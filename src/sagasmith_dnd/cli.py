@@ -478,6 +478,21 @@ def _dispatch(args) -> Any:
                     _require(args.campaign, "campaign"),
                     _require(args.scene, "scene"),
                 )
+            if args.action in {"index", "export-scenes"}:
+                scenes = modules.scene_index(
+                    _require(args.campaign, "campaign"),
+                    module_id=args.module,
+                )
+                result = {"campaign_id": args.campaign, "scenes": scenes}
+                if args.output:
+                    target = Path(args.output).expanduser().resolve()
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(
+                        json.dumps(result, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                    result["output"] = str(target)
+                return result
             if args.action in {"set-scene", "set-progress"}:
                 return modules.set_scene_progress(
                     campaign_id=_require(args.campaign, "campaign"),
@@ -518,6 +533,11 @@ def _dispatch(args) -> Any:
                 return {"valid": saves.verify(campaign_id, _require(args.slot, "slot"))}
             if args.action == "restore":
                 return asdict(saves.restore(campaign_id, _require(args.slot, "slot")))
+            if args.action == "regenerate-recap":
+                return saves.regenerate_recap(
+                    campaign_id,
+                    _require(args.slot, "slot"),
+                )
             if args.action == "lineage":
                 return {
                     "lineage": [
@@ -562,6 +582,13 @@ def _dispatch(args) -> Any:
                             limit=args.limit,
                         )
                     ]
+                }
+            if args.action in {"scope", "status"}:
+                values = memories.list(campaign_id, kind=args.type)
+                return {
+                    "campaign_id": campaign_id,
+                    "count": len(values),
+                    "memories": [asdict(item) for item in values],
                 }
 
         if args.group == "state":

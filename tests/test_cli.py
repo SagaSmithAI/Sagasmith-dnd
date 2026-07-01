@@ -108,6 +108,44 @@ def test_json_cli_campaign_rules_module_and_save(
     )
     assert code == 0
     assert searched["data"]["hits"][0]["title"] == "酒馆"
+    scene_index = _call(
+        capsys,
+        "module",
+        "export-scenes",
+        "--campaign",
+        campaign_id,
+        "--output",
+        str(tmp_path / "scenes.json"),
+    )[1]
+    assert scene_index["data"]["scenes"][0]["title"] == "酒馆"
+    created_save = _call(
+        capsys,
+        "save",
+        "create",
+        "--campaign",
+        campaign_id,
+        "--label",
+        "After arrival",
+    )[1]
+    slot = str(created_save["data"]["slot"])
+    recap = _call(
+        capsys,
+        "save",
+        "regenerate-recap",
+        "--campaign",
+        campaign_id,
+        "--slot",
+        slot,
+    )[1]
+    assert recap["data"]["source"] == "deterministic"
+    memory_status = _call(
+        capsys,
+        "memory",
+        "status",
+        "--campaign",
+        campaign_id,
+    )[1]
+    assert memory_status["data"]["count"] == 0
 
 
 def test_cli_error_is_a_single_json_document(tmp_path: Path, monkeypatch, capsys) -> None:
