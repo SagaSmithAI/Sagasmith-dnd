@@ -4,19 +4,22 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sagasmith-dnd"
-version = "0.1.0"
-description = "D&D 5e system package and nanobot agent for SagaSmith Core"
+version = "0.2.0"
+description = "D&D 5e 2014/2024 runtime and portable JSON CLI for SagaSmith Core"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "SagaSmithAI" }]
-dependencies = ["sagasmith-core>=0.1.0,<0.2.0"]
+dependencies = ["sagasmith-core>=0.2.0,<0.3.0"]
 
 [project.optional-dependencies]
-nanobot = ["nanobot-ai>=0.2.2,<0.3.0"]
 dense = [
     "sentence-transformers>=5.0.0,<6.0.0",
     "chromadb>=0.6.0,<1.0.0",
+]
+documents = ["sagasmith-core[documents]>=0.2.0,<0.3.0"]
+all = [
+    "sagasmith-core[documents,embedding,vector]>=0.2.0,<0.3.0",
 ]
 dev = [
     "pytest>=9.0.0,<10.0.0",
@@ -30,17 +33,8 @@ sagasmith-dnd = "sagasmith_dnd.cli:main"
 [project.entry-points."sagasmith.systems"]
 dnd5e = "sagasmith_dnd.system:get_system"
 
-[project.entry-points."nanobot.tools"]
-dnd_campaign = "sagasmith_dnd.tools:DndCampaignTool"
-dnd_character = "sagasmith_dnd.tools:DndCharacterTool"
-dnd_rules = "sagasmith_dnd.tools:DndRulesTool"
-dnd_module = "sagasmith_dnd.tools:DndModuleTool"
-
 [tool.hatch.build.targets.wheel]
 packages = ["src/sagasmith_dnd"]
-
-[tool.hatch.build.targets.wheel.force-include]
-"resources" = "sagasmith_dnd/resources"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -52,4 +46,3 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]
-
