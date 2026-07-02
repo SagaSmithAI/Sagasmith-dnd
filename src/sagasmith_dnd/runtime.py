@@ -8,7 +8,7 @@ from sagasmith_core import BgeEmbedder, Database, VectorStore, create_embedder
 
 
 def database() -> Database:
-    value = Database()
+    value = Database(os.environ.get("DND_DATABASE_URL"))
     value.upgrade_schema()
     return value
 
@@ -20,4 +20,3 @@ def dense_components() -> tuple[BgeEmbedder | None, VectorStore | None]:
         create_embedder(env_prefix="DND5E"),
         VectorStore("dnd5e"),
     )
-

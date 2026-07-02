@@ -37,7 +37,8 @@ DND5E = SystemDefinition(
     display_name="Dungeons & Dragons 5e",
     character_types=("pc", "npc", "monster"),
     campaign_defaults={
-        "rules_version": "5e",
+        "edition": "2024",
+        "locale": "en",
         "initiative": [],
         "combat": None,
         "world": {},
@@ -48,4 +49,3 @@ DND5E = SystemDefinition(
 
 def get_system() -> SystemDefinition:
     return DND5E
-

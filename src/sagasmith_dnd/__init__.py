@@ -3,5 +3,4 @@
 from sagasmith_dnd.system import DND5E, get_system
 
 __all__ = ["DND5E", "get_system"]
-__version__ = "0.1.0"
-
+__version__ = "0.2.0"

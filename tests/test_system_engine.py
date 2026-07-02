@@ -2,7 +2,7 @@ import random
 
 import pytest
 
-from sagasmith_dnd.engine import ability_modifier, proficiency_bonus, roll, resolve_check
+from sagasmith_dnd.engine import ability_modifier, proficiency_bonus, resolve_check, roll
 from sagasmith_dnd.system import validate_character_sheet
 
 
