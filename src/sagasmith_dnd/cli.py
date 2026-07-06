@@ -26,6 +26,7 @@ from sagasmith_core.modules import MarkdownModuleParser
 from sagasmith_dnd import __version__
 from sagasmith_dnd.engine import resolve_check, roll
 from sagasmith_dnd.module_profile import DndModuleProfile
+from sagasmith_dnd.server import serve as _serve
 from sagasmith_dnd.runtime import database, dense_components
 from sagasmith_dnd.system import DND5E, validate_character_sheet
 
@@ -107,6 +108,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--advantage", action="store_true")
     parser.add_argument("--disadvantage", action="store_true")
     parser.add_argument("--dense", action="store_true")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=3000)
     return parser
 
 
@@ -156,6 +159,9 @@ def _character_revision(revisions, before, after, operation: str) -> None:
 
 
 def _dispatch(args) -> Any:
+    if args.group == "serve":
+        _serve(host=args.host, port=args.port)
+        return {"status": "stopped"}
     if args.group == "version":
         return {"version": __version__, "system_id": DND5E.id}
     if args.group == "capabilities":
