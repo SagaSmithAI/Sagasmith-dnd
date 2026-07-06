@@ -97,6 +97,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit", type=int, default=8)
     parser.add_argument("--progress", type=int, default=0)
     parser.add_argument("--room")
+    parser.add_argument("--scope", default="party")
     parser.add_argument("--expression")
     parser.add_argument("--dc", type=int)
     parser.add_argument("--score", type=int, default=10)
@@ -478,6 +479,13 @@ def _dispatch(args) -> Any:
                     _require(args.campaign, "campaign"),
                     _require(args.scene, "scene"),
                 )
+            if args.action == "current":
+                return {
+                    "scene": modules.current_scene(
+                        _require(args.campaign, "campaign"),
+                        scope_id=args.scope,
+                    )
+                }
             if args.action in {"index", "export-scenes"}:
                 scenes = modules.scene_index(
                     _require(args.campaign, "campaign"),
@@ -500,7 +508,8 @@ def _dispatch(args) -> Any:
                     status=args.status or "current",
                     progress=args.progress,
                     current_room=args.room,
-                    state=_dict(args.state),
+                    state=None if args.state is None else _dict(args.state),
+                    scope_id=args.scope,
                 )
             if args.action == "activate":
                 return modules.set_active(

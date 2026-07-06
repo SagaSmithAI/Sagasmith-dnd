@@ -96,7 +96,7 @@ def test_json_cli_campaign_rules_module_and_save(
         str(module),
     )
     assert code == 0
-    assert imported["data"]["scenes"] == 1
+    assert imported["data"]["scenes"] == 2
     code, searched = _call(
         capsys,
         "module",
@@ -117,7 +117,84 @@ def test_json_cli_campaign_rules_module_and_save(
         "--output",
         str(tmp_path / "scenes.json"),
     )[1]
-    assert scene_index["data"]["scenes"][0]["title"] == "酒馆"
+    assert [scene["title"] for scene in scene_index["data"]["scenes"]] == [
+        "第一章",
+        "酒馆",
+    ]
+    assert scene_index["data"]["scenes"][1]["subsections"] == [
+        {"title": "遭遇", "line": 3, "type": "section"},
+        {"title": "A1. 地窖", "line": 4, "type": "room"},
+    ]
+    scene_id = scene_index["data"]["scenes"][1]["scene_id"]
+    assert _call(
+        capsys,
+        "module",
+        "set-progress",
+        "--campaign",
+        campaign_id,
+        "--scene",
+        scene_id,
+        "--progress",
+        "25",
+        "--room",
+        "A1. 地窖",
+        "--state",
+        '{"discovered":["宝箱"]}',
+    )[0] == 0
+    current = _call(
+        capsys,
+        "module",
+        "current",
+        "--campaign",
+        campaign_id,
+    )[1]["data"]["scene"]
+    assert current["title"] == "酒馆"
+    assert current["scope_id"] == "party"
+    assert current["progress"]["current_room"] == "A1. 地窖"
+    assert current["progress"]["state"] == {"discovered": ["宝箱"]}
+    scoped = _call(
+        capsys,
+        "module",
+        "current",
+        "--campaign",
+        campaign_id,
+        "--scope",
+        "player:hero",
+    )[1]["data"]["scene"]
+    assert scoped["title"] == "酒馆"
+    assert scoped["inherited_from_party"] is True
+    assert _call(
+        capsys,
+        "module",
+        "set-progress",
+        "--campaign",
+        campaign_id,
+        "--scope",
+        "player:hero",
+        "--scene",
+        scene_index["data"]["scenes"][0]["scene_id"],
+        "--progress",
+        "10",
+    )[0] == 0
+    personal = _call(
+        capsys,
+        "module",
+        "current",
+        "--campaign",
+        campaign_id,
+        "--scope",
+        "player:hero",
+    )[1]["data"]["scene"]
+    assert personal["title"] == "第一章"
+    assert personal["scope_id"] == "player:hero"
+    party = _call(
+        capsys,
+        "module",
+        "current",
+        "--campaign",
+        campaign_id,
+    )[1]["data"]["scene"]
+    assert party["title"] == "酒馆"
     created_save = _call(
         capsys,
         "save",
