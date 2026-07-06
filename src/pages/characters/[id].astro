@@ -1,0 +1,9 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import CharacterSheet from '../../components/CharacterSheet';
+export async function getStaticPaths() { return []; }
+const { id } = Astro.params;
+---
+<BaseLayout title="角色详情">
+  {id && <CharacterSheet id={id} client:load />}
+</BaseLayout>

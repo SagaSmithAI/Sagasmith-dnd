@@ -1,0 +1,201 @@
+export interface Campaign {
+  id: string;
+  name: string;
+  slug: string;
+  system_id: string;
+  edition: string;
+  locale: string;
+  status: string;
+  description: string;
+  settings: Record<string, unknown>;
+  state: Record<string, unknown>;
+  revision: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface Character {
+  id: string;
+  campaign_id?: string;
+  name: string;
+  character_type: string;
+  player_name?: string;
+  summary: string;
+  sheet: Record<string, unknown>;
+  notes: Record<string, unknown>;
+  revision: number;
+}
+
+export interface DndSheet {
+  class?: string;
+  level?: number;
+  race?: string;
+  alignment?: string;
+  experience?: number;
+  ability_scores: {
+    str: number; dex: number; con: number;
+    int: number; wis: number; cha: number;
+  };
+  hp: { current: number; max: number; temporary?: number };
+  armor_class: number;
+  initiative: number;
+  speed: number;
+  proficiency_bonus: number;
+  skills: Record<string, number>;
+  spells?: Record<string, number>;
+  equipment?: string[];
+  features?: string[];
+}
+
+export interface ModuleSource {
+  id: string;
+  title: string;
+  source_key: string;
+  campaign_id: string;
+  active: boolean;
+  parser_profile: string;
+  warnings: string[];
+}
+
+export interface ModuleScene {
+  scene_id: string;
+  title: string;
+  module: string;
+  chapter: string;
+  scene_type: string;
+  visibility: string;
+  page_start?: number;
+  page_end?: number;
+  start_line?: number;
+  end_line?: number;
+  keywords: string[];
+  tags: string[];
+  clues?: Clue[];
+  checks?: Check[];
+  sanity?: SanityEntry[];
+  subsections?: Subsection[];
+  headings: string[];
+}
+
+export interface Clue {
+  title: string;
+  line: number;
+  type: string;
+}
+
+export interface Check {
+  title: string;
+  line: number;
+  difficulty?: string;
+}
+
+export interface SanityEntry {
+  expression: string;
+  success_loss: string;
+  failure_loss: string;
+}
+
+export interface Subsection {
+  title: string;
+  line: number;
+  type: string;
+}
+
+export interface SceneProgress {
+  scene_id: string;
+  scope_id: string;
+  status: string;
+  progress: number;
+  current_room?: string;
+  state_version: number;
+  state: Record<string, unknown>;
+}
+
+export interface CurrentScene extends ModuleScene {
+  scope_id: string;
+  requested_scope_id: string;
+  inherited_from_party: boolean;
+  progress: SceneProgress;
+}
+
+export interface SaveSlot {
+  slot: number;
+  label: string;
+  parent_slot?: number;
+  created_at?: string;
+}
+
+export interface RuleSource {
+  id: string;
+  source_key: string;
+  title: string;
+  edition: string;
+  locale: string;
+  version: string;
+  authority: string;
+}
+
+export interface RuleSection {
+  id: string;
+  title: string;
+  path: string[];
+  level: number;
+  content: string;
+  parent_id?: string;
+}
+
+export interface EventLog {
+  id: string;
+  campaign_id: string;
+  type: string;
+  summary: string;
+  payload: Record<string, unknown>;
+  created_at?: string;
+}
+
+export interface MemoryInfo {
+  id: string;
+  subject: string;
+  content: string;
+  type: string;
+  revision_id: string;
+}
+
+export interface HealthStatus {
+  status: string;
+  version: string;
+  dense: boolean;
+}
+
+// ── Shape map for D&D sheet fields ──
+
+export const ABILITY_LABELS: Record<string, string> = {
+  str: "力量", dex: "敏捷", con: "体质",
+  int: "智力", wis: "感知", cha: "魅力",
+};
+
+export const ABILITY_NAMES_EN: Record<string, string> = {
+  str: "STR", dex: "DEX", con: "CON",
+  int: "INT", wis: "WIS", cha: "CHA",
+};
+
+export const SKILL_NAMES: Record<string, string> = {
+  athletics: "运动",
+  acrobatics: "特技",
+  stealth: "隐匿",
+  sleight_of_hand: "手技",
+  arcana: "奥术",
+  history: "历史",
+  investigation: "调查",
+  nature: "自然",
+  religion: "宗教",
+  animal_handling: "驯兽",
+  insight: "洞察",
+  medicine: "医疗",
+  perception: "感知",
+  survival: "生存",
+  deception: "欺瞒",
+  intimidation: "威吓",
+  performance: "表演",
+  persuasion: "说服",
+};
