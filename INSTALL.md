@@ -13,8 +13,6 @@ sagasmith-dnd doctor --json 2>nul
 
 如果返回 `{"status":"ok"}` → ✅ **已安装**，直接加载 skill。
 
-加载哪个 SKILL.md 由 Agent 根据环境自动选择。
-
 ## 完整版（推荐）
 
 ```bash
@@ -25,10 +23,20 @@ sagasmith-dnd doctor --json
 SKILL.md：`https://github.com/SagaSmithAI/SagaSmith-dnd-skills/tree/main/full`
 → 加载 `full/SKILL.md`
 
-建议装 dense 依赖：
-```bash
+安装后询问用户是否启用 ChromaDB：
+
+```powershell
+# 安装 ChromaDB + sentence-transformers（向量语义搜索，~2GB）
 pip install "sagasmith-dnd[all]"
+
+# 设存储路径后启用
+$env:CHROMA_DB_PATH = "$env:APPDATA\sagasmith\chroma_db"
+
+# 或使用远程 ChromaDB 服务
+$env:CHROMA_DB_URL = "http://localhost:8000"
 ```
+
+不装也不影响基础功能（FTS5 全文检索 + 词法搜索已可用）。
 
 ## Standalone 轻量版
 
