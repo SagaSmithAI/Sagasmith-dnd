@@ -22,8 +22,8 @@ pip install "sagasmith-dnd[documents]"
 sagasmith-dnd doctor --json
 ```
 
-SKILL.md：`https://github.com/SagaSmithAI/SagaSmith-dnd-skills/releases/tag/v1.0-full`
-→ 解压后加载 `skills/dnd-dm/SKILL.md`
+SKILL.md：`https://github.com/SagaSmithAI/SagaSmith-dnd-skills/tree/main/full`
+→ 加载 `full/SKILL.md`
 
 建议装 dense 依赖：
 ```bash
@@ -34,8 +34,8 @@ pip install "sagasmith-dnd[all]"
 
 如果当前环境无法安装 Python 包（无 pip、无 Python 3.11+）：
 
-SKILL.md：`https://github.com/SagaSmithAI/SagaSmith-dnd-skills/releases/tag/v1.0-standalone`
-→ 解压后加载根目录 `SKILL.md` + `tools/portable.py`
+SKILL.md：`https://github.com/SagaSmithAI/SagaSmith-dnd-skills/tree/main/standalone`
+→ 从 `standalone/` 目录操作，加载 `standalone/SKILL.md`、使用 `standalone/portable.py`
 
 使用 Python 标准库，数据存 `~/.sagasmith/`。不支持 PDF 导入、FTS5、ChromaDB。
 需要 PDF 时请用户先转为 Markdown。
