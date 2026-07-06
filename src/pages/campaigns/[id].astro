@@ -1,9 +1,9 @@
 ---
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import CampaignDetail from '../../components/CampaignDetail';
-export async function getStaticPaths() { return []; }
+export async function getStaticPaths() {
+  return [{ params: { id: '_demo' } }];
+}
 const { id } = Astro.params;
 ---
-<BaseLayout title="战役详情">
-  {id && <CampaignDetail client:load />}
-</BaseLayout>
+<BaseLayout title="战役详情">{id && <CampaignDetail client:load />}</BaseLayout>
