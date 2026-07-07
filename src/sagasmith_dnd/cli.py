@@ -44,6 +44,7 @@ from sagasmith_dnd.combat import (
     set_condition,
     start_combat,
 )
+from sagasmith_dnd.conditions import add_actor_condition, remove_actor_condition
 from sagasmith_dnd.durations import advance_effect_durations
 from sagasmith_dnd.effects import recalculate_actor_effects
 from sagasmith_dnd.engine import resolve_check, roll
@@ -327,6 +328,7 @@ def _dispatch(args) -> Any:
                 "activity",
                 "reaction",
                 "pack",
+                "condition",
             ],
             "agent_interface": "skill+json-cli",
         }
@@ -1288,6 +1290,26 @@ def _dispatch(args) -> Any:
                 _campaign_revision(revisions, before, updated, f"reaction.{args.action}")
                 return {"pending": updated_pending}
             raise CliError("unknown_command", f"unknown reaction command: {args.action}", exit_code=2)
+
+        if args.group == "condition":
+            campaign_id = _require(args.campaign, "campaign")
+            actor_id = _require(args.actor if args.actor != "runtime" else None, "actor")
+            if args.action == "add":
+                return add_actor_condition(
+                    foundry_documents,
+                    campaign_id=campaign_id,
+                    actor_id=actor_id,
+                    condition=_require(args.condition or args.target, "condition"),
+                    duration=_dict(args.duration),
+                )
+            if args.action == "remove":
+                return remove_actor_condition(
+                    foundry_documents,
+                    campaign_id=campaign_id,
+                    actor_id=actor_id,
+                    condition=_require(args.condition or args.target, "condition"),
+                )
+            raise CliError("unknown_command", f"unknown condition command: {args.action}", exit_code=2)
 
         if args.group == "time":
             campaign_id = _require(args.campaign, "campaign")
