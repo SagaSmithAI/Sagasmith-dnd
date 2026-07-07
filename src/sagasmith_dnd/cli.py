@@ -53,6 +53,7 @@ from sagasmith_dnd.engine import resolve_check, roll
 from sagasmith_dnd.module_profile import DndModuleProfile
 from sagasmith_dnd.pack_importer import import_foundry_pack
 from sagasmith_dnd.rulesets import get_ruleset, list_rulesets, validate_ruleset
+from sagasmith_dnd.ready import clear_ready_actions, set_ready_action, trigger_ready_action
 from sagasmith_dnd.rests import recover_document_rest
 from sagasmith_dnd.rolls import roll_actor_d20
 from sagasmith_dnd.server import serve as _serve
@@ -338,6 +339,7 @@ def _dispatch(args) -> Any:
                 "concentration",
                 "template",
                 "cover",
+                "ready",
             ],
             "agent_interface": "skill+json-cli",
         }
@@ -1369,6 +1371,33 @@ def _dispatch(args) -> Any:
                 _campaign_revision(revisions, before, updated, f"reaction.{args.action}")
                 return {"pending": updated_pending}
             raise CliError("unknown_command", f"unknown reaction command: {args.action}", exit_code=2)
+
+        if args.group == "ready":
+            campaign_id = _require(args.campaign, "campaign")
+            before = campaigns.get(campaign_id)
+            state = dict(before.state)
+            if args.action == "set":
+                state, result = set_ready_action(
+                    state,
+                    actor_id=_require(args.actor if args.actor != "runtime" else None, "actor"),
+                    trigger=_require(args.condition or args.reason, "condition"),
+                    payload=_dict(args.payload),
+                )
+            elif args.action == "trigger":
+                state, result = trigger_ready_action(
+                    state,
+                    ready_id=_require(args.id or args.target, "id"),
+                )
+            elif args.action == "clear":
+                state, result = clear_ready_actions(
+                    state,
+                    actor_id=None if args.actor == "runtime" else args.actor,
+                )
+            else:
+                raise CliError("unknown_command", f"unknown ready command: {args.action}", exit_code=2)
+            updated = campaigns.update(campaign_id, state=state)
+            _campaign_revision(revisions, before, updated, f"ready.{args.action}")
+            return result
 
         if args.group == "condition":
             campaign_id = _require(args.campaign, "campaign")
