@@ -28,6 +28,7 @@ from sagasmith_core.items import normalize_inventory
 from sagasmith_core.modules import MarkdownModuleParser
 
 from sagasmith_dnd import __version__
+from sagasmith_dnd.advancement import apply_advancement
 from sagasmith_dnd.activities import execute_document_activity
 from sagasmith_dnd.checks import resolve_character_check
 from sagasmith_dnd.combat import (
@@ -340,6 +341,7 @@ def _dispatch(args) -> Any:
                 "template",
                 "cover",
                 "ready",
+                "advancement",
             ],
             "agent_interface": "skill+json-cli",
         }
@@ -785,6 +787,16 @@ def _dispatch(args) -> Any:
                 ]
                 return actor
             raise CliError("unknown_command", f"unknown actor command: {args.action}", exit_code=2)
+
+        if args.group == "advancement":
+            if args.action != "apply":
+                raise CliError("unknown_command", f"unknown advancement command: {args.action}", exit_code=2)
+            return apply_advancement(
+                foundry_documents,
+                campaign_id=_require(args.campaign, "campaign"),
+                actor_id=_require(args.actor if args.actor != "runtime" else None, "actor"),
+                advancement=_dict(args.payload),
+            )
 
         if args.group == "scene":
             if args.action == "create":
