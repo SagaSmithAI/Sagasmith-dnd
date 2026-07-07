@@ -47,6 +47,7 @@ from sagasmith_dnd.combat import (
 from sagasmith_dnd.effects import recalculate_actor_effects
 from sagasmith_dnd.engine import resolve_check, roll
 from sagasmith_dnd.module_profile import DndModuleProfile
+from sagasmith_dnd.pack_importer import import_foundry_pack
 from sagasmith_dnd.rulesets import get_ruleset, list_rulesets, validate_ruleset
 from sagasmith_dnd.rests import recover_document_rest
 from sagasmith_dnd.rolls import roll_actor_d20
@@ -323,6 +324,7 @@ def _dispatch(args) -> Any:
                 "rest",
                 "activity",
                 "reaction",
+                "pack",
             ],
             "agent_interface": "skill+json-cli",
         }
@@ -714,6 +716,17 @@ def _dispatch(args) -> Any:
                 return get_ruleset(args.id or args.edition)
             if args.action == "validate":
                 return validate_ruleset(args.id or args.edition)
+
+        if args.group == "pack":
+            if args.action != "import":
+                raise CliError("unknown_command", f"unknown pack command: {args.action}", exit_code=2)
+            return import_foundry_pack(
+                foundry_documents,
+                campaign_id=_require(args.campaign, "campaign"),
+                system_id=DND5E.id,
+                path=_require(args.path, "path"),
+                actor_id=None if args.actor == "runtime" else args.actor,
+            )
 
         if args.group == "scene":
             if args.action == "create":

@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "SagaSmithAI" }]
-dependencies = ["sagasmith-core>=0.2.0,<0.3.0"]
+dependencies = ["sagasmith-core>=0.2.0,<0.3.0", "PyYAML>=6.0,<7.0"]
 
 [project.optional-dependencies]
 dense = [
