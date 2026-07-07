@@ -1,4 +1,5 @@
 import json
+import random
 from pathlib import Path
 
 from sagasmith_dnd.cli import main
@@ -174,3 +175,52 @@ def test_combat_act_is_disabled(tmp_path: Path, monkeypatch, capsys) -> None:
     captured = capsys.readouterr()
     assert code == 2
     assert "runtime_authority_required" in captured.out
+
+
+def test_combat_start_can_derive_participants_from_scene_tokens(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setenv("DND_DATABASE_URL", f"sqlite:///{tmp_path / 'scene-combat.db'}")
+    campaign = _call(capsys, "campaign", "start", "--name", "Scene Combat")["campaign"]
+    actor = _call(
+        capsys,
+        "actor",
+        "create",
+        "--campaign",
+        campaign["id"],
+        "--name",
+        "Mira",
+        "--payload",
+        '{"attributes":{"ac":{"value":15,"bonus":1},"hp":{"value":18,"max":20},"movement":{"walk":35}}}',
+    )
+    _call(capsys, "actor", "prepare", "--campaign", campaign["id"], "--actor", actor["id"])
+    scene = _call(capsys, "scene", "create", "--campaign", campaign["id"], "--name", "Road")
+    token = _call(
+        capsys,
+        "token",
+        "create",
+        "--scene",
+        scene["id"],
+        "--name",
+        "Mira Token",
+        "--actor-id",
+        actor["id"],
+        "--x",
+        "70",
+        "--y",
+        "140",
+    )
+
+    random.seed(0)
+    combat = _call(capsys, "combat", "start", "--campaign", campaign["id"], "--scene", scene["id"])
+
+    participant = combat["participants"][0]
+    assert participant["id"] == actor["id"]
+    assert participant["actor_id"] == actor["id"]
+    assert participant["token_id"] == token["id"]
+    assert participant["ac"] == 16
+    assert participant["hp"] == 18
+    assert participant["max_hp"] == 20
+    assert participant["speed"] == 35

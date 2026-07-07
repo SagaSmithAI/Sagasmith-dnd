@@ -302,6 +302,62 @@ def _character_payload(character: dict[str, Any], inventory: InventoryService) -
     return value
 
 
+def _scene_token_participants(maps, documents, scene_id: str) -> list[dict[str, Any]]:
+    participants = []
+    for token in maps.list_tokens(scene_id):
+        if token.hidden or not token.actor_id:
+            continue
+        actor = documents.get_actor(token.actor_id)
+        system = dict((actor.derived or {}).get("effective_system") or actor.system or {})
+        attributes = dict(system.get("attributes") or {})
+        hp = attributes.get("hp", 1)
+        ac = attributes.get("ac", 10)
+        participants.append(
+            {
+                "id": actor.id,
+                "actor_id": actor.id,
+                "actor_type": actor.actor_type,
+                "token_id": token.id,
+                "name": token.name or actor.name,
+                "kind": actor.actor_type,
+                "ac": _actor_ac_value(ac),
+                "hp": _actor_hp_value(hp),
+                "max_hp": _actor_hp_max(hp),
+                "speed": _actor_speed(system),
+                "features": system.get("features") or [],
+                "class_levels": system.get("class_levels") or {},
+                "position": {"x": token.x, "y": token.y, "elevation": token.elevation},
+            }
+        )
+    return participants
+
+
+def _actor_ac_value(value: Any) -> int:
+    if isinstance(value, dict):
+        return int(value.get("value", 10) or 10) + int(value.get("bonus", 0) or 0)
+    return int(value or 10)
+
+
+def _actor_hp_value(value: Any) -> int:
+    if isinstance(value, dict):
+        return int(value.get("value", 1) or 0)
+    return int(value or 1)
+
+
+def _actor_hp_max(value: Any) -> int:
+    if isinstance(value, dict):
+        return int(value.get("max", value.get("value", 1)) or 1)
+    return int(value or 1)
+
+
+def _actor_speed(system: dict[str, Any]) -> int:
+    attributes = dict(system.get("attributes") or {})
+    movement = attributes.get("movement") or system.get("movement") or {}
+    if isinstance(movement, dict):
+        return int(movement.get("walk", movement.get("value", 30)) or 30)
+    return int(system.get("speed", 30) or 30)
+
+
 def _dispatch(args) -> Any:
     if args.group == "serve":
         _serve(host=args.host, port=args.port)
@@ -1326,11 +1382,14 @@ def _dispatch(args) -> Any:
                 before = campaign
                 payload = _dict(args.payload)
                 participants = _list(args.participants, "participants") if args.participants else payload.pop("participants", [])
+                scene_id = args.scene or payload.pop("scene_id", None)
+                if not participants and scene_id:
+                    participants = _scene_token_participants(maps, foundry_documents, scene_id)
                 environment = _dict(args.environment) if args.environment else payload.pop("environment", {})
                 state["combat"] = start_combat(
                     name=args.name or payload.pop("name", "Combat"),
                     participants=participants,
-                    scene_id=args.scene or payload.pop("scene_id", None),
+                    scene_id=scene_id,
                     environment={**environment, **payload},
                 )
                 updated = campaigns.update(campaign_id, state=state)
