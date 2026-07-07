@@ -9,6 +9,10 @@ from uuid import uuid4
 
 from sagasmith_core.foundry_documents import FoundryDocumentService
 
+from sagasmith_dnd.damage import apply_actor_damage
+from sagasmith_dnd.engine import roll, roll_d20
+from sagasmith_dnd.rolls import roll_actor_d20
+
 
 PAYMENT_BY_ACTIVATION = {
     "action": "main_action",
@@ -66,6 +70,16 @@ def execute_document_activity(
     actor_system_after = _consume_spell_slot(actor_system_before, activity, payload)
     if actor_system_after != actor_system_before:
         actor = documents.update_actor(actor_id, system=actor_system_after)
+
+    execution = _execute_activity_effect(
+        documents,
+        campaign_id=campaign_id,
+        actor_id=actor_id,
+        target_id=target_id,
+        item_system=item.system,
+        activity=activity,
+        payload=payload,
+    )
 
     created_effects = []
     effect_target = target_id or actor_id
@@ -139,10 +153,13 @@ def execute_document_activity(
                 "after": actor_system_after,
             }
         )
+    if execution:
+        deltas.append({"type": "activity_execution", "result": execution["result"]})
     for effect in created_effects:
         deltas.append({"type": "active_effect", "effect_id": effect["id"], "after": effect})
 
     pending = _reaction_windows(activity, actor_id=actor_id, target_id=target_id)
+    pending.extend(execution.get("pending", []) if execution else [])
     if pending:
         runtime = dict(state.get("runtime") or {})
         queued = list(runtime.get("pending") or [])
@@ -162,6 +179,9 @@ def execute_document_activity(
         narration_hints=_narration_hints(actor.name, item.name, activity.name, target_id),
         flags={"dnd5e": {"activity_type": activity.activity_type}},
     )
+    messages = [asdict(message)]
+    if execution:
+        messages.extend(execution.get("messages", []))
 
     return state, {
         "type": "activity_result",
@@ -172,9 +192,10 @@ def execute_document_activity(
         "payment": payment,
         "state_delta": {"runtime": {"turn_budgets": {actor_id: actor_budget}}},
         "deltas": deltas,
+        "execution": execution["result"] if execution else None,
         "effects": created_effects,
         "pending": pending,
-        "messages": [asdict(message)],
+        "messages": messages,
         "narration_hints": list(message.narration_hints),
     }
 
@@ -256,6 +277,277 @@ def _requires_concentration(activity) -> bool:
         or system.get("concentration")
         or system.get("spell", {}).get("concentration")
     )
+
+
+def _execute_activity_effect(
+    documents: FoundryDocumentService,
+    *,
+    campaign_id: str,
+    actor_id: str,
+    target_id: str | None,
+    item_system: dict[str, Any],
+    activity,
+    payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    activity_type = activity.activity_type
+    if activity_type == "attack":
+        return _execute_attack(
+            documents,
+            campaign_id=campaign_id,
+            actor_id=actor_id,
+            target_id=target_id,
+            item_system=item_system,
+            activity=activity,
+            payload=payload,
+        )
+    if activity_type == "damage":
+        return _execute_damage(
+            documents,
+            campaign_id=campaign_id,
+            target_id=target_id,
+            activity=activity,
+            payload=payload,
+        )
+    if activity_type == "heal":
+        if not (payload.get("amount") or payload.get("healing") or activity.system.get("healing")):
+            return None
+        return _execute_heal(
+            documents,
+            campaign_id=campaign_id,
+            target_id=target_id or actor_id,
+            activity=activity,
+            payload=payload,
+        )
+    if activity_type == "save":
+        return _execute_save(
+            documents,
+            campaign_id=campaign_id,
+            target_id=target_id,
+            activity=activity,
+            payload=payload,
+        )
+    return None
+
+
+def _execute_attack(
+    documents: FoundryDocumentService,
+    *,
+    campaign_id: str,
+    actor_id: str,
+    target_id: str | None,
+    item_system: dict[str, Any],
+    activity,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    if not target_id:
+        raise ValueError("attack activity requires target-id")
+    target = documents.get_actor(target_id)
+    attack_bonus = int(
+        payload.get("attack_bonus")
+        or activity.system.get("attack_bonus")
+        or item_system.get("attack_bonus")
+        or 0
+    )
+    die = roll_d20(
+        advantage=bool(payload.get("advantage", False)),
+        disadvantage=bool(payload.get("disadvantage", False)),
+    )
+    total = int(die["natural"]) + attack_bonus
+    target_ac = int(payload.get("target_ac") or _actor_ac(target.system, target.derived))
+    hit = bool(die["critical"] or (not die["fumble"] and total >= target_ac))
+    result: dict[str, Any] = {
+        "type": "attack",
+        "actor_id": actor_id,
+        "target_id": target_id,
+        "attack_bonus": attack_bonus,
+        "target_ac": target_ac,
+        "roll": die,
+        "total": total,
+        "hit": hit,
+    }
+    messages: list[dict[str, Any]] = []
+    pending: list[dict[str, Any]] = []
+    damage_expression = payload.get("damage") or activity.system.get("damage")
+    if hit and damage_expression:
+        damage = roll(str(damage_expression))
+        damage_result = apply_actor_damage(
+            documents,
+            campaign_id=campaign_id,
+            actor_id=target_id,
+            amount=damage.total,
+            damage_type=str(payload.get("damage_type") or activity.system.get("damage_type") or ""),
+            source=activity.name,
+        )
+        result["damage_roll"] = {
+            "expression": damage.expression,
+            "total": damage.total,
+            "rolls": list(damage.rolls),
+            "detail": damage.detail,
+        }
+        result["damage"] = damage_result["damage"]
+        pending.extend(damage_result.get("pending", []))
+        messages.extend(damage_result.get("messages", []))
+    return {"result": result, "pending": pending, "messages": messages}
+
+
+def _execute_damage(
+    documents: FoundryDocumentService,
+    *,
+    campaign_id: str,
+    target_id: str | None,
+    activity,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    if not target_id:
+        raise ValueError("damage activity requires target-id")
+    amount = payload.get("amount")
+    rolled = None
+    if amount is None:
+        expression = str(payload.get("damage") or activity.system.get("damage") or "")
+        if not expression:
+            raise ValueError("damage activity requires amount or damage expression")
+        rolled = roll(expression)
+        amount = rolled.total
+    damage_result = apply_actor_damage(
+        documents,
+        campaign_id=campaign_id,
+        actor_id=target_id,
+        amount=int(amount),
+        damage_type=str(payload.get("damage_type") or activity.system.get("damage_type") or ""),
+        source=activity.name,
+    )
+    result = {"type": "damage", **damage_result["damage"]}
+    if rolled:
+        result["roll"] = {
+            "expression": rolled.expression,
+            "total": rolled.total,
+            "rolls": list(rolled.rolls),
+            "detail": rolled.detail,
+        }
+    return {
+        "result": result,
+        "pending": list(damage_result.get("pending", [])),
+        "messages": list(damage_result.get("messages", [])),
+    }
+
+
+def _execute_heal(
+    documents: FoundryDocumentService,
+    *,
+    campaign_id: str,
+    target_id: str,
+    activity,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    target = documents.get_actor(target_id)
+    if target.campaign_id != campaign_id:
+        raise ValueError(f"actor {target_id} is not in campaign {campaign_id}")
+    amount = payload.get("amount")
+    rolled = None
+    if amount is None:
+        expression = str(payload.get("healing") or activity.system.get("healing") or "")
+        if not expression:
+            raise ValueError("heal activity requires amount or healing expression")
+        rolled = roll(expression)
+        amount = rolled.total
+    system = deepcopy(target.system)
+    hp = _hp(system)
+    before = int(hp.get("value", 0))
+    maximum = int(hp.get("max", before) or before)
+    hp["value"] = min(maximum, before + max(0, int(amount)))
+    updated = documents.update_actor(target_id, system=system)
+    result: dict[str, Any] = {
+        "type": "heal",
+        "target_id": target_id,
+        "amount": max(0, int(amount)),
+        "before_hp": before,
+        "after_hp": hp["value"],
+    }
+    if rolled:
+        result["roll"] = {
+            "expression": rolled.expression,
+            "total": rolled.total,
+            "rolls": list(rolled.rolls),
+            "detail": rolled.detail,
+        }
+    message = documents.create_message(
+        campaign_id=campaign_id,
+        message_type="heal",
+        speaker={"actor": target_id, "alias": target.name},
+        actor_id=target_id,
+        deltas=[{"type": "heal", "before": asdict(target), "after": asdict(updated), "result": result}],
+        narration_hints=[f"{target.name} regains {result['amount']} hit points."],
+    )
+    return {"result": result, "pending": [], "messages": [asdict(message)]}
+
+
+def _execute_save(
+    documents: FoundryDocumentService,
+    *,
+    campaign_id: str,
+    target_id: str | None,
+    activity,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    if not target_id:
+        raise ValueError("save activity requires target-id")
+    dc = int(payload.get("dc") or activity.system.get("dc") or 10)
+    ability = str(payload.get("ability") or activity.system.get("ability") or "dex")
+    save_result = roll_actor_d20(
+        documents,
+        campaign_id=campaign_id,
+        actor_id=target_id,
+        roll_type="save",
+        dc=dc,
+        ability=ability,
+        bonus=int(payload.get("bonus", 0) or 0),
+        advantage=bool(payload.get("advantage", False)),
+        disadvantage=bool(payload.get("disadvantage", False)),
+        source=activity.name,
+    )
+    result: dict[str, Any] = {"type": "save", **save_result["roll"]}
+    pending: list[dict[str, Any]] = []
+    messages = list(save_result.get("messages", []))
+    damage_expression = payload.get("damage") or activity.system.get("damage")
+    if damage_expression:
+        rolled = roll(str(damage_expression))
+        amount = rolled.total if not result["success"] else rolled.total // 2
+        damage_result = apply_actor_damage(
+            documents,
+            campaign_id=campaign_id,
+            actor_id=target_id,
+            amount=amount,
+            damage_type=str(payload.get("damage_type") or activity.system.get("damage_type") or ""),
+            source=activity.name,
+        )
+        result["damage_roll"] = {
+            "expression": rolled.expression,
+            "total": rolled.total,
+            "applied": amount,
+            "rolls": list(rolled.rolls),
+            "detail": rolled.detail,
+        }
+        result["damage"] = damage_result["damage"]
+        pending.extend(damage_result.get("pending", []))
+        messages.extend(damage_result.get("messages", []))
+    return {"result": result, "pending": pending, "messages": messages}
+
+
+def _actor_ac(system: dict[str, Any], derived: dict[str, Any]) -> int:
+    effective = dict((derived or {}).get("effective_system") or system or {})
+    ac = effective.get("attributes", {}).get("ac", 10)
+    if isinstance(ac, dict):
+        return int(ac.get("value", 10))
+    return int(ac or 10)
+
+
+def _hp(system: dict[str, Any]) -> dict[str, Any]:
+    attributes = system.setdefault("attributes", {})
+    hp = attributes.setdefault("hp", {"value": 1, "max": 1})
+    if not isinstance(hp, dict):
+        hp = {"value": int(hp), "max": int(hp)}
+        attributes["hp"] = hp
+    return hp
 
 
 def _reaction_windows(activity, *, actor_id: str, target_id: str | None) -> list[dict[str, Any]]:
