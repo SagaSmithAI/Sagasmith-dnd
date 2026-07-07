@@ -56,7 +56,7 @@ from sagasmith_dnd.rulesets import get_ruleset, list_rulesets, validate_ruleset
 from sagasmith_dnd.rests import recover_document_rest
 from sagasmith_dnd.rolls import roll_actor_d20
 from sagasmith_dnd.server import serve as _serve
-from sagasmith_dnd.spatial import move_token_with_movement_cost
+from sagasmith_dnd.spatial import cover_between_tokens, move_token_with_movement_cost
 from sagasmith_dnd.templates import place_activity_template
 from sagasmith_dnd.runtime import database, dense_components
 from sagasmith_dnd.system import DND5E, validate_character_sheet
@@ -337,6 +337,7 @@ def _dispatch(args) -> Any:
                 "actor",
                 "concentration",
                 "template",
+                "cover",
             ],
             "agent_interface": "skill+json-cli",
         }
@@ -901,6 +902,16 @@ def _dispatch(args) -> Any:
                 actor_id=None if args.actor == "runtime" else args.actor,
                 direction=args.direction,
                 duration=_dict(args.duration),
+            )
+
+        if args.group == "cover":
+            if args.action != "check":
+                raise CliError("unknown_command", f"unknown cover command: {args.action}", exit_code=2)
+            return cover_between_tokens(
+                maps,
+                scene_id=_require(args.scene, "scene"),
+                attacker_token_id=_require(args.token, "token"),
+                target_token_id=_require(args.target_id or args.target, "target-id"),
             )
 
         if args.group == "item":
