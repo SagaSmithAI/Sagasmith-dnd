@@ -45,6 +45,7 @@ from sagasmith_dnd.combat import (
     start_combat,
 )
 from sagasmith_dnd.conditions import add_actor_condition, remove_actor_condition
+from sagasmith_dnd.concentration import resolve_concentration
 from sagasmith_dnd.damage import apply_actor_damage
 from sagasmith_dnd.durations import advance_effect_durations
 from sagasmith_dnd.effects import recalculate_actor_effects
@@ -332,6 +333,7 @@ def _dispatch(args) -> Any:
                 "condition",
                 "damage",
                 "actor",
+                "concentration",
             ],
             "agent_interface": "skill+json-cli",
         }
@@ -1367,6 +1369,16 @@ def _dispatch(args) -> Any:
                 amount=_int_value(args.amount, "amount"),
                 damage_type=args.damage_type or args.type or "",
                 source=args.source or args.reason,
+            )
+
+        if args.group == "concentration":
+            if args.action not in {"pass", "fail"}:
+                raise CliError("unknown_command", f"unknown concentration command: {args.action}", exit_code=2)
+            return resolve_concentration(
+                foundry_documents,
+                campaign_id=_require(args.campaign, "campaign"),
+                actor_id=_require(args.actor if args.actor != "runtime" else None, "actor"),
+                success=args.action == "pass",
             )
 
         if args.group == "time":
