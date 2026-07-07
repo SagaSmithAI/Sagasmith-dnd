@@ -7,12 +7,13 @@ from math import sqrt
 from typing import Any
 from uuid import uuid4
 
-from sagasmith_core import MapService
+from sagasmith_core import FoundryDocumentService, MapService
 
 
 def move_token_with_movement_cost(
     maps: MapService,
     *,
+    documents: FoundryDocumentService | None = None,
     token_id: str,
     x: int,
     y: int,
@@ -23,6 +24,7 @@ def move_token_with_movement_cost(
     scene = maps.get_scene(before.scene_id)
     regions = maps.list_regions(scene.id)
     distance = measure_distance(scene.grid_size, before.x, before.y, x, y)
+    previous = [region for region in regions if _contains(region.shape, before.x, before.y)]
     entered = [region for region in regions if _contains(region.shape, x, y)]
     multiplier = 2 if any(region.behavior == "difficult_terrain" for region in entered) else 1
     moved = maps.move_token(
@@ -45,6 +47,13 @@ def move_token_with_movement_cost(
         grid_size=scene.grid_size,
         disengaged=bool((metadata or {}).get("disengage") or (metadata or {}).get("disengaged")),
     )
+    region_effects = _apply_region_effects(
+        documents,
+        campaign_id=scene.campaign_id,
+        token=moved,
+        previous=previous,
+        entered=entered,
+    )
     return {
         **asdict(moved),
         "movement": {
@@ -64,6 +73,7 @@ def move_token_with_movement_cost(
                 for region in entered
             ],
             "pending": pending,
+            "region_effects": region_effects,
         },
     }
 
@@ -124,6 +134,74 @@ def _contains(shape: dict[str, Any], x: int, y: int) -> bool:
         height = int(shape.get("height", 0) or 0)
         return left <= x <= left + width and top <= y <= top + height
     return False
+
+
+def _apply_region_effects(
+    documents: FoundryDocumentService | None,
+    *,
+    campaign_id: str,
+    token,
+    previous: list[Any],
+    entered: list[Any],
+) -> dict[str, Any]:
+    if documents is None or not token.actor_id:
+        return {"created": [], "removed": []}
+    previous_ids = {region.id for region in previous}
+    entered_ids = {region.id for region in entered}
+    created = []
+    removed = []
+    for region in entered:
+        if region.id in previous_ids or not _is_effect_region(region):
+            continue
+        effect = _region_effect_data(region)
+        created.append(
+            asdict(
+                documents.create_effect(
+                    campaign_id=campaign_id,
+                    parent_type="region",
+                    parent_id=region.id,
+                    actor_id=token.actor_id,
+                    origin=f"SceneRegion.{region.id}",
+                    name=str(effect.get("name") or region.name),
+                    duration=dict(region.duration or effect.get("duration") or {}),
+                    changes=list(effect.get("changes") or []),
+                    statuses=list(effect.get("statuses") or []),
+                    flags={"region_id": region.id, **dict(effect.get("flags") or {})},
+                )
+            )
+        )
+    for region in previous:
+        if region.id in entered_ids or not _is_effect_region(region):
+            continue
+        if not dict(region.metadata or {}).get("remove_on_exit", True):
+            continue
+        for effect in documents.list_effects(
+            campaign_id,
+            actor_id=token.actor_id,
+            parent_type="region",
+            parent_id=region.id,
+        ):
+            removed.append(asdict(documents.delete_effect(effect.id)))
+    return {"created": created, "removed": removed}
+
+
+def _is_effect_region(region) -> bool:
+    behavior = str(region.behavior or "").lower().replace("-", "_")
+    return behavior in {"apply_active_effect", "active_effect", "effect", "hazard"}
+
+
+def _region_effect_data(region) -> dict[str, Any]:
+    metadata = dict(region.metadata or {})
+    effect = metadata.get("effect")
+    if isinstance(effect, dict):
+        return effect
+    return {
+        "name": metadata.get("effect_name") or region.name,
+        "changes": metadata.get("changes") or [],
+        "statuses": metadata.get("statuses") or [],
+        "duration": metadata.get("duration") or {},
+        "flags": metadata.get("flags") or {},
+    }
 
 
 def _best_cover(regions) -> dict[str, Any]:

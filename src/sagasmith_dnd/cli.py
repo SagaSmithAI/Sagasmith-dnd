@@ -869,6 +869,7 @@ def _dispatch(args) -> Any:
                 before = asdict(maps.get_token(_require(args.token or args.id, "token")))
                 result = move_token_with_movement_cost(
                     maps,
+                    documents=foundry_documents,
                     token_id=before["id"],
                     x=_int_value(args.x, "x"),
                     y=_int_value(args.y, "y"),

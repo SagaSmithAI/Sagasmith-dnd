@@ -141,3 +141,65 @@ def test_token_move_leaving_reach_creates_opportunity_attack_window(
     assert pending["trigger"] == "opportunity_attack"
     assert pending["actor_id"] == "goblin"
     assert pending["target_actor_id"] == "hero"
+
+
+def test_token_move_applies_and_removes_region_active_effect(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setenv("DND_DATABASE_URL", f"sqlite+pysqlite:///{(tmp_path / 'region-effect.db').as_posix()}")
+    campaign = _call(capsys, "campaign", "start", "--name", "Region Effect")["campaign"]
+    actor = _call(capsys, "actor", "create", "--campaign", campaign["id"], "--name", "Mira")
+    scene = _call(
+        capsys,
+        "scene",
+        "create",
+        "--campaign",
+        campaign["id"],
+        "--name",
+        "Grid",
+        "--grid-size",
+        "70",
+    )
+    token = _call(
+        capsys,
+        "token",
+        "create",
+        "--scene",
+        scene["id"],
+        "--name",
+        "Hero",
+        "--actor-id",
+        actor["id"],
+        "--x",
+        "0",
+        "--y",
+        "0",
+    )
+    _call(
+        capsys,
+        "region",
+        "create",
+        "--scene",
+        scene["id"],
+        "--name",
+        "Blessing Aura",
+        "--behavior",
+        "apply_active_effect",
+        "--shape",
+        '{"type":"circle","x":70,"y":0,"radius":20}',
+        "--metadata",
+        '{"statuses":["blessed"],"changes":[{"key":"system.attributes.ac.bonus","mode":"ADD","value":1}]}',
+    )
+
+    entered = _call(capsys, "token", "move", "--token", token["id"], "--x", "70", "--y", "0")
+
+    created = entered["movement"]["region_effects"]["created"]
+    assert created[0]["name"] == "Blessing Aura"
+    assert created[0]["actor_id"] == actor["id"]
+    assert created[0]["statuses"] == ["blessed"]
+
+    left = _call(capsys, "token", "move", "--token", token["id"], "--x", "140", "--y", "0")
+    removed = left["movement"]["region_effects"]["removed"]
+    assert removed[0]["id"] == created[0]["id"]
