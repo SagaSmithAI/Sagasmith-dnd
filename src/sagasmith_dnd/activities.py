@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import asdict
 from typing import Any
 from uuid import uuid4
@@ -61,8 +62,36 @@ def execute_document_activity(
     if uses_after != uses_before:
         activity = documents.update_activity(activity_id, uses=uses_after)
 
+    actor_system_before = deepcopy(actor.system)
+    actor_system_after = _consume_spell_slot(actor_system_before, activity, payload)
+    if actor_system_after != actor_system_before:
+        actor = documents.update_actor(actor_id, system=actor_system_after)
+
     created_effects = []
     effect_target = target_id or actor_id
+    if _requires_concentration(activity):
+        concentration = documents.create_effect(
+            campaign_id=campaign_id,
+            parent_type="actor",
+            parent_id=actor_id,
+            actor_id=actor_id,
+            origin=f"Activity.{activity.id}",
+            name=f"Concentrating: {activity.name}",
+            duration=dict(activity.duration or {}),
+            statuses=["concentrating"],
+            flags={"dnd5e": {"concentration": True, "item_id": item_id, "activity_id": activity_id}},
+        )
+        created_effects.append(asdict(concentration))
+        runtime = dict(state.get("runtime") or {})
+        concentration_state = dict(runtime.get("concentration") or {})
+        concentration_state[actor_id] = {
+            "effect_id": concentration.id,
+            "item_id": item_id,
+            "activity_id": activity_id,
+        }
+        runtime["concentration"] = concentration_state
+        state["runtime"] = runtime
+
     for effect in activity.effects:
         effect_payload = dict(effect)
         created = documents.create_effect(
@@ -99,6 +128,15 @@ def execute_document_activity(
                 "activity_id": activity_id,
                 "before": uses_before,
                 "after": uses_after,
+            }
+        )
+    if actor_system_after != actor_system_before:
+        deltas.append(
+            {
+                "type": "actor_system",
+                "actor_id": actor_id,
+                "before": actor_system_before,
+                "after": actor_system_after,
             }
         )
     for effect in created_effects:
@@ -179,6 +217,45 @@ def _spend_uses(uses: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]
         raise ValueError("activity has no uses remaining")
     value["spent"] = spent + cost
     return value
+
+
+def _consume_spell_slot(system: dict[str, Any], activity, payload: dict[str, Any]) -> dict[str, Any]:
+    if activity.activity_type != "cast":
+        return system
+    level = int(
+        payload.get("spell_level")
+        or activity.system.get("level")
+        or activity.system.get("spell", {}).get("level")
+        or 0
+    )
+    if level <= 0:
+        return system
+    value = deepcopy(system)
+    spells = value.setdefault("spells", {})
+    slot = spells.get(f"spell{level}")
+    if not isinstance(slot, dict):
+        slots = spells.setdefault("slots", {})
+        slot = slots.get(str(level))
+        if not isinstance(slot, dict):
+            raise ValueError(f"actor has no level {level} spell slots")
+    current = int(slot.get("value", slot.get("available", 0)) or 0)
+    if current <= 0:
+        raise ValueError(f"actor has no level {level} spell slots remaining")
+    if "value" in slot or "available" not in slot:
+        slot["value"] = current - 1
+    else:
+        slot["available"] = current - 1
+    return value
+
+
+def _requires_concentration(activity) -> bool:
+    duration = dict(activity.duration or {})
+    system = dict(activity.system or {})
+    return bool(
+        duration.get("concentration")
+        or system.get("concentration")
+        or system.get("spell", {}).get("concentration")
+    )
 
 
 def _reaction_windows(activity, *, actor_id: str, target_id: str | None) -> list[dict[str, Any]]:
