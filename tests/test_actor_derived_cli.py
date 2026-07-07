@@ -53,6 +53,13 @@ def test_actor_prepare_builds_foundry_style_derived_data(
                 "ac_bonus": 1,
                 "traits": {"dr": {"value": ["fire"]}},
             },
+            effects=[
+                {
+                    "_id": "defense",
+                    "transfer": True,
+                    "changes": [{"key": "system.attributes.ac.bonus", "mode": "ADD", "value": 1}],
+                }
+            ],
         )
         documents.create_effect(
             campaign_id=campaign.id,
@@ -79,10 +86,11 @@ def test_actor_prepare_builds_foundry_style_derived_data(
     effective = prepared["derived"]["effective_system"]
     assert effective["attributes"]["prof"] == 3
     assert effective["attributes"]["ac"]["value"] == 16
-    assert effective["attributes"]["ac"]["bonus"] == 3
+    assert effective["attributes"]["ac"]["bonus"] == 4
     assert effective["traits"]["dr"]["value"] == ["cold", "fire"]
+    assert prepared["derived"]["items"]["transferred_effects"] == ["defense"]
     assert prepared["derived"]["statuses"] == ["blessed"]
     assert prepared["messages"][0]["message_type"] == "actor_prepare"
 
     shown = _call(capsys, "actor", "show", "--id", actor.id)
-    assert shown["derived"]["effective_system"]["attributes"]["ac"]["bonus"] == 3
+    assert shown["derived"]["effective_system"]["attributes"]["ac"]["bonus"] == 4

@@ -57,6 +57,7 @@ def _apply_equipped_items(
     effective: dict[str, Any],
 ) -> dict[str, Any]:
     equipped = []
+    transferred_effects = []
     ac_candidates = []
     for item in documents.list_items(campaign_id, actor_id=actor_id):
         system = dict(item.system or {})
@@ -74,11 +75,17 @@ def _apply_equipped_items(
             values = system.get("traits", {}).get(trait_key)
             if values:
                 _merge_trait(effective, trait_key, values)
+        for effect in _iter_item_transfer_effects(item):
+            for change in effect.get("changes") or []:
+                _apply_change(effective, dict(change))
+            transferred_effects.append(
+                effect.get("_id") or effect.get("id") or effect.get("name") or item.id
+            )
     if ac_candidates:
         ac = effective.setdefault("attributes", {}).setdefault("ac", {})
         if isinstance(ac, dict):
             ac["value"] = max([int(ac.get("value", 10) or 10), *ac_candidates])
-    return {"equipped": equipped}
+    return {"equipped": equipped, "transferred_effects": transferred_effects}
 
 
 def _apply_effects(
@@ -103,6 +110,8 @@ def _apply_change(target: dict[str, Any], change: dict[str, Any]) -> None:
     path = str(change.get("key") or "").strip()
     if not path:
         return
+    if path.startswith("system."):
+        path = path.removeprefix("system.")
     parts = path.split(".")
     parent = target
     for part in parts[:-1]:
@@ -124,6 +133,23 @@ def _apply_change(target: dict[str, Any], change: dict[str, Any]) -> None:
         parent[key] = min(_number(parent.get(key)), _number(value))
     else:
         parent[key] = _number(parent.get(key)) + _number(value) if _is_number_like(value) else value
+
+
+def _iter_item_transfer_effects(item: Any) -> list[dict[str, Any]]:
+    system = dict(item.system or {})
+    attunement_required = system.get("attunement") == "required"
+    if system.get("hidden") or (attunement_required and not system.get("attuned")):
+        return []
+    effects = []
+    for raw in item.effects or []:
+        if not isinstance(raw, dict):
+            continue
+        if raw.get("disabled") or raw.get("suppressed"):
+            continue
+        if raw.get("transfer") is False:
+            continue
+        effects.append(raw)
+    return effects
 
 
 def _add_path(target: dict[str, Any], parts: list[str], amount: int) -> None:
