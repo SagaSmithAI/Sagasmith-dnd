@@ -28,6 +28,12 @@ def apply_actor_damage(
     hp["value"] = max(0, before_hp - adjusted["amount"])
     system.setdefault("attributes", {})["hp"] = hp
     updated = documents.update_actor(actor_id, system=system)
+    pending = _concentration_pending(
+        documents,
+        campaign_id=campaign_id,
+        actor_id=actor_id,
+        applied_damage=adjusted["amount"],
+    )
     deltas = [
         {
             "type": "damage",
@@ -47,9 +53,15 @@ def apply_actor_damage(
         speaker={"actor": actor_id, "alias": actor.name},
         actor_id=actor_id,
         deltas=deltas,
+        pending=pending,
         narration_hints=[f"{actor.name} takes {adjusted['amount']} {damage_type} damage."],
     )
-    return {"actor": asdict(updated), "damage": deltas[0], "messages": [asdict(message)]}
+    return {
+        "actor": asdict(updated),
+        "damage": deltas[0],
+        "pending": pending,
+        "messages": [asdict(message)],
+    }
 
 
 def _hp(system: dict[str, Any]) -> dict[str, Any]:
@@ -79,3 +91,31 @@ def _trait_values(value: Any) -> set[str]:
     else:
         raw = value or []
     return {str(item).strip().lower() for item in raw}
+
+
+def _concentration_pending(
+    documents: FoundryDocumentService,
+    *,
+    campaign_id: str,
+    actor_id: str,
+    applied_damage: int,
+) -> list[dict[str, Any]]:
+    if applied_damage <= 0:
+        return []
+    concentrating = [
+        effect
+        for effect in documents.list_effects(campaign_id, actor_id=actor_id)
+        if "concentrating" in set(effect.statuses)
+    ]
+    if not concentrating:
+        return []
+    return [
+        {
+            "type": "concentration_save_required",
+            "actor_id": actor_id,
+            "dc": max(10, applied_damage // 2),
+            "ability": "con",
+            "effect_ids": [effect.id for effect in concentrating],
+            "deadline": "after_damage",
+        }
+    ]
