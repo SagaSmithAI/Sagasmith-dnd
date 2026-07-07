@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import random
 from pathlib import Path
 
 from sagasmith_dnd.cli import main
@@ -40,6 +41,7 @@ def test_structured_combat_flow(tmp_path: Path, monkeypatch, capsys) -> None:
     assert started["current"]["id"] == "hero"
     assert "attack" in started["legal_actions"]
 
+    random.seed(2)
     attacked = _call(
         capsys,
         "combat",

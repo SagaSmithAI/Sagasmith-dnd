@@ -49,6 +49,7 @@ from sagasmith_dnd.module_profile import DndModuleProfile
 from sagasmith_dnd.rulesets import get_ruleset, list_rulesets, validate_ruleset
 from sagasmith_dnd.rolls import roll_actor_d20
 from sagasmith_dnd.server import serve as _serve
+from sagasmith_dnd.spatial import move_token_with_movement_cost
 from sagasmith_dnd.runtime import database, dense_components
 from sagasmith_dnd.system import DND5E, validate_character_sheet
 
@@ -774,14 +775,15 @@ def _dispatch(args) -> Any:
                 return asdict(maps.get_token(_require(args.token or args.id, "token")))
             if args.action == "move":
                 before = asdict(maps.get_token(_require(args.token or args.id, "token")))
-                moved = maps.move_token(
-                    before["id"],
+                result = move_token_with_movement_cost(
+                    maps,
+                    token_id=before["id"],
                     x=_int_value(args.x, "x"),
                     y=_int_value(args.y, "y"),
                     elevation=args.elevation,
                     metadata=_dict(args.metadata),
                 )
-                after = asdict(moved)
+                after = {key: value for key, value in result.items() if key != "movement"}
                 revisions.record(
                     after["campaign_id"],
                     operation="token.move",
@@ -790,7 +792,7 @@ def _dispatch(args) -> Any:
                     before=before,
                     after=after,
                 )
-                return after
+                return result
 
         if args.group == "region":
             if args.action == "create":
