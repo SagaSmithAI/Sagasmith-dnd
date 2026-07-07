@@ -43,6 +43,7 @@ from sagasmith_dnd.combat import (
     set_condition,
     start_combat,
 )
+from sagasmith_dnd.effects import recalculate_actor_effects
 from sagasmith_dnd.engine import resolve_check, roll
 from sagasmith_dnd.module_profile import DndModuleProfile
 from sagasmith_dnd.rulesets import get_ruleset, list_rulesets, validate_ruleset
@@ -1273,6 +1274,12 @@ def _dispatch(args) -> Any:
 
         if args.group == "effect":
             campaign_id = _require(args.campaign, "campaign")
+            if args.action == "recalculate":
+                return recalculate_actor_effects(
+                    foundry_documents,
+                    campaign_id=campaign_id,
+                    actor_id=_require(args.actor if args.actor != "runtime" else None, "actor"),
+                )
             before = campaigns.get(campaign_id)
             state = dict(before.state)
             if args.action == "list":
