@@ -317,6 +317,7 @@ def _dispatch(args) -> Any:
                 "effect",
                 "rest",
                 "activity",
+                "reaction",
             ],
             "agent_interface": "skill+json-cli",
         }
@@ -1208,6 +1209,42 @@ def _dispatch(args) -> Any:
             updated = campaigns.update(campaign_id, state=state)
             _campaign_revision(revisions, before, updated, "activity.use")
             return {"result": result, "combat": combat_status(combat)}
+
+        if args.group == "reaction":
+            campaign_id = _require(args.campaign, "campaign")
+            before = campaigns.get(campaign_id)
+            state = dict(before.state)
+            runtime = dict(state.get("runtime") or {})
+            pending = list(runtime.get("pending") or [])
+            if args.action in {None, "list"}:
+                actor_id = args.actor if args.actor != "runtime" else None
+                return {
+                    "pending": [
+                        item
+                        for item in pending
+                        if item.get("status", "pending") == "pending"
+                        and (actor_id is None or item.get("actor_id") == actor_id)
+                    ]
+                }
+            if args.action in {"resolve", "decline"}:
+                window_id = _require(args.id or args.target, "id")
+                changed = False
+                updated_pending = []
+                for item in pending:
+                    value = dict(item)
+                    if value.get("id") == window_id and value.get("status", "pending") == "pending":
+                        value["status"] = "resolved" if args.action == "resolve" else "declined"
+                        value["response"] = _dict(args.payload)
+                        changed = True
+                    updated_pending.append(value)
+                if not changed:
+                    raise CliError("not_found", f"reaction window not found: {window_id}", exit_code=5)
+                runtime["pending"] = updated_pending
+                state["runtime"] = runtime
+                updated = campaigns.update(campaign_id, state=state)
+                _campaign_revision(revisions, before, updated, f"reaction.{args.action}")
+                return {"pending": updated_pending}
+            raise CliError("unknown_command", f"unknown reaction command: {args.action}", exit_code=2)
 
         if args.group == "time":
             campaign_id = _require(args.campaign, "campaign")

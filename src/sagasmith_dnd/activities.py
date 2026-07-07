@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from typing import Any
+from uuid import uuid4
 
 from sagasmith_core.foundry_documents import FoundryDocumentService
 
@@ -104,6 +105,12 @@ def execute_document_activity(
         deltas.append({"type": "active_effect", "effect_id": effect["id"], "after": effect})
 
     pending = _reaction_windows(activity, actor_id=actor_id, target_id=target_id)
+    if pending:
+        runtime = dict(state.get("runtime") or {})
+        queued = list(runtime.get("pending") or [])
+        queued.extend(pending)
+        runtime["pending"] = queued
+        state["runtime"] = runtime
     message = documents.create_message(
         campaign_id=campaign_id,
         message_type="activity",
@@ -179,7 +186,9 @@ def _reaction_windows(activity, *, actor_id: str, target_id: str | None) -> list
         return []
     return [
         {
+            "id": f"reaction-{uuid4().hex}",
             "type": "reaction_window",
+            "status": "pending",
             "trigger": "targeted_by_attack",
             "actor_id": target_id,
             "source_actor_id": actor_id,
