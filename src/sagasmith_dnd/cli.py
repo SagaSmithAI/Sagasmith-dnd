@@ -1025,6 +1025,32 @@ def _dispatch(args) -> Any:
                 }
             if args.action == "show":
                 return asdict(maps.get_token(_require(args.token or args.id, "token")))
+            if args.action == "update":
+                before = asdict(maps.get_token(_require(args.token or args.id, "token")))
+                updated = asdict(
+                    maps.update_token(
+                        before["id"],
+                        actor_type=args.actor_type or args.type,
+                        actor_id=args.actor_id or args.character,
+                        name=args.name,
+                        width=args.width,
+                        height=args.height,
+                        disposition=args.disposition,
+                        hidden=_bool_value(args.hidden) if args.hidden is not None else None,
+                        vision=_dict(args.vision) if args.vision is not None else None,
+                        actor_delta=_dict(args.payload) if args.payload is not None else None,
+                        metadata=_dict(args.metadata) if args.metadata is not None else None,
+                    )
+                )
+                revisions.record(
+                    updated["campaign_id"],
+                    operation="token.update",
+                    entity_type="scene_token",
+                    entity_id=updated["id"],
+                    before=before,
+                    after=updated,
+                )
+                return updated
             if args.action == "move":
                 before = asdict(maps.get_token(_require(args.token or args.id, "token")))
                 result = move_token_with_movement_cost(

@@ -68,6 +68,46 @@ def test_token_move_reports_distance_and_difficult_terrain_cost(
     assert moved["movement"]["regions"][0]["behavior"] == "difficult_terrain"
 
 
+def test_token_update_changes_visibility_and_metadata_with_undo(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setenv("DND_DATABASE_URL", f"sqlite+pysqlite:///{(tmp_path / 'token-update.db').as_posix()}")
+    campaign = _call(capsys, "campaign", "start", "--name", "Token Update")["campaign"]
+    scene = _call(capsys, "scene", "create", "--campaign", campaign["id"], "--name", "Grid")
+    token = _call(capsys, "token", "create", "--scene", scene["id"], "--name", "Hero")
+
+    updated = _call(
+        capsys,
+        "token",
+        "update",
+        "--token",
+        token["id"],
+        "--name",
+        "Hidden Hero",
+        "--hidden",
+        "true",
+        "--disposition",
+        "friendly",
+        "--vision",
+        '{"darkvision":60}',
+        "--metadata",
+        '{"controlled":true}',
+    )
+
+    assert updated["name"] == "Hidden Hero"
+    assert updated["hidden"] is True
+    assert updated["disposition"] == "friendly"
+    assert updated["vision"]["darkvision"] == 60
+    assert updated["metadata"]["controlled"] is True
+
+    _call(capsys, "state", "undo", "--campaign", campaign["id"])
+    shown = _call(capsys, "token", "show", "--token", token["id"])
+    assert shown["name"] == "Hero"
+    assert shown["hidden"] is False
+
+
 def test_token_move_leaving_reach_creates_opportunity_attack_window(
     tmp_path: Path,
     monkeypatch,
