@@ -163,13 +163,30 @@ def _app():
         advantage: bool = False
         disadvantage: bool = False
 
+    class CheckRequest(BaseModel):
+        dc: int
+        ability_score: int = 10
+        proficient: bool = False
+        level: int = 1
+        bonus: int = 0
+        advantage: bool = False
+        disadvantage: bool = False
+
     @app.post("/api/roll")
     def roll(req: RollRequest):
         return roll_dice(req.expression)
 
     @app.post("/api/check")
-    def check(req: RollRequest):
-        return resolve_check(req.expression, req.advantage, req.disadvantage)
+    def check(req: CheckRequest):
+        return resolve_check(
+            dc=req.dc,
+            ability_score=req.ability_score,
+            proficient=req.proficient,
+            level=req.level,
+            bonus=req.bonus,
+            advantage=req.advantage,
+            disadvantage=req.disadvantage,
+        )
 
     return app
 

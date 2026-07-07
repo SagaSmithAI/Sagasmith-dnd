@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from sagasmith_core.systems import SystemDefinition
+from sagasmith_core.items import normalize_inventory
 
 
 def validate_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
@@ -27,7 +28,7 @@ def validate_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
     normalized.setdefault("species", "")
     normalized.setdefault("background", "")
     normalized.setdefault("proficiencies", [])
-    normalized.setdefault("inventory", [])
+    normalized["inventory"] = normalize_inventory(normalized.get("inventory", []))
     normalized.setdefault("spells", [])
     return normalized
 
@@ -41,6 +42,9 @@ DND5E = SystemDefinition(
         "locale": "en",
         "initiative": [],
         "combat": None,
+        "time": {},
+        "rests": {},
+        "map": {"active_scene_id": None},
         "world": {},
     },
     validate_sheet=validate_character_sheet,

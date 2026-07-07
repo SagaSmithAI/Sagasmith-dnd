@@ -13,6 +13,8 @@ from sagasmith_core import (
     CampaignService,
     CharacterService,
     EventService,
+    InventoryService,
+    MapService,
     MemoryService,
     ModuleService,
     RevisionService,
@@ -21,11 +23,27 @@ from sagasmith_core import (
     SnapshotService,
 )
 from sagasmith_core.documents import converter_for
+from sagasmith_core.items import normalize_inventory
 from sagasmith_core.modules import MarkdownModuleParser
 
 from sagasmith_dnd import __version__
+from sagasmith_dnd.checks import resolve_character_check
+from sagasmith_dnd.combat import (
+    apply_damage,
+    apply_effect,
+    attack as combat_attack,
+    combat_status,
+    end_turn,
+    execute_activity,
+    heal as combat_heal,
+    recover_period,
+    remove_effect,
+    set_condition,
+    start_combat,
+)
 from sagasmith_dnd.engine import resolve_check, roll
 from sagasmith_dnd.module_profile import DndModuleProfile
+from sagasmith_dnd.rulesets import get_ruleset, list_rulesets, validate_ruleset
 from sagasmith_dnd.server import serve as _serve
 from sagasmith_dnd.runtime import database, dense_components
 from sagasmith_dnd.system import DND5E, validate_character_sheet
@@ -56,10 +74,18 @@ def _dict(raw: str | None) -> dict[str, Any]:
     return value
 
 
+def _list(raw: str | None, name: str) -> list[Any]:
+    value = _json_value(raw, [])
+    if not isinstance(value, list):
+        raise CliError("array_required", f"--{name} must be a JSON array", exit_code=2)
+    return value
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="sagasmith-dnd")
     parser.add_argument("group")
     parser.add_argument("action", nargs="?")
+    parser.add_argument("target", nargs="?")
     parser.add_argument("--campaign")
     parser.add_argument("--id")
     parser.add_argument("--name")
@@ -74,6 +100,37 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--state")
     parser.add_argument("--payload")
     parser.add_argument("--metadata")
+    parser.add_argument("--participants")
+    parser.add_argument("--environment")
+    parser.add_argument("--target-id")
+    parser.add_argument("--attack-bonus", type=int)
+    parser.add_argument("--amount", type=int)
+    parser.add_argument("--damage-type")
+    parser.add_argument("--weapon")
+    parser.add_argument("--item")
+    parser.add_argument("--template")
+    parser.add_argument("--owner-type")
+    parser.add_argument("--owner-id")
+    parser.add_argument("--container")
+    parser.add_argument("--quantity", type=int)
+    parser.add_argument("--actor", default="runtime")
+    parser.add_argument("--reason", default="")
+    parser.add_argument("--category")
+    parser.add_argument("--rarity", default="")
+    parser.add_argument("--tags")
+    parser.add_argument("--weight", type=int, default=0)
+    parser.add_argument("--value")
+    parser.add_argument("--rules")
+    parser.add_argument("--identified")
+    parser.add_argument("--attunement")
+    parser.add_argument("--charges")
+    parser.add_argument("--condition")
+    parser.add_argument("--custom")
+    parser.add_argument("--character")
+    parser.add_argument("--ability")
+    parser.add_argument("--skill")
+    parser.add_argument("--tool")
+    parser.add_argument("--source")
     parser.add_argument("--sheet")
     parser.add_argument("--notes")
     parser.add_argument("--type")
@@ -92,8 +149,30 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--query")
     parser.add_argument("--chunk")
     parser.add_argument("--scene")
+    parser.add_argument("--token")
+    parser.add_argument("--region")
+    parser.add_argument("--x", type=int)
+    parser.add_argument("--y", type=int)
+    parser.add_argument("--width", type=int)
+    parser.add_argument("--height", type=int)
+    parser.add_argument("--elevation", type=int)
+    parser.add_argument("--grid-size", type=int)
+    parser.add_argument("--grid-units")
+    parser.add_argument("--background")
+    parser.add_argument("--disposition")
+    parser.add_argument("--hidden")
+    parser.add_argument("--vision")
+    parser.add_argument("--actor-type")
+    parser.add_argument("--actor-id")
+    parser.add_argument("--shape")
+    parser.add_argument("--behavior")
+    parser.add_argument("--duration")
+    parser.add_argument("--activity")
+    parser.add_argument("--payment")
+    parser.add_argument("--minutes", type=int)
+    parser.add_argument("--hours", type=int)
     parser.add_argument("--module")
-    parser.add_argument("--slot", type=int)
+    parser.add_argument("--slot")
     parser.add_argument("--label", default="")
     parser.add_argument("--limit", type=int, default=8)
     parser.add_argument("--progress", type=int, default=0)
@@ -117,6 +196,19 @@ def _require(value: Any, name: str) -> Any:
     if value is None or value == "":
         raise CliError("argument_required", f"--{name} is required", exit_code=2)
     return value
+
+
+def _bool_value(value: str | None, default: bool = True) -> bool:
+    if value is None:
+        return default
+    return value.lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _int_value(value: Any, name: str) -> int:
+    try:
+        return int(_require(value, name))
+    except (TypeError, ValueError) as exc:
+        raise CliError("invalid_value", f"--{name} must be an integer", exit_code=2) from exc
 
 
 def _profile_for(args, profiles: RuleProfileService) -> tuple[str | None, str | None, list[str]]:
@@ -158,6 +250,39 @@ def _character_revision(revisions, before, after, operation: str) -> None:
     )
 
 
+def _item_revision(revisions, before, after, operation: str) -> None:
+    value = after or before
+    if not value:
+        return
+    revisions.record(
+        value["campaign_id"],
+        operation=operation,
+        entity_type="item_instance",
+        entity_id=value["id"],
+        before=before,
+        after=after,
+    )
+
+
+def _sheet_for_storage(sheet: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    inventory = normalize_inventory(sheet.get("inventory", []))
+    stored = dict(sheet)
+    if inventory:
+        stored["inventory"] = []
+        stored["inventory_managed"] = True
+    return stored, inventory
+
+
+def _character_payload(character: dict[str, Any], inventory: InventoryService) -> dict[str, Any]:
+    value = dict(character)
+    if value.get("campaign_id"):
+        sheet = dict(value.get("sheet") or {})
+        sheet["inventory"] = inventory.character_inventory(value["id"])
+        sheet["inventory_managed"] = True
+        value["sheet"] = sheet
+    return value
+
+
 def _dispatch(args) -> Any:
     if args.group == "serve":
         _serve(host=args.host, port=args.port)
@@ -175,11 +300,21 @@ def _dispatch(args) -> Any:
                 "event",
                 "rules",
                 "module",
+                "item",
                 "save",
                 "memory",
                 "state",
                 "roll",
+                "check",
                 "combat",
+                "ruleset",
+                "scene",
+                "token",
+                "region",
+                "time",
+                "effect",
+                "rest",
+                "activity",
             ],
             "agent_interface": "skill+json-cli",
         }
@@ -208,6 +343,8 @@ def _dispatch(args) -> Any:
         events = EventService(db)
         rules = RuleService(db)
         modules = ModuleService(db)
+        inventory = InventoryService(db)
+        maps = MapService(db)
         saves = SnapshotService(db)
         memories = MemoryService(db)
         revisions = RevisionService(db)
@@ -283,22 +420,31 @@ def _dispatch(args) -> Any:
 
         if args.group == "character":
             if args.action == "create":
-                return asdict(
-                    characters.create(
-                        system_id=DND5E.id,
-                        campaign_id=args.campaign,
-                        name=_require(args.name, "name"),
-                        character_type=args.type or "pc",
-                        player_name=args.player,
-                        summary=args.summary or "",
-                        sheet=validate_character_sheet(_dict(args.sheet)),
-                        notes=_dict(args.notes),
-                    )
+                sheet, initial_inventory = _sheet_for_storage(
+                    validate_character_sheet(_dict(args.sheet))
                 )
+                created = characters.create(
+                    system_id=DND5E.id,
+                    campaign_id=args.campaign,
+                    name=_require(args.name, "name"),
+                    character_type=args.type or "pc",
+                    player_name=args.player,
+                    summary=args.summary or "",
+                    sheet=sheet,
+                    notes=_dict(args.notes),
+                )
+                if args.campaign and initial_inventory:
+                    inventory.import_inventory(
+                        campaign_id=args.campaign,
+                        character_id=created.id,
+                        inventory=initial_inventory,
+                        actor=args.actor,
+                    )
+                return _character_payload(asdict(created), inventory)
             if args.action == "list":
                 return {
                     "characters": [
-                        asdict(item)
+                        _character_payload(asdict(item), inventory)
                         for item in characters.list(
                             system_id=DND5E.id,
                             campaign_id=args.campaign,
@@ -307,20 +453,36 @@ def _dispatch(args) -> Any:
                     ]
                 }
             if args.action == "show":
-                return asdict(characters.get(_require(args.id, "id")))
+                return _character_payload(
+                    asdict(characters.get(_require(args.id, "id"))),
+                    inventory,
+                )
             if args.action == "update":
                 sheet = _dict(args.sheet) if args.sheet else None
+                imported_inventory: list[dict[str, Any]] = []
+                if sheet is not None:
+                    sheet, imported_inventory = _sheet_for_storage(
+                        validate_character_sheet(sheet)
+                    )
                 before = characters.get(_require(args.id, "id"))
                 updated = characters.update(
                         _require(args.id, "id"),
                         name=args.name,
                         player_name=args.player,
                         summary=args.summary,
-                        sheet=validate_character_sheet(sheet) if sheet is not None else None,
+                        sheet=sheet,
                         notes=_dict(args.notes) if args.notes else None,
                     )
+                if updated.campaign_id and imported_inventory:
+                    inventory.import_inventory(
+                        campaign_id=updated.campaign_id,
+                        character_id=updated.id,
+                        inventory=imported_inventory,
+                        replace=True,
+                        actor=args.actor,
+                    )
                 _character_revision(revisions, before, updated, "character.update")
-                return asdict(updated)
+                return _character_payload(asdict(updated), inventory)
             if args.action in {"bind", "unbind"}:
                 return asdict(
                     characters.bind(
@@ -536,6 +698,268 @@ def _dispatch(args) -> Any:
                 )
                 return {"deleted": args.module}
 
+        if args.group == "ruleset":
+            if args.action == "list":
+                return {"rulesets": list_rulesets()}
+            if args.action == "show":
+                return get_ruleset(args.id or args.edition)
+            if args.action == "validate":
+                return validate_ruleset(args.id or args.edition)
+
+        if args.group == "scene":
+            if args.action == "create":
+                return asdict(
+                    maps.create_scene(
+                        _require(args.campaign, "campaign"),
+                        name=_require(args.name, "name"),
+                        grid_size=args.grid_size or 70,
+                        grid_units=args.grid_units or "ft",
+                        width=args.width or 0,
+                        height=args.height or 0,
+                        background=args.background or "",
+                        metadata=_dict(args.metadata),
+                    )
+                )
+            if args.action == "list":
+                return {
+                    "scenes": [
+                        asdict(item)
+                        for item in maps.list_scenes(_require(args.campaign, "campaign"))
+                    ]
+                }
+            if args.action == "show":
+                scene = asdict(maps.get_scene(_require(args.scene or args.id, "scene")))
+                scene["tokens"] = [
+                    asdict(item) for item in maps.list_tokens(scene["id"])
+                ]
+                scene["regions"] = [
+                    asdict(item) for item in maps.list_regions(scene["id"])
+                ]
+                return scene
+
+        if args.group == "token":
+            if args.action == "create":
+                return asdict(
+                    maps.create_token(
+                        _require(args.scene, "scene"),
+                        actor_type=args.actor_type or args.type or "character",
+                        actor_id=args.actor_id or args.character or "",
+                        name=_require(args.name, "name"),
+                        x=args.x or 0,
+                        y=args.y or 0,
+                        width=args.width or 1,
+                        height=args.height or 1,
+                        elevation=args.elevation or 0,
+                        disposition=args.disposition or "neutral",
+                        hidden=_bool_value(args.hidden, False),
+                        vision=_dict(args.vision),
+                        actor_delta=_dict(args.payload),
+                        metadata=_dict(args.metadata),
+                    )
+                )
+            if args.action == "list":
+                return {
+                    "tokens": [
+                        asdict(item)
+                        for item in maps.list_tokens(_require(args.scene, "scene"))
+                    ]
+                }
+            if args.action == "show":
+                return asdict(maps.get_token(_require(args.token or args.id, "token")))
+            if args.action == "move":
+                before = asdict(maps.get_token(_require(args.token or args.id, "token")))
+                moved = maps.move_token(
+                    before["id"],
+                    x=_int_value(args.x, "x"),
+                    y=_int_value(args.y, "y"),
+                    elevation=args.elevation,
+                    metadata=_dict(args.metadata),
+                )
+                after = asdict(moved)
+                revisions.record(
+                    after["campaign_id"],
+                    operation="token.move",
+                    entity_type="scene_token",
+                    entity_id=after["id"],
+                    before=before,
+                    after=after,
+                )
+                return after
+
+        if args.group == "region":
+            if args.action == "create":
+                return asdict(
+                    maps.create_region(
+                        _require(args.scene, "scene"),
+                        name=_require(args.name, "name"),
+                        shape=_dict(args.shape),
+                        behavior=args.behavior or args.type or "area",
+                        origin_activity_id=args.activity or "",
+                        attached_token_id=args.token,
+                        duration=_dict(args.duration),
+                        metadata=_dict(args.metadata),
+                    )
+                )
+            if args.action == "list":
+                return {
+                    "regions": [
+                        asdict(item)
+                        for item in maps.list_regions(_require(args.scene, "scene"))
+                    ]
+                }
+
+        if args.group == "item":
+            if args.action == "template":
+                if args.target == "create":
+                    return asdict(
+                        inventory.create_template(
+                            system_id=DND5E.id,
+                            name=_require(args.name, "name"),
+                            source_key=args.source_key,
+                            category=args.category or "gear",
+                            rarity=args.rarity or "",
+                            tags=list(_json_value(args.tags, [])),
+                            weight=args.weight,
+                            value=_dict(args.value),
+                            rules=_dict(args.rules),
+                            description=args.description or "",
+                            metadata=_dict(args.metadata),
+                        )
+                    )
+                if args.target == "list":
+                    return {
+                        "templates": [
+                            asdict(item)
+                            for item in inventory.list_templates(
+                                system_id=DND5E.id,
+                                category=args.category,
+                            )
+                        ]
+                    }
+                if args.target == "show":
+                    return asdict(inventory.get_template(_require(args.template or args.id, "template")))
+            if args.action == "add":
+                item = inventory.add_item(
+                    campaign_id=_require(args.campaign, "campaign"),
+                    name=_require(args.name, "name"),
+                    template_id=args.template,
+                    owner_type=args.owner_type or "party",
+                    owner_id=args.owner_id or "party",
+                    container_id=args.container,
+                    quantity=args.quantity or 1,
+                    equipped_slot=args.slot,
+                    attunement=args.attunement or "none",
+                    identified=_bool_value(args.identified, True),
+                    charges=_dict(args.charges),
+                    condition=args.condition or "normal",
+                    state=_dict(args.custom),
+                    actor=args.actor,
+                    reason=args.reason,
+                )
+                data = asdict(item)
+                _item_revision(revisions, None, data, "item.add")
+                return data
+            if args.action == "list":
+                return {
+                    "items": [
+                        asdict(item)
+                        for item in inventory.list_items(
+                            campaign_id=_require(args.campaign, "campaign"),
+                            owner_type=args.owner_type,
+                            owner_id=args.owner_id,
+                            container_id=args.container,
+                        )
+                    ]
+                }
+            if args.action == "show":
+                return asdict(inventory.get_item(_require(args.item or args.id, "item")))
+            if args.action == "update":
+                item_id = _require(args.item or args.id, "item")
+                before = asdict(inventory.get_item(item_id))
+                updates: dict[str, Any] = {}
+                for key, value in {
+                    "name": args.name,
+                    "quantity": args.quantity,
+                    "equipped_slot": args.slot,
+                    "attunement": args.attunement,
+                    "identified": None if args.identified is None else _bool_value(args.identified),
+                    "charges": _dict(args.charges) if args.charges else None,
+                    "condition": args.condition,
+                    "state": _dict(args.custom) if args.custom else None,
+                    "container_id": args.container,
+                }.items():
+                    if value is not None:
+                        updates[key] = value
+                after = asdict(
+                    inventory.update_item(
+                        item_id,
+                        actor=args.actor,
+                        reason=args.reason,
+                        **updates,
+                    )
+                )
+                _item_revision(revisions, before, after, "item.update")
+                return after
+            if args.action == "move":
+                item_id = _require(args.item or args.id, "item")
+                before = asdict(inventory.get_item(item_id))
+                after = asdict(
+                    inventory.move_item(
+                        item_id,
+                        owner_type=_require(args.owner_type, "owner-type"),
+                        owner_id=_require(args.owner_id, "owner-id"),
+                        container_id=args.container,
+                        actor=args.actor,
+                        reason=args.reason,
+                    )
+                )
+                _item_revision(revisions, before, after, "item.move")
+                return after
+            if args.action in {"equip", "unequip"}:
+                item_id = _require(args.item or args.id, "item")
+                before = asdict(inventory.get_item(item_id))
+                after = asdict(
+                    inventory.equip_item(
+                        item_id,
+                        slot=args.slot if args.action == "equip" else None,
+                        actor=args.actor,
+                        reason=args.reason,
+                    )
+                )
+                _item_revision(revisions, before, after, f"item.{args.action}")
+                return after
+            if args.action == "use":
+                item_id = _require(args.item or args.id, "item")
+                before = asdict(inventory.get_item(item_id))
+                after = asdict(
+                    inventory.use_item(
+                        item_id,
+                        quantity=args.quantity or 1,
+                        actor=args.actor,
+                        reason=args.reason,
+                    )
+                )
+                _item_revision(revisions, before, after, "item.use")
+                return after
+            if args.action == "delete":
+                before = inventory.delete_item(
+                    _require(args.item or args.id, "item"),
+                    actor=args.actor,
+                    reason=args.reason,
+                )
+                _item_revision(revisions, before, None, "item.delete")
+                return {"deleted": before["id"]}
+            if args.action == "history":
+                return {
+                    "entries": [
+                        asdict(item)
+                        for item in inventory.history(
+                            campaign_id=_require(args.campaign, "campaign"),
+                            item_id=args.item,
+                        )
+                    ]
+                }
+
         if args.group == "save":
             campaign_id = _require(args.campaign, "campaign")
             if args.action == "create":
@@ -543,30 +967,34 @@ def _dispatch(args) -> Any:
             if args.action == "list":
                 return {"snapshots": [asdict(item) for item in saves.list(campaign_id)]}
             if args.action == "show":
-                return saves.get(campaign_id, _require(args.slot, "slot"))
+                return saves.get(campaign_id, _int_value(args.slot, "slot"))
             if args.action == "verify":
-                return {"valid": saves.verify(campaign_id, _require(args.slot, "slot"))}
+                return {"valid": saves.verify(campaign_id, _int_value(args.slot, "slot"))}
             if args.action == "restore":
-                return asdict(saves.restore(campaign_id, _require(args.slot, "slot")))
+                return asdict(saves.restore(campaign_id, _int_value(args.slot, "slot")))
             if args.action == "regenerate-recap":
                 return saves.regenerate_recap(
                     campaign_id,
-                    _require(args.slot, "slot"),
+                    _int_value(args.slot, "slot"),
                 )
             if args.action == "lineage":
                 return {
                     "lineage": [
-                        asdict(item) for item in saves.lineage(campaign_id, args.slot)
+                        asdict(item)
+                        for item in saves.lineage(
+                            campaign_id,
+                            int(args.slot) if args.slot is not None else None,
+                        )
                     ]
                 }
             if args.action == "export":
                 return saves.export(
                     campaign_id,
-                    _require(args.slot, "slot"),
+                    _int_value(args.slot, "slot"),
                     _require(args.output, "output"),
                 )
             if args.action == "delete":
-                saves.delete(campaign_id, _require(args.slot, "slot"))
+                saves.delete(campaign_id, _int_value(args.slot, "slot"))
                 return {"deleted": args.slot}
 
         if args.group == "memory":
@@ -619,6 +1047,24 @@ def _dispatch(args) -> Any:
                     ]
                 }
 
+        if args.group == "check":
+            if args.action not in {"ability", "skill", "save", "tool", "initiative"}:
+                raise CliError("unknown_command", f"unknown check type: {args.action}", exit_code=2)
+            character = characters.get(_require(args.character or args.id, "character"))
+            dc = args.dc if args.dc is not None else 0 if args.action == "initiative" else None
+            return resolve_character_check(
+                sheet=character.sheet,
+                check_type=args.action,
+                dc=_require(dc, "dc"),
+                ability=args.ability or args.target,
+                skill=args.skill or args.target,
+                tool=args.tool or args.target,
+                bonus=args.bonus,
+                advantage=args.advantage,
+                disadvantage=args.disadvantage,
+                source=args.source or args.reason,
+            )
+
         if args.group == "roll":
             if args.action == "dice":
                 return asdict(roll(_require(args.expression, "expression")))
@@ -639,27 +1085,85 @@ def _dispatch(args) -> Any:
             state = dict(campaign.state)
             if args.action == "start":
                 before = campaign
-                state["combat"] = {
-                    "active": True,
-                    "round": 1,
-                    "turn": 0,
-                    **_dict(args.payload),
-                }
+                payload = _dict(args.payload)
+                participants = _list(args.participants, "participants") if args.participants else payload.pop("participants", [])
+                environment = _dict(args.environment) if args.environment else payload.pop("environment", {})
+                state["combat"] = start_combat(
+                    name=args.name or payload.pop("name", "Combat"),
+                    participants=participants,
+                    scene_id=args.scene or payload.pop("scene_id", None),
+                    environment={**environment, **payload},
+                )
                 updated = campaigns.update(campaign_id, state=state)
                 _campaign_revision(revisions, before, updated, "combat.start")
-                return state["combat"]
+                return combat_status(state["combat"])
             if args.action == "status":
-                return state.get("combat")
-            if args.action == "act":
+                return combat_status(state.get("combat"))
+            if args.action in {"attack", "damage", "heal", "condition", "end-turn"}:
                 before = campaign
-                combat = dict(state.get("combat") or {})
-                if not combat.get("active"):
-                    raise CliError("combat_not_active", "combat is not active", exit_code=4)
-                combat.update(_dict(args.payload))
+                combat = state.get("combat")
+                if args.action == "attack":
+                    combat, result = combat_attack(
+                        combat,
+                        actor_id=_require(args.actor if args.actor != "runtime" else None, "actor"),
+                        target_id=_require(args.target_id or args.target, "target-id"),
+                        attack_bonus=args.attack_bonus if args.attack_bonus is not None else args.bonus,
+                        damage_expression=args.expression,
+                        damage_type=args.damage_type,
+                        advantage=args.advantage,
+                        disadvantage=args.disadvantage,
+                        label=args.weapon or args.name or "",
+                    )
+                elif args.action == "damage":
+                    amount = args.amount
+                    roll_result = None
+                    if amount is None:
+                        rolled = roll(_require(args.expression, "expression"))
+                        amount = rolled.total
+                        roll_result = asdict(rolled)
+                    combat, result = apply_damage(
+                        combat,
+                        target_id=_require(args.target_id or args.target, "target-id"),
+                        amount=amount,
+                        damage_type=args.damage_type or "",
+                        source=args.reason,
+                        roll_result=roll_result,
+                    )
+                elif args.action == "heal":
+                    amount = args.amount
+                    if amount is None:
+                        amount = roll(_require(args.expression, "expression")).total
+                    combat, result = combat_heal(
+                        combat,
+                        target_id=_require(args.target_id or args.target, "target-id"),
+                        amount=amount,
+                        source=args.reason,
+                    )
+                elif args.action == "condition":
+                    mode = (args.target or "").lower()
+                    if mode not in {"add", "remove"}:
+                        raise CliError("invalid_value", "combat condition target must be add or remove", exit_code=2)
+                    combat, result = set_condition(
+                        combat,
+                        target_id=_require(args.target_id, "target-id"),
+                        condition=_require(args.condition, "condition"),
+                        present=mode == "add",
+                    )
+                else:
+                    combat, result = end_turn(
+                        combat,
+                        actor_id=None if args.actor == "runtime" else args.actor,
+                    )
                 state["combat"] = combat
                 updated = campaigns.update(campaign_id, state=state)
-                _campaign_revision(revisions, before, updated, "combat.act")
-                return combat
+                _campaign_revision(revisions, before, updated, f"combat.{args.action}")
+                return {"result": result, "combat": combat_status(combat)}
+            if args.action == "act":
+                raise CliError(
+                    "runtime_authority_required",
+                    "combat act is disabled; use activity, combat, token, effect, time, or rest commands",
+                    exit_code=2,
+                )
             if args.action == "end":
                 before = campaign
                 result = state.get("combat")
@@ -667,6 +1171,98 @@ def _dispatch(args) -> Any:
                 updated = campaigns.update(campaign_id, state=state)
                 _campaign_revision(revisions, before, updated, "combat.end")
                 return {"ended": True, "combat": result}
+
+        if args.group == "activity":
+            if args.action != "use":
+                raise CliError("unknown_command", f"unknown activity command: {args.action}", exit_code=2)
+            campaign_id = _require(args.campaign, "campaign")
+            before = campaigns.get(campaign_id)
+            state = dict(before.state)
+            combat, result = execute_activity(
+                state.get("combat"),
+                actor_id=_require(args.actor if args.actor != "runtime" else None, "actor"),
+                activity_id=_require(args.activity or args.target, "activity"),
+                target_id=args.target_id,
+                payment=args.payment,
+                payload=_dict(args.payload),
+            )
+            state["combat"] = combat
+            updated = campaigns.update(campaign_id, state=state)
+            _campaign_revision(revisions, before, updated, "activity.use")
+            return {"result": result, "combat": combat_status(combat)}
+
+        if args.group == "time":
+            campaign_id = _require(args.campaign, "campaign")
+            before = campaigns.get(campaign_id)
+            state = dict(before.state)
+            clock = dict(state.get("time") or {})
+            if args.action == "status":
+                return clock
+            if args.action == "advance":
+                minutes = int(args.minutes or 0) + (int(args.hours or 0) * 60)
+                clock["declared_minutes"] = int(clock.get("declared_minutes", 0)) + minutes
+                clock["advances"] = int(clock.get("advances", 0)) + 1
+                if args.reason:
+                    clock["last_reason"] = args.reason
+                state["time"] = clock
+                if state.get("combat") and minutes:
+                    combat, _ = recover_period(
+                        state["combat"],
+                        period="declared_minute",
+                        actor_id=None,
+                    )
+                    state["combat"] = combat
+                updated = campaigns.update(campaign_id, state=state)
+                _campaign_revision(revisions, before, updated, "time.advance")
+                return clock
+
+        if args.group == "effect":
+            campaign_id = _require(args.campaign, "campaign")
+            before = campaigns.get(campaign_id)
+            state = dict(before.state)
+            if args.action == "list":
+                return {"effects": list((state.get("combat") or {}).get("effects") or [])}
+            if args.action == "add":
+                combat, result = apply_effect(
+                    state.get("combat"),
+                    target_id=_require(args.target_id or args.target, "target-id"),
+                    effect=_dict(args.payload),
+                    source=args.source or args.reason,
+                )
+            elif args.action == "remove":
+                combat, result = remove_effect(
+                    state.get("combat"),
+                    effect_id=_require(args.id or args.target, "id"),
+                )
+            else:
+                raise CliError("unknown_command", f"unknown effect command: {args.action}", exit_code=2)
+            state["combat"] = combat
+            updated = campaigns.update(campaign_id, state=state)
+            _campaign_revision(revisions, before, updated, f"effect.{args.action}")
+            return {"result": result, "combat": combat_status(combat)}
+
+        if args.group == "rest":
+            campaign_id = _require(args.campaign, "campaign")
+            before = campaigns.get(campaign_id)
+            state = dict(before.state)
+            period = {"short": "short_rest", "long": "long_rest"}.get(args.action or "")
+            if not period:
+                raise CliError("unknown_command", f"unknown rest type: {args.action}", exit_code=2)
+            if state.get("combat"):
+                combat, result = recover_period(
+                    state["combat"],
+                    period=period,
+                    actor_id=None if args.actor == "runtime" else args.actor,
+                )
+                state["combat"] = combat
+            else:
+                result = {"type": "period.recover", "period": period, "recovered": []}
+            rest_state = dict(state.get("rests") or {})
+            rest_state[period] = int(rest_state.get(period, 0)) + 1
+            state["rests"] = rest_state
+            updated = campaigns.update(campaign_id, state=state)
+            _campaign_revision(revisions, before, updated, f"rest.{args.action}")
+            return {"result": result, "rests": rest_state, "combat": combat_status(state.get("combat"))}
 
         raise CliError(
             "unknown_command",

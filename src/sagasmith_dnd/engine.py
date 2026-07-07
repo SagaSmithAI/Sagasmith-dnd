@@ -82,6 +82,7 @@ def resolve_check(
     dc: int,
     ability_score: int,
     proficient: bool = False,
+    proficiency_multiplier: int = 1,
     level: int = 1,
     bonus: int = 0,
     advantage: bool = False,
@@ -90,7 +91,7 @@ def resolve_check(
 ) -> dict:
     die = roll_d20(advantage=advantage, disadvantage=disadvantage, rng=rng)
     modifier = ability_modifier(ability_score)
-    proficiency = proficiency_bonus(level) if proficient else 0
+    proficiency = proficiency_bonus(level) * max(1, proficiency_multiplier) if proficient else 0
     total = die["natural"] + modifier + proficiency + bonus
     success = die["natural"] == 20 or (die["natural"] != 1 and total >= dc)
     return {
