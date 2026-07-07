@@ -45,6 +45,7 @@ from sagasmith_dnd.combat import (
     start_combat,
 )
 from sagasmith_dnd.conditions import add_actor_condition, remove_actor_condition
+from sagasmith_dnd.damage import apply_actor_damage
 from sagasmith_dnd.durations import advance_effect_durations
 from sagasmith_dnd.effects import recalculate_actor_effects
 from sagasmith_dnd.engine import resolve_check, roll
@@ -329,6 +330,7 @@ def _dispatch(args) -> Any:
                 "reaction",
                 "pack",
                 "condition",
+                "damage",
             ],
             "agent_interface": "skill+json-cli",
         }
@@ -1310,6 +1312,18 @@ def _dispatch(args) -> Any:
                     condition=_require(args.condition or args.target, "condition"),
                 )
             raise CliError("unknown_command", f"unknown condition command: {args.action}", exit_code=2)
+
+        if args.group == "damage":
+            if args.action != "apply":
+                raise CliError("unknown_command", f"unknown damage command: {args.action}", exit_code=2)
+            return apply_actor_damage(
+                foundry_documents,
+                campaign_id=_require(args.campaign, "campaign"),
+                actor_id=_require(args.actor if args.actor != "runtime" else None, "actor"),
+                amount=_int_value(args.amount, "amount"),
+                damage_type=args.damage_type or args.type or "",
+                source=args.source or args.reason,
+            )
 
         if args.group == "time":
             campaign_id = _require(args.campaign, "campaign")
