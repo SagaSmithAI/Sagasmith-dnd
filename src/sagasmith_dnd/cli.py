@@ -35,6 +35,7 @@ from sagasmith_dnd.combat import (
     apply_effect,
     attack as combat_attack,
     combat_status,
+    death_save,
     end_turn,
     execute_activity,
     heal as combat_heal,
@@ -1122,7 +1123,7 @@ def _dispatch(args) -> Any:
                 return combat_status(state["combat"])
             if args.action == "status":
                 return combat_status(state.get("combat"))
-            if args.action in {"attack", "damage", "heal", "condition", "end-turn"}:
+            if args.action in {"attack", "damage", "heal", "condition", "death-save", "end-turn"}:
                 before = campaign
                 combat = state.get("combat")
                 if args.action == "attack":
@@ -1171,6 +1172,13 @@ def _dispatch(args) -> Any:
                         target_id=_require(args.target_id, "target-id"),
                         condition=_require(args.condition, "condition"),
                         present=mode == "add",
+                    )
+                elif args.action == "death-save":
+                    combat, result = death_save(
+                        combat,
+                        target_id=_require(args.target_id or args.target, "target-id"),
+                        advantage=args.advantage,
+                        disadvantage=args.disadvantage,
                     )
                 else:
                     combat, result = end_turn(

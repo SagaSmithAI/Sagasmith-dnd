@@ -88,3 +88,33 @@ def test_structured_combat_flow(tmp_path: Path, monkeypatch, capsys) -> None:
     _call(capsys, "state", "undo", "--campaign", campaign_id)
     status = _call(capsys, "combat", "status", "--campaign", campaign_id)
     assert status["current"]["id"] == "hero"
+
+
+def test_combat_death_save_records_success(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.setenv("DND_DATABASE_URL", f"sqlite+pysqlite:///{(tmp_path / 'death.db').as_posix()}")
+    campaign = _call(capsys, "campaign", "start", "--name", "Death Saves")["campaign"]
+    _call(
+        capsys,
+        "combat",
+        "start",
+        "--campaign",
+        campaign["id"],
+        "--participants",
+        '[{"id":"hero","name":"Hero","initiative":1,"hp":0,"max_hp":10,"conditions":["unconscious"]}]',
+    )
+
+    random.seed(0)
+    saved = _call(
+        capsys,
+        "combat",
+        "death-save",
+        "--campaign",
+        campaign["id"],
+        "--target-id",
+        "hero",
+    )
+
+    assert saved["result"]["outcome"] == "pending"
+    assert saved["result"]["death_saves"]["successes"] == 1
+    hero = saved["combat"]["participants"][0]
+    assert hero["death_saves"]["successes"] == 1

@@ -315,6 +315,66 @@ def set_condition(
     return value, result
 
 
+def death_save(
+    combat: dict[str, Any],
+    *,
+    target_id: str,
+    advantage: bool = False,
+    disadvantage: bool = False,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    value = _require_active(combat)
+    target = _participant(value, target_id)
+    if int(target.get("hp", 0)) > 0:
+        raise ValueError(f"{target['name']} is not at 0 hit points")
+    saves = dict(target.get("death_saves") or {"successes": 0, "failures": 0})
+    die = roll_d20(advantage=advantage, disadvantage=disadvantage)
+    if die["natural"] == 20:
+        previous_hp = int(target.get("hp", 0))
+        target["hp"] = 1
+        target["conditions"] = [item for item in target.get("conditions", []) if item != "unconscious"]
+        outcome = "revived"
+        result = {
+            "type": "death_save",
+            "target": target["id"],
+            "roll": die,
+            "outcome": outcome,
+            "previous_hp": previous_hp,
+            "hp": target["hp"],
+            "death_saves": {"successes": 0, "failures": 0},
+        }
+        target["death_saves"] = {"successes": 0, "failures": 0}
+        _append_log(value, result)
+        return value, result
+    if die["natural"] == 1:
+        saves["failures"] = int(saves.get("failures", 0)) + 2
+    elif die["natural"] >= 10:
+        saves["successes"] = int(saves.get("successes", 0)) + 1
+    else:
+        saves["failures"] = int(saves.get("failures", 0)) + 1
+    outcome = "pending"
+    if int(saves.get("successes", 0)) >= 3:
+        outcome = "stable"
+        conditions = set(target.get("conditions") or [])
+        conditions.add("stable")
+        target["conditions"] = sorted(conditions)
+    if int(saves.get("failures", 0)) >= 3:
+        outcome = "dead"
+        conditions = set(target.get("conditions") or [])
+        conditions.add("dead")
+        target["conditions"] = sorted(conditions)
+    target["death_saves"] = saves
+    result = {
+        "type": "death_save",
+        "target": target["id"],
+        "roll": die,
+        "outcome": outcome,
+        "death_saves": dict(saves),
+        "conditions": list(target.get("conditions") or []),
+    }
+    _append_log(value, result)
+    return value, result
+
+
 def end_turn(combat: dict[str, Any], *, actor_id: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
     value = _require_active(combat)
     current = _current(value)
