@@ -57,6 +57,7 @@ from sagasmith_dnd.rests import recover_document_rest
 from sagasmith_dnd.rolls import roll_actor_d20
 from sagasmith_dnd.server import serve as _serve
 from sagasmith_dnd.spatial import move_token_with_movement_cost
+from sagasmith_dnd.templates import place_activity_template
 from sagasmith_dnd.runtime import database, dense_components
 from sagasmith_dnd.system import DND5E, validate_character_sheet
 
@@ -168,6 +169,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--width", type=int)
     parser.add_argument("--height", type=int)
     parser.add_argument("--elevation", type=int)
+    parser.add_argument("--direction", type=int, default=0)
     parser.add_argument("--grid-size", type=int)
     parser.add_argument("--grid-units")
     parser.add_argument("--background")
@@ -334,6 +336,7 @@ def _dispatch(args) -> Any:
                 "damage",
                 "actor",
                 "concentration",
+                "template",
             ],
             "agent_interface": "skill+json-cli",
         }
@@ -882,6 +885,23 @@ def _dispatch(args) -> Any:
                         for item in maps.list_regions(_require(args.scene, "scene"))
                     ]
                 }
+
+        if args.group == "template":
+            if args.action != "place":
+                raise CliError("unknown_command", f"unknown template command: {args.action}", exit_code=2)
+            return place_activity_template(
+                foundry_documents,
+                maps,
+                scene_id=_require(args.scene, "scene"),
+                item_id=_require(args.item, "item"),
+                activity_id=_require(args.activity, "activity"),
+                x=_int_value(args.x, "x"),
+                y=_int_value(args.y, "y"),
+                name=args.name,
+                actor_id=None if args.actor == "runtime" else args.actor,
+                direction=args.direction,
+                duration=_dict(args.duration),
+            )
 
         if args.group == "item":
             if args.action == "template":
