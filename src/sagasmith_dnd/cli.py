@@ -760,7 +760,22 @@ def _dispatch(args) -> Any:
                     ]
                 }
             if args.action == "show":
-                return asdict(foundry_documents.get_actor(_require(args.actor if args.actor != "runtime" else args.id, "actor")))
+                actor_id = _require(args.actor if args.actor != "runtime" else args.id, "actor")
+                actor = asdict(foundry_documents.get_actor(actor_id))
+                items = []
+                for item in foundry_documents.list_items(actor["campaign_id"], actor_id=actor_id):
+                    value = asdict(item)
+                    value["activities"] = [
+                        asdict(activity)
+                        for activity in foundry_documents.list_activities(item.id)
+                    ]
+                    items.append(value)
+                actor["items"] = items
+                actor["effects"] = [
+                    asdict(effect)
+                    for effect in foundry_documents.list_effects(actor["campaign_id"], actor_id=actor_id)
+                ]
+                return actor
             raise CliError("unknown_command", f"unknown actor command: {args.action}", exit_code=2)
 
         if args.group == "scene":

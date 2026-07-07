@@ -38,3 +38,33 @@ def test_actor_document_cli_create_list_show(tmp_path: Path, monkeypatch, capsys
     assert listed["actors"][0]["id"] == actor["id"]
     shown = _call(capsys, "actor", "show", "--id", actor["id"])
     assert shown["system"]["level"] == 5
+
+
+def test_actor_show_includes_items_activities_and_effects(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.setenv("DND_DATABASE_URL", f"sqlite+pysqlite:///{(tmp_path / 'actor-show.db').as_posix()}")
+    campaign = _call(capsys, "campaign", "start", "--name", "Actor Show")["campaign"]
+    actor = _call(capsys, "actor", "create", "--campaign", campaign["id"], "--name", "Mira")
+    pack = tmp_path / "pack"
+    pack.mkdir()
+    (pack / "feature.yml").write_text(
+        """
+_id: secondWind
+name: Second Wind
+type: feat
+system:
+  activities:
+    use:
+      _id: use
+      type: heal
+      activation:
+        type: bonus
+""",
+        encoding="utf-8",
+    )
+    _call(capsys, "pack", "import", "--campaign", campaign["id"], "--actor", actor["id"], "--path", str(pack))
+    _call(capsys, "condition", "add", "--campaign", campaign["id"], "--actor", actor["id"], "--condition", "poisoned")
+
+    shown = _call(capsys, "actor", "show", "--id", actor["id"])
+    assert shown["items"][0]["name"] == "Second Wind"
+    assert shown["items"][0]["activities"][0]["activity_type"] == "heal"
+    assert shown["effects"][0]["statuses"] == ["poisoned"]
