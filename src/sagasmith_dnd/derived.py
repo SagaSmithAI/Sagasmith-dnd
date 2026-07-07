@@ -8,6 +8,8 @@ from typing import Any
 
 from sagasmith_core.foundry_documents import FoundryDocumentService
 
+from sagasmith_dnd.rolls import SKILL_ABILITIES
+
 
 def prepare_actor_derived(
     documents: FoundryDocumentService,
@@ -22,11 +24,13 @@ def prepare_actor_derived(
     _prepare_proficiency(effective)
     item_summary = _apply_equipped_items(documents, campaign_id, actor_id, effective)
     effect_summary = _apply_effects(documents, campaign_id, actor_id, effective)
+    roll_summary = _prepare_roll_data(effective)
     derived = {
         **dict(actor.derived or {}),
         "effective_system": effective,
         "items": item_summary,
         "effects": effect_summary,
+        "rolls": roll_summary,
         "statuses": effect_summary["statuses"],
     }
     updated = documents.update_actor(actor_id, derived=derived)
@@ -48,6 +52,46 @@ def _prepare_proficiency(system: dict[str, Any]) -> None:
         or (2 + (max(1, level) - 1) // 4)
     )
     system.setdefault("attributes", {})["prof"] = proficiency
+
+
+def _prepare_roll_data(system: dict[str, Any]) -> dict[str, Any]:
+    prof = int(system.setdefault("attributes", {}).get("prof", 2) or 2)
+    abilities = system.setdefault("abilities", {})
+    ability_summary = {}
+    for ability in ("str", "dex", "con", "int", "wis", "cha"):
+        data = abilities.setdefault(ability, {"value": 10})
+        if not isinstance(data, dict):
+            data = {"value": int(data or 10)}
+            abilities[ability] = data
+        score = int(data.get("value", 10) or 10)
+        modifier = (score - 10) // 2
+        save_prof = 1 if data.get("save_proficient") or data.get("proficient") else int(data.get("saveProf", 0) or 0)
+        data["mod"] = modifier
+        data["save"] = modifier + (prof * save_prof)
+        ability_summary[ability] = {"value": score, "mod": modifier, "save": data["save"]}
+
+    skills = system.setdefault("skills", {})
+    skill_summary = {}
+    for skill, ability in SKILL_ABILITIES.items():
+        data = skills.setdefault(skill, {})
+        if not isinstance(data, dict):
+            data = {"prof": int(data or 0)}
+            skills[skill] = data
+        multiplier = _skill_multiplier(data)
+        modifier = int(abilities[ability]["mod"]) + (prof * multiplier)
+        data["ability"] = ability
+        data["mod"] = modifier
+        data["passive"] = 10 + modifier
+        skill_summary[skill] = {"ability": ability, "mod": modifier, "passive": data["passive"]}
+    return {"abilities": ability_summary, "skills": skill_summary}
+
+
+def _skill_multiplier(data: dict[str, Any]) -> int:
+    if data.get("expertise"):
+        return 2
+    if data.get("proficient"):
+        return 1
+    return int(data.get("prof", 0) or 0)
 
 
 def _apply_equipped_items(

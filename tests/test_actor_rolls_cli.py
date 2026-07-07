@@ -41,8 +41,18 @@ def test_actor_document_skill_roll_uses_effective_system_and_expertise(
                 "skills": {"perception": {"expertise": True}},
             },
         )
+        documents.create_effect(
+            campaign_id=campaign.id,
+            parent_type="actor",
+            parent_id=actor.id,
+            actor_id=actor.id,
+            name="Owl's Wisdom",
+            changes=[{"key": "system.abilities.wis.value", "mode": 4, "value": 18}],
+        )
     finally:
         database.dispose()
+
+    _call(capsys, "actor", "prepare", "--campaign", campaign.id, "--actor", actor.id)
 
     result = _call(
         capsys,
@@ -60,7 +70,7 @@ def test_actor_document_skill_roll_uses_effective_system_and_expertise(
 
     roll = result["roll"]
     assert roll["ability"] == "wis"
-    assert roll["ability_modifier"] == 3
+    assert roll["ability_modifier"] == 4
     assert roll["proficiency_multiplier"] == 2
     assert roll["breakdown"]["proficiency_bonus"] == 6
     assert result["messages"][0]["message_type"] == "roll"

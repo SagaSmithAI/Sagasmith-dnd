@@ -38,6 +38,8 @@ def test_actor_prepare_builds_foundry_style_derived_data(
             system={
                 "level": 5,
                 "attributes": {"ac": {"value": 10}, "hp": {"value": 20, "max": 20}},
+                "abilities": {"wis": {"value": 16, "save_proficient": True}},
+                "skills": {"perception": {"expertise": True}},
                 "traits": {"dr": {"value": ["cold"]}},
             },
         )
@@ -92,7 +94,11 @@ def test_actor_prepare_builds_foundry_style_derived_data(
     assert effective["attributes"]["ac"]["value"] == 16
     assert effective["attributes"]["ac"]["bonus"] == 4
     assert effective["abilities"]["str"]["value"] == 19
+    assert effective["abilities"]["str"]["mod"] == 4
+    assert effective["abilities"]["wis"]["save"] == 6
     assert effective["attributes"]["movement"]["walk"] == 40
+    assert effective["skills"]["perception"]["passive"] == 19
+    assert prepared["derived"]["rolls"]["skills"]["perception"]["mod"] == 9
     assert effective["traits"]["dr"]["value"] == ["cold", "fire"]
     assert prepared["derived"]["items"]["transferred_effects"] == ["defense"]
     assert prepared["derived"]["statuses"] == ["blessed"]
