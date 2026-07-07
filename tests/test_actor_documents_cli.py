@@ -68,3 +68,26 @@ system:
     assert shown["items"][0]["name"] == "Second Wind"
     assert shown["items"][0]["activities"][0]["activity_type"] == "heal"
     assert shown["effects"][0]["statuses"] == ["poisoned"]
+
+
+def test_actor_update_changes_system_and_flags(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.setenv("DND_DATABASE_URL", f"sqlite+pysqlite:///{(tmp_path / 'actor-update.db').as_posix()}")
+    campaign = _call(capsys, "campaign", "start", "--name", "Actor Update")["campaign"]
+    actor = _call(capsys, "actor", "create", "--campaign", campaign["id"], "--name", "Mira")
+
+    updated = _call(
+        capsys,
+        "actor",
+        "update",
+        "--actor",
+        actor["id"],
+        "--payload",
+        '{"level":3,"attributes":{"hp":{"value":18,"max":18}}}',
+        "--metadata",
+        '{"source":"manual"}',
+    )
+
+    assert updated["revision"] == actor["revision"] + 1
+    shown = _call(capsys, "actor", "show", "--id", actor["id"])
+    assert shown["system"]["level"] == 3
+    assert shown["flags"]["source"] == "manual"

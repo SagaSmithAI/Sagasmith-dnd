@@ -852,6 +852,14 @@ def _dispatch(args) -> Any:
                     campaign_id=_require(args.campaign, "campaign"),
                     actor_id=_require(args.actor if args.actor != "runtime" else args.id, "actor"),
                 )
+            if args.action == "update":
+                return asdict(
+                    foundry_documents.update_actor(
+                        _require(args.actor if args.actor != "runtime" else args.id, "actor"),
+                        system=_dict(args.payload) if args.payload is not None else None,
+                        flags=_dict(args.metadata) if args.metadata is not None else None,
+                    )
+                )
             raise CliError("unknown_command", f"unknown actor command: {args.action}", exit_code=2)
 
         if args.group == "game-item":
