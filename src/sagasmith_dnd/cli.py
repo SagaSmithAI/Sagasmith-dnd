@@ -48,6 +48,7 @@ from sagasmith_dnd.combat import (
 from sagasmith_dnd.conditions import add_actor_condition, remove_actor_condition
 from sagasmith_dnd.concentration import resolve_concentration
 from sagasmith_dnd.damage import apply_actor_damage
+from sagasmith_dnd.derived import prepare_actor_derived
 from sagasmith_dnd.durations import advance_effect_durations
 from sagasmith_dnd.effects import recalculate_actor_effects
 from sagasmith_dnd.engine import resolve_check, roll
@@ -786,6 +787,12 @@ def _dispatch(args) -> Any:
                     for effect in foundry_documents.list_effects(actor["campaign_id"], actor_id=actor_id)
                 ]
                 return actor
+            if args.action == "prepare":
+                return prepare_actor_derived(
+                    foundry_documents,
+                    campaign_id=_require(args.campaign, "campaign"),
+                    actor_id=_require(args.actor if args.actor != "runtime" else args.id, "actor"),
+                )
             raise CliError("unknown_command", f"unknown actor command: {args.action}", exit_code=2)
 
         if args.group == "advancement":
