@@ -76,7 +76,7 @@ def _apply_equipped_items(
             if values:
                 _merge_trait(effective, trait_key, values)
         for effect in _iter_item_transfer_effects(item):
-            for change in effect.get("changes") or []:
+            for change in _sorted_changes(effect.get("changes") or []):
                 _apply_change(effective, dict(change))
             transferred_effects.append(
                 effect.get("_id") or effect.get("id") or effect.get("name") or item.id
@@ -99,7 +99,7 @@ def _apply_effects(
     for effect in documents.list_effects(campaign_id, actor_id=actor_id):
         if effect.disabled or effect.suppressed:
             continue
-        for change in effect.changes:
+        for change in _sorted_changes(effect.changes):
             _apply_change(effective, dict(change))
         statuses.update(effect.statuses)
         applied.append(effect.id)
@@ -121,7 +121,7 @@ def _apply_change(target: dict[str, Any], change: dict[str, Any]) -> None:
             parent[part] = child
         parent = child
     key = parts[-1]
-    mode = str(change.get("mode") or "ADD").upper()
+    mode = _mode_name(change.get("mode"))
     value = change.get("value")
     if mode == "OVERRIDE":
         parent[key] = value
@@ -133,6 +133,36 @@ def _apply_change(target: dict[str, Any], change: dict[str, Any]) -> None:
         parent[key] = min(_number(parent.get(key)), _number(value))
     else:
         parent[key] = _number(parent.get(key)) + _number(value) if _is_number_like(value) else value
+
+
+def _sorted_changes(changes: list[Any]) -> list[dict[str, Any]]:
+    values = [dict(change) for change in changes if isinstance(change, dict)]
+    return sorted(values, key=lambda item: int(item.get("priority", _mode_priority(item.get("mode"))) or 0))
+
+
+def _mode_name(mode: Any) -> str:
+    if isinstance(mode, int) or (isinstance(mode, str) and mode.isdigit()):
+        return {
+            0: "OVERRIDE",
+            1: "MULTIPLY",
+            2: "ADD",
+            3: "DOWNGRADE",
+            4: "UPGRADE",
+            5: "OVERRIDE",
+        }.get(int(mode), "ADD")
+    return str(mode or "ADD").upper()
+
+
+def _mode_priority(mode: Any) -> int:
+    if isinstance(mode, int) or (isinstance(mode, str) and mode.isdigit()):
+        return int(mode) * 10
+    return {
+        "MULTIPLY": 10,
+        "ADD": 20,
+        "DOWNGRADE": 30,
+        "UPGRADE": 40,
+        "OVERRIDE": 50,
+    }.get(str(mode or "ADD").upper(), 20)
 
 
 def _iter_item_transfer_effects(item: Any) -> list[dict[str, Any]]:

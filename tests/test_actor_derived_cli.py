@@ -67,7 +67,11 @@ def test_actor_prepare_builds_foundry_style_derived_data(
             parent_id=actor.id,
             actor_id=actor.id,
             name="Shielded",
-            changes=[{"key": "attributes.ac.bonus", "mode": "ADD", "value": 2}],
+            changes=[
+                {"key": "attributes.ac.bonus", "mode": 2, "value": 2},
+                {"key": "system.abilities.str.value", "mode": 4, "value": 19},
+                {"key": "system.attributes.movement.walk", "mode": 5, "value": 40},
+            ],
             statuses=["blessed"],
         )
     finally:
@@ -87,6 +91,8 @@ def test_actor_prepare_builds_foundry_style_derived_data(
     assert effective["attributes"]["prof"] == 3
     assert effective["attributes"]["ac"]["value"] == 16
     assert effective["attributes"]["ac"]["bonus"] == 4
+    assert effective["abilities"]["str"]["value"] == 19
+    assert effective["attributes"]["movement"]["walk"] == 40
     assert effective["traits"]["dr"]["value"] == ["cold", "fire"]
     assert prepared["derived"]["items"]["transferred_effects"] == ["defense"]
     assert prepared["derived"]["statuses"] == ["blessed"]
