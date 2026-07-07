@@ -118,6 +118,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--metadata")
     parser.add_argument("--participants")
     parser.add_argument("--environment")
+    parser.add_argument("--effects")
     parser.add_argument("--target-id")
     parser.add_argument("--attack-bonus", type=int)
     parser.add_argument("--amount", type=int)
@@ -333,6 +334,8 @@ def _dispatch(args) -> Any:
                 "effect",
                 "rest",
                 "activity",
+                "game-activity",
+                "game-item",
                 "reaction",
                 "pack",
                 "condition",
@@ -794,6 +797,99 @@ def _dispatch(args) -> Any:
                     actor_id=_require(args.actor if args.actor != "runtime" else args.id, "actor"),
                 )
             raise CliError("unknown_command", f"unknown actor command: {args.action}", exit_code=2)
+
+        if args.group == "game-item":
+            if args.action == "create":
+                payload = _dict(args.payload)
+                return asdict(
+                    foundry_documents.create_item(
+                        campaign_id=_require(args.campaign, "campaign"),
+                        system_id=DND5E.id,
+                        actor_id=None if args.actor == "runtime" else args.actor,
+                        container_id=args.container,
+                        item_type=args.type or args.category or "loot",
+                        name=_require(args.name, "name"),
+                        source_key=args.source_key or "",
+                        img=args.path or "",
+                        system=dict(payload.get("system") or payload),
+                        effects=_list(args.effects, "effects") or list(payload.get("effects") or []),
+                        flags=_dict(args.metadata),
+                    )
+                )
+            if args.action == "list":
+                return {
+                    "items": [
+                        asdict(item)
+                        for item in foundry_documents.list_items(
+                            _require(args.campaign, "campaign"),
+                            actor_id=None if args.actor == "runtime" else args.actor,
+                            item_type=args.type or args.category,
+                        )
+                    ]
+                }
+            if args.action == "show":
+                item = asdict(foundry_documents.get_item(_require(args.item or args.id, "item")))
+                item["activities"] = [
+                    asdict(activity)
+                    for activity in foundry_documents.list_activities(item["id"])
+                ]
+                return item
+            if args.action == "update":
+                payload = _dict(args.payload)
+                return asdict(
+                    foundry_documents.update_item(
+                        _require(args.item or args.id, "item"),
+                        system=dict(payload.get("system") or payload) if payload else None,
+                        effects=_list(args.effects, "effects") if args.effects is not None else None,
+                        flags=_dict(args.metadata) if args.metadata is not None else None,
+                    )
+                )
+            raise CliError("unknown_command", f"unknown game-item command: {args.action}", exit_code=2)
+
+        if args.group == "game-activity":
+            payload = _dict(args.payload)
+            if args.action == "create":
+                return asdict(
+                    foundry_documents.create_activity(
+                        item_id=_require(args.item, "item"),
+                        activity_type=args.type or args.category or payload.get("type") or "utility",
+                        name=args.name or payload.get("name") or "Activity",
+                        activation=dict(payload.get("activation") or {}),
+                        consumption=dict(payload.get("consumption") or {}),
+                        duration=_dict(args.duration) or dict(payload.get("duration") or {}),
+                        effects=_list(args.effects, "effects") or list(payload.get("effects") or []),
+                        range=dict(payload.get("range") or {}),
+                        target=dict(payload.get("target") or {}),
+                        uses=dict(payload.get("uses") or {}),
+                        system=dict(payload.get("system") or {}),
+                        flags=_dict(args.metadata),
+                    )
+                )
+            if args.action == "list":
+                return {
+                    "activities": [
+                        asdict(activity)
+                        for activity in foundry_documents.list_activities(_require(args.item, "item"))
+                    ]
+                }
+            if args.action == "show":
+                return asdict(foundry_documents.get_activity(_require(args.activity or args.id, "activity")))
+            if args.action == "update":
+                return asdict(
+                    foundry_documents.update_activity(
+                        _require(args.activity or args.id, "activity"),
+                        activation=dict(payload.get("activation")) if "activation" in payload else None,
+                        consumption=dict(payload.get("consumption")) if "consumption" in payload else None,
+                        duration=_dict(args.duration) if args.duration is not None else payload.get("duration"),
+                        effects=_list(args.effects, "effects") if args.effects is not None else payload.get("effects"),
+                        range=dict(payload.get("range")) if "range" in payload else None,
+                        target=dict(payload.get("target")) if "target" in payload else None,
+                        uses=dict(payload.get("uses")) if "uses" in payload else None,
+                        system=dict(payload.get("system")) if "system" in payload else None,
+                        flags=_dict(args.metadata) if args.metadata is not None else None,
+                    )
+                )
+            raise CliError("unknown_command", f"unknown game-activity command: {args.action}", exit_code=2)
 
         if args.group == "advancement":
             if args.action != "apply":
