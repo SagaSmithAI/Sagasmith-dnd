@@ -44,6 +44,7 @@ from sagasmith_dnd.combat import (
     set_condition,
     start_combat,
 )
+from sagasmith_dnd.durations import advance_effect_durations
 from sagasmith_dnd.effects import recalculate_actor_effects
 from sagasmith_dnd.engine import resolve_check, roll
 from sagasmith_dnd.module_profile import DndModuleProfile
@@ -177,6 +178,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--duration")
     parser.add_argument("--activity")
     parser.add_argument("--payment")
+    parser.add_argument("--period")
     parser.add_argument("--minutes", type=int)
     parser.add_argument("--hours", type=int)
     parser.add_argument("--module")
@@ -1298,6 +1300,14 @@ def _dispatch(args) -> Any:
                 minutes = int(args.minutes or 0) + (int(args.hours or 0) * 60)
                 clock["declared_minutes"] = int(clock.get("declared_minutes", 0)) + minutes
                 clock["advances"] = int(clock.get("advances", 0)) + 1
+                period_result = None
+                if args.period:
+                    period_result = advance_effect_durations(
+                        foundry_documents,
+                        campaign_id=campaign_id,
+                        period=args.period,
+                        actor_id=None if args.actor == "runtime" else args.actor,
+                    )
                 if args.reason:
                     clock["last_reason"] = args.reason
                 state["time"] = clock
@@ -1310,7 +1320,7 @@ def _dispatch(args) -> Any:
                     state["combat"] = combat
                 updated = campaigns.update(campaign_id, state=state)
                 _campaign_revision(revisions, before, updated, "time.advance")
-                return clock
+                return {"clock": clock, "period": period_result}
 
         if args.group == "effect":
             campaign_id = _require(args.campaign, "campaign")
