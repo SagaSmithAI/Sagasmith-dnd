@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import asdict
+import re
 from typing import Any
 from uuid import uuid4
 
@@ -74,8 +75,10 @@ def execute_document_activity(
     execution = _execute_activity_effect(
         documents,
         campaign_id=campaign_id,
+        actor=actor,
         actor_id=actor_id,
         target_id=target_id,
+        item=item,
         item_system=item.system,
         activity=activity,
         payload=payload,
@@ -283,8 +286,10 @@ def _execute_activity_effect(
     documents: FoundryDocumentService,
     *,
     campaign_id: str,
+    actor,
     actor_id: str,
     target_id: str | None,
+    item,
     item_system: dict[str, Any],
     activity,
     payload: dict[str, Any],
@@ -294,8 +299,10 @@ def _execute_activity_effect(
         return _execute_attack(
             documents,
             campaign_id=campaign_id,
+            actor=actor,
             actor_id=actor_id,
             target_id=target_id,
+            item=item,
             item_system=item_system,
             activity=activity,
             payload=payload,
@@ -333,8 +340,10 @@ def _execute_attack(
     documents: FoundryDocumentService,
     *,
     campaign_id: str,
+    actor,
     actor_id: str,
     target_id: str | None,
+    item,
     item_system: dict[str, Any],
     activity,
     payload: dict[str, Any],
@@ -342,18 +351,20 @@ def _execute_attack(
     if not target_id:
         raise ValueError("attack activity requires target-id")
     target = documents.get_actor(target_id)
-    attack_bonus = int(
+    roll_data = _roll_data(actor, item, activity, payload)
+    attack_bonus = _formula_int(
         payload.get("attack_bonus")
         or activity.system.get("attack_bonus")
         or item_system.get("attack_bonus")
-        or 0
+        or 0,
+        roll_data,
     )
     die = roll_d20(
         advantage=bool(payload.get("advantage", False)),
         disadvantage=bool(payload.get("disadvantage", False)),
     )
     total = int(die["natural"]) + attack_bonus
-    target_ac = int(payload.get("target_ac") or _actor_ac(target.system, target.derived))
+    target_ac = _formula_int(payload.get("target_ac") or _actor_ac(target.system, target.derived), roll_data)
     hit = bool(die["critical"] or (not die["fumble"] and total >= target_ac))
     result: dict[str, Any] = {
         "type": "attack",
@@ -369,7 +380,7 @@ def _execute_attack(
     pending: list[dict[str, Any]] = []
     damage_expression = payload.get("damage") or activity.system.get("damage")
     if hit and damage_expression:
-        damage = roll(str(damage_expression))
+        damage = roll(_resolve_formula(str(damage_expression), roll_data))
         damage_result = apply_actor_damage(
             documents,
             campaign_id=campaign_id,
@@ -406,7 +417,7 @@ def _execute_damage(
         expression = str(payload.get("damage") or activity.system.get("damage") or "")
         if not expression:
             raise ValueError("damage activity requires amount or damage expression")
-        rolled = roll(expression)
+        rolled = roll(_resolve_formula(expression, _roll_data(None, None, activity, payload)))
         amount = rolled.total
     damage_result = apply_actor_damage(
         documents,
@@ -448,7 +459,7 @@ def _execute_heal(
         expression = str(payload.get("healing") or activity.system.get("healing") or "")
         if not expression:
             raise ValueError("heal activity requires amount or healing expression")
-        rolled = roll(expression)
+        rolled = roll(_resolve_formula(expression, _roll_data(target, None, activity, payload)))
         amount = rolled.total
     system = deepcopy(target.system)
     hp = _hp(system)
@@ -491,7 +502,8 @@ def _execute_save(
 ) -> dict[str, Any]:
     if not target_id:
         raise ValueError("save activity requires target-id")
-    dc = int(payload.get("dc") or activity.system.get("dc") or 10)
+    roll_data = _roll_data(None, None, activity, payload)
+    dc = _formula_int(payload.get("dc") or activity.system.get("dc") or 10, roll_data)
     ability = str(payload.get("ability") or activity.system.get("ability") or "dex")
     save_result = roll_actor_d20(
         documents,
@@ -510,7 +522,7 @@ def _execute_save(
     messages = list(save_result.get("messages", []))
     damage_expression = payload.get("damage") or activity.system.get("damage")
     if damage_expression:
-        rolled = roll(str(damage_expression))
+        rolled = roll(_resolve_formula(str(damage_expression), roll_data))
         amount = rolled.total if not result["success"] else rolled.total // 2
         damage_result = apply_actor_damage(
             documents,
@@ -539,6 +551,82 @@ def _actor_ac(system: dict[str, Any], derived: dict[str, Any]) -> int:
     if isinstance(ac, dict):
         return int(ac.get("value", 10))
     return int(ac or 10)
+
+
+_ROLL_REF = re.compile(r"@(?P<path>[A-Za-z0-9_.-]+)")
+_ARITHMETIC = re.compile(r"^[0-9+\-*/().]+$")
+_DICE_COUNT_EXPR = re.compile(r"\((?P<expr>[0-9+\-*/().]+)\)d(?P<sides>\d+)", re.I)
+
+
+def _roll_data(actor, item, activity, payload: dict[str, Any]) -> dict[str, Any]:
+    system = dict((getattr(actor, "derived", None) or {}).get("effective_system") or getattr(actor, "system", {}) or {})
+    item_system = dict(getattr(item, "system", {}) or {})
+    ability = str(payload.get("ability") or activity.system.get("ability") or item_system.get("ability") or "str")
+    return {
+        "prof": system.get("attributes", {}).get("prof", 2),
+        "mod": _ability_mod(system, ability),
+        "abilities": _ability_roll_data(system),
+        "classes": {
+            key: {"levels": value} for key, value in dict(system.get("class_levels") or {}).items()
+        },
+        "item": {
+            "uses": dict(getattr(activity, "uses", {}) or {}),
+            "system": item_system,
+        },
+        "activity": {
+            "uses": dict(getattr(activity, "uses", {}) or {}),
+            "system": dict(getattr(activity, "system", {}) or {}),
+        },
+        "payload": payload,
+    }
+
+
+def _resolve_formula(expression: str, data: dict[str, Any]) -> str:
+    resolved = _ROLL_REF.sub(lambda match: str(_lookup_roll_data(data, match.group("path"))), expression)
+    resolved = resolved.replace(" ", "")
+    resolved = _DICE_COUNT_EXPR.sub(
+        lambda match: f"{int(_eval_arithmetic(match.group('expr')))}d{match.group('sides')}",
+        resolved,
+    )
+    if "d" not in resolved.lower() and _ARITHMETIC.match(resolved):
+        return str(int(_eval_arithmetic(resolved)))
+    return resolved
+
+
+def _formula_int(value: Any, data: dict[str, Any]) -> int:
+    if isinstance(value, (int, float)):
+        return int(value)
+    return int(_eval_arithmetic(_resolve_formula(str(value), data)))
+
+
+def _lookup_roll_data(data: dict[str, Any], path: str) -> Any:
+    current: Any = data
+    for part in path.split("."):
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+        else:
+            return 0
+    return current
+
+
+def _eval_arithmetic(expression: str) -> int | float:
+    if not _ARITHMETIC.match(expression):
+        raise ValueError(f"unsupported formula expression: {expression}")
+    return eval(expression, {"__builtins__": {}}, {})
+
+
+def _ability_roll_data(system: dict[str, Any]) -> dict[str, Any]:
+    values = {}
+    for key, value in dict(system.get("abilities") or {}).items():
+        score = int(value.get("value", value) if isinstance(value, dict) else value)
+        values[key] = {"value": score, "mod": (score - 10) // 2}
+    return values
+
+
+def _ability_mod(system: dict[str, Any], ability: str) -> int:
+    value = dict(system.get("abilities") or {}).get(ability, 10)
+    score = int(value.get("value", value) if isinstance(value, dict) else value)
+    return (score - 10) // 2
 
 
 def _hp(system: dict[str, Any]) -> dict[str, Any]:

@@ -140,6 +140,75 @@ def test_heal_activity_updates_target_hp(
     assert result["execution"]["after_hp"] == 7
 
 
+def test_attack_activity_resolves_foundry_roll_data_formulas(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    url = sqlite_database_url(tmp_path / "activity-formula.db")
+    monkeypatch.setenv("DND_DATABASE_URL", url)
+    database = Database(url)
+    database.upgrade_schema()
+    try:
+        campaign = CampaignService(database).create(system_id="dnd5e", name="Formula Activity")
+        documents = FoundryDocumentService(database)
+        attacker = documents.create_actor(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_type="character",
+            name="Mira",
+            system={
+                "attributes": {"prof": 3},
+                "abilities": {"str": {"value": 16}},
+            },
+        )
+        target = documents.create_actor(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_type="npc",
+            name="Goblin",
+            system={"attributes": {"ac": {"value": 12}, "hp": {"value": 10, "max": 10}}},
+        )
+        item = documents.create_item(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_id=attacker.id,
+            item_type="weapon",
+            name="Spear",
+        )
+        activity = documents.create_activity(
+            item_id=item.id,
+            activity_type="attack",
+            name="Thrust",
+            activation={"type": "action"},
+            system={"ability": "str", "attack_bonus": "@prof + @mod", "damage": "1 + @mod"},
+        )
+    finally:
+        database.dispose()
+
+    random.seed(0)
+    result = _call(
+        capsys,
+        "activity",
+        "use",
+        "--campaign",
+        campaign.id,
+        "--actor",
+        attacker.id,
+        "--item",
+        item.id,
+        "--activity",
+        activity.id,
+        "--target-id",
+        target.id,
+    )
+
+    assert result["execution"]["attack_bonus"] == 6
+    assert result["execution"]["hit"] is True
+    assert result["execution"]["damage_roll"]["expression"] == "4"
+    assert result["execution"]["damage"]["after_hp"] == 6
+
+
 def test_save_activity_rolls_save_and_applies_half_damage_on_success(
     tmp_path: Path,
     monkeypatch,
