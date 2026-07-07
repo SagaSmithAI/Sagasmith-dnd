@@ -276,3 +276,136 @@ def test_save_activity_rolls_save_and_applies_half_damage_on_success(
     assert result["execution"]["success"] is True
     assert result["execution"]["damage_roll"]["applied"] == 5
     assert result["execution"]["damage"]["after_hp"] == 15
+
+
+def test_damage_activity_uses_foundry_damage_parts(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    url = sqlite_database_url(tmp_path / "activity-damage-parts.db")
+    monkeypatch.setenv("DND_DATABASE_URL", url)
+    database = Database(url)
+    database.upgrade_schema()
+    try:
+        campaign = CampaignService(database).create(system_id="dnd5e", name="Damage Parts")
+        documents = FoundryDocumentService(database)
+        actor = documents.create_actor(campaign_id=campaign.id, system_id="dnd5e", name="Mira")
+        target = documents.create_actor(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_type="npc",
+            name="Ooze",
+            system={"attributes": {"hp": {"value": 20, "max": 20}}},
+        )
+        item = documents.create_item(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_id=actor.id,
+            item_type="spell",
+            name="Flame",
+            system={"level": 3},
+        )
+        activity = documents.create_activity(
+            item_id=item.id,
+            activity_type="damage",
+            name="Burn",
+            system={
+                "damage": {
+                    "parts": [
+                        {
+                            "number": 2,
+                            "denomination": 4,
+                            "bonus": "@item.level",
+                            "types": ["fire"],
+                        }
+                    ]
+                }
+            },
+        )
+    finally:
+        database.dispose()
+
+    random.seed(1)
+    result = _call(
+        capsys,
+        "activity",
+        "use",
+        "--campaign",
+        campaign.id,
+        "--actor",
+        actor.id,
+        "--item",
+        item.id,
+        "--activity",
+        activity.id,
+        "--target-id",
+        target.id,
+    )
+
+    assert result["execution"]["type"] == "damage"
+    assert result["execution"]["damage_type"] == "fire"
+    assert result["execution"]["roll"]["parts"] == [{"formula": "2d4+@item.level", "types": ["fire"]}]
+    assert result["execution"]["roll"]["expression"] == "2d4+3"
+
+
+def test_heal_activity_uses_foundry_healing_formula(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    url = sqlite_database_url(tmp_path / "activity-healing-parts.db")
+    monkeypatch.setenv("DND_DATABASE_URL", url)
+    database = Database(url)
+    database.upgrade_schema()
+    try:
+        campaign = CampaignService(database).create(system_id="dnd5e", name="Healing Parts")
+        documents = FoundryDocumentService(database)
+        actor = documents.create_actor(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_type="character",
+            name="Mira",
+            system={"attributes": {"hp": {"value": 3, "max": 20}}},
+        )
+        item = documents.create_item(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_id=actor.id,
+            item_type="spell",
+            name="Aid",
+            system={"level": 4},
+        )
+        activity = documents.create_activity(
+            item_id=item.id,
+            activity_type="heal",
+            name="Aid",
+            system={
+                "healing": {
+                    "custom": {"enabled": True, "formula": "5"},
+                    "scaling": {"formula": "(@item.level - 2) * 5"},
+                }
+            },
+        )
+    finally:
+        database.dispose()
+
+    result = _call(
+        capsys,
+        "activity",
+        "use",
+        "--campaign",
+        campaign.id,
+        "--actor",
+        actor.id,
+        "--item",
+        item.id,
+        "--activity",
+        activity.id,
+        "--target-id",
+        actor.id,
+    )
+
+    assert result["execution"]["type"] == "heal"
+    assert result["execution"]["amount"] == 15
+    assert result["execution"]["after_hp"] == 18

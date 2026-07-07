@@ -311,6 +311,8 @@ def _execute_activity_effect(
         return _execute_damage(
             documents,
             campaign_id=campaign_id,
+            actor=actor,
+            item=item,
             target_id=target_id,
             activity=activity,
             payload=payload,
@@ -321,6 +323,8 @@ def _execute_activity_effect(
         return _execute_heal(
             documents,
             campaign_id=campaign_id,
+            actor=actor,
+            item=item,
             target_id=target_id or actor_id,
             activity=activity,
             payload=payload,
@@ -329,6 +333,8 @@ def _execute_activity_effect(
         return _execute_save(
             documents,
             campaign_id=campaign_id,
+            actor=actor,
+            item=item,
             target_id=target_id,
             activity=activity,
             payload=payload,
@@ -378,15 +384,15 @@ def _execute_attack(
     }
     messages: list[dict[str, Any]] = []
     pending: list[dict[str, Any]] = []
-    damage_expression = payload.get("damage") or activity.system.get("damage")
-    if hit and damage_expression:
-        damage = roll(_resolve_formula(str(damage_expression), roll_data))
+    damage_spec = _damage_spec(activity, payload)
+    if hit and damage_spec["expression"]:
+        damage = roll(_resolve_formula(str(damage_spec["expression"]), roll_data))
         damage_result = apply_actor_damage(
             documents,
             campaign_id=campaign_id,
             actor_id=target_id,
             amount=damage.total,
-            damage_type=str(payload.get("damage_type") or activity.system.get("damage_type") or ""),
+            damage_type=str(payload.get("damage_type") or damage_spec["damage_type"]),
             source=activity.name,
         )
         result["damage_roll"] = {
@@ -394,6 +400,7 @@ def _execute_attack(
             "total": damage.total,
             "rolls": list(damage.rolls),
             "detail": damage.detail,
+            "parts": damage_spec["parts"],
         }
         result["damage"] = damage_result["damage"]
         pending.extend(damage_result.get("pending", []))
@@ -405,6 +412,8 @@ def _execute_damage(
     documents: FoundryDocumentService,
     *,
     campaign_id: str,
+    actor,
+    item,
     target_id: str | None,
     activity,
     payload: dict[str, Any],
@@ -413,18 +422,19 @@ def _execute_damage(
         raise ValueError("damage activity requires target-id")
     amount = payload.get("amount")
     rolled = None
+    damage_spec = _damage_spec(activity, payload)
     if amount is None:
-        expression = str(payload.get("damage") or activity.system.get("damage") or "")
+        expression = str(damage_spec["expression"] or "")
         if not expression:
             raise ValueError("damage activity requires amount or damage expression")
-        rolled = roll(_resolve_formula(expression, _roll_data(None, None, activity, payload)))
+        rolled = roll(_resolve_formula(expression, _roll_data(actor, item, activity, payload)))
         amount = rolled.total
     damage_result = apply_actor_damage(
         documents,
         campaign_id=campaign_id,
         actor_id=target_id,
         amount=int(amount),
-        damage_type=str(payload.get("damage_type") or activity.system.get("damage_type") or ""),
+        damage_type=str(payload.get("damage_type") or damage_spec["damage_type"]),
         source=activity.name,
     )
     result = {"type": "damage", **damage_result["damage"]}
@@ -434,6 +444,7 @@ def _execute_damage(
             "total": rolled.total,
             "rolls": list(rolled.rolls),
             "detail": rolled.detail,
+            "parts": damage_spec["parts"],
         }
     return {
         "result": result,
@@ -446,6 +457,8 @@ def _execute_heal(
     documents: FoundryDocumentService,
     *,
     campaign_id: str,
+    actor,
+    item,
     target_id: str,
     activity,
     payload: dict[str, Any],
@@ -456,10 +469,10 @@ def _execute_heal(
     amount = payload.get("amount")
     rolled = None
     if amount is None:
-        expression = str(payload.get("healing") or activity.system.get("healing") or "")
+        expression = str(_healing_expression(activity, payload) or "")
         if not expression:
             raise ValueError("heal activity requires amount or healing expression")
-        rolled = roll(_resolve_formula(expression, _roll_data(target, None, activity, payload)))
+        rolled = roll(_resolve_formula(expression, _roll_data(actor, item, activity, payload)))
         amount = rolled.total
     system = deepcopy(target.system)
     hp = _hp(system)
@@ -496,15 +509,26 @@ def _execute_save(
     documents: FoundryDocumentService,
     *,
     campaign_id: str,
+    actor,
+    item,
     target_id: str | None,
     activity,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     if not target_id:
         raise ValueError("save activity requires target-id")
-    roll_data = _roll_data(None, None, activity, payload)
-    dc = _formula_int(payload.get("dc") or activity.system.get("dc") or 10, roll_data)
-    ability = str(payload.get("ability") or activity.system.get("ability") or "dex")
+    roll_data = _roll_data(actor, item, activity, payload)
+    save_data = dict(activity.system.get("save") or {})
+    dc_data = save_data.get("dc") if isinstance(save_data.get("dc"), dict) else {}
+    dc = _formula_int(
+        payload.get("dc")
+        or activity.system.get("dc")
+        or dc_data.get("formula")
+        or dc_data.get("value")
+        or 10,
+        roll_data,
+    )
+    ability = str(payload.get("ability") or activity.system.get("ability") or save_data.get("ability") or "dex")
     save_result = roll_actor_d20(
         documents,
         campaign_id=campaign_id,
@@ -520,16 +544,19 @@ def _execute_save(
     result: dict[str, Any] = {"type": "save", **save_result["roll"]}
     pending: list[dict[str, Any]] = []
     messages = list(save_result.get("messages", []))
-    damage_expression = payload.get("damage") or activity.system.get("damage")
-    if damage_expression:
-        rolled = roll(_resolve_formula(str(damage_expression), roll_data))
-        amount = rolled.total if not result["success"] else rolled.total // 2
+    damage_spec = _damage_spec(activity, payload)
+    if damage_spec["expression"]:
+        rolled = roll(_resolve_formula(str(damage_spec["expression"]), roll_data))
+        on_save = str(damage_spec["on_save"] or "").lower()
+        amount = rolled.total // 2 if result["success"] and on_save in {"", "half"} else rolled.total
+        if result["success"] and on_save in {"none", "false"}:
+            amount = 0
         damage_result = apply_actor_damage(
             documents,
             campaign_id=campaign_id,
             actor_id=target_id,
             amount=amount,
-            damage_type=str(payload.get("damage_type") or activity.system.get("damage_type") or ""),
+            damage_type=str(payload.get("damage_type") or damage_spec["damage_type"]),
             source=activity.name,
         )
         result["damage_roll"] = {
@@ -538,6 +565,7 @@ def _execute_save(
             "applied": amount,
             "rolls": list(rolled.rolls),
             "detail": rolled.detail,
+            "parts": damage_spec["parts"],
         }
         result["damage"] = damage_result["damage"]
         pending.extend(damage_result.get("pending", []))
@@ -553,9 +581,84 @@ def _actor_ac(system: dict[str, Any], derived: dict[str, Any]) -> int:
     return int(ac or 10)
 
 
+def _damage_spec(activity, payload: dict[str, Any]) -> dict[str, Any]:
+    if payload.get("damage"):
+        return {
+            "expression": str(payload["damage"]),
+            "damage_type": str(payload.get("damage_type") or activity.system.get("damage_type") or ""),
+            "on_save": activity.system.get("damage", {}).get("onSave") if isinstance(activity.system.get("damage"), dict) else None,
+            "parts": [],
+        }
+    damage = activity.system.get("damage")
+    if isinstance(damage, str):
+        return {
+            "expression": damage,
+            "damage_type": str(activity.system.get("damage_type") or ""),
+            "on_save": None,
+            "parts": [],
+        }
+    if not isinstance(damage, dict):
+        return {"expression": "", "damage_type": "", "on_save": None, "parts": []}
+    expressions = []
+    parts_summary = []
+    damage_type = str(activity.system.get("damage_type") or "")
+    for part in damage.get("parts") or []:
+        if not isinstance(part, dict):
+            continue
+        expression = _part_formula(part)
+        if not expression:
+            continue
+        expressions.append(expression)
+        types = [str(item) for item in part.get("types") or [] if item]
+        if not damage_type and types:
+            damage_type = types[0]
+        parts_summary.append({"formula": expression, "types": types})
+    return {
+        "expression": "+".join(expressions),
+        "damage_type": damage_type,
+        "on_save": damage.get("onSave"),
+        "parts": parts_summary,
+    }
+
+
+def _healing_expression(activity, payload: dict[str, Any]) -> str:
+    if payload.get("healing"):
+        return str(payload["healing"])
+    healing = activity.system.get("healing")
+    if isinstance(healing, str):
+        return healing
+    if not isinstance(healing, dict):
+        return ""
+    custom = dict(healing.get("custom") or {})
+    if custom.get("enabled") and custom.get("formula") not in (None, ""):
+        base = str(custom.get("formula"))
+    else:
+        base = _part_formula(healing)
+    scaling = dict(healing.get("scaling") or {})
+    scaling_formula = str(scaling.get("formula") or "")
+    if scaling_formula:
+        return "+".join(part for part in (base, scaling_formula) if part)
+    return base
+
+
+def _part_formula(part: dict[str, Any]) -> str:
+    custom = dict(part.get("custom") or {})
+    if custom.get("enabled") and custom.get("formula") not in (None, ""):
+        return str(custom.get("formula"))
+    number = part.get("number")
+    denomination = part.get("denomination")
+    bonus = str(part.get("bonus") or "")
+    if number not in (None, "") and denomination not in (None, ""):
+        base = f"{number}d{denomination}"
+    else:
+        base = ""
+    return "+".join(item for item in (base, bonus) if item)
+
+
 _ROLL_REF = re.compile(r"@(?P<path>[A-Za-z0-9_.-]+)")
-_ARITHMETIC = re.compile(r"^[0-9+\-*/().]+$")
-_DICE_COUNT_EXPR = re.compile(r"\((?P<expr>[0-9+\-*/().]+)\)d(?P<sides>\d+)", re.I)
+_SAFE_FORMULA = re.compile(r"^[0-9+\-*/().,a-zA-Z_ ]+$")
+_DICE_COUNT_EXPR = re.compile(r"\((?P<expr>[0-9+\-*/().,a-zA-Z_ ]+)\)d(?P<sides>\d+)", re.I)
+_DAMAGE_FLAVOR = re.compile(r"\[[^\]]+\]")
 
 
 def _roll_data(actor, item, activity, payload: dict[str, Any]) -> dict[str, Any]:
@@ -570,6 +673,7 @@ def _roll_data(actor, item, activity, payload: dict[str, Any]) -> dict[str, Any]
             key: {"levels": value} for key, value in dict(system.get("class_levels") or {}).items()
         },
         "item": {
+            "level": item_system.get("level", item_system.get("spell", {}).get("level", 0)),
             "uses": dict(getattr(activity, "uses", {}) or {}),
             "system": item_system,
         },
@@ -583,20 +687,21 @@ def _roll_data(actor, item, activity, payload: dict[str, Any]) -> dict[str, Any]
 
 def _resolve_formula(expression: str, data: dict[str, Any]) -> str:
     resolved = _ROLL_REF.sub(lambda match: str(_lookup_roll_data(data, match.group("path"))), expression)
+    resolved = _DAMAGE_FLAVOR.sub("", resolved)
     resolved = resolved.replace(" ", "")
     resolved = _DICE_COUNT_EXPR.sub(
-        lambda match: f"{int(_eval_arithmetic(match.group('expr')))}d{match.group('sides')}",
+        lambda match: f"{int(_eval_formula(match.group('expr')))}d{match.group('sides')}",
         resolved,
     )
-    if "d" not in resolved.lower() and _ARITHMETIC.match(resolved):
-        return str(int(_eval_arithmetic(resolved)))
+    if "d" not in resolved.lower() and _SAFE_FORMULA.match(resolved):
+        return str(int(_eval_formula(resolved)))
     return resolved
 
 
 def _formula_int(value: Any, data: dict[str, Any]) -> int:
     if isinstance(value, (int, float)):
         return int(value)
-    return int(_eval_arithmetic(_resolve_formula(str(value), data)))
+    return int(_eval_formula(_resolve_formula(str(value), data)))
 
 
 def _lookup_roll_data(data: dict[str, Any], path: str) -> Any:
@@ -609,10 +714,20 @@ def _lookup_roll_data(data: dict[str, Any], path: str) -> Any:
     return current
 
 
-def _eval_arithmetic(expression: str) -> int | float:
-    if not _ARITHMETIC.match(expression):
+def _eval_formula(expression: str) -> int | float:
+    if not _SAFE_FORMULA.match(expression):
         raise ValueError(f"unsupported formula expression: {expression}")
-    return eval(expression, {"__builtins__": {}}, {})
+    return eval(
+        expression,
+        {"__builtins__": {}},
+        {
+            "ceil": __import__("math").ceil,
+            "floor": __import__("math").floor,
+            "max": max,
+            "min": min,
+            "round": round,
+        },
+    )
 
 
 def _ability_roll_data(system: dict[str, Any]) -> dict[str, Any]:
