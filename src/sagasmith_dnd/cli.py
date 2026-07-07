@@ -13,6 +13,7 @@ from sagasmith_core import (
     CampaignService,
     CharacterService,
     EventService,
+    FoundryDocumentService,
     InventoryService,
     MapService,
     MemoryService,
@@ -27,6 +28,7 @@ from sagasmith_core.items import normalize_inventory
 from sagasmith_core.modules import MarkdownModuleParser
 
 from sagasmith_dnd import __version__
+from sagasmith_dnd.activities import execute_document_activity
 from sagasmith_dnd.checks import resolve_character_check
 from sagasmith_dnd.combat import (
     apply_damage,
@@ -345,6 +347,7 @@ def _dispatch(args) -> Any:
         modules = ModuleService(db)
         inventory = InventoryService(db)
         maps = MapService(db)
+        foundry_documents = FoundryDocumentService(db)
         saves = SnapshotService(db)
         memories = MemoryService(db)
         revisions = RevisionService(db)
@@ -1178,6 +1181,21 @@ def _dispatch(args) -> Any:
             campaign_id = _require(args.campaign, "campaign")
             before = campaigns.get(campaign_id)
             state = dict(before.state)
+            if args.item:
+                state, result = execute_document_activity(
+                    foundry_documents,
+                    campaign_id=campaign_id,
+                    state=state,
+                    actor_id=_require(args.actor if args.actor != "runtime" else None, "actor"),
+                    item_id=args.item,
+                    activity_id=_require(args.activity or args.target, "activity"),
+                    target_id=args.target_id,
+                    payment=args.payment,
+                    payload=_dict(args.payload),
+                )
+                updated = campaigns.update(campaign_id, state=state)
+                _campaign_revision(revisions, before, updated, "activity.use")
+                return result
             combat, result = execute_activity(
                 state.get("combat"),
                 actor_id=_require(args.actor if args.actor != "runtime" else None, "actor"),
