@@ -47,6 +47,7 @@ from sagasmith_dnd.effects import recalculate_actor_effects
 from sagasmith_dnd.engine import resolve_check, roll
 from sagasmith_dnd.module_profile import DndModuleProfile
 from sagasmith_dnd.rulesets import get_ruleset, list_rulesets, validate_ruleset
+from sagasmith_dnd.rolls import roll_actor_d20
 from sagasmith_dnd.server import serve as _serve
 from sagasmith_dnd.runtime import database, dense_components
 from sagasmith_dnd.system import DND5E, validate_character_sheet
@@ -1071,6 +1072,21 @@ def _dispatch(args) -> Any:
             )
 
         if args.group == "roll":
+            if args.action in {"ability", "skill", "save", "initiative"} and args.campaign and args.actor != "runtime":
+                dc = args.dc if args.dc is not None else 0 if args.action == "initiative" else None
+                return roll_actor_d20(
+                    foundry_documents,
+                    campaign_id=args.campaign,
+                    actor_id=args.actor,
+                    roll_type=args.action,
+                    dc=_require(dc, "dc"),
+                    ability=args.ability or args.target,
+                    skill=args.skill or args.target,
+                    bonus=args.bonus,
+                    advantage=args.advantage,
+                    disadvantage=args.disadvantage,
+                    source=args.source or args.reason,
+                )
             if args.action == "dice":
                 return asdict(roll(_require(args.expression, "expression")))
             if args.action in {"check", "attack"}:
