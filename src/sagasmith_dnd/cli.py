@@ -48,6 +48,7 @@ from sagasmith_dnd.effects import recalculate_actor_effects
 from sagasmith_dnd.engine import resolve_check, roll
 from sagasmith_dnd.module_profile import DndModuleProfile
 from sagasmith_dnd.rulesets import get_ruleset, list_rulesets, validate_ruleset
+from sagasmith_dnd.rests import recover_document_rest
 from sagasmith_dnd.rolls import roll_actor_d20
 from sagasmith_dnd.server import serve as _serve
 from sagasmith_dnd.spatial import move_token_with_movement_cost
@@ -1345,12 +1346,23 @@ def _dispatch(args) -> Any:
                 state["combat"] = combat
             else:
                 result = {"type": "period.recover", "period": period, "recovered": []}
+            document_recovery = recover_document_rest(
+                foundry_documents,
+                campaign_id=campaign_id,
+                period=period,
+                actor_id=None if args.actor == "runtime" else args.actor,
+            )
             rest_state = dict(state.get("rests") or {})
             rest_state[period] = int(rest_state.get(period, 0)) + 1
             state["rests"] = rest_state
             updated = campaigns.update(campaign_id, state=state)
             _campaign_revision(revisions, before, updated, f"rest.{args.action}")
-            return {"result": result, "rests": rest_state, "combat": combat_status(state.get("combat"))}
+            return {
+                "result": result,
+                "document_recovery": document_recovery,
+                "rests": rest_state,
+                "combat": combat_status(state.get("combat")),
+            }
 
         raise CliError(
             "unknown_command",
