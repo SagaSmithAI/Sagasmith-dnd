@@ -331,6 +331,7 @@ def _dispatch(args) -> Any:
                 "pack",
                 "condition",
                 "damage",
+                "actor",
             ],
             "agent_interface": "skill+json-cli",
         }
@@ -733,6 +734,34 @@ def _dispatch(args) -> Any:
                 path=_require(args.path, "path"),
                 actor_id=None if args.actor == "runtime" else args.actor,
             )
+
+        if args.group == "actor":
+            if args.action == "create":
+                return asdict(
+                    foundry_documents.create_actor(
+                        campaign_id=_require(args.campaign, "campaign"),
+                        system_id=DND5E.id,
+                        actor_type=args.type or args.actor_type or "character",
+                        name=_require(args.name, "name"),
+                        img=args.path or "",
+                        system=_dict(args.payload),
+                        prototype_token=_dict(args.settings),
+                        flags=_dict(args.metadata),
+                    )
+                )
+            if args.action == "list":
+                return {
+                    "actors": [
+                        asdict(item)
+                        for item in foundry_documents.list_actors(
+                            _require(args.campaign, "campaign"),
+                            actor_type=args.type or args.actor_type,
+                        )
+                    ]
+                }
+            if args.action == "show":
+                return asdict(foundry_documents.get_actor(_require(args.actor if args.actor != "runtime" else args.id, "actor")))
+            raise CliError("unknown_command", f"unknown actor command: {args.action}", exit_code=2)
 
         if args.group == "scene":
             if args.action == "create":
