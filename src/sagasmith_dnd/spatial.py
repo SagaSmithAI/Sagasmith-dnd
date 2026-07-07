@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from math import sqrt
 from typing import Any
+from uuid import uuid4
 
 from sagasmith_core import MapService
 
@@ -32,6 +33,18 @@ def move_token_with_movement_cost(
         metadata=metadata,
     )
     grid_distance = int(scene.metadata.get("grid_distance", 5) or 5)
+    pending = _opportunity_windows(
+        maps,
+        scene_id=scene.id,
+        moved_token=before,
+        from_x=before.x,
+        from_y=before.y,
+        to_x=moved.x,
+        to_y=moved.y,
+        grid_distance=grid_distance,
+        grid_size=scene.grid_size,
+        disengaged=bool((metadata or {}).get("disengage") or (metadata or {}).get("disengaged")),
+    )
     return {
         **asdict(moved),
         "movement": {
@@ -50,6 +63,7 @@ def move_token_with_movement_cost(
                 }
                 for region in entered
             ],
+            "pending": pending,
         },
     }
 
@@ -137,3 +151,52 @@ def _cover_degree(region) -> str:
     if normalized in {"total", "full"}:
         return "total"
     return "half"
+
+
+def _opportunity_windows(
+    maps: MapService,
+    *,
+    scene_id: str,
+    moved_token,
+    from_x: int,
+    from_y: int,
+    to_x: int,
+    to_y: int,
+    grid_distance: int,
+    grid_size: int,
+    disengaged: bool,
+) -> list[dict[str, Any]]:
+    if disengaged:
+        return []
+    result = []
+    for token in maps.list_tokens(scene_id):
+        if token.id == moved_token.id or token.hidden:
+            continue
+        if not _hostile(token.disposition, moved_token.disposition):
+            continue
+        reach = int(token.metadata.get("reach", 5) or 5)
+        before_distance = measure_distance(grid_size, token.x, token.y, from_x, from_y) * grid_distance
+        after_distance = measure_distance(grid_size, token.x, token.y, to_x, to_y) * grid_distance
+        if before_distance <= reach < after_distance:
+            result.append(
+                {
+                    "id": f"reaction-{uuid4().hex}",
+                    "type": "reaction_window",
+                    "status": "pending",
+                    "trigger": "opportunity_attack",
+                    "actor_id": token.actor_id,
+                    "token_id": token.id,
+                    "target_actor_id": moved_token.actor_id,
+                    "target_token_id": moved_token.id,
+                    "deadline": "before_token_leaves_reach",
+                }
+            )
+    return result
+
+
+def _hostile(left: str, right: str) -> bool:
+    if not left or not right:
+        return False
+    if left == right:
+        return False
+    return "hostile" in {left, right}
