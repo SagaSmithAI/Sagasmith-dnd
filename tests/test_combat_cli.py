@@ -152,5 +152,8 @@ def test_combat_death_save_records_success(tmp_path: Path, monkeypatch, capsys) 
 
     assert saved["result"]["outcome"] == "pending"
     assert saved["result"]["death_saves"]["successes"] == 1
+    assert saved["result"]["document_death"]["system"]["attributes"]["death"]["successes"] == 1
     hero_combatant = saved["combat"]["combatants"][0]
     assert hero_combatant["death_saves"]["successes"] == 1
+    shown = _call(capsys, "actor", "show", "--actor", hero["id"])
+    assert shown["system"]["attributes"]["death"]["successes"] == 1

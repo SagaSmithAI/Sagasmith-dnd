@@ -319,6 +319,47 @@ def _scene_token_participants(maps, documents, scene_id: str) -> list[dict[str, 
     return participants
 
 
+def _sync_document_death_save(
+    documents,
+    *,
+    campaign_id: str,
+    combat: dict[str, Any],
+    result: dict[str, Any],
+) -> dict[str, Any] | None:
+    target_id = str(result.get("target") or "")
+    combatant = None
+    for item in combat.get("combatants") or []:
+        if target_id in {str(item.get("id") or ""), str(item.get("actor_id") or ""), str(item.get("token_id") or "")}:
+            combatant = item
+            break
+    actor_id = str((combatant or {}).get("actor_id") or target_id)
+    if not actor_id:
+        return None
+    actor = documents.get_actor(actor_id)
+    if actor.campaign_id != campaign_id:
+        return None
+    system = dict(actor.system or {})
+    attributes = system.setdefault("attributes", {})
+    death = attributes.setdefault("death", {})
+    if not isinstance(death, dict):
+        death = {}
+        attributes["death"] = death
+    saves = dict(result.get("death_saves") or {})
+    death["successes"] = int(saves.get("successes", 0) or 0)
+    death["failures"] = int(saves.get("failures", 0) or 0)
+    death["success"] = death["successes"]
+    death["failure"] = death["failures"]
+    death["stable"] = result.get("outcome") == "stable"
+    death["dead"] = result.get("outcome") == "dead"
+    if result.get("outcome") == "revived":
+        hp = attributes.setdefault("hp", {})
+        if isinstance(hp, dict):
+            hp["value"] = int(result.get("hp", 1) or 1)
+        death.update({"successes": 0, "failures": 0, "success": 0, "failure": 0, "stable": False, "dead": False})
+    updated = documents.update_actor(actor_id, system=system)
+    return {"actor_id": actor_id, "system": updated.system}
+
+
 def _initialize_turn_budgets(state: dict[str, Any], combat: dict[str, Any]) -> None:
     runtime = dict(state.get("runtime") or {})
     budgets = dict(runtime.get("turn_budgets") or {})
@@ -1622,6 +1663,12 @@ def _dispatch(args) -> Any:
                         advantage=args.advantage,
                         disadvantage=args.disadvantage,
                     )
+                    result["document_death"] = _sync_document_death_save(
+                        foundry_documents,
+                        campaign_id=campaign_id,
+                        combat=combat,
+                        result=result,
+                    )
                 else:
                     combat, result = end_turn(
                         combat,
@@ -1913,6 +1960,7 @@ def _dispatch(args) -> Any:
                 campaign_id=campaign_id,
                 period=period,
                 actor_id=None if args.actor == "runtime" else args.actor,
+                config=_dict(args.payload),
             )
             duration_recovery = advance_effect_durations(
                 foundry_documents,

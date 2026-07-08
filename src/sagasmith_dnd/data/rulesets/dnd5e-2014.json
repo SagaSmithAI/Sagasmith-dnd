@@ -95,6 +95,29 @@
       "template": {"origin": "activity"}
     }
   },
+  "restRecovery": {
+    "short_rest": {
+      "recoverActivityUses": ["short_rest"],
+      "allowHitDiceSpend": true,
+      "recoverSpellSlots": []
+    },
+    "long_rest": {
+      "recoverActivityUses": ["short_rest", "long_rest"],
+      "recoverHitPoints": "full",
+      "clearTemporaryHitPoints": true,
+      "resetDeathSaves": true,
+      "recoverHitDice": {"fraction": 0.5, "minimum": 1},
+      "recoverSpellSlots": ["spell", "pact"],
+      "recoverResources": ["short_rest", "long_rest"]
+    }
+  },
+  "deathSaves": {
+    "dc": 10,
+    "successesToStabilize": 3,
+    "failuresToDie": 3,
+    "natural20": {"hp": 1, "reset": true},
+    "natural1": {"failures": 2}
+  },
   "activities": {
     "attack": {"activation": "action", "type": "attack"},
     "dash": {"activation": "action", "type": "utility"},
