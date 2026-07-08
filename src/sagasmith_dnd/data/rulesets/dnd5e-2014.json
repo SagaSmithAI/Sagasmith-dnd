@@ -6,6 +6,7 @@
     "round": {"combat": true},
     "declared_minute": {"timeComponent": "minute"},
     "declared_hour": {"timeComponent": "hour"},
+    "declared_day": {"timeComponent": "day"},
     "exploration_turn": {"timeComponent": "exploration"}
   },
   "activityActivationTypes": {
@@ -58,6 +59,21 @@
     "slotScaling": {"source": "cast_spell_level", "minimum": "spell_base_level"},
     "ritual": {"slotCost": false, "requiresPayloadFlag": "ritual"},
     "concentration": {"exclusivePerActor": true, "durationSource": "activity_or_spell_duration"}
+  },
+  "durationPeriods": {
+    "turn_start": {"source": "combat.end_turn", "wallClock": false},
+    "turn_end": {"source": "combat.end_turn", "wallClock": false},
+    "round_start": {"source": "combat.round_increment", "wallClock": false},
+    "encounter_start": {"source": "combat.start", "wallClock": false},
+    "encounter_end": {"source": "combat.end", "wallClock": false},
+    "short_rest": {"source": "rest.short", "wallClock": false},
+    "long_rest": {"source": "rest.long", "wallClock": false},
+    "scene_end": {"source": "scene.end", "wallClock": false},
+    "declared_minute": {"source": "time.advance", "unitAliases": ["minute", "minutes"], "wallClock": false},
+    "declared_hour": {"source": "time.advance", "unitAliases": ["hour", "hours"], "wallClock": false},
+    "declared_day": {"source": "time.advance", "unitAliases": ["day", "days"], "wallClock": false},
+    "until_turn_start": {"expiresOn": "turn_start", "anchorAware": true},
+    "until_turn_end": {"expiresOn": "turn_end", "anchorAware": true}
   },
   "activities": {
     "attack": {"activation": "action", "type": "attack"},
