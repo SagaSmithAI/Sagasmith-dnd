@@ -574,6 +574,9 @@ def _execute_attack(
         raise ValueError("attack activity requires target-id")
     target = documents.get_actor(target_id)
     range_result = _activity_range_result(activity, item_system=item_system, payload=payload)
+    cover_result = _cover_context(payload)
+    if cover_result and not bool(cover_result.get("targetable", True)):
+        raise ValueError("target has total cover")
     roll_data = _roll_data(actor, item, activity, payload)
     attack_bonus = _formula_int(
         payload.get("attack_bonus")
@@ -597,6 +600,8 @@ def _execute_attack(
     )
     total = int(die["natural"]) + attack_bonus
     target_ac = _formula_int(payload.get("target_ac") or _actor_ac(target.system, target.derived), roll_data)
+    if cover_result:
+        target_ac += _cover_bonus(cover_result, "ac_bonus")
     hit = bool(die["critical"] or (not die["fumble"] and total >= target_ac))
     result: dict[str, Any] = {
         "type": "attack",
@@ -614,6 +619,8 @@ def _execute_attack(
     }
     if range_result:
         result["range"] = range_result
+    if cover_result:
+        result["cover"] = cover_result
     messages: list[dict[str, Any]] = []
     pending: list[dict[str, Any]] = []
     damage_spec = _damage_spec(activity, payload, item_system=item_system, roll_data=roll_data)
@@ -728,6 +735,28 @@ def _range_value(range_data: dict[str, Any], *keys: str) -> float:
         except (TypeError, ValueError):
             continue
     return 0.0
+
+
+def _cover_context(payload: dict[str, Any]) -> dict[str, Any]:
+    value = payload.get("cover_context") or payload.get("cover")
+    if not isinstance(value, dict):
+        return {}
+    cover = dict(value.get("cover") or value)
+    if not cover:
+        return {}
+    return {
+        **value,
+        "cover": cover,
+        "targetable": bool(value.get("targetable", cover.get("degree") != "total")),
+    }
+
+
+def _cover_bonus(cover_context: dict[str, Any], key: str) -> int:
+    cover = dict(cover_context.get("cover") or {})
+    value = cover.get(key, 0)
+    if value in (None, ""):
+        return 0
+    return int(value or 0)
 
 
 def _require_actor_can_use_activity(
@@ -949,6 +978,12 @@ def _execute_save(
         or dc_type.get("index")
         or "dex"
     )
+    cover_result = _cover_context(payload)
+    if cover_result and not bool(cover_result.get("targetable", True)):
+        raise ValueError("target has total cover")
+    save_bonus = int(payload.get("bonus", 0) or 0)
+    if cover_result and ability == "dex":
+        save_bonus += _cover_bonus(cover_result, "dex_save_bonus")
     save_result = roll_actor_d20(
         documents,
         campaign_id=campaign_id,
@@ -956,12 +991,14 @@ def _execute_save(
         roll_type="save",
         dc=dc,
         ability=ability,
-        bonus=int(payload.get("bonus", 0) or 0),
+        bonus=save_bonus,
         advantage=bool(payload.get("advantage", False)),
         disadvantage=bool(payload.get("disadvantage", False)),
         source=activity.name,
     )
     result: dict[str, Any] = {"type": "save", **save_result["roll"]}
+    if cover_result:
+        result["cover"] = cover_result
     pending: list[dict[str, Any]] = []
     messages = list(save_result.get("messages", []))
     damage_spec = _damage_spec(activity, payload, item_system=dict(item.system or {}), roll_data=roll_data)

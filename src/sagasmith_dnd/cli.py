@@ -469,6 +469,13 @@ def _activity_payload_with_range_context(
         "grid_size": scene.grid_size,
         "grid_distance": grid_distance,
     }
+    if not value.get("cover_context"):
+        value["cover_context"] = cover_between_tokens(
+            maps,
+            scene_id=scene.id,
+            attacker_token_id=actor_token.id,
+            target_token_id=target_token.id,
+        )
     return value
 
 
