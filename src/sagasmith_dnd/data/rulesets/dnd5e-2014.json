@@ -50,6 +50,15 @@
     "hitDice": {},
     "turnBudget": {}
   },
+  "spellcasting": {
+    "defaultSaveDc": "8 + @prof + @spellcasting.mod + @spellcasting.dc_bonus",
+    "defaultAttackBonus": "@prof + @spellcasting.mod + @spellcasting.attack_bonus",
+    "slotKeys": ["spell1", "spell2", "spell3", "spell4", "spell5", "spell6", "spell7", "spell8", "spell9"],
+    "cantripScaling": {"levels": [1, 5, 11, 17], "source": "character_level"},
+    "slotScaling": {"source": "cast_spell_level", "minimum": "spell_base_level"},
+    "ritual": {"slotCost": false, "requiresPayloadFlag": "ritual"},
+    "concentration": {"exclusivePerActor": true, "durationSource": "activity_or_spell_duration"}
+  },
   "activities": {
     "attack": {"activation": "action", "type": "attack"},
     "dash": {"activation": "action", "type": "utility"},

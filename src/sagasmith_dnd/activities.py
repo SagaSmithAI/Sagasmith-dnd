@@ -73,7 +73,7 @@ def execute_document_activity(
         activity = documents.update_activity(activity_id, uses=uses_after)
 
     actor_system_before = deepcopy(actor.system)
-    actor_system_after = _consume_spell_slot(actor_system_before, activity, payload)
+    actor_system_after = _consume_spell_slot(actor_system_before, item, activity, payload)
     if actor_system_after != actor_system_before:
         actor = documents.update_actor(actor_id, system=actor_system_after)
 
@@ -356,16 +356,21 @@ def _spend_uses(uses: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]
     return value
 
 
-def _consume_spell_slot(system: dict[str, Any], activity, payload: dict[str, Any]) -> dict[str, Any]:
+def _consume_spell_slot(system: dict[str, Any], item, activity, payload: dict[str, Any]) -> dict[str, Any]:
     if activity.activity_type != "cast":
         return system
+    item_system = dict(getattr(item, "system", {}) or {})
     level = int(
         payload.get("spell_level")
         or activity.system.get("level")
         or activity.system.get("spell", {}).get("level")
+        or item_system.get("level")
+        or item_system.get("spell", {}).get("level")
         or 0
     )
     if level <= 0:
+        return system
+    if _ritual_cast(item_system, activity, payload):
         return system
     value = deepcopy(system)
     spells = value.setdefault("spells", {})
@@ -383,6 +388,13 @@ def _consume_spell_slot(system: dict[str, Any], activity, payload: dict[str, Any
     else:
         slot["available"] = current - 1
     return value
+
+
+def _ritual_cast(item_system: dict[str, Any], activity, payload: dict[str, Any]) -> bool:
+    if not bool(payload.get("ritual", False)):
+        return False
+    system = dict(getattr(activity, "system", {}) or {})
+    return bool(system.get("ritual") or system.get("spell", {}).get("ritual") or item_system.get("ritual"))
 
 
 def _requires_concentration(activity) -> bool:
@@ -452,11 +464,79 @@ def _execute_activity_effect(
             activity=activity,
             payload=payload,
         )
+    if activity_type == "cast":
+        return _execute_cast(
+            documents,
+            campaign_id=campaign_id,
+            actor=actor,
+            actor_id=actor_id,
+            item=item,
+            target_id=target_id,
+            activity=activity,
+            payload=payload,
+        )
     if activity_type == "check":
         return _execute_check(
             documents,
             campaign_id=campaign_id,
             actor_id=actor_id,
+            target_id=target_id,
+            activity=activity,
+            payload=payload,
+        )
+    return None
+
+
+def _execute_cast(
+    documents: FoundryDocumentService,
+    *,
+    campaign_id: str,
+    actor,
+    actor_id: str,
+    item,
+    target_id: str | None,
+    activity,
+    payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    system = {**dict(getattr(item, "system", {}) or {}), **dict(getattr(activity, "system", {}) or {})}
+    if system.get("save") or system.get("dc"):
+        return _execute_save(
+            documents,
+            campaign_id=campaign_id,
+            actor=actor,
+            item=item,
+            target_id=target_id,
+            activity=activity,
+            payload=payload,
+        )
+    if system.get("attack") or system.get("attack_bonus"):
+        return _execute_attack(
+            documents,
+            campaign_id=campaign_id,
+            actor=actor,
+            actor_id=actor_id,
+            target_id=target_id,
+            item=item,
+            item_system=dict(getattr(item, "system", {}) or {}),
+            activity=activity,
+            payload=payload,
+        )
+    if system.get("healing") or system.get("heal_at_slot_level"):
+        return _execute_heal(
+            documents,
+            campaign_id=campaign_id,
+            actor=actor,
+            item=item,
+            target_id=target_id or actor.id,
+            activity=activity,
+            payload=payload,
+        )
+    if system.get("damage"):
+        return _execute_damage(
+            documents,
+            campaign_id=campaign_id,
+            actor=actor,
+            item=item,
             target_id=target_id,
             activity=activity,
             payload=payload,
@@ -484,7 +564,7 @@ def _execute_attack(
         payload.get("attack_bonus")
         or activity.system.get("attack_bonus")
         or item_system.get("attack_bonus")
-        or 0,
+        or _default_spell_attack_bonus(actor, item, activity),
         roll_data,
     )
     die = roll_d20(
@@ -506,7 +586,7 @@ def _execute_attack(
     }
     messages: list[dict[str, Any]] = []
     pending: list[dict[str, Any]] = []
-    damage_spec = _damage_spec(activity, payload)
+    damage_spec = _damage_spec(activity, payload, item_system=item_system, roll_data=roll_data)
     if hit and damage_spec["expression"]:
         expression = str(damage_spec["expression"])
         rolled_expression = _critical_expression(expression) if die["critical"] else expression
@@ -548,12 +628,13 @@ def _execute_damage(
         raise ValueError("damage activity requires target-id")
     amount = payload.get("amount")
     rolled = None
-    damage_spec = _damage_spec(activity, payload)
+    roll_data = _roll_data(actor, item, activity, payload)
+    damage_spec = _damage_spec(activity, payload, item_system=dict(item.system or {}), roll_data=roll_data)
     if amount is None:
         expression = str(damage_spec["expression"] or "")
         if not expression:
             raise ValueError("damage activity requires amount or damage expression")
-        rolled = roll(_resolve_formula(expression, _roll_data(actor, item, activity, payload)))
+        rolled = roll(_resolve_formula(expression, roll_data))
         amount = rolled.total
     damage_result = apply_actor_damage(
         documents,
@@ -595,7 +676,15 @@ def _execute_heal(
     amount = payload.get("amount")
     rolled = None
     if amount is None:
-        expression = str(_healing_expression(activity, payload) or "")
+        expression = str(
+            _healing_expression(
+                activity,
+                payload,
+                item_system=dict(item.system or {}),
+                roll_data=_roll_data(actor, item, activity, payload),
+            )
+            or ""
+        )
         if not expression:
             raise ValueError("heal activity requires amount or healing expression")
         rolled = roll(_resolve_formula(expression, _roll_data(actor, item, activity, payload)))
@@ -644,17 +733,25 @@ def _execute_save(
     if not target_id:
         raise ValueError("save activity requires target-id")
     roll_data = _roll_data(actor, item, activity, payload)
-    save_data = dict(activity.system.get("save") or {})
+    item_system = dict(getattr(item, "system", {}) or {})
+    save_data = dict(activity.system.get("save") or item_system.get("dc") or {})
     dc_data = save_data.get("dc") if isinstance(save_data.get("dc"), dict) else {}
+    dc_type = save_data.get("dc_type") if isinstance(save_data.get("dc_type"), dict) else {}
     dc = _formula_int(
         payload.get("dc")
         or activity.system.get("dc")
         or dc_data.get("formula")
         or dc_data.get("value")
-        or 10,
+        or _default_spell_save_dc(actor, item, activity),
         roll_data,
     )
-    ability = str(payload.get("ability") or activity.system.get("ability") or save_data.get("ability") or "dex")
+    ability = str(
+        payload.get("ability")
+        or activity.system.get("ability")
+        or save_data.get("ability")
+        or dc_type.get("index")
+        or "dex"
+    )
     save_result = roll_actor_d20(
         documents,
         campaign_id=campaign_id,
@@ -670,7 +767,7 @@ def _execute_save(
     result: dict[str, Any] = {"type": "save", **save_result["roll"]}
     pending: list[dict[str, Any]] = []
     messages = list(save_result.get("messages", []))
-    damage_spec = _damage_spec(activity, payload)
+    damage_spec = _damage_spec(activity, payload, item_system=dict(item.system or {}), roll_data=roll_data)
     if damage_spec["expression"]:
         rolled = roll(_resolve_formula(str(damage_spec["expression"]), roll_data))
         on_save = str(damage_spec["on_save"] or "").lower()
@@ -763,27 +860,43 @@ def _actor_ac(system: dict[str, Any], derived: dict[str, Any]) -> int:
     return int(ac or 10)
 
 
-def _damage_spec(activity, payload: dict[str, Any]) -> dict[str, Any]:
+def _damage_spec(
+    activity,
+    payload: dict[str, Any],
+    *,
+    item_system: dict[str, Any] | None = None,
+    roll_data: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    item_system = dict(item_system or {})
+    roll_data = dict(roll_data or {})
     if payload.get("damage"):
         return {
             "expression": str(payload["damage"]),
-            "damage_type": str(payload.get("damage_type") or activity.system.get("damage_type") or ""),
+            "damage_type": _damage_type(payload.get("damage_type") or activity.system.get("damage_type") or ""),
             "on_save": activity.system.get("damage", {}).get("onSave") if isinstance(activity.system.get("damage"), dict) else None,
             "parts": [],
         }
-    damage = activity.system.get("damage")
+    damage = activity.system.get("damage") or item_system.get("damage")
     if isinstance(damage, str):
         return {
             "expression": damage,
-            "damage_type": str(activity.system.get("damage_type") or ""),
+            "damage_type": _damage_type(activity.system.get("damage_type") or ""),
             "on_save": None,
             "parts": [],
         }
     if not isinstance(damage, dict):
         return {"expression": "", "damage_type": "", "on_save": None, "parts": []}
+    scaled = _scaled_spell_expression(damage, roll_data)
+    if scaled:
+        return {
+            "expression": scaled,
+            "damage_type": _damage_type(activity.system.get("damage_type") or damage.get("damage_type")),
+            "on_save": damage.get("onSave") or damage.get("dc_success") or item_system.get("dc", {}).get("dc_success"),
+            "parts": [],
+        }
     expressions = []
     parts_summary = []
-    damage_type = str(activity.system.get("damage_type") or "")
+    damage_type = _damage_type(activity.system.get("damage_type") or damage.get("damage_type"))
     for part in damage.get("parts") or []:
         if not isinstance(part, dict):
             continue
@@ -803,12 +916,25 @@ def _damage_spec(activity, payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _healing_expression(activity, payload: dict[str, Any]) -> str:
+def _healing_expression(
+    activity,
+    payload: dict[str, Any],
+    *,
+    item_system: dict[str, Any] | None = None,
+    roll_data: dict[str, Any] | None = None,
+) -> str:
     if payload.get("healing"):
         return str(payload["healing"])
-    healing = activity.system.get("healing")
+    item_system = dict(item_system or {})
+    healing = activity.system.get("healing") or item_system.get("healing")
     if isinstance(healing, str):
         return healing
+    slot_scaled = _scaled_spell_expression(
+        activity.system.get("heal_at_slot_level") or item_system.get("heal_at_slot_level") or {},
+        dict(roll_data or {}),
+    )
+    if slot_scaled:
+        return slot_scaled
     if not isinstance(healing, dict):
         return ""
     custom = dict(healing.get("custom") or {})
@@ -837,6 +963,35 @@ def _part_formula(part: dict[str, Any]) -> str:
     return "+".join(item for item in (base, bonus) if item)
 
 
+def _scaled_spell_expression(data: dict[str, Any], roll_data: dict[str, Any]) -> str:
+    if not isinstance(data, dict):
+        return ""
+    character_level = int(roll_data.get("level", 1) or 1)
+    spell_level = int(roll_data.get("spell", {}).get("level", 0) or 0)
+    if data.get("damage_at_character_level"):
+        return _scaled_table_value(data["damage_at_character_level"], character_level)
+    if data.get("damage_at_slot_level"):
+        return _scaled_table_value(data["damage_at_slot_level"], spell_level)
+    if all(str(key).isdigit() for key in data):
+        return _scaled_table_value(data, spell_level)
+    return ""
+
+
+def _scaled_table_value(table: dict[str, Any], level: int) -> str:
+    candidates = sorted((int(key), str(value)) for key, value in table.items() if str(key).isdigit())
+    value = ""
+    for threshold, expression in candidates:
+        if level >= threshold:
+            value = expression
+    return value
+
+
+def _damage_type(value: Any) -> str:
+    if isinstance(value, dict):
+        return str(value.get("index") or value.get("name") or "")
+    return str(value or "")
+
+
 _ROLL_REF = re.compile(r"@(?P<path>[A-Za-z0-9_.-]+)")
 _SAFE_FORMULA = re.compile(r"^[0-9+\-*/().,a-zA-Z_ ]+$")
 _DICE_COUNT_EXPR = re.compile(r"\((?P<expr>[0-9+\-*/().,a-zA-Z_ ]+)\)d(?P<sides>\d+)", re.I)
@@ -846,8 +1001,25 @@ _DAMAGE_FLAVOR = re.compile(r"\[[^\]]+\]")
 def _roll_data(actor, item, activity, payload: dict[str, Any]) -> dict[str, Any]:
     system = dict((getattr(actor, "derived", None) or {}).get("effective_system") or getattr(actor, "system", {}) or {})
     item_system = dict(getattr(item, "system", {}) or {})
-    ability = str(payload.get("ability") or activity.system.get("ability") or item_system.get("ability") or "str")
+    activity_system = dict(getattr(activity, "system", {}) or {})
+    spell_ability = _spellcasting_ability(system, item_system, activity_system)
+    ability = str(
+        payload.get("ability")
+        or activity_system.get("ability")
+        or item_system.get("ability")
+        or (spell_ability if getattr(item, "item_type", "") == "spell" else "str")
+    )
+    base_spell_level = int(
+        activity.system.get("level")
+        or activity.system.get("spell", {}).get("level")
+        or item_system.get("level")
+        or item_system.get("spell", {}).get("level")
+        or 0
+    )
+    spell_level = int(payload.get("spell_level") or base_spell_level or 0)
+    actor_level = int(system.get("level") or system.get("details", {}).get("level") or 1)
     return {
+        "level": actor_level,
         "prof": system.get("attributes", {}).get("prof", 2),
         "mod": _ability_mod(system, ability),
         "abilities": _ability_roll_data(system),
@@ -859,12 +1031,69 @@ def _roll_data(actor, item, activity, payload: dict[str, Any]) -> dict[str, Any]
             "uses": dict(getattr(activity, "uses", {}) or {}),
             "system": item_system,
         },
+        "spell": {"level": spell_level, "base_level": base_spell_level},
+        "spellcasting": {
+            "ability": spell_ability,
+            "mod": _ability_mod(system, spell_ability),
+            "attack": _default_spell_attack_bonus(actor, item, activity),
+            "dc": _default_spell_save_dc(actor, item, activity),
+        },
         "activity": {
             "uses": dict(getattr(activity, "uses", {}) or {}),
             "system": dict(getattr(activity, "system", {}) or {}),
         },
         "payload": payload,
     }
+
+
+def _default_spell_attack_bonus(actor, item, activity) -> int:
+    if getattr(item, "item_type", "") != "spell" and getattr(activity, "activity_type", "") != "cast":
+        return 0
+    system = dict((getattr(actor, "derived", None) or {}).get("effective_system") or getattr(actor, "system", {}) or {})
+    item_system = dict(getattr(item, "system", {}) or {})
+    ability = _spellcasting_ability(system, item_system, dict(getattr(activity, "system", {}) or {}))
+    return int(system.get("attributes", {}).get("prof", 2) or 2) + _ability_mod(system, ability) + _spell_bonus(system, "attack")
+
+
+def _default_spell_save_dc(actor, item, activity) -> int:
+    if getattr(item, "item_type", "") != "spell" and getattr(activity, "activity_type", "") != "cast":
+        return 10
+    system = dict((getattr(actor, "derived", None) or {}).get("effective_system") or getattr(actor, "system", {}) or {})
+    item_system = dict(getattr(item, "system", {}) or {})
+    ability = _spellcasting_ability(system, item_system, dict(getattr(activity, "system", {}) or {}))
+    return 8 + int(system.get("attributes", {}).get("prof", 2) or 2) + _ability_mod(system, ability) + _spell_bonus(system, "dc")
+
+
+def _spellcasting_ability(
+    system: dict[str, Any],
+    item_system: dict[str, Any],
+    activity_system: dict[str, Any] | None = None,
+) -> str:
+    activity_system = dict(activity_system or {})
+    attributes = dict(system.get("attributes") or {})
+    spell_attr = attributes.get("spell") if isinstance(attributes.get("spell"), dict) else {}
+    spellcasting = system.get("spellcasting") if isinstance(system.get("spellcasting"), dict) else {}
+    for candidate in (
+        activity_system.get("ability"),
+        item_system.get("ability"),
+        spell_attr.get("ability"),
+        attributes.get("spellcasting"),
+        spellcasting.get("ability"),
+    ):
+        if str(candidate or "") in {"str", "dex", "con", "int", "wis", "cha"}:
+            return str(candidate)
+    return "int"
+
+
+def _spell_bonus(system: dict[str, Any], key: str) -> int:
+    attributes = dict(system.get("attributes") or {})
+    spell = attributes.get("spell")
+    if isinstance(spell, dict):
+        value = spell.get(key, 0)
+        if isinstance(value, dict):
+            value = value.get("value", value.get("bonus", 0))
+        return int(value or 0)
+    return 0
 
 
 def _resolve_formula(expression: str, data: dict[str, Any]) -> str:
