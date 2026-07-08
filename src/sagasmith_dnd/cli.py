@@ -28,7 +28,7 @@ from sagasmith_core.modules import MarkdownModuleParser
 
 from sagasmith_dnd import __version__
 from sagasmith_dnd.advancement import apply_advancement
-from sagasmith_dnd.activities import execute_document_activity
+from sagasmith_dnd.activities import execute_document_activity, list_actor_activity_options
 from sagasmith_dnd.checks import resolve_character_check
 from sagasmith_dnd.combat import (
     apply_damage,
@@ -362,6 +362,32 @@ def _spend_runtime_action(state: dict[str, Any], actor_id: str, key: str = "main
     budgets[actor_id] = budget
     runtime["turn_budgets"] = budgets
     state["runtime"] = runtime
+
+
+def _document_combat_status(
+    combat: dict[str, Any] | None,
+    *,
+    state: dict[str, Any],
+    documents: FoundryDocumentService,
+    campaign_id: str,
+) -> dict[str, Any] | None:
+    status = combat_status(combat, runtime=state.get("runtime"))
+    if not status or not status.get("current"):
+        return status
+    actor_id = str(status["current"].get("actor_id") or status["current"].get("id") or "")
+    if not actor_id:
+        return status
+    options = list_actor_activity_options(
+        documents,
+        campaign_id=campaign_id,
+        actor_id=actor_id,
+        state=state,
+    )
+    status["activity_options"] = options
+    status["legal_activities"] = options["available"]
+    status["unavailable_activities"] = options["unavailable"]
+    status["current"]["activities"] = options["available"]
+    return status
 
 
 def _actor_ac_value(value: Any) -> int:
@@ -1494,9 +1520,19 @@ def _dispatch(args) -> Any:
                 )
                 updated = campaigns.update(campaign_id, state=state)
                 _campaign_revision(revisions, before, updated, "combat.start")
-                return combat_status(state["combat"], runtime=state.get("runtime"))
+                return _document_combat_status(
+                    state["combat"],
+                    state=state,
+                    documents=foundry_documents,
+                    campaign_id=campaign_id,
+                )
             if args.action == "status":
-                return combat_status(state.get("combat"), runtime=state.get("runtime"))
+                return _document_combat_status(
+                    state.get("combat"),
+                    state=state,
+                    documents=foundry_documents,
+                    campaign_id=campaign_id,
+                )
             if args.action in {"attack", "damage", "heal", "condition", "death-save", "end-turn"}:
                 before = campaign
                 combat = state.get("combat")
@@ -1583,7 +1619,15 @@ def _dispatch(args) -> Any:
                 state["combat"] = combat
                 updated = campaigns.update(campaign_id, state=state)
                 _campaign_revision(revisions, before, updated, f"combat.{args.action}")
-                return {"result": result, "combat": combat_status(combat, runtime=state.get("runtime"))}
+                return {
+                    "result": result,
+                    "combat": _document_combat_status(
+                        combat,
+                        state=state,
+                        documents=foundry_documents,
+                        campaign_id=campaign_id,
+                    ),
+                }
             if args.action == "act":
                 raise CliError(
                     "runtime_authority_required",
@@ -1855,7 +1899,12 @@ def _dispatch(args) -> Any:
                 "document_recovery": document_recovery,
                 "duration_recovery": duration_recovery,
                 "rests": rest_state,
-                "combat": combat_status(state.get("combat"), runtime=state.get("runtime")),
+                "combat": _document_combat_status(
+                    state.get("combat"),
+                    state=state,
+                    documents=foundry_documents,
+                    campaign_id=campaign_id,
+                ),
             }
 
         raise CliError(

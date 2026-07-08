@@ -53,12 +53,14 @@ def execute_document_activity(
 
     payload = dict(payload or {})
     activation = dict(activity.activation or {})
-    payment = payment or _default_payment(activation)
     runtime = dict(state.get("runtime") or {})
     budgets = dict(runtime.get("turn_budgets") or {})
     actor_budget = _budget_for(budgets.get(actor_id))
-    if activity.activity_type == "attack" and int(actor_budget.get("attack_budget", 0)) > 0 and payment == "main_action":
-        payment = "attack_budget"
+    payment_options = activity_payment_options(activity, actor_budget)
+    if payment is None:
+        payment = payment_options[0] if payment_options else _default_payment(activation)
+    elif payment not in payment_options and payment != "free":
+        raise ValueError(f"cannot pay {payment} for {activity.name}")
     payment_delta = _spend_payment(actor_budget, payment)
     _apply_activity_grants(actor_budget, actor=actor, activity=activity, payment=payment)
     budgets[actor_id] = actor_budget
@@ -204,6 +206,70 @@ def execute_document_activity(
         "messages": messages,
         "narration_hints": list(message.narration_hints),
     }
+
+
+def list_actor_activity_options(
+    documents: FoundryDocumentService,
+    *,
+    campaign_id: str,
+    actor_id: str,
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    budget = turn_budget_for_state(state, actor_id)
+    available = []
+    unavailable = []
+    for item in documents.list_items(campaign_id, actor_id=actor_id):
+        item_system = dict(item.system or {})
+        if item_system.get("hidden"):
+            continue
+        for activity in documents.list_activities(item.id):
+            payments = activity_payment_options(activity, budget)
+            entry = {
+                "item_id": item.id,
+                "item_name": item.name,
+                "item_type": item.item_type,
+                "activity_id": activity.id,
+                "activity_name": activity.name,
+                "activity_type": activity.activity_type,
+                "activation": dict(activity.activation or {}),
+                "payments": payments,
+                "requires_target": activity.activity_type in {"attack", "damage", "heal", "save"},
+            }
+            if payments:
+                available.append(entry)
+            else:
+                unavailable.append({**entry, "reason": "no_available_payment"})
+    return {
+        "actor_id": actor_id,
+        "turn_budget": budget,
+        "available": available,
+        "unavailable": unavailable,
+    }
+
+
+def turn_budget_for_state(state: dict[str, Any], actor_id: str) -> dict[str, int]:
+    runtime = dict(state.get("runtime") or {})
+    budgets = dict(runtime.get("turn_budgets") or {})
+    return _budget_for(budgets.get(actor_id))
+
+
+def activity_payment_options(activity, budget: dict[str, int]) -> list[str]:
+    activation = dict(getattr(activity, "activation", {}) or {})
+    activation_type = str(activation.get("type") or activation.get("activation") or "free")
+    if activation_type == "action":
+        values = []
+        if getattr(activity, "activity_type", "") == "attack" and int(budget.get("attack_budget", 0)) > 0:
+            values.append("attack_budget")
+        if int(budget.get("main_action", 0)) > 0:
+            values.append("main_action")
+        if int(budget.get("extra_action", 0)) > 0:
+            values.append("extra_action")
+        return values
+    if activation_type == "bonus":
+        return ["bonus_action"] if int(budget.get("bonus_action", 0)) > 0 else []
+    if activation_type == "reaction":
+        return ["reaction"] if int(budget.get("reaction", 0)) > 0 else []
+    return ["free"]
 
 
 def _default_payment(activation: dict[str, Any]) -> str:
