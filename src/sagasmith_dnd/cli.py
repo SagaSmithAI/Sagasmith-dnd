@@ -62,6 +62,7 @@ from sagasmith_dnd.rolls import roll_actor_d20
 from sagasmith_dnd.server import serve as _serve
 from sagasmith_dnd.spatial import (
     cover_between_tokens,
+    measure_distance,
     move_token_with_movement_cost,
     prepare_scene_runtime,
     prepare_token_runtime,
@@ -126,6 +127,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--environment")
     parser.add_argument("--effects")
     parser.add_argument("--target-id")
+    parser.add_argument("--target-token")
+    parser.add_argument("--actor-token")
     parser.add_argument("--attack-bonus", type=int)
     parser.add_argument("--amount", type=int)
     parser.add_argument("--damage-type")
@@ -408,6 +411,95 @@ def _spend_runtime_action(state: dict[str, Any], actor_id: str, key: str = "main
     budgets[actor_id] = budget
     runtime["turn_budgets"] = budgets
     state["runtime"] = runtime
+
+
+def _append_pending_reactions(state: dict[str, Any], pending: list[dict[str, Any]]) -> None:
+    if not pending:
+        return
+    runtime = dict(state.get("runtime") or {})
+    queued = list(runtime.get("pending") or [])
+    queued.extend(pending)
+    runtime["pending"] = queued
+    state["runtime"] = runtime
+
+
+def _activity_payload_with_range_context(
+    maps,
+    *,
+    state: dict[str, Any],
+    actor_id: str,
+    target_id: str | None,
+    args,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    value = dict(payload)
+    if value.get("range_context"):
+        return value
+    target_id = target_id or ""
+    actor_token_id = (
+        args.actor_token
+        or value.get("actor_token_id")
+        or value.get("source_token_id")
+        or _combatant_token_id(state, actor_id)
+    )
+    target_token_id = (
+        args.target_token
+        or value.get("target_token_id")
+        or _combatant_token_id(state, target_id)
+    )
+    if not actor_token_id or not target_token_id:
+        return value
+    actor_token = maps.get_token(str(actor_token_id))
+    target_token = maps.get_token(str(target_token_id))
+    if actor_token.scene_id != target_token.scene_id:
+        raise CliError("invalid_target", "actor token and target token must be in the same scene", exit_code=2)
+    if actor_token.actor_id and actor_token.actor_id != actor_id:
+        raise CliError("invalid_actor_token", "actor token does not match --actor", exit_code=2)
+    if target_id and target_token.actor_id and target_token.actor_id != target_id:
+        raise CliError("invalid_target_token", "target token does not match --target-id", exit_code=2)
+    scene = maps.get_scene(actor_token.scene_id)
+    grid_distance = int(scene.metadata.get("grid_distance", 5) or 5)
+    distance = measure_distance(scene.grid_size, actor_token.x, actor_token.y, target_token.x, target_token.y) * grid_distance
+    value["range_context"] = {
+        "scene_id": scene.id,
+        "actor_token_id": actor_token.id,
+        "target_token_id": target_token.id,
+        "distance": distance,
+        "units": scene.grid_units or "ft",
+        "grid_size": scene.grid_size,
+        "grid_distance": grid_distance,
+    }
+    return value
+
+
+def _combatant_token_id(state: dict[str, Any], actor_id: str | None) -> str:
+    if not actor_id:
+        return ""
+    for combatant in dict(state.get("combat") or {}).get("combatants") or []:
+        if actor_id in {
+            str(combatant.get("id") or ""),
+            str(combatant.get("actor_id") or ""),
+            str(combatant.get("character_id") or ""),
+        }:
+            return str(combatant.get("token_id") or "")
+    return ""
+
+
+def _payload_from_reaction_window(window: dict[str, Any], response: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(response.get("payload") or response)
+    if window.get("trigger") == "opportunity_attack":
+        payload.setdefault("reaction_trigger", "opportunity_attack")
+        payload.setdefault(
+            "range_context",
+            {
+                "scene_id": window.get("scene_id"),
+                "actor_token_id": window.get("actor_token_id") or window.get("token_id"),
+                "target_token_id": window.get("target_token_id"),
+                "distance": window.get("distance"),
+                "units": "ft",
+            },
+        )
+    return payload
 
 
 def _document_combat_status(
@@ -1205,6 +1297,8 @@ def _dispatch(args) -> Any:
                 return updated
             if args.action == "move":
                 before = asdict(maps.get_token(_require(args.token or args.id, "token")))
+                campaign_before = campaigns.get(before["campaign_id"])
+                campaign_state = dict(campaign_before.state)
                 result = move_token_with_movement_cost(
                     maps,
                     documents=foundry_documents,
@@ -1223,6 +1317,11 @@ def _dispatch(args) -> Any:
                     before=before,
                     after=after,
                 )
+                pending = list(result.get("movement", {}).get("pending") or [])
+                if pending:
+                    _append_pending_reactions(campaign_state, pending)
+                    campaign_after = campaigns.update(before["campaign_id"], state=campaign_state)
+                    _campaign_revision(revisions, campaign_before, campaign_after, "token.move.reactions")
                 return result
 
         if args.group == "region":
@@ -1732,16 +1831,26 @@ def _dispatch(args) -> Any:
             before = campaigns.get(campaign_id)
             state = dict(before.state)
             if args.item:
+                actor_id = _require(args.actor if args.actor != "runtime" else None, "actor")
+                target_id = args.target_id
+                payload = _activity_payload_with_range_context(
+                    maps,
+                    state=state,
+                    actor_id=actor_id,
+                    target_id=target_id,
+                    args=args,
+                    payload=_dict(args.payload),
+                )
                 state, result = execute_document_activity(
                     foundry_documents,
                     campaign_id=campaign_id,
                     state=state,
-                    actor_id=_require(args.actor if args.actor != "runtime" else None, "actor"),
+                    actor_id=actor_id,
                     item_id=args.item,
                     activity_id=_require(args.activity or args.target, "activity"),
-                    target_id=args.target_id,
+                    target_id=target_id,
                     payment=args.payment,
-                    payload=_dict(args.payload),
+                    payload=payload,
                 )
                 updated = campaigns.update(campaign_id, state=state)
                 _campaign_revision(revisions, before, updated, "activity.use")
@@ -1772,20 +1881,39 @@ def _dispatch(args) -> Any:
                 window_id = _require(args.id or args.target, "id")
                 changed = False
                 updated_pending = []
+                selected_window: dict[str, Any] | None = None
+                response_payload = _dict(args.payload)
                 for item in pending:
                     value = dict(item)
                     if value.get("id") == window_id and value.get("status", "pending") == "pending":
                         value["status"] = "resolved" if args.action == "resolve" else "declined"
-                        value["response"] = _dict(args.payload)
+                        value["response"] = response_payload
+                        selected_window = dict(value)
                         changed = True
                     updated_pending.append(value)
                 if not changed:
                     raise CliError("not_found", f"reaction window not found: {window_id}", exit_code=5)
                 runtime["pending"] = updated_pending
                 state["runtime"] = runtime
+                reaction_result = None
+                response_item_id = str(response_payload.get("item_id") or response_payload.get("item") or "")
+                response_activity_id = str(response_payload.get("activity_id") or response_payload.get("activity") or "")
+                if args.action == "resolve" and selected_window and response_item_id and response_activity_id:
+                    reaction_payload = _payload_from_reaction_window(selected_window, response_payload)
+                    state, reaction_result = execute_document_activity(
+                        foundry_documents,
+                        campaign_id=campaign_id,
+                        state=state,
+                        actor_id=str(selected_window.get("actor_id") or ""),
+                        item_id=response_item_id,
+                        activity_id=response_activity_id,
+                        target_id=str(selected_window.get("target_actor_id") or ""),
+                        payment="reaction",
+                        payload=reaction_payload,
+                    )
                 updated = campaigns.update(campaign_id, state=state)
                 _campaign_revision(revisions, before, updated, f"reaction.{args.action}")
-                return {"pending": updated_pending}
+                return {"pending": updated_pending, "reaction_result": reaction_result}
             raise CliError("unknown_command", f"unknown reaction command: {args.action}", exit_code=2)
 
         if args.group == "ready":

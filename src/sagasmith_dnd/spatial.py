@@ -320,10 +320,15 @@ def _opportunity_windows(
                     "type": "reaction_window",
                     "status": "pending",
                     "trigger": "opportunity_attack",
+                    "scene_id": scene_id,
                     "actor_id": token.actor_id,
                     "token_id": token.id,
+                    "actor_token_id": token.id,
                     "target_actor_id": moved_token.actor_id,
                     "target_token_id": moved_token.id,
+                    "distance": before_distance,
+                    "after_distance": after_distance,
+                    "reach": reach,
                     "deadline": "before_token_leaves_reach",
                 }
             )

@@ -59,7 +59,11 @@ def execute_document_activity(
     payment_options = activity_payment_options(activity, actor_budget)
     if payment is None:
         payment = payment_options[0] if payment_options else _default_payment(activation)
-    elif payment not in payment_options and payment != "free":
+    elif (
+        payment not in payment_options
+        and payment != "free"
+        and not _allows_reaction_override(activity, payload=payload, payment=payment)
+    ):
         raise ValueError(f"cannot pay {payment} for {activity.name}")
     payment_delta = _spend_payment(actor_budget, payment)
     _apply_activity_grants(actor_budget, actor=actor, activity=activity, payment=payment)
@@ -317,6 +321,14 @@ def _spend_payment(budget: dict[str, int], payment: str) -> dict[str, Any]:
     return {"before": before, "after": dict(budget)}
 
 
+def _allows_reaction_override(activity, *, payload: dict[str, Any], payment: str) -> bool:
+    return (
+        payment == "reaction"
+        and getattr(activity, "activity_type", "") == "attack"
+        and str(payload.get("reaction_trigger") or "") == "opportunity_attack"
+    )
+
+
 def _apply_activity_grants(budget: dict[str, int], *, actor, activity, payment: str) -> None:
     grant = dict(activity.system.get("grant") or {})
     if grant.get("extra_actions") is not None:
@@ -559,6 +571,7 @@ def _execute_attack(
     if not target_id:
         raise ValueError("attack activity requires target-id")
     target = documents.get_actor(target_id)
+    range_result = _activity_range_result(activity, item_system=item_system, payload=payload)
     roll_data = _roll_data(actor, item, activity, payload)
     attack_bonus = _formula_int(
         payload.get("attack_bonus")
@@ -569,7 +582,7 @@ def _execute_attack(
     )
     die = roll_d20(
         advantage=bool(payload.get("advantage", False)),
-        disadvantage=bool(payload.get("disadvantage", False)),
+        disadvantage=bool(payload.get("disadvantage", False) or range_result.get("disadvantage")),
     )
     total = int(die["natural"]) + attack_bonus
     target_ac = _formula_int(payload.get("target_ac") or _actor_ac(target.system, target.derived), roll_data)
@@ -584,6 +597,8 @@ def _execute_attack(
         "total": total,
         "hit": hit,
     }
+    if range_result:
+        result["range"] = range_result
     messages: list[dict[str, Any]] = []
     pending: list[dict[str, Any]] = []
     damage_spec = _damage_spec(activity, payload, item_system=item_system, roll_data=roll_data)
@@ -612,6 +627,92 @@ def _execute_attack(
         pending.extend(damage_result.get("pending", []))
         messages.extend(damage_result.get("messages", []))
     return {"result": result, "pending": pending, "messages": messages}
+
+
+def _activity_range_result(activity, *, item_system: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    context = dict(payload.get("range_context") or {})
+    if not context:
+        return {}
+    distance = float(context.get("distance", 0) or 0)
+    range_data = _activity_range_data(activity, item_system=item_system)
+    if not range_data:
+        return {
+            "distance": distance,
+            "units": str(context.get("units") or "ft"),
+            "checked": False,
+        }
+    mode = _range_mode(range_data)
+    normal = _range_value(range_data, "value", "normal", "range", "reach")
+    long = _range_value(range_data, "long", "max")
+    if mode in {"melee", "touch"} and normal <= 0:
+        normal = 5
+    if mode == "self":
+        normal = 0
+        if distance > 0:
+            raise ValueError(f"target is out of range ({distance:g} ft > self)")
+    maximum = long if long > 0 else normal
+    if maximum > 0 and distance > maximum:
+        raise ValueError(f"target is out of range ({distance:g} ft > {maximum:g} ft)")
+    disadvantage = bool(long > 0 and normal > 0 and distance > normal)
+    return {
+        "distance": distance,
+        "units": str(context.get("units") or "ft"),
+        "mode": mode,
+        "normal": normal,
+        "long": long,
+        "maximum": maximum,
+        "disadvantage": disadvantage,
+        "actor_token_id": context.get("actor_token_id"),
+        "target_token_id": context.get("target_token_id"),
+        "scene_id": context.get("scene_id"),
+        "checked": True,
+    }
+
+
+def _activity_range_data(activity, *, item_system: dict[str, Any]) -> dict[str, Any]:
+    values: list[dict[str, Any]] = []
+    for candidate in (
+        item_system.get("range"),
+        getattr(activity, "range", None),
+        getattr(activity, "system", {}).get("range") if isinstance(getattr(activity, "system", {}), dict) else None,
+    ):
+        if isinstance(candidate, dict):
+            values.append(candidate)
+    merged: dict[str, Any] = {}
+    for value in values:
+        merged.update({key: item for key, item in value.items() if item not in (None, "")})
+    return merged
+
+
+def _range_mode(range_data: dict[str, Any]) -> str:
+    value = str(
+        range_data.get("type")
+        or range_data.get("mode")
+        or range_data.get("units")
+        or range_data.get("unit")
+        or ""
+    ).strip().lower()
+    if value in {"touch", "self", "melee"}:
+        return value
+    if range_data.get("reach") not in (None, ""):
+        return "melee"
+    if range_data.get("long") not in (None, ""):
+        return "ranged"
+    return "ranged" if _range_value(range_data, "value", "normal", "range") > 5 else "melee"
+
+
+def _range_value(range_data: dict[str, Any], *keys: str) -> float:
+    for key in keys:
+        value = range_data.get(key)
+        if isinstance(value, dict):
+            value = value.get("value", value.get("range", value.get("distance")))
+        if value in (None, ""):
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return 0.0
 
 
 def _execute_damage(

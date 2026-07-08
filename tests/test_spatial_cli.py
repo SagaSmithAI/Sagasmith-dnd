@@ -15,6 +15,15 @@ def _call(capsys, *args: str) -> dict:
     return value["data"]
 
 
+def _call_error(capsys, *args: str) -> dict:
+    code = main([*args, "--json"])
+    output = capsys.readouterr()
+    value = json.loads(output.out)
+    assert code != 0, value
+    assert value["ok"] is False
+    return value["error"]
+
+
 def test_token_move_reports_distance_and_difficult_terrain_cost(
     tmp_path: Path,
     monkeypatch,
@@ -268,6 +277,271 @@ def test_token_move_leaving_reach_creates_opportunity_attack_window(
     assert pending["trigger"] == "opportunity_attack"
     assert pending["actor_id"] == "goblin"
     assert pending["target_actor_id"] == "hero"
+
+
+def test_activity_range_uses_scene_token_distance(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setenv("DND_DATABASE_URL", f"sqlite+pysqlite:///{(tmp_path / 'range.db').as_posix()}")
+    campaign = _call(capsys, "campaign", "start", "--name", "Range")["campaign"]
+    archer = _call(capsys, "actor", "create", "--campaign", campaign["id"], "--name", "Archer")
+    target = _call(capsys, "actor", "create", "--campaign", campaign["id"], "--name", "Target", "--type", "npc")
+    bow = _call(
+        capsys,
+        "game-item",
+        "create",
+        "--campaign",
+        campaign["id"],
+        "--actor",
+        archer["id"],
+        "--name",
+        "Shortbow",
+        "--type",
+        "weapon",
+    )
+    bow_shot = _call(
+        capsys,
+        "game-activity",
+        "create",
+        "--item",
+        bow["id"],
+        "--name",
+        "Shot",
+        "--type",
+        "attack",
+        "--payload",
+        '{"activation":{"type":"action"},"range":{"value":30,"long":120},"system":{"attack_bonus":20}}',
+    )
+    sword = _call(
+        capsys,
+        "game-item",
+        "create",
+        "--campaign",
+        campaign["id"],
+        "--actor",
+        archer["id"],
+        "--name",
+        "Sword",
+        "--type",
+        "weapon",
+    )
+    slash = _call(
+        capsys,
+        "game-activity",
+        "create",
+        "--item",
+        sword["id"],
+        "--name",
+        "Slash",
+        "--type",
+        "attack",
+        "--payload",
+        '{"activation":{"type":"action"},"range":{"value":5},"system":{"attack_bonus":20}}',
+    )
+    scene = _call(
+        capsys,
+        "scene",
+        "create",
+        "--campaign",
+        campaign["id"],
+        "--name",
+        "Grid",
+        "--grid-size",
+        "70",
+        "--metadata",
+        '{"grid_distance":5}',
+    )
+    archer_token = _call(
+        capsys,
+        "token",
+        "create",
+        "--scene",
+        scene["id"],
+        "--name",
+        "Archer",
+        "--actor-id",
+        archer["id"],
+    )
+    target_token = _call(
+        capsys,
+        "token",
+        "create",
+        "--scene",
+        scene["id"],
+        "--name",
+        "Target",
+        "--actor-id",
+        target["id"],
+        "--x",
+        "700",
+        "--y",
+        "0",
+    )
+
+    error = _call_error(
+        capsys,
+        "activity",
+        "use",
+        "--campaign",
+        campaign["id"],
+        "--actor",
+        archer["id"],
+        "--item",
+        sword["id"],
+        "--activity",
+        slash["id"],
+        "--target-id",
+        target["id"],
+        "--actor-token",
+        archer_token["id"],
+        "--target-token",
+        target_token["id"],
+    )
+    assert "out of range" in error["message"]
+
+    ranged = _call(
+        capsys,
+        "activity",
+        "use",
+        "--campaign",
+        campaign["id"],
+        "--actor",
+        archer["id"],
+        "--item",
+        bow["id"],
+        "--activity",
+        bow_shot["id"],
+        "--target-id",
+        target["id"],
+        "--actor-token",
+        archer_token["id"],
+        "--target-token",
+        target_token["id"],
+    )
+    assert ranged["execution"]["range"]["distance"] == 50
+    assert ranged["execution"]["range"]["disadvantage"] is True
+
+
+def test_opportunity_attack_window_persists_and_resolves_activity(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setenv("DND_DATABASE_URL", f"sqlite+pysqlite:///{(tmp_path / 'opportunity-resolve.db').as_posix()}")
+    campaign = _call(capsys, "campaign", "start", "--name", "Opportunity Resolve")["campaign"]
+    hero = _call(capsys, "actor", "create", "--campaign", campaign["id"], "--name", "Hero")
+    goblin = _call(capsys, "actor", "create", "--campaign", campaign["id"], "--name", "Goblin", "--type", "npc")
+    blade = _call(
+        capsys,
+        "game-item",
+        "create",
+        "--campaign",
+        campaign["id"],
+        "--actor",
+        goblin["id"],
+        "--name",
+        "Scimitar",
+        "--type",
+        "weapon",
+    )
+    slash = _call(
+        capsys,
+        "game-activity",
+        "create",
+        "--item",
+        blade["id"],
+        "--name",
+        "Slash",
+        "--type",
+        "attack",
+        "--payload",
+        '{"activation":{"type":"action"},"range":{"value":5},"system":{"attack_bonus":20}}',
+    )
+    scene = _call(
+        capsys,
+        "scene",
+        "create",
+        "--campaign",
+        campaign["id"],
+        "--name",
+        "Grid",
+        "--grid-size",
+        "70",
+        "--metadata",
+        '{"grid_distance":5}',
+    )
+    hero_token = _call(
+        capsys,
+        "token",
+        "create",
+        "--scene",
+        scene["id"],
+        "--name",
+        "Hero",
+        "--actor-id",
+        hero["id"],
+        "--disposition",
+        "friendly",
+        "--x",
+        "70",
+        "--y",
+        "0",
+    )
+    _call(
+        capsys,
+        "token",
+        "create",
+        "--scene",
+        scene["id"],
+        "--name",
+        "Goblin",
+        "--actor-id",
+        goblin["id"],
+        "--disposition",
+        "hostile",
+        "--x",
+        "0",
+        "--y",
+        "0",
+        "--metadata",
+        '{"reach":5}',
+    )
+
+    moved = _call(
+        capsys,
+        "token",
+        "move",
+        "--token",
+        hero_token["id"],
+        "--x",
+        "140",
+        "--y",
+        "0",
+    )
+    pending = moved["movement"]["pending"][0]
+    assert pending["distance"] == 5
+    assert pending["after_distance"] == 10
+
+    listed = _call(capsys, "reaction", "list", "--campaign", campaign["id"], "--actor", goblin["id"])
+    window = listed["pending"][0]
+    resolved = _call(
+        capsys,
+        "reaction",
+        "resolve",
+        "--campaign",
+        campaign["id"],
+        "--id",
+        window["id"],
+        "--payload",
+        f'{{"item_id":"{blade["id"]}","activity_id":"{slash["id"]}"}}',
+    )
+
+    assert resolved["reaction_result"]["payment"] == "reaction"
+    assert resolved["reaction_result"]["execution"]["type"] == "attack"
+    assert resolved["reaction_result"]["execution"]["range"]["distance"] == 5
+    assert resolved["reaction_result"]["state_delta"]["runtime"]["turn_budgets"][goblin["id"]]["reaction"] == 0
 
 
 def test_token_move_applies_and_removes_region_active_effect(
