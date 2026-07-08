@@ -42,7 +42,7 @@ def test_time_advance_period_ticks_document_effect_durations(
             parent_id=actor.id,
             actor_id=actor.id,
             name="Guidance",
-            duration={"period": "narrative_beat", "remaining": 2},
+            duration={"period": "declared_minute", "remaining": 2},
         )
     finally:
         database.dispose()
@@ -54,7 +54,7 @@ def test_time_advance_period_ticks_document_effect_durations(
         "--campaign",
         campaign.id,
         "--period",
-        "narrative_beat",
+        "declared_minute",
     )
     assert first["period"]["advanced"][0]["duration"]["remaining"] == 1
 
@@ -65,6 +65,6 @@ def test_time_advance_period_ticks_document_effect_durations(
         "--campaign",
         campaign.id,
         "--period",
-        "narrative_beat",
+        "declared_minute",
     )
     assert second["period"]["expired"][0]["id"] == effect.id

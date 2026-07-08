@@ -29,135 +29,41 @@ def start_combat(
         "round": 1,
         "turn": 0,
         "environment": dict(environment or {}),
-        "participants": combatants,
+        "combatants": combatants,
         "reaction_windows": [],
         "effects": [],
         "log": [],
     }
 
 
-def combat_status(combat: dict[str, Any] | None) -> dict[str, Any] | None:
+def combat_status(combat: dict[str, Any] | None, *, runtime: dict[str, Any] | None = None) -> dict[str, Any] | None:
     if not combat:
         return None
     value = deepcopy(combat)
+    value["combatants"] = list(value.get("combatants") or value.get("participants") or [])
+    value.pop("participants", None)
+    if runtime:
+        _apply_runtime_budgets(value, runtime)
     active = _current(value)
     value["current"] = active
     value["legal_actions"] = _legal_actions(active) if active else []
     value["legal_action_details"] = _legal_action_details(active) if active else []
+    pending = list((runtime or {}).get("pending") or [])
+    if active:
+        pending = [
+            item for item in pending
+            if item.get("status", "pending") == "pending" and item.get("actor_id") == active.get("actor_id", active.get("id"))
+        ]
+    value["pending_reactions"] = pending
+    value["combat"] = {
+        "active": value.get("active", False),
+        "name": value.get("name", ""),
+        "scene_id": value.get("scene_id"),
+        "ruleset": value.get("ruleset"),
+        "round": value.get("round", 1),
+        "turn": value.get("turn", 0),
+    }
     return value
-
-
-def execute_activity(
-    combat: dict[str, Any],
-    *,
-    actor_id: str,
-    activity_id: str,
-    target_id: str | None = None,
-    payment: str | None = None,
-    payload: dict[str, Any] | None = None,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    value = _require_active(combat)
-    actor = _participant(value, actor_id)
-    ruleset = get_ruleset(value.get("ruleset"))
-    activity = dict(ruleset["activities"].get(activity_id) or {})
-    if not activity:
-        raise ValueError(f"unknown activity: {activity_id}")
-    if not _has_required_feature(actor, activity.get("requires_feature")):
-        raise ValueError(f"{actor['name']} lacks required feature for {activity_id}")
-    payment = payment or _default_payment(activity)
-    _spend_payment(actor, payment)
-    _spend_uses(actor, activity)
-
-    payload = dict(payload or {})
-    result: dict[str, Any] = {
-        "type": "activity",
-        "activity": activity_id,
-        "activity_type": activity.get("type", "utility"),
-        "activation": activity.get("activation"),
-        "payment": payment,
-        "actor": actor["id"],
-        "target": target_id,
-    }
-    if activity_id == "action_surge":
-        grant = activity.get("grant") or {}
-        budget = _budget(actor)
-        budget["extra_actions"] = int(budget.get("extra_actions", 0)) + int(grant.get("extra_actions", 0))
-        result["turn_budget"] = dict(budget)
-    elif activity_id == "second_wind":
-        fighter_level = int(payload.get("fighter_level", actor.get("class_levels", {}).get("fighter", 1)))
-        amount = roll(f"1d10+{fighter_level}")
-        value, healed = heal(
-            value,
-            target_id=target_id or actor["id"],
-            amount=amount.total,
-            source="second_wind",
-        )
-        result["healing"] = healed
-    elif activity.get("type") == "attack":
-        if target_id is None:
-            raise ValueError("attack activity requires target")
-        value, attack_result = attack(
-            value,
-            actor_id=actor["id"],
-            target_id=target_id,
-            attack_bonus=int(payload.get("attack_bonus", payload.get("bonus", 0))),
-            damage_expression=payload.get("damage") or payload.get("damage_expression"),
-            damage_type=payload.get("damage_type"),
-            advantage=bool(payload.get("advantage", False)),
-            disadvantage=bool(payload.get("disadvantage", False)),
-            label=payload.get("label", activity_id),
-            consume_action=False,
-        )
-        result["attack"] = attack_result
-    elif activity.get("type") == "effect":
-        effect = {
-            "id": f"effect-{len(value.get('effects') or []) + 1}",
-            "source": activity_id,
-            "actor": actor["id"],
-            "target": target_id or actor["id"],
-            **dict(activity.get("effect") or {}),
-        }
-        value.setdefault("effects", []).append(effect)
-        result["effect"] = effect
-    _append_log(value, result)
-    return value, result
-
-
-def apply_effect(
-    combat: dict[str, Any],
-    *,
-    target_id: str,
-    effect: dict[str, Any],
-    source: str = "",
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    value = _require_active(combat)
-    _participant(value, target_id)
-    entry = {
-        "id": str(effect.get("id") or f"effect-{len(value.get('effects') or []) + 1}"),
-        "source": source or effect.get("source", "manual"),
-        "target": target_id,
-        **dict(effect),
-    }
-    value.setdefault("effects", []).append(entry)
-    result = {"type": "effect.add", "effect": entry}
-    _append_log(value, result)
-    return value, result
-
-
-def remove_effect(
-    combat: dict[str, Any],
-    *,
-    effect_id: str,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    value = _require_active(combat)
-    effects = list(value.get("effects") or [])
-    kept = [item for item in effects if item.get("id") != effect_id]
-    if len(kept) == len(effects):
-        raise ValueError(f"effect not found: {effect_id}")
-    value["effects"] = kept
-    result = {"type": "effect.remove", "effect": effect_id}
-    _append_log(value, result)
-    return value, result
 
 
 def recover_period(
@@ -167,7 +73,7 @@ def recover_period(
     actor_id: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     value = _require_active(combat)
-    targets = [_participant(value, actor_id)] if actor_id else list(value.get("participants") or [])
+    targets = [_participant(value, actor_id)] if actor_id else list(_combatants(value))
     recovered: list[dict[str, Any]] = []
     for combatant in targets:
         for resource_id, resource in (combatant.get("resources") or {}).items():
@@ -386,7 +292,7 @@ def end_turn(combat: dict[str, Any], *, actor_id: str | None = None) -> tuple[di
     current["reaction_available"] = True
     _budget(current)["reactions"] = 1
     value["turn"] = int(value.get("turn", 0)) + 1
-    if value["turn"] >= len(value["participants"]):
+    if value["turn"] >= len(_combatants(value)):
         value["turn"] = 0
         value["round"] = int(value.get("round", 1)) + 1
     next_actor = _current(value)
@@ -461,17 +367,44 @@ def _require_active(combat: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def _participant(combat: dict[str, Any], participant_id: str) -> dict[str, Any]:
-    for item in combat.get("participants") or []:
-        if item.get("id") == participant_id or item.get("character_id") == participant_id:
+    for item in _combatants(combat):
+        if participant_id in {item.get("id"), item.get("character_id"), item.get("actor_id"), item.get("token_id")}:
             return item
     raise ValueError(f"combatant not found: {participant_id}")
 
 
 def _current(combat: dict[str, Any]) -> dict[str, Any] | None:
-    participants = combat.get("participants") or []
-    if not participants:
+    combatants = _combatants(combat)
+    if not combatants:
         return None
-    return participants[int(combat.get("turn", 0)) % len(participants)]
+    return combatants[int(combat.get("turn", 0)) % len(combatants)]
+
+
+def _combatants(combat: dict[str, Any]) -> list[dict[str, Any]]:
+    return list(combat.get("combatants") or combat.get("participants") or [])
+
+
+def _apply_runtime_budgets(combat: dict[str, Any], runtime: dict[str, Any]) -> None:
+    budgets = dict(runtime.get("turn_budgets") or {})
+    for combatant in combat.get("combatants") or []:
+        actor_id = str(combatant.get("actor_id") or combatant.get("id") or "")
+        budget = budgets.get(actor_id)
+        if not isinstance(budget, dict):
+            continue
+        turn_budget = _budget(combatant)
+        if "main_action" in budget:
+            turn_budget["main_actions"] = int(budget.get("main_action", 0) or 0)
+            combatant["action_available"] = turn_budget["main_actions"] > 0
+        if "bonus_action" in budget:
+            turn_budget["bonus_actions"] = int(budget.get("bonus_action", 0) or 0)
+            combatant["bonus_action_available"] = turn_budget["bonus_actions"] > 0
+        if "reaction" in budget:
+            turn_budget["reactions"] = int(budget.get("reaction", 0) or 0)
+            combatant["reaction_available"] = turn_budget["reactions"] > 0
+        if "extra_action" in budget:
+            turn_budget["extra_actions"] = int(budget.get("extra_action", 0) or 0)
+        if "attack_budget" in budget:
+            turn_budget["attack_budget"] = int(budget.get("attack_budget", 0) or 0)
 
 
 def _reset_turn_resources(combatant: dict[str, Any]) -> None:
@@ -492,30 +425,30 @@ def _legal_actions(combatant: dict[str, Any]) -> list[str]:
     budget = _budget(combatant)
     if budget.get("main_actions", 0) > 0 or budget.get("extra_actions", 0) > 0 or combatant.get("action_available", True):
         actions.extend(["attack", "dash", "disengage", "dodge", "help", "hide", "ready", "search", "use_object"])
+    if budget.get("attack_budget", 0) > 0:
+        actions.append("attack_budget")
     if budget.get("bonus_actions", 0) > 0 or combatant.get("bonus_action_available", True):
         actions.append("bonus_action")
-        if _has_required_feature(combatant, "cunning-action"):
-            actions.extend(["cunning_action_dash", "cunning_action_disengage", "cunning_action_hide"])
-        if _has_required_feature(combatant, "second-wind"):
-            actions.append("second_wind")
     if budget.get("reactions", 0) > 0 and not _has_condition_tag(combatant, "no_reactions"):
         actions.extend(["reaction", "opportunity_attack"])
-    if _has_required_feature(combatant, "action-surge") and _resource_remaining(combatant, "action_surge") > 0:
-        actions.append("action_surge")
     return actions
 
 
 def _legal_action_details(combatant: dict[str, Any]) -> list[dict[str, Any]]:
     ruleset = get_ruleset()
-    return [
-        {
-            "id": action_id,
-            "definition": ruleset["activities"].get(action_id, {}),
-            "payments": _payment_options(combatant, ruleset["activities"].get(action_id, {})),
-        }
-        for action_id in _legal_actions(combatant)
-        if action_id in ruleset["activities"]
-    ]
+    details: list[dict[str, Any]] = []
+    for action_id in _legal_actions(combatant):
+        definition = dict(ruleset["activities"].get(action_id) or _runtime_action_definition(action_id))
+        if not definition:
+            continue
+        details.append(
+            {
+                "id": action_id,
+                "definition": definition,
+                "payments": _payment_options(combatant, definition),
+            }
+        )
+    return details
 
 
 def _budget(combatant: dict[str, Any]) -> dict[str, int]:
@@ -531,20 +464,11 @@ def _budget(combatant: dict[str, Any]) -> dict[str, int]:
     return budget
 
 
-def _default_payment(activity: dict[str, Any]) -> str:
-    activation = activity.get("activation")
-    if activation == "action":
-        return "main_action"
-    if activation == "bonus":
-        return "bonus_action"
-    if activation == "reaction":
-        return "reaction"
-    return "free"
-
-
 def _payment_options(combatant: dict[str, Any], activity: dict[str, Any]) -> list[str]:
     budget = _budget(combatant)
     activation = activity.get("activation")
+    if activation == "attack_budget":
+        return ["attack_budget"] if budget.get("attack_budget", 0) > 0 else []
     if activation == "action":
         values = []
         if budget.get("main_actions", 0) > 0:
@@ -618,31 +542,6 @@ def _normalize_resources(item: dict[str, Any], features: set[str]) -> dict[str, 
     return resources
 
 
-def _has_required_feature(combatant: dict[str, Any], feature: str | None) -> bool:
-    if not feature:
-        return True
-    normalized = feature.strip().lower().replace("_", "-")
-    return normalized in set(combatant.get("features") or [])
-
-
-def _resource_remaining(combatant: dict[str, Any], resource: str) -> int:
-    value = dict((combatant.get("resources") or {}).get(resource) or {})
-    return max(0, int(value.get("max", 0)) - int(value.get("spent", 0)))
-
-
-def _spend_uses(combatant: dict[str, Any], activity: dict[str, Any]) -> None:
-    uses = activity.get("uses") or {}
-    resource = uses.get("resource")
-    if not resource:
-        return
-    resources = combatant.setdefault("resources", {})
-    value = resources.setdefault(resource, {"spent": 0, "max": int(uses.get("cost", 1))})
-    cost = int(uses.get("cost", 1))
-    if int(value.get("spent", 0)) + cost > int(value.get("max", 0)):
-        raise ValueError(f"{combatant['name']} has no {resource} uses remaining")
-    value["spent"] = int(value.get("spent", 0)) + cost
-
-
 def _resource_recovery_periods(resource_id: str) -> set[str]:
     if resource_id in {"action_surge", "second_wind"}:
         return {"short_rest", "long_rest"}
@@ -660,6 +559,16 @@ def _has_condition_tag(combatant: dict[str, Any], tag: str) -> bool:
         tags.update(ruleset.get("conditions", {}).get(condition, {}).get("tags", []))
         tags.add(condition)
     return tag in tags
+
+
+def _runtime_action_definition(action_id: str) -> dict[str, Any]:
+    definitions = {
+        "bonus_action": {"activation": "bonus", "type": "runtime"},
+        "reaction": {"activation": "reaction", "type": "runtime"},
+        "opportunity_attack": {"activation": "reaction", "type": "runtime"},
+        "attack_budget": {"activation": "attack_budget", "type": "runtime"},
+    }
+    return definitions.get(action_id, {})
 
 
 def _tick_durations(combat: dict[str, Any], period: str, actor_id: str | None = None) -> None:

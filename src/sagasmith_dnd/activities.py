@@ -57,7 +57,10 @@ def execute_document_activity(
     runtime = dict(state.get("runtime") or {})
     budgets = dict(runtime.get("turn_budgets") or {})
     actor_budget = _budget_for(budgets.get(actor_id))
+    if activity.activity_type == "attack" and int(actor_budget.get("attack_budget", 0)) > 0 and payment == "main_action":
+        payment = "attack_budget"
     payment_delta = _spend_payment(actor_budget, payment)
+    _apply_activity_grants(actor_budget, actor=actor, activity=activity, payment=payment)
     budgets[actor_id] = actor_budget
     runtime["turn_budgets"] = budgets
     state["runtime"] = runtime
@@ -212,6 +215,8 @@ def _budget_for(value: Any) -> dict[str, int]:
     budget = dict(value or {})
     for key in ("main_action", "bonus_action", "reaction"):
         budget[key] = int(budget.get(key, 1))
+    budget["extra_action"] = int(budget.get("extra_action", 0) or 0)
+    budget["attack_budget"] = int(budget.get("attack_budget", 0) or 0)
     budget["movement"] = int(budget.get("movement", 0))
     return budget
 
@@ -220,12 +225,36 @@ def _spend_payment(budget: dict[str, int], payment: str) -> dict[str, Any]:
     before = dict(budget)
     if payment == "free":
         return {"before": before, "after": dict(budget)}
-    if payment not in {"main_action", "bonus_action", "reaction"}:
+    if payment not in {"main_action", "bonus_action", "reaction", "extra_action", "attack_budget"}:
         raise ValueError(f"unknown payment: {payment}")
     if int(budget.get(payment, 0)) <= 0:
         raise ValueError(f"cannot pay {payment}")
     budget[payment] = int(budget.get(payment, 0)) - 1
     return {"before": before, "after": dict(budget)}
+
+
+def _apply_activity_grants(budget: dict[str, int], *, actor, activity, payment: str) -> None:
+    grant = dict(activity.system.get("grant") or {})
+    if grant.get("extra_actions") is not None:
+        budget["extra_action"] = int(budget.get("extra_action", 0)) + int(grant.get("extra_actions", 0) or 0)
+    if activity.activity_type == "attack" and payment in {"main_action", "extra_action"}:
+        attacks = _attacks_per_action(actor)
+        budget["attack_budget"] = max(int(budget.get("attack_budget", 0)), max(0, attacks - 1))
+
+
+def _attacks_per_action(actor) -> int:
+    system = dict((getattr(actor, "derived", None) or {}).get("effective_system") or getattr(actor, "system", {}) or {})
+    explicit = system.get("attacks_per_action")
+    if explicit not in (None, ""):
+        return max(1, int(explicit))
+    features = system.get("features") or []
+    if isinstance(features, dict):
+        feature_ids = {str(key).strip().lower().replace("_", "-") for key, enabled in features.items() if enabled}
+    else:
+        feature_ids = {str(item).strip().lower().replace("_", "-").replace(" ", "-") for item in features}
+    if "extra-attack" in feature_ids:
+        return 2
+    return 1
 
 
 def _spend_uses(uses: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:

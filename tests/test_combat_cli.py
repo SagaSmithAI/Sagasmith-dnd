@@ -21,6 +21,33 @@ def test_structured_combat_flow(tmp_path: Path, monkeypatch, capsys) -> None:
     monkeypatch.setenv("DND_DATABASE_URL", f"sqlite+pysqlite:///{(tmp_path / 'dnd.db').as_posix()}")
     campaign = _call(capsys, "campaign", "start", "--name", "Arena")["campaign"]
     campaign_id = campaign["id"]
+    hero = _call(
+        capsys,
+        "actor",
+        "create",
+        "--campaign",
+        campaign_id,
+        "--name",
+        "Hero",
+        "--payload",
+        '{"attributes":{"ac":{"value":12},"hp":{"value":10,"max":10}}}',
+    )
+    goblin = _call(
+        capsys,
+        "actor",
+        "create",
+        "--campaign",
+        campaign_id,
+        "--name",
+        "Goblin",
+        "--type",
+        "npc",
+        "--payload",
+        '{"attributes":{"ac":{"value":10},"hp":{"value":7,"max":7}}}',
+    )
+    scene = _call(capsys, "scene", "create", "--campaign", campaign_id, "--name", "Arena")
+    _call(capsys, "token", "create", "--scene", scene["id"], "--name", "Hero", "--actor-id", hero["id"])
+    _call(capsys, "token", "create", "--scene", scene["id"], "--name", "Goblin", "--actor-id", goblin["id"])
 
     started = _call(
         capsys,
@@ -30,15 +57,10 @@ def test_structured_combat_flow(tmp_path: Path, monkeypatch, capsys) -> None:
         campaign_id,
         "--name",
         "Goblin Ambush",
-        "--participants",
-        json.dumps(
-            [
-                {"id": "hero", "name": "Hero", "ac": 12, "hp": 10, "max_hp": 10, "initiative": 15},
-                {"id": "goblin", "name": "Goblin", "ac": 10, "hp": 7, "max_hp": 7, "initiative": 12},
-            ]
-        ),
+        "--scene",
+        scene["id"],
     )
-    assert started["current"]["id"] == "hero"
+    assert started["current"]["id"] in {hero["id"], goblin["id"]}
     assert "attack" in started["legal_actions"]
 
     random.seed(2)
@@ -49,9 +71,9 @@ def test_structured_combat_flow(tmp_path: Path, monkeypatch, capsys) -> None:
         "--campaign",
         campaign_id,
         "--actor",
-        "hero",
+        hero["id"],
         "--target-id",
-        "goblin",
+        goblin["id"],
         "--attack-bonus",
         "99",
         "--expression",
@@ -62,10 +84,10 @@ def test_structured_combat_flow(tmp_path: Path, monkeypatch, capsys) -> None:
         "Training Sword",
     )
     assert attacked["result"]["hit"] is True
-    goblin = next(item for item in attacked["combat"]["participants"] if item["id"] == "goblin")
-    assert goblin["hp"] < 7
-    hero = next(item for item in attacked["combat"]["participants"] if item["id"] == "hero")
-    assert hero["action_available"] is False
+    goblin_combatant = next(item for item in attacked["combat"]["combatants"] if item["id"] == goblin["id"])
+    assert goblin_combatant["hp"] < 7
+    hero_combatant = next(item for item in attacked["combat"]["combatants"] if item["id"] == hero["id"])
+    assert hero_combatant["action_available"] is False
 
     conditioned = _call(
         capsys,
@@ -75,32 +97,46 @@ def test_structured_combat_flow(tmp_path: Path, monkeypatch, capsys) -> None:
         "--campaign",
         campaign_id,
         "--target-id",
-        "goblin",
+        goblin["id"],
         "--condition",
         "prone",
     )
-    goblin = next(item for item in conditioned["combat"]["participants"] if item["id"] == "goblin")
-    assert "prone" in goblin["conditions"]
+    goblin_combatant = next(item for item in conditioned["combat"]["combatants"] if item["id"] == goblin["id"])
+    assert "prone" in goblin_combatant["conditions"]
 
-    ended = _call(capsys, "combat", "end-turn", "--campaign", campaign_id, "--actor", "hero")
-    assert ended["combat"]["current"]["id"] == "goblin"
+    current = attacked["combat"]["current"]["id"]
+    ended = _call(capsys, "combat", "end-turn", "--campaign", campaign_id, "--actor", current)
+    assert ended["combat"]["current"]["id"] != current
 
     _call(capsys, "state", "undo", "--campaign", campaign_id)
     status = _call(capsys, "combat", "status", "--campaign", campaign_id)
-    assert status["current"]["id"] == "hero"
+    assert status["current"]["id"] == current
 
 
 def test_combat_death_save_records_success(tmp_path: Path, monkeypatch, capsys) -> None:
     monkeypatch.setenv("DND_DATABASE_URL", f"sqlite+pysqlite:///{(tmp_path / 'death.db').as_posix()}")
     campaign = _call(capsys, "campaign", "start", "--name", "Death Saves")["campaign"]
+    hero = _call(
+        capsys,
+        "actor",
+        "create",
+        "--campaign",
+        campaign["id"],
+        "--name",
+        "Hero",
+        "--payload",
+        '{"attributes":{"hp":{"value":0,"max":10}}}',
+    )
+    scene = _call(capsys, "scene", "create", "--campaign", campaign["id"], "--name", "Death")
+    _call(capsys, "token", "create", "--scene", scene["id"], "--name", "Hero", "--actor-id", hero["id"])
     _call(
         capsys,
         "combat",
         "start",
         "--campaign",
         campaign["id"],
-        "--participants",
-        '[{"id":"hero","name":"Hero","initiative":1,"hp":0,"max_hp":10,"conditions":["unconscious"]}]',
+        "--scene",
+        scene["id"],
     )
 
     random.seed(0)
@@ -111,10 +147,10 @@ def test_combat_death_save_records_success(tmp_path: Path, monkeypatch, capsys) 
         "--campaign",
         campaign["id"],
         "--target-id",
-        "hero",
+        hero["id"],
     )
 
     assert saved["result"]["outcome"] == "pending"
     assert saved["result"]["death_saves"]["successes"] == 1
-    hero = saved["combat"]["participants"][0]
-    assert hero["death_saves"]["successes"] == 1
+    hero_combatant = saved["combat"]["combatants"][0]
+    assert hero_combatant["death_saves"]["successes"] == 1

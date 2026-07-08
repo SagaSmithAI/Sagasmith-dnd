@@ -22,6 +22,82 @@ def test_foundry_style_scene_token_activity_and_periods(tmp_path: Path, monkeypa
     ruleset = _call(capsys, "ruleset", "validate", "--id", "dnd5e-2014")
     assert ruleset["valid"] is True
     assert "activityActivationTypes" in ruleset
+    hero = _call(
+        capsys,
+        "actor",
+        "create",
+        "--campaign",
+        campaign_id,
+        "--name",
+        "Hero",
+        "--payload",
+        '{"attributes":{"ac":{"value":16},"hp":{"value":20,"max":20},"movement":{"walk":30}},"features":["action-surge","second-wind","extra-attack"],"class_levels":{"fighter":5}}',
+    )
+    goblin = _call(
+        capsys,
+        "actor",
+        "create",
+        "--campaign",
+        campaign_id,
+        "--name",
+        "Goblin",
+        "--type",
+        "npc",
+        "--payload",
+        '{"attributes":{"ac":{"value":12},"hp":{"value":7,"max":7}}}',
+    )
+    surge_item = _call(
+        capsys,
+        "game-item",
+        "create",
+        "--campaign",
+        campaign_id,
+        "--actor",
+        hero["id"],
+        "--name",
+        "Action Surge",
+        "--type",
+        "feat",
+    )
+    surge_activity = _call(
+        capsys,
+        "game-activity",
+        "create",
+        "--item",
+        surge_item["id"],
+        "--name",
+        "Action Surge",
+        "--type",
+        "utility",
+        "--payload",
+        '{"activation":{"type":"free"},"uses":{"spent":0,"max":1,"cost":1,"recovery":["short_rest"]},"system":{"grant":{"extra_actions":1}}}',
+    )
+    wind_item = _call(
+        capsys,
+        "game-item",
+        "create",
+        "--campaign",
+        campaign_id,
+        "--actor",
+        hero["id"],
+        "--name",
+        "Second Wind",
+        "--type",
+        "feat",
+    )
+    wind_activity = _call(
+        capsys,
+        "game-activity",
+        "create",
+        "--item",
+        wind_item["id"],
+        "--name",
+        "Second Wind",
+        "--type",
+        "heal",
+        "--payload",
+        '{"activation":{"type":"bonus"},"uses":{"spent":0,"max":1,"cost":1,"recovery":["short_rest"]},"system":{"healing":"1"}}',
+    )
 
     scene = _call(
         capsys,
@@ -45,7 +121,7 @@ def test_foundry_style_scene_token_activity_and_periods(tmp_path: Path, monkeypa
         "--name",
         "Hero",
         "--actor-id",
-        "hero",
+        hero["id"],
         "--actor-type",
         "character",
     )
@@ -58,7 +134,7 @@ def test_foundry_style_scene_token_activity_and_periods(tmp_path: Path, monkeypa
         "--name",
         "Goblin",
         "--actor-id",
-        "goblin",
+        goblin["id"],
         "--actor-type",
         "monster",
         "--x",
@@ -91,32 +167,9 @@ def test_foundry_style_scene_token_activity_and_periods(tmp_path: Path, monkeypa
         campaign_id,
         "--scene",
         scene["id"],
-        "--participants",
-        json.dumps(
-            [
-                {
-                    "id": "hero",
-                    "token_id": hero_token["id"],
-                    "name": "Hero",
-                    "initiative": 20,
-                    "ac": 16,
-                    "hp": 20,
-                    "features": ["action-surge", "second-wind", "extra-attack"],
-                    "class_levels": {"fighter": 5},
-                },
-                {
-                    "id": "goblin",
-                    "token_id": goblin_token["id"],
-                    "name": "Goblin",
-                    "initiative": 10,
-                    "ac": 12,
-                    "hp": 7,
-                },
-            ]
-        ),
     )
     assert combat["scene_id"] == scene["id"]
-    assert "action_surge" in combat["legal_actions"]
+    assert combat["combatants"][0]["token_id"] in {hero_token["id"], goblin_token["id"]}
 
     surged = _call(
         capsys,
@@ -125,14 +178,14 @@ def test_foundry_style_scene_token_activity_and_periods(tmp_path: Path, monkeypa
         "--campaign",
         campaign_id,
         "--actor",
-        "hero",
+        hero["id"],
+        "--item",
+        surge_item["id"],
         "--activity",
-        "action_surge",
+        surge_activity["id"],
     )
-    hero = next(item for item in surged["combat"]["participants"] if item["id"] == "hero")
-    assert hero["turn_budget"]["extra_actions"] == 1
-    assert hero["turn_budget"]["bonus_actions"] == 1
-    assert hero["turn_budget"]["reactions"] == 1
+    assert surged["state_delta"]["runtime"]["turn_budgets"][hero["id"]]["extra_action"] == 1
+    assert surged["activity"]["uses"]["spent"] == 1
 
     healed = _call(
         capsys,
@@ -141,40 +194,86 @@ def test_foundry_style_scene_token_activity_and_periods(tmp_path: Path, monkeypa
         "--campaign",
         campaign_id,
         "--actor",
-        "hero",
+        hero["id"],
+        "--item",
+        wind_item["id"],
         "--activity",
-        "second_wind",
+        wind_activity["id"],
         "--target-id",
-        "hero",
-        "--payload",
-        '{"fighter_level":5}',
+        hero["id"],
     )
-    hero = next(item for item in healed["combat"]["participants"] if item["id"] == "hero")
-    assert hero["turn_budget"]["bonus_actions"] == 0
-    assert hero["resources"]["second_wind"]["spent"] == 1
+    assert healed["state_delta"]["runtime"]["turn_budgets"][hero["id"]]["bonus_action"] == 0
+    assert healed["activity"]["uses"]["spent"] == 1
 
     rested = _call(capsys, "rest", "short", "--campaign", campaign_id)
-    hero = next(item for item in rested["combat"]["participants"] if item["id"] == "hero")
-    assert hero["resources"]["second_wind"]["spent"] == 0
-    assert hero["resources"]["action_surge"]["spent"] == 0
+    recovered = {
+        item["activity_id"]
+        for item in rested["document_recovery"]["recovered"]
+        if item["type"] == "activity_uses"
+    }
+    assert recovered == {surge_activity["id"], wind_activity["id"]}
 
 
 def test_combat_act_is_disabled(tmp_path: Path, monkeypatch, capsys) -> None:
     monkeypatch.setenv("DND_DATABASE_URL", f"sqlite:///{tmp_path / 'runtime.db'}")
     campaign = _call(capsys, "campaign", "start", "--name", "No Free Mutate")["campaign"]
+    actor = _call(capsys, "actor", "create", "--campaign", campaign["id"], "--name", "Hero")
+    scene = _call(capsys, "scene", "create", "--campaign", campaign["id"], "--name", "No Free Mutate")
+    _call(capsys, "token", "create", "--scene", scene["id"], "--name", "Hero", "--actor-id", actor["id"])
     _call(
         capsys,
         "combat",
         "start",
         "--campaign",
         campaign["id"],
-        "--participants",
-        '[{"id":"hero","name":"Hero","initiative":1}]',
+        "--scene",
+        scene["id"],
     )
     code = main(["combat", "act", "--campaign", campaign["id"], "--payload", '{"x":1}', "--json"])
     captured = capsys.readouterr()
     assert code == 2
     assert "runtime_authority_required" in captured.out
+
+
+def test_legacy_participants_and_ruleset_activity_paths_are_rejected(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setenv("DND_DATABASE_URL", f"sqlite:///{tmp_path / 'legacy-reject.db'}")
+    campaign = _call(capsys, "campaign", "start", "--name", "No Legacy Runtime")["campaign"]
+
+    code = main(
+        [
+            "combat",
+            "start",
+            "--campaign",
+            campaign["id"],
+            "--participants",
+            '[{"id":"hero","name":"Hero","initiative":1}]',
+            "--json",
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "combat start no longer accepts free participants" in captured.out
+
+    code = main(
+        [
+            "activity",
+            "use",
+            "--campaign",
+            campaign["id"],
+            "--actor",
+            "hero",
+            "--activity",
+            "action_surge",
+            "--json",
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "activity use requires --item" in captured.out
 
 
 def test_combat_start_can_derive_participants_from_scene_tokens(
@@ -216,11 +315,11 @@ def test_combat_start_can_derive_participants_from_scene_tokens(
     random.seed(0)
     combat = _call(capsys, "combat", "start", "--campaign", campaign["id"], "--scene", scene["id"])
 
-    participant = combat["participants"][0]
-    assert participant["id"] == actor["id"]
-    assert participant["actor_id"] == actor["id"]
-    assert participant["token_id"] == token["id"]
-    assert participant["ac"] == 16
-    assert participant["hp"] == 18
-    assert participant["max_hp"] == 20
-    assert participant["speed"] == 35
+    combatant = combat["combatants"][0]
+    assert combatant["id"] == actor["id"]
+    assert combatant["actor_id"] == actor["id"]
+    assert combatant["token_id"] == token["id"]
+    assert combatant["ac"] == 16
+    assert combatant["hp"] == 18
+    assert combatant["max_hp"] == 20
+    assert combatant["speed"] == 35

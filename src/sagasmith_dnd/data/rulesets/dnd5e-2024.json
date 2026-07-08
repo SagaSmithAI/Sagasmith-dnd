@@ -1,0 +1,57 @@
+{
+  "id": "dnd5e-2024",
+  "name": "D&D 5e 2024",
+  "extends": "dnd5e-2014",
+  "status": "framework-placeholder",
+  "timeUnits": {
+    "turn": {"combat": true},
+    "round": {"combat": true},
+    "declared_minute": {"timeComponent": "minute"},
+    "declared_hour": {"timeComponent": "hour"},
+    "exploration_turn": {"timeComponent": "exploration"}
+  },
+  "activityActivationTypes": {
+    "action": {"group": "standard"},
+    "bonus": {"group": "standard"},
+    "reaction": {"group": "standard"},
+    "minute": {"group": "time", "scalar": true, "period": "declared_minute"},
+    "hour": {"group": "time", "scalar": true, "period": "declared_hour"},
+    "shortRest": {"group": "rest", "passive": true, "period": "short_rest"},
+    "longRest": {"group": "rest", "passive": true, "period": "long_rest"},
+    "encounter": {"group": "combat", "passive": true, "period": "encounter_start"},
+    "turnStart": {"group": "combat", "passive": true, "period": "turn_start"},
+    "turnEnd": {"group": "combat", "passive": true, "period": "turn_end"},
+    "special": {"passive": true}
+  },
+  "activityTypes": {
+    "attack": {},
+    "check": {},
+    "damage": {},
+    "effect": {},
+    "heal": {},
+    "save": {},
+    "utility": {}
+  },
+  "limitedUsePeriods": {
+    "sr": {"period": "short_rest", "type": "rest"},
+    "lr": {"period": "long_rest", "type": "rest"},
+    "day": {"period": "declared_day", "type": "time"},
+    "recharge": {"period": "recharge", "type": "special"},
+    "turnStart": {"period": "turn_start", "type": "combat"},
+    "turnEnd": {"period": "turn_end", "type": "combat"},
+    "encounter": {"period": "encounter_start", "type": "combat"}
+  },
+  "activityConsumptionTypes": {
+    "activityUses": {},
+    "itemUses": {},
+    "spellSlots": {},
+    "attribute": {},
+    "material": {},
+    "hitDice": {},
+    "turnBudget": {}
+  },
+  "activities": {},
+  "conditions": {},
+  "conditionTypes": {},
+  "conditionEffects": {}
+}

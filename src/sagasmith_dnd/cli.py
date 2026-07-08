@@ -24,7 +24,6 @@ from sagasmith_core import (
     SnapshotService,
 )
 from sagasmith_core.documents import converter_for
-from sagasmith_core.items import normalize_inventory
 from sagasmith_core.modules import MarkdownModuleParser
 
 from sagasmith_dnd import __version__
@@ -33,15 +32,12 @@ from sagasmith_dnd.activities import execute_document_activity
 from sagasmith_dnd.checks import resolve_character_check
 from sagasmith_dnd.combat import (
     apply_damage,
-    apply_effect,
     attack as combat_attack,
     combat_status,
     death_save,
     end_turn,
-    execute_activity,
     heal as combat_heal,
     recover_period,
-    remove_effect,
     set_condition,
     start_combat,
 )
@@ -283,25 +279,6 @@ def _item_revision(revisions, before, after, operation: str) -> None:
     )
 
 
-def _sheet_for_storage(sheet: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    inventory = normalize_inventory(sheet.get("inventory", []))
-    stored = dict(sheet)
-    if inventory:
-        stored["inventory"] = []
-        stored["inventory_managed"] = True
-    return stored, inventory
-
-
-def _character_payload(character: dict[str, Any], inventory: InventoryService) -> dict[str, Any]:
-    value = dict(character)
-    if value.get("campaign_id"):
-        sheet = dict(value.get("sheet") or {})
-        sheet["inventory"] = inventory.character_inventory(value["id"])
-        sheet["inventory_managed"] = True
-        value["sheet"] = sheet
-    return value
-
-
 def _scene_token_participants(maps, documents, scene_id: str) -> list[dict[str, Any]]:
     participants = []
     for token in maps.list_tokens(scene_id):
@@ -330,6 +307,56 @@ def _scene_token_participants(maps, documents, scene_id: str) -> list[dict[str, 
             }
         )
     return participants
+
+
+def _initialize_turn_budgets(state: dict[str, Any], combat: dict[str, Any]) -> None:
+    runtime = dict(state.get("runtime") or {})
+    budgets = dict(runtime.get("turn_budgets") or {})
+    for combatant in combat.get("combatants") or []:
+        actor_id = str(combatant.get("actor_id") or combatant.get("id") or "")
+        if not actor_id:
+            continue
+        turn_budget = dict(combatant.get("turn_budget") or {})
+        budgets[actor_id] = {
+            "main_action": int(turn_budget.get("main_actions", 1) or 0),
+            "bonus_action": int(turn_budget.get("bonus_actions", 1) or 0),
+            "reaction": int(turn_budget.get("reactions", 1) or 0),
+            "extra_action": int(turn_budget.get("extra_actions", 0) or 0),
+            "attack_budget": int(turn_budget.get("attack_budget", 0) or 0),
+            "movement": int(combatant.get("movement_remaining", combatant.get("speed", 30)) or 30),
+        }
+    runtime["turn_budgets"] = budgets
+    state["runtime"] = runtime
+
+
+def _reset_actor_turn_budget(state: dict[str, Any], combatant: dict[str, Any] | None) -> None:
+    if not combatant:
+        return
+    runtime = dict(state.get("runtime") or {})
+    budgets = dict(runtime.get("turn_budgets") or {})
+    actor_id = str(combatant.get("actor_id") or combatant.get("id") or "")
+    if actor_id:
+        budgets[actor_id] = {
+            "main_action": 1,
+            "bonus_action": 1,
+            "reaction": int(budgets.get(actor_id, {}).get("reaction", 1) or 1),
+            "extra_action": 0,
+            "attack_budget": 0,
+            "movement": int(combatant.get("speed", 30) or 30),
+        }
+    runtime["turn_budgets"] = budgets
+    state["runtime"] = runtime
+
+
+def _spend_runtime_action(state: dict[str, Any], actor_id: str, key: str = "main_action") -> None:
+    runtime = dict(state.get("runtime") or {})
+    budgets = dict(runtime.get("turn_budgets") or {})
+    budget = dict(budgets.get(actor_id) or {})
+    if key in budget:
+        budget[key] = max(0, int(budget.get(key, 0) or 0) - 1)
+    budgets[actor_id] = budget
+    runtime["turn_budgets"] = budgets
+    state["runtime"] = runtime
 
 
 def _actor_ac_value(value: Any) -> int:
@@ -508,9 +535,7 @@ def _dispatch(args) -> Any:
 
         if args.group == "character":
             if args.action == "create":
-                sheet, initial_inventory = _sheet_for_storage(
-                    validate_character_sheet(_dict(args.sheet))
-                )
+                sheet = validate_character_sheet(_dict(args.sheet))
                 created = characters.create(
                     system_id=DND5E.id,
                     campaign_id=args.campaign,
@@ -521,18 +546,11 @@ def _dispatch(args) -> Any:
                     sheet=sheet,
                     notes=_dict(args.notes),
                 )
-                if args.campaign and initial_inventory:
-                    inventory.import_inventory(
-                        campaign_id=args.campaign,
-                        character_id=created.id,
-                        inventory=initial_inventory,
-                        actor=args.actor,
-                    )
-                return _character_payload(asdict(created), inventory)
+                return asdict(created)
             if args.action == "list":
                 return {
                     "characters": [
-                        _character_payload(asdict(item), inventory)
+                        asdict(item)
                         for item in characters.list(
                             system_id=DND5E.id,
                             campaign_id=args.campaign,
@@ -541,17 +559,11 @@ def _dispatch(args) -> Any:
                     ]
                 }
             if args.action == "show":
-                return _character_payload(
-                    asdict(characters.get(_require(args.id, "id"))),
-                    inventory,
-                )
+                return asdict(characters.get(_require(args.id, "id")))
             if args.action == "update":
                 sheet = _dict(args.sheet) if args.sheet else None
-                imported_inventory: list[dict[str, Any]] = []
                 if sheet is not None:
-                    sheet, imported_inventory = _sheet_for_storage(
-                        validate_character_sheet(sheet)
-                    )
+                    sheet = validate_character_sheet(sheet)
                 before = characters.get(_require(args.id, "id"))
                 updated = characters.update(
                         _require(args.id, "id"),
@@ -561,16 +573,8 @@ def _dispatch(args) -> Any:
                         sheet=sheet,
                         notes=_dict(args.notes) if args.notes else None,
                     )
-                if updated.campaign_id and imported_inventory:
-                    inventory.import_inventory(
-                        campaign_id=updated.campaign_id,
-                        character_id=updated.id,
-                        inventory=imported_inventory,
-                        replace=True,
-                        actor=args.actor,
-                    )
                 _character_revision(revisions, before, updated, "character.update")
-                return _character_payload(asdict(updated), inventory)
+                return asdict(updated)
             if args.action in {"bind", "unbind"}:
                 return asdict(
                     characters.bind(
@@ -1415,10 +1419,16 @@ def _dispatch(args) -> Any:
             if args.action == "start":
                 before = campaign
                 payload = _dict(args.payload)
-                participants = _list(args.participants, "participants") if args.participants else payload.pop("participants", [])
+                if args.participants or payload.get("participants"):
+                    raise CliError(
+                        "runtime_authority_required",
+                        "combat start no longer accepts free participants; create actors/tokens and pass --scene",
+                        exit_code=2,
+                    )
                 scene_id = args.scene or payload.pop("scene_id", None)
-                if not participants and scene_id:
-                    participants = _scene_token_participants(maps, foundry_documents, scene_id)
+                if not scene_id:
+                    raise CliError("argument_required", "--scene is required for combat start", exit_code=2)
+                participants = _scene_token_participants(maps, foundry_documents, scene_id)
                 environment = _dict(args.environment) if args.environment else payload.pop("environment", {})
                 state["combat"] = start_combat(
                     name=args.name or payload.pop("name", "Combat"),
@@ -1426,11 +1436,17 @@ def _dispatch(args) -> Any:
                     scene_id=scene_id,
                     environment={**environment, **payload},
                 )
+                _initialize_turn_budgets(state, state["combat"])
+                advance_effect_durations(
+                    foundry_documents,
+                    campaign_id=campaign_id,
+                    period="encounter_start",
+                )
                 updated = campaigns.update(campaign_id, state=state)
                 _campaign_revision(revisions, before, updated, "combat.start")
-                return combat_status(state["combat"])
+                return combat_status(state["combat"], runtime=state.get("runtime"))
             if args.action == "status":
-                return combat_status(state.get("combat"))
+                return combat_status(state.get("combat"), runtime=state.get("runtime"))
             if args.action in {"attack", "damage", "heal", "condition", "death-save", "end-turn"}:
                 before = campaign
                 combat = state.get("combat")
@@ -1446,6 +1462,7 @@ def _dispatch(args) -> Any:
                         disadvantage=args.disadvantage,
                         label=args.weapon or args.name or "",
                     )
+                    _spend_runtime_action(state, str(result["actor"]), "main_action")
                 elif args.action == "damage":
                     amount = args.amount
                     roll_result = None
@@ -1493,10 +1510,30 @@ def _dispatch(args) -> Any:
                         combat,
                         actor_id=None if args.actor == "runtime" else args.actor,
                     )
+                    _reset_actor_turn_budget(state, (combat_status(combat) or {}).get("current"))
+                    advance_effect_durations(
+                        foundry_documents,
+                        campaign_id=campaign_id,
+                        period="turn_end",
+                        actor_id=result.get("ended"),
+                    )
+                    if result.get("current"):
+                        advance_effect_durations(
+                            foundry_documents,
+                            campaign_id=campaign_id,
+                            period="turn_start",
+                            actor_id=result.get("current"),
+                        )
+                    if result.get("turn") == 0:
+                        advance_effect_durations(
+                            foundry_documents,
+                            campaign_id=campaign_id,
+                            period="round_start",
+                        )
                 state["combat"] = combat
                 updated = campaigns.update(campaign_id, state=state)
                 _campaign_revision(revisions, before, updated, f"combat.{args.action}")
-                return {"result": result, "combat": combat_status(combat)}
+                return {"result": result, "combat": combat_status(combat, runtime=state.get("runtime"))}
             if args.action == "act":
                 raise CliError(
                     "runtime_authority_required",
@@ -1506,6 +1543,11 @@ def _dispatch(args) -> Any:
             if args.action == "end":
                 before = campaign
                 result = state.get("combat")
+                advance_effect_durations(
+                    foundry_documents,
+                    campaign_id=campaign_id,
+                    period="encounter_end",
+                )
                 state["combat"] = None
                 updated = campaigns.update(campaign_id, state=state)
                 _campaign_revision(revisions, before, updated, "combat.end")
@@ -1532,18 +1574,11 @@ def _dispatch(args) -> Any:
                 updated = campaigns.update(campaign_id, state=state)
                 _campaign_revision(revisions, before, updated, "activity.use")
                 return result
-            combat, result = execute_activity(
-                state.get("combat"),
-                actor_id=_require(args.actor if args.actor != "runtime" else None, "actor"),
-                activity_id=_require(args.activity or args.target, "activity"),
-                target_id=args.target_id,
-                payment=args.payment,
-                payload=_dict(args.payload),
+            raise CliError(
+                "runtime_authority_required",
+                "activity use requires --item and a persisted activity document",
+                exit_code=2,
             )
-            state["combat"] = combat
-            updated = campaigns.update(campaign_id, state=state)
-            _campaign_revision(revisions, before, updated, "activity.use")
-            return {"result": result, "combat": combat_status(combat)}
 
         if args.group == "reaction":
             campaign_id = _require(args.campaign, "campaign")
@@ -1691,28 +1726,46 @@ def _dispatch(args) -> Any:
                     campaign_id=campaign_id,
                     actor_id=_require(args.actor if args.actor != "runtime" else None, "actor"),
                 )
-            before = campaigns.get(campaign_id)
-            state = dict(before.state)
             if args.action == "list":
-                return {"effects": list((state.get("combat") or {}).get("effects") or [])}
+                return {
+                    "effects": [
+                        asdict(effect)
+                        for effect in foundry_documents.list_effects(
+                            campaign_id,
+                            actor_id=None if args.actor == "runtime" else args.actor,
+                            parent_type=args.type,
+                            parent_id=args.id,
+                        )
+                    ]
+                }
             if args.action == "add":
-                combat, result = apply_effect(
-                    state.get("combat"),
-                    target_id=_require(args.target_id or args.target, "target-id"),
-                    effect=_dict(args.payload),
-                    source=args.source or args.reason,
+                payload = _dict(args.payload)
+                parent_type = args.type or payload.pop("parent_type", "actor")
+                parent_id = args.id or payload.pop("parent_id", None) or args.actor_id or args.actor
+                actor_id = args.actor_id or args.actor
+                if actor_id == "runtime":
+                    actor_id = None
+                created = foundry_documents.create_effect(
+                    campaign_id=campaign_id,
+                    parent_type=parent_type,
+                    parent_id=_require(parent_id, "parent-id"),
+                    actor_id=actor_id,
+                    origin=args.source or payload.pop("origin", ""),
+                    name=args.name or payload.pop("name", "Effect"),
+                    img=payload.pop("img", ""),
+                    disabled=bool(payload.pop("disabled", False)),
+                    suppressed=bool(payload.pop("suppressed", False)),
+                    transfer=bool(payload.pop("transfer", False)),
+                    duration=_dict(args.duration) if args.duration else dict(payload.pop("duration", {})),
+                    changes=list(payload.pop("changes", [])),
+                    statuses=list(payload.pop("statuses", [])),
+                    flags={**dict(payload.pop("flags", {})), "dnd5e": payload},
                 )
+                return asdict(created)
             elif args.action == "remove":
-                combat, result = remove_effect(
-                    state.get("combat"),
-                    effect_id=_require(args.id or args.target, "id"),
-                )
+                return asdict(foundry_documents.delete_effect(_require(args.id or args.target, "id")))
             else:
                 raise CliError("unknown_command", f"unknown effect command: {args.action}", exit_code=2)
-            state["combat"] = combat
-            updated = campaigns.update(campaign_id, state=state)
-            _campaign_revision(revisions, before, updated, f"effect.{args.action}")
-            return {"result": result, "combat": combat_status(combat)}
 
         if args.group == "rest":
             campaign_id = _require(args.campaign, "campaign")
@@ -1736,6 +1789,12 @@ def _dispatch(args) -> Any:
                 period=period,
                 actor_id=None if args.actor == "runtime" else args.actor,
             )
+            duration_recovery = advance_effect_durations(
+                foundry_documents,
+                campaign_id=campaign_id,
+                period=period,
+                actor_id=None if args.actor == "runtime" else args.actor,
+            )
             rest_state = dict(state.get("rests") or {})
             rest_state[period] = int(rest_state.get(period, 0)) + 1
             state["rests"] = rest_state
@@ -1744,8 +1803,9 @@ def _dispatch(args) -> Any:
             return {
                 "result": result,
                 "document_recovery": document_recovery,
+                "duration_recovery": duration_recovery,
                 "rests": rest_state,
-                "combat": combat_status(state.get("combat")),
+                "combat": combat_status(state.get("combat"), runtime=state.get("runtime")),
             }
 
         raise CliError(

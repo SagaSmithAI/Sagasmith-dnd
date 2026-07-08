@@ -8,6 +8,21 @@ from typing import Any
 from sagasmith_core.foundry_documents import FoundryDocumentService
 
 
+DECLARED_PERIODS = {
+    "turn_start",
+    "turn_end",
+    "round_start",
+    "encounter_start",
+    "encounter_end",
+    "short_rest",
+    "long_rest",
+    "scene_end",
+    "declared_minute",
+    "declared_hour",
+    "declared_day",
+}
+
+
 def advance_effect_durations(
     documents: FoundryDocumentService,
     *,
@@ -15,12 +30,15 @@ def advance_effect_durations(
     period: str,
     actor_id: str | None = None,
 ) -> dict[str, Any]:
+    normalized_period = _normalize(period)
+    if normalized_period not in DECLARED_PERIODS:
+        raise ValueError(f"unsupported duration period: {period}")
     effects = documents.list_effects(campaign_id, actor_id=actor_id)
     advanced = []
     expired = []
     for effect in effects:
         duration = dict(effect.duration or {})
-        if not _matches(duration, period):
+        if not _matches(duration, normalized_period):
             continue
         remaining = duration.get("remaining", duration.get("value"))
         if remaining in (None, ""):
@@ -42,7 +60,7 @@ def advance_effect_durations(
         deltas=[
             {
                 "type": "duration_advance",
-                "period": period,
+                "period": normalized_period,
                 "advanced": [item["id"] for item in advanced],
                 "expired": [item["id"] for item in expired],
             }
@@ -50,7 +68,7 @@ def advance_effect_durations(
         narration_hints=[f"{period} durations advance."],
     )
     return {
-        "period": period,
+        "period": normalized_period,
         "advanced": advanced,
         "expired": expired,
         "messages": [asdict(message)],

@@ -13,7 +13,7 @@ def _call(capsys, *args: str) -> tuple[int, dict]:
     return code, json.loads(output.out)
 
 
-def test_item_cli_lifecycle_and_character_inventory_import(
+def test_item_cli_lifecycle_and_character_sheet_inventory_is_not_imported(
     tmp_path: Path,
     monkeypatch,
     capsys,
@@ -85,14 +85,11 @@ def test_item_cli_lifecycle_and_character_inventory_import(
         '{"inventory":["Torch",{"name":"Rope","quantity":1}]}',
     )
     character_id = character["data"]["id"]
-    assert character["data"]["sheet"]["inventory_managed"] is True
-    assert [item["name"] for item in character["data"]["sheet"]["inventory"]] == [
-        "Rope",
-        "Torch",
-    ]
+    assert "inventory_managed" not in character["data"]["sheet"]
+    assert character["data"]["sheet"]["inventory"] == ["Torch", {"name": "Rope", "quantity": 1}]
 
     shown = _call(capsys, "character", "show", "--id", character_id)[1]
-    assert len(shown["data"]["sheet"]["inventory"]) == 2
+    assert shown["data"]["sheet"]["inventory"] == ["Torch", {"name": "Rope", "quantity": 1}]
 
     listed = _call(
         capsys,
@@ -105,4 +102,4 @@ def test_item_cli_lifecycle_and_character_inventory_import(
         "--owner-id",
         character_id,
     )[1]
-    assert {item["name"] for item in listed["data"]["items"]} == {"Rope", "Torch"}
+    assert listed["data"]["items"] == []
