@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sagasmith.ai/schemas/dnd/ruleset.schema.json",
+  "title": "SagaSmith D&D Ruleset",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "id",
+    "name",
+    "timeUnits",
+    "activityActivationTypes",
+    "activityTypes",
+    "limitedUsePeriods",
+    "activityConsumptionTypes",
+    "activities",
+    "conditions",
+    "conditionTypes",
+    "conditionEffects"
+  ],
+  "properties": {
+    "id": {"type": "string", "minLength": 1},
+    "name": {"type": "string", "minLength": 1},
+    "extends": {"type": "string", "minLength": 1},
+    "status": {"type": "string", "minLength": 1},
+    "timeUnits": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/timeUnit"}
+    },
+    "activityActivationTypes": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/activityActivationType"}
+    },
+    "activityTypes": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/activityType"}
+    },
+    "limitedUsePeriods": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/limitedUsePeriod"}
+    },
+    "activityConsumptionTypes": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/activityConsumptionType"}
+    },
+    "activities": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/activity"}
+    },
+    "conditions": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/condition"}
+    },
+    "conditionTypes": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/conditionType"}
+    },
+    "conditionEffects": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {"type": "string"}
+      }
+    }
+  },
+  "$defs": {
+    "timeUnit": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "combat": {"type": "boolean"},
+        "timeComponent": {"type": "string"}
+      }
+    },
+    "activityActivationType": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "group": {"type": "string"},
+        "scalar": {"type": "boolean"},
+        "passive": {"type": "boolean"},
+        "period": {"type": "string"}
+      }
+    },
+    "activityType": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "limitedUsePeriod": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["period", "type"],
+      "properties": {
+        "period": {"type": "string", "minLength": 1},
+        "type": {"type": "string", "minLength": 1}
+      }
+    },
+    "activityConsumptionType": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "activity": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["activation", "type"],
+      "properties": {
+        "activation": {"type": "string", "minLength": 1},
+        "type": {"type": "string", "minLength": 1},
+        "requires_feature": {"type": "string"},
+        "trigger": {"type": "string"},
+        "uses": {"$ref": "#/$defs/uses"},
+        "grant": {
+          "type": "object",
+          "additionalProperties": {"type": ["integer", "number", "string", "boolean", "array", "object", "null"]}
+        },
+        "healing": {"type": "string"},
+        "effect": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "uses": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "resource": {"type": "string", "minLength": 1},
+        "cost": {"type": "integer", "minimum": 0},
+        "recovery": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "condition": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "tags": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "conditionType": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "statuses": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        },
+        "riders": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

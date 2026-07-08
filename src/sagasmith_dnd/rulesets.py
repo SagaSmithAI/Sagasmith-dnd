@@ -8,6 +8,11 @@ from importlib import resources
 from typing import Any
 
 
+def ruleset_schema() -> dict[str, Any]:
+    root = resources.files("sagasmith_dnd").joinpath("data", "schemas")
+    return json.loads(root.joinpath("ruleset.schema.json").read_text(encoding="utf-8"))
+
+
 def _load_structured_rulesets() -> dict[str, dict[str, Any]]:
     loaded: dict[str, dict[str, Any]] = {}
     try:
@@ -45,29 +50,108 @@ def get_ruleset(ruleset_id: str | None = None) -> dict[str, Any]:
 
 def validate_ruleset(ruleset_id: str | None = None) -> dict[str, Any]:
     ruleset = get_ruleset(ruleset_id)
-    errors: list[str] = []
+    schema = ruleset_schema()
+    errors = _schema_errors(ruleset, schema)
+    activation_types = set(ruleset.get("activityActivationTypes", {}))
+    activity_types = set(ruleset.get("activityTypes", {}))
+    limited_use_periods = set(ruleset.get("limitedUsePeriods", {}))
+    condition_types = set(ruleset.get("conditionTypes", {}))
     for action_id, action in ruleset.get("activities", {}).items():
-        if action.get("activation") not in {
-            "action",
-            "bonus",
-            "reaction",
-            "special",
-            "minute",
-            "hour",
-            "short_rest",
-            "long_rest",
-            "encounter",
-            "turn_start",
-            "turn_end",
-        }:
-            errors.append(f"{action_id}: invalid activation")
-        if not action.get("type"):
-            errors.append(f"{action_id}: missing type")
+        activation = str(action.get("activation") or "")
+        activity_type = str(action.get("type") or "")
+        if activation not in activation_types:
+            errors.append(f"activities.{action_id}.activation: unknown activation {activation!r}")
+        if activity_type not in activity_types:
+            errors.append(f"activities.{action_id}.type: unknown activity type {activity_type!r}")
+        for period in (action.get("uses") or {}).get("recovery") or []:
+            if period not in limited_use_periods and period not in {
+                value.get("period") for value in ruleset.get("limitedUsePeriods", {}).values()
+            }:
+                errors.append(f"activities.{action_id}.uses.recovery: unknown period {period!r}")
+    for condition_id, condition in ruleset.get("conditionTypes", {}).items():
+        for status in condition.get("statuses") or []:
+            if status not in condition_types:
+                errors.append(f"conditionTypes.{condition_id}.statuses: unknown condition {status!r}")
+        for rider in condition.get("riders") or []:
+            if rider not in condition_types:
+                errors.append(f"conditionTypes.{condition_id}.riders: unknown condition {rider!r}")
+    for effect_id, conditions in ruleset.get("conditionEffects", {}).items():
+        for condition in conditions:
+            if condition not in condition_types:
+                errors.append(f"conditionEffects.{effect_id}: unknown condition {condition!r}")
     return {
         "id": ruleset["id"],
+        "schema": schema["$id"],
         "valid": not errors,
         "errors": errors,
         "activities": sorted(ruleset.get("activities", {}).keys()),
         "activityActivationTypes": sorted(ruleset.get("activityActivationTypes", {}).keys()),
         "limitedUsePeriods": sorted(ruleset.get("limitedUsePeriods", {}).keys()),
     }
+
+
+def _schema_errors(value: Any, schema: dict[str, Any], *, path: str = "$") -> list[str]:
+    errors: list[str] = []
+    expected_type = schema.get("type")
+    if expected_type and not _matches_type(value, expected_type):
+        return [f"{path}: expected {_type_label(expected_type)}"]
+    if isinstance(value, str) and int(schema.get("minLength", 0) or 0) > len(value):
+        errors.append(f"{path}: shorter than minLength {schema['minLength']}")
+    if isinstance(value, list):
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            for index, item in enumerate(value):
+                errors.extend(_schema_errors(item, _resolve_schema(item_schema), path=f"{path}[{index}]"))
+        return errors
+    if not isinstance(value, dict):
+        return errors
+    for required in schema.get("required") or []:
+        if required not in value:
+            errors.append(f"{path}.{required}: missing required field")
+    properties = schema.get("properties") or {}
+    for key, child_schema in properties.items():
+        if key in value:
+            errors.extend(_schema_errors(value[key], _resolve_schema(child_schema), path=f"{path}.{key}"))
+    additional = schema.get("additionalProperties")
+    if isinstance(additional, dict):
+        known = set(properties)
+        for key, child in value.items():
+            if key not in known:
+                errors.extend(_schema_errors(child, _resolve_schema(additional), path=f"{path}.{key}"))
+    return errors
+
+
+def _resolve_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    if "$ref" not in schema:
+        return schema
+    root = ruleset_schema()
+    ref = str(schema["$ref"])
+    if not ref.startswith("#/$defs/"):
+        return {}
+    return dict(root.get("$defs", {}).get(ref.removeprefix("#/$defs/"), {}))
+
+
+def _matches_type(value: Any, expected: str | list[str]) -> bool:
+    expected_types = [expected] if isinstance(expected, str) else list(expected)
+    for item in expected_types:
+        if item == "object" and isinstance(value, dict):
+            return True
+        if item == "array" and isinstance(value, list):
+            return True
+        if item == "string" and isinstance(value, str):
+            return True
+        if item == "integer" and isinstance(value, int) and not isinstance(value, bool):
+            return True
+        if item == "number" and isinstance(value, int | float) and not isinstance(value, bool):
+            return True
+        if item == "boolean" and isinstance(value, bool):
+            return True
+        if item == "null" and value is None:
+            return True
+    return False
+
+
+def _type_label(expected: str | list[str]) -> str:
+    if isinstance(expected, str):
+        return expected
+    return " or ".join(expected)
