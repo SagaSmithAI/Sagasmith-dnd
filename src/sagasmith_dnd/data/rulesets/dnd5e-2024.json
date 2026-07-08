@@ -14,6 +14,7 @@
     "action": {"group": "standard"},
     "bonus": {"group": "standard"},
     "reaction": {"group": "standard"},
+    "free": {"group": "standard"},
     "minute": {"group": "time", "scalar": true, "period": "declared_minute"},
     "hour": {"group": "time", "scalar": true, "period": "declared_hour"},
     "shortRest": {"group": "rest", "passive": true, "period": "short_rest"},
@@ -30,6 +31,7 @@
     "effect": {},
     "heal": {},
     "save": {},
+    "cast": {},
     "utility": {}
   },
   "limitedUsePeriods": {

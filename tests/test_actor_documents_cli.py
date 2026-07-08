@@ -15,6 +15,15 @@ def _call(capsys, *args: str) -> dict:
     return value["data"]
 
 
+def _call_error(capsys, *args: str) -> dict:
+    code = main([*args, "--json"])
+    output = capsys.readouterr()
+    value = json.loads(output.out)
+    assert code != 0, value
+    assert value["ok"] is False
+    return value["error"]
+
+
 def test_actor_document_cli_create_list_show(tmp_path: Path, monkeypatch, capsys) -> None:
     monkeypatch.setenv("DND_DATABASE_URL", f"sqlite+pysqlite:///{(tmp_path / 'actors.db').as_posix()}")
     campaign = _call(capsys, "campaign", "start", "--name", "Actors")["campaign"]
@@ -38,6 +47,10 @@ def test_actor_document_cli_create_list_show(tmp_path: Path, monkeypatch, capsys
     assert listed["actors"][0]["id"] == actor["id"]
     shown = _call(capsys, "actor", "show", "--id", actor["id"])
     assert shown["system"]["level"] == 5
+    assert shown["system"]["details"]["level"] == 5
+    assert shown["system"]["abilities"]["str"]["value"] == 10
+    assert shown["system"]["attributes"]["hp"]["max"] == 1
+    assert shown["system"]["skills"]["perception"]["ability"] == "wis"
 
 
 def test_actor_show_includes_items_activities_and_effects(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -90,4 +103,26 @@ def test_actor_update_changes_system_and_flags(tmp_path: Path, monkeypatch, caps
     assert updated["revision"] == actor["revision"] + 1
     shown = _call(capsys, "actor", "show", "--id", actor["id"])
     assert shown["system"]["level"] == 3
+    assert shown["system"]["details"]["level"] == 3
+    assert shown["system"]["abilities"]["dex"]["value"] == 10
     assert shown["flags"]["source"] == "manual"
+
+
+def test_actor_document_rejects_unknown_actor_type(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.setenv("DND_DATABASE_URL", f"sqlite+pysqlite:///{(tmp_path / 'actor-invalid.db').as_posix()}")
+    campaign = _call(capsys, "campaign", "start", "--name", "Actor Invalid")["campaign"]
+
+    error = _call_error(
+        capsys,
+        "actor",
+        "create",
+        "--campaign",
+        campaign["id"],
+        "--name",
+        "Mira",
+        "--type",
+        "demigod",
+    )
+
+    assert error["code"] == "invalid_value"
+    assert "unknown actor type" in error["message"]

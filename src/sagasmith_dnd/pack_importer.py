@@ -10,6 +10,8 @@ import yaml
 
 from sagasmith_core.foundry_documents import FoundryDocumentService
 
+from sagasmith_dnd.document_contracts import normalize_activity_document, normalize_item_document
+
 
 def import_foundry_pack(
     documents: FoundryDocumentService,
@@ -57,7 +59,7 @@ def _create_item(
         name=str(data.get("name")),
         source_key=str(data.get("_id") or source_path.as_posix()),
         img=str(data.get("img") or ""),
-        system=system,
+        system=normalize_item_document(item_type, system),
         effects=list(data.get("effects") or []),
         flags={"foundry": {"source_path": source_path.as_posix(), "_id": data.get("_id")}},
     )
@@ -65,10 +67,9 @@ def _create_item(
     for key, raw in dict(system.get("activities") or {}).items():
         if not isinstance(raw, dict):
             continue
-        activity = documents.create_activity(
-            item_id=item.id,
-            activity_type=_activity_type(item_type, raw),
-            name=str(raw.get("name") or data.get("name")),
+        activity_type = _activity_type(item_type, raw)
+        contract = normalize_activity_document(
+            activity_type,
             activation=dict(raw.get("activation") or system.get("activation") or {}),
             consumption=dict(raw.get("consumption") or {}),
             duration=_duration(system, raw),
@@ -82,6 +83,19 @@ def _create_item(
                 "properties": list(system.get("properties") or []),
                 "concentration": "concentration" in set(system.get("properties") or []),
             },
+        )
+        activity = documents.create_activity(
+            item_id=item.id,
+            activity_type=activity_type,
+            name=str(raw.get("name") or data.get("name")),
+            activation=contract["activation"],
+            consumption=contract["consumption"],
+            duration=contract["duration"],
+            effects=contract["effects"],
+            range=contract["range"],
+            target=contract["target"],
+            uses=contract["uses"],
+            system=contract["system"],
             flags={"foundry": {"activity_key": key}},
         )
         activities.append(asdict(activity))

@@ -16,6 +16,15 @@ def _call(capsys, *args: str) -> dict:
     return value["data"]
 
 
+def _call_error(capsys, *args: str) -> dict:
+    code = main([*args, "--json"])
+    output = capsys.readouterr()
+    value = json.loads(output.out)
+    assert code != 0, value
+    assert value["ok"] is False
+    return value["error"]
+
+
 def test_game_item_and_activity_cli_create_update_execute(
     tmp_path: Path,
     monkeypatch,
@@ -105,3 +114,72 @@ def test_game_item_and_activity_cli_create_update_execute(
     assert result["execution"]["hit"] is True
     assert result["execution"]["damage"]["after_hp"] == 9
     assert result["activity"]["uses"]["spent"] == 1
+
+
+def test_game_item_and_activity_contract_defaults_and_validation(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setenv("DND_DATABASE_URL", f"sqlite+pysqlite:///{(tmp_path / 'contracts.db').as_posix()}")
+    campaign = _call(capsys, "campaign", "start", "--name", "Contracts")["campaign"]
+    actor = _call(capsys, "actor", "create", "--campaign", campaign["id"], "--name", "Mira")
+
+    item = _call(
+        capsys,
+        "game-item",
+        "create",
+        "--campaign",
+        campaign["id"],
+        "--actor",
+        actor["id"],
+        "--name",
+        "Torch",
+        "--type",
+        "equipment",
+    )
+    assert item["system"]["quantity"] == 1
+    assert item["system"]["equipped"] is False
+    assert item["system"]["identified"] is True
+
+    activity = _call(
+        capsys,
+        "game-activity",
+        "create",
+        "--item",
+        item["id"],
+        "--name",
+        "Use Torch",
+        "--type",
+        "utility",
+    )
+    assert activity["activation"]["type"] == "free"
+    assert activity["uses"] == {}
+
+    item_error = _call_error(
+        capsys,
+        "game-item",
+        "create",
+        "--campaign",
+        campaign["id"],
+        "--actor",
+        actor["id"],
+        "--name",
+        "Bad",
+        "--type",
+        "artifact-of-doom",
+    )
+    assert "unknown item type" in item_error["message"]
+
+    activity_error = _call_error(
+        capsys,
+        "game-activity",
+        "create",
+        "--item",
+        item["id"],
+        "--name",
+        "Bad",
+        "--type",
+        "ritual-dance",
+    )
+    assert "unknown activity type" in activity_error["message"]

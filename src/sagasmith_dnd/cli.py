@@ -45,6 +45,11 @@ from sagasmith_dnd.conditions import add_actor_condition, remove_actor_condition
 from sagasmith_dnd.concentration import resolve_concentration
 from sagasmith_dnd.damage import apply_actor_damage
 from sagasmith_dnd.derived import prepare_actor_derived
+from sagasmith_dnd.document_contracts import (
+    normalize_actor_document,
+    normalize_activity_document,
+    normalize_item_document,
+)
 from sagasmith_dnd.durations import advance_effect_durations
 from sagasmith_dnd.effects import recalculate_actor_effects
 from sagasmith_dnd.engine import resolve_check, roll
@@ -811,14 +816,15 @@ def _dispatch(args) -> Any:
 
         if args.group == "actor":
             if args.action == "create":
+                actor_type = args.type or args.actor_type or "character"
                 return asdict(
                     foundry_documents.create_actor(
                         campaign_id=_require(args.campaign, "campaign"),
                         system_id=DND5E.id,
-                        actor_type=args.type or args.actor_type or "character",
+                        actor_type=actor_type,
                         name=_require(args.name, "name"),
                         img=args.path or "",
-                        system=_dict(args.payload),
+                        system=normalize_actor_document(actor_type, _dict(args.payload)),
                         prototype_token=_dict(args.settings),
                         flags=_dict(args.metadata),
                     )
@@ -857,10 +863,16 @@ def _dispatch(args) -> Any:
                     actor_id=_require(args.actor if args.actor != "runtime" else args.id, "actor"),
                 )
             if args.action == "update":
+                actor_id = _require(args.actor if args.actor != "runtime" else args.id, "actor")
+                actor_type = foundry_documents.get_actor(actor_id).actor_type
                 return asdict(
                     foundry_documents.update_actor(
-                        _require(args.actor if args.actor != "runtime" else args.id, "actor"),
-                        system=_dict(args.payload) if args.payload is not None else None,
+                        actor_id,
+                        system=(
+                            normalize_actor_document(actor_type, _dict(args.payload))
+                            if args.payload is not None
+                            else None
+                        ),
                         flags=_dict(args.metadata) if args.metadata is not None else None,
                     )
                 )
@@ -869,17 +881,18 @@ def _dispatch(args) -> Any:
         if args.group == "game-item":
             if args.action == "create":
                 payload = _dict(args.payload)
+                item_type = args.type or args.category or "loot"
                 return asdict(
                     foundry_documents.create_item(
                         campaign_id=_require(args.campaign, "campaign"),
                         system_id=DND5E.id,
                         actor_id=None if args.actor == "runtime" else args.actor,
                         container_id=args.container,
-                        item_type=args.type or args.category or "loot",
+                        item_type=item_type,
                         name=_require(args.name, "name"),
                         source_key=args.source_key or "",
                         img=args.path or "",
-                        system=dict(payload.get("system") or payload),
+                        system=normalize_item_document(item_type, dict(payload.get("system") or payload)),
                         effects=_list(args.effects, "effects") or list(payload.get("effects") or []),
                         flags=_dict(args.metadata),
                     )
@@ -904,10 +917,15 @@ def _dispatch(args) -> Any:
                 return item
             if args.action == "update":
                 payload = _dict(args.payload)
+                item = foundry_documents.get_item(_require(args.item or args.id, "item"))
                 return asdict(
                     foundry_documents.update_item(
-                        _require(args.item or args.id, "item"),
-                        system=dict(payload.get("system") or payload) if payload else None,
+                        item.id,
+                        system=(
+                            normalize_item_document(item.item_type, dict(payload.get("system") or payload))
+                            if payload
+                            else None
+                        ),
                         effects=_list(args.effects, "effects") if args.effects is not None else None,
                         flags=_dict(args.metadata) if args.metadata is not None else None,
                     )
@@ -917,19 +935,31 @@ def _dispatch(args) -> Any:
         if args.group == "game-activity":
             payload = _dict(args.payload)
             if args.action == "create":
+                activity_type = args.type or args.category or payload.get("type") or "utility"
+                contract = normalize_activity_document(
+                    activity_type,
+                    activation=dict(payload.get("activation") or {}),
+                    consumption=dict(payload.get("consumption") or {}),
+                    duration=_dict(args.duration) or dict(payload.get("duration") or {}),
+                    effects=_list(args.effects, "effects") or list(payload.get("effects") or []),
+                    range=dict(payload.get("range") or {}),
+                    target=dict(payload.get("target") or {}),
+                    uses=dict(payload.get("uses") or {}),
+                    system=dict(payload.get("system") or {}),
+                )
                 return asdict(
                     foundry_documents.create_activity(
                         item_id=_require(args.item, "item"),
-                        activity_type=args.type or args.category or payload.get("type") or "utility",
+                        activity_type=activity_type,
                         name=args.name or payload.get("name") or "Activity",
-                        activation=dict(payload.get("activation") or {}),
-                        consumption=dict(payload.get("consumption") or {}),
-                        duration=_dict(args.duration) or dict(payload.get("duration") or {}),
-                        effects=_list(args.effects, "effects") or list(payload.get("effects") or []),
-                        range=dict(payload.get("range") or {}),
-                        target=dict(payload.get("target") or {}),
-                        uses=dict(payload.get("uses") or {}),
-                        system=dict(payload.get("system") or {}),
+                        activation=contract["activation"],
+                        consumption=contract["consumption"],
+                        duration=contract["duration"],
+                        effects=contract["effects"],
+                        range=contract["range"],
+                        target=contract["target"],
+                        uses=contract["uses"],
+                        system=contract["system"],
                         flags=_dict(args.metadata),
                     )
                 )
@@ -943,17 +973,37 @@ def _dispatch(args) -> Any:
             if args.action == "show":
                 return asdict(foundry_documents.get_activity(_require(args.activity or args.id, "activity")))
             if args.action == "update":
+                current = foundry_documents.get_activity(_require(args.activity or args.id, "activity"))
+                contract = normalize_activity_document(
+                    current.activity_type,
+                    activation=dict(payload.get("activation")) if "activation" in payload else current.activation,
+                    consumption=dict(payload.get("consumption")) if "consumption" in payload else current.consumption,
+                    duration=(
+                        _dict(args.duration)
+                        if args.duration is not None
+                        else payload.get("duration", current.duration)
+                    ),
+                    effects=(
+                        _list(args.effects, "effects")
+                        if args.effects is not None
+                        else payload.get("effects", current.effects)
+                    ),
+                    range=dict(payload.get("range")) if "range" in payload else current.range,
+                    target=dict(payload.get("target")) if "target" in payload else current.target,
+                    uses=dict(payload.get("uses")) if "uses" in payload else current.uses,
+                    system=dict(payload.get("system")) if "system" in payload else current.system,
+                )
                 return asdict(
                     foundry_documents.update_activity(
-                        _require(args.activity or args.id, "activity"),
-                        activation=dict(payload.get("activation")) if "activation" in payload else None,
-                        consumption=dict(payload.get("consumption")) if "consumption" in payload else None,
-                        duration=_dict(args.duration) if args.duration is not None else payload.get("duration"),
-                        effects=_list(args.effects, "effects") if args.effects is not None else payload.get("effects"),
-                        range=dict(payload.get("range")) if "range" in payload else None,
-                        target=dict(payload.get("target")) if "target" in payload else None,
-                        uses=dict(payload.get("uses")) if "uses" in payload else None,
-                        system=dict(payload.get("system")) if "system" in payload else None,
+                        current.id,
+                        activation=contract["activation"] if "activation" in payload else None,
+                        consumption=contract["consumption"] if "consumption" in payload else None,
+                        duration=contract["duration"] if args.duration is not None or "duration" in payload else None,
+                        effects=contract["effects"] if args.effects is not None or "effects" in payload else None,
+                        range=contract["range"] if "range" in payload else None,
+                        target=contract["target"] if "target" in payload else None,
+                        uses=contract["uses"] if "uses" in payload else None,
+                        system=contract["system"] if "system" in payload else None,
                         flags=_dict(args.metadata) if args.metadata is not None else None,
                     )
                 )

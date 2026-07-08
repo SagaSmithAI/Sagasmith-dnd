@@ -7,6 +7,8 @@ from typing import Any
 
 from sagasmith_core.foundry_documents import FoundryDocumentService
 
+from sagasmith_dnd.document_contracts import normalize_actor_document, normalize_item_document
+
 
 def apply_advancement(
     documents: FoundryDocumentService,
@@ -34,14 +36,18 @@ def apply_advancement(
             delta = _apply_scale_value(system, step)
             deltas.append(delta)
         elif kind == "item_grant":
+            item_type = str(step.get("item_type") or step.get("item", {}).get("type") or "feat")
             item = documents.create_item(
                 campaign_id=campaign_id,
                 system_id=actor.system_id,
                 actor_id=actor_id,
-                item_type=str(step.get("item_type") or step.get("item", {}).get("type") or "feat"),
+                item_type=item_type,
                 name=str(step.get("name") or step.get("item", {}).get("name") or "Granted Item"),
                 source_key=str(step.get("source_key") or step.get("item", {}).get("_id") or ""),
-                system=dict(step.get("system") or step.get("item", {}).get("system") or {}),
+                system=normalize_item_document(
+                    item_type,
+                    dict(step.get("system") or step.get("item", {}).get("system") or {}),
+                ),
                 effects=list(step.get("effects") or step.get("item", {}).get("effects") or []),
                 flags={"dnd5e": {"advancement": step}},
             )
@@ -49,7 +55,10 @@ def apply_advancement(
             deltas.append({"type": kind, "item_id": item.id, "name": item.name})
         else:
             raise ValueError(f"unsupported advancement step: {kind}")
-    updated = documents.update_actor(actor_id, system=system)
+    updated = documents.update_actor(
+        actor_id,
+        system=normalize_actor_document(actor.actor_type, system),
+    )
     message = documents.create_message(
         campaign_id=campaign_id,
         message_type="advancement",
