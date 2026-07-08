@@ -13,6 +13,7 @@ from sagasmith_core.foundry_documents import FoundryDocumentService
 from sagasmith_dnd.damage import apply_actor_damage
 from sagasmith_dnd.engine import roll, roll_d20
 from sagasmith_dnd.rolls import roll_actor_d20
+from sagasmith_dnd.rulesets import get_ruleset
 
 
 PAYMENT_BY_ACTIVATION = {
@@ -53,6 +54,7 @@ def execute_document_activity(
 
     payload = dict(payload or {})
     activation = dict(activity.activation or {})
+    _require_actor_can_use_activity(documents, campaign_id=campaign_id, actor=actor, activity=activity)
     runtime = dict(state.get("runtime") or {})
     budgets = dict(runtime.get("turn_budgets") or {})
     actor_budget = _budget_for(budgets.get(actor_id))
@@ -580,9 +582,18 @@ def _execute_attack(
         or _default_spell_attack_bonus(actor, item, activity),
         roll_data,
     )
-    die = roll_d20(
+    roll_context = _attack_roll_context(
+        documents,
+        campaign_id=campaign_id,
+        actor=actor,
+        target=target,
+        range_result=range_result,
         advantage=bool(payload.get("advantage", False)),
-        disadvantage=bool(payload.get("disadvantage", False) or range_result.get("disadvantage")),
+        disadvantage=bool(payload.get("disadvantage", False)),
+    )
+    die = roll_d20(
+        advantage=roll_context["advantage"],
+        disadvantage=roll_context["disadvantage"],
     )
     total = int(die["natural"]) + attack_bonus
     target_ac = _formula_int(payload.get("target_ac") or _actor_ac(target.system, target.derived), roll_data)
@@ -596,6 +607,10 @@ def _execute_attack(
         "roll": die,
         "total": total,
         "hit": hit,
+        "advantage": roll_context["advantage"],
+        "disadvantage": roll_context["disadvantage"],
+        "advantage_sources": roll_context["advantage_sources"],
+        "disadvantage_sources": roll_context["disadvantage_sources"],
     }
     if range_result:
         result["range"] = range_result
@@ -713,6 +728,87 @@ def _range_value(range_data: dict[str, Any], *keys: str) -> float:
         except (TypeError, ValueError):
             continue
     return 0.0
+
+
+def _require_actor_can_use_activity(
+    documents: FoundryDocumentService,
+    *,
+    campaign_id: str,
+    actor,
+    activity,
+) -> None:
+    activation = str((getattr(activity, "activation", {}) or {}).get("type") or "free").lower()
+    if activation in {"free", "none", ""}:
+        return
+    statuses = _actor_statuses(documents, campaign_id=campaign_id, actor=actor)
+    if statuses & _condition_effects("cannotAct"):
+        raise ValueError(f"{actor.name} is incapacitated and cannot take actions or reactions")
+
+
+def _attack_roll_context(
+    documents: FoundryDocumentService,
+    *,
+    campaign_id: str,
+    actor,
+    target,
+    range_result: dict[str, Any],
+    advantage: bool,
+    disadvantage: bool,
+) -> dict[str, Any]:
+    advantage_sources: list[str] = ["payload"] if advantage else []
+    disadvantage_sources: list[str] = ["payload"] if disadvantage else []
+    attacker_statuses = _actor_statuses(documents, campaign_id=campaign_id, actor=actor)
+    target_statuses = _actor_statuses(documents, campaign_id=campaign_id, actor=target)
+
+    for status in sorted(attacker_statuses & _condition_effects("attackerAttackAdvantage")):
+        advantage_sources.append(f"attacker:{status}")
+    for status in sorted(target_statuses & _condition_effects("attacksAgainstAdvantage")):
+        advantage_sources.append(f"target:{status}")
+    if target_statuses & _condition_effects("meleeAttacksAgainstAdvantage"):
+        if _attacker_within_5_feet(range_result):
+            advantage_sources.append("target:prone:within_5_ft")
+        else:
+            disadvantage_sources.append("target:prone:beyond_5_ft")
+
+    for status in sorted(attacker_statuses & _condition_effects("attackDisadvantage")):
+        disadvantage_sources.append(f"attacker:{status}")
+    for status in sorted(target_statuses & _condition_effects("attacksAgainstDisadvantage")):
+        disadvantage_sources.append(f"target:{status}")
+    if range_result.get("disadvantage"):
+        disadvantage_sources.append("range:long")
+
+    return {
+        "advantage": bool(advantage_sources),
+        "disadvantage": bool(disadvantage_sources),
+        "advantage_sources": advantage_sources,
+        "disadvantage_sources": disadvantage_sources,
+    }
+
+
+def _attacker_within_5_feet(range_result: dict[str, Any]) -> bool:
+    if "distance" in range_result:
+        return float(range_result.get("distance", 999) or 999) <= 5
+    mode = str(range_result.get("mode") or "").lower()
+    return mode in {"melee", "touch"}
+
+
+def _actor_statuses(
+    documents: FoundryDocumentService,
+    *,
+    campaign_id: str,
+    actor,
+) -> set[str]:
+    values = set(str(item) for item in (getattr(actor, "derived", {}) or {}).get("statuses") or [])
+    for effect in documents.list_effects(campaign_id, actor_id=actor.id):
+        if effect.disabled or effect.suppressed:
+            continue
+        values.update(str(item) for item in effect.statuses)
+    return {item.strip().lower().replace("-", "_").replace(" ", "_") for item in values if item}
+
+
+def _condition_effects(key: str) -> set[str]:
+    values = get_ruleset().get("conditionEffects", {}).get(key) or []
+    return {str(item).strip().lower().replace("-", "_").replace(" ", "_") for item in values}
 
 
 def _execute_damage(

@@ -49,7 +49,7 @@ def test_document_condition_add_recalculate_and_remove(
         "--condition",
         "unconscious",
     )
-    assert added["statuses"] == ["prone", "unconscious"]
+    assert added["statuses"] == ["incapacitated", "prone", "unconscious"]
 
     recalculated = _call(
         capsys,
@@ -60,7 +60,7 @@ def test_document_condition_add_recalculate_and_remove(
         "--actor",
         actor.id,
     )
-    assert recalculated["statuses"] == ["prone", "unconscious"]
+    assert recalculated["statuses"] == ["incapacitated", "prone", "unconscious"]
 
     removed = _call(
         capsys,

@@ -19,6 +19,15 @@ def _call(capsys, *args: str) -> dict:
     return value["data"]
 
 
+def _call_error(capsys, *args: str) -> dict:
+    code = main([*args, "--json"])
+    output = capsys.readouterr()
+    value = json.loads(output.out)
+    assert code != 0, value
+    assert value["ok"] is False
+    return value["error"]
+
+
 def test_attack_activity_rolls_hit_and_applies_damage(
     tmp_path: Path,
     monkeypatch,
@@ -149,6 +158,160 @@ def test_attack_activity_doubles_damage_dice_on_critical(
     assert result["execution"]["damage_roll"]["expression"] == "2d8+3"
     assert result["execution"]["damage_roll"]["total"] == 5
     assert result["execution"]["damage"]["after_hp"] == 5
+
+
+def test_attack_activity_applies_condition_advantage_and_disadvantage(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    url = sqlite_database_url(tmp_path / "activity-conditions.db")
+    monkeypatch.setenv("DND_DATABASE_URL", url)
+    rolls = iter([19, 2])
+    monkeypatch.setattr("sagasmith_dnd.engine.random.randint", lambda _low, _high: next(rolls))
+    database = Database(url)
+    database.upgrade_schema()
+    try:
+        campaign = CampaignService(database).create(system_id="dnd5e", name="Condition Activity")
+        documents = FoundryDocumentService(database)
+        attacker = documents.create_actor(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_type="character",
+            name="Mira",
+        )
+        target = documents.create_actor(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_type="npc",
+            name="Goblin",
+            system={"attributes": {"ac": {"value": 12}, "hp": {"value": 10, "max": 10}}},
+        )
+        documents.create_effect(
+            campaign_id=campaign.id,
+            parent_type="actor",
+            parent_id=attacker.id,
+            actor_id=attacker.id,
+            name="Poisoned",
+            statuses=["poisoned"],
+        )
+        documents.create_effect(
+            campaign_id=campaign.id,
+            parent_type="actor",
+            parent_id=target.id,
+            actor_id=target.id,
+            name="Prone",
+            statuses=["prone"],
+        )
+        item = documents.create_item(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_id=attacker.id,
+            item_type="weapon",
+            name="Longsword",
+        )
+        activity = documents.create_activity(
+            item_id=item.id,
+            activity_type="attack",
+            name="Slash",
+            activation={"type": "action"},
+            range={"value": 5},
+            system={"attack_bonus": 99},
+        )
+    finally:
+        database.dispose()
+
+    result = _call(
+        capsys,
+        "activity",
+        "use",
+        "--campaign",
+        campaign.id,
+        "--actor",
+        attacker.id,
+        "--item",
+        item.id,
+        "--activity",
+        activity.id,
+        "--target-id",
+        target.id,
+        "--payload",
+        '{"range_context":{"distance":5}}',
+    )
+
+    execution = result["execution"]
+    assert execution["advantage"] is True
+    assert execution["disadvantage"] is True
+    assert "target:prone:within_5_ft" in execution["advantage_sources"]
+    assert "attacker:poisoned" in execution["disadvantage_sources"]
+    assert execution["roll"]["rolls"] == [19]
+
+
+def test_incapacitated_actor_cannot_use_action_activity(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    url = sqlite_database_url(tmp_path / "activity-incapacitated.db")
+    monkeypatch.setenv("DND_DATABASE_URL", url)
+    database = Database(url)
+    database.upgrade_schema()
+    try:
+        campaign = CampaignService(database).create(system_id="dnd5e", name="Incapacitated Activity")
+        documents = FoundryDocumentService(database)
+        actor = documents.create_actor(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_type="character",
+            name="Mira",
+        )
+        target = documents.create_actor(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_type="npc",
+            name="Goblin",
+        )
+        documents.create_effect(
+            campaign_id=campaign.id,
+            parent_type="actor",
+            parent_id=actor.id,
+            actor_id=actor.id,
+            name="Stunned",
+            statuses=["stunned"],
+        )
+        item = documents.create_item(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_id=actor.id,
+            item_type="weapon",
+            name="Longsword",
+        )
+        activity = documents.create_activity(
+            item_id=item.id,
+            activity_type="attack",
+            name="Slash",
+            activation={"type": "action"},
+            system={"attack_bonus": 99},
+        )
+    finally:
+        database.dispose()
+
+    error = _call_error(
+        capsys,
+        "activity",
+        "use",
+        "--campaign",
+        campaign.id,
+        "--actor",
+        actor.id,
+        "--item",
+        item.id,
+        "--activity",
+        activity.id,
+        "--target-id",
+        target.id,
+    )
+    assert "incapacitated" in error["message"]
 
 
 def test_heal_activity_updates_target_hp(

@@ -121,7 +121,40 @@
     "natural1": {"failures": 2}
   },
   "activities": {},
-  "conditions": {},
-  "conditionTypes": {},
-  "conditionEffects": {}
+  "conditions": {
+    "poisoned": {"tags": ["attack_disadvantage", "ability_check_disadvantage"]},
+    "prone": {"tags": ["crawl", "melee_attackers_advantage", "ranged_attackers_disadvantage"]},
+    "restrained": {"tags": ["no_movement", "attackers_advantage", "attack_disadvantage", "dex_save_disadvantage"]},
+    "incapacitated": {"tags": ["no_actions", "no_reactions"]},
+    "unconscious": {"tags": ["incapacitated", "prone"]}
+  },
+  "conditionTypes": {
+    "blinded": {"statuses": []},
+    "charmed": {"statuses": []},
+    "deafened": {"statuses": []},
+    "frightened": {"statuses": []},
+    "grappled": {"statuses": []},
+    "incapacitated": {"statuses": []},
+    "invisible": {"statuses": []},
+    "paralyzed": {"statuses": ["incapacitated"]},
+    "petrified": {"statuses": ["incapacitated"]},
+    "poisoned": {"statuses": []},
+    "prone": {"statuses": []},
+    "restrained": {"statuses": []},
+    "stunned": {"statuses": ["incapacitated"]},
+    "unconscious": {"statuses": ["incapacitated"], "riders": ["prone"]}
+  },
+  "conditionEffects": {
+    "noMovement": ["grappled", "paralyzed", "petrified", "restrained", "unconscious"],
+    "cannotAct": ["incapacitated", "paralyzed", "petrified", "stunned", "unconscious"],
+    "crawl": ["prone"],
+    "abilityCheckDisadvantage": ["poisoned"],
+    "attackDisadvantage": ["blinded", "poisoned", "prone", "restrained"],
+    "attackerAttackAdvantage": ["invisible"],
+    "attacksAgainstAdvantage": ["blinded", "paralyzed", "petrified", "restrained", "stunned", "unconscious"],
+    "attacksAgainstDisadvantage": ["invisible"],
+    "meleeAttacksAgainstAdvantage": ["prone"],
+    "dexteritySaveDisadvantage": ["restrained"],
+    "initiativeDisadvantage": ["incapacitated", "paralyzed", "petrified", "stunned", "unconscious"]
+  }
 }

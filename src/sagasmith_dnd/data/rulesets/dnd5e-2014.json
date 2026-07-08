@@ -179,10 +179,15 @@
   },
   "conditionEffects": {
     "noMovement": ["grappled", "paralyzed", "petrified", "restrained", "unconscious"],
+    "cannotAct": ["incapacitated", "paralyzed", "petrified", "stunned", "unconscious"],
     "crawl": ["prone"],
     "abilityCheckDisadvantage": ["poisoned"],
-    "attackDisadvantage": ["poisoned"],
+    "attackDisadvantage": ["blinded", "poisoned", "prone", "restrained"],
+    "attackerAttackAdvantage": ["invisible"],
+    "attacksAgainstAdvantage": ["blinded", "paralyzed", "petrified", "restrained", "stunned", "unconscious"],
+    "attacksAgainstDisadvantage": ["invisible"],
+    "meleeAttacksAgainstAdvantage": ["prone"],
     "dexteritySaveDisadvantage": ["restrained"],
-    "initiativeDisadvantage": ["incapacitated"]
+    "initiativeDisadvantage": ["incapacitated", "paralyzed", "petrified", "stunned", "unconscious"]
   }
 }

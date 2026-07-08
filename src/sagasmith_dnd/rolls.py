@@ -9,6 +9,7 @@ from sagasmith_core.foundry_documents import FoundryDocumentService
 
 from sagasmith_dnd.checks import SKILLS_2014
 from sagasmith_dnd.engine import ability_modifier, proficiency_bonus, resolve_check
+from sagasmith_dnd.rulesets import get_ruleset
 
 ABILITY_ALIASES = {
     "str": "str",
@@ -65,7 +66,7 @@ def roll_actor_d20(
     if actor.campaign_id != campaign_id:
         raise ValueError(f"actor {actor_id} is not in campaign {campaign_id}")
     system = dict((actor.derived or {}).get("effective_system") or actor.system or {})
-    statuses = set((actor.derived or {}).get("statuses") or [])
+    statuses = _actor_statuses(documents, campaign_id=campaign_id, actor=actor)
     level = _level(system)
     prof = _proficiency(system, level)
 
@@ -88,10 +89,23 @@ def roll_actor_d20(
         subject = ability_key
         multiplier = 0
 
-    if "poisoned" in statuses and roll_type in {"ability", "skill"}:
+    advantage_sources = ["payload"] if advantage else []
+    disadvantage_sources = ["payload"] if disadvantage else []
+    if statuses & _condition_effects("abilityCheckDisadvantage") and roll_type in {"ability", "skill"}:
         disadvantage = True
-    if "blinded" in statuses and roll_type == "attack":
+        disadvantage_sources.extend(f"actor:{status}" for status in sorted(statuses & _condition_effects("abilityCheckDisadvantage")))
+    if statuses & _condition_effects("dexteritySaveDisadvantage") and roll_type == "save" and ability_key == "dex":
         disadvantage = True
+        disadvantage_sources.extend(
+            f"actor:{status}:dex_save"
+            for status in sorted(statuses & _condition_effects("dexteritySaveDisadvantage"))
+        )
+    if statuses & _condition_effects("initiativeDisadvantage") and roll_type == "initiative":
+        disadvantage = True
+        disadvantage_sources.extend(
+            f"actor:{status}:initiative"
+            for status in sorted(statuses & _condition_effects("initiativeDisadvantage"))
+        )
 
     score = _ability_score(system, ability_key)
     result = resolve_check(
@@ -115,6 +129,10 @@ def roll_actor_d20(
         "proficiency_value": prof,
         "proficiency_multiplier": multiplier,
         "source": source,
+        "advantage": bool(advantage_sources),
+        "disadvantage": bool(disadvantage_sources),
+        "advantage_sources": advantage_sources,
+        "disadvantage_sources": disadvantage_sources,
         "breakdown": {
             "d20": result["natural"],
             "ability_modifier": ability_modifier(score),
@@ -184,3 +202,22 @@ def _save_multiplier(system: dict[str, Any], ability: str) -> int:
 
 def _initiative_multiplier(system: dict[str, Any]) -> int:
     return int(system.get("attributes", {}).get("init", {}).get("prof", 0) or 0)
+
+
+def _actor_statuses(
+    documents: FoundryDocumentService,
+    *,
+    campaign_id: str,
+    actor,
+) -> set[str]:
+    values = set(str(item) for item in (actor.derived or {}).get("statuses") or [])
+    for effect in documents.list_effects(campaign_id, actor_id=actor.id):
+        if effect.disabled or effect.suppressed:
+            continue
+        values.update(str(item) for item in effect.statuses)
+    return {item.strip().lower().replace("-", "_").replace(" ", "_") for item in values if item}
+
+
+def _condition_effects(key: str) -> set[str]:
+    values = get_ruleset().get("conditionEffects", {}).get(key) or []
+    return {str(item).strip().lower().replace("-", "_").replace(" ", "_") for item in values}

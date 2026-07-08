@@ -74,3 +74,109 @@ def test_actor_document_skill_roll_uses_effective_system_and_expertise(
     assert roll["proficiency_multiplier"] == 2
     assert roll["breakdown"]["proficiency_bonus"] == 6
     assert result["messages"][0]["message_type"] == "roll"
+
+
+def test_poisoned_actor_has_disadvantage_on_skill_checks(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    url = sqlite_database_url(tmp_path / "roll-poisoned.db")
+    monkeypatch.setenv("DND_DATABASE_URL", url)
+    rolls = iter([18, 2])
+    monkeypatch.setattr("sagasmith_dnd.engine.random.randint", lambda _low, _high: next(rolls))
+    database = Database(url)
+    database.upgrade_schema()
+    try:
+        campaign = CampaignService(database).create(system_id="dnd5e", name="Poisoned Roll")
+        documents = FoundryDocumentService(database)
+        actor = documents.create_actor(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_type="character",
+            name="Mira",
+            system={"abilities": {"wis": {"value": 16}}},
+        )
+        documents.create_effect(
+            campaign_id=campaign.id,
+            parent_type="actor",
+            parent_id=actor.id,
+            actor_id=actor.id,
+            name="Poisoned",
+            statuses=["poisoned"],
+        )
+    finally:
+        database.dispose()
+
+    result = _call(
+        capsys,
+        "roll",
+        "skill",
+        "--campaign",
+        campaign.id,
+        "--actor",
+        actor.id,
+        "--skill",
+        "perception",
+        "--dc",
+        "10",
+    )
+
+    roll = result["roll"]
+    assert roll["disadvantage"] is True
+    assert "actor:poisoned" in roll["disadvantage_sources"]
+    assert roll["rolls"] == [18, 2]
+    assert roll["natural"] == 2
+
+
+def test_restrained_actor_has_disadvantage_on_dexterity_saves(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    url = sqlite_database_url(tmp_path / "roll-restrained.db")
+    monkeypatch.setenv("DND_DATABASE_URL", url)
+    rolls = iter([17, 4])
+    monkeypatch.setattr("sagasmith_dnd.engine.random.randint", lambda _low, _high: next(rolls))
+    database = Database(url)
+    database.upgrade_schema()
+    try:
+        campaign = CampaignService(database).create(system_id="dnd5e", name="Restrained Roll")
+        documents = FoundryDocumentService(database)
+        actor = documents.create_actor(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_type="character",
+            name="Mira",
+            system={"abilities": {"dex": {"value": 16}}},
+        )
+        documents.create_effect(
+            campaign_id=campaign.id,
+            parent_type="actor",
+            parent_id=actor.id,
+            actor_id=actor.id,
+            name="Restrained",
+            statuses=["restrained"],
+        )
+    finally:
+        database.dispose()
+
+    result = _call(
+        capsys,
+        "roll",
+        "save",
+        "--campaign",
+        campaign.id,
+        "--actor",
+        actor.id,
+        "--ability",
+        "dex",
+        "--dc",
+        "10",
+    )
+
+    roll = result["roll"]
+    assert roll["disadvantage"] is True
+    assert "actor:restrained:dex_save" in roll["disadvantage_sources"]
+    assert roll["rolls"] == [17, 4]
+    assert roll["natural"] == 4

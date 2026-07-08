@@ -25,8 +25,10 @@ def add_actor_condition(
     ruleset = get_ruleset()
     if normalized not in ruleset.get("conditionTypes", {}):
         raise ValueError(f"unknown condition: {condition}")
-    riders = list(ruleset.get("conditionTypes", {}).get(normalized, {}).get("riders", []))
-    statuses = sorted({normalized, *riders})
+    condition_data = ruleset.get("conditionTypes", {}).get(normalized, {})
+    implied_statuses = list(condition_data.get("statuses") or [])
+    riders = list(condition_data.get("riders") or [])
+    statuses = sorted({normalized, *implied_statuses, *riders})
     effect = documents.create_effect(
         campaign_id=campaign_id,
         parent_type="actor",
