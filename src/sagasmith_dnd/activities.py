@@ -116,6 +116,8 @@ def execute_document_activity(
 
     for effect in activity.effects:
         effect_payload = dict(effect)
+        if not _effect_matches_execution(effect_payload, execution):
+            continue
         created = documents.create_effect(
             campaign_id=campaign_id,
             parent_type=str(effect_payload.pop("parent_type", "actor")),
@@ -206,6 +208,22 @@ def execute_document_activity(
         "messages": messages,
         "narration_hints": list(message.narration_hints),
     }
+
+
+def _effect_matches_execution(effect: dict[str, Any], execution: dict[str, Any] | None) -> bool:
+    apply_on = str(effect.get("apply_on") or effect.get("applyOn") or "use").strip().lower()
+    if apply_on in {"", "use", "always"}:
+        return True
+    result = dict((execution or {}).get("result") or {})
+    if apply_on in {"hit", "attack_hit"}:
+        return bool(result.get("type") == "attack" and result.get("hit"))
+    if apply_on in {"miss", "attack_miss"}:
+        return bool(result.get("type") == "attack" and not result.get("hit"))
+    if apply_on in {"failed_save", "save_failed"}:
+        return bool(result.get("type") == "save" and not result.get("success"))
+    if apply_on in {"successful_save", "save_success"}:
+        return bool(result.get("type") == "save" and result.get("success"))
+    return True
 
 
 def list_actor_activity_options(
@@ -434,6 +452,15 @@ def _execute_activity_effect(
             activity=activity,
             payload=payload,
         )
+    if activity_type == "check":
+        return _execute_check(
+            documents,
+            campaign_id=campaign_id,
+            actor_id=actor_id,
+            target_id=target_id,
+            activity=activity,
+            payload=payload,
+        )
     return None
 
 
@@ -481,7 +508,9 @@ def _execute_attack(
     pending: list[dict[str, Any]] = []
     damage_spec = _damage_spec(activity, payload)
     if hit and damage_spec["expression"]:
-        damage = roll(_resolve_formula(str(damage_spec["expression"]), roll_data))
+        expression = str(damage_spec["expression"])
+        rolled_expression = _critical_expression(expression) if die["critical"] else expression
+        damage = roll(_resolve_formula(rolled_expression, roll_data))
         damage_result = apply_actor_damage(
             documents,
             campaign_id=campaign_id,
@@ -492,10 +521,12 @@ def _execute_attack(
         )
         result["damage_roll"] = {
             "expression": damage.expression,
+            "base_expression": expression,
             "total": damage.total,
             "rolls": list(damage.rolls),
             "detail": damage.detail,
             "parts": damage_spec["parts"],
+            "critical": bool(die["critical"]),
         }
         result["damage"] = damage_result["damage"]
         pending.extend(damage_result.get("pending", []))
@@ -668,6 +699,62 @@ def _execute_save(
     return {"result": result, "pending": pending, "messages": messages}
 
 
+def _execute_check(
+    documents: FoundryDocumentService,
+    *,
+    campaign_id: str,
+    actor_id: str,
+    target_id: str | None,
+    activity,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    check_data = dict(activity.system.get("check") or {})
+    ability = payload.get("ability") or activity.system.get("ability") or check_data.get("ability")
+    skill = payload.get("skill") or activity.system.get("skill") or check_data.get("skill")
+    dc = int(payload.get("dc") or activity.system.get("dc") or check_data.get("dc") or 10)
+    actor_roll = roll_actor_d20(
+        documents,
+        campaign_id=campaign_id,
+        actor_id=actor_id,
+        roll_type="skill" if skill else "ability",
+        dc=dc,
+        ability=str(ability or ""),
+        skill=str(skill or ""),
+        bonus=int(payload.get("bonus", 0) or 0),
+        advantage=bool(payload.get("advantage", False)),
+        disadvantage=bool(payload.get("disadvantage", False)),
+        source=activity.name,
+    )
+    result: dict[str, Any] = {
+        "type": "check",
+        "actor": actor_roll["roll"],
+        "dc": dc,
+        "success": bool(actor_roll["roll"]["success"]),
+    }
+    messages = list(actor_roll.get("messages", []))
+    contest = dict(payload.get("contest") or activity.system.get("contest") or {})
+    if target_id and contest:
+        target_ability = contest.get("ability") or payload.get("target_ability") or ability
+        target_skill = contest.get("skill") or payload.get("target_skill")
+        target_roll = roll_actor_d20(
+            documents,
+            campaign_id=campaign_id,
+            actor_id=target_id,
+            roll_type="skill" if target_skill else "ability",
+            dc=0,
+            ability=str(target_ability or ""),
+            skill=str(target_skill or ""),
+            bonus=int(contest.get("bonus", payload.get("target_bonus", 0)) or 0),
+            advantage=bool(contest.get("advantage", False)),
+            disadvantage=bool(contest.get("disadvantage", False)),
+            source=f"Contest: {activity.name}",
+        )
+        result["target"] = target_roll["roll"]
+        result["success"] = int(actor_roll["roll"]["total"]) >= int(target_roll["roll"]["total"])
+        messages.extend(target_roll.get("messages", []))
+    return {"result": result, "pending": [], "messages": messages}
+
+
 def _actor_ac(system: dict[str, Any], derived: dict[str, Any]) -> int:
     effective = dict((derived or {}).get("effective_system") or system or {})
     ac = effective.get("attributes", {}).get("ac", 10)
@@ -791,6 +878,15 @@ def _resolve_formula(expression: str, data: dict[str, Any]) -> str:
     if "d" not in resolved.lower() and _SAFE_FORMULA.match(resolved):
         return str(int(_eval_formula(resolved)))
     return resolved
+
+
+def _critical_expression(expression: str) -> str:
+    return re.sub(
+        r"(?<!\d)(?P<count>\d*)d(?P<sides>\d+)",
+        lambda match: f"{int(match.group('count') or 1) * 2}d{match.group('sides')}",
+        expression,
+        flags=re.I,
+    )
 
 
 def _formula_int(value: Any, data: dict[str, Any]) -> int:

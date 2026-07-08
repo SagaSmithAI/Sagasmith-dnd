@@ -84,6 +84,73 @@ def test_attack_activity_rolls_hit_and_applies_damage(
     assert any(message["message_type"] == "damage" for message in result["messages"])
 
 
+def test_attack_activity_doubles_damage_dice_on_critical(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    url = sqlite_database_url(tmp_path / "activity-critical.db")
+    monkeypatch.setenv("DND_DATABASE_URL", url)
+    rolls = iter([20, 1, 1])
+    monkeypatch.setattr("sagasmith_dnd.engine.random.randint", lambda _low, _high: next(rolls))
+    database = Database(url)
+    database.upgrade_schema()
+    try:
+        campaign = CampaignService(database).create(system_id="dnd5e", name="Critical Activity")
+        documents = FoundryDocumentService(database)
+        attacker = documents.create_actor(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_type="character",
+            name="Mira",
+        )
+        target = documents.create_actor(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_type="npc",
+            name="Goblin",
+            system={"attributes": {"ac": {"value": 12}, "hp": {"value": 10, "max": 10}}},
+        )
+        item = documents.create_item(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_id=attacker.id,
+            item_type="weapon",
+            name="Longsword",
+        )
+        activity = documents.create_activity(
+            item_id=item.id,
+            activity_type="attack",
+            name="Slash",
+            activation={"type": "action"},
+            system={"attack_bonus": 0, "damage": "1d8+3", "damage_type": "slashing"},
+        )
+    finally:
+        database.dispose()
+
+    result = _call(
+        capsys,
+        "activity",
+        "use",
+        "--campaign",
+        campaign.id,
+        "--actor",
+        attacker.id,
+        "--item",
+        item.id,
+        "--activity",
+        activity.id,
+        "--target-id",
+        target.id,
+    )
+
+    assert result["execution"]["roll"]["critical"] is True
+    assert result["execution"]["damage_roll"]["base_expression"] == "1d8+3"
+    assert result["execution"]["damage_roll"]["expression"] == "2d8+3"
+    assert result["execution"]["damage_roll"]["total"] == 5
+    assert result["execution"]["damage"]["after_hp"] == 5
+
+
 def test_heal_activity_updates_target_hp(
     tmp_path: Path,
     monkeypatch,
@@ -278,6 +345,73 @@ def test_save_activity_rolls_save_and_applies_half_damage_on_success(
     assert result["execution"]["damage"]["after_hp"] == 15
 
 
+def test_check_activity_can_resolve_contested_checks(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    url = sqlite_database_url(tmp_path / "activity-contest.db")
+    monkeypatch.setenv("DND_DATABASE_URL", url)
+    rolls = iter([15, 6])
+    monkeypatch.setattr("sagasmith_dnd.engine.random.randint", lambda _low, _high: next(rolls))
+    database = Database(url)
+    database.upgrade_schema()
+    try:
+        campaign = CampaignService(database).create(system_id="dnd5e", name="Contest Activity")
+        documents = FoundryDocumentService(database)
+        actor = documents.create_actor(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_type="character",
+            name="Mira",
+            system={"abilities": {"str": {"value": 16}}},
+        )
+        target = documents.create_actor(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_type="npc",
+            name="Goblin",
+            system={"abilities": {"str": {"value": 10}}},
+        )
+        item = documents.create_item(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_id=actor.id,
+            item_type="feat",
+            name="Grapple",
+        )
+        activity = documents.create_activity(
+            item_id=item.id,
+            activity_type="check",
+            name="Grapple",
+            activation={"type": "action"},
+            system={"ability": "str", "contest": {"ability": "str"}},
+        )
+    finally:
+        database.dispose()
+
+    result = _call(
+        capsys,
+        "activity",
+        "use",
+        "--campaign",
+        campaign.id,
+        "--actor",
+        actor.id,
+        "--item",
+        item.id,
+        "--activity",
+        activity.id,
+        "--target-id",
+        target.id,
+    )
+
+    assert result["execution"]["type"] == "check"
+    assert result["execution"]["actor"]["total"] == 18
+    assert result["execution"]["target"]["total"] == 6
+    assert result["execution"]["success"] is True
+
+
 def test_damage_activity_uses_foundry_damage_parts(
     tmp_path: Path,
     monkeypatch,
@@ -347,6 +481,99 @@ def test_damage_activity_uses_foundry_damage_parts(
     assert result["execution"]["damage_type"] == "fire"
     assert result["execution"]["roll"]["parts"] == [{"formula": "2d4+@item.level", "types": ["fire"]}]
     assert result["execution"]["roll"]["expression"] == "2d4+3"
+
+
+def test_activity_effects_can_be_gated_on_attack_hit(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    url = sqlite_database_url(tmp_path / "activity-hit-effect.db")
+    monkeypatch.setenv("DND_DATABASE_URL", url)
+    rolls = iter([2, 2])
+    monkeypatch.setattr("sagasmith_dnd.engine.random.randint", lambda _low, _high: next(rolls))
+    database = Database(url)
+    database.upgrade_schema()
+    try:
+        campaign = CampaignService(database).create(system_id="dnd5e", name="Hit Effects")
+        documents = FoundryDocumentService(database)
+        attacker = documents.create_actor(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_type="character",
+            name="Mira",
+        )
+        target = documents.create_actor(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_type="npc",
+            name="Goblin",
+            system={"attributes": {"ac": {"value": 30}, "hp": {"value": 10, "max": 10}}},
+        )
+        item = documents.create_item(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_id=attacker.id,
+            item_type="weapon",
+            name="Net",
+        )
+        activity = documents.create_activity(
+            item_id=item.id,
+            activity_type="attack",
+            name="Snare",
+            activation={"type": "action"},
+            effects=[
+                {
+                    "name": "Restrained",
+                    "apply_on": "hit",
+                    "statuses": ["restrained"],
+                }
+            ],
+        )
+    finally:
+        database.dispose()
+
+    miss = _call(
+        capsys,
+        "activity",
+        "use",
+        "--campaign",
+        campaign.id,
+        "--actor",
+        attacker.id,
+        "--item",
+        item.id,
+        "--activity",
+        activity.id,
+        "--target-id",
+        target.id,
+        "--payload",
+        '{"attack_bonus":0}',
+    )
+    assert miss["execution"]["hit"] is False
+    assert miss["effects"] == []
+
+    hit = _call(
+        capsys,
+        "activity",
+        "use",
+        "--campaign",
+        campaign.id,
+        "--actor",
+        attacker.id,
+        "--item",
+        item.id,
+        "--activity",
+        activity.id,
+        "--target-id",
+        target.id,
+        "--payment",
+        "free",
+        "--payload",
+        '{"attack_bonus":99}',
+    )
+    assert hit["execution"]["hit"] is True
+    assert hit["effects"][0]["statuses"] == ["restrained"]
 
 
 def test_heal_activity_uses_foundry_healing_formula(

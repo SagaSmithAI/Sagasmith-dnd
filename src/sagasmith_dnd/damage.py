@@ -24,8 +24,12 @@ def apply_actor_damage(
     effective = dict((actor.derived or {}).get("effective_system") or system)
     hp = _hp(system)
     before_hp = int(hp.get("value", 0))
+    before_temp = int(hp.get("temp", 0) or 0)
     adjusted = _adjust_damage(effective, max(0, int(amount)), damage_type)
-    hp["value"] = max(0, before_hp - adjusted["amount"])
+    absorbed_temp = min(before_temp, adjusted["amount"])
+    remaining = adjusted["amount"] - absorbed_temp
+    hp["temp"] = max(0, before_temp - absorbed_temp)
+    hp["value"] = max(0, before_hp - remaining)
     system.setdefault("attributes", {})["hp"] = hp
     updated = documents.update_actor(actor_id, system=system)
     pending = _concentration_pending(
@@ -42,7 +46,11 @@ def apply_actor_damage(
             "source": source,
             "input_amount": max(0, int(amount)),
             "applied_amount": adjusted["amount"],
+            "hp_damage": remaining,
+            "absorbed_temp": absorbed_temp,
             "adjustment": adjusted["adjustment"],
+            "before_temp": before_temp,
+            "after_temp": hp["temp"],
             "before_hp": before_hp,
             "after_hp": hp["value"],
         }
