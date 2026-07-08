@@ -10,6 +10,64 @@ from uuid import uuid4
 from sagasmith_core import FoundryDocumentService, MapService
 
 
+def prepare_scene_runtime(
+    maps: MapService,
+    documents: FoundryDocumentService,
+    *,
+    scene_id: str,
+) -> dict[str, Any]:
+    scene = maps.get_scene(scene_id)
+    tokens = [
+        prepare_token_runtime(maps, documents, token_id=token.id)
+        for token in maps.list_tokens(scene.id)
+    ]
+    return {
+        **asdict(scene),
+        "grid": {
+            "size": scene.grid_size,
+            "units": scene.grid_units,
+            "distance": int(scene.metadata.get("grid_distance", 5) or 5),
+        },
+        "tokens": tokens,
+        "regions": [asdict(item) for item in maps.list_regions(scene.id)],
+    }
+
+
+def prepare_token_runtime(
+    maps: MapService,
+    documents: FoundryDocumentService,
+    *,
+    token_id: str,
+) -> dict[str, Any]:
+    token = maps.get_token(token_id)
+    scene = maps.get_scene(token.scene_id)
+    value = asdict(token)
+    actor_summary = None
+    system: dict[str, Any] = {}
+    if token.actor_id:
+        actor = documents.get_actor(token.actor_id)
+        system = dict((actor.derived or {}).get("effective_system") or actor.system or {})
+        actor_summary = {
+            "id": actor.id,
+            "type": actor.actor_type,
+            "name": actor.name,
+            "statuses": list((actor.derived or {}).get("statuses") or []),
+        }
+    value["runtime"] = {
+        "actor": actor_summary,
+        "bars": _token_bars(system, token.metadata),
+        "vision": _token_vision(system, token.vision),
+        "size": {
+            "width": token.width,
+            "height": token.height,
+            "pixels": {"width": token.width * scene.grid_size, "height": token.height * scene.grid_size},
+        },
+        "position": {"x": token.x, "y": token.y, "elevation": token.elevation},
+        "targetable": not token.hidden,
+    }
+    return value
+
+
 def move_token_with_movement_cost(
     maps: MapService,
     *,
@@ -278,3 +336,58 @@ def _hostile(left: str, right: str) -> bool:
     if left == right:
         return False
     return "hostile" in {left, right}
+
+
+def _token_bars(system: dict[str, Any], metadata: dict[str, Any]) -> dict[str, Any]:
+    bars = dict(metadata.get("bars") or {})
+    hp = dict(system.get("attributes", {}).get("hp") or {})
+    if hp and "bar1" not in bars:
+        bars["bar1"] = {
+            "attribute": "attributes.hp",
+            "value": int(hp.get("value", 0) or 0),
+            "max": int(hp.get("max", hp.get("value", 0)) or 0),
+            "temp": int(hp.get("temp", 0) or 0),
+        }
+    return bars
+
+
+def _token_vision(system: dict[str, Any], token_vision: dict[str, Any]) -> dict[str, Any]:
+    vision = dict(token_vision or {})
+    senses = _actor_senses(system)
+    max_range = max((int(value or 0) for value in senses.values()), default=0)
+    sight = dict(vision.get("sight") or {})
+    if max_range and sight.get("enabled") is None:
+        sight["enabled"] = True
+    if max_range and not sight.get("range"):
+        sight["range"] = max_range
+    if max_range and not sight.get("visionMode"):
+        sight["visionMode"] = "darkvision" if int(senses.get("darkvision", 0) or 0) == max_range else "basic"
+    if sight:
+        vision["sight"] = sight
+    detection = list(vision.get("detectionModes") or [])
+    for sense, value in senses.items():
+        if int(value or 0) <= 0:
+            continue
+        if not any(item.get("id") == sense for item in detection if isinstance(item, dict)):
+            detection.append({"id": sense, "range": int(value)})
+    if detection:
+        vision["detectionModes"] = detection
+    return vision
+
+
+def _actor_senses(system: dict[str, Any]) -> dict[str, int]:
+    raw = (
+        system.get("attributes", {}).get("senses")
+        or system.get("traits", {}).get("senses")
+        or system.get("senses")
+        or {}
+    )
+    if not isinstance(raw, dict):
+        return {}
+    senses = {}
+    for key in ("blindsight", "darkvision", "tremorsense", "truesight"):
+        value = raw.get(key)
+        if isinstance(value, dict):
+            value = value.get("value", value.get("range", 0))
+        senses[key] = int(value or 0)
+    return senses

@@ -108,6 +108,93 @@ def test_token_update_changes_visibility_and_metadata_with_undo(
     assert shown["hidden"] is False
 
 
+def test_scene_show_prepares_token_runtime_from_actor(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setenv("DND_DATABASE_URL", f"sqlite+pysqlite:///{(tmp_path / 'scene-runtime.db').as_posix()}")
+    campaign = _call(capsys, "campaign", "start", "--name", "Scene Runtime")["campaign"]
+    actor = _call(
+        capsys,
+        "actor",
+        "create",
+        "--campaign",
+        campaign["id"],
+        "--name",
+        "Scout",
+        "--payload",
+        json.dumps(
+            {
+                "attributes": {
+                    "hp": {"value": 7, "max": 12},
+                    "senses": {"darkvision": 60},
+                }
+            }
+        ),
+    )
+    scene = _call(capsys, "scene", "create", "--campaign", campaign["id"], "--name", "Cave")
+    token = _call(
+        capsys,
+        "token",
+        "create",
+        "--scene",
+        scene["id"],
+        "--name",
+        "Scout",
+        "--actor-id",
+        actor["id"],
+        "--width",
+        "2",
+        "--height",
+        "1",
+    )
+
+    shown = _call(capsys, "scene", "show", "--scene", scene["id"])
+    prepared = shown["tokens"][0]
+
+    assert prepared["id"] == token["id"]
+    assert prepared["runtime"]["actor"]["id"] == actor["id"]
+    assert prepared["runtime"]["bars"]["bar1"]["value"] == 7
+    assert prepared["runtime"]["bars"]["bar1"]["max"] == 12
+    assert prepared["runtime"]["vision"]["sight"]["range"] == 60
+    assert prepared["runtime"]["vision"]["sight"]["visionMode"] == "darkvision"
+    assert prepared["runtime"]["size"]["pixels"]["width"] == 140
+
+
+def test_scene_activate_advances_scene_end_durations(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setenv("DND_DATABASE_URL", f"sqlite+pysqlite:///{(tmp_path / 'scene-active.db').as_posix()}")
+    campaign = _call(capsys, "campaign", "start", "--name", "Scene Active")["campaign"]
+    actor = _call(capsys, "actor", "create", "--campaign", campaign["id"], "--name", "Hero")
+    first = _call(capsys, "scene", "create", "--campaign", campaign["id"], "--name", "Room One")
+    second = _call(capsys, "scene", "create", "--campaign", campaign["id"], "--name", "Room Two")
+    effect = _call(
+        capsys,
+        "effect",
+        "add",
+        "--campaign",
+        campaign["id"],
+        "--actor",
+        actor["id"],
+        "--name",
+        "Room Blessing",
+        "--duration",
+        '{"period":"scene_end"}',
+    )
+
+    _call(capsys, "scene", "activate", "--campaign", campaign["id"], "--scene", first["id"])
+    activated = _call(capsys, "scene", "activate", "--campaign", campaign["id"], "--scene", second["id"])
+    listed = _call(capsys, "effect", "list", "--campaign", campaign["id"], "--actor", actor["id"])
+
+    assert activated["active_scene_id"] == second["id"]
+    assert activated["previous_scene_id"] == first["id"]
+    assert effect["id"] not in {item["id"] for item in listed["effects"]}
+
+
 def test_token_move_leaving_reach_creates_opportunity_attack_window(
     tmp_path: Path,
     monkeypatch,

@@ -60,7 +60,12 @@ from sagasmith_dnd.ready import clear_ready_actions, set_ready_action, trigger_r
 from sagasmith_dnd.rests import recover_document_rest
 from sagasmith_dnd.rolls import roll_actor_d20
 from sagasmith_dnd.server import serve as _serve
-from sagasmith_dnd.spatial import cover_between_tokens, move_token_with_movement_cost
+from sagasmith_dnd.spatial import (
+    cover_between_tokens,
+    move_token_with_movement_cost,
+    prepare_scene_runtime,
+    prepare_token_runtime,
+)
 from sagasmith_dnd.templates import place_activity_template
 from sagasmith_dnd.runtime import database, dense_components
 from sagasmith_dnd.system import DND5E, validate_character_sheet
@@ -1059,6 +1064,31 @@ def _dispatch(args) -> Any:
                         metadata=_dict(args.metadata),
                     )
                 )
+            if args.action == "activate":
+                campaign_id = _require(args.campaign, "campaign")
+                scene_id = _require(args.scene or args.id, "scene")
+                scene = maps.get_scene(scene_id)
+                if scene.campaign_id != campaign_id:
+                    raise CliError("invalid_scene", f"scene {scene_id} is not in campaign {campaign_id}", exit_code=2)
+                before = campaigns.get(campaign_id)
+                state = dict(before.state)
+                map_state = dict(state.get("map") or {})
+                previous = map_state.get("active_scene_id")
+                if previous and previous != scene_id:
+                    advance_effect_durations(
+                        foundry_documents,
+                        campaign_id=campaign_id,
+                        period="scene_end",
+                    )
+                    map_state["previous_scene_id"] = previous
+                map_state["active_scene_id"] = scene_id
+                state["map"] = map_state
+                updated = campaigns.update(campaign_id, state=state)
+                _campaign_revision(revisions, before, updated, "scene.activate")
+                result = prepare_scene_runtime(maps, foundry_documents, scene_id=scene_id)
+                result["active_scene_id"] = scene_id
+                result["previous_scene_id"] = previous
+                return result
             if args.action == "list":
                 return {
                     "scenes": [
@@ -1067,14 +1097,11 @@ def _dispatch(args) -> Any:
                     ]
                 }
             if args.action == "show":
-                scene = asdict(maps.get_scene(_require(args.scene or args.id, "scene")))
-                scene["tokens"] = [
-                    asdict(item) for item in maps.list_tokens(scene["id"])
-                ]
-                scene["regions"] = [
-                    asdict(item) for item in maps.list_regions(scene["id"])
-                ]
-                return scene
+                return prepare_scene_runtime(
+                    maps,
+                    foundry_documents,
+                    scene_id=_require(args.scene or args.id, "scene"),
+                )
 
         if args.group == "token":
             if args.action == "create":
@@ -1099,12 +1126,16 @@ def _dispatch(args) -> Any:
             if args.action == "list":
                 return {
                     "tokens": [
-                        asdict(item)
+                        prepare_token_runtime(maps, foundry_documents, token_id=item.id)
                         for item in maps.list_tokens(_require(args.scene, "scene"))
                     ]
                 }
             if args.action == "show":
-                return asdict(maps.get_token(_require(args.token or args.id, "token")))
+                return prepare_token_runtime(
+                    maps,
+                    foundry_documents,
+                    token_id=_require(args.token or args.id, "token"),
+                )
             if args.action == "update":
                 before = asdict(maps.get_token(_require(args.token or args.id, "token")))
                 updated = asdict(

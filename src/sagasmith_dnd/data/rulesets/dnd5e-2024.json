@@ -77,6 +77,26 @@
     "until_turn_start": {"expiresOn": "turn_start", "anchorAware": true},
     "until_turn_end": {"expiresOn": "turn_end", "anchorAware": true}
   },
+  "mapRuntime": {
+    "documents": ["scene", "token", "region"],
+    "token": {
+      "visionDerivedFromActorSenses": true,
+      "bars": {"bar1": "attributes.hp"},
+      "hiddenTokensExcludedFromCombatStart": true,
+      "dispositions": ["friendly", "neutral", "hostile", "secret"]
+    },
+    "movement": {
+      "gridDistanceMetadata": "grid_distance",
+      "difficultTerrainCostMultiplier": 2,
+      "opportunityTrigger": "opportunity_attack"
+    },
+    "regionBehaviors": {
+      "difficult_terrain": {"movementMultiplier": 2},
+      "cover": {"degrees": ["half", "three_quarters", "total"]},
+      "apply_active_effect": {"createsActorEffect": true, "removeOnExitDefault": true},
+      "template": {"origin": "activity"}
+    }
+  },
   "activities": {},
   "conditions": {},
   "conditionTypes": {},
