@@ -31,8 +31,10 @@ from sagasmith_dnd.activities import execute_document_activity, list_actor_activ
 from sagasmith_dnd.advancement import (
     apply_advancement,
     create_ruleset_monster_actor,
+    grant_ruleset_class,
     grant_ruleset_feature,
     grant_ruleset_spell,
+    grant_ruleset_subclass,
 )
 from sagasmith_dnd.checks import resolve_character_check
 from sagasmith_dnd.combat import (
@@ -52,6 +54,7 @@ from sagasmith_dnd.combat import (
 )
 from sagasmith_dnd.concentration import resolve_concentration
 from sagasmith_dnd.conditions import add_actor_condition, remove_actor_condition
+from sagasmith_dnd.content_compiler import compile_foundry_content, write_content_pack
 from sagasmith_dnd.damage import apply_actor_damage
 from sagasmith_dnd.derived import prepare_actor_derived
 from sagasmith_dnd.document_contracts import (
@@ -217,6 +220,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--label", default="")
     parser.add_argument("--spell")
     parser.add_argument("--monster")
+    parser.add_argument("--class-id")
+    parser.add_argument("--subclass")
     parser.add_argument("--limit", type=int, default=8)
     parser.add_argument("--progress", type=int, default=0)
     parser.add_argument("--room")
@@ -347,7 +352,11 @@ def _sync_document_death_save(
     target_id = str(result.get("target") or "")
     combatant = None
     for item in combat.get("combatants") or []:
-        if target_id in {str(item.get("id") or ""), str(item.get("actor_id") or ""), str(item.get("token_id") or "")}:
+        if target_id in {
+            str(item.get("id") or ""),
+            str(item.get("actor_id") or ""),
+            str(item.get("token_id") or ""),
+        }:
             combatant = item
             break
     actor_id = str((combatant or {}).get("actor_id") or target_id)
@@ -373,7 +382,16 @@ def _sync_document_death_save(
         hp = attributes.setdefault("hp", {})
         if isinstance(hp, dict):
             hp["value"] = int(result.get("hp", 1) or 1)
-        death.update({"successes": 0, "failures": 0, "success": 0, "failure": 0, "stable": False, "dead": False})
+        death.update(
+            {
+                "successes": 0,
+                "failures": 0,
+                "success": 0,
+                "failure": 0,
+                "stable": False,
+                "dead": False,
+            }
+        )
     updated = documents.update_actor(actor_id, system=system)
     return {"actor_id": actor_id, "system": updated.system}
 
@@ -458,23 +476,30 @@ def _activity_payload_with_range_context(
         or _combatant_token_id(state, actor_id)
     )
     target_token_id = (
-        args.target_token
-        or value.get("target_token_id")
-        or _combatant_token_id(state, target_id)
+        args.target_token or value.get("target_token_id") or _combatant_token_id(state, target_id)
     )
     if not actor_token_id or not target_token_id:
         return value
     actor_token = maps.get_token(str(actor_token_id))
     target_token = maps.get_token(str(target_token_id))
     if actor_token.scene_id != target_token.scene_id:
-        raise CliError("invalid_target", "actor token and target token must be in the same scene", exit_code=2)
+        raise CliError(
+            "invalid_target", "actor token and target token must be in the same scene", exit_code=2
+        )
     if actor_token.actor_id and actor_token.actor_id != actor_id:
         raise CliError("invalid_actor_token", "actor token does not match --actor", exit_code=2)
     if target_id and target_token.actor_id and target_token.actor_id != target_id:
-        raise CliError("invalid_target_token", "target token does not match --target-id", exit_code=2)
+        raise CliError(
+            "invalid_target_token", "target token does not match --target-id", exit_code=2
+        )
     scene = maps.get_scene(actor_token.scene_id)
     grid_distance = int(scene.metadata.get("grid_distance", 5) or 5)
-    distance = measure_distance(scene.grid_size, actor_token.x, actor_token.y, target_token.x, target_token.y) * grid_distance
+    distance = (
+        measure_distance(
+            scene.grid_size, actor_token.x, actor_token.y, target_token.x, target_token.y
+        )
+        * grid_distance
+    )
     value["range_context"] = {
         "scene_id": scene.id,
         "actor_token_id": actor_token.id,
@@ -483,7 +508,9 @@ def _activity_payload_with_range_context(
         "units": scene.grid_units or "ft",
         "grid_size": scene.grid_size,
         "grid_distance": grid_distance,
-        "hostile_within_reach": _hostile_within_reach(maps, scene_id=scene.id, actor_token=actor_token),
+        "hostile_within_reach": _hostile_within_reach(
+            maps, scene_id=scene.id, actor_token=actor_token
+        ),
     }
     if not value.get("cover_context"):
         value["cover_context"] = cover_between_tokens(
@@ -518,7 +545,10 @@ def _hostile_within_reach(maps: MapService, *, scene_id: str, actor_token) -> li
         if not _hostile_disposition(actor_token.disposition, token.disposition):
             continue
         reach = int(token.metadata.get("reach", 5) or 5)
-        distance = measure_distance(scene.grid_size, actor_token.x, actor_token.y, token.x, token.y) * grid_distance
+        distance = (
+            measure_distance(scene.grid_size, actor_token.x, actor_token.y, token.x, token.y)
+            * grid_distance
+        )
         if distance <= reach:
             values.append(
                 {
@@ -537,7 +567,9 @@ def _hostile_disposition(left: str, right: str) -> bool:
     return "hostile" in {left, right}
 
 
-def _payload_from_reaction_window(window: dict[str, Any], response: dict[str, Any]) -> dict[str, Any]:
+def _payload_from_reaction_window(
+    window: dict[str, Any], response: dict[str, Any]
+) -> dict[str, Any]:
     payload = dict(response.get("payload") or response)
     if window.get("trigger") == "opportunity_attack":
         payload.setdefault("reaction_trigger", "opportunity_attack")
@@ -705,9 +737,7 @@ def _dispatch(args) -> Any:
                 )
                 result = {"campaign": asdict(campaign), "rule_profile": asdict(profile)}
                 if args.action == "start":
-                    result["snapshot"] = asdict(
-                        saves.create(campaign.id, label="Initial state")
-                    )
+                    result["snapshot"] = asdict(saves.create(campaign.id, label="Initial state"))
                 return result
             if args.action == "list":
                 return {
@@ -728,13 +758,13 @@ def _dispatch(args) -> Any:
                 campaign_id = _require(args.campaign or args.id, "campaign")
                 before = campaigns.get(campaign_id)
                 updated = campaigns.update(
-                        campaign_id,
-                        name=args.name,
-                        status="archived" if args.action == "archive" else args.status,
-                        description=args.description,
-                        settings=_dict(args.settings) if args.settings else None,
-                        state=_dict(args.state) if args.state else None,
-                    )
+                    campaign_id,
+                    name=args.name,
+                    status="archived" if args.action == "archive" else args.status,
+                    description=args.description,
+                    settings=_dict(args.settings) if args.settings else None,
+                    state=_dict(args.state) if args.state else None,
+                )
                 _campaign_revision(revisions, before, updated, "campaign.update")
                 return asdict(updated)
             if args.action == "delete":
@@ -788,13 +818,13 @@ def _dispatch(args) -> Any:
                     sheet = validate_character_sheet(sheet)
                 before = characters.get(_require(args.id, "id"))
                 updated = characters.update(
-                        _require(args.id, "id"),
-                        name=args.name,
-                        player_name=args.player,
-                        summary=args.summary,
-                        sheet=sheet,
-                        notes=_dict(args.notes) if args.notes else None,
-                    )
+                    _require(args.id, "id"),
+                    name=args.name,
+                    player_name=args.player,
+                    summary=args.summary,
+                    sheet=sheet,
+                    notes=_dict(args.notes) if args.notes else None,
+                )
                 _character_revision(revisions, before, updated, "character.update")
                 return asdict(updated)
             if args.action in {"bind", "unbind"}:
@@ -916,9 +946,7 @@ def _dispatch(args) -> Any:
                     "metadata": document.metadata,
                     "chapters": len(parsed),
                     "scenes": sum(len(item.scenes) for item in parsed),
-                    "chunks": sum(
-                        len(scene.chunks) for item in parsed for scene in item.scenes
-                    ),
+                    "chunks": sum(len(scene.chunks) for item in parsed for scene in item.scenes),
                 }
             if args.action == "convert":
                 path = Path(_require(args.path, "path")).expanduser().resolve()
@@ -1019,10 +1047,29 @@ def _dispatch(args) -> Any:
                 return get_ruleset(args.id or args.edition)
             if args.action == "validate":
                 return validate_ruleset(args.id or args.edition)
+            if args.action == "compile":
+                pack = compile_foundry_content(
+                    _require(args.path, "path"),
+                    ruleset_id=args.edition or args.id or "dnd5e-2014",
+                    pack_id=args.source_key or "dnd5e-2014-srd",
+                )
+                output = write_content_pack(pack, _require(args.output, "output"))
+                return {
+                    "output": str(output),
+                    "id": pack["id"],
+                    "ruleset_id": pack["ruleset_id"],
+                    "coverage": pack["coverage"],
+                    "skipped": pack["skipped"],
+                }
+            raise CliError(
+                "unknown_command", f"unknown ruleset command: {args.action}", exit_code=2
+            )
 
         if args.group == "pack":
             if args.action != "import":
-                raise CliError("unknown_command", f"unknown pack command: {args.action}", exit_code=2)
+                raise CliError(
+                    "unknown_command", f"unknown pack command: {args.action}", exit_code=2
+                )
             return import_foundry_pack(
                 foundry_documents,
                 campaign_id=_require(args.campaign, "campaign"),
@@ -1071,14 +1118,15 @@ def _dispatch(args) -> Any:
                 for item in foundry_documents.list_items(actor["campaign_id"], actor_id=actor_id):
                     value = asdict(item)
                     value["activities"] = [
-                        asdict(activity)
-                        for activity in foundry_documents.list_activities(item.id)
+                        asdict(activity) for activity in foundry_documents.list_activities(item.id)
                     ]
                     items.append(value)
                 actor["items"] = items
                 actor["effects"] = [
                     asdict(effect)
-                    for effect in foundry_documents.list_effects(actor["campaign_id"], actor_id=actor_id)
+                    for effect in foundry_documents.list_effects(
+                        actor["campaign_id"], actor_id=actor_id
+                    )
                 ]
                 return actor
             if args.action == "prepare":
@@ -1117,8 +1165,11 @@ def _dispatch(args) -> Any:
                         name=_require(args.name, "name"),
                         source_key=args.source_key or "",
                         img=args.path or "",
-                        system=normalize_item_document(item_type, dict(payload.get("system") or payload)),
-                        effects=_list(args.effects, "effects") or list(payload.get("effects") or []),
+                        system=normalize_item_document(
+                            item_type, dict(payload.get("system") or payload)
+                        ),
+                        effects=_list(args.effects, "effects")
+                        or list(payload.get("effects") or []),
                         flags=_dict(args.metadata),
                     )
                 )
@@ -1136,8 +1187,7 @@ def _dispatch(args) -> Any:
             if args.action == "show":
                 item = asdict(foundry_documents.get_item(_require(args.item or args.id, "item")))
                 item["activities"] = [
-                    asdict(activity)
-                    for activity in foundry_documents.list_activities(item["id"])
+                    asdict(activity) for activity in foundry_documents.list_activities(item["id"])
                 ]
                 return item
             if args.action == "update":
@@ -1147,15 +1197,21 @@ def _dispatch(args) -> Any:
                     foundry_documents.update_item(
                         item.id,
                         system=(
-                            normalize_item_document(item.item_type, dict(payload.get("system") or payload))
+                            normalize_item_document(
+                                item.item_type, dict(payload.get("system") or payload)
+                            )
                             if payload
                             else None
                         ),
-                        effects=_list(args.effects, "effects") if args.effects is not None else None,
+                        effects=_list(args.effects, "effects")
+                        if args.effects is not None
+                        else None,
                         flags=_dict(args.metadata) if args.metadata is not None else None,
                     )
                 )
-            raise CliError("unknown_command", f"unknown game-item command: {args.action}", exit_code=2)
+            raise CliError(
+                "unknown_command", f"unknown game-item command: {args.action}", exit_code=2
+            )
 
         if args.group == "game-activity":
             payload = _dict(args.payload)
@@ -1192,17 +1248,27 @@ def _dispatch(args) -> Any:
                 return {
                     "activities": [
                         asdict(activity)
-                        for activity in foundry_documents.list_activities(_require(args.item, "item"))
+                        for activity in foundry_documents.list_activities(
+                            _require(args.item, "item")
+                        )
                     ]
                 }
             if args.action == "show":
-                return asdict(foundry_documents.get_activity(_require(args.activity or args.id, "activity")))
+                return asdict(
+                    foundry_documents.get_activity(_require(args.activity or args.id, "activity"))
+                )
             if args.action == "update":
-                current = foundry_documents.get_activity(_require(args.activity or args.id, "activity"))
+                current = foundry_documents.get_activity(
+                    _require(args.activity or args.id, "activity")
+                )
                 contract = normalize_activity_document(
                     current.activity_type,
-                    activation=dict(payload.get("activation")) if "activation" in payload else current.activation,
-                    consumption=dict(payload.get("consumption")) if "consumption" in payload else current.consumption,
+                    activation=dict(payload.get("activation"))
+                    if "activation" in payload
+                    else current.activation,
+                    consumption=dict(payload.get("consumption"))
+                    if "consumption" in payload
+                    else current.consumption,
                     duration=(
                         _dict(args.duration)
                         if args.duration is not None
@@ -1223,8 +1289,12 @@ def _dispatch(args) -> Any:
                         current.id,
                         activation=contract["activation"] if "activation" in payload else None,
                         consumption=contract["consumption"] if "consumption" in payload else None,
-                        duration=contract["duration"] if args.duration is not None or "duration" in payload else None,
-                        effects=contract["effects"] if args.effects is not None or "effects" in payload else None,
+                        duration=contract["duration"]
+                        if args.duration is not None or "duration" in payload
+                        else None,
+                        effects=contract["effects"]
+                        if args.effects is not None or "effects" in payload
+                        else None,
                         range=contract["range"] if "range" in payload else None,
                         target=contract["target"] if "target" in payload else None,
                         uses=contract["uses"] if "uses" in payload else None,
@@ -1232,9 +1302,29 @@ def _dispatch(args) -> Any:
                         flags=_dict(args.metadata) if args.metadata is not None else None,
                     )
                 )
-            raise CliError("unknown_command", f"unknown game-activity command: {args.action}", exit_code=2)
+            raise CliError(
+                "unknown_command", f"unknown game-activity command: {args.action}", exit_code=2
+            )
 
         if args.group == "advancement":
+            if args.action == "grant-class":
+                return grant_ruleset_class(
+                    foundry_documents,
+                    campaign_id=_require(args.campaign, "campaign"),
+                    actor_id=_require(args.actor, "actor"),
+                    class_id=_require(args.class_id or args.target, "class-id"),
+                    level=_int_value(args.level, "level"),
+                    ruleset_id=args.edition,
+                )
+            if args.action == "grant-subclass":
+                return grant_ruleset_subclass(
+                    foundry_documents,
+                    campaign_id=_require(args.campaign, "campaign"),
+                    actor_id=_require(args.actor, "actor"),
+                    subclass_id=_require(args.subclass or args.target, "subclass"),
+                    level=_int_value(args.level, "level"),
+                    ruleset_id=args.edition,
+                )
             if args.action == "grant-feature":
                 return grant_ruleset_feature(
                     foundry_documents,
@@ -1252,7 +1342,9 @@ def _dispatch(args) -> Any:
                     ruleset_id=args.edition,
                 )
             if args.action != "apply":
-                raise CliError("unknown_command", f"unknown advancement command: {args.action}", exit_code=2)
+                raise CliError(
+                    "unknown_command", f"unknown advancement command: {args.action}", exit_code=2
+                )
             return apply_advancement(
                 foundry_documents,
                 campaign_id=_require(args.campaign, "campaign"),
@@ -1279,7 +1371,11 @@ def _dispatch(args) -> Any:
                 scene_id = _require(args.scene or args.id, "scene")
                 scene = maps.get_scene(scene_id)
                 if scene.campaign_id != campaign_id:
-                    raise CliError("invalid_scene", f"scene {scene_id} is not in campaign {campaign_id}", exit_code=2)
+                    raise CliError(
+                        "invalid_scene",
+                        f"scene {scene_id} is not in campaign {campaign_id}",
+                        exit_code=2,
+                    )
                 before = campaigns.get(campaign_id)
                 state = dict(before.state)
                 map_state = dict(state.get("map") or {})
@@ -1396,7 +1492,9 @@ def _dispatch(args) -> Any:
                 if pending:
                     _append_pending_reactions(campaign_state, pending)
                     campaign_after = campaigns.update(before["campaign_id"], state=campaign_state)
-                    _campaign_revision(revisions, campaign_before, campaign_after, "token.move.reactions")
+                    _campaign_revision(
+                        revisions, campaign_before, campaign_after, "token.move.reactions"
+                    )
                 return result
 
         if args.group == "region":
@@ -1416,14 +1514,15 @@ def _dispatch(args) -> Any:
             if args.action == "list":
                 return {
                     "regions": [
-                        asdict(item)
-                        for item in maps.list_regions(_require(args.scene, "scene"))
+                        asdict(item) for item in maps.list_regions(_require(args.scene, "scene"))
                     ]
                 }
 
         if args.group == "template":
             if args.action != "place":
-                raise CliError("unknown_command", f"unknown template command: {args.action}", exit_code=2)
+                raise CliError(
+                    "unknown_command", f"unknown template command: {args.action}", exit_code=2
+                )
             return place_activity_template(
                 foundry_documents,
                 maps,
@@ -1440,7 +1539,9 @@ def _dispatch(args) -> Any:
 
         if args.group == "cover":
             if args.action != "check":
-                raise CliError("unknown_command", f"unknown cover command: {args.action}", exit_code=2)
+                raise CliError(
+                    "unknown_command", f"unknown cover command: {args.action}", exit_code=2
+                )
             return cover_between_tokens(
                 maps,
                 scene_id=_require(args.scene, "scene"),
@@ -1477,7 +1578,9 @@ def _dispatch(args) -> Any:
                         ]
                     }
                 if args.target == "show":
-                    return asdict(inventory.get_template(_require(args.template or args.id, "template")))
+                    return asdict(
+                        inventory.get_template(_require(args.template or args.id, "template"))
+                    )
             if args.action == "add":
                 item = inventory.add_item(
                     campaign_id=_require(args.campaign, "campaign"),
@@ -1706,7 +1809,11 @@ def _dispatch(args) -> Any:
             )
 
         if args.group == "roll":
-            if args.action in {"ability", "skill", "save", "initiative"} and args.campaign and args.actor != "runtime":
+            if (
+                args.action in {"ability", "skill", "save", "initiative"}
+                and args.campaign
+                and args.actor != "runtime"
+            ):
                 dc = args.dc if args.dc is not None else 0 if args.action == "initiative" else None
                 return roll_actor_d20(
                     foundry_documents,
@@ -1749,9 +1856,13 @@ def _dispatch(args) -> Any:
                     )
                 scene_id = args.scene or payload.pop("scene_id", None)
                 if not scene_id:
-                    raise CliError("argument_required", "--scene is required for combat start", exit_code=2)
+                    raise CliError(
+                        "argument_required", "--scene is required for combat start", exit_code=2
+                    )
                 participants = _scene_token_participants(maps, foundry_documents, scene_id)
-                environment = _dict(args.environment) if args.environment else payload.pop("environment", {})
+                environment = (
+                    _dict(args.environment) if args.environment else payload.pop("environment", {})
+                )
                 state["combat"] = start_combat(
                     name=args.name or payload.pop("name", "Combat"),
                     participants=participants,
@@ -1790,7 +1901,9 @@ def _dispatch(args) -> Any:
                         combat,
                         actor_id=_require(args.actor if args.actor != "runtime" else None, "actor"),
                         target_id=_require(args.target_id or args.target, "target-id"),
-                        attack_bonus=args.attack_bonus if args.attack_bonus is not None else args.bonus,
+                        attack_bonus=args.attack_bonus
+                        if args.attack_bonus is not None
+                        else args.bonus,
                         damage_expression=args.expression,
                         damage_type=args.damage_type,
                         advantage=args.advantage,
@@ -1826,7 +1939,11 @@ def _dispatch(args) -> Any:
                 elif args.action == "condition":
                     mode = (args.target or "").lower()
                     if mode not in {"add", "remove"}:
-                        raise CliError("invalid_value", "combat condition target must be add or remove", exit_code=2)
+                        raise CliError(
+                            "invalid_value",
+                            "combat condition target must be add or remove",
+                            exit_code=2,
+                        )
                     combat, result = set_condition(
                         combat,
                         target_id=_require(args.target_id, "target-id"),
@@ -1900,7 +2017,9 @@ def _dispatch(args) -> Any:
 
         if args.group == "activity":
             if args.action != "use":
-                raise CliError("unknown_command", f"unknown activity command: {args.action}", exit_code=2)
+                raise CliError(
+                    "unknown_command", f"unknown activity command: {args.action}", exit_code=2
+                )
             campaign_id = _require(args.campaign, "campaign")
             before = campaigns.get(campaign_id)
             state = dict(before.state)
@@ -1966,14 +2085,27 @@ def _dispatch(args) -> Any:
                         changed = True
                     updated_pending.append(value)
                 if not changed:
-                    raise CliError("not_found", f"reaction window not found: {window_id}", exit_code=5)
+                    raise CliError(
+                        "not_found", f"reaction window not found: {window_id}", exit_code=5
+                    )
                 runtime["pending"] = updated_pending
                 state["runtime"] = runtime
                 reaction_result = None
-                response_item_id = str(response_payload.get("item_id") or response_payload.get("item") or "")
-                response_activity_id = str(response_payload.get("activity_id") or response_payload.get("activity") or "")
-                if args.action == "resolve" and selected_window and response_item_id and response_activity_id:
-                    reaction_payload = _payload_from_reaction_window(selected_window, response_payload)
+                response_item_id = str(
+                    response_payload.get("item_id") or response_payload.get("item") or ""
+                )
+                response_activity_id = str(
+                    response_payload.get("activity_id") or response_payload.get("activity") or ""
+                )
+                if (
+                    args.action == "resolve"
+                    and selected_window
+                    and response_item_id
+                    and response_activity_id
+                ):
+                    reaction_payload = _payload_from_reaction_window(
+                        selected_window, response_payload
+                    )
                     state, reaction_result = execute_document_activity(
                         foundry_documents,
                         campaign_id=campaign_id,
@@ -1988,7 +2120,9 @@ def _dispatch(args) -> Any:
                 updated = campaigns.update(campaign_id, state=state)
                 _campaign_revision(revisions, before, updated, f"reaction.{args.action}")
                 return {"pending": updated_pending, "reaction_result": reaction_result}
-            raise CliError("unknown_command", f"unknown reaction command: {args.action}", exit_code=2)
+            raise CliError(
+                "unknown_command", f"unknown reaction command: {args.action}", exit_code=2
+            )
 
         if args.group == "ready":
             campaign_id = _require(args.campaign, "campaign")
@@ -2012,7 +2146,9 @@ def _dispatch(args) -> Any:
                     actor_id=None if args.actor == "runtime" else args.actor,
                 )
             else:
-                raise CliError("unknown_command", f"unknown ready command: {args.action}", exit_code=2)
+                raise CliError(
+                    "unknown_command", f"unknown ready command: {args.action}", exit_code=2
+                )
             updated = campaigns.update(campaign_id, state=state)
             _campaign_revision(revisions, before, updated, f"ready.{args.action}")
             return result
@@ -2035,11 +2171,15 @@ def _dispatch(args) -> Any:
                     actor_id=actor_id,
                     condition=_require(args.condition or args.target, "condition"),
                 )
-            raise CliError("unknown_command", f"unknown condition command: {args.action}", exit_code=2)
+            raise CliError(
+                "unknown_command", f"unknown condition command: {args.action}", exit_code=2
+            )
 
         if args.group == "damage":
             if args.action != "apply":
-                raise CliError("unknown_command", f"unknown damage command: {args.action}", exit_code=2)
+                raise CliError(
+                    "unknown_command", f"unknown damage command: {args.action}", exit_code=2
+                )
             return apply_actor_damage(
                 foundry_documents,
                 campaign_id=_require(args.campaign, "campaign"),
@@ -2051,7 +2191,9 @@ def _dispatch(args) -> Any:
 
         if args.group == "concentration":
             if args.action not in {"pass", "fail"}:
-                raise CliError("unknown_command", f"unknown concentration command: {args.action}", exit_code=2)
+                raise CliError(
+                    "unknown_command", f"unknown concentration command: {args.action}", exit_code=2
+                )
             return resolve_concentration(
                 foundry_documents,
                 campaign_id=_require(args.campaign, "campaign"),
@@ -2121,16 +2263,22 @@ def _dispatch(args) -> Any:
                     disabled=bool(payload.pop("disabled", False)),
                     suppressed=bool(payload.pop("suppressed", False)),
                     transfer=bool(payload.pop("transfer", False)),
-                    duration=_dict(args.duration) if args.duration else dict(payload.pop("duration", {})),
+                    duration=_dict(args.duration)
+                    if args.duration
+                    else dict(payload.pop("duration", {})),
                     changes=list(payload.pop("changes", [])),
                     statuses=list(payload.pop("statuses", [])),
                     flags={**dict(payload.pop("flags", {})), "dnd5e": payload},
                 )
                 return asdict(created)
             elif args.action == "remove":
-                return asdict(foundry_documents.delete_effect(_require(args.id or args.target, "id")))
+                return asdict(
+                    foundry_documents.delete_effect(_require(args.id or args.target, "id"))
+                )
             else:
-                raise CliError("unknown_command", f"unknown effect command: {args.action}", exit_code=2)
+                raise CliError(
+                    "unknown_command", f"unknown effect command: {args.action}", exit_code=2
+                )
 
         if args.group == "rest":
             campaign_id = _require(args.campaign, "campaign")

@@ -8,8 +8,8 @@ from typing import Any
 from sagasmith_core.foundry_documents import FoundryDocumentService
 
 from sagasmith_dnd.document_contracts import (
-    normalize_actor_document,
     normalize_activity_document,
+    normalize_actor_document,
     normalize_item_document,
 )
 from sagasmith_dnd.rulesets import get_ruleset
@@ -223,6 +223,119 @@ def grant_ruleset_spell(
     return {"item": asdict(item), "activities": activities, "messages": [asdict(message)]}
 
 
+def grant_ruleset_class(
+    documents: FoundryDocumentService,
+    *,
+    campaign_id: str,
+    actor_id: str,
+    class_id: str,
+    level: int,
+    ruleset_id: str | None = None,
+) -> dict[str, Any]:
+    actor = documents.get_actor(actor_id)
+    if actor.campaign_id != campaign_id:
+        raise ValueError(f"actor {actor_id} is not in campaign {campaign_id}")
+    ruleset = get_ruleset(ruleset_id)
+    normalized = _feature_key(class_id)
+    template = dict(ruleset.get("classes", {}).get(normalized) or {})
+    if not template:
+        raise ValueError(f"unknown ruleset class: {class_id}")
+    if level < 1 or level > 20:
+        raise ValueError("class level must be between 1 and 20")
+    system = dict(actor.system or {})
+    class_levels = dict(system.get("class_levels") or {})
+    previous_level = int(class_levels.get(normalized, 0) or 0)
+    class_levels[normalized] = level
+    system["class_levels"] = class_levels
+    classes = dict(system.get("classes") or {})
+    classes[normalized] = {
+        **dict(classes.get(normalized) or {}),
+        "levels": level,
+        "hit_die": template.get("hit_die") or "",
+    }
+    system["classes"] = classes
+    for ability in template.get("save_proficiencies") or []:
+        abilities = system.setdefault("abilities", {})
+        entry = dict(abilities.get(ability) or {"value": 10})
+        entry["proficient"] = 1
+        abilities[ability] = entry
+    actor = documents.update_actor(
+        actor_id, system=normalize_actor_document(actor.actor_type, system)
+    )
+    class_item = _ensure_class_item(documents, actor=actor, template=template, class_id=normalized)
+    granted, unresolved = _grant_progression_features(
+        documents,
+        campaign_id=campaign_id,
+        actor_id=actor_id,
+        ruleset=ruleset,
+        grants=list(template.get("feature_grants") or []),
+        level=level,
+    )
+    return {
+        "actor": asdict(actor),
+        "class_item": asdict(class_item),
+        "class_id": normalized,
+        "previous_level": previous_level,
+        "level": level,
+        "granted_features": granted,
+        "unresolved_feature_grants": unresolved,
+    }
+
+
+def grant_ruleset_subclass(
+    documents: FoundryDocumentService,
+    *,
+    campaign_id: str,
+    actor_id: str,
+    subclass_id: str,
+    level: int,
+    ruleset_id: str | None = None,
+) -> dict[str, Any]:
+    actor = documents.get_actor(actor_id)
+    if actor.campaign_id != campaign_id:
+        raise ValueError(f"actor {actor_id} is not in campaign {campaign_id}")
+    ruleset = get_ruleset(ruleset_id)
+    normalized = _feature_key(subclass_id)
+    template = dict(ruleset.get("subclasses", {}).get(normalized) or {})
+    if not template:
+        raise ValueError(f"unknown ruleset subclass: {subclass_id}")
+    class_id = str(template.get("class_key") or "")
+    if int(dict(actor.system or {}).get("class_levels", {}).get(class_id, 0) or 0) < level:
+        raise ValueError(f"{actor.name} does not have {class_id} level {level}")
+    system = dict(actor.system or {})
+    subclasses = dict(system.get("subclasses") or {})
+    subclasses[class_id] = normalized
+    actor = documents.update_actor(
+        actor_id, system=normalize_actor_document(actor.actor_type, system)
+    )
+    item = documents.create_item(
+        campaign_id=campaign_id,
+        system_id=actor.system_id,
+        actor_id=actor_id,
+        item_type="feat",
+        name=str(template.get("name") or normalized),
+        source_key=normalized,
+        system=normalize_item_document("feat", dict(template.get("system") or {})),
+        flags={"dnd5e": {"ruleset_subclass": normalized, "class_id": class_id}},
+    )
+    granted, unresolved = _grant_progression_features(
+        documents,
+        campaign_id=campaign_id,
+        actor_id=actor_id,
+        ruleset=ruleset,
+        grants=list(template.get("feature_grants") or []),
+        level=level,
+    )
+    return {
+        "actor": asdict(actor),
+        "subclass_item": asdict(item),
+        "subclass_id": normalized,
+        "class_id": class_id,
+        "granted_features": granted,
+        "unresolved_feature_grants": unresolved,
+    }
+
+
 def create_ruleset_monster_actor(
     documents: FoundryDocumentService,
     *,
@@ -344,6 +457,63 @@ def _create_template_activities(
             )
         )
     return activities
+
+
+def _ensure_class_item(
+    documents: FoundryDocumentService, *, actor, template: dict[str, Any], class_id: str
+):
+    for item in documents.list_items(actor.campaign_id, actor_id=actor.id, item_type="class"):
+        if item.source_key == class_id:
+            return item
+    return documents.create_item(
+        campaign_id=actor.campaign_id,
+        system_id=actor.system_id,
+        actor_id=actor.id,
+        item_type="class",
+        name=str(template.get("name") or class_id),
+        source_key=class_id,
+        system=normalize_item_document("class", dict(template.get("system") or {})),
+        flags={"dnd5e": {"ruleset_class": class_id}},
+    )
+
+
+def _grant_progression_features(
+    documents: FoundryDocumentService,
+    *,
+    campaign_id: str,
+    actor_id: str,
+    ruleset: dict[str, Any],
+    grants: list[dict[str, Any]],
+    level: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    existing = {
+        str((item.flags.get("dnd5e") or {}).get("ruleset_feature") or "")
+        for item in documents.list_items(campaign_id, actor_id=actor_id)
+    }
+    index = dict(ruleset.get("featureSourceIndex") or {})
+    granted = []
+    unresolved = []
+    for grant in grants:
+        if int(grant.get("level", 1) or 1) > level:
+            continue
+        foundry_id = str(grant.get("foundry_id") or "")
+        feature_id = str(index.get(foundry_id) or "")
+        if not feature_id:
+            unresolved.append({"level": grant.get("level", 1), "foundry_id": foundry_id})
+            continue
+        if feature_id in existing:
+            continue
+        granted.append(
+            grant_ruleset_feature(
+                documents,
+                campaign_id=campaign_id,
+                actor_id=actor_id,
+                feature_id=feature_id,
+                ruleset_id=ruleset["id"],
+            )
+        )
+        existing.add(feature_id)
+    return granted, unresolved
 
 
 def _feature_key(value: str) -> str:

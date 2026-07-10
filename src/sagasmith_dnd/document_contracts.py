@@ -8,7 +8,6 @@ from typing import Any
 from sagasmith_dnd.rolls import SKILL_ABILITIES
 from sagasmith_dnd.rulesets import get_ruleset
 
-
 ACTOR_TYPES = {"character", "npc", "vehicle", "group"}
 ITEM_TYPES = {
     "weapon",
@@ -108,11 +107,13 @@ def normalize_activity_document(
     system: dict[str, Any] | None = None,
     ruleset_id: str | None = None,
 ) -> dict[str, Any]:
-    ruleset = get_ruleset(ruleset_id)
+    ruleset = get_ruleset(ruleset_id, include_content=False)
     if activity_type not in ruleset.get("activityTypes", {}):
         raise ValueError(f"unknown activity type: {activity_type}")
     activation_value = deepcopy(activation or {})
-    activation_type = str(activation_value.get("type") or activation_value.get("activation") or "free")
+    activation_type = str(
+        activation_value.get("type") or activation_value.get("activation") or "free"
+    )
     if activation_type not in ruleset.get("activityActivationTypes", {}):
         raise ValueError(f"unknown activity activation: {activation_type}")
     activation_value["type"] = activation_type

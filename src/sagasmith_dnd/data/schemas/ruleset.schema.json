@@ -30,6 +30,16 @@
     "name": {"type": "string", "minLength": 1},
     "extends": {"type": "string", "minLength": 1},
     "status": {"type": "string", "minLength": 1},
+    "contentPacks": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "contentCoverage": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+    "classes": {"type": "object", "additionalProperties": {"$ref": "#/$defs/class"}},
+    "subclasses": {"type": "object", "additionalProperties": {"$ref": "#/$defs/subclass"}},
+    "classFeatures": {"type": "object", "additionalProperties": {"$ref": "#/$defs/contentEntry"}},
+    "spells": {"type": "object", "additionalProperties": {"$ref": "#/$defs/contentEntry"}},
+    "monsters": {"type": "object", "additionalProperties": {"$ref": "#/$defs/contentEntry"}},
     "abilities": {
       "type": "object",
       "additionalProperties": {"$ref": "#/$defs/ability"}
@@ -94,6 +104,31 @@
     }
   },
   "$defs": {
+    "contentEntry": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["name"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "source_key": {"type": "string"},
+        "coverage": {"type": "string"}
+      }
+    },
+    "class": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["name"],
+      "properties": {"name": {"type": "string", "minLength": 1}, "hit_die": {"type": "string"}}
+    },
+    "subclass": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["name", "class_key"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "class_key": {"type": "string", "minLength": 1}
+      }
+    },
     "ability": {
       "type": "object",
       "additionalProperties": true,

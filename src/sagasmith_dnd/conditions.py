@@ -22,7 +22,7 @@ def add_actor_condition(
     if actor.campaign_id != campaign_id:
         raise ValueError(f"actor {actor_id} is not in campaign {campaign_id}")
     normalized = _normalize(condition)
-    ruleset = get_ruleset()
+    ruleset = get_ruleset(include_content=False)
     if normalized not in ruleset.get("conditionTypes", {}):
         raise ValueError(f"unknown condition: {condition}")
     condition_data = ruleset.get("conditionTypes", {}).get(normalized, {})

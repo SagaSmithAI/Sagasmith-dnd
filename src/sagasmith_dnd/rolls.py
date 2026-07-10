@@ -91,10 +91,20 @@ def roll_actor_d20(
 
     advantage_sources = ["payload"] if advantage else []
     disadvantage_sources = ["payload"] if disadvantage else []
-    if statuses & _condition_effects("abilityCheckDisadvantage") and roll_type in {"ability", "skill"}:
+    if statuses & _condition_effects("abilityCheckDisadvantage") and roll_type in {
+        "ability",
+        "skill",
+    }:
         disadvantage = True
-        disadvantage_sources.extend(f"actor:{status}" for status in sorted(statuses & _condition_effects("abilityCheckDisadvantage")))
-    if statuses & _condition_effects("dexteritySaveDisadvantage") and roll_type == "save" and ability_key == "dex":
+        disadvantage_sources.extend(
+            f"actor:{status}"
+            for status in sorted(statuses & _condition_effects("abilityCheckDisadvantage"))
+        )
+    if (
+        statuses & _condition_effects("dexteritySaveDisadvantage")
+        and roll_type == "save"
+        and ability_key == "dex"
+    ):
         disadvantage = True
         disadvantage_sources.extend(
             f"actor:{status}:dex_save"
@@ -201,7 +211,10 @@ def _ability_score(system: dict[str, Any], ability: str) -> int:
     abilities = dict(system.get("abilities") or {})
     value = abilities.get(ability)
     if value is None:
-        long_name = next((name for name, short in ABILITY_ALIASES.items() if short == ability and len(name) > 3), "")
+        long_name = next(
+            (name for name, short in ABILITY_ALIASES.items() if short == ability and len(name) > 3),
+            "",
+        )
         value = abilities.get(long_name)
     if isinstance(value, dict):
         return int(value.get("value", 10))
@@ -222,7 +235,11 @@ def _skill_multiplier(system: dict[str, Any], skill: str) -> int:
 def _save_multiplier(system: dict[str, Any], ability: str) -> int:
     data = dict(system.get("abilities") or {}).get(ability, {})
     if isinstance(data, dict):
-        return 1 if data.get("save_proficient") or data.get("proficient") else int(data.get("saveProf", 0) or 0)
+        return (
+            1
+            if data.get("save_proficient") or data.get("proficient")
+            else int(data.get("saveProf", 0) or 0)
+        )
     return 0
 
 
@@ -245,5 +262,5 @@ def _actor_statuses(
 
 
 def _condition_effects(key: str) -> set[str]:
-    values = get_ruleset().get("conditionEffects", {}).get(key) or []
+    values = get_ruleset(include_content=False).get("conditionEffects", {}).get(key) or []
     return {str(item).strip().lower().replace("-", "_").replace(" ", "_") for item in values}

@@ -31,6 +31,17 @@ def test_2014_ruleset_declares_core_runtime_baseline() -> None:
     assert ruleset["effects"]["concentration"]["exclusivePerActor"] is True
 
 
+def test_2014_ruleset_loads_canonical_reference_content_pack() -> None:
+    ruleset = get_ruleset("dnd5e-2014")
+
+    assert len(ruleset["classes"]) == 12
+    assert len(ruleset["subclasses"]) == 12
+    assert len(ruleset["spells"]) >= 329
+    assert len(ruleset["monsters"]) >= 346
+    assert ruleset["contentCoverage"][0]["coverage"]["spells"]["executable"] >= 319
+    assert ruleset["spells"]["acid-arrow"]["source"]["rules"] == "2014"
+
+
 def test_ruleset_schema_rejects_missing_required_fields() -> None:
     errors = _schema_errors({"id": "broken"}, ruleset_schema())
 
@@ -67,6 +78,14 @@ def test_ruleset_validator_reports_cross_reference_errors(monkeypatch) -> None:
     assert "resources.bad_resource.recovery: unknown period 'moonrise'" in result["errors"]
     assert "effects.bad_duration.period: unknown period 'moonrise'" in result["errors"]
     assert "actionEconomy.reactionRefresh: unknown period 'moonrise'" in result["errors"]
-    assert "conditionTypes.bad_condition.statuses: unknown condition 'missing_condition'" in result["errors"]
-    assert "conditionTypes.bad_condition.riders: unknown condition 'missing_rider'" in result["errors"]
-    assert "conditionEffects.bad_effect: unknown condition 'missing_effect_condition'" in result["errors"]
+    assert (
+        "conditionTypes.bad_condition.statuses: unknown condition 'missing_condition'"
+        in result["errors"]
+    )
+    assert (
+        "conditionTypes.bad_condition.riders: unknown condition 'missing_rider'" in result["errors"]
+    )
+    assert (
+        "conditionEffects.bad_effect: unknown condition 'missing_effect_condition'"
+        in result["errors"]
+    )

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 import json
+from copy import deepcopy
+from functools import lru_cache
 from importlib import resources
 from typing import Any
 
@@ -13,7 +14,7 @@ def ruleset_schema() -> dict[str, Any]:
     return json.loads(root.joinpath("ruleset.schema.json").read_text(encoding="utf-8"))
 
 
-def _load_structured_rulesets() -> dict[str, dict[str, Any]]:
+def _load_structured_rulesets(*, include_content: bool) -> dict[str, dict[str, Any]]:
     loaded: dict[str, dict[str, Any]] = {}
     try:
         root = resources.files("sagasmith_dnd").joinpath("data", "rulesets")
@@ -21,28 +22,72 @@ def _load_structured_rulesets() -> dict[str, dict[str, Any]]:
             if file.suffix != ".json":
                 continue
             value = json.loads(file.read_text(encoding="utf-8"))
+            if include_content:
+                _merge_content_packs(value)
             loaded[str(value["id"])] = value
     except (FileNotFoundError, ModuleNotFoundError):
         pass
     return loaded
 
 
-def _rulesets() -> dict[str, dict[str, Any]]:
-    return _load_structured_rulesets()
+@lru_cache(maxsize=2)
+def _rulesets(include_content: bool) -> dict[str, dict[str, Any]]:
+    return _load_structured_rulesets(include_content=include_content)
+
+
+def _merge_content_packs(ruleset: dict[str, Any]) -> None:
+    root = resources.files("sagasmith_dnd").joinpath("data", "content")
+    loaded = []
+    for pack_id in ruleset.get("contentPacks") or []:
+        file = root.joinpath(f"{pack_id}.json")
+        if not file.is_file():
+            raise LookupError(f"content pack not found: {pack_id}")
+        pack = json.loads(file.read_text(encoding="utf-8"))
+        if pack.get("ruleset_id") != ruleset.get("id"):
+            raise ValueError(
+                f"content pack {pack_id} targets {pack.get('ruleset_id')}, not {ruleset.get('id')}"
+            )
+        content = dict(pack.get("content") or {})
+        _merge_with_manual_overrides(ruleset, "classes", content.get("classes") or {})
+        _merge_with_manual_overrides(ruleset, "subclasses", content.get("subclasses") or {})
+        _merge_with_manual_overrides(ruleset, "classFeatures", content.get("features") or {})
+        _merge_with_manual_overrides(ruleset, "spells", content.get("spells") or {})
+        _merge_with_manual_overrides(ruleset, "monsters", content.get("monsters") or {})
+        ruleset["featureSourceIndex"] = {
+            str(value.get("foundry_id")): key
+            for key, value in (content.get("features") or {}).items()
+            if value.get("foundry_id")
+        }
+        loaded.append({"id": pack["id"], "coverage": dict(pack.get("coverage") or {})})
+    if loaded:
+        ruleset["contentCoverage"] = loaded
+
+
+def _merge_with_manual_overrides(
+    ruleset: dict[str, Any],
+    target: str,
+    generated: dict[str, Any],
+) -> None:
+    manual = dict(ruleset.get(target) or {})
+    ruleset[target] = {**generated, **manual}
 
 
 def list_rulesets() -> list[dict[str, str]]:
     return [
         {"id": value["id"], "name": value["name"]}
-        for value in sorted(_rulesets().values(), key=lambda item: item["id"])
+        for value in sorted(_rulesets(False).values(), key=lambda item: item["id"])
     ]
 
 
-def get_ruleset(ruleset_id: str | None = None) -> dict[str, Any]:
+def get_ruleset(
+    ruleset_id: str | None = None,
+    *,
+    include_content: bool = True,
+) -> dict[str, Any]:
     lookup = "dnd5e-2014" if ruleset_id in {None, "", "2014"} else str(ruleset_id)
     if lookup == "2024":
         lookup = "dnd5e-2024"
-    values = _rulesets()
+    values = _rulesets(include_content)
     if lookup in values:
         return deepcopy(values[lookup])
     raise LookupError(f"ruleset not found: {ruleset_id}")
@@ -95,7 +140,9 @@ def validate_ruleset(ruleset_id: str | None = None) -> dict[str, Any]:
     for condition_id, condition in ruleset.get("conditionTypes", {}).items():
         for status in condition.get("statuses") or []:
             if status not in condition_types:
-                errors.append(f"conditionTypes.{condition_id}.statuses: unknown condition {status!r}")
+                errors.append(
+                    f"conditionTypes.{condition_id}.statuses: unknown condition {status!r}"
+                )
         for rider in condition.get("riders") or []:
             if rider not in condition_types:
                 errors.append(f"conditionTypes.{condition_id}.riders: unknown condition {rider!r}")
@@ -103,6 +150,14 @@ def validate_ruleset(ruleset_id: str | None = None) -> dict[str, Any]:
         for condition in conditions:
             if condition not in condition_types:
                 errors.append(f"conditionEffects.{effect_id}: unknown condition {condition!r}")
+    for subclass_id, subclass in ruleset.get("subclasses", {}).items():
+        class_key = str(subclass.get("class_key") or "")
+        if class_key and class_key not in ruleset.get("classes", {}):
+            errors.append(f"subclasses.{subclass_id}.class_key: unknown class {class_key!r}")
+    for group in ("classFeatures", "spells", "monsters"):
+        for entry_id, entry in ruleset.get(group, {}).items():
+            if not isinstance(entry, dict) or not str(entry.get("name") or ""):
+                errors.append(f"{group}.{entry_id}: missing name")
     return {
         "id": ruleset["id"],
         "schema": schema["$id"],
@@ -125,7 +180,9 @@ def _schema_errors(value: Any, schema: dict[str, Any], *, path: str = "$") -> li
         item_schema = schema.get("items")
         if isinstance(item_schema, dict):
             for index, item in enumerate(value):
-                errors.extend(_schema_errors(item, _resolve_schema(item_schema), path=f"{path}[{index}]"))
+                errors.extend(
+                    _schema_errors(item, _resolve_schema(item_schema), path=f"{path}[{index}]")
+                )
         return errors
     if not isinstance(value, dict):
         return errors
@@ -135,13 +192,17 @@ def _schema_errors(value: Any, schema: dict[str, Any], *, path: str = "$") -> li
     properties = schema.get("properties") or {}
     for key, child_schema in properties.items():
         if key in value:
-            errors.extend(_schema_errors(value[key], _resolve_schema(child_schema), path=f"{path}.{key}"))
+            errors.extend(
+                _schema_errors(value[key], _resolve_schema(child_schema), path=f"{path}.{key}")
+            )
     additional = schema.get("additionalProperties")
     if isinstance(additional, dict):
         known = set(properties)
         for key, child in value.items():
             if key not in known:
-                errors.extend(_schema_errors(child, _resolve_schema(additional), path=f"{path}.{key}"))
+                errors.extend(
+                    _schema_errors(child, _resolve_schema(additional), path=f"{path}.{key}")
+                )
     return errors
 
 

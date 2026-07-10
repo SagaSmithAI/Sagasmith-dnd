@@ -36,7 +36,9 @@ def start_combat(
     }
 
 
-def combat_status(combat: dict[str, Any] | None, *, runtime: dict[str, Any] | None = None) -> dict[str, Any] | None:
+def combat_status(
+    combat: dict[str, Any] | None, *, runtime: dict[str, Any] | None = None
+) -> dict[str, Any] | None:
     if not combat:
         return None
     value = deepcopy(combat)
@@ -51,8 +53,10 @@ def combat_status(combat: dict[str, Any] | None, *, runtime: dict[str, Any] | No
     pending = list((runtime or {}).get("pending") or [])
     if active:
         pending = [
-            item for item in pending
-            if item.get("status", "pending") == "pending" and item.get("actor_id") == active.get("actor_id", active.get("id"))
+            item
+            for item in pending
+            if item.get("status", "pending") == "pending"
+            and item.get("actor_id") == active.get("actor_id", active.get("id"))
         ]
     value["pending_reactions"] = pending
     value["combat"] = {
@@ -81,7 +85,9 @@ def recover_period(
                 before = int(resource.get("spent", 0))
                 resource["spent"] = 0
                 if before:
-                    recovered.append({"actor": combatant["id"], "resource": resource_id, "spent": before})
+                    recovered.append(
+                        {"actor": combatant["id"], "resource": resource_id, "spent": before}
+                    )
     _tick_durations(value, period, actor_id)
     result = {"type": "period.recover", "period": period, "recovered": recovered}
     _append_log(value, result)
@@ -237,7 +243,9 @@ def death_save(
     if die["natural"] == 20:
         previous_hp = int(target.get("hp", 0))
         target["hp"] = 1
-        target["conditions"] = [item for item in target.get("conditions", []) if item != "unconscious"]
+        target["conditions"] = [
+            item for item in target.get("conditions", []) if item != "unconscious"
+        ]
         outcome = "revived"
         result = {
             "type": "death_save",
@@ -281,7 +289,9 @@ def death_save(
     return value, result
 
 
-def end_turn(combat: dict[str, Any], *, actor_id: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+def end_turn(
+    combat: dict[str, Any], *, actor_id: str | None = None
+) -> tuple[dict[str, Any], dict[str, Any]]:
     value = _require_active(combat)
     current = _current(value)
     if not current:
@@ -368,7 +378,12 @@ def _require_active(combat: dict[str, Any] | None) -> dict[str, Any]:
 
 def _participant(combat: dict[str, Any], participant_id: str) -> dict[str, Any]:
     for item in _combatants(combat):
-        if participant_id in {item.get("id"), item.get("character_id"), item.get("actor_id"), item.get("token_id")}:
+        if participant_id in {
+            item.get("id"),
+            item.get("character_id"),
+            item.get("actor_id"),
+            item.get("token_id"),
+        }:
             return item
     raise ValueError(f"combatant not found: {participant_id}")
 
@@ -408,7 +423,9 @@ def _apply_runtime_budgets(combat: dict[str, Any], runtime: dict[str, Any]) -> N
 
 
 def _reset_turn_resources(combatant: dict[str, Any]) -> None:
-    combatant["movement_remaining"] = int(combatant.get("speed", combatant.get("movement_remaining", 30)) or 30)
+    combatant["movement_remaining"] = int(
+        combatant.get("speed", combatant.get("movement_remaining", 30)) or 30
+    )
     combatant["action_available"] = True
     combatant["bonus_action_available"] = True
     budget = _budget(combatant)
@@ -423,8 +440,24 @@ def _legal_actions(combatant: dict[str, Any]) -> list[str]:
         return ["move"] if not _has_condition_tag(combatant, "no_movement") else []
     actions = ["move"]
     budget = _budget(combatant)
-    if budget.get("main_actions", 0) > 0 or budget.get("extra_actions", 0) > 0 or combatant.get("action_available", True):
-        actions.extend(["attack", "dash", "disengage", "dodge", "help", "hide", "ready", "search", "use_object"])
+    if (
+        budget.get("main_actions", 0) > 0
+        or budget.get("extra_actions", 0) > 0
+        or combatant.get("action_available", True)
+    ):
+        actions.extend(
+            [
+                "attack",
+                "dash",
+                "disengage",
+                "dodge",
+                "help",
+                "hide",
+                "ready",
+                "search",
+                "use_object",
+            ]
+        )
     if budget.get("attack_budget", 0) > 0:
         actions.append("attack_budget")
     if budget.get("bonus_actions", 0) > 0 or combatant.get("bonus_action_available", True):
@@ -435,10 +468,12 @@ def _legal_actions(combatant: dict[str, Any]) -> list[str]:
 
 
 def _legal_action_details(combatant: dict[str, Any]) -> list[dict[str, Any]]:
-    ruleset = get_ruleset()
+    ruleset = get_ruleset(include_content=False)
     details: list[dict[str, Any]] = []
     for action_id in _legal_actions(combatant):
-        definition = dict(ruleset["activities"].get(action_id) or _runtime_action_definition(action_id))
+        definition = dict(
+            ruleset["activities"].get(action_id) or _runtime_action_definition(action_id)
+        )
         if not definition:
             continue
         details.append(
@@ -549,7 +584,7 @@ def _resource_recovery_periods(resource_id: str) -> set[str]:
 
 
 def _has_condition_tag(combatant: dict[str, Any], tag: str) -> bool:
-    ruleset = get_ruleset()
+    ruleset = get_ruleset(include_content=False)
     tags: set[str] = set()
     conditions = set(combatant.get("conditions") or [])
     expanded = set(conditions)
@@ -602,7 +637,9 @@ def _critical_expression(expression: str) -> str:
     # Double only dice terms. Flat modifiers stay unchanged, matching common D&D handling.
     import re
 
-    return re.sub(r"(?<!\d)(\d*)d(\d+)", lambda m: f"{int(m.group(1) or 1) * 2}d{m.group(2)}", expression)
+    return re.sub(
+        r"(?<!\d)(\d*)d(\d+)", lambda m: f"{int(m.group(1) or 1) * 2}d{m.group(2)}", expression
+    )
 
 
 def _append_log(combat: dict[str, Any], entry: dict[str, Any]) -> None:

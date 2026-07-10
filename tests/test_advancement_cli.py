@@ -135,6 +135,46 @@ def test_advancement_grant_feature_uses_ruleset_activity_templates(
     assert used["activity"]["uses"]["spent"] == 1
 
 
+def test_advancement_grant_class_uses_compiled_progression_content(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    url = sqlite_database_url(tmp_path / "class-progression.db")
+    monkeypatch.setenv("DND_DATABASE_URL", url)
+    database = Database(url)
+    database.upgrade_schema()
+    try:
+        campaign = CampaignService(database).create(system_id="dnd5e", name="Class progression")
+        actor = FoundryDocumentService(database).create_actor(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_type="character",
+            name="Mira",
+        )
+    finally:
+        database.dispose()
+
+    result = _call(
+        capsys,
+        "advancement",
+        "grant-class",
+        "--campaign",
+        campaign.id,
+        "--actor",
+        actor.id,
+        "--class-id",
+        "fighter",
+        "--level",
+        "2",
+    )
+
+    assert result["actor"]["system"]["class_levels"]["fighter"] == 2
+    assert result["actor"]["system"]["abilities"]["str"]["proficient"] == 1
+    assert result["class_item"]["source_key"] == "fighter"
+    assert any(item["item"]["name"] == "Action Surge" for item in result["granted_features"])
+
+
 def test_advancement_grant_feature_can_create_multiple_activities(
     tmp_path: Path,
     monkeypatch,
