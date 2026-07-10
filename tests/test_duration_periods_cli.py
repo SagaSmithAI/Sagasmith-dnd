@@ -180,3 +180,45 @@ def test_until_turn_start_duration_expires_only_for_anchor_actor(
         mira.id,
     )
     assert [item["id"] for item in mira_turn["period"]["expired"]] == [shield.id]
+
+
+def test_round_end_duration_period_is_supported(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    url = sqlite_database_url(tmp_path / "duration-round-end.db")
+    monkeypatch.setenv("DND_DATABASE_URL", url)
+    database = Database(url)
+    database.upgrade_schema()
+    try:
+        campaign = CampaignService(database).create(system_id="dnd5e", name="Round End")
+        documents = FoundryDocumentService(database)
+        actor = documents.create_actor(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_type="character",
+            name="Mira",
+        )
+        effect = documents.create_effect(
+            campaign_id=campaign.id,
+            parent_type="actor",
+            parent_id=actor.id,
+            actor_id=actor.id,
+            name="Round Aura",
+            duration={"period": "round_end", "remaining": 1},
+        )
+    finally:
+        database.dispose()
+
+    result = _call(
+        capsys,
+        "time",
+        "advance",
+        "--campaign",
+        campaign.id,
+        "--period",
+        "round_end",
+    )
+
+    assert [item["id"] for item in result["period"]["expired"]] == [effect.id]

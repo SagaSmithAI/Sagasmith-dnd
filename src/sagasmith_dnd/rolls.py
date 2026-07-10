@@ -108,16 +108,40 @@ def roll_actor_d20(
         )
 
     score = _ability_score(system, ability_key)
-    result = resolve_check(
-        dc=dc,
-        ability_score=score,
-        proficient=multiplier > 0,
-        proficiency_multiplier=max(1, int(multiplier)) if multiplier else 1,
-        level=level,
-        bonus=bonus,
-        advantage=advantage,
-        disadvantage=disadvantage,
-    )
+    auto_fail_sources: list[str] = []
+    if (
+        roll_type == "save"
+        and ability_key in {"str", "dex"}
+        and statuses & _condition_effects("autoFailStrengthDexteritySaves")
+    ):
+        auto_fail_sources = [
+            f"actor:{status}:auto_fail_{ability_key}_save"
+            for status in sorted(statuses & _condition_effects("autoFailStrengthDexteritySaves"))
+        ]
+    if auto_fail_sources:
+        result = {
+            "natural": None,
+            "rolls": [],
+            "critical": False,
+            "fumble": False,
+            "dc": dc,
+            "ability_modifier": ability_modifier(score),
+            "proficiency_bonus": 0,
+            "bonus": bonus,
+            "total": ability_modifier(score) + bonus,
+            "success": False,
+        }
+    else:
+        result = resolve_check(
+            dc=dc,
+            ability_score=score,
+            proficient=multiplier > 0,
+            proficiency_multiplier=max(1, int(multiplier)) if multiplier else 1,
+            level=level,
+            bonus=bonus,
+            advantage=advantage,
+            disadvantage=disadvantage,
+        )
     result = {
         **result,
         "type": roll_type,
@@ -133,6 +157,8 @@ def roll_actor_d20(
         "disadvantage": bool(disadvantage_sources),
         "advantage_sources": advantage_sources,
         "disadvantage_sources": disadvantage_sources,
+        "auto_fail": bool(auto_fail_sources),
+        "auto_fail_sources": auto_fail_sources,
         "breakdown": {
             "d20": result["natural"],
             "ability_modifier": ability_modifier(score),

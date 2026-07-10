@@ -12,6 +12,7 @@ DECLARED_PERIODS = {
     "turn_start",
     "turn_end",
     "round_start",
+    "round_end",
     "encounter_start",
     "encounter_end",
     "short_rest",
@@ -34,6 +35,7 @@ PERIOD_ALIASES = {
     "turnstart": "turn_start",
     "turnend": "turn_end",
     "roundstart": "round_start",
+    "roundend": "round_end",
     "sceneend": "scene_end",
 }
 

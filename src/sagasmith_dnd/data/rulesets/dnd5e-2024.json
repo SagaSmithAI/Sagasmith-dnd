@@ -155,6 +155,7 @@
     "turn_start": {"source": "combat.end_turn", "wallClock": false},
     "turn_end": {"source": "combat.end_turn", "wallClock": false},
     "round_start": {"source": "combat.round_increment", "wallClock": false},
+    "round_end": {"source": "combat.round_end", "wallClock": false},
     "encounter_start": {"source": "combat.start", "wallClock": false},
     "encounter_end": {"source": "combat.end", "wallClock": false},
     "short_rest": {"source": "rest.short", "wallClock": false},
@@ -213,9 +214,13 @@
   "conditions": {
     "poisoned": {"tags": ["attack_disadvantage", "ability_check_disadvantage"]},
     "prone": {"tags": ["crawl", "melee_attackers_advantage", "ranged_attackers_disadvantage"]},
+    "grappled": {"tags": ["no_movement"]},
     "restrained": {"tags": ["no_movement", "attackers_advantage", "attack_disadvantage", "dex_save_disadvantage"]},
     "incapacitated": {"tags": ["no_actions", "no_reactions"]},
-    "unconscious": {"tags": ["incapacitated", "prone"]}
+    "paralyzed": {"tags": ["incapacitated", "no_movement", "auto_fail_str_dex_saves", "melee_hit_auto_crit"]},
+    "petrified": {"tags": ["incapacitated", "auto_fail_str_dex_saves"]},
+    "stunned": {"tags": ["incapacitated", "no_movement", "auto_fail_str_dex_saves"]},
+    "unconscious": {"tags": ["incapacitated", "prone", "auto_fail_str_dex_saves", "melee_hit_auto_crit"]}
   },
   "conditionTypes": {
     "blinded": {"statuses": []},
@@ -243,6 +248,8 @@
     "attacksAgainstAdvantage": ["blinded", "paralyzed", "petrified", "restrained", "stunned", "unconscious"],
     "attacksAgainstDisadvantage": ["invisible"],
     "meleeAttacksAgainstAdvantage": ["prone"],
+    "autoFailStrengthDexteritySaves": ["paralyzed", "petrified", "stunned", "unconscious"],
+    "meleeHitAutoCrit": ["paralyzed", "unconscious"],
     "dexteritySaveDisadvantage": ["restrained"],
     "initiativeDisadvantage": ["incapacitated", "paralyzed", "petrified", "stunned", "unconscious"]
   }

@@ -180,3 +180,54 @@ def test_restrained_actor_has_disadvantage_on_dexterity_saves(
     assert "actor:restrained:dex_save" in roll["disadvantage_sources"]
     assert roll["rolls"] == [17, 4]
     assert roll["natural"] == 4
+
+
+def test_paralyzed_actor_auto_fails_strength_and_dexterity_saves(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    url = sqlite_database_url(tmp_path / "roll-paralyzed.db")
+    monkeypatch.setenv("DND_DATABASE_URL", url)
+    database = Database(url)
+    database.upgrade_schema()
+    try:
+        campaign = CampaignService(database).create(system_id="dnd5e", name="Paralyzed Roll")
+        documents = FoundryDocumentService(database)
+        actor = documents.create_actor(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_type="character",
+            name="Mira",
+            system={"abilities": {"dex": {"value": 20}}},
+        )
+        documents.create_effect(
+            campaign_id=campaign.id,
+            parent_type="actor",
+            parent_id=actor.id,
+            actor_id=actor.id,
+            name="Paralyzed",
+            statuses=["paralyzed"],
+        )
+    finally:
+        database.dispose()
+
+    result = _call(
+        capsys,
+        "roll",
+        "save",
+        "--campaign",
+        campaign.id,
+        "--actor",
+        actor.id,
+        "--ability",
+        "dex",
+        "--dc",
+        "1",
+    )
+
+    roll = result["roll"]
+    assert roll["success"] is False
+    assert roll["auto_fail"] is True
+    assert roll["rolls"] == []
+    assert "actor:paralyzed:auto_fail_dex_save" in roll["auto_fail_sources"]
