@@ -8,6 +8,7 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from sagasmith_core import (
     CampaignService,
@@ -82,7 +83,7 @@ from sagasmith_dnd.spatial import (
 )
 from sagasmith_dnd.system import DND5E, validate_character_sheet
 from sagasmith_dnd.templates import place_activity_template
-from sagasmith_dnd.timeline import TimelineConflictError, TimelineService
+from sagasmith_dnd.timeline import TimelineConflictError, TimelineService, parse_elapsed
 
 
 class CliError(RuntimeError):
@@ -216,6 +217,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--elapsed")
     parser.add_argument("--intent-id")
     parser.add_argument("--expected-revision", type=int)
+    parser.add_argument("--operation")
     parser.add_argument("--module")
     parser.add_argument("--slot")
     parser.add_argument("--label", default="")
@@ -313,6 +315,22 @@ def _emit_timeline_period(
         for entry in result["periods"]
     ]
     return result
+
+
+def _timed_activity_seconds(activity) -> int:
+    activation = dict(activity.activation or {})
+    kind = str(activation.get("type") or "").strip().lower()
+    value = int(activation.get("value") or 1)
+    if kind == "minute":
+        return value * 60
+    if kind == "hour":
+        return value * 3_600
+    return 0
+
+
+def _scheduled_operations(state: dict[str, Any]) -> list[dict[str, Any]]:
+    runtime = dict(state.get("runtime") or {})
+    return [dict(item) for item in runtime.get("scheduled_operations") or []]
 
 
 def _character_revision(revisions, before, after, operation: str) -> None:
@@ -2112,13 +2130,45 @@ def _dispatch(args) -> Any:
                     args=args,
                     payload=_dict(args.payload),
                 )
+                activity_id = _require(args.activity or args.target, "activity")
+                activity = foundry_documents.get_activity(activity_id)
+                required_seconds = _timed_activity_seconds(activity)
+                if required_seconds and not payload.pop("_time_operation_complete", False):
+                    if state.get("combat"):
+                        raise CliError(
+                            "invalid_timed_activity",
+                            "minute- and hour-activation activities cannot begin during combat",
+                            exit_code=2,
+                        )
+                    operation = {
+                        "id": f"time-operation-{uuid4().hex}",
+                        "status": "scheduled",
+                        "required_seconds": required_seconds,
+                        "actor_id": actor_id,
+                        "item_id": args.item,
+                        "activity_id": activity_id,
+                        "target_id": target_id,
+                        "payload": payload,
+                    }
+                    runtime = dict(state.get("runtime") or {})
+                    scheduled = list(runtime.get("scheduled_operations") or [])
+                    scheduled.append(operation)
+                    runtime["scheduled_operations"] = scheduled
+                    state["runtime"] = runtime
+                    updated = campaigns.update(campaign_id, state=state)
+                    _campaign_revision(revisions, before, updated, "activity.schedule")
+                    return {
+                        "type": "scheduled_activity",
+                        "operation": operation,
+                        "required_elapsed_seconds": required_seconds,
+                    }
                 state, result = execute_document_activity(
                     foundry_documents,
                     campaign_id=campaign_id,
                     state=state,
                     actor_id=actor_id,
                     item_id=args.item,
-                    activity_id=_require(args.activity or args.target, "activity"),
+                    activity_id=activity_id,
                     target_id=target_id,
                     payment=args.payment,
                     payload=payload,
@@ -2317,13 +2367,43 @@ def _dispatch(args) -> Any:
         if args.group == "time":
             campaign_id = _require(args.campaign, "campaign")
             if args.action == "status":
-                return timeline.status(campaign_id)
+                campaign = campaigns.get(campaign_id)
+                return {
+                    "clock": timeline.status(campaign_id),
+                    "scheduled_operations": _scheduled_operations(dict(campaign.state or {})),
+                }
             if args.action == "preview":
                 return timeline.preview(
                     campaign_id=campaign_id,
                     elapsed=_require(args.elapsed, "elapsed"),
                 )
             if args.action == "declare":
+                scheduled = None
+                if args.operation:
+                    campaign = campaigns.get(campaign_id)
+                    scheduled = next(
+                        (
+                            item
+                            for item in _scheduled_operations(dict(campaign.state or {}))
+                            if item.get("id") == args.operation
+                            and item.get("status") == "scheduled"
+                        ),
+                        None,
+                    )
+                    if scheduled is None:
+                        raise CliError(
+                            "not_found",
+                            f"scheduled operation not found: {args.operation}",
+                            exit_code=3,
+                        )
+                    if parse_elapsed(_require(args.elapsed, "elapsed")) < int(
+                        scheduled.get("required_seconds") or 0
+                    ):
+                        raise CliError(
+                            "insufficient_elapsed_time",
+                            "declared elapsed time does not complete the scheduled operation",
+                            exit_code=2,
+                        )
                 declared = timeline.declare(
                     campaign_id=campaign_id,
                     elapsed=_require(args.elapsed, "elapsed"),
@@ -2345,10 +2425,69 @@ def _dispatch(args) -> Any:
                         for period in declared["periods"]
                         if period["period"] != "clock"
                     ]
+                    if scheduled:
+                        after = campaigns.get(campaign_id)
+                        state = dict(after.state or {})
+                        runtime = dict(state.get("runtime") or {})
+                        runtime["scheduled_operations"] = [
+                            item
+                            for item in runtime.get("scheduled_operations") or []
+                            if item.get("id") != scheduled["id"]
+                        ]
+                        state["runtime"] = runtime
+                        payload = {
+                            **dict(scheduled.get("payload") or {}),
+                            "_time_operation_complete": True,
+                        }
+                        state, operation_result = execute_document_activity(
+                            foundry_documents,
+                            campaign_id=campaign_id,
+                            state=state,
+                            actor_id=str(scheduled["actor_id"]),
+                            item_id=str(scheduled["item_id"]),
+                            activity_id=str(scheduled["activity_id"]),
+                            target_id=str(scheduled.get("target_id") or "") or None,
+                            payload=payload,
+                        )
+                        runtime = dict(state.get("runtime") or {})
+                        completed = dict(runtime.get("completed_time_operations") or {})
+                        completed[_require(args.intent_id, "intent-id")] = operation_result
+                        runtime["completed_time_operations"] = completed
+                        state["runtime"] = runtime
+                        updated = campaigns.update(campaign_id, state=state)
+                        _campaign_revision(revisions, after, updated, "time.complete_operation")
+                        declared["operation_result"] = operation_result
+                elif args.operation:
+                    campaign = campaigns.get(campaign_id)
+                    completed = dict(
+                        dict(campaign.state or {})
+                        .get("runtime", {})
+                        .get("completed_time_operations")
+                        or {}
+                    )
+                    declared["operation_result"] = completed.get(args.intent_id)
                 return declared
+            if args.action == "cancel":
+                before = campaigns.get(campaign_id)
+                state = dict(before.state or {})
+                runtime = dict(state.get("runtime") or {})
+                operation_id = _require(args.operation or args.id or args.target, "operation")
+                scheduled = list(runtime.get("scheduled_operations") or [])
+                removed = [item for item in scheduled if item.get("id") == operation_id]
+                if not removed:
+                    raise CliError(
+                        "not_found", f"scheduled operation not found: {operation_id}", exit_code=3
+                    )
+                runtime["scheduled_operations"] = [
+                    item for item in scheduled if item.get("id") != operation_id
+                ]
+                state["runtime"] = runtime
+                updated = campaigns.update(campaign_id, state=state)
+                _campaign_revision(revisions, before, updated, "time.cancel_operation")
+                return {"cancelled": removed[0]}
             raise CliError(
                 "unknown_command",
-                "use time status, time preview, or time declare",
+                "use time status, time preview, time declare, or time cancel",
                 exit_code=2,
             )
 

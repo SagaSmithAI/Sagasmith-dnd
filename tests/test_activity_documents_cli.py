@@ -255,3 +255,71 @@ def test_eligible_reaction_defers_attack_until_resolution(
     )
     assert resolved["reaction_result"]["effects"][0]["name"] == "Shield"
     assert resolved["continuation_result"]["execution"]["hit"] is False
+
+
+def test_timed_activity_executes_only_after_declared_operation_time(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    url = sqlite_database_url(tmp_path / "timed-activity.db")
+    monkeypatch.setenv("DND_DATABASE_URL", url)
+    database = Database(url)
+    database.upgrade_schema()
+    try:
+        campaign = CampaignService(database).create(system_id="dnd5e", name="Timed activity")
+        documents = FoundryDocumentService(database)
+        actor = documents.create_actor(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_type="character",
+            name="Mira",
+        )
+        item = documents.create_item(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_id=actor.id,
+            item_type="spell",
+            name="Ritual Ward",
+        )
+        activity = documents.create_activity(
+            item_id=item.id,
+            activity_type="effect",
+            name="Ritual Ward",
+            activation={"type": "minute", "value": 1},
+            effects=[{"name": "Ritual Ward", "statuses": ["warded"]}],
+        )
+    finally:
+        database.dispose()
+
+    scheduled = _call(
+        capsys,
+        "activity",
+        "use",
+        "--campaign",
+        campaign.id,
+        "--actor",
+        actor.id,
+        "--item",
+        item.id,
+        "--activity",
+        activity.id,
+    )
+    assert scheduled["type"] == "scheduled_activity"
+
+    completed = _call(
+        capsys,
+        "time",
+        "declare",
+        "--campaign",
+        campaign.id,
+        "--operation",
+        scheduled["operation"]["id"],
+        "--elapsed",
+        "PT1M",
+        "--reason",
+        "casting ritual ward",
+        "--intent-id",
+        "ritual-ward-001",
+    )
+    assert completed["operation_result"]["effects"][0]["name"] == "Ritual Ward"
