@@ -27,7 +27,7 @@ from sagasmith_core.documents import converter_for
 from sagasmith_core.modules import MarkdownModuleParser
 
 from sagasmith_dnd import __version__
-from sagasmith_dnd.advancement import apply_advancement
+from sagasmith_dnd.advancement import apply_advancement, grant_ruleset_feature
 from sagasmith_dnd.activities import execute_document_activity, list_actor_activity_options
 from sagasmith_dnd.checks import resolve_character_check
 from sagasmith_dnd.combat import (
@@ -195,6 +195,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--behavior")
     parser.add_argument("--duration")
     parser.add_argument("--activity")
+    parser.add_argument("--feature")
     parser.add_argument("--payment")
     parser.add_argument("--period")
     parser.add_argument("--minutes", type=int)
@@ -1211,6 +1212,14 @@ def _dispatch(args) -> Any:
             raise CliError("unknown_command", f"unknown game-activity command: {args.action}", exit_code=2)
 
         if args.group == "advancement":
+            if args.action == "grant-feature":
+                return grant_ruleset_feature(
+                    foundry_documents,
+                    campaign_id=_require(args.campaign, "campaign"),
+                    actor_id=_require(args.actor, "actor"),
+                    feature_id=_require(args.feature or args.target, "feature"),
+                    ruleset_id=args.edition,
+                )
             if args.action != "apply":
                 raise CliError("unknown_command", f"unknown advancement command: {args.action}", exit_code=2)
             return apply_advancement(

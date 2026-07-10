@@ -7,7 +7,12 @@ from typing import Any
 
 from sagasmith_core.foundry_documents import FoundryDocumentService
 
-from sagasmith_dnd.document_contracts import normalize_actor_document, normalize_item_document
+from sagasmith_dnd.document_contracts import (
+    normalize_actor_document,
+    normalize_activity_document,
+    normalize_item_document,
+)
+from sagasmith_dnd.rulesets import get_ruleset
 
 
 def apply_advancement(
@@ -74,6 +79,96 @@ def apply_advancement(
         "deltas": deltas,
         "messages": [asdict(message)],
     }
+
+
+def grant_ruleset_feature(
+    documents: FoundryDocumentService,
+    *,
+    campaign_id: str,
+    actor_id: str,
+    feature_id: str,
+    ruleset_id: str | None = None,
+) -> dict[str, Any]:
+    actor = documents.get_actor(actor_id)
+    if actor.campaign_id != campaign_id:
+        raise ValueError(f"actor {actor_id} is not in campaign {campaign_id}")
+    ruleset = get_ruleset(ruleset_id)
+    normalized = _feature_key(feature_id)
+    feature = dict(ruleset.get("classFeatures", {}).get(normalized) or {})
+    if not feature:
+        raise ValueError(f"unknown ruleset feature: {feature_id}")
+    item_type = str(feature.get("item_type") or "feat")
+    item = documents.create_item(
+        campaign_id=campaign_id,
+        system_id=actor.system_id,
+        actor_id=actor_id,
+        item_type=item_type,
+        name=str(feature.get("name") or normalized),
+        source_key=normalized,
+        system=normalize_item_document(item_type, dict(feature.get("system") or {})),
+        effects=list(feature.get("effects") or []),
+        flags={"dnd5e": {"ruleset_feature": normalized}},
+    )
+    activities = []
+    for template in feature.get("activities") or []:
+        activity_type = str(template.get("type") or "utility")
+        contract = normalize_activity_document(
+            activity_type,
+            activation=dict(template.get("activation") or {}),
+            consumption=dict(template.get("consumption") or {}),
+            duration=dict(template.get("duration") or {}),
+            effects=list(template.get("effects") or []),
+            range=dict(template.get("range") or {}),
+            target=dict(template.get("target") or {}),
+            uses=dict(template.get("uses") or {}),
+            system=dict(template.get("system") or {}),
+            ruleset_id=ruleset["id"],
+        )
+        activities.append(
+            asdict(
+                documents.create_activity(
+                    item_id=item.id,
+                    activity_type=activity_type,
+                    name=str(template.get("name") or feature.get("name") or normalized),
+                    activation=contract["activation"],
+                    consumption=contract["consumption"],
+                    duration=contract["duration"],
+                    effects=contract["effects"],
+                    range=contract["range"],
+                    target=contract["target"],
+                    uses=contract["uses"],
+                    system=contract["system"],
+                    flags={
+                        "dnd5e": {
+                            "ruleset_feature": normalized,
+                            "source_key": str(template.get("source_key") or ""),
+                        }
+                    },
+                )
+            )
+        )
+    message = documents.create_message(
+        campaign_id=campaign_id,
+        message_type="advancement",
+        speaker={"actor": actor_id, "alias": actor.name},
+        actor_id=actor_id,
+        item_id=item.id,
+        deltas=[
+            {
+                "type": "ruleset_feature_grant",
+                "feature": normalized,
+                "item_id": item.id,
+                "activity_ids": [activity["id"] for activity in activities],
+            }
+        ],
+        narration_hints=[f"{actor.name} gains {item.name}."],
+        flags={"dnd5e": {"ruleset_feature": normalized}},
+    )
+    return {"item": asdict(item), "activities": activities, "messages": [asdict(message)]}
+
+
+def _feature_key(value: str) -> str:
+    return value.strip().lower().replace("_", "-").replace(" ", "-")
 
 
 def _apply_hit_points(system: dict[str, Any], step: dict[str, Any]) -> dict[str, Any]:

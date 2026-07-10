@@ -90,6 +90,75 @@
     "until_turn_start": {"kind": "duration_strategy", "period": "turn_start"},
     "until_turn_end": {"kind": "duration_strategy", "period": "turn_end"}
   },
+  "classFeatures": {
+    "action-surge": {
+      "name": "Action Surge",
+      "item_type": "feat",
+      "system": {"feature": "action-surge"},
+      "activities": [
+        {
+          "name": "Action Surge",
+          "type": "utility",
+          "activation": {"type": "free"},
+          "uses": {"spent": 0, "max": 1, "cost": 1, "recovery": ["short_rest"]},
+          "system": {"grant": {"extra_actions": 1}}
+        }
+      ]
+    },
+    "second-wind": {
+      "name": "Second Wind",
+      "item_type": "feat",
+      "system": {"feature": "second-wind"},
+      "activities": [
+        {
+          "name": "Second Wind",
+          "type": "heal",
+          "activation": {"type": "bonus"},
+          "uses": {"spent": 0, "max": 1, "cost": 1, "recovery": ["short_rest"]},
+          "system": {"healing": "1d10 + @classes.fighter.levels"}
+        }
+      ]
+    },
+    "cunning-action": {
+      "name": "Cunning Action",
+      "item_type": "feat",
+      "system": {"feature": "cunning-action"},
+      "activities": [
+        {"name": "Cunning Action: Dash", "type": "utility", "activation": {"type": "bonus"}, "system": {"action": "dash"}},
+        {"name": "Cunning Action: Disengage", "type": "utility", "activation": {"type": "bonus"}, "system": {"action": "disengage"}},
+        {"name": "Cunning Action: Hide", "type": "check", "activation": {"type": "bonus"}, "system": {"skill": "stealth"}}
+      ]
+    },
+    "rage": {
+      "name": "Rage",
+      "item_type": "feat",
+      "system": {"feature": "rage"},
+      "activities": [
+        {
+          "name": "Rage",
+          "type": "effect",
+          "activation": {"type": "bonus"},
+          "uses": {"spent": 0, "max": 2, "cost": 1, "recovery": ["long_rest"]},
+          "duration": {"period": "declared_minute", "remaining": 1, "concentration": false},
+          "effects": [
+            {
+              "name": "Rage",
+              "statuses": ["rage"],
+              "changes": [
+                {"key": "system.traits.dr.value", "mode": 2, "value": ["bludgeoning", "piercing", "slashing"]},
+                {"key": "system.bonuses.mwak.damage", "mode": 2, "value": "@scale.barbarian.rage"}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "sneak-attack": {
+      "name": "Sneak Attack",
+      "item_type": "feat",
+      "system": {"feature": "sneak-attack", "uses": {"per": "turn"}, "damage": "@scale.rogue.sneak_attack"}
+    }
+  },
   "timeUnits": {
     "turn": {"combat": true},
     "round": {"combat": true},

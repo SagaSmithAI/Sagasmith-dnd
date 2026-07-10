@@ -69,3 +69,108 @@ def test_advancement_apply_updates_actor_and_grants_item(
     assert result["actor"]["system"]["attributes"]["hp"]["max"] == 14
     assert result["actor"]["system"]["scale"]["fighter"]["action_surge"] == 1
     assert result["granted_items"][0]["name"] == "Action Surge"
+
+
+def test_advancement_grant_feature_uses_ruleset_activity_templates(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    url = sqlite_database_url(tmp_path / "feature-grant.db")
+    monkeypatch.setenv("DND_DATABASE_URL", url)
+    monkeypatch.setattr("sagasmith_dnd.engine.random.randint", lambda _low, _high: 1)
+    database = Database(url)
+    database.upgrade_schema()
+    try:
+        campaign = CampaignService(database).create(system_id="dnd5e", name="Feature Grant")
+        actor = FoundryDocumentService(database).create_actor(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_type="character",
+            name="Mira",
+            system={
+                "class_levels": {"fighter": 2},
+                "attributes": {"hp": {"value": 1, "max": 20}},
+            },
+        )
+    finally:
+        database.dispose()
+
+    granted = _call(
+        capsys,
+        "advancement",
+        "grant-feature",
+        "--campaign",
+        campaign.id,
+        "--actor",
+        actor.id,
+        "--feature",
+        "second-wind",
+    )
+
+    assert granted["item"]["name"] == "Second Wind"
+    activity = granted["activities"][0]
+    assert activity["activation"] == {"type": "bonus"}
+    assert activity["uses"]["recovery"] == ["short_rest"]
+    assert activity["system"]["healing"] == "1d10 + @classes.fighter.levels"
+
+    used = _call(
+        capsys,
+        "activity",
+        "use",
+        "--campaign",
+        campaign.id,
+        "--actor",
+        actor.id,
+        "--item",
+        granted["item"]["id"],
+        "--activity",
+        activity["id"],
+        "--target-id",
+        actor.id,
+    )
+
+    assert used["payment"] == "bonus_action"
+    assert used["execution"]["after_hp"] == 4
+    assert used["activity"]["uses"]["spent"] == 1
+
+
+def test_advancement_grant_feature_can_create_multiple_activities(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    url = sqlite_database_url(tmp_path / "feature-cunning.db")
+    monkeypatch.setenv("DND_DATABASE_URL", url)
+    database = Database(url)
+    database.upgrade_schema()
+    try:
+        campaign = CampaignService(database).create(system_id="dnd5e", name="Cunning Grant")
+        actor = FoundryDocumentService(database).create_actor(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_type="character",
+            name="Mira",
+        )
+    finally:
+        database.dispose()
+
+    granted = _call(
+        capsys,
+        "advancement",
+        "grant-feature",
+        "--campaign",
+        campaign.id,
+        "--actor",
+        actor.id,
+        "--feature",
+        "cunning-action",
+    )
+
+    assert granted["item"]["name"] == "Cunning Action"
+    assert [activity["name"] for activity in granted["activities"]] == [
+        "Cunning Action: Dash",
+        "Cunning Action: Disengage",
+        "Cunning Action: Hide",
+    ]
+    assert {activity["activation"]["type"] for activity in granted["activities"]} == {"bonus"}
