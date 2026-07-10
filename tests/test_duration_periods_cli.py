@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from sagasmith_core import CampaignService, Database, FoundryDocumentService
+from sagasmith_core import CampaignService, Database, FoundryDocumentService, MapService
 from sagasmith_core.database import sqlite_database_url
 
 from sagasmith_dnd.cli import main
+from sagasmith_dnd.timeline import TimelineService
 
 
 def _call(capsys, *args: str) -> dict:
@@ -18,7 +19,7 @@ def _call(capsys, *args: str) -> dict:
     return value["data"]
 
 
-def test_time_advance_period_ticks_document_effect_durations(
+def test_declared_time_ticks_effect_durations_for_each_crossed_minute(
     tmp_path: Path,
     monkeypatch,
     capsys,
@@ -50,24 +51,32 @@ def test_time_advance_period_ticks_document_effect_durations(
     first = _call(
         capsys,
         "time",
-        "advance",
+        "declare",
         "--campaign",
         campaign.id,
-        "--period",
-        "declared_minute",
+        "--elapsed",
+        "PT1M",
+        "--reason",
+        "testing",
+        "--intent-id",
+        "duration-first",
     )
-    assert first["period"]["advanced"][0]["duration"]["remaining"] == 1
+    assert first["effects"]["advanced"][0]["remaining"] == 1
 
     second = _call(
         capsys,
         "time",
-        "advance",
+        "declare",
         "--campaign",
         campaign.id,
-        "--period",
-        "declared_minute",
+        "--elapsed",
+        "PT1M",
+        "--reason",
+        "testing",
+        "--intent-id",
+        "duration-second",
     )
-    assert second["period"]["expired"][0]["id"] == effect.id
+    assert second["effects"]["expired"][0]["id"] == effect.id
 
 
 def test_duration_unit_aliases_match_declared_periods(
@@ -102,14 +111,18 @@ def test_duration_unit_aliases_match_declared_periods(
     first = _call(
         capsys,
         "time",
-        "advance",
+        "declare",
         "--campaign",
         campaign.id,
-        "--period",
-        "declared_minute",
+        "--elapsed",
+        "PT1M",
+        "--reason",
+        "testing",
+        "--intent-id",
+        "duration-alias",
     )
-    assert first["period"]["advanced"][0]["id"] == effect.id
-    assert first["period"]["advanced"][0]["duration"]["remaining"] == 1
+    assert first["effects"]["advanced"][0]["id"] == effect.id
+    assert first["effects"]["advanced"][0]["remaining"] == 1
 
 
 def test_until_turn_start_duration_expires_only_for_anchor_actor(
@@ -155,31 +168,25 @@ def test_until_turn_start_duration_expires_only_for_anchor_actor(
     finally:
         database.dispose()
 
-    goblin_turn = _call(
-        capsys,
-        "time",
-        "advance",
-        "--campaign",
-        campaign.id,
-        "--period",
-        "turn_start",
-        "--actor",
-        goblin.id,
-    )
-    assert [item["id"] for item in goblin_turn["period"]["expired"]] == [other.id]
+    database = Database(url)
+    database.upgrade_schema()
+    try:
+        timeline = TimelineService(database)
+        goblin_turn = timeline.emit_period(
+            campaign_id=campaign.id,
+            period="turn_start",
+            actor_id=goblin.id,
+        )
+        assert [item["id"] for item in goblin_turn["effects"]["expired"]] == [other.id]
 
-    mira_turn = _call(
-        capsys,
-        "time",
-        "advance",
-        "--campaign",
-        campaign.id,
-        "--period",
-        "turn_start",
-        "--actor",
-        mira.id,
-    )
-    assert [item["id"] for item in mira_turn["period"]["expired"]] == [shield.id]
+        mira_turn = timeline.emit_period(
+            campaign_id=campaign.id,
+            period="turn_start",
+            actor_id=mira.id,
+        )
+        assert [item["id"] for item in mira_turn["effects"]["expired"]] == [shield.id]
+    finally:
+        database.dispose()
 
 
 def test_round_end_duration_period_is_supported(
@@ -211,14 +218,68 @@ def test_round_end_duration_period_is_supported(
     finally:
         database.dispose()
 
-    result = _call(
+    database = Database(url)
+    database.upgrade_schema()
+    try:
+        result = TimelineService(database).emit_period(
+            campaign_id=campaign.id,
+            period="round_end",
+        )
+    finally:
+        database.dispose()
+
+    assert [item["id"] for item in result["effects"]["expired"]] == [effect.id]
+
+
+def test_declared_time_expires_regions_and_is_idempotent(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    url = sqlite_database_url(tmp_path / "timeline-region.db")
+    monkeypatch.setenv("DND_DATABASE_URL", url)
+    database = Database(url)
+    database.upgrade_schema()
+    try:
+        campaign = CampaignService(database).create(system_id="dnd5e", name="Timeline region")
+        maps = MapService(database)
+        scene = maps.create_scene(campaign.id, name="Chamber")
+        region = maps.create_region(
+            scene.id,
+            name="Burning oil",
+            shape={"type": "circle", "radius": 20},
+            duration={"period": "declared_minute", "remaining": 2},
+        )
+    finally:
+        database.dispose()
+
+    first = _call(
         capsys,
         "time",
-        "advance",
+        "declare",
         "--campaign",
         campaign.id,
-        "--period",
-        "round_end",
+        "--elapsed",
+        "PT2M",
+        "--reason",
+        "waiting",
+        "--intent-id",
+        "wait-001",
     )
+    assert first["regions"]["expired"][0]["id"] == region.id
 
-    assert [item["id"] for item in result["period"]["expired"]] == [effect.id]
+    retried = _call(
+        capsys,
+        "time",
+        "declare",
+        "--campaign",
+        campaign.id,
+        "--elapsed",
+        "PT2M",
+        "--reason",
+        "waiting",
+        "--intent-id",
+        "wait-001",
+    )
+    assert retried["idempotent"] is True
+    assert retried["clock"]["elapsed_seconds"] == 120
