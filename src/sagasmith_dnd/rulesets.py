@@ -55,7 +55,30 @@ def validate_ruleset(ruleset_id: str | None = None) -> dict[str, Any]:
     activation_types = set(ruleset.get("activityActivationTypes", {}))
     activity_types = set(ruleset.get("activityTypes", {}))
     limited_use_periods = set(ruleset.get("limitedUsePeriods", {}))
+    period_values = {
+        value.get("period")
+        for value in ruleset.get("limitedUsePeriods", {}).values()
+        if value.get("period")
+    }
+    period_values.update(ruleset.get("durationPeriods", {}).keys())
+    ability_types = set(ruleset.get("abilities", {}))
     condition_types = set(ruleset.get("conditionTypes", {}))
+    resource_types = set(ruleset.get("resources", {}))
+    for skill_id, skill in ruleset.get("skills", {}).items():
+        ability = str(skill.get("ability") or "")
+        if ability not in ability_types:
+            errors.append(f"skills.{skill_id}.ability: unknown ability {ability!r}")
+    reaction_refresh = str((ruleset.get("actionEconomy", {}).get("reactionRefresh") or ""))
+    if reaction_refresh and reaction_refresh not in period_values:
+        errors.append(f"actionEconomy.reactionRefresh: unknown period {reaction_refresh!r}")
+    for resource_id, resource in ruleset.get("resources", {}).items():
+        for period in resource.get("recovery") or []:
+            if period not in period_values:
+                errors.append(f"resources.{resource_id}.recovery: unknown period {period!r}")
+    for effect_id, effect in ruleset.get("effects", {}).items():
+        period = effect.get("period")
+        if period and period not in period_values:
+            errors.append(f"effects.{effect_id}.period: unknown period {period!r}")
     for action_id, action in ruleset.get("activities", {}).items():
         activation = str(action.get("activation") or "")
         activity_type = str(action.get("type") or "")
@@ -63,10 +86,11 @@ def validate_ruleset(ruleset_id: str | None = None) -> dict[str, Any]:
             errors.append(f"activities.{action_id}.activation: unknown activation {activation!r}")
         if activity_type not in activity_types:
             errors.append(f"activities.{action_id}.type: unknown activity type {activity_type!r}")
+        resource = (action.get("uses") or {}).get("resource")
+        if resource and resource not in resource_types:
+            errors.append(f"activities.{action_id}.uses.resource: unknown resource {resource!r}")
         for period in (action.get("uses") or {}).get("recovery") or []:
-            if period not in limited_use_periods and period not in {
-                value.get("period") for value in ruleset.get("limitedUsePeriods", {}).values()
-            }:
+            if period not in limited_use_periods and period not in period_values:
                 errors.append(f"activities.{action_id}.uses.recovery: unknown period {period!r}")
     for condition_id, condition in ruleset.get("conditionTypes", {}).items():
         for status in condition.get("statuses") or []:

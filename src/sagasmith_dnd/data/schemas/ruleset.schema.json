@@ -7,6 +7,14 @@
   "required": [
     "id",
     "name",
+    "abilities",
+    "skills",
+    "damageTypes",
+    "actionEconomy",
+    "range",
+    "cover",
+    "resources",
+    "effects",
     "timeUnits",
     "activityActivationTypes",
     "activityTypes",
@@ -22,6 +30,29 @@
     "name": {"type": "string", "minLength": 1},
     "extends": {"type": "string", "minLength": 1},
     "status": {"type": "string", "minLength": 1},
+    "abilities": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/ability"}
+    },
+    "skills": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/skill"}
+    },
+    "damageTypes": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/damageType"}
+    },
+    "actionEconomy": {"$ref": "#/$defs/actionEconomy"},
+    "range": {"$ref": "#/$defs/rangeRules"},
+    "cover": {"$ref": "#/$defs/coverRules"},
+    "resources": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/resource"}
+    },
+    "effects": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/effectRule"}
+    },
     "timeUnits": {
       "type": "object",
       "additionalProperties": {"$ref": "#/$defs/timeUnit"}
@@ -63,6 +94,82 @@
     }
   },
   "$defs": {
+    "ability": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["label"],
+      "properties": {
+        "label": {"type": "string", "minLength": 1},
+        "abbreviation": {"type": "string", "minLength": 1},
+        "order": {"type": "integer"}
+      }
+    },
+    "skill": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["ability"],
+      "properties": {
+        "ability": {"type": "string", "minLength": 1},
+        "label": {"type": "string", "minLength": 1}
+      }
+    },
+    "damageType": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "label": {"type": "string", "minLength": 1},
+        "category": {"type": "string", "minLength": 1}
+      }
+    },
+    "actionEconomy": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["turnBudget", "attackBudget", "reactionRefresh"],
+      "properties": {
+        "turnBudget": {"type": "object", "additionalProperties": {"type": "integer"}},
+        "attackBudget": {"type": "object", "additionalProperties": true},
+        "reactionRefresh": {"type": "string", "minLength": 1},
+        "extraActionBudgetKey": {"type": "string", "minLength": 1}
+      }
+    },
+    "rangeRules": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["units", "modes"],
+      "properties": {
+        "units": {"type": "string", "minLength": 1},
+        "modes": {"type": "object", "additionalProperties": true},
+        "longRangeDisadvantage": {"type": "boolean"},
+        "beyondLongRange": {"type": "string", "minLength": 1},
+        "rangedAttackWithinHostileReach": {"type": "string", "minLength": 1}
+      }
+    },
+    "coverRules": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["degrees"],
+      "properties": {
+        "degrees": {"type": "object", "additionalProperties": {"type": "object", "additionalProperties": true}}
+      }
+    },
+    "resource": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "recovery": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "maxFormula": {"type": "string"},
+        "scope": {"type": "string"}
+      }
+    },
+    "effectRule": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "kind": {"type": "string", "minLength": 1},
+        "period": {"type": "string"},
+        "exclusivePerActor": {"type": "boolean"}
+      }
+    },
     "timeUnit": {
       "type": "object",
       "additionalProperties": true,

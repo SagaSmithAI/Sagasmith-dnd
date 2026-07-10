@@ -3,6 +3,95 @@
   "name": "D&D 5e 2024",
   "extends": "dnd5e-2014",
   "status": "framework-placeholder",
+  "abilities": {
+    "str": {"label": "Strength", "abbreviation": "STR", "order": 1},
+    "dex": {"label": "Dexterity", "abbreviation": "DEX", "order": 2},
+    "con": {"label": "Constitution", "abbreviation": "CON", "order": 3},
+    "int": {"label": "Intelligence", "abbreviation": "INT", "order": 4},
+    "wis": {"label": "Wisdom", "abbreviation": "WIS", "order": 5},
+    "cha": {"label": "Charisma", "abbreviation": "CHA", "order": 6}
+  },
+  "skills": {
+    "acr": {"label": "Acrobatics", "ability": "dex"},
+    "ani": {"label": "Animal Handling", "ability": "wis"},
+    "arc": {"label": "Arcana", "ability": "int"},
+    "ath": {"label": "Athletics", "ability": "str"},
+    "dec": {"label": "Deception", "ability": "cha"},
+    "his": {"label": "History", "ability": "int"},
+    "ins": {"label": "Insight", "ability": "wis"},
+    "itm": {"label": "Intimidation", "ability": "cha"},
+    "inv": {"label": "Investigation", "ability": "int"},
+    "med": {"label": "Medicine", "ability": "wis"},
+    "nat": {"label": "Nature", "ability": "int"},
+    "prc": {"label": "Perception", "ability": "wis"},
+    "prf": {"label": "Performance", "ability": "cha"},
+    "per": {"label": "Persuasion", "ability": "cha"},
+    "rel": {"label": "Religion", "ability": "int"},
+    "slt": {"label": "Sleight of Hand", "ability": "dex"},
+    "ste": {"label": "Stealth", "ability": "dex"},
+    "sur": {"label": "Survival", "ability": "wis"}
+  },
+  "damageTypes": {
+    "acid": {"label": "Acid", "category": "energy"},
+    "bludgeoning": {"label": "Bludgeoning", "category": "physical"},
+    "cold": {"label": "Cold", "category": "energy"},
+    "fire": {"label": "Fire", "category": "energy"},
+    "force": {"label": "Force", "category": "energy"},
+    "lightning": {"label": "Lightning", "category": "energy"},
+    "necrotic": {"label": "Necrotic", "category": "energy"},
+    "piercing": {"label": "Piercing", "category": "physical"},
+    "poison": {"label": "Poison", "category": "energy"},
+    "psychic": {"label": "Psychic", "category": "energy"},
+    "radiant": {"label": "Radiant", "category": "energy"},
+    "slashing": {"label": "Slashing", "category": "physical"},
+    "thunder": {"label": "Thunder", "category": "energy"}
+  },
+  "actionEconomy": {
+    "turnBudget": {"main_action": 1, "bonus_action": 1, "reaction": 1, "movement": 1, "object_interaction": 1},
+    "attackBudget": {
+      "source": "Attack action",
+      "default": 1,
+      "extraAttackFeature": "extra-attack",
+      "fighterProgression": {"5": 2, "11": 3, "20": 4},
+      "standardProgression": {"5": 2}
+    },
+    "reactionRefresh": "turn_start",
+    "extraActionBudgetKey": "extra_action"
+  },
+  "range": {
+    "units": "ft",
+    "modes": {
+      "self": {"requiresDistance": 0},
+      "touch": {"maximum": 5},
+      "melee": {"defaultReach": 5},
+      "ranged": {"usesNormalAndLong": true}
+    },
+    "longRangeDisadvantage": true,
+    "beyondLongRange": "illegal",
+    "rangedAttackWithinHostileReach": "disadvantage"
+  },
+  "cover": {
+    "degrees": {
+      "none": {"ac_bonus": 0, "dex_save_bonus": 0, "targetable": true},
+      "half": {"ac_bonus": 2, "dex_save_bonus": 2, "targetable": true},
+      "three_quarters": {"ac_bonus": 5, "dex_save_bonus": 5, "targetable": true},
+      "total": {"ac_bonus": 0, "dex_save_bonus": 0, "targetable": false}
+    }
+  },
+  "resources": {
+    "action_surge": {"scope": "activity", "recovery": ["short_rest", "long_rest"], "maxFormula": "1; level>=17 => 2"},
+    "second_wind": {"scope": "activity", "recovery": ["short_rest", "long_rest"], "maxFormula": "1"},
+    "rage": {"scope": "actor", "recovery": ["long_rest"], "maxFormula": "barbarian.rage_uses"},
+    "ki": {"scope": "actor", "recovery": ["short_rest", "long_rest"], "maxFormula": "monk.level"},
+    "sneak_attack": {"scope": "turn", "recovery": ["turn_start"], "maxFormula": "1"},
+    "hit_dice": {"scope": "actor", "recovery": ["long_rest"], "maxFormula": "level"}
+  },
+  "effects": {
+    "concentration": {"kind": "exclusive_actor_effect", "exclusivePerActor": true},
+    "save_ends": {"kind": "duration_strategy", "period": "turn_end"},
+    "until_turn_start": {"kind": "duration_strategy", "period": "turn_start"},
+    "until_turn_end": {"kind": "duration_strategy", "period": "turn_end"}
+  },
   "timeUnits": {
     "turn": {"combat": true},
     "round": {"combat": true},
