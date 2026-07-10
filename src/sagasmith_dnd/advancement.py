@@ -167,6 +167,115 @@ def grant_ruleset_feature(
     return {"item": asdict(item), "activities": activities, "messages": [asdict(message)]}
 
 
+def grant_ruleset_spell(
+    documents: FoundryDocumentService,
+    *,
+    campaign_id: str,
+    actor_id: str,
+    spell_id: str,
+    ruleset_id: str | None = None,
+) -> dict[str, Any]:
+    actor = documents.get_actor(actor_id)
+    if actor.campaign_id != campaign_id:
+        raise ValueError(f"actor {actor_id} is not in campaign {campaign_id}")
+    ruleset = get_ruleset(ruleset_id)
+    normalized = _feature_key(spell_id)
+    spell = dict(ruleset.get("spells", {}).get(normalized) or {})
+    if not spell:
+        raise ValueError(f"unknown ruleset spell: {spell_id}")
+    item = documents.create_item(
+        campaign_id=campaign_id,
+        system_id=actor.system_id,
+        actor_id=actor_id,
+        item_type="spell",
+        name=str(spell.get("name") or normalized),
+        source_key=normalized,
+        system=normalize_item_document("spell", dict(spell.get("system") or {})),
+        effects=list(spell.get("effects") or []),
+        flags={"dnd5e": {"ruleset_spell": normalized}},
+    )
+    activities = _create_template_activities(
+        documents,
+        item_id=item.id,
+        templates=list(spell.get("activities") or []),
+        ruleset_id=ruleset["id"],
+        flag_key="ruleset_spell",
+        flag_value=normalized,
+        fallback_name=item.name,
+    )
+    message = documents.create_message(
+        campaign_id=campaign_id,
+        message_type="advancement",
+        speaker={"actor": actor_id, "alias": actor.name},
+        actor_id=actor_id,
+        item_id=item.id,
+        deltas=[
+            {
+                "type": "ruleset_spell_grant",
+                "spell": normalized,
+                "item_id": item.id,
+                "activity_ids": [activity["id"] for activity in activities],
+            }
+        ],
+        narration_hints=[f"{actor.name} learns {item.name}."],
+        flags={"dnd5e": {"ruleset_spell": normalized}},
+    )
+    return {"item": asdict(item), "activities": activities, "messages": [asdict(message)]}
+
+
+def _create_template_activities(
+    documents: FoundryDocumentService,
+    *,
+    item_id: str,
+    templates: list[Any],
+    ruleset_id: str,
+    flag_key: str,
+    flag_value: str,
+    fallback_name: str,
+) -> list[dict[str, Any]]:
+    activities = []
+    for template in templates:
+        if not isinstance(template, dict):
+            continue
+        activity_type = str(template.get("type") or "utility")
+        contract = normalize_activity_document(
+            activity_type,
+            activation=dict(template.get("activation") or {}),
+            consumption=dict(template.get("consumption") or {}),
+            duration=dict(template.get("duration") or {}),
+            effects=list(template.get("effects") or []),
+            range=dict(template.get("range") or {}),
+            target=dict(template.get("target") or {}),
+            uses=dict(template.get("uses") or {}),
+            system=dict(template.get("system") or {}),
+            ruleset_id=ruleset_id,
+        )
+        activities.append(
+            asdict(
+                documents.create_activity(
+                    item_id=item_id,
+                    activity_type=activity_type,
+                    name=str(template.get("name") or fallback_name),
+                    activation=contract["activation"],
+                    consumption=contract["consumption"],
+                    duration=contract["duration"],
+                    effects=contract["effects"],
+                    range=contract["range"],
+                    target=contract["target"],
+                    uses=contract["uses"],
+                    system=contract["system"],
+                    flags={
+                        "dnd5e": {
+                            flag_key: flag_value,
+                            "source_key": str(template.get("source_key") or ""),
+                        }
+                    },
+                )
+            )
+        )
+    return activities
+
+
 def _feature_key(value: str) -> str:
     return value.strip().lower().replace("_", "-").replace(" ", "-")
 

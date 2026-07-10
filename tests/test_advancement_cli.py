@@ -174,3 +174,76 @@ def test_advancement_grant_feature_can_create_multiple_activities(
         "Cunning Action: Hide",
     ]
     assert {activity["activation"]["type"] for activity in granted["activities"]} == {"bonus"}
+
+
+def test_advancement_grant_spell_uses_ruleset_spell_templates(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    url = sqlite_database_url(tmp_path / "spell-grant.db")
+    monkeypatch.setenv("DND_DATABASE_URL", url)
+    rolls = iter([10, 1, 1])
+    monkeypatch.setattr("sagasmith_dnd.engine.random.randint", lambda _low, _high: next(rolls))
+    database = Database(url)
+    database.upgrade_schema()
+    try:
+        campaign = CampaignService(database).create(system_id="dnd5e", name="Spell Grant")
+        documents = FoundryDocumentService(database)
+        caster = documents.create_actor(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_type="character",
+            name="Mira",
+            system={
+                "level": 5,
+                "attributes": {"prof": 3, "spellcasting": "int"},
+                "abilities": {"int": {"value": 16}},
+            },
+        )
+        target = documents.create_actor(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_type="npc",
+            name="Dummy",
+            system={"attributes": {"ac": {"value": 10}, "hp": {"value": 10, "max": 10}}},
+        )
+    finally:
+        database.dispose()
+
+    granted = _call(
+        capsys,
+        "advancement",
+        "grant-spell",
+        "--campaign",
+        campaign.id,
+        "--actor",
+        caster.id,
+        "--spell",
+        "fire-bolt",
+    )
+
+    assert granted["item"]["name"] == "Fire Bolt"
+    activity = granted["activities"][0]
+    assert activity["activity_type"] == "attack"
+    assert activity["range"] == {"value": 120, "type": "ranged"}
+
+    used = _call(
+        capsys,
+        "activity",
+        "use",
+        "--campaign",
+        campaign.id,
+        "--actor",
+        caster.id,
+        "--item",
+        granted["item"]["id"],
+        "--activity",
+        activity["id"],
+        "--target-id",
+        target.id,
+    )
+
+    assert used["execution"]["hit"] is True
+    assert used["execution"]["damage_roll"]["expression"] == "2d10"
+    assert used["execution"]["damage"]["after_hp"] == 8

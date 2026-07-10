@@ -161,6 +161,70 @@
       "system": {"feature": "sneak-attack", "uses": {"per": "turn"}, "damage": "@scale.rogue.sneak_attack"}
     }
   },
+  "spells": {
+    "fire-bolt": {
+      "name": "Fire Bolt",
+      "system": {"level": 0, "school": "evocation", "ability": "spellcasting"},
+      "activities": [
+        {
+          "name": "Fire Bolt",
+          "type": "attack",
+          "activation": {"type": "action"},
+          "range": {"value": 120, "type": "ranged"},
+          "system": {
+            "attack_bonus": "@spellcasting.attack",
+            "damage": {"damage_at_character_level": {"1": "1d10", "5": "2d10", "11": "3d10", "17": "4d10"}},
+            "damage_type": "fire"
+          }
+        }
+      ]
+    },
+    "cure-wounds": {
+      "name": "Cure Wounds",
+      "system": {"level": 1, "school": "evocation"},
+      "activities": [
+        {
+          "name": "Cure Wounds",
+          "type": "heal",
+          "activation": {"type": "action"},
+          "range": {"value": 5, "type": "touch"},
+          "system": {"healing": "1d8 + @spellcasting.mod"}
+        }
+      ]
+    },
+    "shield": {
+      "name": "Shield",
+      "system": {"level": 1, "school": "abjuration"},
+      "activities": [
+        {
+          "name": "Shield",
+          "type": "effect",
+          "activation": {"type": "reaction"},
+          "duration": {"period": "until_turn_start", "anchor": "self"},
+          "effects": [{"name": "Shield", "changes": [{"key": "system.attributes.ac.value", "mode": 2, "value": 5}]}],
+          "system": {"trigger": "before_hit_resolution"}
+        }
+      ]
+    },
+    "fireball": {
+      "name": "Fireball",
+      "system": {"level": 3, "school": "evocation", "ability": "spellcasting"},
+      "activities": [
+        {
+          "name": "Fireball",
+          "type": "save",
+          "activation": {"type": "action"},
+          "range": {"value": 150, "type": "ranged"},
+          "target": {"type": "sphere", "value": 20},
+          "system": {
+            "save": {"ability": "dex", "dc": {"formula": "@spellcasting.dc"}},
+            "damage": {"damage_at_slot_level": {"3": "8d6"}, "onSave": "half"},
+            "damage_type": "fire"
+          }
+        }
+      ]
+    }
+  },
   "timeUnits": {
     "turn": {"combat": true},
     "round": {"combat": true},

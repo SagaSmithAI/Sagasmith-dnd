@@ -27,7 +27,7 @@ from sagasmith_core.documents import converter_for
 from sagasmith_core.modules import MarkdownModuleParser
 
 from sagasmith_dnd import __version__
-from sagasmith_dnd.advancement import apply_advancement, grant_ruleset_feature
+from sagasmith_dnd.advancement import apply_advancement, grant_ruleset_feature, grant_ruleset_spell
 from sagasmith_dnd.activities import execute_document_activity, list_actor_activity_options
 from sagasmith_dnd.checks import resolve_character_check
 from sagasmith_dnd.combat import (
@@ -203,6 +203,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--module")
     parser.add_argument("--slot")
     parser.add_argument("--label", default="")
+    parser.add_argument("--spell")
     parser.add_argument("--limit", type=int, default=8)
     parser.add_argument("--progress", type=int, default=0)
     parser.add_argument("--room")
@@ -1218,6 +1219,14 @@ def _dispatch(args) -> Any:
                     campaign_id=_require(args.campaign, "campaign"),
                     actor_id=_require(args.actor, "actor"),
                     feature_id=_require(args.feature or args.target, "feature"),
+                    ruleset_id=args.edition,
+                )
+            if args.action == "grant-spell":
+                return grant_ruleset_spell(
+                    foundry_documents,
+                    campaign_id=_require(args.campaign, "campaign"),
+                    actor_id=_require(args.actor, "actor"),
+                    spell_id=_require(args.spell or args.target, "spell"),
                     ruleset_id=args.edition,
                 )
             if args.action != "apply":
