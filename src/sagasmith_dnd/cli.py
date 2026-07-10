@@ -2332,17 +2332,19 @@ def _dispatch(args) -> Any:
                     expected_revision=args.expected_revision,
                     scene_id=args.scene,
                 )
-                declared["region_resolution"] = [
-                    resolve_region_periods(
-                        foundry_documents,
-                        maps,
-                        campaign_id=campaign_id,
-                        period=str(period["period"]),
-                        count=int(period.get("count", 1)),
-                    )
-                    for period in declared["periods"]
-                    if period["period"] != "clock"
-                ]
+                declared["region_resolution"] = []
+                if not declared["idempotent"]:
+                    declared["region_resolution"] = [
+                        resolve_region_periods(
+                            foundry_documents,
+                            maps,
+                            campaign_id=campaign_id,
+                            period=str(period["period"]),
+                            count=int(period.get("count", 1)),
+                        )
+                        for period in declared["periods"]
+                        if period["period"] != "clock"
+                    ]
                 return declared
             raise CliError(
                 "unknown_command",

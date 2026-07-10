@@ -342,3 +342,29 @@ def test_declared_time_resolves_structured_region_damage(
 
     triggered = result["region_resolution"][0]["results"][0]
     assert triggered["damage"]["after_hp"] == 6
+
+    retried = _call(
+        capsys,
+        "time",
+        "declare",
+        "--campaign",
+        campaign.id,
+        "--elapsed",
+        "PT1M",
+        "--reason",
+        "waiting in the fire",
+        "--intent-id",
+        "oil-001",
+    )
+    assert retried["idempotent"] is True
+    assert retried["region_resolution"] == []
+
+    database = Database(url)
+    database.upgrade_schema()
+    try:
+        assert (
+            FoundryDocumentService(database).get_actor(actor.id).system["attributes"]["hp"]["value"]
+            == 6
+        )
+    finally:
+        database.dispose()
