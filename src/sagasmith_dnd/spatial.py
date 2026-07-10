@@ -60,7 +60,10 @@ def prepare_token_runtime(
         "size": {
             "width": token.width,
             "height": token.height,
-            "pixels": {"width": token.width * scene.grid_size, "height": token.height * scene.grid_size},
+            "pixels": {
+                "width": token.width * scene.grid_size,
+                "height": token.height * scene.grid_size,
+            },
         },
         "position": {"x": token.x, "y": token.y, "elevation": token.elevation},
         "targetable": not token.hidden,
@@ -82,8 +85,10 @@ def move_token_with_movement_cost(
     scene = maps.get_scene(before.scene_id)
     regions = maps.list_regions(scene.id)
     distance = measure_distance(scene.grid_size, before.x, before.y, x, y)
-    previous = [region for region in regions if _contains(region.shape, before.x, before.y)]
-    entered = [region for region in regions if _contains(region.shape, x, y)]
+    previous = [
+        region for region in regions if contains_region_shape(region.shape, before.x, before.y)
+    ]
+    entered = [region for region in regions if contains_region_shape(region.shape, x, y)]
     multiplier = 2 if any(region.behavior == "difficult_terrain" for region in entered) else 1
     moved = maps.move_token(
         token_id,
@@ -151,7 +156,7 @@ def cover_between_tokens(
     cover_regions = [
         region
         for region in maps.list_regions(scene.id)
-        if region.behavior == "cover" and _contains(region.shape, target.x, target.y)
+        if region.behavior == "cover" and contains_region_shape(region.shape, target.x, target.y)
     ]
     best = _best_cover(cover_regions)
     return {
@@ -178,7 +183,7 @@ def measure_distance(grid_size: int, x1: int, y1: int, x2: int, y2: int) -> floa
     return round(sqrt((dx * dx) + (dy * dy)), 3)
 
 
-def _contains(shape: dict[str, Any], x: int, y: int) -> bool:
+def contains_region_shape(shape: dict[str, Any], x: int, y: int) -> bool:
     shape_type = str(shape.get("type") or "").lower()
     if shape_type == "circle":
         cx = int(shape.get("x", 0) or 0)
@@ -311,13 +316,17 @@ def _opportunity_windows(
         if not _hostile(token.disposition, moved_token.disposition):
             continue
         reach = int(token.metadata.get("reach", 5) or 5)
-        before_distance = measure_distance(grid_size, token.x, token.y, from_x, from_y) * grid_distance
+        before_distance = (
+            measure_distance(grid_size, token.x, token.y, from_x, from_y) * grid_distance
+        )
         after_distance = measure_distance(grid_size, token.x, token.y, to_x, to_y) * grid_distance
         if before_distance <= reach < after_distance:
             result.append(
                 {
                     "id": f"reaction-{uuid4().hex}",
                     "type": "reaction_window",
+                    "event": "movement.leave_reach",
+                    "kind": "reaction",
                     "status": "pending",
                     "trigger": "opportunity_attack",
                     "scene_id": scene_id,
@@ -366,7 +375,9 @@ def _token_vision(system: dict[str, Any], token_vision: dict[str, Any]) -> dict[
     if max_range and not sight.get("range"):
         sight["range"] = max_range
     if max_range and not sight.get("visionMode"):
-        sight["visionMode"] = "darkvision" if int(senses.get("darkvision", 0) or 0) == max_range else "basic"
+        sight["visionMode"] = (
+            "darkvision" if int(senses.get("darkvision", 0) or 0) == max_range else "basic"
+        )
     if sight:
         vision["sight"] = sight
     detection = list(vision.get("detectionModes") or [])

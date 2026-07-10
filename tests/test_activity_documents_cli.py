@@ -157,3 +157,101 @@ def test_attack_activity_creates_resolvable_reaction_window(
         '{"activity":"shield"}',
     )
     assert resolved["pending"][0]["status"] == "resolved"
+
+
+def test_eligible_reaction_defers_attack_until_resolution(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    url = sqlite_database_url(tmp_path / "deferred-reaction.db")
+    monkeypatch.setenv("DND_DATABASE_URL", url)
+    monkeypatch.setattr("sagasmith_dnd.engine.random.randint", lambda _low, _high: 9)
+    database = Database(url)
+    database.upgrade_schema()
+    try:
+        campaign = CampaignService(database).create(system_id="dnd5e", name="Deferred reactions")
+        documents = FoundryDocumentService(database)
+        attacker = documents.create_actor(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_type="character",
+            name="Mira",
+        )
+        defender = documents.create_actor(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_type="npc",
+            name="Acolyte",
+            system={"attributes": {"ac": {"value": 10}, "hp": {"value": 10, "max": 10}}},
+        )
+        sword = documents.create_item(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_id=attacker.id,
+            item_type="weapon",
+            name="Longsword",
+        )
+        slash = documents.create_activity(
+            item_id=sword.id,
+            activity_type="attack",
+            name="Slash",
+            activation={"type": "action"},
+            system={"attack_bonus": 5, "damage": "1d6", "damage_type": "slashing"},
+        )
+        shield = documents.create_item(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_id=defender.id,
+            item_type="spell",
+            name="Shield",
+        )
+        shield_activity = documents.create_activity(
+            item_id=shield.id,
+            activity_type="effect",
+            name="Shield",
+            activation={"type": "reaction"},
+            system={"trigger": "before_hit_resolution"},
+            duration={"period": "until_turn_start", "anchor": "self"},
+            effects=[
+                {
+                    "name": "Shield",
+                    "changes": [{"key": "system.attributes.ac.value", "mode": "ADD", "value": 5}],
+                }
+            ],
+        )
+    finally:
+        database.dispose()
+
+    declared = _call(
+        capsys,
+        "activity",
+        "use",
+        "--campaign",
+        campaign.id,
+        "--actor",
+        attacker.id,
+        "--item",
+        sword.id,
+        "--activity",
+        slash.id,
+        "--target-id",
+        defender.id,
+    )
+    assert declared["deferred"] is True
+    window = declared["pending"][0]
+    assert window["candidates"][0]["activity_id"] == shield_activity.id
+
+    resolved = _call(
+        capsys,
+        "reaction",
+        "resolve",
+        "--campaign",
+        campaign.id,
+        "--id",
+        window["id"],
+        "--payload",
+        json.dumps({"item_id": shield.id, "activity_id": shield_activity.id}),
+    )
+    assert resolved["reaction_result"]["effects"][0]["name"] == "Shield"
+    assert resolved["continuation_result"]["execution"]["hit"] is False

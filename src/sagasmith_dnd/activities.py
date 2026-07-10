@@ -36,6 +36,8 @@ def execute_document_activity(
     target_id: str | None = None,
     payment: str | None = None,
     payload: dict[str, Any] | None = None,
+    prepaid: bool = False,
+    defer_reactions: bool = True,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Execute a persisted Activity document and return a Foundry-like envelope."""
 
@@ -59,30 +61,112 @@ def execute_document_activity(
     runtime = dict(state.get("runtime") or {})
     budgets = dict(runtime.get("turn_budgets") or {})
     actor_budget = _budget_for(budgets.get(actor_id))
-    payment_options = activity_payment_options(activity, actor_budget)
-    if payment is None:
-        payment = payment_options[0] if payment_options else _default_payment(activation)
-    elif (
-        payment not in payment_options
-        and payment != "free"
-        and not _allows_reaction_override(activity, payload=payload, payment=payment)
-    ):
-        raise ValueError(f"cannot pay {payment} for {activity.name}")
-    payment_delta = _spend_payment(actor_budget, payment)
-    _apply_activity_grants(actor_budget, actor=actor, activity=activity, payment=payment)
-    budgets[actor_id] = actor_budget
-    runtime["turn_budgets"] = budgets
-    state["runtime"] = runtime
-
     uses_before = dict(activity.uses or {})
-    uses_after = _spend_uses(uses_before, payload)
-    if uses_after != uses_before:
-        activity = documents.update_activity(activity_id, uses=uses_after)
-
     actor_system_before = deepcopy(actor.system)
-    actor_system_after = _consume_spell_slot(actor_system_before, item, activity, payload)
+    if prepaid:
+        payment = "prepaid"
+        payment_delta = {"before": dict(actor_budget), "after": dict(actor_budget)}
+        uses_after = uses_before
+        actor_system_after = actor_system_before
+    else:
+        payment_options = activity_payment_options(activity, actor_budget)
+        if payment is None:
+            payment = payment_options[0] if payment_options else _default_payment(activation)
+        elif (
+            payment not in payment_options
+            and payment != "free"
+            and not _allows_reaction_override(activity, payload=payload, payment=payment)
+        ):
+            raise ValueError(f"cannot pay {payment} for {activity.name}")
+        payment_delta = _spend_payment(actor_budget, payment)
+        _apply_activity_grants(actor_budget, actor=actor, activity=activity, payment=payment)
+        budgets[actor_id] = actor_budget
+        runtime["turn_budgets"] = budgets
+        state["runtime"] = runtime
+        uses_after = _spend_uses(uses_before, payload)
+        if uses_after != uses_before:
+            activity = documents.update_activity(activity_id, uses=uses_after)
+        actor_system_after = _consume_spell_slot(actor_system_before, item, activity, payload)
+        if actor_system_after != actor_system_before:
+            actor = documents.update_actor(actor_id, system=actor_system_after)
+
+    pre_deltas = [
+        {
+            "type": "payment",
+            "actor_id": actor_id,
+            "payment": payment,
+            "before": payment_delta["before"],
+            "after": payment_delta["after"],
+        }
+    ]
+    if uses_after != uses_before:
+        pre_deltas.append(
+            {
+                "type": "activity_uses",
+                "activity_id": activity_id,
+                "before": uses_before,
+                "after": uses_after,
+            }
+        )
     if actor_system_after != actor_system_before:
-        actor = documents.update_actor(actor_id, system=actor_system_after)
+        pre_deltas.append(
+            {
+                "type": "actor_system",
+                "actor_id": actor_id,
+                "before": actor_system_before,
+                "after": actor_system_after,
+            }
+        )
+    reaction_windows = _reaction_windows(
+        documents,
+        campaign_id=campaign_id,
+        activity=activity,
+        actor_id=actor_id,
+        target_id=target_id,
+    )
+    if defer_reactions and any(window.get("candidates") for window in reaction_windows):
+        continuation = {
+            "actor_id": actor_id,
+            "item_id": item_id,
+            "activity_id": activity_id,
+            "target_id": target_id,
+            "payload": payload,
+        }
+        for window in reaction_windows:
+            window["continuation"] = continuation
+        runtime = dict(state.get("runtime") or {})
+        queued = list(runtime.get("pending") or [])
+        queued.extend(reaction_windows)
+        runtime["pending"] = queued
+        state["runtime"] = runtime
+        message = documents.create_message(
+            campaign_id=campaign_id,
+            message_type="activity_declaration",
+            speaker={"actor": actor_id, "alias": actor.name},
+            actor_id=actor_id,
+            item_id=item_id,
+            activity_id=activity_id,
+            deltas=pre_deltas,
+            pending=reaction_windows,
+            narration_hints=[f"{actor.name}'s {activity.name} awaits reaction resolution."],
+            flags={"dnd5e": {"activity_type": activity.activity_type, "deferred": True}},
+        )
+        return state, {
+            "type": "activity_result",
+            "actor": asdict(actor),
+            "item": asdict(item),
+            "activity": asdict(activity),
+            "target_id": target_id,
+            "payment": payment,
+            "state_delta": {"runtime": {"turn_budgets": {actor_id: actor_budget}}},
+            "deltas": pre_deltas,
+            "execution": None,
+            "effects": [],
+            "pending": reaction_windows,
+            "deferred": True,
+            "messages": [asdict(message)],
+            "narration_hints": list(message.narration_hints),
+        }
 
     execution = _execute_activity_effect(
         documents,
@@ -145,39 +229,13 @@ def execute_document_activity(
         )
         created_effects.append(asdict(created))
 
-    deltas = [
-        {
-            "type": "payment",
-            "actor_id": actor_id,
-            "payment": payment,
-            "before": payment_delta["before"],
-            "after": payment_delta["after"],
-        }
-    ]
-    if uses_after != uses_before:
-        deltas.append(
-            {
-                "type": "activity_uses",
-                "activity_id": activity_id,
-                "before": uses_before,
-                "after": uses_after,
-            }
-        )
-    if actor_system_after != actor_system_before:
-        deltas.append(
-            {
-                "type": "actor_system",
-                "actor_id": actor_id,
-                "before": actor_system_before,
-                "after": actor_system_after,
-            }
-        )
+    deltas = pre_deltas
     if execution:
         deltas.append({"type": "activity_execution", "result": execution["result"]})
     for effect in created_effects:
         deltas.append({"type": "active_effect", "effect_id": effect["id"], "after": effect})
 
-    pending = _reaction_windows(activity, actor_id=actor_id, target_id=target_id)
+    pending = reaction_windows if defer_reactions else []
     pending.extend(execution.get("pending", []) if execution else [])
     if pending:
         runtime = dict(state.get("runtime") or {})
@@ -641,6 +699,11 @@ def _execute_attack(
     if not target_id:
         raise ValueError("attack activity requires target-id")
     target = documents.get_actor(target_id)
+    if any(effect.changes for effect in documents.list_effects(campaign_id, actor_id=target_id)):
+        from sagasmith_dnd.effects import recalculate_actor_effects
+
+        recalculate_actor_effects(documents, campaign_id=campaign_id, actor_id=target_id)
+        target = documents.get_actor(target_id)
     range_result = _activity_range_result(activity, item_system=item_system, payload=payload)
     cover_result = _cover_context(payload)
     if cover_result and not bool(cover_result.get("targetable", True)):
@@ -1541,21 +1604,72 @@ def _hp(system: dict[str, Any]) -> dict[str, Any]:
     return hp
 
 
-def _reaction_windows(activity, *, actor_id: str, target_id: str | None) -> list[dict[str, Any]]:
+def _reaction_windows(
+    documents: FoundryDocumentService,
+    *,
+    campaign_id: str,
+    activity,
+    actor_id: str,
+    target_id: str | None,
+) -> list[dict[str, Any]]:
     if activity.activity_type != "attack" or not target_id:
         return []
+    candidates = _reaction_candidates(
+        documents,
+        campaign_id=campaign_id,
+        actor_id=target_id,
+        trigger="before_hit_resolution",
+    )
     return [
         {
             "id": f"reaction-{uuid4().hex}",
             "type": "reaction_window",
+            "event": "attack.before_hit",
+            "kind": "reaction",
             "status": "pending",
             "trigger": "targeted_by_attack",
             "actor_id": target_id,
             "source_actor_id": actor_id,
             "activity_id": activity.id,
             "deadline": "before_attack_resolution",
+            "candidates": candidates,
         }
     ]
+
+
+def _reaction_candidates(
+    documents: FoundryDocumentService,
+    *,
+    campaign_id: str,
+    actor_id: str,
+    trigger: str,
+) -> list[dict[str, Any]]:
+    candidates = []
+    for item in documents.list_items(campaign_id, actor_id=actor_id):
+        for activity in documents.list_activities(item.id):
+            activation = str((activity.activation or {}).get("type") or "").lower()
+            if activation != "reaction" or not _activity_matches_trigger(activity, trigger):
+                continue
+            candidates.append(
+                {
+                    "item_id": item.id,
+                    "activity_id": activity.id,
+                    "item_name": item.name,
+                    "activity_name": activity.name,
+                    "trigger": trigger,
+                }
+            )
+    return candidates
+
+
+def _activity_matches_trigger(activity, trigger: str) -> bool:
+    system = dict(activity.system or {})
+    values = system.get("triggers", system.get("trigger", []))
+    if isinstance(values, str):
+        values = [values]
+    normalized = {str(value).strip().lower() for value in values or []}
+    aliases = {"before_hit_resolution", "targeted_by_attack", "attack.before_hit"}
+    return trigger in normalized or bool(normalized & aliases)
 
 
 def _narration_hints(

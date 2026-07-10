@@ -31,6 +31,11 @@ def place_activity_template(
     if item.actor_id and actor_id and item.actor_id != actor_id:
         raise ValueError(f"item {item_id} is owned by actor {item.actor_id}, not {actor_id}")
     shape = _shape_from_activity(scene, activity.target, x=x, y=y, direction=direction)
+    region_triggers = activity.system.get("region_triggers") or []
+    if isinstance(region_triggers, dict):
+        region_triggers = [region_triggers]
+    if not isinstance(region_triggers, list):
+        region_triggers = []
     region = maps.create_region(
         scene_id,
         name=name or f"{item.name}: {activity.name}",
@@ -43,6 +48,7 @@ def place_activity_template(
             "activity_id": activity.id,
             "actor_id": actor_id or item.actor_id,
             "activity_type": activity.activity_type,
+            "triggers": region_triggers,
         },
     )
     return {
@@ -53,7 +59,9 @@ def place_activity_template(
     }
 
 
-def _shape_from_activity(scene, target: dict[str, Any], *, x: int, y: int, direction: int) -> dict[str, Any]:
+def _shape_from_activity(
+    scene, target: dict[str, Any], *, x: int, y: int, direction: int
+) -> dict[str, Any]:
     template = dict(target.get("template") or target or {})
     template_type = str(template.get("type") or "circle").lower()
     grid_distance = int(scene.metadata.get("grid_distance", 5) or 5)

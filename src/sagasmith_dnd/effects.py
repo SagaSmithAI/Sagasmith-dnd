@@ -64,7 +64,10 @@ def _apply_change(target: dict[str, Any], change: dict[str, Any]) -> None:
         raise ValueError("effect change is missing key")
     mode = str(change.get("mode") or "ADD").upper()
     value = change.get("value")
-    parent, key = _parent_for(target, path.split("."))
+    parts = path.split(".")
+    if parts[0] == "system" and "system" not in target:
+        parts = parts[1:]
+    parent, key = _parent_for(target, parts)
     current = parent.get(key)
     if mode == "ADD":
         parent[key] = _add(current, value)

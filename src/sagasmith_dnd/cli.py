@@ -67,6 +67,7 @@ from sagasmith_dnd.engine import resolve_check, roll
 from sagasmith_dnd.module_profile import DndModuleProfile
 from sagasmith_dnd.pack_importer import import_foundry_pack
 from sagasmith_dnd.ready import clear_ready_actions, set_ready_action, trigger_ready_action
+from sagasmith_dnd.regions import resolve_region_periods
 from sagasmith_dnd.rests import recover_document_rest
 from sagasmith_dnd.rolls import roll_actor_d20
 from sagasmith_dnd.rulesets import get_ruleset, list_rulesets, validate_ruleset
@@ -282,6 +283,36 @@ def _campaign_revision(revisions, before, after, operation: str) -> None:
         before={name: getattr(before, name) for name in fields},
         after={name: getattr(after, name) for name in fields},
     )
+
+
+def _emit_timeline_period(
+    timeline: TimelineService,
+    documents: FoundryDocumentService,
+    maps: MapService,
+    *,
+    campaign_id: str,
+    period: str,
+    actor_id: str | None = None,
+    elapsed_seconds: int = 0,
+) -> dict[str, Any]:
+    result = timeline.emit_period(
+        campaign_id=campaign_id,
+        period=period,
+        actor_id=actor_id,
+        elapsed_seconds=elapsed_seconds,
+    )
+    result["region_resolution"] = [
+        resolve_region_periods(
+            documents,
+            maps,
+            campaign_id=campaign_id,
+            period=str(entry["period"]),
+            count=int(entry.get("count", 1)),
+            actor_id=actor_id,
+        )
+        for entry in result["periods"]
+    ]
+    return result
 
 
 def _character_revision(revisions, before, after, operation: str) -> None:
@@ -673,6 +704,7 @@ def _dispatch(args) -> Any:
                 "game-activity",
                 "game-item",
                 "reaction",
+                "resolution",
                 "pack",
                 "condition",
                 "damage",
@@ -1047,6 +1079,16 @@ def _dispatch(args) -> Any:
                 return get_ruleset(args.id or args.edition)
             if args.action == "validate":
                 return validate_ruleset(args.id or args.edition)
+            if args.action == "coverage":
+                ruleset = get_ruleset(args.id or args.edition)
+                return {
+                    "id": ruleset["id"],
+                    "packs": list(ruleset.get("contentCoverage") or []),
+                    "counts": {
+                        key: len(ruleset.get(key) or {})
+                        for key in ("classes", "subclasses", "classFeatures", "spells", "monsters")
+                    },
+                }
             if args.action == "compile":
                 pack = compile_foundry_content(
                     _require(args.path, "path"),
@@ -1388,7 +1430,13 @@ def _dispatch(args) -> Any:
                 updated = campaigns.update(campaign_id, state=state)
                 _campaign_revision(revisions, before, updated, "scene.activate")
                 if scene_ended:
-                    timeline.emit_period(campaign_id=campaign_id, period="scene_end")
+                    _emit_timeline_period(
+                        timeline,
+                        foundry_documents,
+                        maps,
+                        campaign_id=campaign_id,
+                        period="scene_end",
+                    )
                 result = prepare_scene_runtime(maps, foundry_documents, scene_id=scene_id)
                 result["active_scene_id"] = scene_id
                 result["previous_scene_id"] = previous
@@ -1872,10 +1920,19 @@ def _dispatch(args) -> Any:
                 _initialize_turn_budgets(state, state["combat"])
                 updated = campaigns.update(campaign_id, state=state)
                 _campaign_revision(revisions, before, updated, "combat.start")
-                timeline.emit_period(campaign_id=campaign_id, period="encounter_start")
+                _emit_timeline_period(
+                    timeline,
+                    foundry_documents,
+                    maps,
+                    campaign_id=campaign_id,
+                    period="encounter_start",
+                )
                 current = (combat_status(state["combat"]) or {}).get("current") or {}
                 if current.get("actor_id") or current.get("id"):
-                    timeline.emit_period(
+                    _emit_timeline_period(
+                        timeline,
+                        foundry_documents,
+                        maps,
                         campaign_id=campaign_id,
                         period="turn_start",
                         actor_id=current.get("actor_id") or current.get("id"),
@@ -1973,20 +2030,35 @@ def _dispatch(args) -> Any:
                 updated = campaigns.update(campaign_id, state=state)
                 _campaign_revision(revisions, before, updated, f"combat.{args.action}")
                 if args.action == "end-turn":
-                    timeline.emit_period(
+                    _emit_timeline_period(
+                        timeline,
+                        foundry_documents,
+                        maps,
                         campaign_id=campaign_id,
                         period="turn_end",
                         actor_id=result.get("ended"),
                     )
                     if result.get("turn") == 0:
-                        timeline.emit_period(campaign_id=campaign_id, period="round_end")
-                        timeline.emit_period(
+                        _emit_timeline_period(
+                            timeline,
+                            foundry_documents,
+                            maps,
+                            campaign_id=campaign_id,
+                            period="round_end",
+                        )
+                        _emit_timeline_period(
+                            timeline,
+                            foundry_documents,
+                            maps,
                             campaign_id=campaign_id,
                             period="round_start",
                             elapsed_seconds=6,
                         )
                     if result.get("current"):
-                        timeline.emit_period(
+                        _emit_timeline_period(
+                            timeline,
+                            foundry_documents,
+                            maps,
                             campaign_id=campaign_id,
                             period="turn_start",
                             actor_id=result.get("current"),
@@ -2012,7 +2084,13 @@ def _dispatch(args) -> Any:
                 state["combat"] = None
                 updated = campaigns.update(campaign_id, state=state)
                 _campaign_revision(revisions, before, updated, "combat.end")
-                timeline.emit_period(campaign_id=campaign_id, period="encounter_end")
+                _emit_timeline_period(
+                    timeline,
+                    foundry_documents,
+                    maps,
+                    campaign_id=campaign_id,
+                    period="encounter_end",
+                )
                 return {"ended": True, "combat": result}
 
         if args.group == "activity":
@@ -2054,7 +2132,7 @@ def _dispatch(args) -> Any:
                 exit_code=2,
             )
 
-        if args.group == "reaction":
+        if args.group in {"reaction", "resolution"}:
             campaign_id = _require(args.campaign, "campaign")
             before = campaigns.get(campaign_id)
             state = dict(before.state)
@@ -2091,12 +2169,28 @@ def _dispatch(args) -> Any:
                 runtime["pending"] = updated_pending
                 state["runtime"] = runtime
                 reaction_result = None
+                continuation_result = None
                 response_item_id = str(
                     response_payload.get("item_id") or response_payload.get("item") or ""
                 )
                 response_activity_id = str(
                     response_payload.get("activity_id") or response_payload.get("activity") or ""
                 )
+                candidates = list((selected_window or {}).get("candidates") or [])
+                if candidates and response_item_id and response_activity_id:
+                    permitted = {
+                        (
+                            str(candidate.get("item_id") or ""),
+                            str(candidate.get("activity_id") or ""),
+                        )
+                        for candidate in candidates
+                    }
+                    if (response_item_id, response_activity_id) not in permitted:
+                        raise CliError(
+                            "invalid_reaction",
+                            "selected response is not eligible for this reaction window",
+                            exit_code=2,
+                        )
                 if (
                     args.action == "resolve"
                     and selected_window
@@ -2116,12 +2210,31 @@ def _dispatch(args) -> Any:
                         target_id=str(selected_window.get("target_actor_id") or ""),
                         payment="reaction",
                         payload=reaction_payload,
+                        defer_reactions=False,
+                    )
+                continuation = dict((selected_window or {}).get("continuation") or {})
+                if continuation:
+                    state, continuation_result = execute_document_activity(
+                        foundry_documents,
+                        campaign_id=campaign_id,
+                        state=state,
+                        actor_id=str(continuation["actor_id"]),
+                        item_id=str(continuation["item_id"]),
+                        activity_id=str(continuation["activity_id"]),
+                        target_id=str(continuation.get("target_id") or "") or None,
+                        payload=dict(continuation.get("payload") or {}),
+                        prepaid=True,
+                        defer_reactions=False,
                     )
                 updated = campaigns.update(campaign_id, state=state)
-                _campaign_revision(revisions, before, updated, f"reaction.{args.action}")
-                return {"pending": updated_pending, "reaction_result": reaction_result}
+                _campaign_revision(revisions, before, updated, f"resolution.{args.action}")
+                return {
+                    "pending": updated_pending,
+                    "reaction_result": reaction_result,
+                    "continuation_result": continuation_result,
+                }
             raise CliError(
-                "unknown_command", f"unknown reaction command: {args.action}", exit_code=2
+                "unknown_command", f"unknown resolution command: {args.action}", exit_code=2
             )
 
         if args.group == "ready":
@@ -2211,7 +2324,7 @@ def _dispatch(args) -> Any:
                     elapsed=_require(args.elapsed, "elapsed"),
                 )
             if args.action == "declare":
-                return timeline.declare(
+                declared = timeline.declare(
                     campaign_id=campaign_id,
                     elapsed=_require(args.elapsed, "elapsed"),
                     reason=_require(args.reason, "reason"),
@@ -2219,6 +2332,18 @@ def _dispatch(args) -> Any:
                     expected_revision=args.expected_revision,
                     scene_id=args.scene,
                 )
+                declared["region_resolution"] = [
+                    resolve_region_periods(
+                        foundry_documents,
+                        maps,
+                        campaign_id=campaign_id,
+                        period=str(period["period"]),
+                        count=int(period.get("count", 1)),
+                    )
+                    for period in declared["periods"]
+                    if period["period"] != "clock"
+                ]
+                return declared
             raise CliError(
                 "unknown_command",
                 "use time status, time preview, or time declare",
@@ -2308,7 +2433,10 @@ def _dispatch(args) -> Any:
             state["rests"] = rest_state
             updated = campaigns.update(campaign_id, state=state)
             _campaign_revision(revisions, before, updated, f"rest.{args.action}")
-            duration_recovery = timeline.emit_period(
+            duration_recovery = _emit_timeline_period(
+                timeline,
+                foundry_documents,
+                maps,
                 campaign_id=campaign_id,
                 period=period,
                 actor_id=None if args.actor == "runtime" else args.actor,

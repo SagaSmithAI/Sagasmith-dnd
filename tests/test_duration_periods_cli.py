@@ -283,3 +283,62 @@ def test_declared_time_expires_regions_and_is_idempotent(
     )
     assert retried["idempotent"] is True
     assert retried["clock"]["elapsed_seconds"] == 120
+
+
+def test_declared_time_resolves_structured_region_damage(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    url = sqlite_database_url(tmp_path / "timeline-region-trigger.db")
+    monkeypatch.setenv("DND_DATABASE_URL", url)
+    monkeypatch.setattr("sagasmith_dnd.engine.random.randint", lambda _low, _high: 4)
+    database = Database(url)
+    database.upgrade_schema()
+    try:
+        campaign = CampaignService(database).create(system_id="dnd5e", name="Region trigger")
+        documents = FoundryDocumentService(database)
+        actor = documents.create_actor(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_type="character",
+            name="Mira",
+            system={"attributes": {"hp": {"value": 10, "max": 10}}},
+        )
+        maps = MapService(database)
+        scene = maps.create_scene(campaign.id, name="Chamber")
+        maps.create_token(scene.id, actor_id=actor.id, name="Mira", x=10, y=10)
+        maps.create_region(
+            scene.id,
+            name="Burning oil",
+            shape={"type": "circle", "x": 10, "y": 10, "radius": 20},
+            behavior="hazard",
+            metadata={
+                "triggers": [
+                    {
+                        "event": "declared_minute",
+                        "damage": "1d6",
+                        "damage_type": "fire",
+                    }
+                ]
+            },
+        )
+    finally:
+        database.dispose()
+
+    result = _call(
+        capsys,
+        "time",
+        "declare",
+        "--campaign",
+        campaign.id,
+        "--elapsed",
+        "PT1M",
+        "--reason",
+        "waiting in the fire",
+        "--intent-id",
+        "oil-001",
+    )
+
+    triggered = result["region_resolution"][0]["results"][0]
+    assert triggered["damage"]["after_hp"] == 6
