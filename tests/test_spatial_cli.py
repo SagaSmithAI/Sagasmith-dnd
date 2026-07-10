@@ -424,6 +424,204 @@ def test_activity_range_uses_scene_token_distance(
     assert ranged["execution"]["range"]["disadvantage"] is True
 
 
+def test_ranged_attack_has_disadvantage_when_hostile_is_within_reach(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setenv("DND_DATABASE_URL", f"sqlite+pysqlite:///{(tmp_path / 'range-threat.db').as_posix()}")
+    campaign = _call(capsys, "campaign", "start", "--name", "Ranged Threat")["campaign"]
+    archer = _call(capsys, "actor", "create", "--campaign", campaign["id"], "--name", "Archer")
+    target = _call(capsys, "actor", "create", "--campaign", campaign["id"], "--name", "Target", "--type", "npc")
+    bow = _call(
+        capsys,
+        "game-item",
+        "create",
+        "--campaign",
+        campaign["id"],
+        "--actor",
+        archer["id"],
+        "--name",
+        "Shortbow",
+        "--type",
+        "weapon",
+    )
+    bow_shot = _call(
+        capsys,
+        "game-activity",
+        "create",
+        "--item",
+        bow["id"],
+        "--name",
+        "Shot",
+        "--type",
+        "attack",
+        "--payload",
+        '{"activation":{"type":"action"},"range":{"value":30,"long":120},"system":{"attack_bonus":20}}',
+    )
+    scene = _call(
+        capsys,
+        "scene",
+        "create",
+        "--campaign",
+        campaign["id"],
+        "--name",
+        "Grid",
+        "--grid-size",
+        "70",
+        "--metadata",
+        '{"grid_distance":5}',
+    )
+    archer_token = _call(
+        capsys,
+        "token",
+        "create",
+        "--scene",
+        scene["id"],
+        "--name",
+        "Archer",
+        "--actor-id",
+        archer["id"],
+        "--disposition",
+        "friendly",
+    )
+    target_token = _call(
+        capsys,
+        "token",
+        "create",
+        "--scene",
+        scene["id"],
+        "--name",
+        "Target",
+        "--actor-id",
+        target["id"],
+        "--disposition",
+        "hostile",
+        "--x",
+        "350",
+        "--y",
+        "0",
+    )
+    threat = _call(
+        capsys,
+        "token",
+        "create",
+        "--scene",
+        scene["id"],
+        "--name",
+        "Threat",
+        "--actor-id",
+        "threat",
+        "--disposition",
+        "hostile",
+        "--x",
+        "70",
+        "--y",
+        "0",
+        "--metadata",
+        '{"reach":5}',
+    )
+
+    ranged = _call(
+        capsys,
+        "activity",
+        "use",
+        "--campaign",
+        campaign["id"],
+        "--actor",
+        archer["id"],
+        "--item",
+        bow["id"],
+        "--activity",
+        bow_shot["id"],
+        "--target-id",
+        target["id"],
+        "--actor-token",
+        archer_token["id"],
+        "--target-token",
+        target_token["id"],
+    )
+
+    assert ranged["execution"]["range"]["distance"] == 25
+    assert ranged["execution"]["range"]["hostile_within_reach"][0]["token_id"] == threat["id"]
+    assert ranged["execution"]["disadvantage"] is True
+    assert "range:hostile_within_reach" in ranged["execution"]["disadvantage_sources"]
+
+
+def test_disengage_move_does_not_create_opportunity_attack_window(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setenv("DND_DATABASE_URL", f"sqlite+pysqlite:///{(tmp_path / 'opportunity-disengage.db').as_posix()}")
+    campaign = _call(capsys, "campaign", "start", "--name", "Disengage")["campaign"]
+    scene = _call(
+        capsys,
+        "scene",
+        "create",
+        "--campaign",
+        campaign["id"],
+        "--name",
+        "Grid",
+        "--grid-size",
+        "70",
+        "--metadata",
+        '{"grid_distance":5}',
+    )
+    hero = _call(
+        capsys,
+        "token",
+        "create",
+        "--scene",
+        scene["id"],
+        "--name",
+        "Hero",
+        "--actor-id",
+        "hero",
+        "--disposition",
+        "friendly",
+        "--x",
+        "70",
+        "--y",
+        "0",
+    )
+    _call(
+        capsys,
+        "token",
+        "create",
+        "--scene",
+        scene["id"],
+        "--name",
+        "Goblin",
+        "--actor-id",
+        "goblin",
+        "--disposition",
+        "hostile",
+        "--x",
+        "0",
+        "--y",
+        "0",
+        "--metadata",
+        '{"reach":5}',
+    )
+
+    moved = _call(
+        capsys,
+        "token",
+        "move",
+        "--token",
+        hero["id"],
+        "--x",
+        "140",
+        "--y",
+        "0",
+        "--metadata",
+        '{"disengage":true}',
+    )
+
+    assert moved["movement"]["pending"] == []
+
+
 def test_opportunity_attack_window_persists_and_resolves_activity(
     tmp_path: Path,
     monkeypatch,

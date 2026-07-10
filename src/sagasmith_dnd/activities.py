@@ -726,6 +726,7 @@ def _activity_range_result(activity, *, item_system: dict[str, Any], payload: di
         "actor_token_id": context.get("actor_token_id"),
         "target_token_id": context.get("target_token_id"),
         "scene_id": context.get("scene_id"),
+        "hostile_within_reach": list(context.get("hostile_within_reach") or []),
         "checked": True,
     }
 
@@ -844,6 +845,8 @@ def _attack_roll_context(
         disadvantage_sources.append(f"target:{status}")
     if range_result.get("disadvantage"):
         disadvantage_sources.append("range:long")
+    if range_result.get("mode") == "ranged" and range_result.get("hostile_within_reach"):
+        disadvantage_sources.append("range:hostile_within_reach")
 
     return {
         "advantage": bool(advantage_sources),

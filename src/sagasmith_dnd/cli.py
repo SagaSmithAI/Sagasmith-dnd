@@ -468,6 +468,7 @@ def _activity_payload_with_range_context(
         "units": scene.grid_units or "ft",
         "grid_size": scene.grid_size,
         "grid_distance": grid_distance,
+        "hostile_within_reach": _hostile_within_reach(maps, scene_id=scene.id, actor_token=actor_token),
     }
     if not value.get("cover_context"):
         value["cover_context"] = cover_between_tokens(
@@ -490,6 +491,35 @@ def _combatant_token_id(state: dict[str, Any], actor_id: str | None) -> str:
         }:
             return str(combatant.get("token_id") or "")
     return ""
+
+
+def _hostile_within_reach(maps: MapService, *, scene_id: str, actor_token) -> list[dict[str, Any]]:
+    values: list[dict[str, Any]] = []
+    scene = maps.get_scene(scene_id)
+    grid_distance = int(scene.metadata.get("grid_distance", 5) or 5)
+    for token in maps.list_tokens(scene_id):
+        if token.id == actor_token.id or token.hidden:
+            continue
+        if not _hostile_disposition(actor_token.disposition, token.disposition):
+            continue
+        reach = int(token.metadata.get("reach", 5) or 5)
+        distance = measure_distance(scene.grid_size, actor_token.x, actor_token.y, token.x, token.y) * grid_distance
+        if distance <= reach:
+            values.append(
+                {
+                    "token_id": token.id,
+                    "actor_id": token.actor_id,
+                    "distance": distance,
+                    "reach": reach,
+                }
+            )
+    return values
+
+
+def _hostile_disposition(left: str, right: str) -> bool:
+    if not left or not right or left == right:
+        return False
+    return "hostile" in {left, right}
 
 
 def _payload_from_reaction_window(window: dict[str, Any], response: dict[str, Any]) -> dict[str, Any]:
