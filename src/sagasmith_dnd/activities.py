@@ -303,11 +303,15 @@ def _default_payment(activation: dict[str, Any]) -> str:
 
 def _budget_for(value: Any) -> dict[str, int]:
     budget = dict(value or {})
+    defaults = dict(get_ruleset().get("actionEconomy", {}).get("turnBudget") or {})
     for key in ("main_action", "bonus_action", "reaction"):
-        budget[key] = int(budget.get(key, 1))
+        budget[key] = int(budget.get(key, defaults.get(key, 1)))
     budget["extra_action"] = int(budget.get("extra_action", 0) or 0)
     budget["attack_budget"] = int(budget.get("attack_budget", 0) or 0)
-    budget["movement"] = int(budget.get("movement", 0))
+    budget["movement"] = int(budget.get("movement", defaults.get("movement", 0)) or 0)
+    budget["object_interaction"] = int(
+        budget.get("object_interaction", defaults.get("object_interaction", 0)) or 0
+    )
     return budget
 
 
@@ -351,8 +355,43 @@ def _attacks_per_action(actor) -> int:
     else:
         feature_ids = {str(item).strip().lower().replace("_", "-").replace(" ", "-") for item in features}
     if "extra-attack" in feature_ids:
-        return 2
+        return _attacks_from_class_levels(system) or 2
     return 1
+
+
+def _attacks_from_class_levels(system: dict[str, Any]) -> int:
+    class_levels = dict(system.get("class_levels") or {})
+    economy = dict(get_ruleset().get("actionEconomy", {}).get("attackBudget") or {})
+    fighter_progression = _progression(economy.get("fighterProgression"))
+    standard_progression = _progression(economy.get("standardProgression"))
+    attacks = 0
+    for class_id, level in class_levels.items():
+        normalized = str(class_id).strip().lower().replace("_", "-").replace(" ", "-")
+        try:
+            class_level = int(level.get("levels", level) if isinstance(level, dict) else level)
+        except (TypeError, ValueError):
+            continue
+        if normalized == "fighter":
+            attacks = max(attacks, _progression_value(fighter_progression, class_level))
+        else:
+            attacks = max(attacks, _progression_value(standard_progression, class_level))
+    return attacks
+
+
+def _progression(raw: Any) -> dict[int, int]:
+    return {
+        int(level): int(attacks)
+        for level, attacks in dict(raw or {}).items()
+        if str(level).strip().isdigit()
+    }
+
+
+def _progression_value(progression: dict[int, int], level: int) -> int:
+    value = 0
+    for threshold, attacks in sorted(progression.items()):
+        if level >= threshold:
+            value = max(value, attacks)
+    return value
 
 
 def _spend_uses(uses: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:

@@ -65,6 +65,8 @@ def test_combat_status_lists_current_actor_document_activities(
 
     assert status["current"]["id"] == actor["id"]
     assert status["activity_options"]["turn_budget"]["bonus_action"] == 1
+    assert status["activity_options"]["turn_budget"]["movement"] == 30
+    assert status["activity_options"]["turn_budget"]["object_interaction"] == 1
     assert status["legal_activities"] == [
         {
             "item_id": item["id"],
@@ -96,7 +98,7 @@ def test_extra_attack_and_action_surge_payments_flow_through_activity_use(
         "--name",
         "Fighter",
         "--payload",
-        '{"features":["extra-attack"],"attributes":{"hp":{"value":20,"max":20}}}',
+        '{"features":["extra-attack"],"class_levels":{"fighter":11},"attributes":{"hp":{"value":20,"max":20}}}',
     )
     target = _call(
         capsys,
@@ -184,7 +186,7 @@ def test_extra_attack_and_action_surge_payments_flow_through_activity_use(
         target["id"],
     )
     assert first["payment"] == "main_action"
-    assert first["state_delta"]["runtime"]["turn_budgets"][hero["id"]]["attack_budget"] == 1
+    assert first["state_delta"]["runtime"]["turn_budgets"][hero["id"]]["attack_budget"] == 2
 
     second = _call(
         capsys,
@@ -202,7 +204,25 @@ def test_extra_attack_and_action_surge_payments_flow_through_activity_use(
         target["id"],
     )
     assert second["payment"] == "attack_budget"
-    assert second["state_delta"]["runtime"]["turn_budgets"][hero["id"]]["attack_budget"] == 0
+    assert second["state_delta"]["runtime"]["turn_budgets"][hero["id"]]["attack_budget"] == 1
+
+    third = _call(
+        capsys,
+        "activity",
+        "use",
+        "--campaign",
+        campaign["id"],
+        "--actor",
+        hero["id"],
+        "--item",
+        weapon["id"],
+        "--activity",
+        attack["id"],
+        "--target-id",
+        target["id"],
+    )
+    assert third["payment"] == "attack_budget"
+    assert third["state_delta"]["runtime"]["turn_budgets"][hero["id"]]["attack_budget"] == 0
 
     error = _call_error(
         capsys,
@@ -234,9 +254,12 @@ def test_extra_attack_and_action_surge_payments_flow_through_activity_use(
         "--activity",
         surge["id"],
     )
-    assert surged["state_delta"]["runtime"]["turn_budgets"][hero["id"]]["extra_action"] == 1
+    surge_budget = surged["state_delta"]["runtime"]["turn_budgets"][hero["id"]]
+    assert surge_budget["extra_action"] == 1
+    assert surge_budget["bonus_action"] == 1
+    assert surge_budget["reaction"] == 1
 
-    third = _call(
+    fourth = _call(
         capsys,
         "activity",
         "use",
@@ -251,4 +274,5 @@ def test_extra_attack_and_action_surge_payments_flow_through_activity_use(
         "--target-id",
         target["id"],
     )
-    assert third["payment"] == "extra_action"
+    assert fourth["payment"] == "extra_action"
+    assert fourth["state_delta"]["runtime"]["turn_budgets"][hero["id"]]["attack_budget"] == 2
