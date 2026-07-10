@@ -223,6 +223,76 @@ def grant_ruleset_spell(
     return {"item": asdict(item), "activities": activities, "messages": [asdict(message)]}
 
 
+def create_ruleset_monster_actor(
+    documents: FoundryDocumentService,
+    *,
+    campaign_id: str,
+    monster_id: str,
+    name: str | None = None,
+    ruleset_id: str | None = None,
+) -> dict[str, Any]:
+    ruleset = get_ruleset(ruleset_id)
+    normalized = _feature_key(monster_id)
+    monster = dict(ruleset.get("monsters", {}).get(normalized) or {})
+    if not monster:
+        raise ValueError(f"unknown ruleset monster: {monster_id}")
+    actor = documents.create_actor(
+        campaign_id=campaign_id,
+        system_id="dnd5e",
+        actor_type="npc",
+        name=name or str(monster.get("name") or normalized),
+        img=str(monster.get("img") or ""),
+        system=normalize_actor_document("npc", dict(monster.get("system") or {})),
+        prototype_token=dict(monster.get("prototype_token") or {}),
+        flags={"dnd5e": {"ruleset_monster": normalized}},
+    )
+    items = []
+    for template in monster.get("items") or []:
+        if not isinstance(template, dict):
+            continue
+        item_type = str(template.get("type") or "weapon")
+        item = documents.create_item(
+            campaign_id=campaign_id,
+            system_id=actor.system_id,
+            actor_id=actor.id,
+            item_type=item_type,
+            name=str(template.get("name") or "Monster Action"),
+            source_key=str(template.get("source_key") or ""),
+            system=normalize_item_document(item_type, dict(template.get("system") or {})),
+            effects=list(template.get("effects") or []),
+            flags={"dnd5e": {"ruleset_monster": normalized}},
+        )
+        activities = _create_template_activities(
+            documents,
+            item_id=item.id,
+            templates=list(template.get("activities") or []),
+            ruleset_id=ruleset["id"],
+            flag_key="ruleset_monster",
+            flag_value=normalized,
+            fallback_name=item.name,
+        )
+        item_data = asdict(item)
+        item_data["activities"] = activities
+        items.append(item_data)
+    message = documents.create_message(
+        campaign_id=campaign_id,
+        message_type="advancement",
+        speaker={"system": "runtime"},
+        actor_id=actor.id,
+        deltas=[
+            {
+                "type": "ruleset_monster_create",
+                "monster": normalized,
+                "actor_id": actor.id,
+                "item_ids": [item["id"] for item in items],
+            }
+        ],
+        narration_hints=[f"{actor.name} is added to the encounter roster."],
+        flags={"dnd5e": {"ruleset_monster": normalized}},
+    )
+    return {"actor": asdict(actor), "items": items, "messages": [asdict(message)]}
+
+
 def _create_template_activities(
     documents: FoundryDocumentService,
     *,

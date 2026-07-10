@@ -247,3 +247,63 @@ def test_advancement_grant_spell_uses_ruleset_spell_templates(
     assert used["execution"]["hit"] is True
     assert used["execution"]["damage_roll"]["expression"] == "2d10"
     assert used["execution"]["damage"]["after_hp"] == 8
+
+
+def test_actor_create_monster_uses_ruleset_monster_templates(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    url = sqlite_database_url(tmp_path / "monster-template.db")
+    monkeypatch.setenv("DND_DATABASE_URL", url)
+    rolls = iter([10, 1])
+    monkeypatch.setattr("sagasmith_dnd.engine.random.randint", lambda _low, _high: next(rolls))
+    database = Database(url)
+    database.upgrade_schema()
+    try:
+        campaign = CampaignService(database).create(system_id="dnd5e", name="Monster Template")
+        target = FoundryDocumentService(database).create_actor(
+            campaign_id=campaign.id,
+            system_id="dnd5e",
+            actor_type="character",
+            name="Mira",
+            system={"attributes": {"ac": {"value": 10}, "hp": {"value": 10, "max": 10}}},
+        )
+    finally:
+        database.dispose()
+
+    created = _call(
+        capsys,
+        "actor",
+        "create-monster",
+        "--campaign",
+        campaign.id,
+        "--monster",
+        "goblin",
+    )
+
+    assert created["actor"]["name"] == "Goblin"
+    assert created["actor"]["system"]["attributes"]["ac"]["value"] == 15
+    assert [item["name"] for item in created["items"]] == ["Scimitar", "Shortbow"]
+    scimitar = created["items"][0]
+    slash = scimitar["activities"][0]
+    assert slash["range"] == {"value": 5, "type": "melee"}
+
+    used = _call(
+        capsys,
+        "activity",
+        "use",
+        "--campaign",
+        campaign.id,
+        "--actor",
+        created["actor"]["id"],
+        "--item",
+        scimitar["id"],
+        "--activity",
+        slash["id"],
+        "--target-id",
+        target.id,
+    )
+
+    assert used["execution"]["hit"] is True
+    assert used["execution"]["damage"]["after_hp"] == 7

@@ -223,6 +223,68 @@
       ]
     }
   },
+  "monsters": {
+    "goblin": {
+      "name": "Goblin",
+      "system": {
+        "attributes": {"ac": {"value": 15}, "hp": {"value": 7, "max": 7}, "movement": {"walk": 30}},
+        "abilities": {"str": {"value": 8}, "dex": {"value": 14}, "con": {"value": 10}, "int": {"value": 10}, "wis": {"value": 8}, "cha": {"value": 8}},
+        "details": {"cr": "1/4", "xp": 50},
+        "traits": {"size": "small", "type": "humanoid"}
+      },
+      "prototype_token": {"disposition": "hostile", "metadata": {"reach": 5}},
+      "items": [
+        {
+          "name": "Scimitar",
+          "type": "weapon",
+          "system": {"equipped": true, "damage_type": "slashing"},
+          "activities": [{"name": "Scimitar", "type": "attack", "activation": {"type": "action"}, "range": {"value": 5, "type": "melee"}, "system": {"attack_bonus": 4, "damage": "1d6+2", "damage_type": "slashing"}}]
+        },
+        {
+          "name": "Shortbow",
+          "type": "weapon",
+          "system": {"equipped": true, "damage_type": "piercing"},
+          "activities": [{"name": "Shortbow", "type": "attack", "activation": {"type": "action"}, "range": {"value": 80, "long": 320, "type": "ranged"}, "system": {"attack_bonus": 4, "damage": "1d6+2", "damage_type": "piercing"}}]
+        }
+      ]
+    },
+    "orc": {
+      "name": "Orc",
+      "system": {
+        "attributes": {"ac": {"value": 13}, "hp": {"value": 15, "max": 15}, "movement": {"walk": 30}},
+        "abilities": {"str": {"value": 16}, "dex": {"value": 12}, "con": {"value": 16}, "int": {"value": 7}, "wis": {"value": 11}, "cha": {"value": 10}},
+        "details": {"cr": "1/2", "xp": 100},
+        "traits": {"size": "medium", "type": "humanoid"}
+      },
+      "prototype_token": {"disposition": "hostile", "metadata": {"reach": 5}},
+      "items": [
+        {
+          "name": "Greataxe",
+          "type": "weapon",
+          "system": {"equipped": true, "damage_type": "slashing"},
+          "activities": [{"name": "Greataxe", "type": "attack", "activation": {"type": "action"}, "range": {"value": 5, "type": "melee"}, "system": {"attack_bonus": 5, "damage": "1d12+3", "damage_type": "slashing"}}]
+        }
+      ]
+    },
+    "wolf": {
+      "name": "Wolf",
+      "system": {
+        "attributes": {"ac": {"value": 13}, "hp": {"value": 11, "max": 11}, "movement": {"walk": 40}},
+        "abilities": {"str": {"value": 12}, "dex": {"value": 15}, "con": {"value": 12}, "int": {"value": 3}, "wis": {"value": 12}, "cha": {"value": 6}},
+        "details": {"cr": "1/4", "xp": 50},
+        "traits": {"size": "medium", "type": "beast"}
+      },
+      "prototype_token": {"disposition": "hostile", "metadata": {"reach": 5}},
+      "items": [
+        {
+          "name": "Bite",
+          "type": "weapon",
+          "system": {"equipped": true, "damage_type": "piercing", "features": ["pack-tactics"]},
+          "activities": [{"name": "Bite", "type": "attack", "activation": {"type": "action"}, "range": {"value": 5, "type": "melee"}, "system": {"attack_bonus": 4, "damage": "2d4+2", "damage_type": "piercing", "save": {"ability": "str", "dc": {"value": 11}}, "effects": [{"statuses": ["prone"], "apply_on": "failed_save"}]}}]
+        }
+      ]
+    }
+  },
   "timeUnits": {
     "turn": {"combat": true},
     "round": {"combat": true},
