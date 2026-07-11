@@ -48,7 +48,32 @@ ITEM_KINDS = {
     "magic_item",
     "focus",
 }
-EQUIPMENT_SLOTS = ("armor", "shield", "main_hand", "off_hand")
+EQUIPMENT_SLOTS = (
+    "armor",
+    "shield",
+    "main_hand",
+    "off_hand",
+    "head",
+    "neck",
+    "cloak",
+    "gloves",
+    "boots",
+    "ring_1",
+    "ring_2",
+)
+SLOT_ITEM_KINDS = {
+    "armor": {"armor"},
+    "shield": {"shield"},
+    "main_hand": {"weapon", "equipment", "tool", "focus", "consumable", "magic_item", "loot"},
+    "off_hand": {"weapon", "equipment", "tool", "focus", "consumable", "magic_item", "loot"},
+    "head": {"equipment", "magic_item"},
+    "neck": {"equipment", "magic_item"},
+    "cloak": {"equipment", "magic_item"},
+    "gloves": {"equipment", "magic_item"},
+    "boots": {"equipment", "magic_item"},
+    "ring_1": {"magic_item"},
+    "ring_2": {"magic_item"},
+}
 RECOVERY_PERIODS = {"none", "turn", "short_rest", "long_rest", "dawn", "manual"}
 EFFECT_PERIODS = {
     "manual",
@@ -265,6 +290,52 @@ def _normalize_resource(value: Any, field: str) -> dict[str, Any]:
     }
 
 
+def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, Any]:
+    mechanics = _object(value or {}, field)
+    if kind == "armor":
+        _reject_unknown(
+            mechanics,
+            field,
+            {"base_ac", "dexterity_mode", "dexterity_max", "magic_bonus"},
+        )
+        if "base_ac" not in mechanics:
+            raise ValueError(f"{field}.base_ac is required for armor")
+        dexterity_mode = _text(
+            mechanics.get("dexterity_mode"), f"{field}.dexterity_mode", default="none"
+        )
+        if dexterity_mode not in {"none", "full", "max"}:
+            raise ValueError(f"{field}.dexterity_mode is invalid")
+        dexterity_max = mechanics.get("dexterity_max")
+        if dexterity_mode == "max":
+            if dexterity_max is None:
+                raise ValueError(f"{field}.dexterity_max is required when dexterity_mode is max")
+            dexterity_max = _integer(dexterity_max, f"{field}.dexterity_max", minimum=0, maximum=10)
+        elif dexterity_max is not None:
+            raise ValueError(f"{field}.dexterity_max is only valid when dexterity_mode is max")
+        return {
+            "base_ac": _integer(mechanics["base_ac"], f"{field}.base_ac", minimum=1),
+            "dexterity_mode": dexterity_mode,
+            "dexterity_max": dexterity_max,
+            "magic_bonus": _integer(mechanics.get("magic_bonus"), f"{field}.magic_bonus"),
+        }
+    if kind == "shield":
+        _reject_unknown(mechanics, field, {"ac_bonus", "magic_bonus"})
+        if "ac_bonus" not in mechanics:
+            raise ValueError(f"{field}.ac_bonus is required for shield")
+        return {
+            "ac_bonus": _integer(mechanics["ac_bonus"], f"{field}.ac_bonus", minimum=0),
+            "magic_bonus": _integer(mechanics.get("magic_bonus"), f"{field}.magic_bonus"),
+        }
+    if kind == "magic_item" and "ac_bonus" in mechanics:
+        mechanics["ac_bonus"] = _integer(mechanics["ac_bonus"], f"{field}.ac_bonus")
+    return mechanics
+
+
+def _validate_item_slot(item: dict[str, Any], slot: str) -> None:
+    if item["kind"] not in SLOT_ITEM_KINDS[slot]:
+        raise ValueError(f"{item['kind']} cannot be equipped in {slot}")
+
+
 def _normalize_item(value: Any, field: str, *, generate_id: bool = True) -> dict[str, Any]:
     item = _object(value, field)
     allowed = {
@@ -295,6 +366,11 @@ def _normalize_item(value: Any, field: str, *, generate_id: bool = True) -> dict
     kind = _text(item.get("kind"), f"{field}.kind", default="equipment")
     if kind not in ITEM_KINDS:
         raise ValueError(f"{field}.kind is invalid")
+    if (
+        kind in {"armor", "shield"}
+        and _integer(item.get("quantity"), f"{field}.quantity", default=1, minimum=1) != 1
+    ):
+        raise ValueError(f"{field}.quantity must be 1 for {kind}")
     attunement = _text(item.get("attunement"), f"{field}.attunement", default="none")
     if attunement not in {"none", "required", "attuned"}:
         raise ValueError(f"{field}.attunement is invalid")
@@ -328,7 +404,7 @@ def _normalize_item(value: Any, field: str, *, generate_id: bool = True) -> dict
         ),
         "uses": uses,
         "charges": charges,
-        "mechanics": _object(item.get("mechanics") or {}, f"{field}.mechanics"),
+        "mechanics": _normalize_item_mechanics(kind, item.get("mechanics"), f"{field}.mechanics"),
     }
 
 
@@ -375,7 +451,21 @@ def validate_inventory(value: Any) -> dict[str, Any]:
             item_id = _text(item_id, f"inventory.equipment_slots.{slot}", maximum=100)
             if item_id not in by_id:
                 raise ValueError(f"inventory.equipment_slots.{slot} references an unknown item")
+            item = by_id[item_id]
+            _validate_item_slot(item, slot)
+            if not item["equipped"] or item["equipped_slot"] != slot:
+                raise ValueError("inventory equipment slot and item equipped state must agree")
         normalized_slots[slot] = item_id
+    for item in items:
+        equipped_slot = item["equipped_slot"]
+        if item["equipped"]:
+            if equipped_slot is None:
+                raise ValueError("equipped item must declare an equipped_slot")
+            if normalized_slots[equipped_slot] != item["id"]:
+                raise ValueError("equipped item must be referenced by its equipment slot")
+            _validate_item_slot(item, equipped_slot)
+        elif equipped_slot is not None:
+            raise ValueError("unequipped item cannot declare an equipped_slot")
     return {"wallet": normalized_wallet, "items": items, "equipment_slots": normalized_slots}
 
 
@@ -941,6 +1031,94 @@ def validate_party_state(state: dict[str, Any]) -> dict[str, Any]:
     return value
 
 
+def _derive_armor_class(
+    value: dict[str, Any], ability_modifiers: dict[str, int], active_effects: list[dict[str, Any]]
+) -> tuple[int, dict[str, Any], set[str]]:
+    inventory = value["inventory"]
+    items = {item["id"]: item for item in inventory["items"]}
+    ac = value["combat"]["ac"]
+    override = ac["override"]
+    breakdown: dict[str, Any] = {
+        "mode": "override" if override is not None else "base",
+        "base": override if override is not None else ac["base"],
+        "armor": None,
+        "shield": None,
+        "magic_items": [],
+        "effects": [],
+    }
+    total = breakdown["base"]
+    if override is None:
+        armor_id = inventory["equipment_slots"]["armor"]
+        if armor_id:
+            armor = items[armor_id]
+            mechanics = armor["mechanics"]
+            dexterity_modifier = ability_modifiers["dexterity"]
+            dexterity_mode = mechanics["dexterity_mode"]
+            if dexterity_mode == "none":
+                dexterity_bonus = 0
+            elif dexterity_mode == "full":
+                dexterity_bonus = dexterity_modifier
+            else:
+                dexterity_bonus = min(dexterity_modifier, mechanics["dexterity_max"])
+            total = mechanics["base_ac"] + dexterity_bonus + mechanics["magic_bonus"]
+            breakdown["mode"] = "armor"
+            breakdown["base"] = mechanics["base_ac"]
+            breakdown["armor"] = {
+                "item_id": armor_id,
+                "name": armor["name"],
+                "dexterity_bonus": dexterity_bonus,
+                "magic_bonus": mechanics["magic_bonus"],
+            }
+        shield_id = inventory["equipment_slots"]["shield"]
+        if shield_id:
+            shield = items[shield_id]
+            mechanics = shield["mechanics"]
+            bonus = mechanics["ac_bonus"] + mechanics["magic_bonus"]
+            total += bonus
+            breakdown["shield"] = {
+                "item_id": shield_id,
+                "name": shield["name"],
+                "bonus": bonus,
+            }
+        for item in inventory["items"]:
+            if item["kind"] != "magic_item" or not item["equipped"]:
+                continue
+            bonus = item["mechanics"].get("ac_bonus", 0)
+            if bonus:
+                total += bonus
+                breakdown["magic_items"].append(
+                    {"item_id": item["id"], "name": item["name"], "bonus": bonus}
+                )
+
+    unresolved_effects: set[str] = set()
+    for effect in active_effects:
+        for change in effect["changes"]:
+            if change["path"] not in {"derived.armor_class", "combat.ac"}:
+                unresolved_effects.add(effect["id"])
+                continue
+            if (
+                change["mode"] not in {"add", "override"}
+                or isinstance(change["value"], bool)
+                or not isinstance(change["value"], int)
+            ):
+                unresolved_effects.add(effect["id"])
+                continue
+            if change["mode"] == "add":
+                total += change["value"]
+            else:
+                total = change["value"]
+            breakdown["effects"].append(
+                {
+                    "effect_id": effect["id"],
+                    "name": effect["name"],
+                    "mode": change["mode"],
+                    "value": change["value"],
+                }
+            )
+    breakdown["total"] = total
+    return total, breakdown, unresolved_effects
+
+
 def derive_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
     value = validate_character_sheet(sheet)
     level = value["progression"]["level"]
@@ -969,6 +1147,9 @@ def derive_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
     )
     spell_ability = value["spellcasting"]["ability"]
     active_effects = [effect for effect in value["effects"] if effect["active"]]
+    armor_class, armor_class_breakdown, unresolved_effects = _derive_armor_class(
+        value, ability_modifiers, active_effects
+    )
     return {
         "proficiency_bonus": proficiency,
         "ability_modifiers": ability_modifiers,
@@ -977,7 +1158,8 @@ def derive_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
         "passive_perception": 10
         + skills["perception"]
         + value["traits"]["senses"]["passive_perception_bonus"],
-        "armor_class": value["combat"]["ac"]["override"] or value["combat"]["ac"]["base"],
+        "armor_class": armor_class,
+        "armor_class_breakdown": armor_class_breakdown,
         "initiative": ability_modifiers[value["combat"]["initiative"]["ability"]]
         + value["combat"]["initiative"]["bonus"],
         "hit_points": dict(value["combat"]["hp"]),
@@ -1000,7 +1182,7 @@ def derive_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
         "active_effects": [
             {"id": effect["id"], "name": effect["name"]} for effect in active_effects
         ],
-        "unresolved_rules": [effect["id"] for effect in active_effects if effect["changes"]],
+        "unresolved_rules": sorted(unresolved_effects),
     }
 
 
@@ -1086,6 +1268,8 @@ def equip_inventory_item(sheet: dict[str, Any], item_id: str, slot: str | None) 
         raise LookupError(item_id)
     if slot is not None and slot not in EQUIPMENT_SLOTS:
         raise ValueError("invalid equipment slot")
+    if slot is not None:
+        _validate_item_slot(item, slot)
     for key, current_id in value["inventory"]["equipment_slots"].items():
         if current_id == item_id:
             value["inventory"]["equipment_slots"][key] = None

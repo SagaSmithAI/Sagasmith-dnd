@@ -110,6 +110,96 @@ def test_inventory_wallet_effect_and_memory_contracts() -> None:
     assert notes["memories"][0]["id"] == memory_id
 
 
+def test_equipment_slots_and_ac_derive_from_armor_shield_magic_and_effects() -> None:
+    sheet = validate_character_sheet(
+        {
+            "abilities": {"dexterity": {"score": 16}},
+            "combat": {"ac": {"base": 10}},
+        }
+    )
+    sheet, armor_id = add_inventory_item(
+        sheet,
+        {
+            "id": "leather",
+            "name": "Leather Armor",
+            "kind": "armor",
+            "mechanics": {
+                "base_ac": 11,
+                "dexterity_mode": "full",
+                "magic_bonus": 0,
+            },
+        },
+    )
+    sheet, shield_id = add_inventory_item(
+        sheet,
+        {
+            "id": "shield",
+            "name": "Shield",
+            "kind": "shield",
+            "mechanics": {"ac_bonus": 2, "magic_bonus": 0},
+        },
+    )
+    sheet, cloak_id = add_inventory_item(
+        sheet,
+        {
+            "id": "cloak",
+            "name": "Cloak of Protection",
+            "kind": "magic_item",
+            "mechanics": {"ac_bonus": 1},
+        },
+    )
+    sheet = equip_inventory_item(sheet, armor_id, "armor")
+    sheet = equip_inventory_item(sheet, shield_id, "shield")
+    sheet = equip_inventory_item(sheet, cloak_id, "cloak")
+    sheet, _ = add_effect(
+        sheet,
+        {
+            "name": "Shield of Faith",
+            "kind": "spell",
+            "changes": [{"path": "derived.armor_class", "mode": "add", "value": 2}],
+        },
+    )
+
+    derived = derive_character_sheet(sheet)
+    assert derived["armor_class"] == 19
+    assert derived["armor_class_breakdown"]["armor"]["dexterity_bonus"] == 3
+    assert derived["armor_class_breakdown"]["shield"]["bonus"] == 2
+    assert derived["armor_class_breakdown"]["magic_items"] == [
+        {"item_id": "cloak", "name": "Cloak of Protection", "bonus": 1}
+    ]
+    assert derived["unresolved_rules"] == []
+
+
+def test_equipment_schema_rejects_incompatible_slots_and_inconsistent_state() -> None:
+    with pytest.raises(ValueError, match="base_ac is required"):
+        add_inventory_item(
+            validate_character_sheet({}),
+            {"name": "Broken Armor", "kind": "armor", "mechanics": {}},
+        )
+    potion_sheet, potion_id = add_inventory_item(
+        validate_character_sheet({}),
+        {"id": "potion", "name": "Potion", "kind": "consumable"},
+    )
+    with pytest.raises(ValueError, match="cannot be equipped in armor"):
+        equip_inventory_item(potion_sheet, potion_id, "armor")
+    with pytest.raises(ValueError, match="equipment slot and item equipped state must agree"):
+        validate_character_sheet(
+            {
+                "inventory": {
+                    "items": [
+                        {
+                            "id": "armor",
+                            "name": "Leather",
+                            "kind": "armor",
+                            "mechanics": {"base_ac": 11},
+                        }
+                    ],
+                    "equipment_slots": {"armor": "armor"},
+                }
+            }
+        )
+
+
 def test_schema_rejects_legacy_fields_and_invalid_container_cycles() -> None:
     with pytest.raises(ValueError, match="unsupported fields"):
         validate_character_sheet({"level": 3})

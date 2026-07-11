@@ -534,3 +534,59 @@ def test_2014_translation_links_to_english_source(
         "zh",
     )
     assert found["data"]["hits"][0]["metadata"]["canonical_source_id"]
+
+
+def test_cli_equipment_command_derives_armor_class(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.setenv(
+        "DND_DATABASE_URL", f"sqlite+pysqlite:///{(tmp_path / 'equipment.db').as_posix()}"
+    )
+    campaign_id = _call(capsys, "campaign", "start", "--name", "Equipment")[1]["data"]["campaign"][
+        "id"
+    ]
+    _, created = _call(
+        capsys,
+        "character",
+        "create",
+        "--campaign",
+        campaign_id,
+        "--name",
+        "Mira",
+        "--sheet",
+        '{"abilities":{"dexterity":{"score":16}}}',
+    )
+    character_id = created["data"]["id"]
+    leather = json.dumps(
+        {
+            "id": "leather",
+            "name": "Leather Armor",
+            "kind": "armor",
+            "mechanics": {"base_ac": 11, "dexterity_mode": "full"},
+        }
+    )
+    assert (
+        _call(
+            capsys,
+            "character",
+            "inventory",
+            "add",
+            "--id",
+            character_id,
+            "--payload",
+            leather,
+        )[0]
+        == 0
+    )
+    _, equipped = _call(
+        capsys,
+        "character",
+        "equipment",
+        "equip",
+        "--id",
+        character_id,
+        "--item",
+        "leather",
+        "--slot-name",
+        "armor",
+    )
+    assert equipped["data"]["sheet"]["inventory"]["equipment_slots"]["armor"] == "leather"
+    assert equipped["data"]["derived"]["armor_class"] == 14
