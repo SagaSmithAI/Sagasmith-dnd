@@ -14,7 +14,15 @@ def test_dnd_vertical_slice(tmp_path: Path) -> None:
         system_id=DND5E.id,
         campaign_id=campaign.id,
         name="Mira",
-        sheet=validate_character_sheet({"class": "Fighter", "armor_class": 16}),
+        sheet=validate_character_sheet(
+            {
+                "progression": {
+                    "level": 1,
+                    "classes": [{"name": "Fighter", "level": 1, "hit_die": 10}],
+                },
+                "combat": {"ac": {"base": 16}},
+            }
+        ),
     )
     RuleService(database).ingest(
         system_id=DND5E.id,
@@ -29,7 +37,6 @@ def test_dnd_vertical_slice(tmp_path: Path) -> None:
         content="# Arrival\n## Gate\nTwo guards wait here.",
     )
 
-    assert character.sheet["armor_class"] == 16
+    assert character.sheet["combat"]["ac"]["base"] == 16
     assert RuleService(database).search(system_id=DND5E.id, query="grapple")
     assert ModuleService(database).search(campaign_id=campaign.id, query="guards")
-
