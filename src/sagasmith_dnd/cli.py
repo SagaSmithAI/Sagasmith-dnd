@@ -26,11 +26,13 @@ from sagasmith_core.documents import converter_for
 from sagasmith_core.modules import MarkdownModuleParser
 
 from sagasmith_dnd import __version__
+from sagasmith_dnd.ability_generation import apply_ability_generation, roll_ability_scores
 from sagasmith_dnd.character_schema import (
     add_effect,
     add_inventory_item,
     add_memory,
     adjust_wallet,
+    consume_weapon_ammunition,
     default_character_sheet,
     derive_character_sheet,
     equip_inventory_item,
@@ -138,6 +140,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--memory-id")
     parser.add_argument("--spell")
     parser.add_argument("--resource")
+    parser.add_argument("--method")
+    parser.add_argument("--ability-method")
+    parser.add_argument("--assignments")
+    parser.add_argument("--rolls")
     return parser
 
 
@@ -367,6 +373,17 @@ def _dispatch(args) -> Any:
                     raise CliError(
                         "invalid_value", "--type must be pc, npc, or monster", exit_code=2
                     )
+                sheet = validate_character_sheet(_dict(args.sheet))
+                if args.ability_method:
+                    raw_rolls = _json_value(args.rolls) if args.rolls else None
+                    sheet = validate_character_sheet(
+                        apply_ability_generation(
+                            sheet,
+                            method=args.ability_method,
+                            assignments=_dict(args.assignments),
+                            rolls=raw_rolls,
+                        )
+                    )
                 template, instance = characters.create_with_instance(
                     system_id=DND5E.id,
                     campaign_id=_require(args.campaign, "campaign"),
@@ -374,7 +391,7 @@ def _dispatch(args) -> Any:
                     character_type=character_type,
                     player_name=args.player,
                     summary=args.summary or "",
-                    sheet=validate_character_sheet(_dict(args.sheet)),
+                    sheet=sheet,
                     notes=validate_character_notes(
                         _dict(args.notes), character_type=character_type
                     ),
@@ -383,6 +400,29 @@ def _dispatch(args) -> Any:
                     "template": _character_view(template),
                     "instance": _character_view(instance),
                 }
+            if args.action == "ability":
+                if args.subaction == "roll":
+                    return roll_ability_scores(args.edition or "2014")
+                if args.subaction == "apply":
+                    before = characters.get(_require(args.id, "id"))
+                    raw_rolls = _json_value(args.rolls) if args.rolls else None
+                    sheet = validate_character_sheet(
+                        apply_ability_generation(
+                            validate_character_sheet(before.sheet),
+                            method=_require(args.method, "method"),
+                            assignments=_dict(args.assignments),
+                            rolls=raw_rolls,
+                        )
+                    )
+                    return _character_view(
+                        _persist_character(
+                            characters,
+                            revisions,
+                            before,
+                            sheet=sheet,
+                            operation=f"character.ability.{args.method}",
+                        )
+                    )
             if args.action == "library" and args.subaction == "list":
                 return {
                     "characters": [
@@ -482,6 +522,19 @@ def _dispatch(args) -> Any:
                         operation="character.inventory.remove",
                     )
                     return {"character": _character_view(updated), "removed": removed}
+                if args.subaction == "use-ammunition":
+                    quantity = args.amount if args.amount is not None else 1
+                    sheet, consumed = consume_weapon_ammunition(
+                        before.sheet, _require(args.item, "item"), quantity
+                    )
+                    updated = _persist_character(
+                        characters,
+                        revisions,
+                        before,
+                        sheet=sheet,
+                        operation="character.inventory.use_ammunition",
+                    )
+                    return {"character": _character_view(updated), "consumed": consumed}
                 if args.subaction == "transfer":
                     target = characters.get(_require(args.target, "target"))
                     if before.id == target.id:

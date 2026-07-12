@@ -6,6 +6,8 @@ import copy
 import uuid
 from typing import Any
 
+from sagasmith_dnd.ability_generation import normalize_ability_generation
+
 ABILITY_NAMES = (
     "strength",
     "dexterity",
@@ -60,6 +62,12 @@ EQUIPMENT_SLOTS = (
     "boots",
     "ring_1",
     "ring_2",
+    "shoulders",
+    "back",
+    "chest",
+    "wrists",
+    "waist",
+    "legs",
 )
 SLOT_ITEM_KINDS = {
     "armor": {"armor"},
@@ -73,7 +81,15 @@ SLOT_ITEM_KINDS = {
     "boots": {"equipment", "magic_item"},
     "ring_1": {"magic_item"},
     "ring_2": {"magic_item"},
+    "shoulders": {"equipment", "magic_item"},
+    "back": {"equipment", "magic_item"},
+    "chest": {"equipment", "magic_item"},
+    "wrists": {"equipment", "magic_item"},
+    "waist": {"equipment", "magic_item"},
+    "legs": {"equipment", "magic_item"},
 }
+SENSE_NAMES = ("darkvision", "blindsight", "tremorsense", "truesight")
+ATTACK_ABILITIES = {"strength", "dexterity", "spell", "none"}
 RECOVERY_PERIODS = {"none", "turn", "short_rest", "long_rest", "dawn", "manual"}
 EFFECT_PERIODS = {
     "manual",
@@ -166,6 +182,7 @@ def _default_inventory() -> dict[str, Any]:
         "wallet": {denomination: 0 for denomination in DENOMINATIONS},
         "items": [],
         "equipment_slots": {slot: None for slot in EQUIPMENT_SLOTS},
+        "encumbrance": {"mode": "standard", "ignore_currency_weight": True},
     }
 
 
@@ -173,12 +190,38 @@ def default_character_sheet() -> dict[str, Any]:
     return {
         "schema_version": 2,
         "edition": "2014",
+        "identity": {
+            "gender": "",
+            "age": "",
+            "height_cm": None,
+            "weight_lb": None,
+            "faith": "",
+            "deity": "",
+            "hair": "",
+            "skin": "",
+            "eyes": "",
+            "portrait_uri": "",
+        },
         "progression": {
             "level": 1,
             "xp": 0,
             "classes": [],
             "background": "",
+            "background_grants": {
+                "feature": "",
+                "equipment_item_ids": [],
+                "languages": [],
+                "tools": [],
+                "choices": {},
+            },
             "species": "",
+        },
+        "ability_generation": {
+            "ruleset": "",
+            "method": "unrecorded",
+            "assignments": {},
+            "point_buy": None,
+            "rolls": [],
         },
         "abilities": {ability: _default_ability() for ability in ABILITY_NAMES},
         "skills": {skill: _default_skill() for skill in SKILL_ABILITIES},
@@ -188,8 +231,11 @@ def default_character_sheet() -> dict[str, Any]:
             "initiative": {"ability": "dexterity", "bonus": 0},
             "speed": {"walk": 30, "fly": 0, "swim": 0, "climb": 0, "burrow": 0},
             "hit_dice": {},
+            "hp_progression": [],
             "death_saves": {"successes": 0, "failures": 0},
             "exhaustion": 0,
+            "inspiration": False,
+            "wounded": False,
         },
         "traits": {
             "size": "medium",
@@ -200,7 +246,13 @@ def default_character_sheet() -> dict[str, Any]:
             "immunities": [],
             "vulnerabilities": [],
             "condition_immunities": [],
-            "senses": {"darkvision": 0, "passive_perception_bonus": 0},
+            "senses": {
+                "darkvision": 0,
+                "blindsight": 0,
+                "tremorsense": 0,
+                "truesight": 0,
+                "passive_perception_bonus": 0,
+            },
         },
         "resources": {},
         "spellcasting": {
@@ -215,10 +267,20 @@ def default_character_sheet() -> dict[str, Any]:
             },
             "ritual_casting": False,
             "spellbook": {"enabled": False, "spell_ids": []},
+            "casting_economy": "slots",
+            "spell_points": None,
         },
         "content": {"spells": [], "features": [], "feats": [], "activities": []},
         "conditions": [],
         "effects": [],
+        "adventure_state": {
+            "reputation": {},
+            "contributions": {},
+            "blessings": [],
+            "wards": [],
+            "legendary_boons": [],
+            "status_tags": [],
+        },
         "inventory": _default_inventory(),
     }
 
@@ -234,6 +296,7 @@ def default_character_notes() -> dict[str, Any]:
             "bonds": [],
             "flaws": [],
             "motivation": "",
+            "backstory": "",
             "dm_notes": "",
         },
         "memories": [],
@@ -292,6 +355,94 @@ def _normalize_resource(value: Any, field: str) -> dict[str, Any]:
 
 def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, Any]:
     mechanics = _object(value or {}, field)
+    if kind == "weapon":
+        _reject_unknown(
+            mechanics,
+            field,
+            {
+                "category",
+                "attack_type",
+                "attack_ability",
+                "damage_formula",
+                "damage_type",
+                "versatile_damage_formula",
+                "properties",
+                "normal_range_ft",
+                "long_range_ft",
+                "thrown_normal_range_ft",
+                "thrown_long_range_ft",
+                "ammunition_item_id",
+                "proficient",
+                "magic_bonus",
+            },
+        )
+        category = _text(mechanics.get("category"), f"{field}.category", default="other")
+        if category not in {"simple", "martial", "natural", "improvised", "other"}:
+            raise ValueError(f"{field}.category is invalid")
+        attack_type = _text(mechanics.get("attack_type"), f"{field}.attack_type", default="melee")
+        if attack_type not in {"melee", "ranged"}:
+            raise ValueError(f"{field}.attack_type is invalid")
+        attack_ability = _text(
+            mechanics.get("attack_ability"), f"{field}.attack_ability", default="strength"
+        )
+        if attack_ability not in ATTACK_ABILITIES:
+            raise ValueError(f"{field}.attack_ability is invalid")
+        properties = _string_list(mechanics.get("properties"), f"{field}.properties")
+        return {
+            "category": category,
+            "attack_type": attack_type,
+            "attack_ability": attack_ability,
+            "damage_formula": _text(
+                mechanics.get("damage_formula"), f"{field}.damage_formula", maximum=100
+            ),
+            "damage_type": _text(mechanics.get("damage_type"), f"{field}.damage_type", maximum=100),
+            "versatile_damage_formula": _text(
+                mechanics.get("versatile_damage_formula"),
+                f"{field}.versatile_damage_formula",
+                maximum=100,
+            ),
+            "properties": properties,
+            "normal_range_ft": _integer(
+                mechanics.get("normal_range_ft"), f"{field}.normal_range_ft", minimum=0
+            ),
+            "long_range_ft": _integer(
+                mechanics.get("long_range_ft"), f"{field}.long_range_ft", minimum=0
+            ),
+            "thrown_normal_range_ft": _integer(
+                mechanics.get("thrown_normal_range_ft"),
+                f"{field}.thrown_normal_range_ft",
+                minimum=0,
+            ),
+            "thrown_long_range_ft": _integer(
+                mechanics.get("thrown_long_range_ft"),
+                f"{field}.thrown_long_range_ft",
+                minimum=0,
+            ),
+            "ammunition_item_id": (
+                _text(mechanics["ammunition_item_id"], f"{field}.ammunition_item_id", maximum=100)
+                if mechanics.get("ammunition_item_id") is not None
+                else None
+            ),
+            "proficient": _boolean(
+                mechanics.get("proficient"), f"{field}.proficient", default=True
+            ),
+            "magic_bonus": _integer(mechanics.get("magic_bonus"), f"{field}.magic_bonus"),
+        }
+    if kind == "container":
+        _reject_unknown(
+            mechanics, field, {"capacity_oz", "weightless_contents", "extra_dimensional"}
+        )
+        return {
+            "capacity_oz": _integer(
+                mechanics.get("capacity_oz"), f"{field}.capacity_oz", minimum=0
+            ),
+            "weightless_contents": _boolean(
+                mechanics.get("weightless_contents"), f"{field}.weightless_contents"
+            ),
+            "extra_dimensional": _boolean(
+                mechanics.get("extra_dimensional"), f"{field}.extra_dimensional"
+            ),
+        }
     if kind == "armor":
         _reject_unknown(
             mechanics,
@@ -410,7 +561,7 @@ def _normalize_item(value: Any, field: str, *, generate_id: bool = True) -> dict
 
 def validate_inventory(value: Any) -> dict[str, Any]:
     inventory = _merge_defaults(_default_inventory(), _object(value or {}, "inventory"))
-    _reject_unknown(inventory, "inventory", {"wallet", "items", "equipment_slots"})
+    _reject_unknown(inventory, "inventory", {"wallet", "items", "equipment_slots", "encumbrance"})
     wallet = _object(inventory["wallet"], "inventory.wallet")
     _reject_unknown(wallet, "inventory.wallet", set(DENOMINATIONS))
     normalized_wallet = {
@@ -429,19 +580,35 @@ def validate_inventory(value: Any) -> dict[str, Any]:
     by_id = {item["id"]: item for item in items}
     for item in items:
         container_id = item["container_id"]
-        if container_id is None:
-            continue
-        container = by_id.get(container_id)
-        if container is None or container["kind"] != "container":
-            raise ValueError("inventory item references an invalid container")
-        seen = {item["id"]}
-        current = container
-        while current["container_id"] is not None:
-            parent_id = current["container_id"]
-            if parent_id in seen:
-                raise ValueError("inventory containers must not form a cycle")
-            seen.add(parent_id)
-            current = by_id[parent_id]
+        if container_id is not None:
+            container = by_id.get(container_id)
+            if container is None or container["kind"] != "container":
+                raise ValueError("inventory item references an invalid container")
+            seen = {item["id"]}
+            current = container
+            while current["container_id"] is not None:
+                parent_id = current["container_id"]
+                if parent_id in seen:
+                    raise ValueError("inventory containers must not form a cycle")
+                seen.add(parent_id)
+                current = by_id[parent_id]
+        if item["kind"] == "weapon":
+            ammunition_item_id = item["mechanics"]["ammunition_item_id"]
+            if ammunition_item_id is not None:
+                ammunition = by_id.get(ammunition_item_id)
+                if ammunition is None or ammunition["kind"] != "ammunition":
+                    raise ValueError(
+                        "weapon ammunition_item_id must reference ammunition in inventory"
+                    )
+    for container in (item for item in items if item["kind"] == "container"):
+        capacity = container["mechanics"]["capacity_oz"]
+        contained_weight = sum(
+            item["weight_oz"] * item["quantity"]
+            for item in items
+            if item["container_id"] == container["id"]
+        )
+        if capacity and contained_weight > capacity:
+            raise ValueError("container contents exceed capacity_oz")
     slots = _object(inventory["equipment_slots"], "inventory.equipment_slots")
     _reject_unknown(slots, "inventory.equipment_slots", set(EQUIPMENT_SLOTS))
     normalized_slots: dict[str, str | None] = {}
@@ -466,12 +633,40 @@ def validate_inventory(value: Any) -> dict[str, Any]:
             _validate_item_slot(item, equipped_slot)
         elif equipped_slot is not None:
             raise ValueError("unequipped item cannot declare an equipped_slot")
-    return {"wallet": normalized_wallet, "items": items, "equipment_slots": normalized_slots}
+    encumbrance = _object(inventory["encumbrance"], "inventory.encumbrance")
+    _reject_unknown(encumbrance, "inventory.encumbrance", {"mode", "ignore_currency_weight"})
+    mode = _text(encumbrance.get("mode"), "inventory.encumbrance.mode", default="standard")
+    if mode not in {"standard", "variant"}:
+        raise ValueError("inventory.encumbrance.mode is invalid")
+    return {
+        "wallet": normalized_wallet,
+        "items": items,
+        "equipment_slots": normalized_slots,
+        "encumbrance": {
+            "mode": mode,
+            "ignore_currency_weight": _boolean(
+                encumbrance.get("ignore_currency_weight"),
+                "inventory.encumbrance.ignore_currency_weight",
+                default=True,
+            ),
+        },
+    }
 
 
 def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
     spell = _object(value, field)
-    allowed = {"id", "source_key", "name", "level", "grant", "access", "custom_definition", "notes"}
+    allowed = {
+        "id",
+        "source_key",
+        "name",
+        "level",
+        "grant",
+        "access",
+        "definition",
+        "point_cost",
+        "custom_definition",
+        "notes",
+    }
     _reject_unknown(spell, field, allowed)
     grant = _object(spell.get("grant") or {}, f"{field}.grant")
     _reject_unknown(grant, f"{field}.grant", {"source_type", "source_key", "method"})
@@ -480,6 +675,39 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
         access,
         f"{field}.access",
         {"known", "prepared", "always_prepared", "in_spellbook", "ritual_available", "at_will"},
+    )
+    definition = _object(spell.get("definition") or {}, f"{field}.definition")
+    _reject_unknown(
+        definition,
+        f"{field}.definition",
+        {"school", "casting_time", "range", "duration", "components", "effect"},
+    )
+    spell_range = _object(definition.get("range") or {}, f"{field}.definition.range")
+    _reject_unknown(
+        spell_range, f"{field}.definition.range", {"kind", "normal_ft", "long_ft", "area"}
+    )
+    range_kind = _text(spell_range.get("kind"), f"{field}.definition.range.kind", default="special")
+    if range_kind not in {"self", "touch", "distance", "sight", "unlimited", "special"}:
+        raise ValueError(f"{field}.definition.range.kind is invalid")
+    duration = _object(definition.get("duration") or {}, f"{field}.definition.duration")
+    _reject_unknown(
+        duration, f"{field}.definition.duration", {"kind", "value", "unit", "concentration"}
+    )
+    duration_kind = _text(
+        duration.get("kind"), f"{field}.definition.duration.kind", default="instantaneous"
+    )
+    if duration_kind not in {"instantaneous", "timed", "until_dispelled", "special"}:
+        raise ValueError(f"{field}.definition.duration.kind is invalid")
+    duration_unit = _text(
+        duration.get("unit"), f"{field}.definition.duration.unit", default="round"
+    )
+    if duration_unit not in {"round", "minute", "hour", "day", "special"}:
+        raise ValueError(f"{field}.definition.duration.unit is invalid")
+    components = _object(definition.get("components") or {}, f"{field}.definition.components")
+    _reject_unknown(
+        components,
+        f"{field}.definition.components",
+        {"verbal", "somatic", "material", "material_description", "material_cost_cp", "consumed"},
     )
     return {
         "id": _text(spell.get("id"), f"{field}.id", default=_uuid(), maximum=100),
@@ -507,6 +735,60 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
             ),
             "at_will": _boolean(access.get("at_will"), f"{field}.access.at_will"),
         },
+        "definition": {
+            "school": _text(definition.get("school"), f"{field}.definition.school", maximum=100),
+            "casting_time": _text(
+                definition.get("casting_time"), f"{field}.definition.casting_time", maximum=200
+            ),
+            "range": {
+                "kind": range_kind,
+                "normal_ft": _integer(
+                    spell_range.get("normal_ft"), f"{field}.definition.range.normal_ft", minimum=0
+                ),
+                "long_ft": _integer(
+                    spell_range.get("long_ft"), f"{field}.definition.range.long_ft", minimum=0
+                ),
+                "area": _text(
+                    spell_range.get("area"), f"{field}.definition.range.area", maximum=200
+                ),
+            },
+            "duration": {
+                "kind": duration_kind,
+                "value": _integer(
+                    duration.get("value"), f"{field}.definition.duration.value", minimum=0
+                ),
+                "unit": duration_unit,
+                "concentration": _boolean(
+                    duration.get("concentration"), f"{field}.definition.duration.concentration"
+                ),
+            },
+            "components": {
+                "verbal": _boolean(
+                    components.get("verbal"), f"{field}.definition.components.verbal"
+                ),
+                "somatic": _boolean(
+                    components.get("somatic"), f"{field}.definition.components.somatic"
+                ),
+                "material": _boolean(
+                    components.get("material"), f"{field}.definition.components.material"
+                ),
+                "material_description": _text(
+                    components.get("material_description"),
+                    f"{field}.definition.components.material_description",
+                    maximum=500,
+                ),
+                "material_cost_cp": _integer(
+                    components.get("material_cost_cp"),
+                    f"{field}.definition.components.material_cost_cp",
+                    minimum=0,
+                ),
+                "consumed": _boolean(
+                    components.get("consumed"), f"{field}.definition.components.consumed"
+                ),
+            },
+            "effect": _text(definition.get("effect"), f"{field}.definition.effect", maximum=4000),
+        },
+        "point_cost": _integer(spell.get("point_cost"), f"{field}.point_cost", minimum=0),
         "custom_definition": (
             _object(spell["custom_definition"], f"{field}.custom_definition")
             if spell.get("custom_definition") is not None
@@ -518,7 +800,18 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
 
 def _normalize_effect(value: Any, field: str) -> dict[str, Any]:
     effect = _object(value, field)
-    allowed = {"id", "name", "kind", "source", "active", "duration", "changes", "description"}
+    allowed = {
+        "id",
+        "name",
+        "kind",
+        "source",
+        "source_spell_id",
+        "active",
+        "concentration",
+        "duration",
+        "changes",
+        "description",
+    }
     _reject_unknown(effect, field, allowed)
     duration = _object(effect.get("duration") or {}, f"{field}.duration")
     _reject_unknown(duration, f"{field}.duration", {"period", "remaining"})
@@ -546,7 +839,11 @@ def _normalize_effect(value: Any, field: str) -> dict[str, Any]:
         "name": _text(effect.get("name"), f"{field}.name", maximum=300),
         "kind": _text(effect.get("kind"), f"{field}.kind", default="custom", maximum=100),
         "source": _text(effect.get("source"), f"{field}.source", maximum=300),
+        "source_spell_id": _text(
+            effect.get("source_spell_id"), f"{field}.source_spell_id", maximum=100
+        ),
         "active": _boolean(effect.get("active"), f"{field}.active", default=True),
+        "concentration": _boolean(effect.get("concentration"), f"{field}.concentration"),
         "duration": {
             "period": period,
             "remaining": _integer(
@@ -563,7 +860,9 @@ def validate_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
     allowed = {
         "schema_version",
         "edition",
+        "identity",
         "progression",
+        "ability_generation",
         "abilities",
         "skills",
         "combat",
@@ -573,6 +872,7 @@ def validate_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
         "content",
         "conditions",
         "effects",
+        "adventure_state",
         "inventory",
     }
     _reject_unknown(value, "sheet", allowed)
@@ -581,10 +881,31 @@ def validate_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
     edition = _text(value["edition"], "sheet.edition")
     if edition not in {"2014", "2024"}:
         raise ValueError("sheet.edition must be 2014 or 2024")
+    ability_generation = normalize_ability_generation(value["ability_generation"], edition)
+
+    identity = _object(value["identity"], "sheet.identity")
+    _reject_unknown(
+        identity,
+        "sheet.identity",
+        {
+            "gender",
+            "age",
+            "height_cm",
+            "weight_lb",
+            "faith",
+            "deity",
+            "hair",
+            "skin",
+            "eyes",
+            "portrait_uri",
+        },
+    )
 
     progression = _object(value["progression"], "sheet.progression")
     _reject_unknown(
-        progression, "sheet.progression", {"level", "xp", "classes", "background", "species"}
+        progression,
+        "sheet.progression",
+        {"level", "xp", "classes", "background", "background_grants", "species"},
     )
     classes = []
     for index, item in enumerate(_array(progression["classes"], "sheet.progression.classes")):
@@ -619,6 +940,14 @@ def validate_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
     level = _integer(progression["level"], "sheet.progression.level", minimum=1, maximum=20)
     if classes and sum(item["level"] for item in classes) != level:
         raise ValueError("sheet.progression.level must equal the total class levels")
+    background_grants = _object(
+        progression["background_grants"], "sheet.progression.background_grants"
+    )
+    _reject_unknown(
+        background_grants,
+        "sheet.progression.background_grants",
+        {"feature", "equipment_item_ids", "languages", "tools", "choices"},
+    )
 
     abilities = _object(value["abilities"], "sheet.abilities")
     _reject_unknown(abilities, "sheet.abilities", set(ABILITY_NAMES))
@@ -636,7 +965,18 @@ def validate_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
     _reject_unknown(
         combat,
         "sheet.combat",
-        {"hp", "ac", "initiative", "speed", "hit_dice", "death_saves", "exhaustion"},
+        {
+            "hp",
+            "ac",
+            "initiative",
+            "speed",
+            "hit_dice",
+            "hp_progression",
+            "death_saves",
+            "exhaustion",
+            "inspiration",
+            "wounded",
+        },
     )
     hp = _object(combat["hp"], "sheet.combat.hp")
     _reject_unknown(hp, "sheet.combat.hp", {"value", "max", "temp"})
@@ -658,6 +998,38 @@ def validate_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
         key: _normalize_resource(item, f"sheet.combat.hit_dice.{key}")
         for key, item in hit_dice.items()
     }
+    hp_progression = []
+    recorded_hp_levels: set[int] = set()
+    for index, gain in enumerate(_array(combat["hp_progression"], "sheet.combat.hp_progression")):
+        entry = _object(gain, f"sheet.combat.hp_progression[{index}]")
+        _reject_unknown(
+            entry,
+            f"sheet.combat.hp_progression[{index}]",
+            {"level", "method", "value", "source"},
+        )
+        gain_level = _integer(
+            entry.get("level"), f"sheet.combat.hp_progression[{index}].level", minimum=1, maximum=20
+        )
+        if gain_level in recorded_hp_levels:
+            raise ValueError("sheet.combat.hp_progression has duplicate levels")
+        recorded_hp_levels.add(gain_level)
+        method = _text(
+            entry.get("method"), f"sheet.combat.hp_progression[{index}].method", default="manual"
+        )
+        if method not in {"fixed", "rolled", "manual"}:
+            raise ValueError(f"sheet.combat.hp_progression[{index}].method is invalid")
+        hp_progression.append(
+            {
+                "level": gain_level,
+                "method": method,
+                "value": _integer(
+                    entry.get("value"), f"sheet.combat.hp_progression[{index}].value", minimum=0
+                ),
+                "source": _text(
+                    entry.get("source"), f"sheet.combat.hp_progression[{index}].source", maximum=300
+                ),
+            }
+        )
     death_saves = _object(combat["death_saves"], "sheet.combat.death_saves")
     _reject_unknown(death_saves, "sheet.combat.death_saves", {"successes", "failures"})
 
@@ -680,7 +1052,7 @@ def validate_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
     proficiencies = _object(traits["proficiencies"], "sheet.traits.proficiencies")
     _reject_unknown(proficiencies, "sheet.traits.proficiencies", {"armor", "weapons", "tools"})
     senses = _object(traits["senses"], "sheet.traits.senses")
-    _reject_unknown(senses, "sheet.traits.senses", {"darkvision", "passive_perception_bonus"})
+    _reject_unknown(senses, "sheet.traits.senses", {*SENSE_NAMES, "passive_perception_bonus"})
 
     resources = _object(value["resources"], "sheet.resources")
     normalized_resources = {
@@ -690,7 +1062,16 @@ def validate_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
     _reject_unknown(
         spellcasting,
         "sheet.spellcasting",
-        {"ability", "spell_slots", "pact_magic", "preparation", "ritual_casting", "spellbook"},
+        {
+            "ability",
+            "spell_slots",
+            "pact_magic",
+            "preparation",
+            "ritual_casting",
+            "spellbook",
+            "casting_economy",
+            "spell_points",
+        },
     )
     spell_ability = spellcasting["ability"]
     if spell_ability is not None and spell_ability not in ABILITY_NAMES:
@@ -703,6 +1084,16 @@ def validate_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
     pact_magic = spellcasting["pact_magic"]
     if pact_magic is not None:
         pact_magic = _normalize_resource(pact_magic, "sheet.spellcasting.pact_magic")
+    casting_economy = _text(
+        spellcasting["casting_economy"], "sheet.spellcasting.casting_economy", default="slots"
+    )
+    if casting_economy not in {"slots", "spell_points"}:
+        raise ValueError("sheet.spellcasting.casting_economy is invalid")
+    spell_points = spellcasting["spell_points"]
+    if spell_points is not None:
+        spell_points = _normalize_resource(spell_points, "sheet.spellcasting.spell_points")
+    if casting_economy == "spell_points" and spell_points is None:
+        raise ValueError("sheet.spellcasting.spell_points is required for spell_points casting")
     preparation = _object(spellcasting["preparation"], "sheet.spellcasting.preparation")
     _reject_unknown(
         preparation,
@@ -757,8 +1148,64 @@ def validate_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
             _reject_unknown(
                 entry,
                 f"sheet.content.{name}[{index}]",
-                {"id", "name", "source_key", "description", "uses", "choices"},
+                {
+                    "id",
+                    "name",
+                    "source_key",
+                    "description",
+                    "uses",
+                    "resource_key",
+                    "activation",
+                    "scaling",
+                    "choices",
+                },
             )
+            activation = _object(
+                entry.get("activation") or {}, f"sheet.content.{name}[{index}].activation"
+            )
+            _reject_unknown(
+                activation,
+                f"sheet.content.{name}[{index}].activation",
+                {"type", "cost", "trigger"},
+            )
+            activation_type = _text(
+                activation.get("type"),
+                f"sheet.content.{name}[{index}].activation.type",
+                default="passive",
+            )
+            if activation_type not in {"passive", "action", "bonus_action", "reaction", "special"}:
+                raise ValueError(f"sheet.content.{name}[{index}].activation.type is invalid")
+            scaling = []
+            for scale_index, scale in enumerate(
+                _array(entry.get("scaling") or [], f"sheet.content.{name}[{index}].scaling")
+            ):
+                scale_entry = _object(
+                    scale, f"sheet.content.{name}[{index}].scaling[{scale_index}]"
+                )
+                _reject_unknown(
+                    scale_entry,
+                    f"sheet.content.{name}[{index}].scaling[{scale_index}]",
+                    {"level", "value", "description"},
+                )
+                scaling.append(
+                    {
+                        "level": _integer(
+                            scale_entry.get("level"),
+                            f"sheet.content.{name}[{index}].scaling[{scale_index}].level",
+                            minimum=1,
+                            maximum=20,
+                        ),
+                        "value": _integer(
+                            scale_entry.get("value"),
+                            f"sheet.content.{name}[{index}].scaling[{scale_index}].value",
+                        ),
+                        "description": _text(
+                            scale_entry.get("description"),
+                            f"sheet.content.{name}[{index}].scaling[{scale_index}].description",
+                            maximum=1000,
+                        ),
+                    }
+                )
             result.append(
                 {
                     "id": _text(
@@ -783,6 +1230,25 @@ def validate_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
                     "uses": _normalize_resource(
                         entry.get("uses") or {}, f"sheet.content.{name}[{index}].uses"
                     ),
+                    "resource_key": _text(
+                        entry.get("resource_key"),
+                        f"sheet.content.{name}[{index}].resource_key",
+                        maximum=200,
+                    ),
+                    "activation": {
+                        "type": activation_type,
+                        "cost": _integer(
+                            activation.get("cost"),
+                            f"sheet.content.{name}[{index}].activation.cost",
+                            minimum=0,
+                        ),
+                        "trigger": _text(
+                            activation.get("trigger"),
+                            f"sheet.content.{name}[{index}].activation.trigger",
+                            maximum=1000,
+                        ),
+                    },
+                    "scaling": scaling,
                     "choices": _object(
                         entry.get("choices") or {}, f"sheet.content.{name}[{index}].choices"
                     ),
@@ -798,10 +1264,59 @@ def validate_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
     effect_ids = {effect["id"] for effect in effects}
     if len(effect_ids) != len(effects):
         raise ValueError("sheet.effects contains duplicate ids")
+    active_concentration = [
+        effect for effect in effects if effect["active"] and effect["concentration"]
+    ]
+    if len(active_concentration) > 1:
+        raise ValueError("a character can have only one active concentration effect")
+    for effect in effects:
+        source_spell_id = effect["source_spell_id"]
+        if source_spell_id and source_spell_id not in spell_ids:
+            raise ValueError("effect source_spell_id references an unknown spell")
+
+    adventure_state = _object(value["adventure_state"], "sheet.adventure_state")
+    _reject_unknown(
+        adventure_state,
+        "sheet.adventure_state",
+        {"reputation", "contributions", "blessings", "wards", "legendary_boons", "status_tags"},
+    )
+    reputation = _object(adventure_state["reputation"], "sheet.adventure_state.reputation")
+    contributions = _object(adventure_state["contributions"], "sheet.adventure_state.contributions")
+    inventory = validate_inventory(value["inventory"])
+    background_item_ids = _string_list(
+        background_grants["equipment_item_ids"],
+        "sheet.progression.background_grants.equipment_item_ids",
+    )
+    inventory_item_ids = {item["id"] for item in inventory["items"]}
+    if not set(background_item_ids).issubset(inventory_item_ids):
+        raise ValueError("background equipment references an unknown inventory item")
 
     return {
         "schema_version": 2,
         "edition": edition,
+        "identity": {
+            "gender": _text(identity["gender"], "sheet.identity.gender", maximum=100),
+            "age": _text(identity["age"], "sheet.identity.age", maximum=100),
+            "height_cm": (
+                _integer(identity["height_cm"], "sheet.identity.height_cm", minimum=1)
+                if identity["height_cm"] is not None
+                else None
+            ),
+            "weight_lb": (
+                _integer(identity["weight_lb"], "sheet.identity.weight_lb", minimum=1)
+                if identity["weight_lb"] is not None
+                else None
+            ),
+            "faith": _text(identity["faith"], "sheet.identity.faith", maximum=200),
+            "deity": _text(identity["deity"], "sheet.identity.deity", maximum=200),
+            "hair": _text(identity["hair"], "sheet.identity.hair", maximum=100),
+            "skin": _text(identity["skin"], "sheet.identity.skin", maximum=100),
+            "eyes": _text(identity["eyes"], "sheet.identity.eyes", maximum=100),
+            "portrait_uri": _text(
+                identity["portrait_uri"], "sheet.identity.portrait_uri", maximum=2000
+            ),
+        },
+        "ability_generation": ability_generation,
         "progression": {
             "level": level,
             "xp": _integer(progression["xp"], "sheet.progression.xp", minimum=0),
@@ -809,6 +1324,23 @@ def validate_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
             "background": _text(
                 progression["background"], "sheet.progression.background", maximum=200
             ),
+            "background_grants": {
+                "feature": _text(
+                    background_grants["feature"],
+                    "sheet.progression.background_grants.feature",
+                    maximum=300,
+                ),
+                "equipment_item_ids": background_item_ids,
+                "languages": _string_list(
+                    background_grants["languages"], "sheet.progression.background_grants.languages"
+                ),
+                "tools": _string_list(
+                    background_grants["tools"], "sheet.progression.background_grants.tools"
+                ),
+                "choices": _object(
+                    background_grants["choices"], "sheet.progression.background_grants.choices"
+                ),
+            },
             "species": _text(progression["species"], "sheet.progression.species", maximum=200),
         },
         "abilities": normalized_abilities,
@@ -836,6 +1368,7 @@ def validate_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
                 for mode in ("walk", "fly", "swim", "climb", "burrow")
             },
             "hit_dice": normalized_hit_dice,
+            "hp_progression": hp_progression,
             "death_saves": {
                 "successes": _integer(
                     death_saves["successes"],
@@ -853,6 +1386,8 @@ def validate_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
             "exhaustion": _integer(
                 combat["exhaustion"], "sheet.combat.exhaustion", minimum=0, maximum=6
             ),
+            "inspiration": _boolean(combat["inspiration"], "sheet.combat.inspiration"),
+            "wounded": _boolean(combat["wounded"], "sheet.combat.wounded"),
         },
         "traits": {
             "size": _text(traits["size"], "sheet.traits.size", maximum=100),
@@ -871,9 +1406,10 @@ def validate_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
                 traits["condition_immunities"], "sheet.traits.condition_immunities"
             ),
             "senses": {
-                "darkvision": _integer(
-                    senses["darkvision"], "sheet.traits.senses.darkvision", minimum=0
-                ),
+                sense: _integer(senses[sense], f"sheet.traits.senses.{sense}", minimum=0)
+                for sense in SENSE_NAMES
+            }
+            | {
                 "passive_perception_bonus": _integer(
                     senses["passive_perception_bonus"],
                     "sheet.traits.senses.passive_perception_bonus",
@@ -885,6 +1421,8 @@ def validate_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
             "ability": spell_ability,
             "spell_slots": normalized_slots,
             "pact_magic": pact_magic,
+            "casting_economy": casting_economy,
+            "spell_points": spell_points,
             "preparation": {
                 "mode": preparation_mode,
                 "max_prepared": _integer(
@@ -911,7 +1449,27 @@ def validate_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
         },
         "conditions": conditions,
         "effects": effects,
-        "inventory": validate_inventory(value["inventory"]),
+        "adventure_state": {
+            "reputation": {
+                key: _integer(entry, f"sheet.adventure_state.reputation.{key}")
+                for key, entry in reputation.items()
+            },
+            "contributions": {
+                key: _integer(entry, f"sheet.adventure_state.contributions.{key}")
+                for key, entry in contributions.items()
+            },
+            "blessings": _string_list(
+                adventure_state["blessings"], "sheet.adventure_state.blessings"
+            ),
+            "wards": _string_list(adventure_state["wards"], "sheet.adventure_state.wards"),
+            "legendary_boons": _string_list(
+                adventure_state["legendary_boons"], "sheet.adventure_state.legendary_boons"
+            ),
+            "status_tags": _string_list(
+                adventure_state["status_tags"], "sheet.adventure_state.status_tags"
+            ),
+        },
+        "inventory": inventory,
     }
 
 
@@ -936,6 +1494,7 @@ def validate_character_notes(
             "bonds",
             "flaws",
             "motivation",
+            "backstory",
             "dm_notes",
         },
     )
@@ -1006,6 +1565,7 @@ def validate_character_notes(
             "bonds": _string_list(profile["bonds"], "notes.profile.bonds"),
             "flaws": _string_list(profile["flaws"], "notes.profile.flaws"),
             "motivation": _text(profile["motivation"], "notes.profile.motivation", maximum=1200),
+            "backstory": _text(profile["backstory"], "notes.profile.backstory", maximum=8000),
             "dm_notes": _text(profile["dm_notes"], "notes.profile.dm_notes", maximum=4000),
         },
         "memories": memories,
@@ -1119,6 +1679,81 @@ def _derive_armor_class(
     return total, breakdown, unresolved_effects
 
 
+def _inventory_weight_oz(inventory: dict[str, Any]) -> float:
+    """Return carried weight after extra-dimensional container exceptions."""
+    items = {item["id"]: item for item in inventory["items"]}
+
+    def weight(item_id: str) -> float:
+        item = items[item_id]
+        own_weight = item["weight_oz"] * item["quantity"]
+        contents = sum(
+            weight(child["id"]) for child in items.values() if child["container_id"] == item_id
+        )
+        if item["kind"] == "container" and item["mechanics"]["weightless_contents"]:
+            contents = 0
+        return own_weight + contents
+
+    total = sum(weight(item_id) for item_id, item in items.items() if item["container_id"] is None)
+    if not inventory["encumbrance"]["ignore_currency_weight"]:
+        total += sum(inventory["wallet"].values()) * 0.32  # 50 coins per pound.
+    return total
+
+
+def _weapon_attacks(
+    inventory: dict[str, Any],
+    ability_modifiers: dict[str, int],
+    proficiency: int,
+    spell_ability: str | None,
+) -> list[dict[str, Any]]:
+    attacks = []
+    for item in inventory["items"]:
+        if item["kind"] != "weapon":
+            continue
+        mechanics = item["mechanics"]
+        ability = mechanics["attack_ability"]
+        modifier = (
+            ability_modifiers.get(spell_ability or "", 0)
+            if ability == "spell"
+            else ability_modifiers.get(ability, 0)
+        )
+        attack_bonus = modifier + mechanics["magic_bonus"]
+        if mechanics["proficient"]:
+            attack_bonus += proficiency
+        damage_bonus = modifier + mechanics["magic_bonus"]
+        damage_formula = mechanics["damage_formula"]
+        damage_expression = damage_formula
+        if damage_formula and damage_bonus:
+            damage_expression = (
+                f"{damage_formula} {'+' if damage_bonus > 0 else '-'} {abs(damage_bonus)}"
+            )
+        attacks.append(
+            {
+                "item_id": item["id"],
+                "name": item["name"],
+                "equipped_slot": item["equipped_slot"],
+                "attack_type": mechanics["attack_type"],
+                "attack_ability": ability,
+                "attack_bonus": attack_bonus,
+                "damage_formula": damage_formula,
+                "damage_bonus": damage_bonus,
+                "damage_expression": damage_expression,
+                "damage_type": mechanics["damage_type"],
+                "versatile_damage_formula": mechanics["versatile_damage_formula"],
+                "properties": mechanics["properties"],
+                "range_ft": {
+                    "normal": mechanics["normal_range_ft"],
+                    "long": mechanics["long_range_ft"],
+                },
+                "thrown_range_ft": {
+                    "normal": mechanics["thrown_normal_range_ft"],
+                    "long": mechanics["thrown_long_range_ft"],
+                },
+                "ammunition_item_id": mechanics["ammunition_item_id"],
+            }
+        )
+    return attacks
+
+
 def derive_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
     value = validate_character_sheet(sheet)
     level = value["progression"]["level"]
@@ -1140,7 +1775,7 @@ def derive_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
         for skill, entry in value["skills"].items()
     }
     inventory = value["inventory"]
-    total_weight = sum(item["weight_oz"] * item["quantity"] for item in inventory["items"])
+    total_weight = _inventory_weight_oz(inventory)
     wallet_cp = sum(
         inventory["wallet"][name] * multiplier
         for name, multiplier in {"cp": 1, "sp": 10, "ep": 50, "gp": 100, "pp": 1000}.items()
@@ -1150,6 +1785,33 @@ def derive_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
     armor_class, armor_class_breakdown, unresolved_effects = _derive_armor_class(
         value, ability_modifiers, active_effects
     )
+    size_multiplier = {
+        "tiny": 0.5,
+        "small": 1,
+        "medium": 1,
+        "large": 2,
+        "huge": 4,
+        "gargantuan": 8,
+    }.get(value["traits"]["size"].lower(), 1)
+    strength = value["abilities"]["strength"]["score"]
+    maximum_weight = strength * 240 * size_multiplier
+    encumbrance = inventory["encumbrance"]
+    encumbrance_summary = {
+        "mode": encumbrance["mode"],
+        "carried_weight_oz": total_weight,
+        "light_threshold_oz": strength * 80 * size_multiplier,
+        "heavy_threshold_oz": strength * 160 * size_multiplier,
+        "maximum_oz": maximum_weight,
+        "state": (
+            "over_capacity"
+            if total_weight > maximum_weight
+            else "heavily_encumbered"
+            if encumbrance["mode"] == "variant" and total_weight > strength * 160 * size_multiplier
+            else "encumbered"
+            if encumbrance["mode"] == "variant" and total_weight > strength * 80 * size_multiplier
+            else "normal"
+        ),
+    }
     return {
         "proficiency_bonus": proficiency,
         "ability_modifiers": ability_modifiers,
@@ -1163,6 +1825,10 @@ def derive_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
         "initiative": ability_modifiers[value["combat"]["initiative"]["ability"]]
         + value["combat"]["initiative"]["bonus"],
         "hit_points": dict(value["combat"]["hp"]),
+        "hit_point_progression": {
+            "gains": list(value["combat"]["hp_progression"]),
+            "recorded_gain_total": sum(gain["value"] for gain in value["combat"]["hp_progression"]),
+        },
         "speed": dict(value["combat"]["speed"]),
         "spellcasting": (
             {
@@ -1178,7 +1844,14 @@ def derive_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
             if spell_ability
             else None
         ),
-        "inventory": {"total_weight_oz": total_weight, "wallet_value_cp": wallet_cp},
+        "inventory": {
+            "total_weight_oz": total_weight,
+            "wallet_value_cp": wallet_cp,
+            "encumbrance": encumbrance_summary,
+            "weapon_attacks": _weapon_attacks(
+                inventory, ability_modifiers, proficiency, spell_ability
+            ),
+        },
         "active_effects": [
             {"id": effect["id"], "name": effect["name"]} for effect in active_effects
         ],
@@ -1234,6 +1907,25 @@ def remove_inventory_item(
         item["quantity"] -= count
         moved["id"] = _uuid()
     return validate_character_sheet(value), moved
+
+
+def consume_weapon_ammunition(
+    sheet: dict[str, Any], weapon_id: str, quantity: int = 1
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Consume the ammunition linked by a weapon's structured mechanics."""
+    value = validate_character_sheet(sheet)
+    weapon = next((item for item in value["inventory"]["items"] if item["id"] == weapon_id), None)
+    if weapon is None or weapon["kind"] != "weapon":
+        raise ValueError("weapon_id must reference a weapon in inventory")
+    ammunition_item_id = weapon["mechanics"]["ammunition_item_id"]
+    if ammunition_item_id is None:
+        raise ValueError("weapon has no linked ammunition")
+    updated, removed = remove_inventory_item(value, ammunition_item_id, quantity)
+    return updated, {
+        "item_id": ammunition_item_id,
+        "name": removed["name"],
+        "quantity": removed["quantity"],
+    }
 
 
 def receive_inventory_item(sheet: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:

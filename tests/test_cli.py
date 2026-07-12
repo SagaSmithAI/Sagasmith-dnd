@@ -285,9 +285,7 @@ def test_cli_character_v2_inventory_party_and_memory_workflow(
     )
     assert mira_template["data"]["campaign_id"] is None
     _, library = _call(capsys, "character", "library", "list", "--type", "pc")
-    assert [item["id"] for item in library["data"]["characters"]] == [
-        mira_template["data"]["id"]
-    ]
+    assert [item["id"] for item in library["data"]["characters"]] == [mira_template["data"]["id"]]
     _, mira_created = _call(
         capsys,
         "character",
@@ -375,6 +373,31 @@ def test_cli_character_v2_inventory_party_and_memory_workflow(
     )
     assert built["data"]["template"]["campaign_id"] is None
     assert built["data"]["instance"]["template_id"] == built["data"]["template"]["id"]
+    assignments = (
+        '{"strength":15,"dexterity":14,"constitution":13,'
+        '"intelligence":12,"wisdom":10,"charisma":8}'
+    )
+    _, rolled_scores = _call(capsys, "character", "ability", "roll", "--edition", "2014")
+    assert rolled_scores["data"]["method"] == "roll_4d6_drop_lowest"
+    assert len(rolled_scores["data"]["rolls"]) == 6
+    _, built_with_array = _call(
+        capsys,
+        "character",
+        "build",
+        "--campaign",
+        campaign_id,
+        "--name",
+        "Array Hero",
+        "--ability-method",
+        "standard_array",
+        "--assignments",
+        assignments,
+    )
+    assert (
+        built_with_array["data"]["template"]["sheet"]["ability_generation"]["method"]
+        == "standard_array"
+    )
+    assert built_with_array["data"]["instance"]["sheet"]["abilities"]["strength"]["score"] == 15
     _, nox_created = _call(
         capsys,
         "character",
@@ -401,6 +424,37 @@ def test_cli_character_v2_inventory_party_and_memory_workflow(
         '{"id":"key","name":"Rusty Key","kind":"loot","description":"Opens an old cellar."}',
     )
     assert added["data"]["item_id"] == "key"
+    _call(
+        capsys,
+        "character",
+        "inventory",
+        "add",
+        "--id",
+        mira_id,
+        "--payload",
+        '{"id":"arrows","name":"Arrows","kind":"ammunition","quantity":3}',
+    )
+    _call(
+        capsys,
+        "character",
+        "inventory",
+        "add",
+        "--id",
+        mira_id,
+        "--payload",
+        '{"id":"bow","name":"Longbow","kind":"weapon","mechanics":{"ammunition_item_id":"arrows"}}',
+    )
+    _, shot = _call(
+        capsys,
+        "character",
+        "inventory",
+        "use-ammunition",
+        "--id",
+        mira_id,
+        "--item",
+        "bow",
+    )
+    assert shot["data"]["consumed"] == {"item_id": "arrows", "name": "Arrows", "quantity": 1}
     assert (
         _call(
             capsys,

@@ -7,6 +7,7 @@ from sagasmith_dnd.character_schema import (
     add_inventory_item,
     add_memory,
     adjust_wallet,
+    consume_weapon_ammunition,
     derive_character_sheet,
     equip_inventory_item,
     remove_inventory_item,
@@ -196,6 +197,218 @@ def test_equipment_schema_rejects_incompatible_slots_and_inconsistent_state() ->
                     ],
                     "equipment_slots": {"armor": "armor"},
                 }
+            }
+        )
+
+
+def test_complete_card_supports_identity_weapons_spells_encumbrance_and_adventure_state() -> None:
+    sheet = validate_character_sheet(
+        {
+            "identity": {
+                "gender": "female",
+                "age": "27",
+                "height_cm": 168,
+                "weight_lb": 132,
+                "faith": "The Triad",
+                "deity": "Tyr",
+                "hair": "black",
+                "skin": "olive",
+                "eyes": "brown",
+                "portrait_uri": "asset://portraits/mira.png",
+            },
+            "progression": {
+                "background": "Soldier",
+                "background_grants": {
+                    "feature": "Military Rank",
+                    "equipment_item_ids": ["longbow"],
+                    "languages": ["Common"],
+                    "tools": ["Dice set"],
+                },
+            },
+            "abilities": {"strength": {"score": 16}, "dexterity": {"score": 14}},
+            "combat": {
+                "inspiration": True,
+                "wounded": True,
+                "hp_progression": [
+                    {"level": 1, "method": "fixed", "value": 10, "source": "Fighter d10"},
+                    {"level": 2, "method": "rolled", "value": 7, "source": "d10 roll"},
+                ],
+            },
+            "traits": {"size": "medium", "senses": {"darkvision": 60, "truesight": 30}},
+            "spellcasting": {
+                "ability": "wisdom",
+                "casting_economy": "spell_points",
+                "spell_points": {"value": 7, "max": 10, "recovers_on": "long_rest"},
+            },
+            "content": {
+                "spells": [
+                    {
+                        "id": "bless",
+                        "name": "Bless",
+                        "level": 1,
+                        "point_cost": 2,
+                        "definition": {
+                            "school": "enchantment",
+                            "casting_time": "1 action",
+                            "range": {"kind": "distance", "normal_ft": 30},
+                            "duration": {
+                                "kind": "timed",
+                                "value": 1,
+                                "unit": "minute",
+                                "concentration": True,
+                            },
+                            "components": {
+                                "verbal": True,
+                                "somatic": True,
+                                "material": True,
+                                "material_description": "holy water",
+                            },
+                            "effect": "Bless up to three creatures.",
+                        },
+                    }
+                ],
+                "features": [
+                    {
+                        "name": "Second Wind",
+                        "resource_key": "second_wind",
+                        "activation": {"type": "bonus_action", "cost": 1},
+                        "scaling": [{"level": 1, "value": 1, "description": "One use."}],
+                    }
+                ],
+            },
+            "effects": [
+                {
+                    "name": "Bless",
+                    "source_spell_id": "bless",
+                    "concentration": True,
+                    "duration": {"period": "round", "remaining": 10},
+                }
+            ],
+            "adventure_state": {
+                "reputation": {"Baldur's Gate": 3},
+                "contributions": {"Harpers": 1},
+                "blessings": ["Blessing of Health"],
+                "wards": ["Temple ward"],
+                "legendary_boons": ["Boon of Fortitude"],
+                "status_tags": ["wanted"],
+            },
+            "inventory": {
+                "encumbrance": {"mode": "variant", "ignore_currency_weight": True},
+                "items": [
+                    {
+                        "id": "arrows",
+                        "name": "Arrows",
+                        "kind": "ammunition",
+                        "quantity": 20,
+                        "weight_oz": 1,
+                    },
+                    {
+                        "id": "longbow",
+                        "name": "Longbow",
+                        "kind": "weapon",
+                        "equipped": True,
+                        "equipped_slot": "main_hand",
+                        "mechanics": {
+                            "category": "martial",
+                            "attack_type": "ranged",
+                            "attack_ability": "dexterity",
+                            "damage_formula": "1d8",
+                            "damage_type": "piercing",
+                            "properties": ["ammunition", "heavy", "two_handed"],
+                            "normal_range_ft": 150,
+                            "long_range_ft": 600,
+                            "ammunition_item_id": "arrows",
+                        },
+                    },
+                    {
+                        "id": "bag",
+                        "name": "Bag of Holding",
+                        "kind": "container",
+                        "mechanics": {
+                            "capacity_oz": 4000,
+                            "weightless_contents": True,
+                            "extra_dimensional": True,
+                        },
+                    },
+                    {
+                        "id": "anvil",
+                        "name": "Anvil",
+                        "kind": "equipment",
+                        "weight_oz": 1600,
+                        "container_id": "bag",
+                    },
+                ],
+                "equipment_slots": {"main_hand": "longbow"},
+            },
+        }
+    )
+    assert sheet["identity"]["deity"] == "Tyr"
+    assert sheet["content"]["spells"][0]["definition"]["components"]["material"] is True
+    assert sheet["effects"][0]["concentration"] is True
+    assert sheet["inventory"]["items"][2]["mechanics"]["extra_dimensional"] is True
+    derived = derive_character_sheet(sheet)
+    assert derived["inventory"]["encumbrance"]["carried_weight_oz"] == 20
+    assert derived["inventory"]["weapon_attacks"][0]["attack_bonus"] == 4
+    assert derived["inventory"]["weapon_attacks"][0]["damage_expression"] == "1d8 + 2"
+    assert derived["hit_point_progression"]["recorded_gain_total"] == 17
+    after_shot, consumed = consume_weapon_ammunition(sheet, "longbow")
+    assert consumed["item_id"] == "arrows"
+    assert (
+        next(item for item in after_shot["inventory"]["items"] if item["id"] == "arrows")[
+            "quantity"
+        ]
+        == 19
+    )
+
+    notes = validate_character_notes({"profile": {"backstory": "A veteran of the border wars."}})
+    assert notes["profile"]["backstory"] == "A veteran of the border wars."
+
+
+def test_schema_rejects_invalid_ammunition_capacity_and_multiple_concentration_effects() -> None:
+    with pytest.raises(ValueError, match="ammunition_item_id"):
+        validate_character_sheet(
+            {
+                "inventory": {
+                    "items": [
+                        {
+                            "id": "bow",
+                            "name": "Bow",
+                            "kind": "weapon",
+                            "mechanics": {"ammunition_item_id": "missing"},
+                        }
+                    ]
+                }
+            }
+        )
+    with pytest.raises(ValueError, match="exceed capacity"):
+        validate_character_sheet(
+            {
+                "inventory": {
+                    "items": [
+                        {
+                            "id": "pack",
+                            "name": "Pack",
+                            "kind": "container",
+                            "mechanics": {"capacity_oz": 1},
+                        },
+                        {
+                            "id": "rope",
+                            "name": "Rope",
+                            "kind": "equipment",
+                            "weight_oz": 2,
+                            "container_id": "pack",
+                        },
+                    ]
+                }
+            }
+        )
+    with pytest.raises(ValueError, match="one active concentration"):
+        validate_character_sheet(
+            {
+                "effects": [
+                    {"name": "First", "concentration": True},
+                    {"name": "Second", "concentration": True},
+                ]
             }
         )
 
