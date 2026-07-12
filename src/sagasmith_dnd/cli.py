@@ -361,13 +361,63 @@ def _dispatch(args) -> Any:
                     ),
                 )
                 return _character_view(created)
+            if args.action == "build":
+                character_type = args.type or "pc"
+                if character_type not in DND5E.character_types:
+                    raise CliError(
+                        "invalid_value", "--type must be pc, npc, or monster", exit_code=2
+                    )
+                template, instance = characters.create_with_instance(
+                    system_id=DND5E.id,
+                    campaign_id=_require(args.campaign, "campaign"),
+                    name=_require(args.name, "name"),
+                    character_type=character_type,
+                    player_name=args.player,
+                    summary=args.summary or "",
+                    sheet=validate_character_sheet(_dict(args.sheet)),
+                    notes=validate_character_notes(
+                        _dict(args.notes), character_type=character_type
+                    ),
+                )
+                return {
+                    "template": _character_view(template),
+                    "instance": _character_view(instance),
+                }
+            if args.action == "library" and args.subaction == "list":
+                return {
+                    "characters": [
+                        asdict(item)
+                        for item in characters.list_library(
+                            system_id=DND5E.id,
+                            character_type=args.type,
+                        )
+                    ]
+                }
+            if args.action == "instantiate":
+                template = characters.get(_require(args.id, "id"))
+                if template.system_id != DND5E.id:
+                    raise CliError("invalid_value", "template must be a D&D character", exit_code=2)
+                if template.campaign_id is not None:
+                    raise CliError(
+                        "template_required",
+                        "only a library PC or NPC can be instantiated",
+                        exit_code=2,
+                    )
+                created = characters.instantiate(
+                    template.id,
+                    campaign_id=_require(args.campaign, "campaign"),
+                    name=args.name,
+                    player_name=args.player,
+                )
+                return _character_view(created)
             if args.action == "list":
+                campaign_id = _require(args.campaign, "campaign")
                 return {
                     "characters": [
                         asdict(item)
                         for item in characters.list(
                             system_id=DND5E.id,
-                            campaign_id=args.campaign,
+                            campaign_id=campaign_id,
                             character_type=args.type,
                         )
                     ]
@@ -393,13 +443,6 @@ def _dispatch(args) -> Any:
                 )
                 _character_revision(revisions, before, updated, "character.update")
                 return _character_view(updated)
-            if args.action in {"bind", "unbind"}:
-                return asdict(
-                    characters.bind(
-                        _require(args.id, "id"),
-                        args.campaign if args.action == "bind" else None,
-                    )
-                )
             if args.action == "inventory":
                 before = characters.get(_require(args.id, "id"))
                 if args.subaction == "list":

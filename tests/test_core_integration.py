@@ -10,9 +10,8 @@ def test_dnd_vertical_slice(tmp_path: Path) -> None:
     database = Database(sqlite_database_url(tmp_path / "dnd.db"))
     database.create_schema()
     campaign = CampaignService(database).create(system_id=DND5E.id, name="Keep")
-    character = CharacterService(database).create(
+    template = CharacterService(database).create(
         system_id=DND5E.id,
-        campaign_id=campaign.id,
         name="Mira",
         sheet=validate_character_sheet(
             {
@@ -23,6 +22,10 @@ def test_dnd_vertical_slice(tmp_path: Path) -> None:
                 "combat": {"ac": {"base": 16}},
             }
         ),
+    )
+    character = CharacterService(database).instantiate(
+        template.id,
+        campaign_id=campaign.id,
     )
     RuleService(database).ingest(
         system_id=DND5E.id,

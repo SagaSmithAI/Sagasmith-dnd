@@ -274,18 +274,107 @@ def test_cli_character_v2_inventory_party_and_memory_workflow(
             },
         }
     )
+    _, mira_template = _call(
+        capsys,
+        "character",
+        "create",
+        "--name",
+        "Mira",
+        "--sheet",
+        caster_sheet,
+    )
+    assert mira_template["data"]["campaign_id"] is None
+    _, library = _call(capsys, "character", "library", "list", "--type", "pc")
+    assert [item["id"] for item in library["data"]["characters"]] == [
+        mira_template["data"]["id"]
+    ]
     _, mira_created = _call(
+        capsys,
+        "character",
+        "instantiate",
+        "--id",
+        mira_template["data"]["id"],
+        "--campaign",
+        campaign_id,
+        "--player",
+        "Ada",
+    )
+    mira_id = mira_created["data"]["id"]
+    assert mira_created["data"]["template_id"] == mira_template["data"]["id"]
+    code, direct_pc = _call(
         capsys,
         "character",
         "create",
         "--campaign",
         campaign_id,
         "--name",
-        "Mira",
-        "--sheet",
-        caster_sheet,
+        "Direct Campaign PC",
     )
-    mira_id = mira_created["data"]["id"]
+    assert code == 0
+    assert direct_pc["data"]["campaign_id"] == campaign_id
+    assert direct_pc["data"]["template_id"] is None
+    code, library_monster = _call(
+        capsys,
+        "character",
+        "create",
+        "--name",
+        "Invalid Library Monster",
+        "--type",
+        "monster",
+        "--notes",
+        '{"profile":{"summary":"A reusable library monster."}}',
+    )
+    assert code == 0
+    _, monster_instance = _call(
+        capsys,
+        "character",
+        "instantiate",
+        "--id",
+        library_monster["data"]["id"],
+        "--campaign",
+        campaign_id,
+    )
+    assert monster_instance["data"]["template_id"] == library_monster["data"]["id"]
+    _, npc_template = _call(
+        capsys,
+        "character",
+        "create",
+        "--name",
+        "Nox Template",
+        "--type",
+        "npc",
+        "--notes",
+        '{"profile":{"summary":"A reusable cautious innkeeper."}}',
+    )
+    _, npc_instance = _call(
+        capsys,
+        "character",
+        "instantiate",
+        "--id",
+        npc_template["data"]["id"],
+        "--campaign",
+        campaign_id,
+        "--name",
+        "Nox From Library",
+    )
+    assert npc_instance["data"]["template_id"] == npc_template["data"]["id"]
+    _, built = _call(
+        capsys,
+        "character",
+        "build",
+        "--campaign",
+        campaign_id,
+        "--name",
+        "Built Hero",
+        "--type",
+        "pc",
+        "--player",
+        "Bea",
+        "--notes",
+        '{"profile":{"summary":"Built during character creation."}}',
+    )
+    assert built["data"]["template"]["campaign_id"] is None
+    assert built["data"]["instance"]["template_id"] == built["data"]["template"]["id"]
     _, nox_created = _call(
         capsys,
         "character",
@@ -543,16 +632,23 @@ def test_cli_equipment_command_derives_armor_class(tmp_path: Path, monkeypatch, 
     campaign_id = _call(capsys, "campaign", "start", "--name", "Equipment")[1]["data"]["campaign"][
         "id"
     ]
-    _, created = _call(
+    _, template = _call(
         capsys,
         "character",
         "create",
-        "--campaign",
-        campaign_id,
         "--name",
         "Mira",
         "--sheet",
         '{"abilities":{"dexterity":{"score":16}}}',
+    )
+    _, created = _call(
+        capsys,
+        "character",
+        "instantiate",
+        "--id",
+        template["data"]["id"],
+        "--campaign",
+        campaign_id,
     )
     character_id = created["data"]["id"]
     leather = json.dumps(
