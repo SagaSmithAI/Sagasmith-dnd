@@ -709,23 +709,6 @@ def _dispatch(args) -> Any:
                     updated = _persist_character(
                         characters, revisions, before, notes=notes, operation="character.memory.add"
                     )
-                    if updated.campaign_id:
-                        entry = next(
-                            item
-                            for item in validate_character_notes(
-                                updated.notes, character_type=updated.character_type
-                            )["memories"]
-                            if item["id"] == memory_id
-                        )
-                        knowledge.add(
-                            updated.campaign_id,
-                            actor_id=updated.id,
-                            knowledge_key=f"legacy:{memory_id}",
-                            proposition=entry["summary"],
-                            subject_ref=entry.get("kind", ""),
-                            cause="character_memory",
-                            disclosure_scope=entry.get("visibility", "dm"),
-                        )
                     return {"character": _character_view(updated), "memory_id": memory_id}
                 if args.subaction == "resolve":
                     notes = resolve_memory(before.notes, _require(args.memory_id, "memory-id"))
@@ -736,27 +719,6 @@ def _dispatch(args) -> Any:
                         notes=notes,
                         operation="character.memory.resolve",
                     )
-                    if updated.campaign_id:
-                        key = f"legacy:{_require(args.memory_id, 'memory-id')}"
-                        item = next(
-                            (
-                                value
-                                for value in knowledge.list(
-                                    updated.campaign_id, actor_id=updated.id
-                                )
-                                if value.knowledge_key == key
-                            ),
-                            None,
-                        )
-                        if item is not None:
-                            knowledge.revise(
-                                item.id,
-                                proposition=item.proposition,
-                                epistemic_status="superseded",
-                                confidence=item.confidence,
-                                cause="character_memory.resolve",
-                                disclosure_scope=item.disclosure_scope,
-                            )
                     return _character_view(updated)
             if args.action == "spell":
                 before = characters.get(_require(args.id, "id"))
