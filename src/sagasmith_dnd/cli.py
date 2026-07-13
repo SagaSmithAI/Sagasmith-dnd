@@ -10,9 +10,12 @@ from pathlib import Path
 from typing import Any
 
 from sagasmith_core import (
+    ActorKnowledgeService,
+    BranchService,
     CampaignService,
     CharacterService,
     CharacterStateUpdate,
+    ContinuityService,
     EventService,
     MemoryService,
     ModuleService,
@@ -144,6 +147,16 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--ability-method")
     parser.add_argument("--assignments")
     parser.add_argument("--rolls")
+    parser.add_argument("--branch")
+    parser.add_argument("--from-snapshot")
+    parser.add_argument("--actor-id")
+    parser.add_argument("--knowledge-key")
+    parser.add_argument("--epistemic-status", default="known")
+    parser.add_argument("--confidence", type=int, default=3)
+    parser.add_argument("--cause", default="witnessed")
+    parser.add_argument("--disclosure", default="dm")
+    parser.add_argument("--event-id")
+    parser.add_argument("--audience", default="dm")
     return parser
 
 
@@ -245,6 +258,9 @@ def _dispatch(args) -> Any:
                 "module",
                 "save",
                 "memory",
+                "knowledge",
+                "branch",
+                "continuity",
                 "state",
                 "roll",
                 "combat",
@@ -278,6 +294,9 @@ def _dispatch(args) -> Any:
         modules = ModuleService(db)
         saves = SnapshotService(db)
         memories = MemoryService(db)
+        branches = BranchService(db)
+        knowledge = ActorKnowledgeService(db)
+        continuity = ContinuityService(db)
         revisions = RevisionService(db)
 
         if args.group == "campaign":
@@ -690,18 +709,55 @@ def _dispatch(args) -> Any:
                     updated = _persist_character(
                         characters, revisions, before, notes=notes, operation="character.memory.add"
                     )
+                    if updated.campaign_id:
+                        entry = next(
+                            item
+                            for item in validate_character_notes(
+                                updated.notes, character_type=updated.character_type
+                            )["memories"]
+                            if item["id"] == memory_id
+                        )
+                        knowledge.add(
+                            updated.campaign_id,
+                            actor_id=updated.id,
+                            knowledge_key=f"legacy:{memory_id}",
+                            proposition=entry["summary"],
+                            subject_ref=entry.get("kind", ""),
+                            cause="character_memory",
+                            disclosure_scope=entry.get("visibility", "dm"),
+                        )
                     return {"character": _character_view(updated), "memory_id": memory_id}
                 if args.subaction == "resolve":
                     notes = resolve_memory(before.notes, _require(args.memory_id, "memory-id"))
-                    return _character_view(
-                        _persist_character(
-                            characters,
-                            revisions,
-                            before,
-                            notes=notes,
-                            operation="character.memory.resolve",
-                        )
+                    updated = _persist_character(
+                        characters,
+                        revisions,
+                        before,
+                        notes=notes,
+                        operation="character.memory.resolve",
                     )
+                    if updated.campaign_id:
+                        key = f"legacy:{_require(args.memory_id, 'memory-id')}"
+                        item = next(
+                            (
+                                value
+                                for value in knowledge.list(
+                                    updated.campaign_id, actor_id=updated.id
+                                )
+                                if value.knowledge_key == key
+                            ),
+                            None,
+                        )
+                        if item is not None:
+                            knowledge.revise(
+                                item.id,
+                                proposition=item.proposition,
+                                epistemic_status="superseded",
+                                confidence=item.confidence,
+                                cause="character_memory.resolve",
+                                disclosure_scope=item.disclosure_scope,
+                            )
+                    return _character_view(updated)
             if args.action == "spell":
                 before = characters.get(_require(args.id, "id"))
                 if args.subaction == "list":
@@ -865,6 +921,8 @@ def _dispatch(args) -> Any:
                         event_type=args.type or "narrative",
                         summary=_require(args.summary, "summary"),
                         payload=_dict(args.payload),
+                        audience_scope=args.audience,
+                        branch_id=args.branch,
                     )
                 )
             if args.action == "list":
@@ -874,6 +932,7 @@ def _dispatch(args) -> Any:
                         for item in events.list(
                             _require(args.campaign, "campaign"),
                             limit=args.limit,
+                            branch_id=args.branch,
                         )
                     ]
                 }
@@ -1062,6 +1121,85 @@ def _dispatch(args) -> Any:
                 )
                 return {"deleted": args.module}
 
+        if args.group == "branch":
+            campaign_id = _require(args.campaign, "campaign")
+            if args.action == "list":
+                return {"branches": [asdict(item) for item in branches.list(campaign_id)]}
+            if args.action == "create":
+                return asdict(
+                    branches.create(
+                        campaign_id,
+                        name=_require(args.name, "name"),
+                        from_snapshot_id=args.from_snapshot,
+                        checkout=args.status == "checkout",
+                    )
+                )
+            if args.action == "checkout":
+                snapshot = saves.checkout_branch(
+                    campaign_id, _require(args.branch or args.id, "branch")
+                )
+                return {
+                    "branch": asdict(branches.current(campaign_id)),
+                    "snapshot": asdict(snapshot) if snapshot else None,
+                }
+
+        if args.group == "knowledge":
+            campaign_id = _require(args.campaign, "campaign")
+            if args.action == "add":
+                return asdict(
+                    knowledge.add(
+                        campaign_id,
+                        actor_id=_require(args.actor_id, "actor-id"),
+                        knowledge_key=_require(args.knowledge_key, "knowledge-key"),
+                        proposition=_require(args.content, "content"),
+                        subject_ref=args.subject or "",
+                        epistemic_status=args.epistemic_status,
+                        confidence=args.confidence,
+                        source_event_id=args.event_id,
+                        cause=args.cause,
+                        disclosure_scope=args.disclosure,
+                        branch_id=args.branch,
+                    )
+                )
+            if args.action == "revise":
+                return asdict(
+                    knowledge.revise(
+                        _require(args.id, "id"),
+                        proposition=_require(args.content, "content"),
+                        epistemic_status=args.epistemic_status,
+                        confidence=args.confidence,
+                        source_event_id=args.event_id,
+                        cause=args.cause,
+                        disclosure_scope=args.disclosure,
+                        branch_id=args.branch,
+                    )
+                )
+            if args.action in {"list", "search"}:
+                actor_id = _require(args.actor_id, "actor-id")
+                values = (
+                    knowledge.search(
+                        campaign_id,
+                        actor_id=actor_id,
+                        query=_require(args.query, "query"),
+                        branch_id=args.branch,
+                        limit=args.limit,
+                    )
+                    if args.action == "search"
+                    else knowledge.list(campaign_id, actor_id=actor_id, branch_id=args.branch)
+                )
+                return {"knowledge": [asdict(item) for item in values]}
+
+        if args.group == "continuity" and args.action == "context":
+            return continuity.context(
+                _require(args.campaign, "campaign"),
+                query=args.query or "",
+                actor_id=args.actor_id,
+                scope_id=args.scope,
+                audience=args.audience,
+                branch_id=args.branch,
+                limit=args.limit,
+            )
+
         if args.group == "save":
             campaign_id = _require(args.campaign, "campaign")
             if args.action == "create":
@@ -1101,12 +1239,16 @@ def _dispatch(args) -> Any:
                         kind=args.type or "fact",
                         subject=args.subject or "",
                         metadata=_dict(args.metadata),
+                        branch_id=args.branch,
                     )
                 )
             if args.action == "list":
                 return {
                     "memories": [
-                        asdict(item) for item in memories.list(campaign_id, kind=args.type)
+                        asdict(item)
+                        for item in memories.list(
+                            campaign_id, kind=args.type, branch_id=args.branch
+                        )
                     ]
                 }
             if args.action == "search":
@@ -1117,11 +1259,12 @@ def _dispatch(args) -> Any:
                             campaign_id,
                             _require(args.query, "query"),
                             limit=args.limit,
+                            branch_id=args.branch,
                         )
                     ]
                 }
             if args.action in {"scope", "status"}:
-                values = memories.list(campaign_id, kind=args.type)
+                values = memories.list(campaign_id, kind=args.type, branch_id=args.branch)
                 return {
                     "campaign_id": campaign_id,
                     "count": len(values),
