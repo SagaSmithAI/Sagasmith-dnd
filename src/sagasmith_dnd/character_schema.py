@@ -229,6 +229,7 @@ def default_character_sheet() -> dict[str, Any]:
             "hp": {"value": 1, "max": 1, "temp": 0},
             "ac": {"base": 10, "override": None},
             "initiative": {"ability": "dexterity", "bonus": 0},
+            "attacks_per_action": 1,
             "speed": {"walk": 30, "fly": 0, "swim": 0, "climb": 0, "burrow": 0},
             "hit_dice": {},
             "hp_progression": [],
@@ -969,6 +970,7 @@ def validate_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
             "hp",
             "ac",
             "initiative",
+            "attacks_per_action",
             "speed",
             "hit_dice",
             "hp_progression",
@@ -1118,6 +1120,11 @@ def validate_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
     spell_ids = {spell["id"] for spell in spells}
     if len(spell_ids) != len(spells):
         raise ValueError("sheet.content.spells contains duplicate ids")
+    spellbook_ids = _string_list(spellbook["spell_ids"], "sheet.spellcasting.spellbook.spell_ids")
+    if not set(spellbook_ids).issubset(spell_ids):
+        raise ValueError("spellbook references an unknown spell")
+    for spell in spells:
+        spell["access"]["in_spellbook"] = spell["id"] in spellbook_ids
     selected_spell_ids = _string_list(
         preparation["selected_spell_ids"], "sheet.spellcasting.preparation.selected_spell_ids"
     )
@@ -1131,16 +1138,12 @@ def validate_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
         spell = next((item for item in spells if item["id"] == spell_id), None)
         if spell is None:
             raise ValueError("prepared spell selection references an unknown spell")
-        if not (spell["access"]["known"] or spell["access"]["in_spellbook"]):
+        if not (spell["access"]["known"] or spell["id"] in spellbook_ids):
             raise ValueError("prepared spell must be known or in the spellbook")
     for spell in spells:
         spell["access"]["prepared"] = (
             spell["id"] in selected_spell_ids or spell["access"]["always_prepared"]
         )
-    spellbook_ids = _string_list(spellbook["spell_ids"], "sheet.spellcasting.spellbook.spell_ids")
-    if not set(spellbook_ids).issubset(spell_ids):
-        raise ValueError("spellbook references an unknown spell")
-
     def _content_entries(name: str) -> list[dict[str, Any]]:
         result = []
         for index, item in enumerate(_array(content[name], f"sheet.content.{name}")):
@@ -1363,6 +1366,12 @@ def validate_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
                 "ability": initiative_ability,
                 "bonus": _integer(initiative["bonus"], "sheet.combat.initiative.bonus"),
             },
+            "attacks_per_action": _integer(
+                combat["attacks_per_action"],
+                "sheet.combat.attacks_per_action",
+                minimum=1,
+                maximum=10,
+            ),
             "speed": {
                 mode: _integer(speed[mode], f"sheet.combat.speed.{mode}", minimum=0)
                 for mode in ("walk", "fly", "swim", "climb", "burrow")
@@ -1707,7 +1716,7 @@ def _weapon_attacks(
 ) -> list[dict[str, Any]]:
     attacks = []
     for item in inventory["items"]:
-        if item["kind"] != "weapon":
+        if item["kind"] != "weapon" or not item["equipped"]:
             continue
         mechanics = item["mechanics"]
         ability = mechanics["attack_ability"]
@@ -1824,6 +1833,7 @@ def derive_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
         "armor_class_breakdown": armor_class_breakdown,
         "initiative": ability_modifiers[value["combat"]["initiative"]["ability"]]
         + value["combat"]["initiative"]["bonus"],
+        "attacks_per_action": value["combat"]["attacks_per_action"],
         "hit_points": dict(value["combat"]["hp"]),
         "hit_point_progression": {
             "gains": list(value["combat"]["hp_progression"]),
@@ -1999,6 +2009,7 @@ def remove_effect(sheet: dict[str, Any], effect_id: str) -> dict[str, Any]:
 
 
 def set_spell_prepared(sheet: dict[str, Any], spell_id: str, prepared: bool) -> dict[str, Any]:
+    """Set one preparation during card setup; live rest changes use an atomic full list."""
     value = validate_character_sheet(sheet)
     preparation = value["spellcasting"]["preparation"]
     if preparation["mode"] not in {"prepared", "spellbook"}:
@@ -2006,6 +2017,12 @@ def set_spell_prepared(sheet: dict[str, Any], spell_id: str, prepared: bool) -> 
     spell = next((entry for entry in value["content"]["spells"] if entry["id"] == spell_id), None)
     if spell is None:
         raise LookupError(spell_id)
+    if spell["level"] == 0:
+        raise ValueError("cantrips are known, not selected as prepared level 1+ spells")
+    if spell["access"]["always_prepared"]:
+        raise ValueError("always-prepared spells are not part of the selected list")
+    if preparation["mode"] == "spellbook" and not spell["access"]["in_spellbook"]:
+        raise ValueError("a spellbook caster can prepare only spells in the spellbook")
     selected = preparation["selected_spell_ids"]
     if prepared:
         if spell_id not in selected:

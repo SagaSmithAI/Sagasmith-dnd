@@ -67,6 +67,7 @@ def test_v2_sheet_exposes_complete_derived_card_and_prepared_spells() -> None:
     ]
     derived = derive_character_sheet(prepared)
     assert derived["proficiency_bonus"] == 2
+    assert derived["attacks_per_action"] == 1
     assert derived["spellcasting"]["save_dc"] == 13
     assert set(derived["spellcasting"]["prepared_spell_ids"]) == {"cure-wounds", "bless"}
 

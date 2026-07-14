@@ -1,4 +1,9 @@
-"""Small deterministic D&D mechanics layer."""
+"""Small deterministic D&D mechanics layer.
+
+The engine deliberately separates ordinary D20 tests from attack rolls and
+death saves.  Natural 1/20 handling is not a generic ``resolve_check`` rule:
+it belongs to the specific test type.
+"""
 
 from __future__ import annotations
 
@@ -86,15 +91,25 @@ def resolve_check(
     bonus: int = 0,
     advantage: bool = False,
     disadvantage: bool = False,
+    kind: str = "ability",
     rng: random.Random | None = None,
 ) -> dict:
+    """Resolve an ability check or saving throw.
+
+    Ordinary ability checks and saving throws succeed when the total meets the
+    DC.  Natural 1/20 are only special for attacks and death saves, so callers
+    must use :func:`resolve_attack` or :func:`resolve_death_save` for those.
+    """
+    if kind not in {"ability", "save"}:
+        raise ValueError("resolve_check kind must be ability or save")
     die = roll_d20(advantage=advantage, disadvantage=disadvantage, rng=rng)
     modifier = ability_modifier(ability_score)
     proficiency = proficiency_bonus(level) if proficient else 0
     total = die["natural"] + modifier + proficiency + bonus
-    success = die["natural"] == 20 or (die["natural"] != 1 and total >= dc)
+    success = total >= dc
     return {
         **die,
+        "kind": kind,
         "dc": dc,
         "ability_modifier": modifier,
         "proficiency_bonus": proficiency,
@@ -103,3 +118,63 @@ def resolve_check(
         "success": success,
     }
 
+
+def resolve_attack(
+    *,
+    armor_class: int,
+    attack_bonus: int,
+    advantage: bool = False,
+    disadvantage: bool = False,
+    rng: random.Random | None = None,
+) -> dict:
+    """Resolve an attack roll with attack-specific natural 1/20 semantics."""
+    die = roll_d20(advantage=advantage, disadvantage=disadvantage, rng=rng)
+    total = die["natural"] + attack_bonus
+    hit = bool(die["critical"] or (not die["fumble"] and total >= armor_class))
+    return {
+        **die,
+        "kind": "attack",
+        "armor_class": armor_class,
+        "attack_bonus": attack_bonus,
+        "total": total,
+        "hit": hit,
+    }
+
+
+def resolve_death_save(
+    *,
+    successes: int = 0,
+    failures: int = 0,
+    advantage: bool = False,
+    disadvantage: bool = False,
+    bonus: int = 0,
+    rng: random.Random | None = None,
+) -> dict:
+    """Resolve a death save, including natural 1/20 special cases."""
+    die = roll_d20(advantage=advantage, disadvantage=disadvantage, rng=rng)
+    next_successes = successes
+    next_failures = failures
+    outcome = "pending"
+    if die["natural"] == 20:
+        outcome = "revived"
+        next_successes = 0
+        next_failures = 0
+    elif die["natural"] == 1:
+        next_failures += 2
+    elif die["natural"] + int(bonus) >= 10:
+        next_successes += 1
+    else:
+        next_failures += 1
+    if outcome == "pending" and next_successes >= 3:
+        outcome = "stable"
+    elif outcome == "pending" and next_failures >= 3:
+        outcome = "dead"
+    return {
+        **die,
+        "bonus": int(bonus),
+        "total": die["natural"] + int(bonus),
+        "kind": "death_save",
+        "successes": next_successes,
+        "failures": next_failures,
+        "outcome": outcome,
+    }
