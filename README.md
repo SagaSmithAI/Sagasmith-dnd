@@ -1,95 +1,77 @@
-# ⚔️ SagaSmith D&D
+# SagaSmith D&D
 
-[中文](README.md) | [English](README-en.md)
+[中文](README.md) · [English](README-en.md) · [D&D MCP](https://github.com/SagaSmithAI/SagaSmith-dnd-mcp)
 
-**D&D 5e 2014/2024 运行时** — 为 `sagasmith-core` 提供 D&D 系统插件与便携 JSON CLI。
+**SagaSmithAI 的 D&D 5e 2014/2024 规则运行时。** 本仓库实现可测试的角色、法术、活动、规则包、空间与结构化战斗逻辑，并通过 `sagasmith.systems` 注册 `dnd5e` 系统插件。
 
-> *"规则书为经文，骰子为审判官。"*
+> Skills 教 Agent 如何主持；MCP 管理能力边界；这个包负责把已经确定的规则输入结算成可验证结果。
 
-`sagasmith-dnd` 是一个轻量 Python 包，在 `sagasmith-core` 之上注册 `dnd5e` 系统 profile。它不绑定 Agent 平台——Agent 平台通过 `SagaSmith-dnd-skills` 调用同一 `sagasmith-dnd --json` CLI。
+## 在平台中的职责
 
----
-
-## 生态
-
-| 仓库 | 定位 |
-|------|------|
-| ⚔️ **sagasmith-dnd**（本仓库） | D&D 5e 系统插件 + CLI |
-| 🏗️ [sagasmith-core](https://github.com/dajiaohuang/sagasmith-core) | 通用引擎 — DB、文档、RAG |
-| 🎲 [SagaSmith-agent](https://github.com/dajiaohuang/SagaSmith-agent) | 完整 AI DM 运行时 |
-| 📦 [SagaSmith-dnd-skills](https://github.com/dajiaohuang/SagaSmith-dnd-skills) | D&D Agent Skill 定义 |
-| ✍️ [SagaSmith-module-gen-skills](https://github.com/dajiaohuang/SagaSmith-module-gen-skills) | 冒险模组生成器 |
-
----
-
-## 功能
-
-- 🎲 **规则引擎** — 基于 `sagasmith-core` 检索，混合搜索（精确 + FTS + 语义），BGE-M3 Dense 嵌入
-- ⚔️ **战斗** — 真实的 d20 掷骰、先攻、命中/伤害、豁免、暴击、先攻追踪、XP 计算
-- 🏛️ **战役管理** — 创建、角色绑定、规则集绑定、模组绑定
-- 👤 **角色** — D&D 5e 2014/2024 双版属性面板、职业、种族、法术位追踪
-- 📖 **模组** — PDF/Markdown 导入、结构感知解析、场景索引、中英双语场景合并
-- 🧩 **场景进度** — 作用域式追踪（`party` / `group:<id>` / `player:<id>`），从 party 透明继承
-- 💾 **Snapshot** — DAG 存档/读档/校验、分支感知记忆、recap 生成
-- 🗂️ **事件与记忆** — 发现事件日志、修订式战役记忆、自然语言查询
-
----
-
-## 快速开始
-
-```bash
-# 安装
-pip install "sagasmith-dnd[documents]"
-
-# 检查运行时健康状况
-sagasmith-dnd doctor --json
-
-# 创建战役
-sagasmith-dnd campaign start --name "深渊之门" --edition 2024 --locale zh --json
-
-# 导入规则
-sagasmith-dnd rules ingest --path ./srd/2024 --edition 2024 --locale en --json
-
-# 导入模组
-sagasmith-dnd module ingest --campaign <id> --path ./module.pdf --json
-
-# 查询当前场景
-sagasmith-dnd module current --campaign <id> --scope party --json
-
-# 更新进度
-sagasmith-dnd module set-progress --campaign <id> --scope party --scene <scene-id> --progress 50 --room "A1. 地窖" --state '{"visited_rooms":["A1"]}' --json
-
-# 保存战役
-sagasmith-dnd save create --campaign <id> --label "进入地城前" --json
+```mermaid
+flowchart LR
+    A[Agent] --> M[SagaSmith D&D MCP]
+    M --> S[D&D Skills]
+    M --> D[sagasmith-dnd]
+    D --> C[sagasmith-core]
 ```
 
----
+推荐的 Agent 接入点是 [SagaSmith-dnd-mcp](https://github.com/SagaSmithAI/SagaSmith-dnd-mcp)，而不是让 Agent 直接拼 CLI 或修改数据库。CLI 保留给开发、诊断和便携集成；Python 包是规则与内容实现层。
 
-## D&D Profile 场景解析
+## 已实现能力
 
-`DndModuleProfile` 在 `scene_boundaries()` 中实现了 D&D 专属的场景分割逻辑：
+- **版本化核心规则包** — 2014/2024 core pack、规则 profile、mechanic IR、扩展包组合与来源锁定。
+- **角色数据** — D&D sheet 校验、派生属性、武器/弹药、负重、资源、熟练项与可恢复状态。
+- **角色创建** — 标准数组、购点、掷骰与版本差异；核心职业、物种/种族、背景和专长内容。
+- **法术** — 法术数据、施法资源、准备法术、专注、Ready spell 与目标/豁免边界。
+- **结构化战斗** — 先攻、回合、动作经济、攻击预检与提交、伤害类型、抗性/免疫、倒地、死亡豁免、反应和选择窗口。
+- **空间语义** — 模组房间/地点证据，战斗开始时生成临时 map，移动、距离、触及和机会攻击。
+- **非战斗活动** — 检定、休息、资源与常见角色活动；战斗中禁止绕过战斗状态机修改同一状态。
+- **内容导入** — D&D 模组 profile、结构化规则内容、扩展规则书草稿与校验路径。
 
-- **层级自动检测** — H2 默认作为场景；当 H3 数量 >= H2 × 5 时改用 H3
-- **前言提取** — 章节标题与首个场景之间的内容作为独立 scene
-- **子节与房间** — 场景下一级标题为 subsection，再下一级为 `room`
-- **双语合并** — 相邻的中英双标题（如 `酒馆` / `Tavern`）自动合并为同一场景
-- **标签分类** — 根据标题关键词自动标记 `combat` / `exploration` / `dungeon` / `social` / `transition`
+## 自动结算与 GM 裁决的边界
 
----
+引擎只自动结算 **规则输入已经明确** 的机械部分，例如攻击加值、AC、骰式、伤害类型、豁免 DC、资源和当前状态。以下信息不应由引擎猜测：
 
-## 安装 extras
+- 行动意图、目标选择与叙事前提；
+- 视线、掩护、隐藏、触发时机和地图中未给出的距离；
+- 可选规则、规则冲突、特例优先级和 homebrew；
+- NPC 是否投降、环境后果或失败代价。
+
+MCP 层会用 preflight、choice window 和 ruling-required 结果把这些问题交回 Agent/GM，再由引擎提交确定性部分。
+
+## 安装与 CLI
+
+Python 3.11+：
+
+```bash
+pip install "sagasmith-dnd[all]"
+sagasmith-dnd doctor --json
+```
+
+可选 extras：
 
 | Extra | 用途 |
-|-------|------|
-| `dense` | sentence-transformers + ChromaDB 向量检索 |
-| `documents` | PDF 解析 |
-| `all` | 全部 extras |
+|---|---|
+| `documents` | PDF 文档解析 |
+| `dense` | sentence-transformers + ChromaDB |
+| `all` | 文档、嵌入与向量依赖 |
 
-Dense 检索是可选的，缺失时自动降级为精确/词法搜索。
+查看 CLI 的当前命令契约：
 
----
+```bash
+sagasmith-dnd --help
+sagasmith-dnd doctor --json
+sagasmith-dnd database upgrade --json
+```
 
-## 贡献
+## 扩展规则包
+
+扩展书不会通过散落的条件判断直接覆盖核心逻辑。导入流程将内容转成带 provenance 的 draft rule pack，验证 schema、依赖、edition 与 mechanic IR，随后绑定到 campaign rule profile。战役锁定核心包与扩展版本，Snapshot 恢复时必须能解析同一套精确依赖。
+
+这允许 Xanathar 等用户合法持有的扩展内容添加子职、背景、法术和可结算 mechanics，同时保留 2014/2024 核心边界与既有修复。商业书内容不随仓库分发。
+
+## 开发
 
 ```bash
 pip install -e ".[all,dev]"
@@ -97,15 +79,8 @@ pytest --cov
 ruff check .
 ```
 
----
+测试重点覆盖 rule pack、核心内容、保留规则边界、角色 schema、法术、生命周期、空间与战斗引擎。
 
-## 致谢
+## 内容与许可
 
-- D&D 5e SRD 5.2.1 © Wizards of the Coast，以 [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/) 授权使用
-- [SagiriWWW/DND.SRD.zh-CN](https://github.com/SagiriWWW/DND.SRD.zh-CN) — D&D 5e SRD 5.1 中文翻译
-
----
-
-## 许可证
-
-MIT
+代码使用 MIT License。D&D 5e SRD 派生内容遵循对应 CC-BY-4.0 条款；中文便利翻译保留原项目许可和署名。非 SRD 商业内容必须由用户自行合法导入。
