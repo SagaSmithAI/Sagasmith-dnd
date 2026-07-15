@@ -20,6 +20,12 @@ from sagasmith_dnd.engine import (
     roll,
     roll_d20,
 )
+from sagasmith_dnd.rule_engine import (
+    ResolutionContext,
+    apply_rule_event,
+    context_with_facts,
+    core_receipts,
+)
 
 
 class CombatEngineError(ValueError):
@@ -321,6 +327,7 @@ def preflight_attack(
     action: dict[str, Any],
     encounter: dict[str, Any] | None = None,
     allow_out_of_turn: bool = False,
+    rules: ResolutionContext | None = None,
 ) -> dict[str, Any]:
     """Validate an attack declaration without changing any state or rolling."""
     actor_sheet(attacker)
@@ -503,6 +510,33 @@ def preflight_attack(
         and int(distance) <= 5
         and target_conditions & {"paralyzed", "unconscious"}
     )
+    extension = apply_rule_event(actor_sheet(attacker), "attack.preflight", rules)
+    if extension.status != "committed":
+        raise NeedsRulingError(
+            "an active rule pack requires an attack choice or ruling",
+            missing=[item["mechanic_id"] for item in extension.pending],
+        )
+    for modifier in extension.modifiers:
+        opcode = modifier["op"]
+        if opcode == "modifier.add":
+            target_field = str(modifier.get("target") or "")
+            if target_field == "attack_bonus":
+                attack_bonus += int(modifier.get("value", 0) or 0)
+            elif target_field == "target_ac":
+                target_ac += int(modifier.get("value", 0) or 0)
+            else:
+                raise CombatEngineError(f"unsupported attack modifier target: {target_field}")
+        elif opcode == "advantage.add":
+            context["advantage"] = True
+            context.setdefault("advantage_sources", []).append(modifier["mechanic_id"])
+        elif opcode == "disadvantage.add":
+            context["disadvantage"] = True
+            context.setdefault("disadvantage_sources", []).append(modifier["mechanic_id"])
+    core_boundary_ids: list[str] = []
+    if cover_degree or cover.get("ac_bonus") is not None:
+        core_boundary_ids.append("dnd5e.core.attack.cover")
+    if helped_by:
+        core_boundary_ids.append("dnd5e.core.attack.help")
     return {
         "status": "ready",
         "kind": "attack",
@@ -526,6 +560,15 @@ def preflight_attack(
         "knock_out": bool(action.get("knock_out", False)),
         "melee_attack": str(weapon.get("attack_type") or "melee") == "melee",
         "helped_by": helped_by,
+        "rule_receipts": [
+            *core_receipts(
+                rules,
+                core_boundary_ids,
+                "attack.preflight",
+            ),
+            *extension.receipts,
+        ],
+        "ruleset_fingerprint": rules.fingerprint if rules else "",
     }
 
 
@@ -534,6 +577,7 @@ def resolve_attack_action(
     target: dict[str, Any],
     *,
     plan: dict[str, Any],
+    rules: ResolutionContext | None = None,
     rng: Any = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Resolve a prepared attack and return updated attacker/target snapshots."""
@@ -578,9 +622,48 @@ def resolve_attack_action(
             "rolls": list(damage_roll.rolls),
             "detail": damage_roll.detail,
         }
-    if updated_attacker.get("hidden"):
+    was_hidden = bool(updated_attacker.get("hidden"))
+    if was_hidden:
         updated_attacker["hidden"] = False
         result["reveals_attacker"] = True
+    resolution_boundaries: list[str] = []
+    if was_hidden:
+        resolution_boundaries.append("dnd5e.core.attack.hidden_reveal")
+    if isinstance(result.get("damage"), dict):
+        resolution_boundaries.append("dnd5e.core.damage.zero_hp")
+        if bool(plan.get("knock_out", False)):
+            resolution_boundaries.append("dnd5e.core.damage.knockout")
+    extension_receipts: list[dict[str, Any]] = [
+        *list(plan.get("rule_receipts") or []),
+        *core_receipts(
+            rules,
+            resolution_boundaries,
+            "attack.resolve",
+        ),
+    ]
+    facts = {
+        "kind": "attack",
+        "hit": bool(result.get("attack", {}).get("hit")),
+        "critical": bool(result.get("attack", {}).get("critical")),
+        "attacker_id": actor_id(attacker),
+        "target_id": actor_id(target),
+    }
+    attacker_rules = apply_rule_event(
+        actor_sheet(updated_attacker),
+        "attack.after",
+        context_with_facts(rules, **facts, subject="attacker"),
+    )
+    target_rules = apply_rule_event(
+        actor_sheet(updated_target),
+        "attack.after",
+        context_with_facts(rules, **facts, subject="target"),
+    )
+    updated_attacker["sheet"] = attacker_rules.sheet
+    updated_target["sheet"] = target_rules.sheet
+    extension_receipts.extend(attacker_rules.receipts)
+    extension_receipts.extend(target_rules.receipts)
+    result["rule_receipts"] = extension_receipts
+    result["ruleset_fingerprint"] = rules.fingerprint if rules else ""
     return updated_attacker, updated_target, result
 
 
@@ -1538,6 +1621,7 @@ def resolve_actor_check(
     advantage: bool = False,
     disadvantage: bool = False,
     ruleset: str | None = None,
+    rules: ResolutionContext | None = None,
     rng: Any = None,
 ) -> dict[str, Any]:
     sheet = actor_sheet(actor)
@@ -1545,13 +1629,43 @@ def resolve_actor_check(
     conditions = _condition_set(sheet.get("conditions"))
     exhaustion = int(sheet.get("combat", {}).get("exhaustion", 0) or 0)
     roll_bonus = int(bonus)
+    extension = apply_rule_event(sheet, "check.before", rules)
+    if extension.status != "committed":
+        raise NeedsRulingError(
+            "an active rule pack requires a check choice or ruling",
+            missing=[item["mechanic_id"] for item in extension.pending],
+        )
+    for modifier in extension.modifiers:
+        if modifier["op"] == "modifier.add" and modifier.get("target") == "check_bonus":
+            roll_bonus += int(modifier.get("value", 0) or 0)
+        elif modifier["op"] == "advantage.add":
+            advantage = True
+        elif modifier["op"] == "disadvantage.add":
+            disadvantage = True
+    boundary_ids = (
+        ["dnd5e.core.save.restrained_dexterity"]
+        if (
+            kind == "save"
+            and _long_ability_name(ability) == "dexterity"
+            and "restrained" in conditions
+        )
+        else []
+    )
+
+    def with_rule_receipts(result: dict[str, Any]) -> dict[str, Any]:
+        result["rule_receipts"] = [
+            *core_receipts(rules, boundary_ids, "check.resolve"),
+            *extension.receipts,
+        ]
+        result["ruleset_fingerprint"] = rules.fingerprint if rules else ""
+        return result
     abilities = dict(sheet.get("abilities") or {})
     if kind not in {"ability", "check", "save", "death_save", "attack"}:
         raise CombatEngineError("unsupported check kind")
     if kind == "save" and _long_ability_name(ability) in {"strength", "dexterity"}:
         automatic = conditions & {"paralyzed", "petrified", "stunned", "unconscious"}
         if automatic:
-            return {
+            return with_rule_receipts({
                 "kind": "save",
                 "dc": dc,
                 "natural": None,
@@ -1562,7 +1676,7 @@ def resolve_actor_check(
                 "success": False,
                 "automatic_failure": True,
                 "reason": sorted(automatic)[0],
-            }
+            })
     if kind in {"ability", "check"} and "poisoned" in conditions:
         disadvantage = True
     if kind == "save" and _long_ability_name(ability) == "dexterity" and "restrained" in conditions:
@@ -1575,7 +1689,7 @@ def resolve_actor_check(
         disadvantage = True
     derived_skills = dict(actor_derived(actor).get("skills") or {})
     if kind in {"ability", "check"} and ability in derived_skills:
-        return resolve_check(
+        return with_rule_receipts(resolve_check(
             dc=dc,
             ability_score=10,
             proficient=False,
@@ -1585,7 +1699,7 @@ def resolve_actor_check(
             disadvantage=disadvantage,
             kind="ability",
             rng=rng,
-        )
+        ))
     entry = abilities.get(ability) or abilities.get(_long_ability_name(ability)) or {}
     score = int(entry.get("score", 10) if isinstance(entry, dict) else entry)
     level = int(sheet.get("progression", {}).get("level", 1) or 1)
@@ -1607,15 +1721,15 @@ def resolve_actor_check(
         raise CombatEngineError("use resolve_attack for attacks")
     if kind == "death_save":
         death = dict(sheet.get("combat", {}).get("death_saves") or {})
-        return resolve_death_save(
+        return with_rule_receipts(resolve_death_save(
             successes=int(death.get("successes", 0)),
             failures=int(death.get("failures", 0)),
             advantage=advantage,
             disadvantage=disadvantage,
             bonus=roll_bonus,
             rng=rng,
-        )
-    return resolve_check(
+        ))
+    return with_rule_receipts(resolve_check(
         dc=dc,
         ability_score=score,
         proficient=proficient,
@@ -1625,7 +1739,7 @@ def resolve_actor_check(
         disadvantage=disadvantage,
         kind="save" if kind == "save" else "ability",
         rng=rng,
-    )
+    ))
 
 
 def end_turn(encounter: dict[str, Any], *, actor_id_value: str | None = None) -> dict[str, Any]:

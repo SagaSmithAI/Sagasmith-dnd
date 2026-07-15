@@ -7,6 +7,7 @@ from typing import Any
 from uuid import uuid4
 
 from sagasmith_dnd.combat_engine import CombatEngineError
+from sagasmith_dnd.rule_engine import ResolutionContext, apply_rule_event, core_receipts
 
 _SPELL_POINT_COSTS = {1: 2, 2: 3, 3: 5, 4: 6, 5: 7, 6: 9, 7: 10, 8: 11, 9: 13}
 
@@ -33,9 +34,19 @@ def consume_spell_cast(
     cast_level: int | None = None,
     ritual: bool = False,
     component_ruling: dict[str, Any] | None = None,
+    rules: ResolutionContext | None = None,
 ) -> dict[str, Any]:
     """Validate access and pay a spell's canonical slot or spell-point cost."""
-    value = deepcopy(sheet)
+    before = apply_rule_event(sheet, "spell.before", rules)
+    if before.status != "committed":
+        return {
+            "sheet": deepcopy(sheet),
+            "spell_id": spell_id,
+            "status": before.status,
+            "rule_receipts": list(before.receipts),
+            "pending": list(before.pending),
+        }
+    value = before.sheet
     spell = next(
         (item for item in value.get("content", {}).get("spells", []) if item.get("id") == spell_id),
         None,
@@ -136,8 +147,17 @@ def consume_spell_cast(
                 "description": "",
             }
         )
+    after = apply_rule_event(value, "spell.after", rules)
+    if after.status != "committed":
+        return {
+            "sheet": deepcopy(sheet),
+            "spell_id": spell_id,
+            "status": after.status,
+            "rule_receipts": [*before.receipts, *after.receipts],
+            "pending": list(after.pending),
+        }
     return {
-        "sheet": value,
+        "sheet": after.sheet,
         "spell_id": spell_id,
         "cast_level": level,
         "payment": paid,
@@ -148,6 +168,25 @@ def consume_spell_cast(
             *(["material_component"] if components.get("material") else []),
             "targets_and_effect",
         ],
+        "status": "committed",
+        "rule_receipts": [
+            *core_receipts(
+                rules,
+                [
+                    "dnd5e.core.spell.cantrip_ritual_level",
+                    "dnd5e.core.spell.material_components",
+                    *(
+                        ["dnd5e.core.spell.pact_magic"]
+                        if rules and rules.core_pack.edition == "2014"
+                        else []
+                    ),
+                ],
+                "spell.cast",
+            ),
+            *before.receipts,
+            *after.receipts,
+        ],
+        "ruleset_fingerprint": rules.fingerprint if rules else "",
     }
 
 

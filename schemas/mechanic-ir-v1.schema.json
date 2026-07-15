@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sagasmith.ai/schemas/dnd5e/mechanic-ir-v1.schema.json",
+  "title": "SagaSmith D&D Mechanic IR v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "event", "operations", "citations"],
+  "properties": {
+    "id": {"type": "string"},
+    "event": {
+      "enum": [
+        "character.validate", "character.derive", "activity.before", "activity.after",
+        "spell.before", "spell.after", "rest.before", "rest.after", "attack.preflight",
+        "attack.after", "check.before", "turn.end", "duration.advance"
+      ]
+    },
+    "priority": {"type": "integer"},
+    "predicates": {"type": "array", "items": {"type": "object"}},
+    "operations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["op"],
+        "properties": {
+          "op": {
+            "enum": [
+              "resource.spend", "resource.recover", "hp.heal", "hp.temp.set",
+              "condition.add", "condition.remove", "effect.add", "effect.remove",
+              "spell_slot.spend", "spell_slot.recover", "modifier.add", "advantage.add",
+              "disadvantage.add", "choice.require", "ruling.require"
+            ]
+          }
+        }
+      }
+    },
+    "citations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["source"],
+        "properties": {
+          "source": {"type": "string"},
+          "source_id": {"type": "string"},
+          "source_key": {"type": "string"},
+          "source_checksum": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "chunk_id": {"type": "string"},
+          "heading_path": {"type": "array", "items": {"type": "string"}},
+          "page_start": {"type": ["integer", "null"], "minimum": 1},
+          "page_end": {"type": ["integer", "null"], "minimum": 1}
+        }
+      }
+    },
+    "patch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target", "expected_checksum"],
+      "properties": {
+        "target": {"type": "string"},
+        "expected_checksum": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    }
+  }
+}

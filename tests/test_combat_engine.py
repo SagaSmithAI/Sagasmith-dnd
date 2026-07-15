@@ -118,8 +118,19 @@ def test_initiative_ties_require_explicit_tie_breakers() -> None:
 def test_half_cover_uses_the_rules_ac_bonus() -> None:
     attacker = _actor("attacker")
     target = _actor("target", ac=10)
-    attacker["derived"]["inventory"]["weapon_attacks"] = [{"item_id": "sword", "attack_bonus": 5, "damage_expression": "1", "damage_type": "slashing"}]
-    plan = preflight_attack(attacker, target, action={"weapon_id": "sword", "context": {"cover": {"degree": "half"}}})
+    attacker["derived"]["inventory"]["weapon_attacks"] = [
+        {
+            "item_id": "sword",
+            "attack_bonus": 5,
+            "damage_expression": "1",
+            "damage_type": "slashing",
+        }
+    ]
+    plan = preflight_attack(
+        attacker,
+        target,
+        action={"weapon_id": "sword", "context": {"cover": {"degree": "half"}}},
+    )
     assert plan["target_ac"] == 12
 
 

@@ -58,7 +58,9 @@ def test_short_rest_uses_explicit_hit_die_roll_and_2024_long_rest_recovers_all()
     sheet["combat"]["hit_dice"] = {
         "d8": {"label": "d8", "value": 1, "max": 3, "recovers_on": "none", "source_key": "cleric"}
     }
-    short_rest = apply_rest(sheet, rest_type="short_rest", hit_dice_spends=[{"key": "d8", "roll": 4}])
+    short_rest = apply_rest(
+        sheet, rest_type="short_rest", hit_dice_spends=[{"key": "d8", "roll": 4}]
+    )
     assert short_rest["hit_die_healing"] == 6
     assert short_rest["sheet"]["combat"]["hp"]["value"] == 8
     long_rest = apply_rest(short_rest["sheet"], rest_type="long_rest")

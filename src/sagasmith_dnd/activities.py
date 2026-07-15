@@ -5,12 +5,16 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from sagasmith_dnd.rule_engine import ResolutionContext, apply_rule_event, core_receipts
+
 
 class ActivityError(ValueError):
     """Raised when a declared activity cannot pay its structured cost."""
 
 
-def consume_activity(sheet: dict[str, Any], *, activity_id: str) -> dict[str, Any]:
+def consume_activity(
+    sheet: dict[str, Any], *, activity_id: str, rules: ResolutionContext | None = None
+) -> dict[str, Any]:
     """Consume one recorded use without inferring a narrative effect.
 
     A card can point at a shared ``sheet.resources`` entry through
@@ -19,7 +23,16 @@ def consume_activity(sheet: dict[str, Any], *, activity_id: str) -> dict[str, An
     checks, damage, and any DM ruling separately so this helper never invents
     an outcome from prose.
     """
-    value = deepcopy(sheet)
+    before = apply_rule_event(sheet, "activity.before", rules)
+    if before.status != "committed":
+        return {
+            "sheet": deepcopy(sheet),
+            "activity_id": activity_id,
+            "status": before.status,
+            "rule_receipts": list(before.receipts),
+            "pending": list(before.pending),
+        }
+    value = before.sheet
     section, activity = _find_activity(value, activity_id)
     activation = dict(activity.get("activation") or {})
     activation_type = str(activation.get("type") or "passive")
@@ -48,8 +61,21 @@ def consume_activity(sheet: dict[str, Any], *, activity_id: str) -> dict[str, An
         activity if item.get("id") == activity_id else item
         for item in value["content"].get(section, [])
     ]
+    after = apply_rule_event(value, "activity.after", rules)
+    if after.status != "committed":
+        return {
+            "sheet": deepcopy(sheet),
+            "activity_id": activity_id,
+            "content_type": section,
+            "name": activity.get("name", activity_id),
+            "activation": activation,
+            "payment": None,
+            "status": after.status,
+            "rule_receipts": [*before.receipts, *after.receipts],
+            "pending": list(after.pending),
+        }
     return {
-        "sheet": value,
+        "sheet": after.sheet,
         "activity_id": activity_id,
         "content_type": section,
         "name": activity.get("name", activity_id),
@@ -57,6 +83,15 @@ def consume_activity(sheet: dict[str, Any], *, activity_id: str) -> dict[str, An
         "payment": payment,
         "choices": deepcopy(activity.get("choices") or {}),
         "requires_ruling": bool(activity.get("choices")),
+        "status": "committed",
+        "rule_receipts": [
+            *core_receipts(
+                rules, ["dnd5e.core.activity.resource_accounting"], "activity.consume"
+            ),
+            *before.receipts,
+            *after.receipts,
+        ],
+        "ruleset_fingerprint": rules.fingerprint if rules else "",
     }
 
 

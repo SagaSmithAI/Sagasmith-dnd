@@ -6,6 +6,7 @@ from copy import deepcopy
 from typing import Any
 
 from sagasmith_dnd.combat_engine import CombatEngineError
+from sagasmith_dnd.rule_engine import ResolutionContext, apply_rule_event, core_receipts
 
 
 def advance_effect_durations(sheet: dict[str, Any], *, period: str) -> dict[str, Any]:
@@ -40,12 +41,22 @@ def apply_rest(
     hit_dice_spends: list[dict[str, Any]] | None = None,
     hit_dice_recovery: dict[str, int] | None = None,
     food_and_drink: bool = False,
+    rules: ResolutionContext | None = None,
 ) -> dict[str, Any]:
     """Settle a short or long rest without inventing player-choice allocations."""
     rest_type = str(rest_type).strip().lower().replace("-", "_")
     if rest_type not in {"short_rest", "long_rest"}:
         raise CombatEngineError("rest_type must be short_rest or long_rest")
-    value = deepcopy(sheet)
+    before_rules = apply_rule_event(sheet, "rest.before", rules)
+    if before_rules.status != "committed":
+        return {
+            "sheet": deepcopy(sheet),
+            "rest_type": rest_type,
+            "status": before_rules.status,
+            "rule_receipts": list(before_rules.receipts),
+            "pending": list(before_rules.pending),
+        }
+    value = before_rules.sheet
     combat = value.setdefault("combat", {})
     hp = dict(combat.get("hp") or {})
     if int(hp.get("value", 0) or 0) <= 0 or "dead" in {
@@ -168,12 +179,32 @@ def apply_rest(
         recover_resource(item.get("charges"), f"inventory:{index}:charges")
     value["combat"] = combat | {"hp": hp}
     duration = advance_effect_durations(value, period=rest_type)
+    after_rules = apply_rule_event(duration["sheet"], "rest.after", rules)
+    if after_rules.status != "committed":
+        return {
+            "sheet": deepcopy(sheet),
+            "rest_type": rest_type,
+            "status": after_rules.status,
+            "rule_receipts": [*before_rules.receipts, *after_rules.receipts],
+            "pending": list(after_rules.pending),
+        }
     return {
-        "sheet": duration["sheet"],
+        "sheet": after_rules.sheet,
         "rest_type": rest_type,
         "recovered": recovered,
         "hit_die_healing": hit_die_healing,
         "effects_expired": duration["expired"],
+        "status": "committed",
+        "rule_receipts": [
+            *core_receipts(
+                rules,
+                ["dnd5e.core.rest.hit_dice", "dnd5e.core.rest.exhaustion"],
+                "rest.apply",
+            ),
+            *before_rules.receipts,
+            *after_rules.receipts,
+        ],
+        "ruleset_fingerprint": rules.fingerprint if rules else "",
     }
 
 

@@ -77,6 +77,22 @@ sagasmith-dnd save create --campaign <id> --label "Before entering the dungeon" 
 
 ---
 
+## Optional rule-pack runtime
+
+The D&D package owns the safe mechanic IR in `schemas/mechanic-ir-v1.schema.json`.
+It accepts only declared events, predicates, and whitelisted operations; it never
+loads Python or expressions from an imported book. `validate_source_bound_mechanics()`
+additionally verifies the canonical Core source id, source SHA-256, chunk id, heading
+path, and page range supplied by the MCP import workflow.
+
+At settlement, the immutable `dnd5e.core.2014` or `dnd5e.core.2024` provider and all
+enabled optional packs compile into one `ResolutionContext`. The combined fingerprint
+and every applied Core/extension mechanic receipt are persisted with the same atomic
+mutation. Non-combat checks enter this path through MCP `character_check`; combat
+checks use `combat_check`.
+
+---
+
 ## Optional Extras
 
 | Extra | Purpose |

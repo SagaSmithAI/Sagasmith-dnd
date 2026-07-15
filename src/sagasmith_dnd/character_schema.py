@@ -7,6 +7,7 @@ import uuid
 from typing import Any
 
 from sagasmith_dnd.ability_generation import normalize_ability_generation
+from sagasmith_dnd.rule_engine import ResolutionContext, apply_rule_event, core_receipts
 
 ABILITY_NAMES = (
     "strength",
@@ -670,6 +671,10 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
         "point_cost",
         "custom_definition",
         "notes",
+        "pack_id",
+        "pack_version",
+        "rule_refs",
+        "mechanic_refs",
     }
     _reject_unknown(spell, field, allowed)
     grant = _object(spell.get("grant") or {}, f"{field}.grant")
@@ -799,6 +804,14 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
             else None
         ),
         "notes": _text(spell.get("notes"), f"{field}.notes", maximum=1200),
+        "pack_id": _text(spell.get("pack_id"), f"{field}.pack_id", maximum=200),
+        "pack_version": _text(
+            spell.get("pack_version"), f"{field}.pack_version", maximum=64
+        ),
+        "rule_refs": _string_list(spell.get("rule_refs") or [], f"{field}.rule_refs"),
+        "mechanic_refs": _string_list(
+            spell.get("mechanic_refs") or [], f"{field}.mechanic_refs"
+        ),
     }
 
 
@@ -859,7 +872,9 @@ def _normalize_effect(value: Any, field: str) -> dict[str, Any]:
     }
 
 
-def validate_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
+def validate_character_sheet(
+    sheet: dict[str, Any], *, rules: ResolutionContext | None = None
+) -> dict[str, Any]:
     value = _merge_defaults(default_character_sheet(), _object(sheet, "sheet"))
     allowed = {
         "schema_version",
@@ -1167,6 +1182,10 @@ def validate_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
                     "activation",
                     "scaling",
                     "choices",
+                    "pack_id",
+                    "pack_version",
+                    "rule_refs",
+                    "mechanic_refs",
                 },
             )
             activation = _object(
@@ -1261,6 +1280,24 @@ def validate_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
                     "choices": _object(
                         entry.get("choices") or {}, f"sheet.content.{name}[{index}].choices"
                     ),
+                    "pack_id": _text(
+                        entry.get("pack_id"),
+                        f"sheet.content.{name}[{index}].pack_id",
+                        maximum=200,
+                    ),
+                    "pack_version": _text(
+                        entry.get("pack_version"),
+                        f"sheet.content.{name}[{index}].pack_version",
+                        maximum=64,
+                    ),
+                    "rule_refs": _string_list(
+                        entry.get("rule_refs") or [],
+                        f"sheet.content.{name}[{index}].rule_refs",
+                    ),
+                    "mechanic_refs": _string_list(
+                        entry.get("mechanic_refs") or [],
+                        f"sheet.content.{name}[{index}].mechanic_refs",
+                    ),
                 }
             )
         return result
@@ -1300,7 +1337,7 @@ def validate_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
     if not set(background_item_ids).issubset(inventory_item_ids):
         raise ValueError("background equipment references an unknown inventory item")
 
-    return {
+    normalized = {
         "schema_version": 2,
         "edition": edition,
         "identity": {
@@ -1486,6 +1523,10 @@ def validate_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
         },
         "inventory": inventory,
     }
+    extension = apply_rule_event(normalized, "character.validate", rules)
+    if extension.status != "committed":
+        raise ValueError("active rule pack requires a character validation ruling")
+    return normalized
 
 
 def validate_character_notes(
@@ -1777,7 +1818,9 @@ def _weapon_attacks(
     return attacks
 
 
-def derive_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
+def derive_character_sheet(
+    sheet: dict[str, Any], *, rules: ResolutionContext | None = None
+) -> dict[str, Any]:
     value = validate_character_sheet(sheet)
     level = value["progression"]["level"]
     proficiency = 2 + (level - 1) // 4
@@ -1835,7 +1878,7 @@ def derive_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
             else "normal"
         ),
     }
-    return {
+    derived = {
         "proficiency_bonus": proficiency,
         "ability_modifiers": ability_modifiers,
         "saving_throws": saves,
@@ -1881,6 +1924,38 @@ def derive_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
         ],
         "unresolved_rules": sorted(unresolved_effects),
     }
+    extension = apply_rule_event(value, "character.derive", rules)
+    if extension.status != "committed":
+        derived["unresolved_rules"] = sorted(
+            {
+                *derived["unresolved_rules"],
+                *(item["mechanic_id"] for item in extension.pending),
+            }
+        )
+    for modifier in extension.modifiers:
+        if modifier["op"] != "modifier.add":
+            continue
+        target = str(modifier.get("target") or "")
+        if target in {"armor_class", "initiative", "passive_perception"}:
+            derived[target] = int(derived[target]) + int(modifier.get("value", 0) or 0)
+        else:
+            derived["unresolved_rules"] = sorted(
+                {*derived["unresolved_rules"], modifier["mechanic_id"]}
+            )
+    core_boundary_ids: list[str] = []
+    if derived["armor_class_breakdown"].get("mode") == "unarmored":
+        core_boundary_ids.append("dnd5e.core.armor_class.unarmored")
+    if any(
+        int(item.get("reach_ft", 5) or 5) > 5
+        for item in derived["inventory"]["weapon_attacks"]
+    ):
+        core_boundary_ids.append("dnd5e.core.weapon.reach")
+    derived["rule_receipts"] = [
+        *core_receipts(rules, core_boundary_ids, "character.derive"),
+        *extension.receipts,
+    ]
+    derived["ruleset_fingerprint"] = rules.fingerprint if rules else ""
+    return derived
 
 
 def add_inventory_item(sheet: dict[str, Any], item: dict[str, Any]) -> tuple[dict[str, Any], str]:
