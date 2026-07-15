@@ -75,6 +75,7 @@ export interface ModuleScene {
   sanity?: SanityEntry[];
   subsections?: Subsection[];
   headings: string[];
+  content?: string;
 }
 
 export interface Clue {

@@ -1,38 +1,38 @@
-import { useState, useEffect } from 'react';
-import { listCampaigns, MOCK_CAMPAIGNS } from '../lib/api';
+import { useEffect, useState } from 'react';
+import { MOCK_CAMPAIGNS, emitRuntimeStatus, listCampaigns } from '../lib/api';
 import type { Campaign } from '../types';
 
 export default function CampaignList() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [demo, setDemo] = useState(false);
 
   useEffect(() => {
-    listCampaigns().then(setCampaigns).catch(() => setCampaigns(MOCK_CAMPAIGNS));
+    listCampaigns()
+      .then((items) => { setCampaigns(items); emitRuntimeStatus(true); })
+      .catch(() => { setCampaigns(MOCK_CAMPAIGNS); setDemo(true); emitRuntimeStatus(false); });
   }, []);
 
   return (
-    <div style={{ maxWidth: 800, margin: '0 auto', padding: '24px 16px' }}>
-      <div className="page-header">
-        <a href="/" className="btn btn-ghost btn-sm">← Dashboard</a>
-        <h1>战役</h1>
+    <div className="page">
+      <div className="page-heading">
+        <div><div className="eyebrow">CAMPAIGN ARCHIVE / BRANCH-AWARE</div><h1>战役档案</h1><p>查看系统版本、当前阶段、revision 与活动状态。进入战役后继续检查角色、场景、模组和 Snapshot lineage。</p></div>
+        <div className="heading-actions"><a href="/" className="btn btn-ghost">返回桌面</a><a href="https://github.com/SagaSmithAI/SagaSmith-dnd-mcp" className="btn btn-primary" target="_blank" rel="noreferrer">通过 MCP 建团 ↗</a></div>
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {campaigns.map(c => (
-          <a key={c.id} href={`/campaigns/${c.id}`} className="card"
-            style={{ display: 'block', textDecoration: 'none', color: 'inherit', transition: 'box-shadow .2s' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <div style={{ fontWeight: 600, fontSize: '1rem' }}>{c.name}</div>
-                <div style={{ fontSize: '.82rem', color: '#6b7280' }}>
-                  D&D 5e {c.edition} · {c.locale === 'zh' ? '中文' : 'English'} · Rev {c.revision}
-                  {c.description ? ` · ${c.description}` : ''}
-                </div>
-              </div>
-              <span className={`badge ${c.status === 'active' ? 'badge-green' : 'badge-gray'}`}>
-                {c.status === 'active' ? '进行中' : c.status}
-              </span>
-            </div>
-          </a>
-        ))}
+      {demo && <div className="demo-notice"><strong>DEMO DATA</strong><span>未连接 compatible gateway；以下战役用于展示信息结构。</span></div>}
+      <div className="campaign-grid">
+        {campaigns.map((campaign, index) => {
+          const phase = String(campaign.state?.game_phase || 'lobby');
+          return (
+            <a key={campaign.id} href={`/campaigns/detail?id=${encodeURIComponent(campaign.id)}`} className="campaign-card">
+              <header><span>0{index + 1}</span><span className={`badge ${campaign.status === 'active' ? 'badge-green' : 'badge-gray'}`}>{campaign.status}</span></header>
+              <div className="campaign-edition">D&D 5E · {campaign.edition} · {campaign.locale.toUpperCase()}</div>
+              <h2>{campaign.name}</h2>
+              <p>{campaign.description || '暂无战役摘要。'}</p>
+              <div className="campaign-phase"><span>PHASE</span><b>{phase.toUpperCase()}</b><span>REVISION</span><b>{campaign.revision}</b></div>
+              <footer><span>{campaign.slug}</span><b>OPEN DOSSIER →</b></footer>
+            </a>
+          );
+        })}
       </div>
     </div>
   );

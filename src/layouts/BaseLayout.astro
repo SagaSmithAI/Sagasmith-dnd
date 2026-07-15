@@ -1,19 +1,82 @@
 ---
-import "../styles/global.css";
+import '../styles/global.css';
+
 export interface Props {
   title: string;
+  section?: string;
 }
-const { title } = Astro.props;
+
+const { title, section = 'DM WORKBENCH' } = Astro.props;
+const path = Astro.url.pathname;
+const active = (prefix: string) => prefix === '/' ? path === '/' : path.startsWith(prefix);
 ---
 <!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width" />
+    <meta name="theme-color" content="#171916" />
+    <meta name="description" content="SagaSmith D&D DM Workbench — campaign continuity, actor knowledge, rules, scenes, and live-table operations." />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>{title} · SagaSmith D&D</title>
-    <link rel="icon" type="image/png" href="/favicon.png" />
   </head>
   <body>
-    <slot />
+    <div class="app-shell" data-app-shell>
+      <aside class="sidebar">
+        <a class="sidebar-brand" href="/">
+          <span class="sidebar-brand-mark">S</span>
+          <span><strong>SagaSmith D&D</strong><small>DM WORKBENCH</small></span>
+        </a>
+
+        <div class="side-section">TABLE</div>
+        <nav class="side-nav" aria-label="Workbench navigation">
+          <a href="/" aria-current={active('/') ? 'page' : undefined}><span class="nav-icon">⌁</span>战役现场</a>
+          <a href="/campaigns" aria-current={active('/campaigns') ? 'page' : undefined}><span class="nav-icon">◇</span>战役档案</a>
+          <a href="/rules" aria-current={active('/rules') ? 'page' : undefined}><span class="nav-icon">§</span>规则与来源</a>
+        </nav>
+
+        <div class="side-section">OPERATIONS</div>
+        <nav class="side-nav" aria-label="Future operations">
+          <a href="/campaigns"><span class="nav-icon">◎</span>角色与知识</a>
+          <a href="/campaigns"><span class="nav-icon">▦</span>场景与地图</a>
+          <a href="https://github.com/SagaSmithAI/SagaSmith-dnd-mcp" target="_blank" rel="noreferrer"><span class="nav-icon">↗</span>MCP 能力面</a>
+          <a href="https://github.com/SagaSmithAI/sagasmith-dnd-ui" target="_blank" rel="noreferrer"><span class="nav-icon">+</span>项目仓库 <span class="soon">ALPHA</span></a>
+        </nav>
+
+        <div class="sidebar-foot">
+          <header><span>RUNTIME OWNER</span><i></i></header>
+          <strong>SagaSmith D&D MCP</strong>
+          <p>UI observes a compatible gateway.<br />Authoritative writes stay in MCP.</p>
+        </div>
+      </aside>
+
+      <div class="workspace">
+        <header class="workspace-top">
+          <div class="workspace-top-left">
+            <button class="mobile-menu" type="button" aria-label="Toggle navigation" data-menu>☰</button>
+            <div><div class="workspace-kicker">{section}</div><h1 class="workspace-title">{title}</h1></div>
+          </div>
+          <div class="workspace-meta">
+            <span class="runtime-badge" data-runtime-badge><i></i><span>DETECTING RUNTIME</span></span>
+            <span class="alpha-badge">ALPHA / LOCAL</span>
+          </div>
+        </header>
+        <main class="workspace-main"><slot /></main>
+      </div>
+    </div>
+    <script>
+      const shell = document.querySelector('[data-app-shell]');
+      document.querySelector('[data-menu]')?.addEventListener('click', () => shell?.classList.toggle('menu-open'));
+      document.querySelectorAll('.sidebar a').forEach((link) => link.addEventListener('click', () => shell?.classList.remove('menu-open')));
+      window.addEventListener('sagasmith:runtime', (event) => {
+        const badge = document.querySelector('[data-runtime-badge]');
+        const detail = event.detail || {};
+        if (!badge) return;
+        badge.classList.toggle('connected', detail.connected === true);
+        badge.classList.toggle('disconnected', detail.connected === false);
+        const text = badge.querySelector('span');
+        if (text) text.textContent = detail.connected ? `MCP GATEWAY · ${detail.version || 'READY'}` : 'DEMO DATA · GATEWAY OFFLINE';
+      });
+    </script>
   </body>
 </html>

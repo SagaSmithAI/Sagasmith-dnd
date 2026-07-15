@@ -1,75 +1,40 @@
-import { useState, useEffect } from 'react';
-import { sceneIndex } from '../lib/api';
+import { useEffect, useMemo, useState } from 'react';
+import { MOCK_SCENE, sceneIndex } from '../lib/api';
 import type { ModuleScene } from '../types';
+
+const DEMO_SCENES: ModuleScene[] = [
+  { ...MOCK_SCENE, scene_id: 'scene-gate', title: '封锁区入口', chapter: '第三章 · 断钟', scene_type: 'social', page_start: 38, page_end: 41, tags: ['social', 'gate'], visibility: 'player', keywords: ['守卫', '通行证'], headings: ['第三章', '封锁区入口'], content: '灰袍守卫封锁了通往钟楼的石桥。' },
+  MOCK_SCENE,
+  { ...MOCK_SCENE, scene_id: 'scene-vault', title: '余烬保险库', chapter: '第三章 · 断钟', scene_type: 'combat', page_start: 46, page_end: 50, tags: ['combat', 'dungeon'], visibility: 'keeper', keywords: ['保险库', '守卫构装体'], headings: ['第三章', '余烬保险库'], content: '未解锁的战斗场景；玩家视图不应看到 Keeper 正文。' },
+];
 
 export default function SceneIndex({ campaignId }: { campaignId: string }) {
   const [scenes, setScenes] = useState<ModuleScene[]>([]);
-  const [filter, setFilter] = useState<string>('all');
+  const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
 
-  useEffect(() => { sceneIndex(campaignId).then(setScenes).catch(() => {}); }, [campaignId]);
+  useEffect(() => { sceneIndex(campaignId).then(setScenes).catch(() => setScenes(DEMO_SCENES)); }, [campaignId]);
 
-  const types = [...new Set(scenes.map(s => s.scene_type))];
-  const filtered = scenes.filter(s => {
-    if (filter !== 'all' && s.scene_type !== filter) return false;
-    if (search && !s.title.toLowerCase().includes(search.toLowerCase())) return false;
-    return true;
-  });
-
-  const byModule: Record<string, ModuleScene[]> = {};
-  filtered.forEach(s => {
-    const key = s.module || '未知';
-    if (!byModule[key]) byModule[key] = [];
-    byModule[key].push(s);
-  });
+  const types = useMemo(() => [...new Set(scenes.map((scene) => scene.scene_type))], [scenes]);
+  const filtered = scenes.filter((scene) => (filter === 'all' || scene.scene_type === filter) && (!search || `${scene.title} ${scene.keywords.join(' ')}`.toLowerCase().includes(search.toLowerCase())));
 
   return (
     <div>
-      {/* Filter bar */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+      <div className="filter-row">
         <button className={`btn btn-sm ${filter === 'all' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setFilter('all')}>全部</button>
-        {types.map(t => (
-          <button key={t} className={`btn btn-sm ${filter === t ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setFilter(t)}>
-            {t === 'combat' ? '⚔️' : t === 'social' ? '💬' : t === 'exploration' ? '🗺️' : t === 'reference' ? '📖' : '🏷️'} {t}
-          </button>
-        ))}
-        <input
-          placeholder="搜索场景..."
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          style={{ marginLeft: 'auto', padding: '6px 12px', borderRadius: 6, border: '1px solid #e5e7eb', fontSize: '.85rem', width: 200 }}
-        />
+        {types.map((type) => <button key={type} className={`btn btn-sm ${filter === type ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setFilter(type)}>{type}</button>)}
+        <input className="form-input" placeholder="搜索场景、房间或关键词…" value={search} onChange={(event) => setSearch(event.target.value)} />
       </div>
-
-      {/* Scene tree */}
-      {Object.entries(byModule).map(([module, modScenes]) => (
-        <div key={module} className="card" style={{ marginBottom: 12, padding: 0 }}>
-          <div style={{ padding: '12px 16px', borderBottom: '1px solid #e5e7eb', fontWeight: 600, fontSize: '.9rem' }}>
-            📂 {module} · {modScenes.length} 场景
-          </div>
-          <div style={{ padding: '8px 0' }}>
-            {modScenes.map((s, i) => (
-              <div key={s.scene_id || i} style={{
-                display: 'flex', alignItems: 'center', gap: 10, padding: '8px 16px',
-                borderBottom: i < modScenes.length - 1 ? '1px solid #f3f4f6' : 'none',
-                cursor: 'pointer', transition: 'background .1s', fontSize: '.88rem',
-              }} onClick={() => alert(`场景: ${s.title}\n类型: ${s.scene_type}\n可见性: ${s.visibility}\n${s.content?.substring(0, 200) || '(无内容预览)'}`)}>
-                <span>{s.scene_type === 'combat' ? '⚔️' : s.scene_type === 'social' ? '💬' : s.scene_type === 'exploration' ? '🗺️' : s.scene_type === 'reference' ? '📖' : '📄'}</span>
-                <div style={{ flex: 1 }}>
-                  <div>{s.title}</div>
-                  <div style={{ fontSize: '.75rem', color: '#9ca3af', display: 'flex', gap: 4 }}>
-                    <span className="badge badge-gray" style={{ fontSize: '.68rem' }}>{s.scene_type}</span>
-                    {s.tags?.map(t => <span key={t} className="tag" style={{ fontSize: '.68rem' }}>{t}</span>)}
-                    {s.page_start && <span>p.{s.page_start}{s.page_end !== s.page_start ? `-${s.page_end}` : ''}</span>}
-                  </div>
-                </div>
-                <span style={{ fontSize: '.75rem', color: '#2563eb' }}>{s.visibility}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      ))}
-      {filtered.length === 0 && <p style={{ color: '#9ca3af', textAlign: 'center', padding: 40 }}>无匹配场景</p>}
+      <div className="scene-list card">
+        {filtered.map((scene, index) => (
+          <article className="scene-row" key={scene.scene_id}>
+            <span className="scene-number">{String(index + 1).padStart(2, '0')}</span>
+            <div><div className="scene-path">{scene.chapter} · {scene.module}</div><h4>{scene.title}</h4><p>{scene.visibility === 'keeper' ? 'Keeper-only scene content is sealed in this audience view.' : scene.content || 'No preview text available.'}</p><div className="scene-tags"><span className="badge badge-blue">{scene.scene_type}</span>{scene.tags.map((tag) => <span className="tag" key={tag}>{tag}</span>)}</div></div>
+            <aside><span className={`badge ${scene.visibility === 'keeper' ? 'badge-orange' : 'badge-green'}`}>{scene.visibility}</span><small>{scene.page_start ? `P.${scene.page_start}${scene.page_end && scene.page_end !== scene.page_start ? `–${scene.page_end}` : ''}` : 'NO PAGE'}</small></aside>
+          </article>
+        ))}
+        {filtered.length === 0 && <div className="empty">没有匹配的场景。</div>}
+      </div>
     </div>
   );
 }

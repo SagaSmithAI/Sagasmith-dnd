@@ -1,99 +1,159 @@
-import { useState, useEffect } from 'react';
-import { health, listCampaigns, listCharacters, listModules, listSaves, MOCK_CAMPAIGNS } from '../lib/api';
-import type { Campaign, HealthStatus } from '../types';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  MOCK_CAMPAIGNS,
+  MOCK_CHARACTERS,
+  MOCK_MODULES,
+  MOCK_SAVES,
+  MOCK_SCENE,
+  currentScene,
+  emitRuntimeStatus,
+  health,
+  listCampaigns,
+  listCharacters,
+  listModules,
+  listSaves,
+} from '../lib/api';
+import type { Campaign, Character, CurrentScene, HealthStatus } from '../types';
+
+type Connection = 'loading' | 'connected' | 'demo';
 
 export default function Dashboard() {
-  const [connected, setConnected] = useState<'loading' | 'connected' | 'disconnected'>('loading');
+  const [connection, setConnection] = useState<Connection>('loading');
   const [healthData, setHealthData] = useState<HealthStatus | null>(null);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
-  const [stats, setStats] = useState({ characters: 0, modules: 0, saves: 0 });
+  const [characters, setCharacters] = useState<Character[]>([]);
+  const [scene, setScene] = useState<CurrentScene | null>(null);
+  const [stats, setStats] = useState({ modules: 0, saves: 0 });
 
   useEffect(() => {
-    health()
-      .then(h => { setConnected('connected'); setHealthData(h); })
-      .catch(() => setConnected('disconnected'));
-    listCampaigns().then(setCampaigns).catch(() => setCampaigns(MOCK_CAMPAIGNS));
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const runtime = await health();
+        const liveCampaigns = await listCampaigns();
+        const active = liveCampaigns.find((item) => item.status === 'active') || liveCampaigns[0];
+        const [liveCharacters, modules, saves, liveScene] = active
+          ? await Promise.all([
+              listCharacters(active.id).catch(() => []),
+              listModules(active.id).catch(() => []),
+              listSaves(active.id).catch(() => []),
+              currentScene(active.id).catch(() => null),
+            ])
+          : [[], [], [], null];
+        if (cancelled) return;
+        setConnection('connected');
+        setHealthData(runtime);
+        setCampaigns(liveCampaigns);
+        setCharacters(liveCharacters);
+        setScene(liveScene);
+        setStats({ modules: modules.length, saves: saves.length });
+        emitRuntimeStatus(true, runtime.version);
+      } catch {
+        if (cancelled) return;
+        setConnection('demo');
+        setCampaigns(MOCK_CAMPAIGNS);
+        setCharacters(MOCK_CHARACTERS);
+        setScene(MOCK_SCENE);
+        setStats({ modules: MOCK_MODULES.length, saves: MOCK_SAVES.length });
+        emitRuntimeStatus(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
   }, []);
 
-  useEffect(() => {
-    campaigns.forEach(c => {
-      listCharacters(c.id).then(chars => setStats(s => ({ ...s, characters: s.characters + chars.length }))).catch(() => {});
-      listModules(c.id).then(mods => setStats(s => ({ ...s, modules: s.modules + mods.length }))).catch(() => {});
-      listSaves(c.id).then(svs => setStats(s => ({ ...s, saves: s.saves + svs.length }))).catch(() => {});
-    });
-  }, [campaigns]);
+  const active = useMemo(() => campaigns.find((item) => item.status === 'active') || campaigns[0], [campaigns]);
+  const phase = String(active?.state?.game_phase || 'play');
 
   return (
-    <div style={{ maxWidth: 1000, margin: '0 auto', padding: '24px 16px' }}>
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
+    <div className="page">
+      <div className="page-heading">
         <div>
-          <h1 style={{ fontSize: '1.5rem', fontWeight: 700 }}>SagaSmith D&D</h1>
-          <p style={{ fontSize: '.85rem', color: '#6b7280' }}>Dashboard</p>
+          <div className="eyebrow">LIVE TABLE / {connection === 'connected' ? 'RUNTIME CONNECTED' : connection === 'demo' ? 'DEMO FALLBACK' : 'CONNECTING'}</div>
+          <h1>今晚的桌面</h1>
+          <p>把战役连续性、当前场景、角色认知与 MCP 工具阶段放在同一个开团视图中。</p>
         </div>
-        <StatusBadge status={connected} health={healthData} />
+        <div className="heading-actions">
+          <a className="btn btn-ghost" href="/rules">检查规则来源</a>
+          <a className="btn btn-primary" href={active ? `/campaigns/detail?id=${encodeURIComponent(active.id)}` : '/campaigns'}>打开当前战役</a>
+        </div>
       </div>
 
-      {/* Stats */}
-      <div className="stat-grid" style={{ marginBottom: 24 }}>
-        <div className="stat-card"><div className="stat-number">{campaigns.length}</div><div className="stat-label">战役</div></div>
-        <div className="stat-card"><div className="stat-number">{stats.characters}</div><div className="stat-label">角色</div></div>
-        <div className="stat-card"><div className="stat-number">{stats.modules}</div><div className="stat-label">模组</div></div>
-        <div className="stat-card"><div className="stat-number">{stats.saves}</div><div className="stat-label">存档</div></div>
-      </div>
+      {connection === 'demo' && (
+        <div className="demo-notice">
+          <strong>DEMO DATA</strong>
+          <span>未发现兼容的只读 gateway，界面正在使用本地演示数据。权威写入始终属于 D&D MCP。</span>
+        </div>
+      )}
 
-      {/* Campaign list */}
-      <div className="card" style={{ marginBottom: 16 }}>
-        <div className="card-header">战役列表</div>
-        {campaigns.length === 0 ? (
-          <p style={{ color: '#9ca3af', padding: '20px 0', textAlign: 'center' }}>暂无战役</p>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {campaigns.map(c => <CampaignRow key={c.id} campaign={c} />)}
+      <section className="table-hero">
+        <div className="table-hero-copy">
+          <div className="table-meta"><span className="badge badge-green">{active?.status || 'loading'}</span><span>D&D 5E {active?.edition || '—'}</span><span>REV {active?.revision ?? '—'}</span></div>
+          <h2>{active?.name || '正在读取战役…'}</h2>
+          <p>{active?.description || '等待 compatible gateway 返回当前桌面。'}</p>
+          <div className="phase-switch" aria-label="Current game phase">
+            {['lobby', 'play', 'combat'].map((item, index) => (
+              <div key={item} className={`${phase === item ? 'active' : ''} ${['lobby', 'play', 'combat'].indexOf(phase) > index ? 'past' : ''}`}>
+                <small>0{index + 1}</small><strong>{item.toUpperCase()}</strong><span>{item === 'lobby' ? '准备' : item === 'play' ? '探索' : '结算'}</span>
+              </div>
+            ))}
           </div>
-        )}
-      </div>
-
-      {/* Quick actions */}
-      <div className="card">
-        <div className="card-header">快速操作</div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <a href="/campaigns" className="btn btn-primary">管理战役</a>
-          <a href="/rules" className="btn btn-ghost">搜索规则</a>
         </div>
-      </div>
-    </div>
-  );
-}
-
-function StatusBadge({ status, health }: { status: string; health: HealthStatus | null }) {
-  const color = status === 'connected' ? '#059669' : status === 'loading' ? '#d97706' : '#dc2626';
-  const text = status === 'connected' ? `已连接 ${health?.dense ? '· Dense ✓' : '· FTS5'}` : status === 'loading' ? '连接中...' : 'API 不可用（Mock 数据）';
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '.8rem', color }}>
-      <span style={{ width: 8, height: 8, borderRadius: '50%', background: color }} />
-      {text}
-    </div>
-  );
-}
-
-function CampaignRow({ campaign }: { campaign: Campaign }) {
-  return (
-    <a href={`/campaigns/${campaign.id}`} style={{
-      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-      padding: '12px 16px', borderRadius: 8, background: '#f9fafb', textDecoration: 'none', color: 'inherit',
-      transition: 'background .15s',
-    }} onMouseOver={e => (e.currentTarget.style.background = '#f3f4f6')}
-       onMouseOut={e => (e.currentTarget.style.background = '#f9fafb')}>
-      <div>
-        <div style={{ fontWeight: 600 }}>{campaign.name}</div>
-        <div style={{ fontSize: '.8rem', color: '#6b7280' }}>
-          D&D 5e {campaign.edition} · {campaign.locale === 'zh' ? '中文' : 'EN'} · 修订 {campaign.revision}
+        <div className="scene-focus">
+          <header><span>CURRENT SCENE</span><em>{scene?.scope_id || 'party'}</em></header>
+          <small>{scene?.chapter || 'NO ACTIVE CHAPTER'}</small>
+          <h3>{scene?.title || '尚未选择场景'}</h3>
+          <p>{scene?.content || '从战役详情进入场景索引，或让 Agent 通过 play.scene 读取当前场景。'}</p>
+          <div className="scene-progress"><div><i style={{ width: `${scene?.progress?.progress || 0}%` }} /></div><b>{scene?.progress?.progress || 0}%</b></div>
+          <footer><span>{scene?.progress?.current_room || 'ROOM UNSET'}</span><a href={active ? `/campaigns/detail?id=${encodeURIComponent(active.id)}#scene` : '/campaigns'}>VIEW SCENE →</a></footer>
         </div>
+      </section>
+
+      <section className="stat-grid dashboard-stats">
+        <div className="stat-card"><small>01</small><div className="stat-number">{campaigns.length}</div><div className="stat-label">Campaigns</div></div>
+        <div className="stat-card"><small>02</small><div className="stat-number">{characters.length}</div><div className="stat-label">Actors at this table</div></div>
+        <div className="stat-card"><small>03</small><div className="stat-number">{stats.modules}</div><div className="stat-label">Active modules</div></div>
+        <div className="stat-card"><small>04</small><div className="stat-number">{stats.saves}</div><div className="stat-label">Branch snapshots</div></div>
+      </section>
+
+      <div className="dashboard-grid">
+        <section className="card actor-panel">
+          <div className="card-header"><strong>PARTY & ACTOR KNOWLEDGE</strong><a href={active ? `/campaigns/detail?id=${encodeURIComponent(active.id)}` : '/campaigns'}>ALL ACTORS →</a></div>
+          <div>
+            {characters.slice(0, 5).map((character) => {
+              const sheet = character.sheet as Record<string, any>;
+              const hp = sheet.hp || {};
+              return (
+                <a className="actor-row" key={character.id} href={`/characters/detail?id=${encodeURIComponent(character.id)}`}>
+                  <span className={`actor-sigil ${character.character_type}`}>{character.name.slice(0, 1)}</span>
+                  <span className="actor-info"><strong>{character.name}</strong><small>{character.character_type.toUpperCase()} · {sheet.class || 'UNCLASSIFIED'} {sheet.level ? `LV.${sheet.level}` : ''}</small></span>
+                  <span className="actor-hp"><b>{hp.current ?? '—'}</b><small>/ {hp.max ?? '—'} HP</small></span>
+                  <span className="knowledge-count"><b>{String((character.notes as any)?.knowledge_count || 0).padStart(2, '0')}</b><small>KNOWN</small></span>
+                </a>
+              );
+            })}
+            {characters.length === 0 && <div className="empty">当前战役没有可见角色。</div>}
+          </div>
+        </section>
+
+        <section className="card operation-panel">
+          <div className="card-header"><strong>MCP SESSION SURFACE</strong><span className={`badge ${connection === 'connected' ? 'badge-green' : 'badge-orange'}`}>{connection}</span></div>
+          <div className="operation-body">
+            <p>当前阶段建议只向 Agent 暴露与桌面任务匹配的能力组。</p>
+            <div className="tool-group active"><span>PLAY.SCENE</span><small>scene · event · continuity · memory</small><b>LOADED</b></div>
+            <div className="tool-group active"><span>PLAY.RESOLUTION</span><small>checks · dice · rules · combat start</small><b>LOADED</b></div>
+            <div className="tool-group"><span>COMBAT.ACTIONS</span><small>attacks · spells · movement · reactions</small><b>LOCKED</b></div>
+            <div className="operation-boundary"><strong>SERVER ENFORCED</strong><span>phase · campaign · principal · role · TTL</span></div>
+          </div>
+        </section>
       </div>
-      <span className={`badge ${campaign.status === 'active' ? 'badge-green' : 'badge-gray'}`}>
-        {campaign.status === 'active' ? '进行中' : campaign.status}
-      </span>
-    </a>
+
+      <section className="quick-strip">
+        <div><span>QUICK OPERATIONS</span><p>浏览界面用于观察与导航；状态提交仍通过 Agent + MCP。</p></div>
+        <a href="/campaigns">战役档案 <b>→</b></a>
+        <a href="/rules">规则来源 <b>→</b></a>
+        <a href="https://github.com/SagaSmithAI/SagaSmith-dnd-mcp" target="_blank" rel="noreferrer">MCP Contract <b>↗</b></a>
+      </section>
+    </div>
   );
 }
