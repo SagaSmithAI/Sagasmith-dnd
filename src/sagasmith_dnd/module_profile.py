@@ -32,8 +32,9 @@ _KEYWORDS = {
 _COMBAT_SUBSECTION_SIGNALS = ("战斗", "遭遇", "陷阱", "推销", "巡逻")
 _CJK_RANGES = (("一", "鿿"), ("㐀", "䶿"), ("豈", "﫿"))
 _DIMENSIONS = re.compile(
-    r"(?P<width>\d{1,3})\s*(?:-?foot|feet|ft\.?|尺)\s*(?:by|x|×|乘)\s*"
-    r"(?P<height>\d{1,3})\s*(?:-?foot|feet|ft\.?|尺)",
+    r"(?P<width>\d{1,3})\s*(?:(?:-?foot|feet|ft\.?|\u5c3a)\s*)?"
+    r"(?:by|x|\u00d7|\u4e58)\s*"
+    r"(?P<height>\d{1,3})\s*(?:-?foot|feet|ft\.?|\u5c3a)",
     re.IGNORECASE,
 )
 
@@ -171,21 +172,13 @@ def _spatial_manifest(
         if item.get("type") != "room":
             continue
         label = str(item["title"])
-        dimensions = _DIMENSIONS.search(text)
         locations.append(
             {
                 "key": _location_key(label, ordinal),
                 "title": label,
                 "kind": "room",
                 "line": item.get("line"),
-                "dimensions_ft": (
-                    {
-                        "width": int(dimensions.group("width")),
-                        "height": int(dimensions.group("height")),
-                    }
-                    if dimensions
-                    else None
-                ),
+                "dimensions_ft": item.get("dimensions_ft"),
                 "confidence": "explicit_heading",
             }
         )
@@ -368,11 +361,26 @@ class DndModuleProfile(GenericModuleProfile):
             level = len(heading.group(1))
             item: dict[str, object] | None = None
             if room_level is not None and level == room_level:
+                next_boundary = next(
+                    (
+                        candidate.start()
+                        for candidate in headings
+                        if heading.start() < candidate.start() < end
+                        and len(candidate.group(1)) <= level
+                    ),
+                    end,
+                )
+                dimensions = _DIMENSIONS.search(content[heading.end() : next_boundary])
                 item = {
                     "title": heading.group(2).strip(),
                     "line": _line_number(content, heading.start()),
                     "type": "room",
                 }
+                if dimensions:
+                    item["dimensions_ft"] = {
+                        "width": int(dimensions.group("width")),
+                        "height": int(dimensions.group("height")),
+                    }
             elif sub_level is not None and level == sub_level:
                 item = {
                     "title": heading.group(2).strip(),

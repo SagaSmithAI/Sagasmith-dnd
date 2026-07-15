@@ -430,3 +430,35 @@ def test_schema_rejects_legacy_fields_and_invalid_container_cycles() -> None:
         )
     with pytest.raises(ValueError, match="npc notes.profile.summary"):
         validate_character_notes({}, character_type="npc")
+
+
+def test_content_selection_provenance_is_normalized_and_unique() -> None:
+    sheet = validate_character_sheet(
+        {
+            "content": {
+                "selections": [
+                    {
+                        "artifact_id": "dnd5e.content.srd2014.subclass.path-of-the-berserker",
+                        "kind": "subclass",
+                        "name": "Path of the Berserker",
+                        "pack_id": "dnd5e.content.srd2014",
+                        "pack_version": "1.1.0",
+                        "rule_refs": ["bundled:srd2014/02_Classes/Barbarian.md"],
+                        "selection": {"target_class_name": "Barbarian"},
+                    }
+                ]
+            }
+        }
+    )
+    assert sheet["content"]["selections"][0]["pack_version"] == "1.1.0"
+    with pytest.raises(ValueError, match="duplicate artifact ids"):
+        validate_character_sheet(
+            {
+                "content": {
+                    "selections": [
+                        {"artifact_id": "same", "kind": "background"},
+                        {"artifact_id": "same", "kind": "subclass"},
+                    ]
+                }
+            }
+        )

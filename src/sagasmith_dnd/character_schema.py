@@ -272,7 +272,13 @@ def default_character_sheet() -> dict[str, Any]:
             "casting_economy": "slots",
             "spell_points": None,
         },
-        "content": {"spells": [], "features": [], "feats": [], "activities": []},
+        "content": {
+            "spells": [],
+            "features": [],
+            "feats": [],
+            "activities": [],
+            "selections": [],
+        },
         "conditions": [],
         "effects": [],
         "adventure_state": {
@@ -805,13 +811,9 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
         ),
         "notes": _text(spell.get("notes"), f"{field}.notes", maximum=1200),
         "pack_id": _text(spell.get("pack_id"), f"{field}.pack_id", maximum=200),
-        "pack_version": _text(
-            spell.get("pack_version"), f"{field}.pack_version", maximum=64
-        ),
+        "pack_version": _text(spell.get("pack_version"), f"{field}.pack_version", maximum=64),
         "rule_refs": _string_list(spell.get("rule_refs") or [], f"{field}.rule_refs"),
-        "mechanic_refs": _string_list(
-            spell.get("mechanic_refs") or [], f"{field}.mechanic_refs"
-        ),
+        "mechanic_refs": _string_list(spell.get("mechanic_refs") or [], f"{field}.mechanic_refs"),
     }
 
 
@@ -1132,7 +1134,11 @@ def validate_character_sheet(
     _reject_unknown(spellbook, "sheet.spellcasting.spellbook", {"enabled", "spell_ids"})
 
     content = _object(value["content"], "sheet.content")
-    _reject_unknown(content, "sheet.content", {"spells", "features", "feats", "activities"})
+    _reject_unknown(
+        content,
+        "sheet.content",
+        {"spells", "features", "feats", "activities", "selections"},
+    )
     spells = [
         _normalize_spell(item, f"sheet.content.spells[{index}]")
         for index, item in enumerate(_array(content["spells"], "sheet.content.spells"))
@@ -1301,6 +1307,68 @@ def validate_character_sheet(
                 }
             )
         return result
+
+    selections: list[dict[str, Any]] = []
+    for index, item in enumerate(_array(content["selections"], "sheet.content.selections")):
+        entry = _object(item, f"sheet.content.selections[{index}]")
+        _reject_unknown(
+            entry,
+            f"sheet.content.selections[{index}]",
+            {
+                "artifact_id",
+                "kind",
+                "name",
+                "pack_id",
+                "pack_version",
+                "rule_refs",
+                "mechanic_refs",
+                "selection",
+            },
+        )
+        selections.append(
+            {
+                "artifact_id": _text(
+                    entry.get("artifact_id"),
+                    f"sheet.content.selections[{index}].artifact_id",
+                    maximum=300,
+                ),
+                "kind": _text(
+                    entry.get("kind"),
+                    f"sheet.content.selections[{index}].kind",
+                    maximum=100,
+                ),
+                "name": _text(
+                    entry.get("name"),
+                    f"sheet.content.selections[{index}].name",
+                    maximum=300,
+                ),
+                "pack_id": _text(
+                    entry.get("pack_id"),
+                    f"sheet.content.selections[{index}].pack_id",
+                    maximum=200,
+                ),
+                "pack_version": _text(
+                    entry.get("pack_version"),
+                    f"sheet.content.selections[{index}].pack_version",
+                    maximum=64,
+                ),
+                "rule_refs": _string_list(
+                    entry.get("rule_refs") or [],
+                    f"sheet.content.selections[{index}].rule_refs",
+                ),
+                "mechanic_refs": _string_list(
+                    entry.get("mechanic_refs") or [],
+                    f"sheet.content.selections[{index}].mechanic_refs",
+                ),
+                "selection": _object(
+                    entry.get("selection") or {},
+                    f"sheet.content.selections[{index}].selection",
+                ),
+            }
+        )
+    selection_ids = [item["artifact_id"] for item in selections]
+    if len(selection_ids) != len(set(selection_ids)):
+        raise ValueError("sheet.content.selections contains duplicate artifact ids")
 
     conditions = _string_list(value["conditions"], "sheet.conditions")
     effects = [
@@ -1498,6 +1566,7 @@ def validate_character_sheet(
             "features": _content_entries("features"),
             "feats": _content_entries("feats"),
             "activities": _content_entries("activities"),
+            "selections": selections,
         },
         "conditions": conditions,
         "effects": effects,
@@ -1946,8 +2015,7 @@ def derive_character_sheet(
     if derived["armor_class_breakdown"].get("mode") == "unarmored":
         core_boundary_ids.append("dnd5e.core.armor_class.unarmored")
     if any(
-        int(item.get("reach_ft", 5) or 5) > 5
-        for item in derived["inventory"]["weapon_attacks"]
+        int(item.get("reach_ft", 5) or 5) > 5 for item in derived["inventory"]["weapon_attacks"]
     ):
         core_boundary_ids.append("dnd5e.core.weapon.reach")
     derived["rule_receipts"] = [

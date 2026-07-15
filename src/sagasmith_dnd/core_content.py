@@ -9,7 +9,22 @@ from pathlib import Path
 from typing import Any, Iterable
 
 PACK_ID = "dnd5e.content.srd2014"
-PACK_VERSION = "1.0.0"
+PACK_VERSION = "1.1.0"
+
+_SUBCLASS_LEVELS = {
+    "barbarian": 3,
+    "bard": 3,
+    "cleric": 1,
+    "druid": 2,
+    "fighter": 3,
+    "monk": 3,
+    "paladin": 3,
+    "ranger": 3,
+    "rogue": 3,
+    "sorcerer": 1,
+    "warlock": 1,
+    "wizard": 2,
+}
 
 
 def build_srd2014_content(skill_root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -23,14 +38,21 @@ def _cached_srd2014_content(skill_root: str) -> tuple[dict[str, Any], list[dict[
     if not root.is_dir():
         return {}, []
     artifacts: list[dict[str, Any]] = []
-    artifacts.extend(_spells(root / "07_Spells"))
-    artifacts.extend(_simple_files(root / "01_Races", "species"))
+    spell_classes = _spell_class_lists(root / "07_Spells" / "Spell_Lists.md")
+    artifacts.extend(_spells(root / "07_Spells" / "Spells_Each", spell_classes))
+    artifacts.extend(_simple_files(root / "01_Races" / "Races_Each", "species"))
     artifacts.extend(_simple_files(root / "02_Classes", "class"))
-    artifacts.extend(_sections(root / "02_Classes", "subclass", _subclass_sections))
-    artifacts.extend(_sections(root / "03_Characterization", "background", _h2_sections))
+    artifacts.extend(_subclasses(root / "02_Classes"))
+    artifacts.extend(
+        _sections_from_paths(
+            [root / "03_Characterization" / "Backgrounds.md"],
+            "background",
+            _h2_sections,
+        )
+    )
     artifacts.extend(_sections(root / "05_Feats", "feat", _h2_sections))
-    artifacts.extend(_simple_files(root / "04_Equipment", "item"))
-    artifacts.extend(_simple_files(root / "09_Magic_Items", "item"))
+    artifacts.extend(_equipment_items(root / "04_Equipment"))
+    artifacts.extend(_simple_files(root / "09_Magic_Items" / "Magic_Items_Each", "item"))
     return (
         {
             "id": PACK_ID,
@@ -54,7 +76,7 @@ def _cached_srd2014_content(skill_root: str) -> tuple[dict[str, Any], list[dict[
     )
 
 
-def _spells(folder: Path) -> list[dict[str, Any]]:
+def _spells(folder: Path, spell_classes: dict[str, list[str]]) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for path in _markdown_files(folder):
         text = path.read_text(encoding="utf-8")
@@ -68,9 +90,14 @@ def _spells(folder: Path) -> list[dict[str, Any]]:
                 {
                     "name": name,
                     "level": level,
-                    "grant": {"source_type": "catalog", "source_key": PACK_ID, "method": "known"},
+                    "classes": list(spell_classes.get(_name_key(name), [])),
+                    "grant": {
+                        "source_type": "catalog",
+                        "source_key": "",
+                        "method": "unselected",
+                    },
                     "access": {
-                        "known": True,
+                        "known": False,
                         "prepared": False,
                         "ritual_available": "ritual" in text.casefold(),
                     },
@@ -89,31 +116,62 @@ def _spells(folder: Path) -> list[dict[str, Any]]:
 
 
 def _simple_files(folder: Path, kind: str) -> list[dict[str, Any]]:
-    return [
-        _artifact(
-            kind,
-            _heading_or_stem(path.read_text(encoding="utf-8"), path),
-            path,
-            {"name": _heading_or_stem(path.read_text(encoding="utf-8"), path)},
+    result: list[dict[str, Any]] = []
+    for path in _markdown_files(folder):
+        text = path.read_text(encoding="utf-8")
+        name = _heading_or_stem(text, path)
+        result.append(
+            _artifact(
+                kind,
+                name,
+                path,
+                {"name": name, "description": _description(text)},
+            )
         )
-        for path in _markdown_files(folder)
-    ]
+    return result
 
 
 def _sections(folder: Path, kind: str, extractor: Any) -> list[dict[str, Any]]:
+    return _sections_from_paths(_markdown_files(folder), kind, extractor)
+
+
+def _sections_from_paths(paths: Iterable[Path], kind: str, extractor: Any) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
-    for path in _markdown_files(folder):
+    for path in paths:
+        if not path.is_file():
+            continue
         text = path.read_text(encoding="utf-8")
         for title, body in extractor(text):
             card: dict[str, Any] = {"name": title, "description": body[:1200]}
             if kind == "background":
-                card["background_grants"] = {
-                    "feature": "",
-                    "languages": [],
-                    "tools": [],
-                    "choices": [],
-                }
+                card.update(_background_fields(body))
+            if kind == "feat":
+                prerequisites = _feat_prerequisites(body)
+                if prerequisites:
+                    card["prerequisites"] = prerequisites
             result.append(_artifact(kind, title, path, card))
+    return result
+
+
+def _subclasses(folder: Path) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for path in _markdown_files(folder):
+        text = path.read_text(encoding="utf-8")
+        class_name = _heading_or_stem(text, path)
+        for title, body in _subclass_sections(text):
+            result.append(
+                _artifact(
+                    "subclass",
+                    title,
+                    path,
+                    {
+                        "name": title,
+                        "class_name": class_name,
+                        "minimum_level": _SUBCLASS_LEVELS.get(class_name.casefold(), 1),
+                        "description": body[:1200],
+                    },
+                )
+            )
     return result
 
 
@@ -129,7 +187,7 @@ def _h2_sections(text: str) -> Iterable[tuple[str, str]]:
 
 def _subclass_sections(text: str) -> Iterable[tuple[str, str]]:
     marker = re.search(
-        r"^##\s+.+(?:Archetypes|Domains|Circles|Colleges|Oaths|Traditions|Schools|Patrons|Origins|Bloodlines).*$",
+        r"^##\s+.+(?:Archetypes|Domains|Circles|Colleges|Oaths|Paths|Traditions|Schools|Patrons|Origins|Bloodlines).*$",
         text,
         re.MULTILINE | re.IGNORECASE,
     )
@@ -142,6 +200,155 @@ def _subclass_sections(text: str) -> Iterable[tuple[str, str]]:
         end = matches[index + 1].start() if index + 1 < len(matches) else len(tail)
         result.append((match.group(1).strip(), tail[match.end() : end].strip()))
     return result
+
+
+def _spell_class_lists(path: Path) -> dict[str, list[str]]:
+    if not path.is_file():
+        return {}
+    current = ""
+    result: dict[str, set[str]] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        heading = re.match(r"^##\s+(.+?)\s+Spells\s*$", line, re.IGNORECASE)
+        if heading:
+            current = heading.group(1).strip().casefold()
+            continue
+        entry = re.match(r"^[-*]\s+(.+?)\s*$", line)
+        if current and entry:
+            name = re.sub(r"\[\[|\]\]", "", entry.group(1)).strip()
+            result.setdefault(_name_key(name), set()).add(current)
+    return {key: sorted(values) for key, values in result.items()}
+
+
+def _equipment_items(folder: Path) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    sources = {
+        "Adventuring_Gear.md": {"Adventuring Gear"},
+        "Armor.md": {"Armor"},
+        "Tools.md": {"Tools"},
+        "Trade_Goods.md": {"Cost of Trade Goods"},
+        "Transportation.md": {
+            "Mounts and Other Animals",
+            "Tack, Harness, and Drawn Vehicles",
+            "Waterborne Vehicles",
+        },
+        "Weapons.md": {"Weapons"},
+    }
+    for name, allowed_tables in sources.items():
+        path = folder / name
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        for table_name, fields in _markdown_table_rows(text):
+            if table_name not in allowed_tables:
+                continue
+            item_name = next(iter(fields.values()), "").strip()
+            if not item_name or item_name.startswith("**"):
+                continue
+            result.append(
+                _artifact(
+                    "item",
+                    item_name,
+                    path,
+                    {
+                        "name": item_name,
+                        "category": path.stem.replace("_", " "),
+                        "table": table_name,
+                        "properties": {
+                            _name_key(key).replace("-", "_"): value for key, value in fields.items()
+                        },
+                    },
+                )
+            )
+    return result
+
+
+def _markdown_table_rows(text: str) -> Iterable[tuple[str, dict[str, str]]]:
+    lines = text.splitlines()
+    table_name = ""
+    index = 0
+    while index < len(lines):
+        marker = re.match(r"^\*\*Table-\s*(.+?)\*\*\s*$", lines[index], re.IGNORECASE)
+        if marker:
+            table_name = marker.group(1).strip()
+        if (
+            lines[index].lstrip().startswith("|")
+            and index + 1 < len(lines)
+            and re.match(r"^\s*\|(?:\s*:?-+:?\s*\|)+\s*$", lines[index + 1])
+        ):
+            headers = _table_cells(lines[index])
+            index += 2
+            while index < len(lines) and lines[index].lstrip().startswith("|"):
+                values = _table_cells(lines[index])
+                if values and any(values):
+                    padded = [*values, *([""] * max(0, len(headers) - len(values)))]
+                    yield table_name, dict(zip(headers, padded, strict=False))
+                index += 1
+            continue
+        index += 1
+
+
+def _table_cells(line: str) -> list[str]:
+    return [item.strip() for item in line.strip().strip("|").split("|")]
+
+
+def _background_fields(body: str) -> dict[str, Any]:
+    skills = [
+        item.strip().casefold()
+        for item in (_plain_label(body, "Skill Proficiencies") or "").split(",")
+        if item.strip()
+    ]
+    tools = [
+        item.strip()
+        for item in (_plain_label(body, "Tool Proficiencies") or "").split(",")
+        if item.strip() and item.strip().casefold() != "none"
+    ]
+    language_text = _plain_label(body, "Languages") or ""
+    language_count = _leading_count(language_text)
+    feature = re.search(r"^###\s+Feature:\s*(.+?)\s*$", body, re.MULTILINE | re.IGNORECASE)
+    equipment = _plain_label(body, "Equipment") or ""
+    return {
+        "skill_proficiencies": skills,
+        "background_grants": {
+            "feature": feature.group(1).strip() if feature else "",
+            "languages": [],
+            "tools": tools,
+            "choices": {
+                "language_count": language_count,
+                "equipment_description": equipment,
+            },
+        },
+    }
+
+
+def _feat_prerequisites(body: str) -> list[dict[str, Any]]:
+    line = re.search(r"^\*Prerequisite:\s*(.+?)\*\s*$", body, re.MULTILINE | re.IGNORECASE)
+    if not line:
+        return []
+    ability = re.fullmatch(
+        r"(Strength|Dexterity|Constitution|Intelligence|Wisdom|Charisma)\s+(\d+)\s+or\s+higher",
+        line.group(1).strip(),
+        re.IGNORECASE,
+    )
+    if ability:
+        return [
+            {
+                "kind": "ability_minimum",
+                "ability": ability.group(1).casefold(),
+                "minimum": int(ability.group(2)),
+            }
+        ]
+    return [{"kind": "dm_review", "text": line.group(1).strip()}]
+
+
+def _plain_label(text: str, label: str) -> str:
+    match = re.search(rf"^\*\*{re.escape(label)}:\*\*\s*(.+?)\s*$", text, re.MULTILINE)
+    return match.group(1).strip() if match else ""
+
+
+def _leading_count(value: str) -> int:
+    first = value.casefold().split(maxsplit=1)[0] if value.strip() else ""
+    words = {"one": 1, "two": 2, "three": 3, "four": 4}
+    return int(first) if first.isdigit() else words.get(first, 0)
 
 
 def _artifact(kind: str, name: str, path: Path, card: dict[str, Any]) -> dict[str, Any]:
@@ -181,6 +388,14 @@ def _markdown_files(folder: Path) -> list[Path]:
 def _heading_or_stem(text: str, path: Path) -> str:
     match = re.search(r"^#{1,3}\s+(.+?)\s*$", text, re.MULTILINE)
     return match.group(1).strip() if match else path.stem.replace("_", " ")
+
+
+def _name_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", value.casefold()).strip("-")
+
+
+def _description(text: str) -> str:
+    return re.sub(r"^#{1,6}\s+.+?\s*$", "", text, count=1, flags=re.MULTILINE).strip()[:1200]
 
 
 def _spell_level_school(text: str) -> tuple[int, str]:

@@ -60,3 +60,19 @@ def test_dnd_scene_parser_promotes_h3_when_it_dominates_h2() -> None:
         "Five",
     ]
     assert all(scene.metadata["scene_level"] == 3 for scene in scenes)
+
+
+def test_room_dimensions_are_bound_to_their_own_heading_content() -> None:
+    content = (
+        "# Keep\n## Cellars\n"
+        "#### A1. Guard Room\nThis chamber is 30 by 20 feet.\n"
+        "#### A2. Shrine\nThis chamber is 15 by 10 feet.\n"
+    )
+    scene = next(
+        item
+        for item in MarkdownModuleParser(profile=DndModuleProfile()).parse(content)[0].scenes
+        if item.title == "Cellars"
+    )
+    locations = scene.metadata["spatial"]["locations"]
+    assert locations[0]["dimensions_ft"] == {"width": 30, "height": 20}
+    assert locations[1]["dimensions_ft"] == {"width": 15, "height": 10}

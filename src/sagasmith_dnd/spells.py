@@ -393,6 +393,40 @@ def replace_prepared_spells(
     }
 
 
+def validate_spell_grant(
+    sheet: dict[str, Any],
+    spell: dict[str, Any],
+    *,
+    source_class: str | None = None,
+) -> str:
+    """Validate a catalog spell against recorded class ownership and spell level."""
+    classes = {
+        _class_key(item.get("name")): int(item.get("level", 0) or 0)
+        for item in sheet.get("progression", {}).get("classes", [])
+    }
+    if not classes:
+        raise CombatEngineError("spell selection requires a recorded class")
+    source = _class_key(source_class)
+    if not source:
+        if len(classes) != 1:
+            raise CombatEngineError("multiclass spell selection requires source_class")
+        source = next(iter(classes))
+    if source not in classes:
+        raise CombatEngineError(f"spell source class is not on this actor card: {source}")
+    allowed = {_class_key(item) for item in spell.get("classes", []) if str(item).strip()}
+    if not allowed:
+        raise CombatEngineError("spell artifact has no structured class-list eligibility")
+    if source not in allowed:
+        raise CombatEngineError(f"{spell.get('name') or spell.get('id')} is not a {source} spell")
+    maximum = _maximum_spell_level(_edition(sheet), source, classes[source])
+    level = int(spell.get("level", 0) or 0)
+    if level > maximum:
+        raise CombatEngineError(
+            f"{source} level {classes[source]} cannot select spell level {level}"
+        )
+    return source
+
+
 def _class_key(value: Any) -> str:
     text = str(value or "").strip().lower().replace("_", "-")
     for prefix in ("class:", "class/", "class-"):
