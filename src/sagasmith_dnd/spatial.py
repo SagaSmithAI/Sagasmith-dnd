@@ -27,9 +27,11 @@ def compile_battle_map(
     location = location or (locations[0] if locations else None)
     dimensions = dict((location or {}).get("dimensions_ft") or {})
     grid = dict(spatial.get("grid") or {"kind": "square", "cell_ft": 5})
+    if str(grid.get("kind") or "square") != "square":
+        raise BattleMapError("D&D temporary battle maps require a square grid")
     cell_ft = int(request.get("cell_ft") or grid.get("cell_ft") or 5)
-    if cell_ft <= 0:
-        raise BattleMapError("battle-map cell_ft must be positive")
+    if cell_ft != 5:
+        raise BattleMapError("D&D combat resolution requires five-foot grid cells")
     width = int(
         request.get("width_cells") or max(6, int(dimensions.get("width", 0) or 0) // cell_ft) or 12
     )
@@ -51,6 +53,7 @@ def compile_battle_map(
     value = {
         "id": f"battle-map-{uuid4().hex}",
         "schema_version": 1,
+        "map_revision": 1,
         "lifecycle": "temporary",
         "source": source,
         "grid": {"kind": "square", "cell_ft": cell_ft},
@@ -60,10 +63,35 @@ def compile_battle_map(
         "dm_overrides": bool(request),
         "world_patches": [],
     }
-    value["checksum"] = hashlib.sha256(
-        json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
+    value["checksum"] = _checksum(value)
     return value
+
+
+def patch_battle_map(
+    battle_map: dict[str, Any], patches: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Append reviewed world patches and refresh the immutable map identity.
+
+    Patches document scene-runtime changes. They do not create walls, cover,
+    line of sight, terrain costs, or any other mechanic the combat engine has
+    not explicitly implemented.
+    """
+    next_map = deepcopy(battle_map)
+    normalized: list[dict[str, Any]] = []
+    for patch in patches:
+        if not isinstance(patch, dict):
+            raise BattleMapError("each map patch must be an object")
+        key = patch.get("key")
+        if not isinstance(key, str) or not key.strip():
+            raise BattleMapError("each map patch needs a non-empty string key")
+        normalized.append({"key": key.strip(), "value": deepcopy(patch.get("value"))})
+    next_map["world_patches"] = [
+        *list(next_map.get("world_patches") or []),
+        *normalized,
+    ]
+    next_map["map_revision"] = int(next_map.get("map_revision") or 1) + 1
+    next_map["checksum"] = _checksum(next_map)
+    return next_map
 
 
 def validate_position(battle_map: dict[str, Any], position: dict[str, Any] | None) -> None:
@@ -75,10 +103,10 @@ def validate_position(battle_map: dict[str, Any], position: dict[str, Any] | Non
     if (
         isinstance(x, bool)
         or isinstance(y, bool)
-        or not isinstance(x, (int, float))
-        or not isinstance(y, (int, float))
+        or not isinstance(x, int)
+        or not isinstance(y, int)
     ):
-        raise BattleMapError("battle-map positions need numeric x and y")
+        raise BattleMapError("battle-map positions need integer x and y cells")
     bounds = dict(battle_map.get("bounds") or {})
     if not (
         0 <= x < int(bounds.get("width_cells", 0)) and 0 <= y < int(bounds.get("height_cells", 0))
@@ -109,3 +137,10 @@ def _cells(values: list[Any], width: int, height: int, field: str) -> list[str]:
 
 def _cell_key(x: int | float, y: int | float) -> str:
     return f"{int(x)},{int(y)}"
+
+
+def _checksum(value: dict[str, Any]) -> str:
+    payload = {key: item for key, item in value.items() if key != "checksum"}
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()

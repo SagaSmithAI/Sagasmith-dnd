@@ -11,7 +11,12 @@ from sagasmith_core.database import sqlite_database_url
 from sagasmith_core.modules import MarkdownModuleParser
 
 from sagasmith_dnd.module_profile import DndModuleProfile
-from sagasmith_dnd.spatial import BattleMapError, compile_battle_map, validate_position
+from sagasmith_dnd.spatial import (
+    BattleMapError,
+    compile_battle_map,
+    patch_battle_map,
+    validate_position,
+)
 from sagasmith_dnd.system import DND5E, validate_character_sheet
 
 
@@ -72,6 +77,8 @@ def test_dnd_module_spatial_manifest_and_temporary_map() -> None:
         },
     )
     assert battle_map["lifecycle"] == "temporary"
+    assert battle_map["grid"] == {"kind": "square", "cell_ft": 5}
+    assert battle_map["map_revision"] == 1
     assert battle_map["source"]["location_key"] == "a1-cellar"
     validate_position(battle_map, {"x": 1, "y": 1})
     try:
@@ -80,3 +87,28 @@ def test_dnd_module_spatial_manifest_and_temporary_map() -> None:
         assert "blocked" in str(exc)
     else:
         raise AssertionError("blocked map cells must reject a token position")
+
+    updated = patch_battle_map(battle_map, [{"key": "gate.open", "value": True}])
+    assert updated["map_revision"] == 2
+    assert updated["checksum"] != battle_map["checksum"]
+    assert battle_map["world_patches"] == []
+
+    for invalid in ({"x": 1.5, "y": 1}, {"x": 1, "y": 1.5}):
+        try:
+            validate_position(battle_map, invalid)
+        except BattleMapError as exc:
+            assert "integer" in str(exc)
+        else:
+            raise AssertionError("fractional token positions must be rejected")
+
+
+def test_dnd_temporary_map_rejects_non_five_foot_cells() -> None:
+    try:
+        compile_battle_map(
+            {"scene_id": "scene-1", "spatial": {}},
+            {"cell_ft": 10},
+        )
+    except BattleMapError as exc:
+        assert "five-foot" in str(exc)
+    else:
+        raise AssertionError("the combat engine only resolves five-foot grid cells")
