@@ -49,6 +49,57 @@ def test_ritual_and_cantrip_do_not_spend_a_slot() -> None:
     assert consume_spell_cast(sheet, spell_id="light")["payment"]["economy"] == "none"
 
 
+def test_cantrip_and_ritual_reject_slot_levels() -> None:
+    sheet = default_character_sheet()
+    sheet["spellcasting"]["ritual_casting"] = True
+    ritual = _spell("alarm", level=1)
+    ritual["access"]["ritual_available"] = True
+    sheet["content"]["spells"] = [ritual, _spell("light", level=0)]
+    sheet = validate_character_sheet(sheet)
+    with pytest.raises(ValueError, match="cantrips"):
+        consume_spell_cast(sheet, spell_id="light", cast_level=1)
+    with pytest.raises(ValueError, match="ritual casting"):
+        consume_spell_cast(sheet, spell_id="alarm", ritual=True, cast_level=2)
+
+
+def test_pact_magic_uses_its_recorded_slot_level() -> None:
+    sheet = default_character_sheet()
+    sheet["spellcasting"]["pact_magic"] = {
+        "label": "Pact Magic",
+        "value": 1,
+        "max": 1,
+        "slot_level": 3,
+        "recovers_on": "short_rest",
+        "source_key": "warlock",
+    }
+    sheet["content"]["spells"] = [_spell("fireball", level=3)]
+    result = consume_spell_cast(validate_character_sheet(sheet), spell_id="fireball", cast_level=3)
+    assert result["payment"]["economy"] == "pact_magic"
+    assert result["cast_level"] == 3
+    assert result["sheet"]["spellcasting"]["pact_magic"]["value"] == 0
+
+
+def test_costly_material_component_requires_dm_confirmation() -> None:
+    sheet = default_character_sheet()
+    sheet["spellcasting"]["spell_slots"] = {
+        "1": {"label": "1st", "value": 1, "max": 1, "recovers_on": "long_rest", "source_key": ""}
+    }
+    chromatic_orb = _spell("chromatic-orb", level=1)
+    chromatic_orb["definition"]["components"] = {
+        "material": True,
+        "material_cost_cp": 5000,
+        "consumed": False,
+    }
+    sheet["content"]["spells"] = [chromatic_orb]
+    sheet = validate_character_sheet(sheet)
+    with pytest.raises(ValueError, match="material_confirmed"):
+        consume_spell_cast(sheet, spell_id="chromatic-orb")
+    result = consume_spell_cast(
+        sheet, spell_id="chromatic-orb", component_ruling={"material_confirmed": True}
+    )
+    assert "material_component" in result["ruling_required"]
+
+
 def test_readied_spell_pays_now_and_replaces_existing_concentration() -> None:
     sheet = default_character_sheet()
     sheet["spellcasting"]["spell_slots"] = {

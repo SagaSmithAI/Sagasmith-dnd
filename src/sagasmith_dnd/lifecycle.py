@@ -37,16 +37,24 @@ def apply_rest(
     sheet: dict[str, Any],
     *,
     rest_type: str,
-    hit_dice_spent: int = 0,
+    hit_dice_spends: list[dict[str, Any]] | None = None,
+    hit_dice_recovery: dict[str, int] | None = None,
+    food_and_drink: bool = False,
 ) -> dict[str, Any]:
-    """Settle deterministic resource recovery; individual hit-die rolls remain explicit."""
+    """Settle a short or long rest without inventing player-choice allocations."""
     rest_type = str(rest_type).strip().lower().replace("-", "_")
     if rest_type not in {"short_rest", "long_rest"}:
         raise CombatEngineError("rest_type must be short_rest or long_rest")
     value = deepcopy(sheet)
     combat = value.setdefault("combat", {})
     hp = dict(combat.get("hp") or {})
+    if int(hp.get("value", 0) or 0) <= 0 or "dead" in {
+        str(item).casefold() for item in value.get("conditions", [])
+    }:
+        raise CombatEngineError("a creature at 0 hit points or dead cannot benefit from a rest")
+    edition = "2024" if "2024" in str(value.get("edition") or "") else "2014"
     recovered: dict[str, int] = {}
+    hit_die_healing = 0
     if rest_type == "long_rest":
         hp["value"] = int(hp.get("max", 0) or 0)
         hp["temp"] = 0
@@ -54,10 +62,30 @@ def apply_rest(
         value["conditions"] = [
             item for item in value.get("conditions", []) if item not in {"unconscious", "stable"}
         ]
-    elif hit_dice_spent:
-        raise CombatEngineError(
-            "short-rest hit-die healing needs an explicit rolled healing result"
-        )
+        exhaustion = int(combat.get("exhaustion", 0) or 0)
+        if edition == "2024" or food_and_drink:
+            combat["exhaustion"] = max(0, exhaustion - 1)
+    else:
+        hit_dice = combat.get("hit_dice", {})
+        for spend in hit_dice_spends or []:
+            if not isinstance(spend, dict):
+                raise CombatEngineError("each hit-die spend must be an object")
+            key = str(spend.get("key") or "")
+            resource = hit_dice.get(key)
+            if not isinstance(resource, dict) or int(resource.get("value", 0) or 0) <= 0:
+                raise CombatEngineError(f"no hit die remains for {key}")
+            sides = _hit_die_sides(key, resource)
+            roll = spend.get("roll")
+            if isinstance(roll, bool) or not isinstance(roll, int) or not 1 <= roll <= sides:
+                raise CombatEngineError(f"{key} hit-die roll must be an integer from 1 to {sides}")
+            resource["value"] = int(resource["value"]) - 1
+            healing = roll + _constitution_modifier(value)
+            hit_die_healing += max(1 if edition == "2024" else 0, healing)
+        if hit_die_healing:
+            hp["value"] = min(
+                int(hp.get("max", 0) or 0), int(hp.get("value", 0) or 0) + hit_die_healing
+            )
+
     def recover_resource(resource: object, key: str) -> None:
         if not isinstance(resource, dict) or resource.get("recovers_on") != rest_type:
             return
@@ -89,12 +117,48 @@ def apply_rest(
         pact_magic["value"] = int(pact_magic.get("max", 0) or 0)
         recovered["pact_magic"] = pact_magic["value"] - before
     if rest_type == "long_rest":
-        for key, resource in value.get("combat", {}).get("hit_dice", {}).items():
-            if not isinstance(resource, dict):
-                continue
+        hit_dice = value.get("combat", {}).get("hit_dice", {})
+        if edition == "2024":
+            allocation = {
+                key: int(resource.get("max", 0) or 0) - int(resource.get("value", 0) or 0)
+                for key, resource in hit_dice.items()
+                if isinstance(resource, dict)
+            }
+        else:
+            missing = {
+                key: int(resource.get("max", 0) or 0) - int(resource.get("value", 0) or 0)
+                for key, resource in hit_dice.items()
+                if isinstance(resource, dict)
+            }
+            allowance = max(
+                1,
+                sum(
+                    int(resource.get("max", 0) or 0)
+                    for resource in hit_dice.values()
+                    if isinstance(resource, dict)
+                )
+                // 2,
+            )
+            if (
+                hit_dice_recovery is None
+                and sum(1 for amount in missing.values() if amount > 0) > 1
+                and sum(missing.values()) > allowance
+            ):
+                raise CombatEngineError("2014 long-rest hit-die recovery needs a player allocation")
+            requested = hit_dice_recovery or {}
+            allocation = {
+                key: int(requested.get(key, min(amount, allowance)))
+                for key, amount in missing.items()
+            }
+            if (
+                any(amount < 0 or amount > missing[key] for key, amount in allocation.items())
+                or sum(allocation.values()) > allowance
+            ):
+                raise CombatEngineError("2014 hit-die recovery allocation is invalid")
+        for key, amount in allocation.items():
+            resource = hit_dice[key]
             before = int(resource.get("value", 0) or 0)
-            maximum = int(resource.get("max", 0) or 0)
-            resource["value"] = min(maximum, before + max(1, maximum // 2)) if maximum else 0
+            resource["value"] = min(int(resource.get("max", 0) or 0), before + amount)
             recovered[f"hit_dice:{key}"] = resource["value"] - before
     for section in ("activities", "features", "feats"):
         for index, item in enumerate(value.get("content", {}).get(section, [])):
@@ -108,5 +172,22 @@ def apply_rest(
         "sheet": duration["sheet"],
         "rest_type": rest_type,
         "recovered": recovered,
+        "hit_die_healing": hit_die_healing,
         "effects_expired": duration["expired"],
     }
+
+
+def _constitution_modifier(sheet: dict[str, Any]) -> int:
+    score = int(sheet.get("abilities", {}).get("constitution", {}).get("score", 10) or 10)
+    return (score - 10) // 2
+
+
+def _hit_die_sides(key: str, resource: dict[str, Any]) -> int:
+    for candidate in (key, str(resource.get("label") or "")):
+        lowered = candidate.casefold()
+        if "d" in lowered:
+            tail = lowered.rsplit("d", 1)[1]
+            digits = "".join(char for char in tail if char.isdigit())
+            if digits and int(digits) > 0:
+                return int(digits)
+    raise CombatEngineError(f"hit die {key} must identify its die size, for example d8")

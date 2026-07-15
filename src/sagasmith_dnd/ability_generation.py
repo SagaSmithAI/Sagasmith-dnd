@@ -26,7 +26,18 @@ ABILITY_GENERATION_RULESETS = {
             "costs": {8: 0, 9: 1, 10: 2, 11: 3, 12: 4, 13: 5, 14: 7, 15: 9},
         },
         "roll": {"count": 6, "dice": 4, "sides": 6, "drop_lowest": 1},
-    }
+    },
+    "dnd5e-2024": {
+        "edition": "2024",
+        "standard_array": (15, 14, 13, 12, 10, 8),
+        "point_buy": {
+            "budget": 27,
+            "minimum": 8,
+            "maximum": 15,
+            "costs": {8: 0, 9: 1, 10: 2, 11: 3, 12: 4, 13: 5, 14: 7, 15: 9},
+        },
+        "roll": {"count": 6, "dice": 4, "sides": 6, "drop_lowest": 1},
+    },
 }
 
 

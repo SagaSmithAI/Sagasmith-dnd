@@ -337,7 +337,9 @@ def _normalize_skill(value: Any, field: str) -> dict[str, Any]:
 
 def _normalize_resource(value: Any, field: str) -> dict[str, Any]:
     item = _object(value, field)
-    _reject_unknown(item, field, {"label", "value", "max", "recovers_on", "source_key"})
+    _reject_unknown(
+        item, field, {"label", "value", "max", "recovers_on", "source_key", "slot_level"}
+    )
     maximum = _integer(item.get("max"), f"{field}.max", minimum=0)
     current = _integer(item.get("value"), f"{field}.value", default=maximum, minimum=0)
     if current > maximum:
@@ -351,6 +353,7 @@ def _normalize_resource(value: Any, field: str) -> dict[str, Any]:
         "max": maximum,
         "recovers_on": recovery,
         "source_key": _text(item.get("source_key"), f"{field}.source_key", default="", maximum=300),
+        "slot_level": _integer(item.get("slot_level"), f"{field}.slot_level", minimum=0, maximum=9),
     }
 
 
@@ -1086,6 +1089,8 @@ def validate_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
     pact_magic = spellcasting["pact_magic"]
     if pact_magic is not None:
         pact_magic = _normalize_resource(pact_magic, "sheet.spellcasting.pact_magic")
+        if not int(pact_magic.get("slot_level", 0) or 0):
+            raise ValueError("sheet.spellcasting.pact_magic.slot_level is required")
     casting_economy = _text(
         spellcasting["casting_economy"], "sheet.spellcasting.casting_economy", default="slots"
     )
@@ -1144,6 +1149,7 @@ def validate_character_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
         spell["access"]["prepared"] = (
             spell["id"] in selected_spell_ids or spell["access"]["always_prepared"]
         )
+
     def _content_entries(name: str) -> list[dict[str, Any]]:
         result = []
         for index, item in enumerate(_array(content[name], f"sheet.content.{name}")):
@@ -1638,6 +1644,11 @@ def _derive_armor_class(
                 "dexterity_bonus": dexterity_bonus,
                 "magic_bonus": mechanics["magic_bonus"],
             }
+        elif ac["base"] == 10:
+            dexterity_bonus = ability_modifiers["dexterity"]
+            total += dexterity_bonus
+            breakdown["mode"] = "unarmored"
+            breakdown["dexterity_bonus"] = dexterity_bonus
         shield_id = inventory["equipment_slots"]["shield"]
         if shield_id:
             shield = items[shield_id]
@@ -1741,6 +1752,9 @@ def _weapon_attacks(
                 "name": item["name"],
                 "equipped_slot": item["equipped_slot"],
                 "attack_type": mechanics["attack_type"],
+                "reach_ft": 10
+                if "reach" in {item.casefold() for item in mechanics["properties"]}
+                else 5,
                 "attack_ability": ability,
                 "attack_bonus": attack_bonus,
                 "damage_formula": damage_formula,

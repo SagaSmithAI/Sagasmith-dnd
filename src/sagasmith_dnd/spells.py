@@ -32,6 +32,7 @@ def consume_spell_cast(
     spell_id: str,
     cast_level: int | None = None,
     ritual: bool = False,
+    component_ruling: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Validate access and pay a spell's canonical slot or spell-point cost."""
     value = deepcopy(sheet)
@@ -61,12 +62,24 @@ def consume_spell_cast(
     if not available:
         raise CombatEngineError("spell is not available to cast")
     level = base_level if cast_level is None else int(cast_level)
+    if base_level == 0 and level != 0:
+        raise CombatEngineError("cantrips cannot be cast with a spell slot")
     if level < base_level or level > 9:
         raise CombatEngineError("cast_level is invalid for this spell")
     spellcasting = value.setdefault("spellcasting", {})
     if ritual:
         if not access.get("ritual_available") or not spellcasting.get("ritual_casting"):
             raise CombatEngineError("spell cannot be cast as a ritual")
+        if level != base_level:
+            raise CombatEngineError("ritual casting does not allow an upcast spell level")
+    components = dict(spell.get("definition", {}).get("components") or {})
+    ruling = dict(component_ruling or {})
+    if (
+        int(components.get("material_cost_cp", 0) or 0) > 0 or components.get("consumed")
+    ) and ruling.get("material_confirmed") is not True:
+        raise CombatEngineError(
+            "a costly or consumed material component needs material_confirmed DM ruling"
+        )
     paid: dict[str, Any] = {"economy": "none", "level": level, "ritual": ritual}
     if base_level > 0 and not ritual and not access.get("at_will"):
         if spellcasting.get("casting_economy", "slots") == "spell_points":
@@ -81,10 +94,25 @@ def consume_spell_cast(
         else:
             slots = spellcasting.get("spell_slots", {})
             slot = slots.get(str(level)) or slots.get(f"spell{level}")
-            if not isinstance(slot, dict) or int(slot.get("value", 0) or 0) <= 0:
-                raise CombatEngineError(f"no level {level} spell slot remains")
-            slot["value"] = int(slot["value"]) - 1
-            paid = {"economy": "slots", "level": level, "ritual": False}
+            if isinstance(slot, dict) and int(slot.get("value", 0) or 0) > 0:
+                slot["value"] = int(slot["value"]) - 1
+                paid = {"economy": "slots", "level": level, "ritual": False}
+            else:
+                pact_magic = spellcasting.get("pact_magic")
+                pact_level = int(dict(pact_magic or {}).get("slot_level", 0) or 0)
+                if (
+                    not isinstance(pact_magic, dict)
+                    or int(pact_magic.get("value", 0) or 0) <= 0
+                    or pact_level < base_level
+                ):
+                    raise CombatEngineError(f"no level {level} spell slot remains")
+                if cast_level is not None and int(cast_level) != pact_level:
+                    raise CombatEngineError(
+                        f"Pact Magic casts this spell at its level {pact_level} slot level"
+                    )
+                pact_magic["value"] = int(pact_magic["value"]) - 1
+                level = pact_level
+                paid = {"economy": "pact_magic", "level": level, "ritual": False}
     duration = dict(spell.get("definition", {}).get("duration") or {})
     concentration = bool(duration.get("concentration"))
     if concentration:
@@ -114,6 +142,12 @@ def consume_spell_cast(
         "cast_level": level,
         "payment": paid,
         "concentration_started": concentration,
+        "ruling_required": [
+            *(["verbal_component"] if components.get("verbal") else []),
+            *(["somatic_component"] if components.get("somatic") else []),
+            *(["material_component"] if components.get("material") else []),
+            "targets_and_effect",
+        ],
     }
 
 

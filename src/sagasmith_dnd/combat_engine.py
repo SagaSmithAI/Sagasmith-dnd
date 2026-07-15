@@ -202,7 +202,9 @@ def start_encounter(
                 "initiative": initiative,
                 "initiative_roll": die,
                 "initiative_bonus": initiative_bonus,
+                "_initiative_supplied": supplied is not None,
                 "tie_breaker": int(actor.get("tie_breaker", index)),
+                "_tie_breaker_supplied": "tie_breaker" in actor,
                 "turn_budget": {
                     "main_action": 1,
                     "bonus_action": 1,
@@ -229,6 +231,21 @@ def start_encounter(
                 movement=0,
                 reaction=0,
             )
+    ties: dict[int, list[dict[str, Any]]] = {}
+    for combatant in combatants:
+        ties.setdefault(int(combatant["initiative"]), []).append(combatant)
+    if any(
+        len(items) > 1
+        and all(item["_initiative_supplied"] for item in items)
+        and not all(item["_tie_breaker_supplied"] for item in items)
+        for items in ties.values()
+    ):
+        raise NeedsRulingError(
+            "initiative ties need explicit tie_breaker choices", missing=("tie_breaker",)
+        )
+    for combatant in combatants:
+        combatant.pop("_tie_breaker_supplied", None)
+        combatant.pop("_initiative_supplied", None)
     combatants.sort(
         key=lambda value: (-value["initiative"], value["tie_breaker"], value["actor_id"])
     )
@@ -288,10 +305,12 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
         actions.extend(
             ["attack", "cast", "dash", "disengage", "dodge", "help", "hide", "ready", "search"]
         )
+        if _normalize_ruleset(encounter.get("ruleset")) == "2024":
+            actions.extend(["influence", "study", "utilize"])
+        else:
+            actions.append("use_object")
     if budget.get("attack_budget", 0) > 0:
         actions.append("attack")
-    if budget.get("bonus_action", 0) > 0:
-        actions.append("bonus_action")
     return actions
 
 
@@ -322,12 +341,14 @@ def preflight_attack(
                 attacker["turn_flags"] = deepcopy(combatant.get("turn_flags") or {})
                 attacker["conditions"] = deepcopy(combatant.get("conditions") or [])
                 attacker["hidden"] = bool(combatant.get("hidden", False))
+                attacker["death_saves"] = bool(combatant.get("death_saves", True))
                 attacker["visible_to_actor_ids"] = deepcopy(combatant.get("visible_to_actor_ids"))
             elif combatant.get("actor_id") == actor_id(target):
                 target["position"] = deepcopy(combatant.get("position"))
                 target["turn_flags"] = deepcopy(combatant.get("turn_flags") or {})
                 target["conditions"] = deepcopy(combatant.get("conditions") or [])
                 target["hidden"] = bool(combatant.get("hidden", False))
+                target["death_saves"] = bool(combatant.get("death_saves", True))
                 target["visible_to_actor_ids"] = deepcopy(combatant.get("visible_to_actor_ids"))
     attacker_unresolved = actor_derived(attacker).get("unresolved_rules") or []
     if attacker_unresolved:
@@ -362,8 +383,14 @@ def preflight_attack(
     cover = dict(context.get("cover") or {})
     if cover.get("degree") == "total" or context.get("targetable") is False:
         raise CombatEngineError("target has total cover")
-    if cover.get("ac_bonus"):
-        target_ac += int(cover["ac_bonus"])
+    cover_degree = str(cover.get("degree") or "").replace("-", "_")
+    cover_bonus = {"half": 2, "three_quarters": 5}.get(cover_degree, 0)
+    if cover.get("ac_bonus") is not None:
+        declared_bonus = int(cover["ac_bonus"])
+        if cover_bonus and declared_bonus != cover_bonus:
+            raise CombatEngineError("cover ac_bonus does not match the declared cover degree")
+        cover_bonus = declared_bonus
+    target_ac += cover_bonus
     expression = weapon.get("damage_expression") or weapon.get("damage") or ""
     damage_type = str(weapon.get("damage_type") or "")
     range_result = _attack_range(attacker, target, weapon)
@@ -403,6 +430,12 @@ def preflight_attack(
         context["disadvantage"] = True
         context.setdefault("disadvantage_sources", []).extend(
             sorted(attacker_conditions & {"blinded", "poisoned", "prone", "restrained"})
+        )
+    unresolved_condition_sources = attacker_conditions & {"charmed", "frightened"}
+    if unresolved_condition_sources:
+        raise NeedsRulingError(
+            "condition source is required to determine this attack's legality",
+            missing=sorted(unresolved_condition_sources),
         )
     if target_conditions & {
         "blinded",
@@ -446,6 +479,25 @@ def preflight_attack(
     ):
         context["disadvantage"] = True
         context.setdefault("disadvantage_sources", []).append("target_dodging")
+    helped_by = None
+    if encounter is not None:
+        target_position = _position(target.get("position"))
+        for helper in encounter.get("combatants", []):
+            helping = dict(helper.get("turn_flags") or {}).get("helping")
+            helper_position = _position(helper.get("position"))
+            if (
+                isinstance(helping, dict)
+                and helping.get("target_id") == actor_id(attacker)
+                and target_position is not None
+                and helper_position is not None
+                and _grid_distance(helper_position, target_position) <= 5
+                and not _condition_set(helper.get("conditions"))
+                & {"dead", "unconscious", "stunned", "incapacitated", "paralyzed", "petrified"}
+            ):
+                context["advantage"] = True
+                context.setdefault("advantage_sources", []).append("help")
+                helped_by = str(helper.get("actor_id"))
+                break
     automatic_critical = bool(
         distance is not None
         and int(distance) <= 5
@@ -469,6 +521,11 @@ def preflight_attack(
         "resource_cost": deepcopy(weapon.get("resource_cost") or {}),
         "range": range_result,
         "automatic_critical_on_hit": automatic_critical,
+        "ruleset": ruleset,
+        "target_uses_death_saves": bool(target.get("death_saves", True)),
+        "knock_out": bool(action.get("knock_out", False)),
+        "melee_attack": str(weapon.get("attack_type") or "melee") == "melee",
+        "helped_by": helped_by,
     }
 
 
@@ -504,10 +561,14 @@ def resolve_attack_action(
         target_sheet = actor_sheet(updated_target)
         damage = apply_damage_to_sheet(
             target_sheet,
-            amount=damage_roll.total,
+            amount=max(0, damage_roll.total),
             damage_type=str(plan.get("damage_type") or ""),
             source=actor_id(attacker),
             critical=bool(attack["critical"]),
+            ruleset=str(plan.get("ruleset") or "2014"),
+            death_saves=bool(plan.get("target_uses_death_saves", True)),
+            knock_out=bool(plan.get("knock_out", False)),
+            melee=bool(plan.get("melee_attack", False)),
         )
         updated_target["sheet"] = damage["sheet"]
         result["damage"] = {
@@ -517,6 +578,9 @@ def resolve_attack_action(
             "rolls": list(damage_roll.rolls),
             "detail": damage_roll.detail,
         }
+    if updated_attacker.get("hidden"):
+        updated_attacker["hidden"] = False
+        result["reveals_attacker"] = True
     return updated_attacker, updated_target, result
 
 
@@ -527,6 +591,10 @@ def apply_damage_to_sheet(
     damage_type: str = "",
     source: str = "",
     critical: bool = False,
+    ruleset: str | None = None,
+    death_saves: bool = True,
+    knock_out: bool = False,
+    melee: bool = False,
 ) -> dict[str, Any]:
     """Apply one typed damage part with temp HP and trait ordering."""
     raw, adjusted, normalized, adjustment = _adjust_damage_amount(
@@ -540,6 +608,10 @@ def apply_damage_to_sheet(
         adjustment=adjustment,
         source=source,
         critical=critical,
+        ruleset=ruleset,
+        death_saves=death_saves,
+        knock_out=knock_out,
+        melee=melee,
     )
 
 
@@ -552,6 +624,10 @@ def _apply_adjusted_damage(
     adjustment: str,
     source: str,
     critical: bool,
+    ruleset: str | None,
+    death_saves: bool,
+    knock_out: bool,
+    melee: bool,
 ) -> dict[str, Any]:
     """Apply an already trait-adjusted simultaneous damage instance once."""
     value = deepcopy(sheet)
@@ -570,11 +646,21 @@ def _apply_adjusted_damage(
     became_zero = hp["value"] == 0 and before_hp > 0
     if became_zero:
         conditions.update({"prone", "unconscious"})
-        if massive_excess >= max_hp:
+        normalized_ruleset = _normalize_ruleset(ruleset or value.get("edition"))
+        if knock_out and not melee:
+            raise CombatEngineError("only a melee attack can knock a creature out")
+        if knock_out and melee:
+            if normalized_ruleset == "2024":
+                hp["value"] = 1
+            conditions.add("stable")
+        elif massive_excess >= max_hp:
+            conditions.discard("unconscious")
+            conditions.add("dead")
+        elif normalized_ruleset == "2014" and not death_saves:
             conditions.discard("unconscious")
             conditions.add("dead")
     death = dict(combat.setdefault("death_saves", {"successes": 0, "failures": 0}))
-    if before_hp == 0 and hp_damage > 0 and "dead" not in conditions:
+    if before_hp == 0 and hp_damage > 0 and "dead" not in conditions and death_saves:
         conditions.discard("stable")
         conditions.update({"prone", "unconscious"})
         if hp_damage >= max_hp:
@@ -674,6 +760,10 @@ def apply_damage_parts_to_sheet(
         adjustment="per_part" if len(details) > 1 else details[0]["adjustment"],
         source=source,
         critical=critical,
+        ruleset=None,
+        death_saves=True,
+        knock_out=False,
+        melee=False,
     )
     remaining_temp = applied["before_temp"]
     for detail in details:
@@ -794,6 +884,7 @@ def spend_movement(
     destination: Any = None,
     path: list[Any] | None = None,
     movement_mode: str = "voluntary",
+    crawl: bool = False,
 ) -> dict[str, Any]:
     """Consume movement and open opportunity-reaction windows from known geometry.
 
@@ -833,15 +924,21 @@ def spend_movement(
         "stunned",
         "paralyzed",
         "petrified",
-        "grappled",
         "restrained",
     }:
         raise CombatEngineError("actor cannot move under its current conditions")
+    if "grappled" in conditions:
+        raise NeedsRulingError(
+            "grapple source is needed to determine movement", missing=("grapple_source",)
+        )
+    if "prone" in conditions and not crawl:
+        raise CombatEngineError("a prone actor must crawl or stand before moving")
     if combatant.get("surprised") and _normalize_ruleset(value.get("ruleset")) == "2014":
         raise CombatEngineError("surprised actor cannot move on its first turn")
     budget = dict(combatant.get("turn_budget") or {})
     available = int(budget.get("movement", 0) or 0)
-    if distance > available:
+    movement_cost = distance * 2 if crawl else distance
+    if movement_cost > available:
         raise CombatEngineError("movement exceeds the remaining speed")
     origin = _position(combatant.get("position"))
     if path is not None:
@@ -869,7 +966,7 @@ def spend_movement(
             raise CombatEngineError(
                 "movement distance must equal the grid distance between origin and destination"
             )
-    budget["movement"] = available - distance
+    budget["movement"] = available - movement_cost
     combatant["turn_budget"] = budget
     if destination is not None:
         combatant["position"] = deepcopy(destination)
@@ -884,6 +981,9 @@ def spend_movement(
             for item in value.get("pending", [])
             if item.get("status", "pending") == "pending"
         }
+        movement_segments = (
+            list(zip(waypoints, waypoints[1:])) if path is not None else [(origin, target_position)]
+        )
         for threat in value.get("combatants", []):
             if not _can_make_opportunity_attack(threat, combatant):
                 continue
@@ -891,11 +991,17 @@ def spend_movement(
             if threat_position is None:
                 continue
             reach = _positive_int(threat.get("reach_ft"), default=5)
-            if (
-                _grid_distance(origin, threat_position)
-                <= reach
-                < _grid_distance(target_position, threat_position)
-            ):
+            leaving_segment = next(
+                (
+                    start
+                    for start, end in movement_segments
+                    if _grid_distance(start, threat_position)
+                    <= reach
+                    < _grid_distance(end, threat_position)
+                ),
+                None,
+            )
+            if leaving_segment is not None:
                 key = ("movement.leave_reach", threat.get("actor_id"), actor_id_value)
                 if key in existing:
                     continue
@@ -906,7 +1012,7 @@ def spend_movement(
                         "kind": "reaction",
                         "actor_id": threat["actor_id"],
                         "target_id": actor_id_value,
-                        "target_position": {"x": origin[0], "y": origin[1]},
+                        "target_position": {"x": leaving_segment[0], "y": leaving_segment[1]},
                         "target_visible": True,
                         "event": "movement.leave_reach",
                         "trigger": "opportunity_attack",
@@ -918,6 +1024,34 @@ def spend_movement(
                         "status": "pending",
                     },
                 ]
+    return value
+
+
+def stand_up(encounter: dict[str, Any], actor_id_value: str) -> dict[str, Any]:
+    """Spend half the recorded speed to end Prone without spending an action."""
+    value = deepcopy(encounter)
+    combatant = next(
+        (item for item in value.get("combatants", []) if item.get("actor_id") == actor_id_value),
+        None,
+    )
+    if combatant is None or current_combatant(value) is None:
+        raise CombatEngineError("actor is not the current combatant")
+    if current_combatant(value).get("actor_id") != actor_id_value:
+        raise CombatEngineError("it is not this actor's turn")
+    conditions = _condition_set(combatant.get("conditions"))
+    if "prone" not in conditions:
+        raise CombatEngineError("actor is not prone")
+    if conditions & {"dead", "unconscious", "stunned", "paralyzed", "petrified"}:
+        raise CombatEngineError("actor cannot stand under its current conditions")
+    budget = dict(combatant.get("turn_budget") or {})
+    cost = int(budget.get("speed", 0) or 0) // 2
+    if int(budget.get("movement", 0) or 0) < cost:
+        raise CombatEngineError("standing requires half the actor's speed in remaining movement")
+    budget["movement"] = int(budget["movement"]) - cost
+    combatant["turn_budget"] = budget
+    combatant["conditions"] = [
+        item for item in combatant.get("conditions", []) if str(item).casefold() != "prone"
+    ]
     return value
 
 
@@ -938,7 +1072,20 @@ def resolve_common_action(
     """
     value = deepcopy(encounter)
     action = str(action).strip().lower().replace("-", "_")
-    supported = {"cast", "dash", "disengage", "dodge", "help", "hide", "ready", "search"}
+    supported = {
+        "cast",
+        "dash",
+        "disengage",
+        "dodge",
+        "help",
+        "hide",
+        "ready",
+        "search",
+        "influence",
+        "study",
+        "utilize",
+        "use_object",
+    }
     if action not in supported:
         raise CombatEngineError(f"unsupported common action: {action}")
     current = current_combatant(value)
@@ -990,7 +1137,7 @@ def resolve_common_action(
         if not target_id:
             raise CombatEngineError("help requires a target actor")
         flags["helping"] = {"target_id": target_id, "payload": deepcopy(payload or {})}
-    elif action in {"hide", "search"}:
+    elif action in {"hide", "search", "influence", "study", "utilize", "use_object"}:
         flags[f"{action}_declared"] = deepcopy(payload or {})
     elif action == "ready":
         if not trigger:
@@ -1093,6 +1240,83 @@ def trigger_readied_spell(
     }
     value["pending"] = [*list(value.get("pending") or []), window]
     return value
+
+
+def trigger_readied_action(
+    encounter: dict[str, Any], *, readied_id: str, event: str
+) -> dict[str, Any]:
+    """Open the reaction choice for a non-spell Ready action after DM confirmation."""
+    value = deepcopy(encounter)
+    event_text = str(event).strip()
+    readied = next(
+        (item for item in value.get("readied", []) if item.get("id") == readied_id), None
+    )
+    if (
+        not event_text
+        or readied is None
+        or readied.get("kind") == "spell"
+        or readied.get("status") != "armed"
+    ):
+        raise CombatEngineError("readied non-spell action is not armed or has no observed trigger")
+    if any(item.get("status", "pending") == "pending" for item in value.get("pending", [])):
+        raise CombatEngineError("resolve the pending save or choice before another trigger")
+    readied["status"] = "triggered"
+    value["pending"] = [
+        *list(value.get("pending") or []),
+        {
+            "id": f"reaction-{uuid4().hex}",
+            "kind": "reaction",
+            "actor_id": readied["actor_id"],
+            "event": event_text,
+            "trigger": "readied_action",
+            "readied_id": readied_id,
+            "candidates": [{"id": "release"}, {"id": "decline"}],
+            "deadline": "immediate_after_trigger",
+            "status": "pending",
+        },
+    ]
+    return value
+
+
+def resolve_readied_action_window(
+    encounter: dict[str, Any], *, actor_id_value: str, choice_id: str, release: bool
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Spend a reaction for a generic readied action; its effect remains a DM ruling."""
+    value = deepcopy(encounter)
+    window = next((item for item in value.get("pending", []) if item.get("id") == choice_id), None)
+    if (
+        not isinstance(window, dict)
+        or window.get("trigger") != "readied_action"
+        or window.get("actor_id") != actor_id_value
+    ):
+        raise CombatEngineError("choice_id is not this actor's readied-action window")
+    readied = next(
+        (item for item in value.get("readied", []) if item.get("id") == window.get("readied_id")),
+        None,
+    )
+    if readied is None or readied.get("status") != "triggered":
+        raise CombatEngineError("readied action is no longer available")
+    value = resolve_choice_window(
+        value,
+        choice_id=choice_id,
+        actor_id_value=actor_id_value,
+        selection={"id": "release" if release else "decline"},
+    )
+    if release:
+        combatant = next(
+            item for item in value.get("combatants", []) if item.get("actor_id") == actor_id_value
+        )
+        budget = dict(combatant.get("turn_budget") or {})
+        if int(budget.get("reaction", 0) or 0) <= 0:
+            raise CombatEngineError("actor has no reaction remaining")
+        budget["reaction"] = int(budget["reaction"]) - 1
+        combatant["turn_budget"] = budget
+        value["readied"] = [
+            item for item in value.get("readied", []) if item.get("id") != readied["id"]
+        ]
+    else:
+        readied["status"] = "armed"
+    return value, deepcopy(readied)
 
 
 def resolve_readied_spell_window(
@@ -1340,6 +1564,8 @@ def resolve_actor_check(
                 "reason": sorted(automatic)[0],
             }
     if kind in {"ability", "check"} and "poisoned" in conditions:
+        disadvantage = True
+    if kind == "save" and _long_ability_name(ability) == "dexterity" and "restrained" in conditions:
         disadvantage = True
     if normalized_ruleset == "2024":
         roll_bonus -= 2 * exhaustion

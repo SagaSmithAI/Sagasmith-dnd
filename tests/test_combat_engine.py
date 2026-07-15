@@ -108,6 +108,43 @@ def test_encounter_uses_actor_references_and_turn_budget() -> None:
     assert encounter["combatants"][0]["turn_budget"]["reaction"] == 1
 
 
+def test_initiative_ties_require_explicit_tie_breakers() -> None:
+    with pytest.raises(NeedsRulingError, match="tie_breaker"):
+        start_encounter(
+            [{**_actor("a"), "initiative": 10}, {**_actor("b"), "initiative": 10}]
+        )
+
+
+def test_half_cover_uses_the_rules_ac_bonus() -> None:
+    attacker = _actor("attacker")
+    target = _actor("target", ac=10)
+    attacker["derived"]["inventory"]["weapon_attacks"] = [{"item_id": "sword", "attack_bonus": 5, "damage_expression": "1", "damage_type": "slashing"}]
+    plan = preflight_attack(attacker, target, action={"weapon_id": "sword", "context": {"cover": {"degree": "half"}}})
+    assert plan["target_ac"] == 12
+
+
+def test_help_grants_and_then_consumes_attack_advantage() -> None:
+    attacker = _actor("attacker")
+    helper = _actor("helper")
+    target = _actor("target")
+    for actor in (attacker, helper, target):
+        actor["initiative"] = {"attacker": 20, "helper": 15, "target": 10}[actor["id"]]
+        actor["tie_breaker"] = 0
+    attacker["position"] = {"x": 0, "y": 0}
+    helper["position"] = {"x": 1, "y": 0}
+    target["position"] = {"x": 1, "y": 0}
+    attacker["disposition"] = helper["disposition"] = "friendly"
+    target["disposition"] = "hostile"
+    attacker["derived"]["inventory"]["weapon_attacks"] = [
+        {"item_id": "sword", "attack_bonus": 5, "damage_expression": "1", "damage_type": "slashing"}
+    ]
+    encounter = start_encounter([attacker, helper, target])
+    encounter["combatants"][1]["turn_flags"] = {"helping": {"target_id": "attacker"}}
+    plan = preflight_attack(attacker, target, action={"weapon_id": "sword"}, encounter=encounter)
+    assert plan["helped_by"] == "helper"
+    assert "help" in plan["advantage_sources"]
+
+
 def test_multi_damage_preserves_types_and_massive_damage() -> None:
     actor = _actor("target", hp=10)
     result = apply_damage_parts_to_sheet(
