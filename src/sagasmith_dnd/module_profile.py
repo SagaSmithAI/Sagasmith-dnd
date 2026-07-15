@@ -31,6 +31,11 @@ _KEYWORDS = {
 }
 _COMBAT_SUBSECTION_SIGNALS = ("战斗", "遭遇", "陷阱", "推销", "巡逻")
 _CJK_RANGES = (("一", "鿿"), ("㐀", "䶿"), ("豈", "﫿"))
+_DIMENSIONS = re.compile(
+    r"(?P<width>\d{1,3})\s*(?:-?foot|feet|ft\.?|尺)\s*(?:by|x|×|乘)\s*"
+    r"(?P<height>\d{1,3})\s*(?:-?foot|feet|ft\.?|尺)",
+    re.IGNORECASE,
+)
 
 
 def _has_cjk(text: str) -> bool:
@@ -151,6 +156,67 @@ def _scene_tags(title: str) -> list[str]:
     return ["exploration"]
 
 
+def _location_key(title: str, ordinal: int) -> str:
+    """Produce a stable-enough key from parser evidence, never a display label."""
+    folded = re.sub(r"[^a-z0-9]+", "-", title.casefold()).strip("-")
+    return folded[:72] or f"location-{ordinal + 1}"
+
+
+def _spatial_manifest(
+    title: str, text: str, subsections: list[dict[str, object]]
+) -> dict[str, object]:
+    """Emit conservative scene-space evidence; it is not an inferred battle map."""
+    locations: list[dict[str, object]] = []
+    for ordinal, item in enumerate(subsections):
+        if item.get("type") != "room":
+            continue
+        label = str(item["title"])
+        dimensions = _DIMENSIONS.search(text)
+        locations.append(
+            {
+                "key": _location_key(label, ordinal),
+                "title": label,
+                "kind": "room",
+                "line": item.get("line"),
+                "dimensions_ft": (
+                    {
+                        "width": int(dimensions.group("width")),
+                        "height": int(dimensions.group("height")),
+                    }
+                    if dimensions
+                    else None
+                ),
+                "confidence": "explicit_heading",
+            }
+        )
+    if not locations:
+        dimensions = _DIMENSIONS.search(text)
+        locations.append(
+            {
+                "key": _location_key(title, 0),
+                "title": title,
+                "kind": "scene",
+                "dimensions_ft": (
+                    {
+                        "width": int(dimensions.group("width")),
+                        "height": int(dimensions.group("height")),
+                    }
+                    if dimensions
+                    else None
+                ),
+                "confidence": "scene_fallback",
+            }
+        )
+    return {
+        "schema_version": 1,
+        "grid": {"kind": "square", "cell_ft": 5},
+        "locations": locations,
+        # Connections need explicit structured authoring or DM confirmation;
+        # a heading order is not safe evidence of a traversable route.
+        "connections": [],
+    }
+
+
 class DndModuleProfile(GenericModuleProfile):
     name = "dnd5e"
     version = "2"
@@ -178,12 +244,9 @@ class DndModuleProfile(GenericModuleProfile):
         chapter_title: str,
         chapter_content: str,
     ) -> list[SceneBoundary]:
-        headings = list(
-            re.finditer(r"^(#{1,6})\s+(.+?)\s*$", chapter_content, re.MULTILINE)
-        )
+        headings = list(re.finditer(r"^(#{1,6})\s+(.+?)\s*$", chapter_content, re.MULTILINE))
         counts = {
-            level: sum(len(match.group(1)) == level for match in headings)
-            for level in (2, 3, 4)
+            level: sum(len(match.group(1)) == level for match in headings) for level in (2, 3, 4)
         }
         if counts[2] and counts[3] >= counts[2] * 5:
             scene_level = 3
@@ -195,9 +258,7 @@ class DndModuleProfile(GenericModuleProfile):
             scene_level = 4
         sub_level = scene_level + 1 if scene_level < 4 else None
         room_level = scene_level + 2 if scene_level < 3 else None
-        scene_headings = [
-            heading for heading in headings if len(heading.group(1)) == scene_level
-        ]
+        scene_headings = [heading for heading in headings if len(heading.group(1)) == scene_level]
         if not scene_headings:
             return [
                 SceneBoundary(
@@ -258,10 +319,13 @@ class DndModuleProfile(GenericModuleProfile):
                 chapter_content,
             )
             tags = _scene_tags(title)
-            if any(
-                any(signal in str(item["title"]) for signal in _COMBAT_SUBSECTION_SIGNALS)
-                for item in subsections
-            ) and "combat" not in tags:
+            if (
+                any(
+                    any(signal in str(item["title"]) for signal in _COMBAT_SUBSECTION_SIGNALS)
+                    for item in subsections
+                )
+                and "combat" not in tags
+            ):
                 tags.append("combat")
             boundaries.append(
                 SceneBoundary(
@@ -274,6 +338,9 @@ class DndModuleProfile(GenericModuleProfile):
                         "subsections": subsections,
                         "headings": [str(item["title"]) for item in subsections],
                         "tags": tags,
+                        "spatial": _spatial_manifest(
+                            title, chapter_content[heading.start() : end], subsections
+                        ),
                         "line_count": max(
                             1,
                             _line_number(chapter_content, end)

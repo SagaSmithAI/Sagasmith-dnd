@@ -154,6 +154,7 @@ def start_encounter(
     ruleset: str = "2014",
     scene_id: str | None = None,
     name: str = "Combat",
+    battle_map: dict[str, Any] | None = None,
     rng: Any = None,
 ) -> dict[str, Any]:
     """Create encounter state from actor references and derived values.
@@ -260,6 +261,7 @@ def start_encounter(
         "active": True,
         "name": name or "Combat",
         "scene_id": scene_id,
+        "battle_map": deepcopy(battle_map) if battle_map is not None else None,
         "ruleset": normalized_ruleset,
         "round": 1,
         "turn_index": 0,
@@ -971,9 +973,9 @@ def spend_movement(
 ) -> dict[str, Any]:
     """Consume movement and open opportunity-reaction windows from known geometry.
 
-    Only explicit token positions and reach values are automated.  Terrain,
-    blocking, forced movement, and line-of-effect remain DM-rulable because
-    this encounter state does not claim to model them.
+    Only explicit token positions, reach values, and an encounter-local map's
+    bounds/blocked cells are automated. Terrain cost, forced movement, and
+    line-of-effect remain DM-rulable unless a later rules module supplies them.
     """
     value = deepcopy(encounter)
     distance = int(distance)
@@ -1052,6 +1054,12 @@ def spend_movement(
     budget["movement"] = available - movement_cost
     combatant["turn_budget"] = budget
     if destination is not None:
+        from sagasmith_dnd.spatial import validate_position
+
+        if encounter.get("battle_map") is not None:
+            battle_map = dict(encounter["battle_map"])
+            for point in (path or [destination]):
+                validate_position(battle_map, point)
         combatant["position"] = deepcopy(destination)
     if (
         movement_mode == "voluntary"
