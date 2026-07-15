@@ -8,7 +8,7 @@ This UI is not a second D&D backend and does not write the SagaSmith database di
 
 ```text
 DM Workbench
-    ↓ compatible read-only/local gateway
+    ↓ principal-aware HTTP/SSE adapter
 SagaSmith D&D MCP
     ↓
 D&D runtime + SagaSmith Core
@@ -16,14 +16,16 @@ D&D runtime + SagaSmith Core
 
 - The MCP remains authoritative for campaign, branch, actor, rule, and combat state.
 - Player/GM visibility must be filtered by the server before it reaches the browser.
-- Writes should eventually call authenticated MCP-backed gateway operations with revision and idempotency contracts.
-- Until that gateway is standardized, the UI ships a complete demo fallback and should be treated as an Alpha design/inspection client.
+- Combat movement writes call the MCP-backed gateway with principal, revision, branch, and idempotency contracts; the browser never writes coordinates directly to storage.
+- Other mutation workflows remain Agent/MCP operations. The UI keeps a visibly labeled demo fallback for disconnected design and product testing.
 
 ## Implemented views
 
 - **Live table** — active campaign, `lobby`/`play`/`combat` phase, current scene, party, actor-knowledge counts, and suggested MCP groups.
 - **Campaign archive** — edition, locale, status, phase, revision, and dossier navigation.
 - **Campaign dossier** — actors, modules, current scene, scene index, knowledge boundaries, and snapshot ancestry.
+- **Scene Atlas** — stable module/chapter order, deep links, scoped progress, source pages, and a graph of only the spatial evidence actually present in the module.
+- **Combat map** — encounter-local five-foot grid, audience-filtered tokens, initiative, blocked/difficult cell rendering, drag-to-propose movement, and MCP rejection feedback.
 - **Actor dossier** — abilities, combat values, skills, spell resources, equipment, and an explicit actor-knowledge boundary.
 - **Rule evidence** — installed sources, edition filters, hybrid-search candidates, provenance, and the reminder that retrieval is not authoritative state.
 - **Demo mode** — coherent local data when no compatible gateway answers, visibly labeled throughout the interface.
@@ -39,14 +41,17 @@ npm run build
 npm run preview
 ```
 
-The default gateway URL is `http://127.0.0.1:3000`. Override it at build/dev time:
+Start the adjacent `SagaSmith-dnd-mcp` gateway (or use `SagaSmith-agent/start.bat`). The default URL is `http://127.0.0.1:8766`. Override its address and audience at build/dev time:
 
 ```powershell
-$env:PUBLIC_SAGASMITH_API_BASE = "http://127.0.0.1:3000"
+$env:PUBLIC_SAGASMITH_API_BASE = "http://127.0.0.1:8766"
+$env:PUBLIC_SAGASMITH_PRINCIPAL_ID = "system:local"
+# Only when the gateway is configured with SAGASMITH_DND_GATEWAY_TOKEN:
+$env:PUBLIC_SAGASMITH_API_TOKEN = "local-development-token"
 npm run dev
 ```
 
-The current adapter expects the read endpoints defined in [`src/lib/api.ts`](src/lib/api.ts). Failed health or data requests switch to demo data after a short timeout.
+The adapter returns `{ data, meta }` envelopes and pushes campaign revision events over SSE. Failed health or data requests switch to demo data after a short timeout. Server projection is the security boundary: the UI does not use CSS to conceal GM-only scenes, hidden combatants, blocked cells, or world patches.
 
 ## Static routing
 
@@ -54,7 +59,9 @@ Campaign and character detail pages use query IDs so a static Astro build can op
 
 ```text
 /campaigns/detail?id=<campaign-id>
+/campaigns/detail?id=<campaign-id>&tab=scenes&scene=<scene-id>&scope=party
 /characters/detail?id=<character-id>
+/combat?campaign=<campaign-id>
 ```
 
 Legacy dynamic demo routes remain temporarily in source but new navigation uses the static-safe paths above.
@@ -63,9 +70,10 @@ Legacy dynamic demo routes remain temporarily in source but new navigation uses 
 
 - Shared layout and visual tokens live in `src/layouts/BaseLayout.astro` and `src/styles/global.css`.
 - Runtime calls and demo fixtures live in `src/lib/api.ts`.
+- Scene and combat components live under `src/features/`; placeholder assets are explicitly non-mechanical in `public/placeholders/manifest.json`.
 - React islands own data loading; Astro owns static routing and the application shell.
 - Do not add direct SQLite, Chroma, or filesystem access to the browser.
 
 ## Status and license
 
-Active Alpha. The UI is suitable for product validation and local visual testing; authenticated MCP-backed writes and a production gateway remain future work. MIT licensed.
+Active Alpha. The UI, local principal-aware gateway, Scene Atlas, SSE refresh, and MCP-backed combat movement are ready for integrated local testing. Production identity issuance, TLS termination, and broader mutation workflows remain deployment work. MIT licensed.

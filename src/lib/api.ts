@@ -1,5 +1,6 @@
 import type {
   Campaign,
+  CombatStatus,
   Character,
   CurrentScene,
   HealthStatus,
@@ -7,17 +8,31 @@ import type {
   ModuleSource,
   RuleSource,
   SaveSlot,
+  SceneProgress,
 } from '../types';
 
-export const API_BASE = (import.meta.env.PUBLIC_SAGASMITH_API_BASE || 'http://127.0.0.1:3000').replace(/\/$/, '');
+export const API_BASE = (import.meta.env.PUBLIC_SAGASMITH_API_BASE || 'http://127.0.0.1:8766').replace(/\/$/, '');
+export const PRINCIPAL_ID = import.meta.env.PUBLIC_SAGASMITH_PRINCIPAL_ID || 'system:local';
+const API_TOKEN = import.meta.env.PUBLIC_SAGASMITH_API_TOKEN || '';
+
+function requestHeaders(extra?: HeadersInit): Headers {
+  const headers = new Headers(extra);
+  headers.set('X-SagaSmith-Principal', PRINCIPAL_ID);
+  if (API_TOKEN) headers.set('Authorization', `Bearer ${API_TOKEN}`);
+  return headers;
+}
+
+function unwrap<T>(value: T | { data: T }): T {
+  return value && typeof value === 'object' && 'data' in value ? (value as { data: T }).data : value as T;
+}
 
 async function fetchJson<T>(path: string): Promise<T> {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 3500);
   try {
-    const res = await fetch(`${API_BASE}${path}`, { signal: controller.signal });
+    const res = await fetch(`${API_BASE}${path}`, { signal: controller.signal, headers: requestHeaders() });
     if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
-    return await res.json() as T;
+    return unwrap(await res.json() as T | { data: T });
   } finally {
     window.clearTimeout(timeout);
   }
@@ -30,6 +45,7 @@ export function listCharacters(campaignId: string): Promise<Character[]> { retur
 export function getCharacter(id: string): Promise<Character> { return fetchJson(`/api/characters/${encodeURIComponent(id)}`); }
 export function listModules(campaignId: string): Promise<ModuleSource[]> { return fetchJson(`/api/campaigns/${encodeURIComponent(campaignId)}/modules`); }
 export function sceneIndex(campaignId: string): Promise<ModuleScene[]> { return fetchJson(`/api/campaigns/${encodeURIComponent(campaignId)}/scenes`); }
+export function sceneProgress(campaignId: string, scope = 'party'): Promise<SceneProgress[]> { return fetchJson(`/api/campaigns/${encodeURIComponent(campaignId)}/scene-progress?scope=${encodeURIComponent(scope)}`); }
 export function currentScene(campaignId: string, scope = 'party'): Promise<CurrentScene> { return fetchJson(`/api/campaigns/${encodeURIComponent(campaignId)}/current-scene?scope=${encodeURIComponent(scope)}`); }
 export function searchModules(campaignId: string, query: string, limit = 8) { return fetchJson(`/api/campaigns/${encodeURIComponent(campaignId)}/search?query=${encodeURIComponent(query)}&limit=${limit}`); }
 export function listRules(systemId = 'dnd5e'): Promise<RuleSource[]> { return fetchJson(`/api/rules?system_id=${encodeURIComponent(systemId)}`); }
@@ -37,6 +53,42 @@ export function searchRules(query: string, systemId = 'dnd5e', limit = 8) { retu
 export function listEvents(campaignId: string, limit = 50) { return fetchJson<any[]>(`/api/campaigns/${encodeURIComponent(campaignId)}/events?limit=${limit}`); }
 export function listSaves(campaignId: string): Promise<SaveSlot[]> { return fetchJson(`/api/campaigns/${encodeURIComponent(campaignId)}/saves`); }
 export function saveLineage(campaignId: string): Promise<SaveSlot[]> { return fetchJson(`/api/campaigns/${encodeURIComponent(campaignId)}/lineage`); }
+export function combatStatus(campaignId: string): Promise<CombatStatus> { return fetchJson(`/api/campaigns/${encodeURIComponent(campaignId)}/combat`); }
+
+export async function submitCombatMove(
+  campaignId: string,
+  actorId: string,
+  destination: { x: number; y: number },
+  distance: number,
+  expectedRevision: number,
+  branchId?: string,
+): Promise<CombatStatus> {
+  const response = await fetch(`${API_BASE}/api/campaigns/${encodeURIComponent(campaignId)}/combat/move`, {
+    method: 'POST',
+    headers: requestHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({
+      actor_id: actorId,
+      destination,
+      distance,
+      expected_revision: expectedRevision,
+      branch_id: branchId,
+      idempotency_key: globalThis.crypto?.randomUUID?.() || `ui-${Date.now()}`,
+    }),
+  });
+  if (!response.ok) {
+    const problem = await response.json().catch(() => ({})) as { error?: string };
+    throw new Error(problem.error || `Move rejected (${response.status})`);
+  }
+  return unwrap(await response.json() as CombatStatus | { data: CombatStatus });
+}
+
+export function subscribeCampaign(campaignId: string, onRevision: () => void): () => void {
+  const query = new URLSearchParams({ principal_id: PRINCIPAL_ID });
+  if (API_TOKEN) query.set('token', API_TOKEN);
+  const source = new EventSource(`${API_BASE}/api/campaigns/${encodeURIComponent(campaignId)}/stream?${query}`);
+  source.addEventListener('revision', onRevision);
+  return () => source.close();
+}
 
 export const SUPPORTED_SYSTEMS = ['dnd5e'] as const;
 export function isApiAvailable(): Promise<boolean> { return health().then(() => true).catch(() => false); }
@@ -65,8 +117,25 @@ export const MOCK_SAVES: SaveSlot[] = [
 ];
 
 export const MOCK_SCENE: CurrentScene = {
-  scene_id: 'scene-bell-chamber', title: '钟楼下的密室', module: '灰烬穹顶', chapter: '第三章 · 断钟', scene_type: 'exploration', visibility: 'player', page_start: 42, page_end: 45, keywords: ['钟楼', '契约', '密室'], tags: ['exploration', 'clue'], headings: ['第三章', '钟楼下的密室'], content: '断裂的铜钟悬在石室上方。西墙刻着被擦除一半的龙文契约。', scope_id: 'party', requested_scope_id: 'party', inherited_from_party: false,
-  progress: { scene_id: 'scene-bell-chamber', scope_id: 'party', status: 'active', progress: 68, current_room: 'B3. 契约厅', state_version: 7, state: { discovered_clues: ['破损印记', '黄铜钥匙孔'], visited_rooms: ['B1', 'B2', 'B3'] } },
+  scene_id: 'scene-bell-chamber', stable_key: 'chapter-three-bell-chamber', title: '钟楼下的密室', module_id: 'module-ash-vault', module: '灰烬穹顶', chapter_id: 'chapter-three', chapter: '第三章 · 断钟', chapter_ordinal: 2, scene_ordinal: 1, scene_type: 'exploration', visibility: 'party', page_start: 42, page_end: 45, keywords: ['钟楼', '契约', '密室'], tags: ['exploration', 'clue'], headings: ['第三章', '钟楼下的密室'], content: '断裂的铜钟悬在石室上方。西墙刻着被擦除一半的龙文契约。', scope_id: 'party', requested_scope_id: 'party', inherited_from_party: false,
+  spatial: { schema_version: 1, grid: { kind: 'square', cell_ft: 5 }, locations: [{ key: 'b1-entry', title: 'B1. 石阶入口', kind: 'room', dimensions_ft: { width: 20, height: 15 }, confidence: 'explicit' }, { key: 'b2-bell', title: 'B2. 断钟厅', kind: 'room', dimensions_ft: { width: 40, height: 30 }, confidence: 'explicit' }, { key: 'b3-oath', title: 'B3. 契约厅', kind: 'room', confidence: 'derived' }], connections: [{ from: 'b1-entry', to: 'b2-bell', kind: 'passage', bidirectional: true, confidence: 'explicit' }, { from: 'b2-bell', to: 'b3-oath', kind: 'door', bidirectional: true, confidence: 'derived' }] },
+  progress: { scene_id: 'scene-bell-chamber', scope_id: 'party', status: 'current', percent: 68, current_room: 'B3. 契约厅', current_location_key: 'b3-oath', state_version: 7, state: { discovered_clues: ['破损印记', '黄铜钥匙孔'], visited_rooms: ['B1', 'B2', 'B3'] } },
+};
+
+export const MOCK_COMBAT: CombatStatus = {
+  active: true,
+  round: 3,
+  turn_index: 1,
+  current_actor_id: 'char-sera',
+  campaign_revision: 18,
+  branch_id: 'main',
+  battle_map: { id: 'battle-map-demo', schema_version: 1, map_revision: 1, lifecycle: 'temporary', source: { scene_id: 'scene-bell-chamber', module_id: 'module-ash-vault', location_key: 'b2-bell', scene_spatial_schema: 1 }, grid: { kind: 'square', cell_ft: 5 }, bounds: { width_cells: 12, height_cells: 9 }, blocked_cells: ['5,2', '5,3', '5,4'], difficult_cells: ['3,5', '4,5', '5,5'], checksum: 'demo' },
+  combatants: [
+    { actor_id: 'char-varis', token_id: 'token-varis', name: '瓦里斯', initiative: 18, position: { x: 2, y: 3 }, disposition: 'friendly', hp: { current: 38, max: 44 } },
+    { actor_id: 'char-sera', token_id: 'token-sera', name: '瑟拉', initiative: 15, position: { x: 3, y: 4 }, disposition: 'friendly', hp: { current: 46, max: 49 } },
+    { actor_id: 'ember-construct', token_id: 'token-construct', name: '余烬构装体', initiative: 11, position: { x: 8, y: 3 }, disposition: 'hostile', hp: { current: 31, max: 52 }, conditions: ['marked'] },
+    { actor_id: 'mira', token_id: 'token-mira', name: '米拉', initiative: 8, position: { x: 4, y: 6 }, disposition: 'neutral', hp: { current: 24, max: 24 } },
+  ],
 };
 
 export const MOCK_RULES: RuleSource[] = [

@@ -59,11 +59,16 @@ export interface ModuleSource {
 
 export interface ModuleScene {
   scene_id: string;
+  stable_key?: string;
   title: string;
+  module_id?: string;
   module: string;
+  chapter_id?: string;
   chapter: string;
+  chapter_ordinal?: number;
+  scene_ordinal?: number;
   scene_type: string;
-  visibility: string;
+  visibility: SceneVisibility;
   page_start?: number;
   page_end?: number;
   start_line?: number;
@@ -76,6 +81,34 @@ export interface ModuleScene {
   subsections?: Subsection[];
   headings: string[];
   content?: string;
+  spatial?: SceneSpatial;
+}
+
+export type SceneVisibility = 'keeper' | 'party' | 'public';
+
+export interface SpatialLocation {
+  key: string;
+  title: string;
+  kind?: string;
+  line?: number;
+  dimensions_ft?: { width?: number; height?: number };
+  confidence?: 'explicit' | 'derived' | 'unknown' | string;
+}
+
+export interface SpatialConnection {
+  from: string;
+  to: string;
+  kind?: string;
+  label?: string;
+  bidirectional?: boolean;
+  confidence?: 'explicit' | 'derived' | 'unknown' | string;
+}
+
+export interface SceneSpatial {
+  schema_version?: number;
+  grid?: { kind?: string; cell_ft?: number };
+  locations?: SpatialLocation[];
+  connections?: SpatialConnection[];
 }
 
 export interface Clue {
@@ -103,11 +136,16 @@ export interface Subsection {
 }
 
 export interface SceneProgress {
+  id?: string;
   scene_id: string;
+  stable_key?: string;
   scope_id: string;
+  requested_scope_id?: string;
+  inherited_from_party?: boolean;
   status: string;
-  progress: number;
+  percent: number;
   current_room?: string;
+  current_location_key?: string;
   state_version: number;
   state: Record<string, unknown>;
 }
@@ -166,6 +204,61 @@ export interface HealthStatus {
   status: string;
   version: string;
   dense: boolean;
+}
+
+export interface GridPosition { x: number; y: number }
+
+export interface BattleMap {
+  id: string;
+  schema_version: number;
+  map_revision?: number;
+  lifecycle: 'temporary';
+  source: {
+    scene_id?: string;
+    module_id?: string;
+    location_key?: string;
+    scene_spatial_schema?: number;
+  };
+  grid: { kind: 'square'; cell_ft: 5 };
+  bounds: { width_cells: number; height_cells: number };
+  blocked_cells?: string[];
+  difficult_cells?: string[];
+  world_patches?: Array<{ key: string; value: unknown }>;
+  checksum?: string;
+}
+
+export interface CombatantView {
+  actor_id: string;
+  token_id?: string;
+  name: string;
+  initiative: number;
+  position?: GridPosition | null;
+  disposition?: 'friendly' | 'neutral' | 'hostile';
+  reach_ft?: number;
+  hp?: { current?: number; max?: number; temporary?: number };
+  conditions?: string[];
+}
+
+export interface CombatStatus {
+  active: boolean;
+  round?: number;
+  turn_index?: number;
+  current_actor_id?: string;
+  campaign_revision?: number;
+  branch_id?: string;
+  combatants: CombatantView[];
+  battle_map?: BattleMap | null;
+  pending_reactions?: unknown[];
+}
+
+export interface GatewayEnvelope<T> {
+  data: T;
+  meta: {
+    schema_version: number;
+    campaign_revision?: number;
+    branch_id?: string;
+    audience: string;
+  };
 }
 
 // ── Shape map for D&D sheet fields ──

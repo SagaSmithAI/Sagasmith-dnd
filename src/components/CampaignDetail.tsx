@@ -28,7 +28,10 @@ export default function CampaignDetail() {
   const [demo, setDemo] = useState(false);
 
   useEffect(() => {
-    const id = new URLSearchParams(window.location.search).get('id') || 'campaign-1';
+    const query = new URLSearchParams(window.location.search);
+    const id = query.get('id') || 'campaign-1';
+    const requestedTab = query.get('tab');
+    if (requestedTab && ['overview', 'scenes', 'knowledge', 'timeline'].includes(requestedTab)) setTab(requestedTab as Tab);
     Promise.all([getCampaign(id), listCharacters(id), listModules(id), listSaves(id), currentScene(id)])
       .then(([nextCampaign, nextCharacters, nextModules, nextSaves, nextScene]) => {
         setCampaign(nextCampaign); setCharacters(nextCharacters); setModules(nextModules); setSaves(nextSaves); setScene(nextScene); emitRuntimeStatus(true);
@@ -46,6 +49,13 @@ export default function CampaignDetail() {
 
   if (!campaign) return <div className="page"><div className="empty">正在读取战役档案…</div></div>;
   const phase = String(campaign.state?.game_phase || 'lobby');
+  const chooseTab = (next: Tab) => {
+    setTab(next);
+    const query = new URLSearchParams(window.location.search);
+    query.set('id', campaign.id);
+    query.set('tab', next);
+    window.history.replaceState({}, '', `${window.location.pathname}?${query}`);
+  };
 
   return (
     <div className="page">
@@ -63,7 +73,7 @@ export default function CampaignDetail() {
       </section>
 
       <div className="tabs campaign-tabs">
-        {(['overview', 'scenes', 'knowledge', 'timeline'] as Tab[]).map((item) => <button key={item} className={`tab ${tab === item ? 'active' : ''}`} onClick={() => setTab(item)}>{item === 'overview' ? '桌面概览' : item === 'scenes' ? '场景索引' : item === 'knowledge' ? '角色认知' : '分支存档'}</button>)}
+        {(['overview', 'scenes', 'knowledge', 'timeline'] as Tab[]).map((item) => <button key={item} className={`tab ${tab === item ? 'active' : ''}`} onClick={() => chooseTab(item)}>{item === 'overview' ? '桌面概览' : item === 'scenes' ? '场景索引' : item === 'knowledge' ? '角色认知' : '分支存档'}</button>)}
       </div>
 
       <div className="tab-content">
@@ -89,7 +99,7 @@ function Overview({ campaign, characters, modules, scene, saves }: { campaign: C
       </section>
       <section className="card">
         <div className="card-header"><strong>CURRENT SCENE</strong><span>{scene?.scope_id || 'party'}</span></div>
-        <div className="current-scene-card"><span>{scene?.chapter || 'NO CHAPTER'}</span><h3>{scene?.title || '尚未设置当前场景'}</h3><p>{scene?.content || '让 Agent 在 play.scene 中选择并读取当前场景。'}</p><div className="progress-bar"><div className="progress-fill" style={{ width: `${scene?.progress?.progress || 0}%` }} /></div><footer><span>{scene?.progress?.current_room || 'ROOM UNSET'}</span><b>{scene?.progress?.progress || 0}%</b></footer></div>
+        <div className="current-scene-card"><span>{scene?.chapter || 'NO CHAPTER'}</span><h3>{scene?.title || '尚未设置当前场景'}</h3><p>{scene?.content || '让 Agent 在 play.scene 中选择并读取当前场景。'}</p><div className="progress-bar"><div className="progress-fill" style={{ width: `${scene?.progress?.percent || 0}%` }} /></div><footer><span>{scene?.progress?.current_location_key || scene?.progress?.current_room || 'ROOM UNSET'}</span><b>{scene?.progress?.percent || 0}%</b></footer></div>
       </section>
       <section className="card">
         <div className="card-header"><strong>MODULE SOURCES</strong><span>{modules.length} ACTIVE</span></div>

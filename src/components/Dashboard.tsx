@@ -104,8 +104,8 @@ export default function Dashboard() {
           <small>{scene?.chapter || 'NO ACTIVE CHAPTER'}</small>
           <h3>{scene?.title || '尚未选择场景'}</h3>
           <p>{scene?.content || '从战役详情进入场景索引，或让 Agent 通过 play.scene 读取当前场景。'}</p>
-          <div className="scene-progress"><div><i style={{ width: `${scene?.progress?.progress || 0}%` }} /></div><b>{scene?.progress?.progress || 0}%</b></div>
-          <footer><span>{scene?.progress?.current_room || 'ROOM UNSET'}</span><a href={active ? `/campaigns/detail?id=${encodeURIComponent(active.id)}#scene` : '/campaigns'}>VIEW SCENE →</a></footer>
+          <div className="scene-progress"><div><i style={{ width: `${scene?.progress?.percent || 0}%` }} /></div><b>{scene?.progress?.percent || 0}%</b></div>
+          <footer><span>{scene?.progress?.current_location_key || scene?.progress?.current_room || 'ROOM UNSET'}</span><a href={active ? `/campaigns/detail?id=${encodeURIComponent(active.id)}&tab=scenes&scene=${encodeURIComponent(scene?.scene_id || '')}` : '/campaigns'}>VIEW SCENE →</a></footer>
         </div>
       </section>
 
