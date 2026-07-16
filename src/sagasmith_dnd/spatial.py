@@ -32,13 +32,11 @@ def compile_battle_map(
     cell_ft = int(request.get("cell_ft") or grid.get("cell_ft") or 5)
     if cell_ft != 5:
         raise BattleMapError("D&D combat resolution requires five-foot grid cells")
-    width = int(
-        request.get("width_cells") or max(6, int(dimensions.get("width", 0) or 0) // cell_ft) or 12
-    )
+    width_ft = int(dimensions.get("width", 0) or 0)
+    height_ft = int(dimensions.get("height", 0) or 0)
+    width = int(request.get("width_cells") or (max(6, width_ft // cell_ft) if width_ft else 12))
     height = int(
-        request.get("height_cells")
-        or max(6, int(dimensions.get("height", 0) or 0) // cell_ft)
-        or 12
+        request.get("height_cells") or (max(6, height_ft // cell_ft) if height_ft else 12)
     )
     if not 1 <= width <= 200 or not 1 <= height <= 200:
         raise BattleMapError("battle-map bounds must be between 1 and 200 cells")

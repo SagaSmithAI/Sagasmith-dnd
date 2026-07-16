@@ -99,6 +99,7 @@ def test_dnd_module_spatial_manifest_and_temporary_map() -> None:
     )
     assert linked_map["source"]["scene_id"] == "spatial-scene"
     assert linked_map["source"]["encounter_scene_id"] == "ambush-scene"
+    assert linked_map["bounds"] == {"width_cells": 12, "height_cells": 12}
 
     updated = patch_battle_map(battle_map, [{"key": "gate.open", "value": True}])
     assert updated["map_revision"] == 2
