@@ -7,13 +7,17 @@ from sagasmith_dnd.character_schema import (
 )
 from sagasmith_dnd.lifecycle import advance_effect_durations
 from sagasmith_dnd.spells import (
+    CORE_MAGIC_MISSILE_MECHANIC_ID,
+    CORE_MAGIC_MISSILE_SPELL_ID,
     CORE_SHIELD_MECHANIC_ID,
     CORE_SHIELD_SPELL_ID,
     available_shield_attack_defenses,
+    available_shield_magic_missile_defenses,
     consume_readied_spell,
     consume_shield_reaction,
     consume_spell_cast,
     replace_prepared_spells,
+    validate_magic_missile_allocations,
 )
 
 
@@ -118,6 +122,48 @@ def test_shield_name_without_source_bound_mechanic_is_not_executable() -> None:
     spell["definition"]["casting_time"] = "1 reaction"
     sheet["content"]["spells"] = [spell]
     assert available_shield_attack_defenses(validate_character_sheet(sheet)) == []
+
+
+def test_magic_missile_allocation_and_shield_trigger_are_source_bound() -> None:
+    allocations = validate_magic_missile_allocations(
+        [
+            {"target_id": "goblin-a", "darts": 1},
+            {"target_id": "goblin-b", "darts": 1},
+            {"target_id": "goblin-a", "darts": 1},
+        ],
+        cast_level=1,
+    )
+    assert allocations == [
+        {"target_id": "goblin-a", "darts": 2},
+        {"target_id": "goblin-b", "darts": 1},
+    ]
+    with pytest.raises(ValueError, match="exactly 4 darts"):
+        validate_magic_missile_allocations(
+            [{"target_id": "goblin-a", "darts": 3}], cast_level=2
+        )
+
+    sheet = default_character_sheet()
+    sheet["spellcasting"]["spell_slots"] = {
+        "1": {
+            "label": "1st",
+            "value": 1,
+            "max": 1,
+            "recovers_on": "long_rest",
+            "source_key": "wizard",
+        }
+    }
+    shield = _spell(CORE_SHIELD_SPELL_ID, level=1)
+    shield["name"] = "Shield"
+    shield["definition"]["casting_time"] = "1 reaction"
+    shield["mechanic_refs"] = [CORE_SHIELD_MECHANIC_ID]
+    sheet["content"]["spells"] = [shield]
+    candidates = available_shield_magic_missile_defenses(validate_character_sheet(sheet))
+    assert candidates[0]["kind"] == "spell_magic_missile_immunity"
+
+    unrelated = _spell(CORE_MAGIC_MISSILE_SPELL_ID, level=1)
+    unrelated["mechanic_refs"] = [CORE_MAGIC_MISSILE_MECHANIC_ID]
+    sheet["content"]["spells"] = [unrelated]
+    assert available_shield_magic_missile_defenses(validate_character_sheet(sheet)) == []
 
 
 def test_ritual_and_cantrip_do_not_spend_a_slot() -> None:

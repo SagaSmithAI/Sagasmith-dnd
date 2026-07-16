@@ -12,7 +12,11 @@ from sagasmith_dnd.rule_engine import ResolutionContext, apply_rule_event, core_
 _SPELL_POINT_COSTS = {1: 2, 2: 3, 3: 5, 4: 6, 5: 7, 6: 9, 7: 10, 8: 11, 9: 13}
 CORE_SHIELD_MECHANIC_ID = "dnd5e.core.spell.shield"
 CORE_SHIELD_ATTACK_BOUNDARY_ID = "dnd5e.core.spell.shield_attack_ac"
+CORE_SHIELD_MAGIC_MISSILE_BOUNDARY_ID = "dnd5e.core.spell.shield_magic_missile"
 CORE_SHIELD_SPELL_ID = "dnd5e.content.srd2014.spell.shield"
+CORE_MAGIC_MISSILE_MECHANIC_ID = "dnd5e.core.spell.magic_missile"
+CORE_MAGIC_MISSILE_BOUNDARY_ID = "dnd5e.core.spell.magic_missile_darts"
+CORE_MAGIC_MISSILE_SPELL_ID = "dnd5e.content.srd2014.spell.magic-missile"
 
 _PREPARED_2024 = {
     "bard": (4, 5, 6, 7, 9, 10, 11, 12, 14, 15, 16, 16, 17, 17, 18, 18, 19, 20, 21, 22),
@@ -35,6 +39,53 @@ def is_core_shield_spell(spell: dict[str, Any]) -> bool:
     return str(spell.get("id") or "") == CORE_SHIELD_SPELL_ID or CORE_SHIELD_MECHANIC_ID in {
         str(item) for item in spell.get("mechanic_refs", [])
     }
+
+
+def is_core_magic_missile_spell(spell: dict[str, Any]) -> bool:
+    """Recognize only the source-bound Core Magic Missile mechanic."""
+    return str(spell.get("id") or "") == CORE_MAGIC_MISSILE_SPELL_ID or (
+        CORE_MAGIC_MISSILE_MECHANIC_ID
+        in {str(item) for item in spell.get("mechanic_refs", [])}
+    )
+
+
+def magic_missile_dart_count(cast_level: int) -> int:
+    """Return the exact number of darts created by a legal slot level."""
+    level = int(cast_level)
+    if level < 1 or level > 9:
+        raise CombatEngineError("Magic Missile cast_level must be between 1 and 9")
+    return level + 2
+
+
+def validate_magic_missile_allocations(
+    allocations: list[dict[str, Any]], *, cast_level: int
+) -> list[dict[str, Any]]:
+    """Normalize target allocations while preserving one damage instance per dart."""
+    if not isinstance(allocations, list) or not allocations:
+        raise CombatEngineError("Magic Missile requires at least one target allocation")
+    normalized: list[dict[str, Any]] = []
+    by_target: dict[str, int] = {}
+    for allocation in allocations:
+        if not isinstance(allocation, dict):
+            raise CombatEngineError("Magic Missile target allocations must be objects")
+        target_id = str(allocation.get("target_id") or "").strip()
+        darts = allocation.get("darts")
+        if not target_id:
+            raise CombatEngineError("Magic Missile target_id is required")
+        if isinstance(darts, bool) or not isinstance(darts, int) or darts <= 0:
+            raise CombatEngineError("Magic Missile darts must be a positive integer")
+        if target_id not in by_target:
+            normalized.append({"target_id": target_id, "darts": 0})
+        by_target[target_id] = by_target.get(target_id, 0) + darts
+    for allocation in normalized:
+        allocation["darts"] = by_target[allocation["target_id"]]
+    expected = magic_missile_dart_count(cast_level)
+    actual = sum(item["darts"] for item in normalized)
+    if actual != expected:
+        raise CombatEngineError(
+            f"Magic Missile level {cast_level} requires exactly {expected} darts, found {actual}"
+        )
+    return normalized
 
 
 def available_shield_cast_options(
@@ -114,11 +165,26 @@ def available_shield_attack_defenses(
     return options
 
 
+def available_shield_magic_missile_defenses(
+    sheet: dict[str, Any], *, rules: ResolutionContext | None = None
+) -> list[dict[str, Any]]:
+    """Build source-bound Shield choices for the Magic Missile targeting trigger."""
+    return [
+        {
+            **candidate,
+            "kind": "spell_magic_missile_immunity",
+            "mechanic_id": CORE_SHIELD_MECHANIC_ID,
+        }
+        for candidate in available_shield_attack_defenses(sheet, rules=rules)
+    ]
+
+
 def consume_shield_reaction(
     sheet: dict[str, Any],
     *,
     spell_id: str,
     cast_level: int,
+    trigger: str = "attack",
     rules: ResolutionContext | None = None,
 ) -> dict[str, Any]:
     """Pay Core Shield and apply its AC effect until the caster's next turn starts."""
@@ -154,6 +220,14 @@ def consume_shield_reaction(
             "description": "",
         }
     )
+    normalized_trigger = str(trigger).strip().casefold().replace("-", "_")
+    if normalized_trigger not in {"attack", "magic_missile"}:
+        raise CombatEngineError("Shield trigger must be attack or magic_missile")
+    boundary_id = (
+        CORE_SHIELD_MAGIC_MISSILE_BOUNDARY_ID
+        if normalized_trigger == "magic_missile"
+        else CORE_SHIELD_ATTACK_BOUNDARY_ID
+    )
     return {
         **{key: item for key, item in applied.items() if key != "sheet"},
         "sheet": value,
@@ -162,7 +236,11 @@ def consume_shield_reaction(
         "mechanic_id": CORE_SHIELD_MECHANIC_ID,
         "rule_receipts": [
             *list(applied.get("rule_receipts") or []),
-            *core_receipts(rules, [CORE_SHIELD_ATTACK_BOUNDARY_ID], "spell.shield.attack"),
+            *core_receipts(
+                rules,
+                [boundary_id],
+                f"spell.shield.{normalized_trigger}",
+            ),
         ],
     }
 

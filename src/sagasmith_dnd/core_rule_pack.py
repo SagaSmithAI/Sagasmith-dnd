@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-CORE_RULE_PACK_VERSION = "1.2.0"
+CORE_RULE_PACK_VERSION = "1.3.0"
 
 
 @dataclass(frozen=True)
@@ -161,6 +161,20 @@ BOUNDARIES = (
         "bundled:srd/shield",
     ),
     CoreBoundary(
+        "dnd5e.core.spell.shield_magic_missile",
+        ("2014", "2024"),
+        "spells.available_shield_magic_missile_defenses|consume_shield_reaction",
+        ("tests/test_spells.py::test_magic_missile_allocation_and_shield_trigger_are_source_bound",),
+        "bundled:srd/shield",
+    ),
+    CoreBoundary(
+        "dnd5e.core.spell.magic_missile_darts",
+        ("2014", "2024"),
+        "spells.validate_magic_missile_allocations",
+        ("tests/test_spells.py::test_magic_missile_allocation_and_shield_trigger_are_source_bound",),
+        "bundled:srd/magic-missile",
+    ),
+    CoreBoundary(
         "dnd5e.core.ready.action",
         ("2014", "2024"),
         "combat_engine.trigger_readied_action|resolve_readied_action_window",
@@ -246,6 +260,13 @@ BOUNDARIES = (
         "sagasmith_dnd_mcp.server.combat_reaction_defense",
         ("SagaSmith-dnd-mcp/tests/test_reaction_defense_mcp.py",),
         "runtime:mcp/shield-post-hit-reaction",
+    ),
+    CoreBoundary(
+        "dnd5e.core.mcp.magic_missile_atomicity",
+        ("2014", "2024"),
+        "sagasmith_dnd_mcp.server.combat_cast_spell|combat_magic_missile_defense",
+        ("SagaSmith-dnd-mcp/tests/test_magic_missile_mcp.py",),
+        "runtime:mcp/magic-missile-targeting-darts-shield",
     ),
     CoreBoundary(
         "dnd5e.core.mcp.duration_clock",

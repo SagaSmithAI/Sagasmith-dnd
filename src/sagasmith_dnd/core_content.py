@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 PACK_ID = "dnd5e.content.srd2014"
-PACK_VERSION = "1.3.0"
+PACK_VERSION = "1.4.0"
 
 _SUBCLASS_LEVELS = {
     "barbarian": 3,
@@ -110,6 +110,8 @@ def _spells(folder: Path, spell_classes: dict[str, list[str]]) -> list[dict[str,
         }
         if _name_key(name) == "shield":
             card["mechanic_refs"] = ["dnd5e.core.spell.shield"]
+        elif _name_key(name) == "magic-missile":
+            card["mechanic_refs"] = ["dnd5e.core.spell.magic_missile"]
         result.append(
             _artifact(
                 "spell",
