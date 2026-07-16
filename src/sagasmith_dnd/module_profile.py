@@ -212,7 +212,7 @@ def _spatial_manifest(
 
 class DndModuleProfile(GenericModuleProfile):
     name = "dnd5e"
-    version = "2"
+    version = "3"
 
     def classify_chunk(self, heading: str, text: str) -> str:
         if _ROOM.match(heading):
