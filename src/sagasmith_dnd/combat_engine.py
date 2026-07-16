@@ -772,6 +772,7 @@ def available_attack_defenses(
     plan: dict[str, Any],
     attack: dict[str, Any],
     encounter: dict[str, Any] | None = None,
+    extra_defenses: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Return structured reaction defenses legal after this stored attack roll."""
     if not bool(attack.get("hit")):
@@ -842,6 +843,28 @@ def available_attack_defenses(
                 "rule_refs": deepcopy(list(activity.get("rule_refs") or [])),
             }
         )
+    known_ids = {str(item.get("id") or "") for item in options}
+    for candidate in extra_defenses or []:
+        candidate_id = str(candidate.get("id") or "")
+        bonus = int(candidate.get("bonus", 0) or 0)
+        if (
+            not candidate_id
+            or candidate_id in known_ids
+            or str(candidate.get("kind") or "").casefold()
+            not in {"armor_class_bonus", "spell_armor_class_bonus"}
+            or bonus <= 0
+        ):
+            continue
+        projected = apply_attack_ac_bonus(attack, bonus=bonus, source_id=candidate_id)
+        options.append(
+            {
+                **deepcopy(candidate),
+                "id": candidate_id,
+                "bonus": bonus,
+                "projected_hit": bool(projected["hit"]),
+            }
+        )
+        known_ids.add(candidate_id)
     return options
 
 

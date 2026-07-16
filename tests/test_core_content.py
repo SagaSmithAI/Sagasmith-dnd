@@ -9,7 +9,7 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     manifest, artifacts = build_srd2014_content(workspace / "SagaSmith-dnd-skills")
     counts = Counter(item["kind"] for item in artifacts)
 
-    assert manifest["version"] == PACK_VERSION == "1.2.0"
+    assert manifest["version"] == PACK_VERSION == "1.3.0"
     assert counts["spell"] == 319
     assert counts["species"] == 13
     assert counts["class"] == 12
@@ -31,6 +31,12 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     assert fireball["card"]["classes"] == ["sorcerer", "wizard"]
     assert fireball["card"]["access"]["known"] is False
     assert fireball["card"]["definition"]["components"]["material"] is True
+
+    shield = next(
+        item for item in artifacts if item["id"] == "dnd5e.content.srd2014.spell.shield"
+    )
+    assert shield["mechanic_refs"] == ["dnd5e.core.spell.shield"]
+    assert shield["card"]["mechanic_refs"] == ["dnd5e.core.spell.shield"]
 
     berserker = next(
         item

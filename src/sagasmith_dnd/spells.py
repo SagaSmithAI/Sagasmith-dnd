@@ -10,6 +10,9 @@ from sagasmith_dnd.combat_engine import CombatEngineError
 from sagasmith_dnd.rule_engine import ResolutionContext, apply_rule_event, core_receipts
 
 _SPELL_POINT_COSTS = {1: 2, 2: 3, 3: 5, 4: 6, 5: 7, 6: 9, 7: 10, 8: 11, 9: 13}
+CORE_SHIELD_MECHANIC_ID = "dnd5e.core.spell.shield"
+CORE_SHIELD_ATTACK_BOUNDARY_ID = "dnd5e.core.spell.shield_attack_ac"
+CORE_SHIELD_SPELL_ID = "dnd5e.content.srd2014.spell.shield"
 
 _PREPARED_2024 = {
     "bard": (4, 5, 6, 7, 9, 10, 11, 12, 14, 15, 16, 16, 17, 17, 18, 18, 19, 20, 21, 22),
@@ -25,6 +28,143 @@ _LONG_REST_ANY_2024 = {"cleric", "druid", "wizard"}
 _LONG_REST_ONE_2024 = {"paladin", "ranger"}
 _LEVEL_UP_ONE_2024 = {"bard", "sorcerer", "warlock"}
 _PREPARED_2014 = {"cleric", "druid", "paladin", "wizard"}
+
+
+def is_core_shield_spell(spell: dict[str, Any]) -> bool:
+    """Recognize only the source-bound Core Shield mechanic."""
+    return str(spell.get("id") or "") == CORE_SHIELD_SPELL_ID or CORE_SHIELD_MECHANIC_ID in {
+        str(item) for item in spell.get("mechanic_refs", [])
+    }
+
+
+def available_shield_cast_options(
+    sheet: dict[str, Any], *, spell_id: str, rules: ResolutionContext | None = None
+) -> list[dict[str, Any]]:
+    """Return legal levels and their resource economy for a Core Shield spell."""
+    spell = next(
+        (item for item in sheet.get("content", {}).get("spells", []) if item.get("id") == spell_id),
+        None,
+    )
+    if spell is None or not is_core_shield_spell(spell):
+        return []
+    casting_time = str(spell.get("definition", {}).get("casting_time") or "").casefold()
+    if not (casting_time.startswith("1 reaction") or casting_time.startswith("reaction")):
+        return []
+    base_level = int(spell.get("level", 0) or 0)
+    if base_level != 1:
+        return []
+    candidates = [base_level] if spell.get("access", {}).get("at_will") else range(base_level, 10)
+    options: list[dict[str, Any]] = []
+    for level in candidates:
+        try:
+            applied = consume_spell_cast(
+                sheet,
+                spell_id=spell_id,
+                cast_level=level,
+                rules=rules,
+            )
+        except CombatEngineError:
+            continue
+        if applied.get("status") == "committed":
+            resolved_level = int(applied.get("cast_level", level) or level)
+            if not any(item["cast_level"] == resolved_level for item in options):
+                options.append(
+                    {
+                        "cast_level": resolved_level,
+                        "payment": deepcopy(dict(applied.get("payment") or {})),
+                    }
+                )
+    return options
+
+
+def available_shield_cast_levels(
+    sheet: dict[str, Any], *, spell_id: str, rules: ResolutionContext | None = None
+) -> list[int]:
+    """Return the legal slot levels currently available for a Core Shield spell."""
+    return [
+        int(item["cast_level"])
+        for item in available_shield_cast_options(sheet, spell_id=spell_id, rules=rules)
+    ]
+
+
+def available_shield_attack_defenses(
+    sheet: dict[str, Any], *, rules: ResolutionContext | None = None
+) -> list[dict[str, Any]]:
+    """Build source-bound Shield candidates before combat eligibility filtering."""
+    options: list[dict[str, Any]] = []
+    for spell in sheet.get("content", {}).get("spells", []):
+        spell_id = str(spell.get("id") or "")
+        cast_options = available_shield_cast_options(sheet, spell_id=spell_id, rules=rules)
+        if not cast_options:
+            continue
+        options.append(
+            {
+                "id": spell_id,
+                "name": str(spell.get("name") or "Shield"),
+                "kind": "spell_armor_class_bonus",
+                "bonus": 5,
+                "spell_id": spell_id,
+                "cast_levels": [int(item["cast_level"]) for item in cast_options],
+                "cast_options": cast_options,
+                "mechanic_id": CORE_SHIELD_MECHANIC_ID,
+                "source_key": str(spell.get("source_key") or ""),
+                "rule_refs": deepcopy(list(spell.get("rule_refs") or [])),
+            }
+        )
+    return options
+
+
+def consume_shield_reaction(
+    sheet: dict[str, Any],
+    *,
+    spell_id: str,
+    cast_level: int,
+    rules: ResolutionContext | None = None,
+) -> dict[str, Any]:
+    """Pay Core Shield and apply its AC effect until the caster's next turn starts."""
+    legal_levels = available_shield_cast_levels(sheet, spell_id=spell_id, rules=rules)
+    level = int(cast_level)
+    if level not in legal_levels:
+        raise CombatEngineError("Shield cast_level is not currently available")
+    applied = consume_spell_cast(
+        sheet,
+        spell_id=spell_id,
+        cast_level=level,
+        ritual=False,
+        rules=rules,
+    )
+    if applied.get("status") != "committed":
+        return applied
+    value = applied["sheet"]
+    for effect in value.get("effects", []):
+        if effect.get("active") and effect.get("kind") == "spell_shield":
+            effect["active"] = False
+    effect_id = f"shield-{uuid4().hex}"
+    value.setdefault("effects", []).append(
+        {
+            "id": effect_id,
+            "name": "Shield",
+            "kind": "spell_shield",
+            "source": CORE_SHIELD_MECHANIC_ID,
+            "source_spell_id": spell_id,
+            "active": True,
+            "concentration": False,
+            "duration": {"period": "turn_start", "remaining": 1},
+            "changes": [{"path": "derived.armor_class", "mode": "add", "value": 5}],
+            "description": "",
+        }
+    )
+    return {
+        **{key: item for key, item in applied.items() if key != "sheet"},
+        "sheet": value,
+        "effect_id": effect_id,
+        "armor_class_bonus": 5,
+        "mechanic_id": CORE_SHIELD_MECHANIC_ID,
+        "rule_receipts": [
+            *list(applied.get("rule_receipts") or []),
+            *core_receipts(rules, [CORE_SHIELD_ATTACK_BOUNDARY_ID], "spell.shield.attack"),
+        ],
+    }
 
 
 def consume_spell_cast(

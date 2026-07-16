@@ -1,8 +1,17 @@
 import pytest
 
-from sagasmith_dnd.character_schema import default_character_sheet, validate_character_sheet
+from sagasmith_dnd.character_schema import (
+    default_character_sheet,
+    derive_character_sheet,
+    validate_character_sheet,
+)
+from sagasmith_dnd.lifecycle import advance_effect_durations
 from sagasmith_dnd.spells import (
+    CORE_SHIELD_MECHANIC_ID,
+    CORE_SHIELD_SPELL_ID,
+    available_shield_attack_defenses,
     consume_readied_spell,
+    consume_shield_reaction,
     consume_spell_cast,
     replace_prepared_spells,
 )
@@ -35,6 +44,80 @@ def test_spell_slot_and_concentration_are_settled_from_card_data() -> None:
     result = consume_spell_cast(validate_character_sheet(sheet), spell_id="bless")
     assert result["sheet"]["spellcasting"]["spell_slots"]["1"]["value"] == 0
     assert result["concentration_started"] is True
+
+
+def test_shield_reaction_pays_slot_and_expires_at_turn_start() -> None:
+    sheet = default_character_sheet()
+    sheet["combat"]["ac"]["override"] = 13
+    sheet["spellcasting"]["spell_slots"] = {
+        "1": {
+            "label": "1st",
+            "value": 1,
+            "max": 1,
+            "recovers_on": "long_rest",
+            "source_key": "wizard",
+        }
+    }
+    shield = _spell(CORE_SHIELD_SPELL_ID, level=1)
+    shield["name"] = "Shield"
+    shield["definition"]["casting_time"] = "1 reaction, which you take when hit"
+    shield["definition"]["duration"] = {
+        "kind": "timed",
+        "value": 1,
+        "unit": "round",
+        "concentration": False,
+    }
+    shield["mechanic_refs"] = [CORE_SHIELD_MECHANIC_ID]
+    sheet["content"]["spells"] = [shield]
+    sheet = validate_character_sheet(sheet)
+
+    assert available_shield_attack_defenses(sheet) == [
+        {
+            "id": CORE_SHIELD_SPELL_ID,
+            "name": "Shield",
+            "kind": "spell_armor_class_bonus",
+            "bonus": 5,
+            "spell_id": CORE_SHIELD_SPELL_ID,
+            "cast_levels": [1],
+            "cast_options": [
+                {
+                    "cast_level": 1,
+                    "payment": {
+                        "economy": "slots",
+                        "level": 1,
+                        "ritual": False,
+                    },
+                }
+            ],
+            "mechanic_id": CORE_SHIELD_MECHANIC_ID,
+            "source_key": "",
+            "rule_refs": [],
+        }
+    ]
+    applied = consume_shield_reaction(
+        sheet,
+        spell_id=CORE_SHIELD_SPELL_ID,
+        cast_level=1,
+    )
+    assert applied["payment"]["economy"] == "slots"
+    assert applied["sheet"]["spellcasting"]["spell_slots"]["1"]["value"] == 0
+    assert available_shield_attack_defenses(applied["sheet"]) == []
+    assert derive_character_sheet(applied["sheet"])["armor_class"] == 18
+
+    ended = advance_effect_durations(applied["sheet"], period="turn_end")
+    assert derive_character_sheet(ended["sheet"])["armor_class"] == 18
+    started = advance_effect_durations(ended["sheet"], period="turn_start")
+    assert started["expired"] == [applied["effect_id"]]
+    assert derive_character_sheet(started["sheet"])["armor_class"] == 13
+
+
+def test_shield_name_without_source_bound_mechanic_is_not_executable() -> None:
+    sheet = default_character_sheet()
+    spell = _spell("homebrew-shield", level=1)
+    spell["name"] = "Shield"
+    spell["definition"]["casting_time"] = "1 reaction"
+    sheet["content"]["spells"] = [spell]
+    assert available_shield_attack_defenses(validate_character_sheet(sheet)) == []
 
 
 def test_ritual_and_cantrip_do_not_spend_a_slot() -> None:

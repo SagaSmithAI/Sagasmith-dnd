@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 PACK_ID = "dnd5e.content.srd2014"
-PACK_VERSION = "1.2.0"
+PACK_VERSION = "1.3.0"
 
 _SUBCLASS_LEVELS = {
     "barbarian": 3,
@@ -85,34 +85,37 @@ def _spells(folder: Path, spell_classes: dict[str, list[str]]) -> list[dict[str,
         text = path.read_text(encoding="utf-8")
         name = _heading_or_stem(text, path)
         level, school = _spell_level_school(text)
+        card = {
+            "name": name,
+            "level": level,
+            "classes": list(spell_classes.get(_name_key(name), [])),
+            "grant": {
+                "source_type": "catalog",
+                "source_key": "",
+                "method": "unselected",
+            },
+            "access": {
+                "known": False,
+                "prepared": False,
+                "ritual_available": "ritual" in text.casefold(),
+            },
+            "definition": {
+                "school": school,
+                "casting_time": _label(text, "Casting Time") or "1 action",
+                "range": _range(_label(text, "Range")),
+                "duration": _duration(_label(text, "Duration")),
+                "components": _components(_label(text, "Components")),
+                "effect": _body_after_metadata(text),
+            },
+        }
+        if _name_key(name) == "shield":
+            card["mechanic_refs"] = ["dnd5e.core.spell.shield"]
         result.append(
             _artifact(
                 "spell",
                 name,
                 path,
-                {
-                    "name": name,
-                    "level": level,
-                    "classes": list(spell_classes.get(_name_key(name), [])),
-                    "grant": {
-                        "source_type": "catalog",
-                        "source_key": "",
-                        "method": "unselected",
-                    },
-                    "access": {
-                        "known": False,
-                        "prepared": False,
-                        "ritual_available": "ritual" in text.casefold(),
-                    },
-                    "definition": {
-                        "school": school,
-                        "casting_time": _label(text, "Casting Time") or "1 action",
-                        "range": _range(_label(text, "Range")),
-                        "duration": _duration(_label(text, "Duration")),
-                        "components": _components(_label(text, "Components")),
-                        "effect": _body_after_metadata(text),
-                    },
-                },
+                card,
             )
         )
     return result
@@ -775,6 +778,7 @@ def _artifact(kind: str, name: str, path: Path, card: dict[str, Any]) -> dict[st
         "kind": kind,
         "card": card,
         "rule_refs": [f"bundled:srd2014/{rel}"],
+        "mechanic_refs": list(card.get("mechanic_refs") or []),
         "source_citations": [{"source": f"bundled:srd2014/{rel}"}],
     }
 

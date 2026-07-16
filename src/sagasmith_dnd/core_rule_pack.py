@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-CORE_RULE_PACK_VERSION = "1.1.0"
+CORE_RULE_PACK_VERSION = "1.2.0"
 
 
 @dataclass(frozen=True)
@@ -154,6 +154,13 @@ BOUNDARIES = (
         "bundled:srd/reactions",
     ),
     CoreBoundary(
+        "dnd5e.core.spell.shield_attack_ac",
+        ("2014", "2024"),
+        "spells.available_shield_attack_defenses|consume_shield_reaction",
+        ("tests/test_spells.py::test_shield_reaction_pays_slot_and_expires_at_turn_start",),
+        "bundled:srd/shield",
+    ),
+    CoreBoundary(
         "dnd5e.core.ready.action",
         ("2014", "2024"),
         "combat_engine.trigger_readied_action|resolve_readied_action_window",
@@ -232,6 +239,13 @@ BOUNDARIES = (
         "sagasmith_dnd_mcp.server.combat_reaction_defense",
         ("SagaSmith-dnd-mcp/tests/test_reaction_defense_mcp.py",),
         "runtime:mcp/post-hit-pre-damage-reaction",
+    ),
+    CoreBoundary(
+        "dnd5e.core.mcp.shield_attack_reaction_atomicity",
+        ("2014", "2024"),
+        "sagasmith_dnd_mcp.server.combat_reaction_defense",
+        ("SagaSmith-dnd-mcp/tests/test_reaction_defense_mcp.py",),
+        "runtime:mcp/shield-post-hit-reaction",
     ),
     CoreBoundary(
         "dnd5e.core.mcp.duration_clock",
