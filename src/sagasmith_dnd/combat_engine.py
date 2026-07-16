@@ -534,6 +534,14 @@ def preflight_attack(
         elif opcode == "disadvantage.add":
             context["disadvantage"] = True
             context.setdefault("disadvantage_sources", []).append(modifier["mechanic_id"])
+    sneak_attack = _sneak_attack_plan(
+        attacker,
+        target,
+        weapon=weapon,
+        context=context,
+        encounter=encounter,
+        requested=bool(action.get("use_sneak_attack", False)),
+    )
     core_boundary_ids: list[str] = []
     if cover_degree or cover.get("ac_bonus") is not None:
         core_boundary_ids.append("dnd5e.core.attack.cover")
@@ -562,6 +570,7 @@ def preflight_attack(
         "knock_out": bool(action.get("knock_out", False)),
         "melee_attack": str(weapon.get("attack_type") or "melee") == "melee",
         "helped_by": helped_by,
+        "sneak_attack": sneak_attack,
         "rule_receipts": [
             *core_receipts(
                 rules,
@@ -604,10 +613,18 @@ def resolve_attack_action(
     if attack["hit"] and expression:
         damage_expression = _critical_expression(expression) if attack["critical"] else expression
         damage_roll = roll(damage_expression, rng=rng)
+        sneak_plan = dict(plan.get("sneak_attack") or {})
+        sneak_roll = None
+        if sneak_plan:
+            sneak_expression = str(sneak_plan["expression"])
+            rolled_sneak_expression = (
+                _critical_expression(sneak_expression) if attack["critical"] else sneak_expression
+            )
+            sneak_roll = roll(rolled_sneak_expression, rng=rng)
         target_sheet = actor_sheet(updated_target)
         damage = apply_damage_to_sheet(
             target_sheet,
-            amount=max(0, damage_roll.total),
+            amount=max(0, damage_roll.total + (sneak_roll.total if sneak_roll else 0)),
             damage_type=str(plan.get("damage_type") or ""),
             source=actor_id(attacker),
             critical=bool(attack["critical"]),
@@ -624,6 +641,18 @@ def resolve_attack_action(
             "rolls": list(damage_roll.rolls),
             "detail": damage_roll.detail,
         }
+        if sneak_roll is not None:
+            result["sneak_attack"] = {
+                **sneak_plan,
+                "used": True,
+                "rolled_expression": sneak_roll.expression,
+                "rolls": list(sneak_roll.rolls),
+                "total": sneak_roll.total,
+                "detail": sneak_roll.detail,
+            }
+            result["damage"]["sneak_attack"] = deepcopy(result["sneak_attack"])
+    elif plan.get("sneak_attack"):
+        result["sneak_attack"] = {**dict(plan["sneak_attack"]), "used": False}
     was_hidden = bool(updated_attacker.get("hidden"))
     if was_hidden:
         updated_attacker["hidden"] = False
@@ -645,8 +674,8 @@ def resolve_attack_action(
     ]
     facts = {
         "kind": "attack",
-        "hit": bool(result.get("attack", {}).get("hit")),
-        "critical": bool(result.get("attack", {}).get("critical")),
+        "hit": bool(result.get("hit")),
+        "critical": bool(result.get("critical")),
         "attacker_id": actor_id(attacker),
         "target_id": actor_id(target),
     }
@@ -667,6 +696,119 @@ def resolve_attack_action(
     result["rule_receipts"] = extension_receipts
     result["ruleset_fingerprint"] = rules.fingerprint if rules else ""
     return updated_attacker, updated_target, result
+
+
+def _sneak_attack_plan(
+    attacker: dict[str, Any],
+    target: dict[str, Any],
+    *,
+    weapon: dict[str, Any],
+    context: dict[str, Any],
+    encounter: dict[str, Any] | None,
+    requested: bool,
+) -> dict[str, Any] | None:
+    """Validate the 2014 Rogue Sneak Attack boundary without inventing eligibility."""
+    if not requested:
+        return None
+    sheet = actor_sheet(attacker)
+    feature = next(
+        (
+            item
+            for item in sheet.get("content", {}).get("features", [])
+            if item.get("id") == "dnd5e.content.srd2014.feature.rogue-sneak-attack"
+            or (
+                str(item.get("name") or "").casefold() == "sneak attack"
+                and str(item.get("source_key") or "").casefold() == "rogue"
+            )
+        ),
+        None,
+    )
+    if feature is None:
+        raise CombatEngineError("Sneak Attack is not recorded on this actor card")
+    rogue_level = sum(
+        int(item.get("level", 0) or 0)
+        for item in sheet.get("progression", {}).get("classes", [])
+        if str(item.get("name") or "").casefold() == "rogue"
+    )
+    if rogue_level < 1:
+        raise CombatEngineError("Sneak Attack requires at least one Rogue level")
+    properties = {str(item).casefold() for item in weapon.get("properties", [])}
+    if str(weapon.get("attack_type") or "melee") != "ranged" and "finesse" not in properties:
+        raise CombatEngineError("Sneak Attack requires a finesse or ranged weapon")
+    advantage = bool(context.get("advantage"))
+    disadvantage = bool(context.get("disadvantage"))
+    if disadvantage and not advantage:
+        raise CombatEngineError("Sneak Attack cannot be used while the attack has disadvantage")
+    effective_advantage = advantage and not disadvantage
+    turn_token = ""
+    nearby_enemy = False
+    if encounter is not None:
+        current = current_combatant(encounter)
+        turn_token = (
+            f"{int(encounter.get('round', 1))}:"
+            f"{int(encounter.get('turn_index', 0))}:"
+            f"{str((current or {}).get('actor_id') or '')}"
+        )
+        attacker_state = next(
+            (
+                item
+                for item in encounter.get("combatants", [])
+                if item.get("actor_id") == actor_id(attacker)
+            ),
+            None,
+        )
+        if attacker_state is None:
+            raise CombatEngineError("Sneak Attack attacker is not in the encounter")
+        if dict(attacker_state.get("turn_flags") or {}).get(
+            "sneak_attack_turn_token"
+        ) == turn_token:
+            raise CombatEngineError("Sneak Attack has already been used on this turn")
+        target_state = next(
+            (
+                item
+                for item in encounter.get("combatants", [])
+                if item.get("actor_id") == actor_id(target)
+            ),
+            None,
+        )
+        if target_state is None:
+            raise CombatEngineError("Sneak Attack target is not in the encounter")
+        target_position = _position(target_state.get("position"))
+        target_disposition = _normalize_disposition(target_state.get("disposition"))
+        for candidate in encounter.get("combatants", []):
+            if candidate.get("actor_id") in {actor_id(attacker), actor_id(target)}:
+                continue
+            if _condition_set(candidate.get("conditions")) & {
+                "dead",
+                "unconscious",
+                "stunned",
+                "incapacitated",
+                "paralyzed",
+                "petrified",
+            }:
+                continue
+            candidate_position = _position(candidate.get("position"))
+            if target_position is None or candidate_position is None:
+                continue
+            candidate_disposition = _normalize_disposition(candidate.get("disposition"))
+            if (
+                {target_disposition, candidate_disposition} == {"friendly", "hostile"}
+                and _grid_distance(target_position, candidate_position) <= 5
+            ):
+                nearby_enemy = True
+                break
+    if not effective_advantage and not nearby_enemy:
+        raise CombatEngineError(
+            "Sneak Attack needs effective advantage or another active enemy within 5 feet "
+            "of the target"
+        )
+    dice = (rogue_level + 1) // 2
+    return {
+        "feature_id": str(feature.get("id") or "sneak-attack"),
+        "expression": f"{dice}d6",
+        "turn_token": turn_token,
+        "eligibility": "advantage" if effective_advantage else "adjacent_enemy",
+    }
 
 
 def apply_damage_to_sheet(

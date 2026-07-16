@@ -39,6 +39,33 @@ def _actor(identifier: str, *, hp: int = 12, ac: int = 10) -> dict:
     }
 
 
+def _rogue(identifier: str = "rogue") -> dict:
+    actor = _actor(identifier, hp=30)
+    actor["sheet"]["progression"] = {
+        "level": 1,
+        "classes": [{"name": "Rogue", "level": 1, "hit_die": 8}],
+    }
+    actor["sheet"]["content"]["features"] = [
+        {
+            "id": "dnd5e.content.srd2014.feature.rogue-sneak-attack",
+            "name": "Sneak Attack",
+            "source_key": "Rogue",
+        }
+    ]
+    actor["derived"] = derive_character_sheet(actor["sheet"])
+    actor["derived"]["inventory"]["weapon_attacks"] = [
+        {
+            "item_id": "dagger",
+            "attack_type": "melee",
+            "properties": ["finesse", "light", "thrown"],
+            "attack_bonus": 99,
+            "damage_expression": "1",
+            "damage_type": "piercing",
+        }
+    ]
+    return actor
+
+
 def test_ordinary_checks_do_not_use_attack_natural_rules() -> None:
     result = resolve_check(
         dc=21,
@@ -154,6 +181,82 @@ def test_help_grants_and_then_consumes_attack_advantage() -> None:
     plan = preflight_attack(attacker, target, action={"weapon_id": "sword"}, encounter=encounter)
     assert plan["helped_by"] == "helper"
     assert "help" in plan["advantage_sources"]
+
+
+def test_sneak_attack_requires_card_feature_and_records_critical_bonus_damage() -> None:
+    rogue = _rogue()
+    ally = _actor("ally")
+    target = _actor("target", hp=30, ac=1)
+    rogue.update(initiative=20, tie_breaker=0, position={"x": 0, "y": 0}, disposition="friendly")
+    ally.update(initiative=15, tie_breaker=0, position={"x": 1, "y": 0}, disposition="friendly")
+    target.update(initiative=10, tie_breaker=0, position={"x": 1, "y": 0}, disposition="hostile")
+    encounter = start_encounter([rogue, ally, target])
+
+    plan = preflight_attack(
+        rogue,
+        target,
+        action={"weapon_id": "dagger", "use_sneak_attack": True},
+        encounter=encounter,
+    )
+    assert plan["sneak_attack"]["expression"] == "1d6"
+    assert plan["sneak_attack"]["eligibility"] == "adjacent_enemy"
+
+    _, updated_target, result = resolve_attack_action(
+        rogue,
+        target,
+        plan=plan,
+        rng=random.Random(5),
+    )
+    assert result["critical"] is True
+    assert result["sneak_attack"]["used"] is True
+    assert result["sneak_attack"]["rolled_expression"] == "2d6"
+    assert result["damage"]["sneak_attack"] == result["sneak_attack"]
+    assert updated_target["sheet"]["combat"]["hp"]["value"] < 29
+
+
+def test_sneak_attack_enforces_once_per_turn_weapon_and_disadvantage_boundaries() -> None:
+    rogue = _rogue()
+    ally = _actor("ally")
+    target = _actor("target", ac=1)
+    rogue.update(initiative=20, tie_breaker=0, position={"x": 0, "y": 0}, disposition="friendly")
+    ally.update(initiative=15, tie_breaker=0, position={"x": 1, "y": 0}, disposition="friendly")
+    target.update(initiative=10, tie_breaker=0, position={"x": 1, "y": 0}, disposition="hostile")
+    encounter = start_encounter([rogue, ally, target])
+    turn_token = f"1:0:{rogue['id']}"
+    encounter["combatants"][0]["turn_flags"] = {"sneak_attack_turn_token": turn_token}
+    with pytest.raises(Exception, match="already been used"):
+        preflight_attack(
+            rogue,
+            target,
+            action={"weapon_id": "dagger", "use_sneak_attack": True},
+            encounter=encounter,
+        )
+
+    encounter["combatants"][0].pop("turn_flags")
+    with pytest.raises(Exception, match="disadvantage"):
+        preflight_attack(
+            rogue,
+            target,
+            action={
+                "weapon_id": "dagger",
+                "use_sneak_attack": True,
+                "context": {"disadvantage": True},
+            },
+            encounter=encounter,
+        )
+
+    rogue["derived"]["inventory"]["weapon_attacks"][0]["properties"] = ["light"]
+    with pytest.raises(Exception, match="finesse or ranged"):
+        preflight_attack(
+            rogue,
+            target,
+            action={
+                "weapon_id": "dagger",
+                "use_sneak_attack": True,
+                "context": {"advantage": True},
+            },
+            encounter=encounter,
+        )
 
 
 def test_multi_damage_preserves_types_and_massive_damage() -> None:
