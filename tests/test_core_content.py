@@ -9,11 +9,12 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     manifest, artifacts = build_srd2014_content(workspace / "SagaSmith-dnd-skills")
     counts = Counter(item["kind"] for item in artifacts)
 
-    assert manifest["version"] == PACK_VERSION == "1.1.0"
+    assert manifest["version"] == PACK_VERSION == "1.2.0"
     assert counts["spell"] == 319
-    assert counts["species"] == 9
+    assert counts["species"] == 13
     assert counts["class"] == 12
     assert counts["subclass"] == 12
+    assert counts["feature"] >= 175
     assert counts["background"] == 1
     assert counts["feat"] == 1
     assert counts["item"] > 450
@@ -38,6 +39,42 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     )
     assert berserker["card"]["class_name"] == "Barbarian"
     assert berserker["card"]["minimum_level"] == 3
+
+    sneak_attack = next(
+        item
+        for item in artifacts
+        if item["id"] == "dnd5e.content.srd2014.feature.rogue-sneak-attack"
+    )
+    assert sneak_attack["card"]["class_name"] == "Rogue"
+    assert sneak_attack["card"]["minimum_level"] == 1
+
+    second_wind = next(
+        item
+        for item in artifacts
+        if item["id"] == "dnd5e.content.srd2014.feature.fighter-second-wind"
+    )
+    assert second_wind["card"]["activation"]["type"] == "bonus_action"
+    assert second_wind["card"]["uses"]["recovers_on"] == "short_rest"
+
+    hill_dwarf = next(
+        item
+        for item in artifacts
+        if item["kind"] == "species" and item["card"]["name"] == "Hill Dwarf"
+    )
+    assert hill_dwarf.get("application_state", "selection_ready") == "selection_ready"
+    assert hill_dwarf["card"]["grants"]["ability_score_increases"] == {
+        "constitution": 2,
+        "wisdom": 1,
+    }
+    assert hill_dwarf["card"]["grants"]["hp_per_level"] == 1
+    assert hill_dwarf["card"]["grants"]["resistances"] == ["poison"]
+
+    dragonborn = next(
+        item
+        for item in artifacts
+        if item["kind"] == "species" and item["card"]["name"] == "Dragonborn"
+    )
+    assert dragonborn["application_state"] == "catalog_only"
 
     acolyte = next(item for item in artifacts if item["kind"] == "background")
     assert acolyte["card"]["skill_proficiencies"] == ["insight", "religion"]
