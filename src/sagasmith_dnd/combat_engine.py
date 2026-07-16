@@ -691,6 +691,8 @@ def preflight_attack(
         "target_uses_death_saves": bool(target.get("death_saves", True)),
         "knock_out": bool(action.get("knock_out", False)),
         "melee_attack": attack_mode == "melee",
+        "attacker_was_hidden": bool(attacker.get("hidden", False)),
+        "target_can_see_attacker": target_can_see_attacker,
         "helped_by": helped_by,
         "sneak_attack": sneak_attack,
         "halfling_lucky": _has_halfling_lucky(actor_sheet(attacker)),
@@ -706,15 +708,12 @@ def preflight_attack(
     }
 
 
-def resolve_attack_action(
-    attacker: dict[str, Any],
-    target: dict[str, Any],
+def roll_attack_action(
     *,
     plan: dict[str, Any],
-    rules: ResolutionContext | None = None,
     rng: Any = None,
-) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-    """Resolve a prepared attack and return updated attacker/target snapshots."""
+) -> dict[str, Any]:
+    """Roll one prepared attack without rolling damage or changing actor state."""
     attack = resolve_attack(
         armor_class=int(plan["target_ac"]),
         attack_bonus=int(plan["attack_bonus"]),
@@ -725,14 +724,145 @@ def resolve_attack_action(
     )
     if attack["hit"] and plan.get("automatic_critical_on_hit"):
         attack["critical"] = True
-    updated_attacker = deepcopy(attacker)
-    updated_target = deepcopy(target)
-    result: dict[str, Any] = {
+    return {
         **attack,
-        "attacker_id": actor_id(attacker),
-        "target_id": actor_id(target),
+        "attacker_id": str(plan["attacker_id"]),
+        "target_id": str(plan["target_id"]),
         "damage": None,
     }
+
+
+def apply_attack_ac_bonus(
+    attack: dict[str, Any],
+    *,
+    bonus: int,
+    source_id: str,
+) -> dict[str, Any]:
+    """Re-evaluate a stored attack roll against a reaction AC bonus."""
+    value = deepcopy(attack)
+    amount = int(bonus)
+    if amount <= 0:
+        raise CombatEngineError("reaction AC bonus must be positive")
+    base_ac = int(value.get("armor_class", 0) or 0)
+    effective_ac = base_ac + amount
+    hit = bool(
+        int(value.get("natural", 0) or 0) == 20
+        or (
+            not bool(value.get("fumble"))
+            and int(value.get("total", 0) or 0) >= effective_ac
+        )
+    )
+    value.update(
+        base_armor_class=base_ac,
+        armor_class=effective_ac,
+        hit=hit,
+        critical=bool(hit and value.get("critical")),
+        defense={
+            "source_id": str(source_id),
+            "armor_class_bonus": amount,
+            "effective_armor_class": effective_ac,
+        },
+    )
+    return value
+
+
+def available_attack_defenses(
+    target: dict[str, Any],
+    *,
+    plan: dict[str, Any],
+    attack: dict[str, Any],
+    encounter: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Return structured reaction defenses legal after this stored attack roll."""
+    if not bool(attack.get("hit")):
+        return []
+    target_id_value = actor_id(target)
+    target_conditions = _condition_set(actor_sheet(target).get("conditions"))
+    if encounter is not None:
+        combatant = next(
+            (
+                item
+                for item in encounter.get("combatants", [])
+                if item.get("actor_id") == target_id_value
+            ),
+            None,
+        )
+        if combatant is None:
+            raise CombatEngineError("attack target is not a combatant")
+        target_conditions |= _condition_set(combatant.get("conditions"))
+        if int(dict(combatant.get("turn_budget") or {}).get("reaction", 0) or 0) <= 0:
+            return []
+    if target_conditions & {
+        "dead",
+        "unconscious",
+        "stunned",
+        "incapacitated",
+        "paralyzed",
+        "petrified",
+    }:
+        return []
+    equipped_melee = any(
+        str(item.get("attack_type") or "").casefold() == "melee"
+        for item in actor_derived(target).get("inventory", {}).get("weapon_attacks", [])
+    )
+    options: list[dict[str, Any]] = []
+    for activity in actor_sheet(target).get("content", {}).get("activities", []):
+        if str(dict(activity.get("activation") or {}).get("type") or "").casefold() != "reaction":
+            continue
+        mechanic = dict(dict(activity.get("choices") or {}).get("reaction_defense") or {})
+        if str(mechanic.get("kind") or "").casefold() != "armor_class_bonus":
+            continue
+        modes = {
+            str(item).casefold() for item in mechanic.get("attack_modes", []) if str(item).strip()
+        }
+        if str(plan.get("attack_mode") or "").casefold() not in modes:
+            continue
+        if mechanic.get("requires_visible_attacker") and not plan.get(
+            "target_can_see_attacker"
+        ):
+            continue
+        if mechanic.get("requires_wielded_melee_weapon") and not equipped_melee:
+            continue
+        bonus = int(mechanic.get("bonus", 0) or 0)
+        if bonus <= 0:
+            continue
+        projected = apply_attack_ac_bonus(
+            attack,
+            bonus=bonus,
+            source_id=str(activity.get("id") or ""),
+        )
+        options.append(
+            {
+                "id": str(activity.get("id") or ""),
+                "name": str(activity.get("name") or "Reaction defense"),
+                "kind": "armor_class_bonus",
+                "bonus": bonus,
+                "projected_hit": bool(projected["hit"]),
+                "source_key": str(activity.get("source_key") or ""),
+                "rule_refs": deepcopy(list(activity.get("rule_refs") or [])),
+            }
+        )
+    return options
+
+
+def resolve_attack_damage(
+    attacker: dict[str, Any],
+    target: dict[str, Any],
+    *,
+    plan: dict[str, Any],
+    attack: dict[str, Any],
+    rules: ResolutionContext | None = None,
+    rng: Any = None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Resolve damage and after-effects from one already rolled attack."""
+    updated_attacker = deepcopy(attacker)
+    updated_target = deepcopy(target)
+    result: dict[str, Any] = deepcopy(attack)
+    result.update(
+        attacker_id=actor_id(attacker),
+        target_id=actor_id(target),
+        damage=None,
+    )
     expression = str(plan.get("damage_expression") or "")
     if attack["hit"] and expression:
         damage_expression = _critical_expression(expression) if attack["critical"] else expression
@@ -777,7 +907,7 @@ def resolve_attack_action(
             result["damage"]["sneak_attack"] = deepcopy(result["sneak_attack"])
     elif plan.get("sneak_attack"):
         result["sneak_attack"] = {**dict(plan["sneak_attack"]), "used": False}
-    was_hidden = bool(updated_attacker.get("hidden"))
+    was_hidden = bool(plan.get("attacker_was_hidden", updated_attacker.get("hidden")))
     if was_hidden:
         updated_attacker["hidden"] = False
         result["reveals_attacker"] = True
@@ -820,6 +950,26 @@ def resolve_attack_action(
     result["rule_receipts"] = extension_receipts
     result["ruleset_fingerprint"] = rules.fingerprint if rules else ""
     return updated_attacker, updated_target, result
+
+
+def resolve_attack_action(
+    attacker: dict[str, Any],
+    target: dict[str, Any],
+    *,
+    plan: dict[str, Any],
+    rules: ResolutionContext | None = None,
+    rng: Any = None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Resolve an attack atomically when no post-hit reaction window is needed."""
+    attack = roll_attack_action(plan=plan, rng=rng)
+    return resolve_attack_damage(
+        attacker,
+        target,
+        plan=plan,
+        attack=attack,
+        rules=rules,
+        rng=rng,
+    )
 
 
 def _sneak_attack_plan(

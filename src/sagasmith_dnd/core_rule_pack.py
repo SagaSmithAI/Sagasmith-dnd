@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-CORE_RULE_PACK_VERSION = "1.0.0"
+CORE_RULE_PACK_VERSION = "1.1.0"
 
 
 @dataclass(frozen=True)
@@ -147,6 +147,13 @@ BOUNDARIES = (
         "bundled:srd/opportunity-attacks",
     ),
     CoreBoundary(
+        "dnd5e.core.reaction.post_hit_defense",
+        ("2014", "2024"),
+        "combat_engine.available_attack_defenses|apply_attack_ac_bonus",
+        ("tests/test_combat_engine.py::test_structured_parry_opens_after_hit_and_before_damage",),
+        "bundled:srd/reactions",
+    ),
+    CoreBoundary(
         "dnd5e.core.ready.action",
         ("2014", "2024"),
         "combat_engine.trigger_readied_action|resolve_readied_action_window",
@@ -218,6 +225,13 @@ BOUNDARIES = (
         "sagasmith_dnd_mcp.server.combat_reaction_attack",
         ("SagaSmith-dnd-mcp/tests/test_runtime_integrity_mcp.py",),
         "bundled:srd/opportunity-attacks",
+    ),
+    CoreBoundary(
+        "dnd5e.core.mcp.reaction_defense_atomicity",
+        ("2014", "2024"),
+        "sagasmith_dnd_mcp.server.combat_reaction_defense",
+        ("SagaSmith-dnd-mcp/tests/test_reaction_defense_mcp.py",),
+        "runtime:mcp/post-hit-pre-damage-reaction",
     ),
     CoreBoundary(
         "dnd5e.core.mcp.duration_clock",

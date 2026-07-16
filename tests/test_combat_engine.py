@@ -6,10 +6,12 @@ from sagasmith_dnd.character_schema import default_character_sheet, derive_chara
 from sagasmith_dnd.combat_engine import (
     NeedsRulingError,
     add_choice_window,
+    apply_attack_ac_bonus,
     apply_damage_parts_to_sheet,
     apply_damage_to_sheet,
     apply_healing_to_sheet,
     arm_readied_spell,
+    available_attack_defenses,
     available_reactions,
     end_turn,
     pay_activity_activation,
@@ -17,10 +19,12 @@ from sagasmith_dnd.combat_engine import (
     preflight_attack,
     resolve_actor_check,
     resolve_attack_action,
+    resolve_attack_damage,
     resolve_choice_window,
     resolve_common_action,
     resolve_death_save_to_sheet,
     resolve_readied_spell_window,
+    roll_attack_action,
     spend_movement,
     start_encounter,
     trigger_readied_spell,
@@ -198,6 +202,119 @@ def test_attack_preflight_and_resolution_keep_target_sheet_auditable() -> None:
     assert result["hit"] is True
     assert result["damage"]["after_hp"] < 10
     assert updated_target["sheet"]["combat"]["hp"]["value"] < 10
+
+
+def test_structured_parry_opens_after_hit_and_before_damage() -> None:
+    attacker = _actor("attacker")
+    attacker["derived"]["inventory"]["weapon_attacks"] = [
+        {
+            "item_id": "sword",
+            "attack_type": "melee",
+            "reach_ft": 5,
+            "attack_bonus": 4,
+            "damage_expression": "1d8 + 2",
+            "damage_type": "slashing",
+            "properties": [],
+        }
+    ]
+    attacker.update(
+        initiative=20,
+        position={"x": 0, "y": 0},
+        disposition="hostile",
+    )
+    target = _actor("target", hp=20, ac=15)
+    target["sheet"]["inventory"]["items"] = [
+        {
+            "id": "scimitar",
+            "name": "Scimitar",
+            "kind": "weapon",
+            "equipped": True,
+            "equipped_slot": "main_hand",
+            "mechanics": {
+                "attack_type": "melee",
+                "attack_ability": "strength",
+                "damage_formula": "1d6",
+                "damage_type": "slashing",
+                "properties": ["finesse", "light"],
+            },
+        }
+    ]
+    target["sheet"]["inventory"]["equipment_slots"]["main_hand"] = "scimitar"
+    target["sheet"]["content"]["activities"] = [
+        {
+            "id": "bandit-captain-parry",
+            "name": "Parry",
+            "source_key": "Bandit Captain",
+            "activation": {"type": "reaction"},
+            "choices": {
+                "reaction_defense": {
+                    "kind": "armor_class_bonus",
+                    "bonus": 2,
+                    "attack_modes": ["melee"],
+                    "requires_visible_attacker": True,
+                    "requires_wielded_melee_weapon": True,
+                }
+            },
+        }
+    ]
+    target["derived"] = derive_character_sheet(target["sheet"])
+    target.update(
+        initiative=10,
+        position={"x": 1, "y": 0},
+        disposition="friendly",
+    )
+    encounter = start_encounter([attacker, target])
+    plan = preflight_attack(
+        attacker,
+        target,
+        action={"weapon_id": "sword"},
+        encounter=encounter,
+    )
+    attack = roll_attack_action(plan=plan, rng=_SequenceRng(12))
+    assert attack["total"] == 16
+    assert attack["hit"] is True
+    defenses = available_attack_defenses(
+        target,
+        plan=plan,
+        attack=attack,
+        encounter=encounter,
+    )
+    assert defenses == [
+        {
+            "id": "bandit-captain-parry",
+            "name": "Parry",
+            "kind": "armor_class_bonus",
+            "bonus": 2,
+            "projected_hit": False,
+            "source_key": "Bandit Captain",
+            "rule_refs": [],
+        }
+    ]
+    defended = apply_attack_ac_bonus(
+        attack,
+        bonus=defenses[0]["bonus"],
+        source_id=defenses[0]["id"],
+    )
+    _, updated_target, result = resolve_attack_damage(
+        attacker,
+        target,
+        plan=plan,
+        attack=defended,
+    )
+    assert result["hit"] is False
+    assert result["damage"] is None
+    assert updated_target["sheet"]["combat"]["hp"]["value"] == 20
+
+    ranged_plan = {**plan, "attack_mode": "ranged", "melee_attack": False}
+    assert (
+        available_attack_defenses(
+            target,
+            plan=ranged_plan,
+            attack=attack,
+            encounter=encounter,
+        )
+        == []
+    )
 
 
 def test_dueling_style_adds_damage_only_for_one_equipped_melee_weapon() -> None:
