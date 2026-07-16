@@ -1782,14 +1782,81 @@ def resolve_choice_window(
     return value
 
 
-def apply_healing_to_sheet(sheet: dict[str, Any], *, amount: int) -> dict[str, Any]:
+def apply_healing_to_sheet(
+    sheet: dict[str, Any],
+    *,
+    amount: int,
+    source_sheet: dict[str, Any] | None = None,
+    spell_id: str | None = None,
+    spell_level: int | None = None,
+) -> dict[str, Any]:
+    """Apply healing and settle source-linked spell modifiers before HP clamping."""
     value = deepcopy(sheet)
     hp = dict(value.setdefault("combat", {}).setdefault("hp", {"value": 0, "max": 0, "temp": 0}))
     before = int(hp.get("value", 0) or 0)
     if "dead" in _condition_set(value.get("conditions")):
         raise CombatEngineError("ordinary healing cannot restore a dead actor")
+    requested_amount = int(amount)
+    if requested_amount <= 0:
+        raise CombatEngineError("healing amount must be positive")
+    bonus = 0
+    source: dict[str, Any] | None = None
+    if source_sheet is not None or spell_id is not None or spell_level is not None:
+        if source_sheet is None or not spell_id or spell_level is None:
+            raise CombatEngineError(
+                "spell healing requires source_sheet, spell_id, and spell_level"
+            )
+        spell = next(
+            (
+                item
+                for item in source_sheet.get("content", {}).get("spells", [])
+                if str(item.get("id") or "") == str(spell_id)
+            ),
+            None,
+        )
+        if spell is None:
+            raise CombatEngineError("healing spell is not recorded on the source actor card")
+        base_level = int(spell.get("level", 0) or 0)
+        cast_level = int(spell_level)
+        if base_level < 1 or cast_level < base_level:
+            raise CombatEngineError(
+                "spell healing requires a level 1+ spell and a legal cast level"
+            )
+        disciple = next(
+            (
+                item
+                for item in source_sheet.get("content", {}).get("features", [])
+                if item.get("id")
+                == "dnd5e.content.srd2014.feature.life-domain-disciple-of-life"
+                or (
+                    str(item.get("name") or "").casefold() == "disciple of life"
+                    and str(item.get("source_key") or "").casefold() == "life domain"
+                )
+            ),
+            None,
+        )
+        if disciple is not None:
+            bonus = 2 + cast_level
+        source = {
+            "kind": "spell",
+            "spell_id": str(spell_id),
+            "spell_name": str(spell.get("name") or spell_id),
+            "spell_level": cast_level,
+            "modifiers": (
+                [
+                    {
+                        "feature_id": str(disciple.get("id") or "disciple-of-life"),
+                        "name": "Disciple of Life",
+                        "amount": bonus,
+                    }
+                ]
+                if disciple is not None
+                else []
+            ),
+        }
     maximum = int(hp.get("max", before) or before)
-    hp["value"] = min(maximum, before + max(0, int(amount)))
+    effective_amount = requested_amount + bonus
+    hp["value"] = min(maximum, before + effective_amount)
     value["combat"]["hp"] = hp
     if hp["value"] > 0:
         value["conditions"] = [
@@ -1801,6 +1868,10 @@ def apply_healing_to_sheet(sheet: dict[str, Any], *, amount: int) -> dict[str, A
         "before_hp": before,
         "after_hp": hp["value"],
         "amount": hp["value"] - before,
+        "requested_amount": requested_amount,
+        "bonus_amount": bonus,
+        "effective_amount": effective_amount,
+        "source": source,
     }
 
 

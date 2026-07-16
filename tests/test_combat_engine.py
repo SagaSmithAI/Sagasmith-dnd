@@ -8,6 +8,7 @@ from sagasmith_dnd.combat_engine import (
     add_choice_window,
     apply_damage_parts_to_sheet,
     apply_damage_to_sheet,
+    apply_healing_to_sheet,
     arm_readied_spell,
     available_reactions,
     end_turn,
@@ -446,6 +447,64 @@ def test_falling_unconscious_also_leaves_actor_prone_after_healing() -> None:
     actor = _actor("target", hp=5)
     dropped = apply_damage_to_sheet(actor["sheet"], amount=5, damage_type="force")
     assert {"prone", "unconscious"} <= set(dropped["sheet"]["conditions"])
+
+
+def test_disciple_of_life_uses_recorded_spell_and_cast_level_before_hp_clamp() -> None:
+    target = _actor("target", hp=20)
+    target["sheet"]["combat"]["hp"]["value"] = 1
+    cleric = _actor("cleric")
+    cleric["sheet"]["content"]["spells"] = [
+        {
+            "id": "cure-wounds",
+            "name": "Cure Wounds",
+            "level": 1,
+        }
+    ]
+    cleric["sheet"]["content"]["features"] = [
+        {
+            "id": "dnd5e.content.srd2014.feature.life-domain-disciple-of-life",
+            "name": "Disciple of Life",
+            "source_key": "Life Domain",
+        }
+    ]
+
+    result = apply_healing_to_sheet(
+        target["sheet"],
+        amount=8,
+        source_sheet=cleric["sheet"],
+        spell_id="cure-wounds",
+        spell_level=2,
+    )
+
+    assert result["after_hp"] == 13
+    assert result["requested_amount"] == 8
+    assert result["bonus_amount"] == 4
+    assert result["source"]["modifiers"][0]["name"] == "Disciple of Life"
+
+
+def test_spell_healing_rejects_unrecorded_spells_and_illegal_cast_levels() -> None:
+    target = _actor("target")
+    source = _actor("source")
+    source["sheet"]["content"]["spells"] = [
+        {"id": "cure-wounds", "name": "Cure Wounds", "level": 1}
+    ]
+
+    with pytest.raises(ValueError, match="not recorded"):
+        apply_healing_to_sheet(
+            target["sheet"],
+            amount=1,
+            source_sheet=source["sheet"],
+            spell_id="invented-heal",
+            spell_level=1,
+        )
+    with pytest.raises(ValueError, match="legal cast level"):
+        apply_healing_to_sheet(
+            target["sheet"],
+            amount=1,
+            source_sheet=source["sheet"],
+            spell_id="cure-wounds",
+            spell_level=0,
+        )
 
 
 def test_petrified_condition_grants_resistance_to_every_damage_type_once() -> None:
