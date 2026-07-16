@@ -72,6 +72,42 @@ def test_v2_sheet_exposes_complete_derived_card_and_prepared_spells() -> None:
     assert set(derived["spellcasting"]["prepared_spell_ids"]) == {"cure-wounds", "bless"}
 
 
+def test_class_prepared_spell_does_not_have_to_be_known() -> None:
+    sheet = {
+        "progression": {
+            "level": 1,
+            "classes": [{"name": "Cleric", "level": 1, "hit_die": 8}],
+        },
+        "spellcasting": {
+            "preparation": {
+                "mode": "prepared",
+                "max_prepared": 1,
+                "selected_spell_ids": ["bless"],
+            },
+        },
+        "content": {
+            "spells": [
+                {
+                    "id": "bless",
+                    "name": "Bless",
+                    "level": 1,
+                    "grant": {
+                        "source_type": "class",
+                        "source_key": "Cleric",
+                        "method": "class_prepared",
+                    },
+                    "access": {"known": False},
+                }
+            ]
+        },
+    }
+
+    normalized = validate_character_sheet(sheet)
+
+    assert normalized["content"]["spells"][0]["access"]["known"] is False
+    assert normalized["content"]["spells"][0]["access"]["prepared"] is True
+
+
 def test_inventory_wallet_effect_and_memory_contracts() -> None:
     sheet, item_id = add_inventory_item(
         validate_character_sheet({}),

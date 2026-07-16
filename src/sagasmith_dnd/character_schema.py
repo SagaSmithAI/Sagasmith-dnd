@@ -1164,7 +1164,17 @@ def validate_character_sheet(
         spell = next((item for item in spells if item["id"] == spell_id), None)
         if spell is None:
             raise ValueError("prepared spell selection references an unknown spell")
-        if not (spell["access"]["known"] or spell["id"] in spellbook_ids):
+        class_prepared = spell["grant"]["method"] == "class_prepared"
+        if class_prepared:
+            if preparation["mode"] != "prepared":
+                raise ValueError("class-prepared spell requires prepared-caster mode")
+            source_class = spell["grant"]["source_key"].strip().casefold()
+            class_names = {item["name"].strip().casefold() for item in classes}
+            if source_class not in class_names:
+                raise ValueError("class-prepared spell grant must name a recorded class")
+        if not (
+            spell["access"]["known"] or spell["id"] in spellbook_ids or class_prepared
+        ):
             raise ValueError("prepared spell must be known or in the spellbook")
     for spell in spells:
         spell["access"]["prepared"] = (
