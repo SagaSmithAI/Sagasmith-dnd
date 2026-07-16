@@ -237,6 +237,11 @@ def _subclasses(folder: Path) -> list[dict[str, Any]]:
                         "class_name": class_name,
                         "minimum_level": _SUBCLASS_LEVELS.get(class_name.casefold(), 1),
                         "description": body[:1200],
+                        "always_prepared_spells": (
+                            _subclass_spell_grants(body)
+                            if class_name.casefold() in {"cleric", "paladin"}
+                            else []
+                        ),
                     },
                 )
             )
@@ -514,7 +519,28 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
                 "requires_existing_proficiency": True,
             }
         }
+    if key == ("cleric", "bonus proficiency") and "heavy armor" in body.casefold():
+        return {"mechanical_grants": {"armor_proficiencies": ["heavy armor"]}}
     return {}
+
+
+def _subclass_spell_grants(body: str) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for _, fields in _markdown_table_rows(body):
+        spell_text = fields.get("Spells")
+        level_text = next(
+            (value for key, value in fields.items() if key.casefold().endswith("level")),
+            "",
+        )
+        level_match = re.match(r"(\d+)", level_text)
+        if not spell_text or not level_match:
+            continue
+        minimum_level = int(level_match.group(1))
+        for name in spell_text.split(","):
+            cleaned = re.sub(r"[*_`]", "", name).strip()
+            if cleaned and cleaned != "-":
+                result.append({"name": cleaned, "minimum_level": minimum_level})
+    return result
 
 
 def _trait_paragraphs(text: str) -> list[tuple[str, str]]:

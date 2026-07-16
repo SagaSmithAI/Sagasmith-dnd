@@ -40,6 +40,32 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     assert berserker["card"]["class_name"] == "Barbarian"
     assert berserker["card"]["minimum_level"] == 3
 
+    life_domain = next(
+        item
+        for item in artifacts
+        if item["kind"] == "subclass" and item["card"]["name"] == "Life Domain"
+    )
+    assert life_domain["card"]["always_prepared_spells"][:2] == [
+        {"name": "bless", "minimum_level": 1},
+        {"name": "cure wounds", "minimum_level": 1},
+    ]
+    fiend = next(
+        item
+        for item in artifacts
+        if item["kind"] == "subclass" and item["card"]["name"] == "The Fiend"
+    )
+    assert fiend["card"]["always_prepared_spells"] == []
+
+    life_bonus_proficiency = next(
+        item
+        for item in artifacts
+        if item["id"]
+        == "dnd5e.content.srd2014.feature.life-domain-bonus-proficiency"
+    )
+    assert life_bonus_proficiency["card"]["mechanical_grants"] == {
+        "armor_proficiencies": ["heavy armor"]
+    }
+
     sneak_attack = next(
         item
         for item in artifacts

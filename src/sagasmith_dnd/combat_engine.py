@@ -402,6 +402,9 @@ def preflight_attack(
         cover_bonus = declared_bonus
     target_ac += cover_bonus
     expression = weapon.get("damage_expression") or weapon.get("damage") or ""
+    dueling_bonus = _dueling_damage_bonus(attacker, weapon)
+    if dueling_bonus and expression:
+        expression = f"{expression} + {dueling_bonus}"
     damage_type = str(weapon.get("damage_type") or "")
     range_result = _attack_range(attacker, target, weapon)
     if range_result["disadvantage"]:
@@ -556,6 +559,11 @@ def preflight_attack(
         "attack_bonus": attack_bonus,
         "target_ac": target_ac,
         "damage_expression": str(expression),
+        "damage_modifiers": (
+            [{"source": "Fighting Style: Dueling", "value": dueling_bonus}]
+            if dueling_bonus
+            else []
+        ),
         "damage_type": damage_type,
         "advantage": bool(context.get("advantage", False)),
         "disadvantage": bool(context.get("disadvantage", False)),
@@ -812,6 +820,38 @@ def _sneak_attack_plan(
         "turn_token": turn_token,
         "eligibility": "advantage" if effective_advantage else "adjacent_enemy",
     }
+
+
+def _dueling_damage_bonus(attacker: dict[str, Any], weapon: dict[str, Any]) -> int:
+    sheet = actor_sheet(attacker)
+    has_style = any(
+        str(item.get("name") or "").casefold() == "fighting style"
+        and str(item.get("source_key") or "").casefold() == "fighter"
+        and str(dict(item.get("choices") or {}).get("option") or "").casefold() == "dueling"
+        for item in sheet.get("content", {}).get("features", [])
+    )
+    if not has_style or str(weapon.get("attack_type") or "melee") != "melee":
+        return 0
+    weapon_id = str(weapon.get("item_id") or "")
+    selected = next(
+        (
+            item
+            for item in sheet.get("inventory", {}).get("items", [])
+            if item.get("id") == weapon_id
+        ),
+        None,
+    )
+    if selected is None or selected.get("equipped_slot") not in {"main_hand", "off_hand"}:
+        return 0
+    other_weapons = [
+        item
+        for item in sheet.get("inventory", {}).get("items", [])
+        if item.get("id") != weapon_id
+        and item.get("kind") == "weapon"
+        and item.get("equipped")
+        and item.get("equipped_slot") in {"main_hand", "off_hand"}
+    ]
+    return 0 if other_weapons else 2
 
 
 def apply_damage_to_sheet(

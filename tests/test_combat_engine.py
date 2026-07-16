@@ -198,6 +198,43 @@ def test_attack_preflight_and_resolution_keep_target_sheet_auditable() -> None:
     assert updated_target["sheet"]["combat"]["hp"]["value"] < 10
 
 
+def test_dueling_style_adds_damage_only_for_one_equipped_melee_weapon() -> None:
+    attacker = _actor("duelist")
+    attacker["sheet"]["content"]["features"] = [
+        {
+            "id": "dnd5e.content.srd2014.feature.fighter-fighting-style",
+            "name": "Fighting Style",
+            "source_key": "Fighter",
+            "choices": {"option": "Dueling"},
+        }
+    ]
+    attacker["sheet"]["inventory"]["items"] = [
+        {
+            "id": "longsword",
+            "name": "Longsword",
+            "kind": "weapon",
+            "equipped": True,
+            "equipped_slot": "main_hand",
+            "mechanics": {
+                "category": "martial",
+                "attack_type": "melee",
+                "attack_ability": "strength",
+                "damage_formula": "1d8",
+                "damage_type": "slashing",
+                "properties": ["versatile"],
+            },
+        }
+    ]
+    attacker["sheet"]["inventory"]["equipment_slots"]["main_hand"] = "longsword"
+    attacker["derived"] = derive_character_sheet(attacker["sheet"])
+    target = _actor("target", hp=20, ac=1)
+    plan = preflight_attack(attacker, target, action={"weapon_id": "longsword"})
+    assert plan["damage_expression"] == "1d8 + 3 + 2"
+    assert plan["damage_modifiers"] == [
+        {"source": "Fighting Style: Dueling", "value": 2}
+    ]
+
+
 def test_preflight_stops_on_unresolved_rules() -> None:
     attacker = _actor("attacker")
     target = _actor("target")
