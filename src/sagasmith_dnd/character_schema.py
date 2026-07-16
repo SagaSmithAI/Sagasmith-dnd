@@ -1957,6 +1957,28 @@ def derive_character_sheet(
             else "normal"
         ),
     }
+    multiattack_options = []
+    for activity in value["content"]["activities"]:
+        if (
+            str(activity.get("name") or "").casefold() != "multiattack"
+            or str(dict(activity.get("activation") or {}).get("type") or "") != "action"
+        ):
+            continue
+        options = dict(activity.get("choices") or {}).get("multiattack_options")
+        if isinstance(options, list):
+            multiattack_options.extend(copy.deepcopy(options))
+    multiattack_max = max(
+        (
+            sum(
+                int(attack.get("count", 0) or 0)
+                for attack in option.get("attacks", [])
+                if isinstance(attack, dict)
+            )
+            for option in multiattack_options
+            if isinstance(option, dict)
+        ),
+        default=0,
+    )
     derived = {
         "proficiency_bonus": proficiency,
         "ability_modifiers": ability_modifiers,
@@ -1969,7 +1991,10 @@ def derive_character_sheet(
         "armor_class_breakdown": armor_class_breakdown,
         "initiative": ability_modifiers[value["combat"]["initiative"]["ability"]]
         + value["combat"]["initiative"]["bonus"],
-        "attacks_per_action": value["combat"]["attacks_per_action"],
+        "attacks_per_action": max(
+            value["combat"]["attacks_per_action"], multiattack_max
+        ),
+        "multiattack_options": multiattack_options,
         "hit_points": dict(value["combat"]["hp"]),
         "hit_point_progression": {
             "gains": list(value["combat"]["hp_progression"]),

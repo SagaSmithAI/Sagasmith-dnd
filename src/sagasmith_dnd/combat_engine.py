@@ -323,6 +323,108 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
     return actions
 
 
+def pay_attack_action(
+    encounter: dict[str, Any],
+    attacker: dict[str, Any],
+    *,
+    weapon_id: str,
+    attack_mode: str,
+    multiattack_option_id: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Pay one attack while preserving a recorded monster Multiattack composition."""
+    value = deepcopy(encounter)
+    current = current_combatant(value)
+    attacker_id = actor_id(attacker)
+    if current is None or current.get("actor_id") != attacker_id:
+        raise CombatEngineError("it is not this actor's turn")
+    combatant = next(
+        item for item in value.get("combatants", []) if item.get("actor_id") == attacker_id
+    )
+    budget = dict(combatant.get("turn_budget") or {})
+    flags = dict(combatant.get("turn_flags") or {})
+    active_multiattack = flags.get("multiattack")
+
+    if int(budget.get("attack_budget", 0) or 0) > 0:
+        if active_multiattack:
+            if (
+                multiattack_option_id
+                and multiattack_option_id != active_multiattack.get("option_id")
+            ):
+                raise CombatEngineError("multiattack option cannot change during the action")
+            remaining = _consume_multiattack_entry(
+                active_multiattack.get("remaining"), weapon_id, attack_mode
+            )
+            if remaining:
+                flags["multiattack"] = {
+                    **dict(active_multiattack),
+                    "remaining": remaining,
+                }
+            else:
+                flags.pop("multiattack", None)
+            payment = {
+                "kind": "multiattack_followup",
+                "option_id": active_multiattack.get("option_id"),
+            }
+        else:
+            if multiattack_option_id:
+                raise CombatEngineError(
+                    "multiattack option can be selected only on its first attack"
+                )
+            payment = {"kind": "extra_attack"}
+        budget["attack_budget"] -= 1
+    else:
+        payment_key = (
+            "main_action"
+            if int(budget.get("main_action", 0) or 0) > 0
+            else "extra_action"
+            if int(budget.get("extra_action", 0) or 0) > 0
+            else ""
+        )
+        if not payment_key:
+            raise CombatEngineError("actor has no attack payment available")
+        multiattack_options = _validated_multiattack_options(attacker)
+        if multiattack_options:
+            option = _select_multiattack_option(
+                multiattack_options, multiattack_option_id
+            )
+            remaining = _consume_multiattack_entry(
+                option["attacks"], weapon_id, attack_mode
+            )
+            total = sum(int(item["count"]) for item in option["attacks"])
+            budget["attack_budget"] = total - 1
+            if remaining:
+                flags["multiattack"] = {
+                    "activity_id": option["activity_id"],
+                    "option_id": option["id"],
+                    "remaining": remaining,
+                }
+            payment = {
+                "kind": "multiattack",
+                "payment": payment_key,
+                "activity_id": option["activity_id"],
+                "option_id": option["id"],
+                "attack_count": total,
+            }
+        else:
+            if multiattack_option_id:
+                raise CombatEngineError("actor has no recorded Multiattack option")
+            count = int(actor_derived(attacker).get("attacks_per_action", 1) or 1)
+            budget["attack_budget"] = max(0, count - 1)
+            payment = {
+                "kind": "attack_action",
+                "payment": payment_key,
+                "attack_count": count,
+            }
+        budget[payment_key] -= 1
+
+    combatant["turn_budget"] = budget
+    if flags:
+        combatant["turn_flags"] = flags
+    else:
+        combatant.pop("turn_flags", None)
+    return value, payment
+
+
 def preflight_attack(
     attacker: dict[str, Any],
     target: dict[str, Any],
@@ -402,11 +504,21 @@ def preflight_attack(
         cover_bonus = declared_bonus
     target_ac += cover_bonus
     expression = weapon.get("damage_expression") or weapon.get("damage") or ""
-    dueling_bonus = _dueling_damage_bonus(attacker, weapon)
+    attack_mode = str(action.get("attack_mode") or weapon.get("attack_type") or "melee").lower()
+    if attack_mode not in {"melee", "ranged"}:
+        raise CombatEngineError("attack_mode must be melee or ranged")
+    weapon_attack_type = str(weapon.get("attack_type") or "melee").lower()
+    if weapon_attack_type == "ranged" and attack_mode != "ranged":
+        raise CombatEngineError("a ranged weapon cannot make a melee weapon attack")
+    if attack_mode == "ranged" and weapon_attack_type != "ranged":
+        thrown_range = weapon.get("thrown_range_ft")
+        if not isinstance(thrown_range, dict) or not thrown_range.get("normal"):
+            raise CombatEngineError("weapon has no recorded ranged attack mode")
+    dueling_bonus = _dueling_damage_bonus(attacker, weapon, attack_mode=attack_mode)
     if dueling_bonus and expression:
         expression = f"{expression} + {dueling_bonus}"
     damage_type = str(weapon.get("damage_type") or "")
-    range_result = _attack_range(attacker, target, weapon)
+    range_result = _attack_range(attacker, target, weapon, attack_mode=attack_mode)
     if range_result["disadvantage"]:
         context["disadvantage"] = True
         context.setdefault("disadvantage_sources", []).append("weapon_long_range")
@@ -571,13 +683,14 @@ def preflight_attack(
         "disadvantage_sources": list(context.get("disadvantage_sources") or []),
         "rulings": list(action.get("rulings") or []),
         "weapon_id": weapon.get("item_id"),
+        "attack_mode": attack_mode,
         "resource_cost": deepcopy(weapon.get("resource_cost") or {}),
         "range": range_result,
         "automatic_critical_on_hit": automatic_critical,
         "ruleset": ruleset,
         "target_uses_death_saves": bool(target.get("death_saves", True)),
         "knock_out": bool(action.get("knock_out", False)),
-        "melee_attack": str(weapon.get("attack_type") or "melee") == "melee",
+        "melee_attack": attack_mode == "melee",
         "helped_by": helped_by,
         "sneak_attack": sneak_attack,
         "halfling_lucky": _has_halfling_lucky(actor_sheet(attacker)),
@@ -822,7 +935,9 @@ def _sneak_attack_plan(
     }
 
 
-def _dueling_damage_bonus(attacker: dict[str, Any], weapon: dict[str, Any]) -> int:
+def _dueling_damage_bonus(
+    attacker: dict[str, Any], weapon: dict[str, Any], *, attack_mode: str
+) -> int:
     sheet = actor_sheet(attacker)
     has_style = any(
         str(item.get("name") or "").casefold() == "fighting style"
@@ -830,7 +945,7 @@ def _dueling_damage_bonus(attacker: dict[str, Any], weapon: dict[str, Any]) -> i
         and str(dict(item.get("choices") or {}).get("option") or "").casefold() == "dueling"
         for item in sheet.get("content", {}).get("features", [])
     )
-    if not has_style or str(weapon.get("attack_type") or "melee") != "melee":
+    if not has_style or attack_mode != "melee":
         return 0
     weapon_id = str(weapon.get("item_id") or "")
     selected = next(
@@ -852,6 +967,112 @@ def _dueling_damage_bonus(attacker: dict[str, Any], weapon: dict[str, Any]) -> i
         and item.get("equipped_slot") in {"main_hand", "off_hand"}
     ]
     return 0 if other_weapons else 2
+
+
+def _validated_multiattack_options(attacker: dict[str, Any]) -> list[dict[str, Any]]:
+    sheet = actor_sheet(attacker)
+    weapons = {
+        str(item.get("item_id") or ""): item
+        for item in actor_derived(attacker).get("inventory", {}).get("weapon_attacks", [])
+    }
+    result: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for activity in sheet.get("content", {}).get("activities", []):
+        if str(activity.get("name") or "").casefold() != "multiattack":
+            continue
+        if str(dict(activity.get("activation") or {}).get("type") or "") != "action":
+            raise CombatEngineError("recorded Multiattack must use action activation")
+        options = dict(activity.get("choices") or {}).get("multiattack_options")
+        if not isinstance(options, list) or not options:
+            raise CombatEngineError("recorded Multiattack has no structured options")
+        for raw_option in options:
+            if not isinstance(raw_option, dict):
+                raise CombatEngineError("Multiattack option must be an object")
+            option_id = str(raw_option.get("id") or "").strip()
+            if not option_id or option_id in seen_ids:
+                raise CombatEngineError("Multiattack option ids must be nonempty and unique")
+            seen_ids.add(option_id)
+            raw_attacks = raw_option.get("attacks")
+            if not isinstance(raw_attacks, list) or not raw_attacks:
+                raise CombatEngineError("Multiattack option must list its attacks")
+            attacks: list[dict[str, Any]] = []
+            total = 0
+            for raw_attack in raw_attacks:
+                if not isinstance(raw_attack, dict):
+                    raise CombatEngineError("Multiattack attack entry must be an object")
+                weapon_id = str(raw_attack.get("weapon_id") or "")
+                attack_mode = str(raw_attack.get("attack_mode") or "melee").lower()
+                count = int(raw_attack.get("count", 0) or 0)
+                if weapon_id not in weapons:
+                    raise CombatEngineError(
+                        "Multiattack references a weapon absent from derived attacks"
+                    )
+                if attack_mode not in {"melee", "ranged"}:
+                    raise CombatEngineError("Multiattack attack_mode must be melee or ranged")
+                weapon = weapons[weapon_id]
+                if attack_mode == "ranged" and str(
+                    weapon.get("attack_type") or "melee"
+                ) != "ranged":
+                    thrown = weapon.get("thrown_range_ft")
+                    if not isinstance(thrown, dict) or not thrown.get("normal"):
+                        raise CombatEngineError(
+                            "Multiattack ranged entry needs a ranged or thrown weapon"
+                        )
+                if count < 1:
+                    raise CombatEngineError("Multiattack attack count must be positive")
+                attacks.append(
+                    {
+                        "weapon_id": weapon_id,
+                        "attack_mode": attack_mode,
+                        "count": count,
+                    }
+                )
+                total += count
+            if total < 2 or total > 10:
+                raise CombatEngineError("Multiattack option must contain 2 to 10 attacks")
+            result.append(
+                {
+                    "activity_id": str(activity.get("id") or "multiattack"),
+                    "id": option_id,
+                    "attacks": attacks,
+                }
+            )
+    return result
+
+
+def _select_multiattack_option(
+    options: list[dict[str, Any]], option_id: str | None
+) -> dict[str, Any]:
+    if option_id:
+        selected = next((item for item in options if item["id"] == option_id), None)
+        if selected is None:
+            raise CombatEngineError("multiattack_option_id is not recorded on the actor card")
+        return selected
+    if len(options) != 1:
+        raise CombatEngineError("multiattack_option_id is required for this actor")
+    return options[0]
+
+
+def _consume_multiattack_entry(
+    entries: Any, weapon_id: str, attack_mode: str
+) -> list[dict[str, Any]]:
+    if not isinstance(entries, list):
+        raise CombatEngineError("active Multiattack state is malformed")
+    remaining = deepcopy(entries)
+    match = next(
+        (
+            item
+            for item in remaining
+            if item.get("weapon_id") == weapon_id
+            and item.get("attack_mode") == attack_mode
+            and int(item.get("count", 0) or 0) > 0
+        ),
+        None,
+    )
+    if match is None:
+        raise CombatEngineError("attack is not allowed by the remaining Multiattack sequence")
+    match["count"] = int(match["count"]) - 1
+    return [item for item in remaining if int(item.get("count", 0) or 0) > 0]
 
 
 def apply_damage_to_sheet(
@@ -2176,7 +2397,11 @@ def _can_see(viewer: dict[str, Any], subject: dict[str, Any]) -> bool:
 
 
 def _attack_range(
-    attacker: dict[str, Any], target: dict[str, Any], weapon: dict[str, Any]
+    attacker: dict[str, Any],
+    target: dict[str, Any],
+    weapon: dict[str, Any],
+    *,
+    attack_mode: str,
 ) -> dict[str, Any]:
     """Validate only deterministic range facts when both combatants are positioned."""
     attacker_position = _position(attacker.get("position"))
@@ -2184,22 +2409,23 @@ def _attack_range(
     if attacker_position is None or target_position is None:
         return {"enforced": False, "distance_ft": None, "disadvantage": False}
     distance = _grid_distance(attacker_position, target_position)
-    attack_type = str(weapon.get("attack_type") or "melee").lower()
     range_data = (
-        weapon.get("range_ft") if attack_type == "ranged" else weapon.get("thrown_range_ft")
+        weapon.get("range_ft")
+        if str(weapon.get("attack_type") or "melee").lower() == "ranged"
+        else weapon.get("thrown_range_ft")
     )
+    if attack_mode == "melee":
+        reach = _positive_int(weapon.get("reach_ft"), default=5)
+        if distance > reach:
+            raise CombatEngineError("target is outside melee reach")
+        return {
+            "enforced": True,
+            "distance_ft": distance,
+            "normal_ft": reach,
+            "long_ft": reach,
+            "disadvantage": False,
+        }
     if not isinstance(range_data, dict) or not range_data.get("normal"):
-        if attack_type == "melee":
-            reach = _positive_int(weapon.get("reach_ft"), default=5)
-            if distance > reach:
-                raise CombatEngineError("target is outside melee reach")
-            return {
-                "enforced": True,
-                "distance_ft": distance,
-                "normal_ft": reach,
-                "long_ft": reach,
-                "disadvantage": False,
-            }
         return {"enforced": False, "distance_ft": distance, "disadvantage": False}
     normal = _positive_int(range_data.get("normal"), default=5)
     long = _positive_int(range_data.get("long"), default=normal)

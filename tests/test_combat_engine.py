@@ -13,6 +13,7 @@ from sagasmith_dnd.combat_engine import (
     available_reactions,
     end_turn,
     pay_activity_activation,
+    pay_attack_action,
     preflight_attack,
     resolve_actor_check,
     resolve_attack_action,
@@ -234,6 +235,142 @@ def test_dueling_style_adds_damage_only_for_one_equipped_melee_weapon() -> None:
     assert plan["damage_modifiers"] == [
         {"source": "Fighting Style: Dueling", "value": 2}
     ]
+
+
+def test_bandit_captain_multiattack_preserves_recorded_weapon_composition() -> None:
+    captain = _actor("captain", hp=65)
+    captain["sheet"]["inventory"]["items"] = [
+        {
+            "id": "scimitar",
+            "name": "Scimitar",
+            "kind": "weapon",
+            "equipped": True,
+            "equipped_slot": "main_hand",
+            "mechanics": {
+                "attack_type": "melee",
+                "attack_ability": "strength",
+                "damage_formula": "1d6",
+                "damage_type": "slashing",
+                "properties": ["finesse", "light"],
+            },
+        },
+        {
+            "id": "dagger",
+            "name": "Dagger",
+            "kind": "weapon",
+            "equipped": True,
+            "equipped_slot": "off_hand",
+            "mechanics": {
+                "attack_type": "melee",
+                "attack_ability": "strength",
+                "damage_formula": "1d4",
+                "damage_type": "piercing",
+                "properties": ["finesse", "light", "thrown"],
+                "thrown_normal_range_ft": 20,
+                "thrown_long_range_ft": 60,
+            },
+        },
+    ]
+    captain["sheet"]["inventory"]["equipment_slots"].update(
+        {"main_hand": "scimitar", "off_hand": "dagger"}
+    )
+    captain["sheet"]["content"]["activities"] = [
+        {
+            "id": "bandit-captain-multiattack",
+            "name": "Multiattack",
+            "source_key": "Bandit Captain",
+            "activation": {"type": "action"},
+            "choices": {
+                "multiattack_options": [
+                    {
+                        "id": "melee",
+                        "attacks": [
+                            {"weapon_id": "scimitar", "attack_mode": "melee", "count": 2},
+                            {"weapon_id": "dagger", "attack_mode": "melee", "count": 1},
+                        ],
+                    },
+                    {
+                        "id": "ranged",
+                        "attacks": [
+                            {"weapon_id": "dagger", "attack_mode": "ranged", "count": 2}
+                        ],
+                    },
+                ]
+            },
+        }
+    ]
+    captain["derived"] = derive_character_sheet(captain["sheet"])
+    assert captain["derived"]["attacks_per_action"] == 3
+    assert {item["id"] for item in captain["derived"]["multiattack_options"]} == {
+        "melee",
+        "ranged",
+    }
+    target = _actor("target", hp=65)
+    captain.update(
+        initiative=20,
+        tie_breaker=0,
+        position={"x": 0, "y": 0},
+        disposition="hostile",
+    )
+    target.update(
+        initiative=10,
+        tie_breaker=0,
+        position={"x": 5, "y": 0},
+        disposition="friendly",
+    )
+    encounter = start_encounter([captain, target])
+
+    encounter, first = pay_attack_action(
+        encounter,
+        captain,
+        weapon_id="scimitar",
+        attack_mode="melee",
+        multiattack_option_id="melee",
+    )
+    assert first["attack_count"] == 3
+    encounter, _ = pay_attack_action(
+        encounter, captain, weapon_id="scimitar", attack_mode="melee"
+    )
+    with pytest.raises(ValueError, match="remaining Multiattack"):
+        pay_attack_action(
+            encounter, captain, weapon_id="scimitar", attack_mode="melee"
+        )
+    encounter, _ = pay_attack_action(
+        encounter, captain, weapon_id="dagger", attack_mode="melee"
+    )
+    current = encounter["combatants"][encounter["turn_index"]]
+    assert current["turn_budget"]["attack_budget"] == 0
+    assert "multiattack" not in current.get("turn_flags", {})
+
+
+def test_thrown_weapon_requires_explicit_ranged_attack_mode() -> None:
+    attacker = _actor("thrower")
+    attacker["derived"]["inventory"]["weapon_attacks"] = [
+        {
+            "item_id": "dagger",
+            "attack_type": "melee",
+            "reach_ft": 5,
+            "attack_bonus": 5,
+            "damage_expression": "1d4 + 3",
+            "damage_type": "piercing",
+            "properties": ["finesse", "light", "thrown"],
+            "thrown_range_ft": {"normal": 20, "long": 60},
+        }
+    ]
+    target = _actor("target")
+    attacker["position"] = {"x": 0, "y": 0}
+    target["position"] = {"x": 10, "y": 0}
+
+    with pytest.raises(ValueError, match="outside melee reach"):
+        preflight_attack(attacker, target, action={"weapon_id": "dagger"})
+    plan = preflight_attack(
+        attacker,
+        target,
+        action={"weapon_id": "dagger", "attack_mode": "ranged"},
+    )
+    assert plan["attack_mode"] == "ranged"
+    assert plan["melee_attack"] is False
+    assert plan["range"]["normal_ft"] == 20
 
 
 def test_preflight_stops_on_unresolved_rules() -> None:
