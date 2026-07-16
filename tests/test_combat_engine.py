@@ -23,7 +23,17 @@ from sagasmith_dnd.combat_engine import (
     start_encounter,
     trigger_readied_spell,
 )
-from sagasmith_dnd.engine import resolve_check
+from sagasmith_dnd.engine import resolve_check, roll_d20
+
+
+class _SequenceRng:
+    def __init__(self, *values: int) -> None:
+        self.values = list(values)
+
+    def randint(self, minimum: int, maximum: int) -> int:
+        value = self.values.pop(0)
+        assert minimum <= value <= maximum
+        return value
 
 
 def _actor(identifier: str, *, hp: int = 12, ac: int = 10) -> dict:
@@ -66,6 +76,19 @@ def _rogue(identifier: str = "rogue") -> dict:
     return actor
 
 
+def _lightfoot(identifier: str = "lightfoot") -> dict:
+    actor = _actor(identifier)
+    actor["sheet"]["content"]["features"] = [
+        {
+            "id": "dnd5e.content.srd2014.species-feature.lightfoot-lucky",
+            "name": "Lucky",
+            "source_key": "Lightfoot",
+        }
+    ]
+    actor["derived"] = derive_character_sheet(actor["sheet"])
+    return actor
+
+
 def test_ordinary_checks_do_not_use_attack_natural_rules() -> None:
     result = resolve_check(
         dc=21,
@@ -75,6 +98,61 @@ def test_ordinary_checks_do_not_use_attack_natural_rules() -> None:
     )
     assert result["natural"] == 20
     assert result["success"] is False
+
+
+def test_halfling_lucky_rerolls_only_one_natural_one_and_keeps_replacement() -> None:
+    result = roll_d20(
+        advantage=True,
+        reroll_ones=True,
+        rng=_SequenceRng(1, 7, 18),
+    )
+    assert result["rolls"] == [18, 7]
+    assert result["natural"] == 18
+    assert result["rerolls"] == [
+        {"index": 0, "from": 1, "to": 18, "source": "halfling_lucky"}
+    ]
+
+
+def test_halfling_lucky_applies_to_actor_checks_attacks_and_death_saves() -> None:
+    halfling = _lightfoot()
+    check = resolve_actor_check(
+        halfling,
+        kind="ability",
+        ability="strength",
+        dc=10,
+        rng=_SequenceRng(1, 15),
+    )
+    assert check["natural"] == 15
+    assert check["rerolls"][0]["source"] == "halfling_lucky"
+
+    halfling["derived"]["inventory"]["weapon_attacks"] = [
+        {
+            "item_id": "shortsword",
+            "attack_type": "melee",
+            "properties": ["finesse"],
+            "attack_bonus": 0,
+            "damage_expression": "1",
+            "damage_type": "piercing",
+        }
+    ]
+    target = _actor("target", ac=10)
+    plan = preflight_attack(halfling, target, action={"weapon_id": "shortsword"})
+    _, _, attack = resolve_attack_action(
+        halfling,
+        target,
+        plan=plan,
+        rng=_SequenceRng(1, 15, 1),
+    )
+    assert attack["hit"] is True
+    assert attack["rerolls"][0]["to"] == 15
+
+    death_sheet = halfling["sheet"]
+    death_sheet["combat"]["hp"]["value"] = 0
+    death_sheet["conditions"] = ["unconscious"]
+    death = resolve_death_save_to_sheet(death_sheet, rng=_SequenceRng(1, 14))
+    assert death["natural"] == 14
+    assert death["failures"] == 0
+    assert death["successes"] == 1
 
 
 def test_damage_applies_resistance_and_vulnerability_in_order() -> None:

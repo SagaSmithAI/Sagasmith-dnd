@@ -65,18 +65,35 @@ def roll_d20(
     *,
     advantage: bool = False,
     disadvantage: bool = False,
+    reroll_ones: bool = False,
     rng: random.Random | None = None,
 ) -> dict:
     generator = rng or random
     values = [generator.randint(1, 20)]
     if advantage != disadvantage:
         values.append(generator.randint(1, 20))
+    rerolls = []
+    if reroll_ones and 1 in values:
+        # The advantage/disadvantage rule permits only one of its d20s to be
+        # rerolled. Halfling Lucky must then keep the replacement result.
+        index = values.index(1)
+        replacement = generator.randint(1, 20)
+        values[index] = replacement
+        rerolls.append(
+            {
+                "index": index,
+                "from": 1,
+                "to": replacement,
+                "source": "halfling_lucky",
+            }
+        )
     selected = max(values) if advantage and not disadvantage else min(values)
     if advantage == disadvantage:
         selected = values[0]
     return {
         "natural": selected,
         "rolls": values,
+        "rerolls": rerolls,
         "critical": selected == 20,
         "fumble": selected == 1,
     }
@@ -92,6 +109,7 @@ def resolve_check(
     advantage: bool = False,
     disadvantage: bool = False,
     kind: str = "ability",
+    reroll_ones: bool = False,
     rng: random.Random | None = None,
 ) -> dict:
     """Resolve an ability check or saving throw.
@@ -102,7 +120,12 @@ def resolve_check(
     """
     if kind not in {"ability", "save"}:
         raise ValueError("resolve_check kind must be ability or save")
-    die = roll_d20(advantage=advantage, disadvantage=disadvantage, rng=rng)
+    die = roll_d20(
+        advantage=advantage,
+        disadvantage=disadvantage,
+        reroll_ones=reroll_ones,
+        rng=rng,
+    )
     modifier = ability_modifier(ability_score)
     proficiency = proficiency_bonus(level) if proficient else 0
     total = die["natural"] + modifier + proficiency + bonus
@@ -125,10 +148,16 @@ def resolve_attack(
     attack_bonus: int,
     advantage: bool = False,
     disadvantage: bool = False,
+    reroll_ones: bool = False,
     rng: random.Random | None = None,
 ) -> dict:
     """Resolve an attack roll with attack-specific natural 1/20 semantics."""
-    die = roll_d20(advantage=advantage, disadvantage=disadvantage, rng=rng)
+    die = roll_d20(
+        advantage=advantage,
+        disadvantage=disadvantage,
+        reroll_ones=reroll_ones,
+        rng=rng,
+    )
     total = die["natural"] + attack_bonus
     hit = bool(die["critical"] or (not die["fumble"] and total >= armor_class))
     return {
@@ -148,10 +177,16 @@ def resolve_death_save(
     advantage: bool = False,
     disadvantage: bool = False,
     bonus: int = 0,
+    reroll_ones: bool = False,
     rng: random.Random | None = None,
 ) -> dict:
     """Resolve a death save, including natural 1/20 special cases."""
-    die = roll_d20(advantage=advantage, disadvantage=disadvantage, rng=rng)
+    die = roll_d20(
+        advantage=advantage,
+        disadvantage=disadvantage,
+        reroll_ones=reroll_ones,
+        rng=rng,
+    )
     next_successes = successes
     next_failures = failures
     outcome = "pending"

@@ -196,6 +196,7 @@ def start_encounter(
                 disadvantage=bool(actor.get("initiative_disadvantage", False))
                 or (surprised and normalized_ruleset == "2024")
                 or (exhaustion >= 1 and normalized_ruleset == "2014"),
+                reroll_ones=_has_halfling_lucky(sheet),
                 rng=rng,
             )
             initiative = die["natural"] + initiative_bonus
@@ -571,6 +572,7 @@ def preflight_attack(
         "melee_attack": str(weapon.get("attack_type") or "melee") == "melee",
         "helped_by": helped_by,
         "sneak_attack": sneak_attack,
+        "halfling_lucky": _has_halfling_lucky(actor_sheet(attacker)),
         "rule_receipts": [
             *core_receipts(
                 rules,
@@ -597,6 +599,7 @@ def resolve_attack_action(
         attack_bonus=int(plan["attack_bonus"]),
         advantage=bool(plan.get("advantage")),
         disadvantage=bool(plan.get("disadvantage")),
+        reroll_ones=bool(plan.get("halfling_lucky")),
         rng=rng,
     )
     if attack["hit"] and plan.get("automatic_critical_on_hit"):
@@ -1069,6 +1072,7 @@ def resolve_death_save_to_sheet(
         advantage=advantage,
         disadvantage=disadvantage,
         bonus=bonus,
+        reroll_ones=_has_halfling_lucky(value),
         rng=rng,
     )
     if result["outcome"] == "revived":
@@ -1848,6 +1852,7 @@ def resolve_actor_check(
             advantage=advantage,
             disadvantage=disadvantage,
             kind="ability",
+            reroll_ones=_has_halfling_lucky(sheet),
             rng=rng,
         ))
     entry = abilities.get(ability) or abilities.get(_long_ability_name(ability)) or {}
@@ -1877,6 +1882,7 @@ def resolve_actor_check(
             advantage=advantage,
             disadvantage=disadvantage,
             bonus=roll_bonus,
+            reroll_ones=_has_halfling_lucky(sheet),
             rng=rng,
         ))
     return with_rule_receipts(resolve_check(
@@ -1888,6 +1894,7 @@ def resolve_actor_check(
         advantage=advantage,
         disadvantage=disadvantage,
         kind="save" if kind == "save" else "ability",
+        reroll_ones=_has_halfling_lucky(sheet),
         rng=rng,
     ))
 
@@ -1956,6 +1963,17 @@ def end_turn(encounter: dict[str, Any], *, actor_id_value: str | None = None) ->
         next_actor["turn_budget"] = budget
     value["turn_spell_casts"] = {}
     return value
+
+
+def _has_halfling_lucky(sheet: dict[str, Any]) -> bool:
+    return any(
+        item.get("id") == "dnd5e.content.srd2014.species-feature.lightfoot-lucky"
+        or (
+            str(item.get("name") or "").casefold() == "lucky"
+            and str(item.get("source_key") or "").casefold() in {"halfling", "lightfoot"}
+        )
+        for item in sheet.get("content", {}).get("features", [])
+    )
 
 
 def _normalize_ruleset(value: Any) -> str:
