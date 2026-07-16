@@ -11,6 +11,7 @@ from sagasmith_dnd.combat_engine import (
     apply_damage_to_sheet,
     apply_healing_to_sheet,
     arm_readied_spell,
+    available_actions,
     available_attack_defenses,
     available_reactions,
     end_turn,
@@ -961,6 +962,26 @@ def test_common_actions_pay_action_and_keep_tactical_state_explicit() -> None:
         payload={"action": "attack"},
     )
     assert readied["readied"][0]["status"] == "armed"
+
+
+def test_common_cast_can_pay_available_bonus_action_without_spending_main_action() -> None:
+    encounter = start_encounter([_actor("a"), _actor("b")], rng=random.Random(1))
+    current = encounter["combatants"][encounter["turn_index"]]["actor_id"]
+
+    assert "bonus_action" in available_actions(encounter, current)
+    cast = resolve_common_action(
+        encounter,
+        actor_id_value=current,
+        action="cast",
+        payment="bonus_action",
+        payload={"spell_id": "healing-word"},
+    )
+
+    actor = cast["combatants"][cast["turn_index"]]
+    assert actor["turn_budget"]["bonus_action"] == 0
+    assert actor["turn_budget"]["main_action"] == 1
+    assert actor["turn_flags"]["cast_declared"]["spell_id"] == "healing-word"
+    assert "bonus_action" not in available_actions(cast, current)
 
 
 def test_generic_ready_rejects_spell_payload_that_would_bypass_resources() -> None:
