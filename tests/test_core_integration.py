@@ -80,6 +80,7 @@ def test_dnd_module_spatial_manifest_and_temporary_map() -> None:
     assert battle_map["grid"] == {"kind": "square", "cell_ft": 5}
     assert battle_map["map_revision"] == 1
     assert battle_map["source"]["location_key"] == "a1-cellar"
+    assert battle_map["source"]["encounter_scene_id"] == "scene-1"
     validate_position(battle_map, {"x": 1, "y": 1})
     try:
         validate_position(battle_map, {"x": 2, "y": 1})
@@ -87,6 +88,17 @@ def test_dnd_module_spatial_manifest_and_temporary_map() -> None:
         assert "blocked" in str(exc)
     else:
         raise AssertionError("blocked map cells must reject a token position")
+
+    linked_map = compile_battle_map(
+        {
+            "scene_id": "spatial-scene",
+            "encounter_scene_id": "ambush-scene",
+            "spatial": spatial,
+        },
+        {"location_key": "a1-cellar"},
+    )
+    assert linked_map["source"]["scene_id"] == "spatial-scene"
+    assert linked_map["source"]["encounter_scene_id"] == "ambush-scene"
 
     updated = patch_battle_map(battle_map, [{"key": "gate.open", "value": True}])
     assert updated["map_revision"] == 2

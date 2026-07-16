@@ -46,6 +46,7 @@ def compile_battle_map(
     difficult = _cells(request.get("difficult_cells") or [], width, height, "difficult_cells")
     source = {
         "scene_id": scene["scene_id"],
+        "encounter_scene_id": scene.get("encounter_scene_id", scene["scene_id"]),
         "module_id": scene.get("module_id"),
         "location_key": (location or {}).get("key"),
         "scene_spatial_schema": spatial.get("schema_version", 1),
