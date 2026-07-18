@@ -6,6 +6,7 @@ from sagasmith_dnd.lifecycle import (
     advance_effect_durations,
     apply_rest,
     recover_stable_creature,
+    stand_outside_combat,
 )
 
 
@@ -126,3 +127,26 @@ def test_stable_recovery_rejects_nonstable_dead_or_invalid_roll() -> None:
         recover_stable_creature(sheet, recovery_hours=1)
     with pytest.raises(CombatEngineError, match="integer from 1 to 4"):
         recover_stable_creature(sheet, recovery_hours=5)
+
+
+def test_conscious_recovered_creature_can_stand_outside_combat() -> None:
+    sheet = default_character_sheet()
+    sheet["combat"]["hp"] = {"value": 1, "max": 12, "temp": 0}
+    sheet["conditions"] = ["prone"]
+
+    result = stand_outside_combat(sheet)
+
+    assert result["status"] == "stood"
+    assert result["sheet"]["conditions"] == []
+    assert sheet["conditions"] == ["prone"]
+
+
+def test_outside_combat_stand_rejects_unconscious_or_nonprone_creature() -> None:
+    sheet = default_character_sheet()
+    sheet["combat"]["hp"] = {"value": 1, "max": 12, "temp": 0}
+    sheet["conditions"] = ["prone", "unconscious"]
+    with pytest.raises(CombatEngineError, match="conscious living creature"):
+        stand_outside_combat(sheet)
+    sheet["conditions"] = []
+    with pytest.raises(CombatEngineError, match="Prone condition"):
+        stand_outside_combat(sheet)

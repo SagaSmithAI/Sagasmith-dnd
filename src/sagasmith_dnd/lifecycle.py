@@ -77,6 +77,21 @@ def recover_stable_creature(
     }
 
 
+def stand_outside_combat(sheet: dict[str, Any]) -> dict[str, Any]:
+    """Stand a conscious living creature without exposing arbitrary condition edits."""
+    value = deepcopy(sheet)
+    hp = int(dict(value.get("combat", {}).get("hp") or {}).get("value", 0) or 0)
+    conditions = [str(item).casefold() for item in value.get("conditions", [])]
+    if hp <= 0 or "dead" in conditions or "unconscious" in conditions:
+        raise CombatEngineError("standing requires a conscious living creature above 0 hit points")
+    if "prone" not in conditions:
+        raise CombatEngineError("standing requires the Prone condition")
+    value["conditions"] = [
+        item for item in value.get("conditions", []) if str(item).casefold() != "prone"
+    ]
+    return {"sheet": value, "status": "stood", "removed_condition": "prone"}
+
+
 def apply_rest(
     sheet: dict[str, Any],
     *,
