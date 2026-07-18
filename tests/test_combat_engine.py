@@ -14,10 +14,12 @@ from sagasmith_dnd.combat_engine import (
     available_actions,
     available_attack_defenses,
     available_reactions,
+    current_combatant,
     end_turn,
     pay_activity_activation,
     pay_attack_action,
     preflight_attack,
+    queue_combatant,
     resolve_actor_check,
     resolve_attack_action,
     resolve_attack_damage,
@@ -1024,6 +1026,47 @@ def test_common_stabilize_action_pays_main_action_and_records_target() -> None:
         "target_id": target,
         "payload": {"method": "medicine"},
     }
+
+
+def test_queued_combatant_joins_at_next_round_without_moving_current_turn() -> None:
+    encounter = start_encounter(
+        [
+            {**_actor("fast"), "initiative": 20, "tie_breaker": 0},
+            {**_actor("slow"), "initiative": 10, "tie_breaker": 1},
+        ]
+    )
+    queued = queue_combatant(
+        encounter,
+        {**_actor("ally"), "initiative": 15, "tie_breaker": 2},
+    )
+
+    assert current_combatant(queued)["actor_id"] == "fast"
+    assert [item["actor_id"] for item in queued["combatants"]] == ["fast", "slow"]
+    assert queued["reinforcements"][0]["join_round"] == 2
+
+    slow = end_turn(queued, actor_id_value="fast")
+    assert current_combatant(slow)["actor_id"] == "slow"
+    joined = end_turn(slow, actor_id_value="slow")
+    assert joined["round"] == 2
+    assert [item["actor_id"] for item in joined["combatants"]] == [
+        "fast",
+        "ally",
+        "slow",
+    ]
+    assert joined["reinforcements"] == []
+    assert current_combatant(joined)["actor_id"] == "fast"
+
+
+def test_queued_combatant_requires_explicit_tie_breaker_for_initiative_tie() -> None:
+    encounter = start_encounter(
+        [
+            {**_actor("fast"), "initiative": 20, "tie_breaker": 0},
+            {**_actor("slow"), "initiative": 10, "tie_breaker": 1},
+        ]
+    )
+
+    with pytest.raises(NeedsRulingError, match="tie_breaker"):
+        queue_combatant(encounter, {**_actor("ally"), "initiative": 10})
 
 
 def test_generic_ready_rejects_spell_payload_that_would_bypass_resources() -> None:

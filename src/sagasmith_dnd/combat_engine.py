@@ -267,11 +267,78 @@ def start_encounter(
         "round": 1,
         "turn_index": 0,
         "combatants": combatants,
+        "reinforcements": [],
         "pending": [],
         "readied": [],
         "effects": [],
         "log": [],
+}
+
+
+def queue_combatant(
+    encounter: dict[str, Any],
+    actor: dict[str, Any],
+    *,
+    joins_round: int | None = None,
+    rng: Any = None,
+) -> dict[str, Any]:
+    """Queue one canonical actor to enter at the start of a future round."""
+    value = deepcopy(encounter)
+    if not value.get("active", True):
+        raise CombatEngineError("cannot join an inactive encounter")
+    identifier = actor_id(actor)
+    occupied_ids = {
+        str(item.get("actor_id") or "")
+        for item in [
+            *list(value.get("combatants") or []),
+            *list(value.get("reinforcements") or []),
+        ]
     }
+    if identifier in occupied_ids:
+        raise CombatEngineError("actor is already present or queued in this encounter")
+    current_round = int(value.get("round", 1) or 1)
+    due_round = current_round + 1 if joins_round is None else int(joins_round)
+    if due_round <= current_round:
+        raise CombatEngineError("a queued combatant must join in a future round")
+
+    generated = start_encounter(
+        [actor],
+        ruleset=value.get("ruleset"),
+        rng=rng,
+    )["combatants"][0]
+    same_initiative = [
+        item
+        for item in [
+            *list(value.get("combatants") or []),
+            *list(value.get("reinforcements") or []),
+        ]
+        if int(item.get("initiative", 0) or 0) == int(generated["initiative"])
+    ]
+    if same_initiative and "tie_breaker" not in actor:
+        raise NeedsRulingError(
+            "joining initiative ties need an explicit tie_breaker choice",
+            missing=("tie_breaker",),
+        )
+    if "tie_breaker" not in actor:
+        generated["tie_breaker"] = max(
+            (int(item.get("tie_breaker", 0) or 0) for item in value["combatants"]),
+            default=-1,
+        ) + 1
+    generated["join_round"] = due_round
+    value["reinforcements"] = [
+        *list(value.get("reinforcements") or []),
+        generated,
+    ]
+    value["log"] = [
+        *list(value.get("log") or []),
+        {
+            "type": "reinforcement_queued",
+            "actor_id": identifier,
+            "initiative": generated["initiative"],
+            "join_round": due_round,
+        },
+    ][-100:]
+    return value
 
 
 def current_combatant(encounter: dict[str, Any]) -> dict[str, Any] | None:
@@ -328,7 +395,7 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
         if _normalize_ruleset(encounter.get("ruleset")) == "2024":
             actions.extend(["influence", "study", "utilize"])
         else:
-            actions.append("use_object")
+            actions.extend(["improvise", "use_object"])
     if budget.get("bonus_action", 0) > 0:
         actions.append("bonus_action")
     if budget.get("attack_budget", 0) > 0:
@@ -1790,6 +1857,7 @@ def resolve_common_action(
         "ready",
         "search",
         "influence",
+        "improvise",
         "study",
         "stabilize",
         "utilize",
@@ -1853,7 +1921,15 @@ def resolve_common_action(
             "target_id": target_id,
             "payload": deepcopy(payload or {}),
         }
-    elif action in {"hide", "search", "influence", "study", "utilize", "use_object"}:
+    elif action in {
+        "hide",
+        "search",
+        "influence",
+        "improvise",
+        "study",
+        "utilize",
+        "use_object",
+    }:
         flags[f"{action}_declared"] = deepcopy(payload or {})
     elif action == "ready":
         if not trigger:
@@ -2481,9 +2557,45 @@ def end_turn(encounter: dict[str, Any], *, actor_id_value: str | None = None) ->
         # turn ends, not at the start of its second turn.
         current.setdefault("turn_budget", {})["reaction"] = 1
     combatants = list(value.get("combatants") or [])
-    value["turn_index"] = (int(value.get("turn_index", 0)) + 1) % len(combatants)
-    if value["turn_index"] == 0:
+    next_index = (int(value.get("turn_index", 0)) + 1) % len(combatants)
+    if next_index == 0:
         value["round"] = int(value.get("round", 1)) + 1
+        joining = [
+            item
+            for item in value.get("reinforcements", [])
+            if int(item.get("join_round", 0) or 0) <= int(value["round"])
+        ]
+        if joining:
+            for item in joining:
+                item.pop("join_round", None)
+            combatants.extend(joining)
+            combatants.sort(
+                key=lambda item: (
+                    -int(item.get("initiative", 0) or 0),
+                    int(item.get("tie_breaker", 0) or 0),
+                    str(item.get("actor_id") or ""),
+                )
+            )
+            value["combatants"] = combatants
+            joined_ids = {str(item.get("actor_id") or "") for item in joining}
+            value["reinforcements"] = [
+                item
+                for item in value.get("reinforcements", [])
+                if str(item.get("actor_id") or "") not in joined_ids
+            ]
+            value["log"] = [
+                *list(value.get("log") or []),
+                *[
+                    {
+                        "type": "reinforcement_joined",
+                        "actor_id": item.get("actor_id"),
+                        "round": value["round"],
+                    }
+                    for item in joining
+                ],
+            ][-100:]
+        next_index = 0
+    value["turn_index"] = next_index
     next_actor = current_combatant(value)
     if next_actor:
         next_flags = dict(next_actor.get("turn_flags") or {})
