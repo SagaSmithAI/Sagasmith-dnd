@@ -156,7 +156,12 @@ def apply_rest(
             )
 
     def recover_resource(resource: object, key: str) -> None:
-        if not isinstance(resource, dict) or resource.get("recovers_on") != rest_type:
+        if not isinstance(resource, dict):
+            return
+        recovery = resource.get("recovers_on")
+        if recovery != rest_type and not (
+            rest_type == "long_rest" and recovery == "short_rest"
+        ):
             return
         before = int(resource.get("value", 0) or 0)
         resource["value"] = int(resource.get("max", 0) or 0)

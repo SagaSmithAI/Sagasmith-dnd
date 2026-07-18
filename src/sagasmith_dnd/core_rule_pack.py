@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-CORE_RULE_PACK_VERSION = "1.4.0"
+CORE_RULE_PACK_VERSION = "1.5.0"
 
 
 @dataclass(frozen=True)
@@ -54,6 +54,20 @@ BOUNDARIES = (
         "ability_generation.py",
         ("tests/test_ability_generation.py",),
         "bundled:srd/character-creation",
+    ),
+    CoreBoundary(
+        "dnd5e.core.progression.hp_hit_dice",
+        ("2014",),
+        "progression.advance_single_class_level",
+        ("tests/test_progression.py",),
+        "bundled:srd2014/03_Characterization/Beyond_1st_Level.md",
+    ),
+    CoreBoundary(
+        "dnd5e.core.progression.spellcasting",
+        ("2014",),
+        "progression.advance_single_class_level",
+        ("tests/test_progression.py",),
+        "bundled:srd2014/02_Classes",
     ),
     CoreBoundary(
         "dnd5e.core.armor_class.unarmored",

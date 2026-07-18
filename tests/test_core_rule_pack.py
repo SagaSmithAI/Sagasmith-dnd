@@ -38,7 +38,11 @@ REQUIRED_BOUNDARIES = {
 }
 
 EDITION_BOUNDARIES = {
-    "2014": {"dnd5e.core.spell.pact_magic"},
+    "2014": {
+        "dnd5e.core.spell.pact_magic",
+        "dnd5e.core.progression.hp_hit_dice",
+        "dnd5e.core.progression.spellcasting",
+    },
     "2024": set(),
 }
 

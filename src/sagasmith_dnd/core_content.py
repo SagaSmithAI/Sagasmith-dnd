@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 PACK_ID = "dnd5e.content.srd2014"
-PACK_VERSION = "1.4.0"
+PACK_VERSION = "1.5.0"
 
 _SUBCLASS_LEVELS = {
     "barbarian": 3,
@@ -507,6 +507,52 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
             },
             "choices": {"outcome": "roll 1d10 + fighter level, then apply healing"},
         }
+    if key == ("fighter", "action surge"):
+        return {
+            "activation": {"type": "special", "cost": 0},
+            "uses": {
+                "label": "Action Surge",
+                "value": 1,
+                "max": 1,
+                "recovers_on": "short_rest",
+            },
+            "choices": {"outcome": "take one additional action on the current turn"},
+        }
+    if key == ("rogue", "cunning action"):
+        return {
+            "activation": {"type": "bonus_action", "cost": 1},
+            "choices": {"options": ["Dash", "Disengage", "Hide"]},
+        }
+    if key == ("cleric", "channel divinity"):
+        return {
+            "activation": {"type": "action", "cost": 1},
+            "resource_key": "channel_divinity",
+            "mechanical_grants": {
+                "resources": {
+                    "channel_divinity": {
+                        "label": "Channel Divinity",
+                        "value": 1,
+                        "max": 1,
+                        "recovers_on": "short_rest",
+                        "source_key": "Cleric",
+                    }
+                }
+            },
+            "choices": {"options": ["Turn Undead", "selected-domain option"]},
+        }
+    if key == ("cleric", "channel divinity: preserve life"):
+        return {
+            "activation": {"type": "action", "cost": 1},
+            "resource_key": "channel_divinity",
+            "choices": {
+                "outcome": (
+                    "restore up to five times cleric level hit points among creatures "
+                    "within 30 feet, never above half maximum hit points"
+                )
+            },
+        }
+    if key == ("sorcerer", "draconic resilience"):
+        return {"mechanical_grants": {"hp_per_class_level": 1}}
     if title.casefold() == "fighting style":
         options = [name for name, _ in _h4_sections(body)]
         return {

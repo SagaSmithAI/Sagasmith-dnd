@@ -9,7 +9,7 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     manifest, artifacts = build_srd2014_content(workspace / "SagaSmith-dnd-skills")
     counts = Counter(item["kind"] for item in artifacts)
 
-    assert manifest["version"] == PACK_VERSION == "1.4.0"
+    assert manifest["version"] == PACK_VERSION == "1.5.0"
     assert counts["spell"] == 319
     assert counts["species"] == 13
     assert counts["class"] == 12
@@ -92,6 +92,32 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     )
     assert second_wind["card"]["activation"]["type"] == "bonus_action"
     assert second_wind["card"]["uses"]["recovers_on"] == "short_rest"
+
+    action_surge = next(
+        item
+        for item in artifacts
+        if item["id"] == "dnd5e.content.srd2014.feature.fighter-action-surge"
+    )
+    assert action_surge["card"]["activation"]["type"] == "special"
+    assert action_surge["card"]["uses"]["value"] == 1
+
+    channel_divinity = next(
+        item
+        for item in artifacts
+        if item["id"] == "dnd5e.content.srd2014.feature.cleric-channel-divinity"
+    )
+    assert channel_divinity["card"]["resource_key"] == "channel_divinity"
+    assert channel_divinity["card"]["mechanical_grants"]["resources"][
+        "channel_divinity"
+    ]["recovers_on"] == "short_rest"
+
+    preserve_life = next(
+        item
+        for item in artifacts
+        if item["id"]
+        == "dnd5e.content.srd2014.feature.life-domain-channel-divinity-preserve-life"
+    )
+    assert preserve_life["card"]["resource_key"] == "channel_divinity"
 
     hill_dwarf = next(
         item

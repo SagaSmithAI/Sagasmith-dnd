@@ -37,6 +37,24 @@ def test_effect_duration_and_long_rest_recovery_are_card_local() -> None:
     assert result["recovered"]["feature"] == 2
 
 
+def test_long_rest_also_recovers_short_rest_resources() -> None:
+    sheet = default_character_sheet()
+    sheet["resources"] = {
+        "channel_divinity": {
+            "label": "Channel Divinity",
+            "value": 0,
+            "max": 1,
+            "recovers_on": "short_rest",
+            "source_key": "Cleric",
+        }
+    }
+
+    result = apply_rest(sheet, rest_type="long_rest")
+
+    assert result["sheet"]["resources"]["channel_divinity"]["value"] == 1
+    assert result["recovered"]["channel_divinity"] == 1
+
+
 def test_elapsed_time_only_advances_matching_effect_periods() -> None:
     sheet = default_character_sheet()
     sheet["effects"] = [
