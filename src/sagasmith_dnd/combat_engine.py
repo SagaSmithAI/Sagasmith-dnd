@@ -312,7 +312,18 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
     )
     if budget.get("main_action", 0) > 0 or budget.get("extra_action", 0) > 0:
         actions.extend(
-            ["attack", "cast", "dash", "disengage", "dodge", "help", "hide", "ready", "search"]
+            [
+                "attack",
+                "cast",
+                "dash",
+                "disengage",
+                "dodge",
+                "help",
+                "hide",
+                "ready",
+                "search",
+                "stabilize",
+            ]
         )
         if _normalize_ruleset(encounter.get("ruleset")) == "2024":
             actions.extend(["influence", "study", "utilize"])
@@ -1527,6 +1538,30 @@ def resolve_death_save_to_sheet(
     return {"sheet": value, **result}
 
 
+def stabilize_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
+    """Make one living creature at 0 HP stable and clear its death-save tally."""
+    value = deepcopy(sheet)
+    combat = value.setdefault("combat", {})
+    hp = dict(combat.setdefault("hp", {"value": 0, "max": 1, "temp": 0}))
+    if int(hp.get("value", 0) or 0) != 0:
+        raise CombatEngineError("only a creature at 0 hit points can be stabilized")
+    conditions = _condition_set(value.get("conditions"))
+    if "dead" in conditions:
+        raise CombatEngineError("a dead creature cannot be stabilized")
+    if "stable" in conditions:
+        raise CombatEngineError("the creature is already stable")
+    before = dict(combat.setdefault("death_saves", {"successes": 0, "failures": 0}))
+    combat["death_saves"] = {"successes": 0, "failures": 0}
+    value["conditions"] = sorted(conditions | {"stable", "unconscious"})
+    return {
+        "sheet": value,
+        "status": "stable",
+        "before_death_saves": before,
+        "after_death_saves": {"successes": 0, "failures": 0},
+        "conditions": list(value["conditions"]),
+    }
+
+
 def apply_concentration_result(
     sheet: dict[str, Any],
     *,
@@ -1756,6 +1791,7 @@ def resolve_common_action(
         "search",
         "influence",
         "study",
+        "stabilize",
         "utilize",
         "use_object",
     }
@@ -1810,6 +1846,13 @@ def resolve_common_action(
         if not target_id:
             raise CombatEngineError("help requires a target actor")
         flags["helping"] = {"target_id": target_id, "payload": deepcopy(payload or {})}
+    elif action == "stabilize":
+        if not target_id:
+            raise CombatEngineError("stabilize requires a target actor")
+        flags["stabilizing"] = {
+            "target_id": target_id,
+            "payload": deepcopy(payload or {}),
+        }
     elif action in {"hide", "search", "influence", "study", "utilize", "use_object"}:
         flags[f"{action}_declared"] = deepcopy(payload or {})
     elif action == "ready":

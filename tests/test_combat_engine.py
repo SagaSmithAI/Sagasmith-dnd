@@ -27,6 +27,7 @@ from sagasmith_dnd.combat_engine import (
     resolve_readied_spell_window,
     roll_attack_action,
     spend_movement,
+    stabilize_sheet,
     start_encounter,
     trigger_readied_spell,
 )
@@ -922,6 +923,26 @@ def test_death_save_persists_nat20_recovery() -> None:
     assert "unconscious" not in result["sheet"]["conditions"]
 
 
+def test_stabilize_sheet_requires_zero_hp_and_clears_death_saves() -> None:
+    actor = _actor("dying")
+    actor["sheet"]["combat"]["hp"]["value"] = 0
+    actor["sheet"]["combat"]["death_saves"] = {"successes": 1, "failures": 2}
+    actor["sheet"]["conditions"] = ["prone", "unconscious"]
+
+    result = stabilize_sheet(actor["sheet"])
+
+    assert result["status"] == "stable"
+    assert result["before_death_saves"] == {"successes": 1, "failures": 2}
+    assert result["sheet"]["combat"]["death_saves"] == {"successes": 0, "failures": 0}
+    assert set(result["sheet"]["conditions"]) == {"prone", "stable", "unconscious"}
+
+    with pytest.raises(ValueError, match="0 hit points"):
+        stabilize_sheet(_actor("healthy")["sheet"])
+    dead = actor["sheet"] | {"conditions": ["dead"]}
+    with pytest.raises(ValueError, match="dead creature"):
+        stabilize_sheet(dead)
+
+
 def test_movement_and_choice_window_are_explicit() -> None:
     encounter = start_encounter([_actor("a"), _actor("b")], rng=random.Random(1))
     current = encounter["combatants"][encounter["turn_index"]]["actor_id"]
@@ -982,6 +1003,27 @@ def test_common_cast_can_pay_available_bonus_action_without_spending_main_action
     assert actor["turn_budget"]["main_action"] == 1
     assert actor["turn_flags"]["cast_declared"]["spell_id"] == "healing-word"
     assert "bonus_action" not in available_actions(cast, current)
+
+
+def test_common_stabilize_action_pays_main_action_and_records_target() -> None:
+    encounter = start_encounter([_actor("helper"), _actor("target")], rng=random.Random(1))
+    current = encounter["combatants"][encounter["turn_index"]]["actor_id"]
+    target = "target" if current == "helper" else "helper"
+
+    stabilized = resolve_common_action(
+        encounter,
+        actor_id_value=current,
+        action="stabilize",
+        target_id=target,
+        payload={"method": "medicine"},
+    )
+
+    actor = stabilized["combatants"][stabilized["turn_index"]]
+    assert actor["turn_budget"]["main_action"] == 0
+    assert actor["turn_flags"]["stabilizing"] == {
+        "target_id": target,
+        "payload": {"method": "medicine"},
+    }
 
 
 def test_generic_ready_rejects_spell_payload_that_would_bypass_resources() -> None:
