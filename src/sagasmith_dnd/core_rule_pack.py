@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-CORE_RULE_PACK_VERSION = "1.3.0"
+CORE_RULE_PACK_VERSION = "1.4.0"
 
 
 @dataclass(frozen=True)
@@ -124,6 +124,13 @@ BOUNDARIES = (
         "combat_engine._apply_adjusted_damage",
         ("tests/test_combat_engine.py",),
         "bundled:srd/knocking-a-creature-out",
+    ),
+    CoreBoundary(
+        "dnd5e.core.damage.stable_recovery",
+        ("2014", "2024"),
+        "lifecycle.recover_stable_creature",
+        ("tests/test_lifecycle.py::test_stable_creature_recovers_one_hp_after_rolled_hours",),
+        "bundled:srd/damage-and-healing",
     ),
     CoreBoundary(
         "dnd5e.core.movement.prone_crawl_stand",

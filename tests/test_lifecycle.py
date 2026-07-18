@@ -1,5 +1,12 @@
+import pytest
+
 from sagasmith_dnd.character_schema import default_character_sheet
-from sagasmith_dnd.lifecycle import advance_effect_durations, apply_rest
+from sagasmith_dnd.combat_engine import CombatEngineError
+from sagasmith_dnd.lifecycle import (
+    advance_effect_durations,
+    apply_rest,
+    recover_stable_creature,
+)
 
 
 def test_effect_duration_and_long_rest_recovery_are_card_local() -> None:
@@ -65,3 +72,30 @@ def test_short_rest_uses_explicit_hit_die_roll_and_2024_long_rest_recovers_all()
     assert short_rest["sheet"]["combat"]["hp"]["value"] == 8
     long_rest = apply_rest(short_rest["sheet"], rest_type="long_rest")
     assert long_rest["sheet"]["combat"]["hit_dice"]["d8"]["value"] == 3
+
+
+def test_stable_creature_recovers_one_hp_after_rolled_hours() -> None:
+    sheet = default_character_sheet()
+    sheet["combat"]["hp"] = {"value": 0, "max": 12, "temp": 0}
+    sheet["combat"]["death_saves"] = {"successes": 0, "failures": 0}
+    sheet["conditions"] = ["prone", "stable", "unconscious"]
+
+    result = recover_stable_creature(sheet, recovery_hours=3)
+
+    assert result["recovery_hours"] == 3
+    assert result["sheet"]["combat"]["hp"]["value"] == 1
+    assert result["sheet"]["combat"]["death_saves"] == {"successes": 0, "failures": 0}
+    assert result["sheet"]["conditions"] == ["prone"]
+    assert sheet["combat"]["hp"]["value"] == 0
+
+
+def test_stable_recovery_rejects_nonstable_dead_or_invalid_roll() -> None:
+    sheet = default_character_sheet()
+    sheet["combat"]["hp"] = {"value": 0, "max": 12, "temp": 0}
+    with pytest.raises(CombatEngineError, match="Stable creature at 0"):
+        recover_stable_creature(sheet, recovery_hours=1)
+    sheet["conditions"] = ["dead", "stable", "unconscious"]
+    with pytest.raises(CombatEngineError, match="dead creature"):
+        recover_stable_creature(sheet, recovery_hours=1)
+    with pytest.raises(CombatEngineError, match="integer from 1 to 4"):
+        recover_stable_creature(sheet, recovery_hours=5)

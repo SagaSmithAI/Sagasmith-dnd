@@ -34,6 +34,39 @@ def advance_effect_durations(sheet: dict[str, Any], *, period: str) -> dict[str,
     return {"sheet": value, "period": normalized, "advanced": advanced, "expired": expired}
 
 
+def recover_stable_creature(
+    sheet: dict[str, Any], *, recovery_hours: int
+) -> dict[str, Any]:
+    """Resolve the automatic 1 HP recovery of an unhealed Stable creature."""
+    if isinstance(recovery_hours, bool) or not isinstance(recovery_hours, int):
+        raise CombatEngineError("stable recovery hours must be an integer from 1 to 4")
+    if not 1 <= recovery_hours <= 4:
+        raise CombatEngineError("stable recovery hours must be an integer from 1 to 4")
+    value = deepcopy(sheet)
+    combat = value.setdefault("combat", {})
+    hp = dict(combat.get("hp") or {})
+    conditions = {str(item).casefold() for item in value.get("conditions", [])}
+    if "dead" in conditions:
+        raise CombatEngineError("a dead creature cannot recover from being stable")
+    if int(hp.get("value", 0) or 0) != 0 or "stable" not in conditions:
+        raise CombatEngineError("stable recovery requires a Stable creature at 0 hit points")
+    hp["value"] = 1
+    combat["hp"] = hp
+    combat["death_saves"] = {"successes": 0, "failures": 0}
+    value["conditions"] = [
+        item
+        for item in value.get("conditions", [])
+        if str(item).casefold() not in {"stable", "unconscious"}
+    ]
+    return {
+        "sheet": value,
+        "status": "recovered",
+        "recovery_hours": recovery_hours,
+        "before_hp": 0,
+        "after_hp": 1,
+    }
+
+
 def apply_rest(
     sheet: dict[str, Any],
     *,

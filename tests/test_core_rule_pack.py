@@ -15,6 +15,7 @@ REQUIRED_BOUNDARIES = {
     "dnd5e.core.attack.hidden_reveal",
     "dnd5e.core.damage.zero_hp",
     "dnd5e.core.damage.knockout",
+    "dnd5e.core.damage.stable_recovery",
     "dnd5e.core.movement.prone_crawl_stand",
     "dnd5e.core.movement.grapple_source",
     "dnd5e.core.reaction.opportunity_path",
