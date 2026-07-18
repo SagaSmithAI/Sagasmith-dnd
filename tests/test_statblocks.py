@@ -1,0 +1,124 @@
+from sagasmith_dnd.character_schema import derive_character_sheet
+from sagasmith_dnd.statblocks import parse_2014_statblock
+
+COMMONER = """### Commoner
+
+*Medium humanoid (any race), any alignment*
+
+**Armor Class** 10
+
+**Hit Points** 4 (1d8)
+
+**Speed** 30 ft.
+
+| STR | DEX | CON | INT | WIS | CHA |
+|:---:|:---:|:---:|:---:|:---:|:---:|
+| 10 (+0) | 10 (+0) | 10 (+0) | 10 (+0) | 10 (+0) | 10 (+0) |
+
+**Senses** passive Perception 10
+
+**Languages** any one language (usually Common)
+
+**Challenge** 0 (10 XP)
+
+###### Actions
+
+***Club***. *Melee Weapon Attack:* +2 to hit, reach 5 ft., one target.
+*Hit:* 2 (1d4) bludgeoning damage.
+"""
+
+
+BANDIT_CAPTAIN = """### Bandit Captain
+
+*Medium humanoid (any race), any non-lawful alignment*
+
+**Armor Class** 15 (studded leather)
+
+**Hit Points** 65 (10d8 + 20)
+
+**Speed** 30 ft.
+
+| STR | DEX | CON | INT | WIS | CHA |
+|:---:|:---:|:---:|:---:|:---:|:---:|
+| 15 (+2) | 16 (+3) | 14 (+2) | 14 (+2) | 11 (+0) | 14 (+2) |
+
+**Saving Throws** Str +4, Dex +5, Wis +2
+
+**Skills** Athletics +4, Deception +4
+
+**Senses** passive Perception 10
+
+**Languages** any two languages
+
+**Challenge** 2 (450 XP)
+
+###### Actions
+
+***Multiattack***. The captain makes three melee attacks: two with its scimitar and one with its
+dagger. Or the captain makes two ranged attacks with its daggers.
+
+***Scimitar***. *Melee Weapon Attack:* +5 to hit, reach 5 ft., one target.
+*Hit:* 6 (1d6 + 3) slashing damage.
+
+***Dagger***. *Melee or Ranged Weapon Attack:* +5 to hit, reach 5 ft. or range 20/60 ft.,
+one target. *Hit:* 5 (1d4 + 2) piercing damage.
+
+###### Reactions
+
+***Parry***. The captain adds 2 to its AC against one melee attack that would hit it.
+"""
+
+
+def test_commoner_statblock_becomes_an_exact_executable_actor_sheet() -> None:
+    parsed = parse_2014_statblock(
+        COMMONER,
+        source_key="srd-commoner",
+        rule_refs=["chunk-commoner"],
+    )
+    derived = derive_character_sheet(parsed.sheet)
+
+    assert parsed.name == "Commoner"
+    assert parsed.challenge_rating == "0"
+    assert parsed.experience_points == 10
+    assert parsed.warnings == ()
+    assert derived["armor_class"] == 10
+    assert derived["hit_points"]["max"] == 4
+    assert derived["speed"]["walk"] == 30
+    assert derived["inventory"]["weapon_attacks"] == [
+        derived["inventory"]["weapon_attacks"][0]
+    ]
+    club = derived["inventory"]["weapon_attacks"][0]
+    assert club["item_id"] == "club"
+    assert club["attack_bonus"] == 2
+    assert club["damage_expression"] == "1d4"
+    assert club["reach_ft"] == 5
+
+
+def test_bandit_captain_preserves_exact_overrides_and_multiattack_composition() -> None:
+    parsed = parse_2014_statblock(
+        BANDIT_CAPTAIN,
+        source_key="srd-bandit-captain",
+        rule_refs=["chunk-bandit-captain"],
+    )
+    derived = derive_character_sheet(parsed.sheet)
+
+    assert derived["armor_class"] == 15
+    assert derived["saving_throws"]["strength"] == 4
+    assert derived["saving_throws"]["dexterity"] == 5
+    assert derived["skills"]["athletics"] == 4
+    assert derived["skills"]["deception"] == 4
+    attacks = {item["item_id"]: item for item in derived["inventory"]["weapon_attacks"]}
+    assert attacks["scimitar"]["attack_bonus"] == 5
+    assert attacks["scimitar"]["damage_expression"] == "1d6 + 3"
+    assert attacks["dagger"]["damage_expression"] == "1d4 + 2"
+    assert attacks["dagger"]["thrown_range_ft"] == {"normal": 20, "long": 60}
+    assert derived["attacks_per_action"] == 3
+    options = {item["id"]: item["attacks"] for item in derived["multiattack_options"]}
+    assert options["melee"] == [
+        {"weapon_id": "scimitar", "attack_mode": "melee", "count": 2},
+        {"weapon_id": "dagger", "attack_mode": "melee", "count": 1},
+    ]
+    assert options["ranged"] == [
+        {"weapon_id": "dagger", "attack_mode": "ranged", "count": 2}
+    ]
+    assert parsed.warnings == ("Parry: descriptive reaction is not automatically settled",)

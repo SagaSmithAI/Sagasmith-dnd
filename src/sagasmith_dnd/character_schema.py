@@ -385,6 +385,10 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
                 "ammunition_item_id",
                 "proficient",
                 "magic_bonus",
+                "reach_ft",
+                "attack_bonus_override",
+                "damage_bonus_override",
+                "always_available",
             },
         )
         category = _text(mechanics.get("category"), f"{field}.category", default="other")
@@ -438,6 +442,25 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
                 mechanics.get("proficient"), f"{field}.proficient", default=True
             ),
             "magic_bonus": _integer(mechanics.get("magic_bonus"), f"{field}.magic_bonus"),
+            "reach_ft": _integer(
+                mechanics.get("reach_ft"),
+                f"{field}.reach_ft",
+                default=10 if "reach" in {item.casefold() for item in properties} else 5,
+                minimum=1,
+            ),
+            "attack_bonus_override": (
+                _integer(mechanics["attack_bonus_override"], f"{field}.attack_bonus_override")
+                if mechanics.get("attack_bonus_override") is not None
+                else None
+            ),
+            "damage_bonus_override": (
+                _integer(mechanics["damage_bonus_override"], f"{field}.damage_bonus_override")
+                if mechanics.get("damage_bonus_override") is not None
+                else None
+            ),
+            "always_available": _boolean(
+                mechanics.get("always_available"), f"{field}.always_available"
+            ),
         }
     if kind == "container":
         _reject_unknown(
@@ -1847,7 +1870,9 @@ def _weapon_attacks(
 ) -> list[dict[str, Any]]:
     attacks = []
     for item in inventory["items"]:
-        if item["kind"] != "weapon" or not item["equipped"]:
+        if item["kind"] != "weapon" or not (
+            item["equipped"] or item["mechanics"].get("always_available", False)
+        ):
             continue
         mechanics = item["mechanics"]
         ability = mechanics["attack_ability"]
@@ -1856,10 +1881,14 @@ def _weapon_attacks(
             if ability == "spell"
             else ability_modifiers.get(ability, 0)
         )
-        attack_bonus = modifier + mechanics["magic_bonus"]
-        if mechanics["proficient"]:
-            attack_bonus += proficiency
-        damage_bonus = modifier + mechanics["magic_bonus"]
+        attack_bonus = mechanics.get("attack_bonus_override")
+        if attack_bonus is None:
+            attack_bonus = modifier + mechanics["magic_bonus"]
+            if mechanics["proficient"]:
+                attack_bonus += proficiency
+        damage_bonus = mechanics.get("damage_bonus_override")
+        if damage_bonus is None:
+            damage_bonus = modifier + mechanics["magic_bonus"]
         damage_formula = mechanics["damage_formula"]
         damage_expression = damage_formula
         if damage_formula and damage_bonus:
@@ -1872,9 +1901,7 @@ def _weapon_attacks(
                 "name": item["name"],
                 "equipped_slot": item["equipped_slot"],
                 "attack_type": mechanics["attack_type"],
-                "reach_ft": 10
-                if "reach" in {item.casefold() for item in mechanics["properties"]}
-                else 5,
+                "reach_ft": mechanics.get("reach_ft", 5),
                 "attack_ability": ability,
                 "attack_bonus": attack_bonus,
                 "damage_formula": damage_formula,
