@@ -37,6 +37,24 @@ _DIMENSIONS = re.compile(
     r"(?P<height>\d{1,3})\s*(?:-?foot|feet|ft\.?|\u5c3a)",
     re.IGNORECASE,
 )
+_ROOM_CODE = re.compile(r"^(?P<code>[A-Z]{1,3}\d+[A-Za-z]?)", re.IGNORECASE)
+_ROOM_HEADING = re.compile(
+    r"^#{1,6}\s+(?P<code>[A-Z]{1,3}\d+[A-Za-z]?)\s*[.．。:：-]?",
+    re.IGNORECASE | re.MULTILINE,
+)
+_EXPLICIT_ROUTE_PATTERNS = (
+    re.compile(
+        r"(?:通向|通往|连接到|连接至|直达)\s*(?:了|着)?\s*"
+        r"(?:区域|区|房间)?\s*(?P<target>[A-Z]{1,3}\d+[A-Za-z]?)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:leads?|connects?|opens?|descends?|ascends?)\s+"
+        r"(?:directly\s+)?(?:to|into)\s+(?:area|room\s+)?"
+        r"(?P<target>[A-Z]{1,3}\d+[A-Za-z]?)\b",
+        re.IGNORECASE,
+    ),
+)
 
 
 def _has_cjk(text: str) -> bool:
@@ -163,6 +181,60 @@ def _location_key(title: str, ordinal: int) -> str:
     return folded[:72] or f"location-{ordinal + 1}"
 
 
+def _explicit_connections(
+    text: str, locations: list[dict[str, object]]
+) -> list[dict[str, object]]:
+    """Extract only prose that explicitly states one room leads to another.
+
+    Room-number order and generic cross-references are deliberately ignored: an
+    encounter in D2 mentioning reinforcements from D4 is not enough evidence of
+    a traversable D2-D4 edge. Each accepted edge retains its source line so a DM
+    or importer UI can audit the parser decision.
+    """
+    key_by_code: dict[str, str] = {}
+    for location in locations:
+        matched = _ROOM_CODE.match(str(location.get("title") or "").strip())
+        if matched:
+            key_by_code[matched.group("code").casefold()] = str(location["key"])
+    if len(key_by_code) < 2:
+        return []
+
+    headings = list(_ROOM_HEADING.finditer(text))
+    connections: list[dict[str, object]] = []
+    seen: set[tuple[str, str]] = set()
+    for index, heading in enumerate(headings):
+        source_code = heading.group("code").casefold()
+        source_key = key_by_code.get(source_code)
+        if source_key is None:
+            continue
+        end = headings[index + 1].start() if index + 1 < len(headings) else len(text)
+        section = text[heading.end() : end]
+        for pattern in _EXPLICIT_ROUTE_PATTERNS:
+            for route in pattern.finditer(section):
+                target_key = key_by_code.get(route.group("target").casefold())
+                if target_key is None or target_key == source_key:
+                    continue
+                edge = tuple(sorted((source_key, target_key)))
+                if edge in seen:
+                    continue
+                seen.add(edge)
+                matched_text = route.group(0).strip()
+                connections.append(
+                    {
+                        "from": source_key,
+                        "to": target_key,
+                        "bidirectional": True,
+                        "kind": "passage",
+                        "confidence": "explicit_text",
+                        "evidence": {
+                            "line": _line_number(text, heading.end() + route.start()),
+                            "text": matched_text,
+                        },
+                    }
+                )
+    return connections
+
+
 def _spatial_manifest(
     title: str, text: str, subsections: list[dict[str, object]]
 ) -> dict[str, object]:
@@ -204,15 +276,14 @@ def _spatial_manifest(
         "schema_version": 1,
         "grid": {"kind": "square", "cell_ft": 5},
         "locations": locations,
-        # Connections need explicit structured authoring or DM confirmation;
-        # a heading order is not safe evidence of a traversable route.
-        "connections": [],
+        # Heading order remains unsafe. Only explicit route prose is accepted.
+        "connections": _explicit_connections(text, locations),
     }
 
 
 class DndModuleProfile(GenericModuleProfile):
     name = "dnd5e"
-    version = "3"
+    version = "4"
 
     def classify_chunk(self, heading: str, text: str) -> str:
         if _ROOM.match(heading):
