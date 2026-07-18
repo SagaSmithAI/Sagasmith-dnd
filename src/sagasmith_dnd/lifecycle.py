@@ -9,8 +9,12 @@ from sagasmith_dnd.combat_engine import CombatEngineError
 from sagasmith_dnd.rule_engine import ResolutionContext, apply_rule_event, core_receipts
 
 
-def advance_effect_durations(sheet: dict[str, Any], *, period: str) -> dict[str, Any]:
+def advance_effect_durations(
+    sheet: dict[str, Any], *, period: str, amount: int = 1
+) -> dict[str, Any]:
     """Advance effects whose declared period matches and deactivate expired ones."""
+    if isinstance(amount, bool) or not isinstance(amount, int) or amount < 1:
+        raise CombatEngineError("effect duration advance amount must be a positive integer")
     normalized = str(period).strip().lower().replace("-", "_")
     aliases = {"round_end": "round", "round_start": "round", "turn": "turn_end"}
     normalized = aliases.get(normalized, normalized)
@@ -24,14 +28,20 @@ def advance_effect_durations(sheet: dict[str, Any], *, period: str) -> dict[str,
         if duration.get("period") != normalized:
             continue
         remaining = int(duration.get("remaining", 0) or 0)
-        if remaining <= 1:
+        if remaining <= amount:
             effect["active"] = False
             expired.append(str(effect.get("id")))
         else:
-            duration["remaining"] = remaining - 1
+            duration["remaining"] = remaining - amount
             effect["duration"] = duration
             advanced.append(str(effect.get("id")))
-    return {"sheet": value, "period": normalized, "advanced": advanced, "expired": expired}
+    return {
+        "sheet": value,
+        "period": normalized,
+        "amount": amount,
+        "advanced": advanced,
+        "expired": expired,
+    }
 
 
 def recover_stable_creature(

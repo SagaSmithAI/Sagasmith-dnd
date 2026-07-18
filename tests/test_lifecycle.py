@@ -57,6 +57,33 @@ def test_elapsed_time_only_advances_matching_effect_periods() -> None:
     assert result["sheet"]["effects"][1]["active"] is True
 
 
+def test_effect_duration_advance_accepts_audited_multi_period_amount() -> None:
+    sheet = default_character_sheet()
+    sheet["effects"] = [
+        {
+            "id": "hourly-ward",
+            "name": "Hourly Ward",
+            "active": True,
+            "duration": {"period": "hour", "remaining": 3},
+        }
+    ]
+
+    result = advance_effect_durations(sheet, period="hour", amount=2)
+
+    assert result["amount"] == 2
+    assert result["advanced"] == ["hourly-ward"]
+    assert result["sheet"]["effects"][0]["duration"]["remaining"] == 1
+
+    expired = advance_effect_durations(result["sheet"], period="hour", amount=2)
+    assert expired["expired"] == ["hourly-ward"]
+    assert expired["sheet"]["effects"][0]["active"] is False
+
+
+def test_effect_duration_advance_rejects_nonpositive_amount() -> None:
+    with pytest.raises(CombatEngineError, match="positive integer"):
+        advance_effect_durations(default_character_sheet(), period="hour", amount=0)
+
+
 def test_short_rest_uses_explicit_hit_die_roll_and_2024_long_rest_recovers_all() -> None:
     sheet = default_character_sheet()
     sheet["edition"] = "2024"
