@@ -800,7 +800,11 @@ def test_surprise_semantics_are_ruleset_specific() -> None:
     old_surprised = next(item for item in old["combatants"] if item["actor_id"] == "a")
     modern_surprised = next(item for item in modern["combatants"] if item["actor_id"] == "a")
     assert old_surprised["turn_budget"]["main_action"] == 0
+    assert old_surprised["turn_budget"]["bonus_action"] == 0
+    assert old_surprised["turn_budget"]["object_interaction"] == 0
     assert modern_surprised["turn_budget"]["main_action"] == 1
+    assert modern_surprised["turn_budget"]["bonus_action"] == 1
+    assert modern_surprised["turn_budget"]["object_interaction"] == 1
 
 
 def test_2014_surprised_actor_regains_reaction_when_first_turn_ends() -> None:
@@ -812,6 +816,8 @@ def test_2014_surprised_actor_regains_reaction_when_first_turn_ends() -> None:
     ended = end_turn(encounter, actor_id_value="surprised")
     combatant = next(item for item in ended["combatants"] if item["actor_id"] == "surprised")
     assert combatant["turn_budget"]["reaction"] == 1
+    assert combatant["turn_budget"]["bonus_action"] == 0
+    assert combatant["turn_budget"]["object_interaction"] == 0
 
 
 def test_dodge_lasts_until_start_of_next_turn_and_affects_attacks() -> None:

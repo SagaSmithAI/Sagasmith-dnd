@@ -236,8 +236,10 @@ def start_encounter(
         if combatants[-1]["surprised"] and normalized_ruleset == "2014":
             combatants[-1]["turn_budget"].update(
                 main_action=0,
+                bonus_action=0,
                 movement=0,
                 reaction=0,
+                object_interaction=0,
             )
     ties: dict[int, list[dict[str, Any]]] = {}
     for combatant in combatants:
@@ -2621,7 +2623,13 @@ def end_turn(encounter: dict[str, Any], *, actor_id_value: str | None = None) ->
             attack_budget=0,
         )
         if next_actor.get("surprised") and _normalize_ruleset(value.get("ruleset")) == "2014":
-            budget.update(main_action=0, movement=0, reaction=0)
+            budget.update(
+                main_action=0,
+                bonus_action=0,
+                movement=0,
+                reaction=0,
+                object_interaction=0,
+            )
         next_actor["turn_budget"] = budget
     value["turn_spell_casts"] = {}
     return value
