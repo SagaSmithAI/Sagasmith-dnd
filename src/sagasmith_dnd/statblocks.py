@@ -172,7 +172,7 @@ def _parse_weapon(name: str, description: str, source_key: str) -> dict[str, Any
         r"([+\-−]\s*\d+)\s+to hit",
         description,
     )
-    if not attack or attack.group(2).casefold() != "weapon":
+    if not attack:
         return None
     mode = attack.group(1).casefold()
     hit = re.search(
@@ -193,7 +193,13 @@ def _parse_weapon(name: str, description: str, source_key: str) -> dict[str, Any
         properties.append("thrown")
     mechanics: dict[str, Any] = {
         "attack_type": "ranged" if mode == "ranged" else "melee",
-        "attack_ability": "dexterity" if mode == "ranged" else "strength",
+        "attack_ability": (
+            "spell"
+            if attack.group(2).casefold() == "spell"
+            else "dexterity"
+            if mode == "ranged"
+            else "strength"
+        ),
         "damage_formula": damage.group(1),
         "damage_type": hit.group(2).casefold(),
         "properties": properties,

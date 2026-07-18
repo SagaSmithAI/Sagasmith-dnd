@@ -122,3 +122,44 @@ def test_bandit_captain_preserves_exact_overrides_and_multiattack_composition() 
         {"weapon_id": "dagger", "attack_mode": "ranged", "count": 2}
     ]
     assert parsed.warnings == ("Parry: descriptive reaction is not automatically settled",)
+
+
+def test_numeric_statblock_spell_attack_is_executable() -> None:
+    parsed = parse_2014_statblock(
+        """# Necromite of Myrkul
+
+*Medium humanoid (human), neutral evil*
+
+**Armor Class** 11
+**Hit Points** 13 (2d8 + 4)
+**Speed** 30 ft.
+
+| STR | DEX | CON | INT | WIS | CHA |
+|---|---|---|---|---|---|
+| 10 (+0) | 13 (+1) | 15 (+2) | 16 (+3) | 11 (+0) | 10 (+0) |
+
+**Skills** Arcana +5, Religion +5
+**Senses** passive Perception 10
+**Languages** Abyssal, Common, Infernal
+**Challenge** 1/2 (100 XP)
+
+## Actions
+
+***Skull Flail***. *Melee Weapon Attack:* +2 to hit, reach 5 ft., one target.
+*Hit:* 4 (1d8) bludgeoning damage.
+
+***Claws of the Grave***. *Ranged Spell Attack:* +5 to hit, range 90 ft., one target.
+*Hit:* 8 (2d4 + 3) necrotic damage.
+""",
+        source_key="module-review:necromite",
+    )
+
+    attacks = {item["name"]: item for item in parsed.sheet["inventory"]["items"]}
+    claws = attacks["Claws of the Grave"]
+    assert claws["mechanics"]["attack_type"] == "ranged"
+    assert claws["mechanics"]["attack_ability"] == "spell"
+    assert claws["mechanics"]["attack_bonus_override"] == 5
+    assert claws["mechanics"]["damage_formula"] == "2d4"
+    assert claws["mechanics"]["damage_bonus_override"] == 3
+    assert claws["mechanics"]["damage_type"] == "necrotic"
+    assert parsed.warnings == ()
