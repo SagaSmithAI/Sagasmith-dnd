@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-CORE_RULE_PACK_VERSION = "1.5.0"
+CORE_RULE_PACK_VERSION = "1.6.0"
 
 
 @dataclass(frozen=True)
@@ -253,6 +253,13 @@ BOUNDARIES = (
             "tests/test_spells.py::test_preparation_rejects_illegal_event_and_class_timing",
         ),
         "bundled:srd/preparing-spells",
+    ),
+    CoreBoundary(
+        "dnd5e.core.spell.spellbook_copy",
+        ("2014",),
+        "sagasmith_dnd_mcp.server.settle_spellbook_copy",
+        ("SagaSmith-dnd-mcp/tests/test_spellbook_copy_mcp.py",),
+        "bundled:srd/wizard-spellbook-copying",
     ),
     CoreBoundary(
         "dnd5e.core.mcp.combat_mutation_guard",
