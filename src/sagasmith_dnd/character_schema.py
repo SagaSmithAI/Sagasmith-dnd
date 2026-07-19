@@ -515,7 +515,7 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
                 mechanics.get("source_scene_id"), f"{field}.source_scene_id", maximum=100
             ),
             "deciphered": _boolean(
-                mechanics.get("deciphered"), f"{field}.deciphered", default=True
+                mechanics.get("deciphered"), f"{field}.deciphered", default=False
             ),
             "copyable": _boolean(
                 mechanics.get("copyable"), f"{field}.copyable", default=True

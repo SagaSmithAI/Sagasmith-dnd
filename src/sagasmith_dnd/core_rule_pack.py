@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-CORE_RULE_PACK_VERSION = "1.8.0"
+CORE_RULE_PACK_VERSION = "1.9.0"
 
 
 @dataclass(frozen=True)
