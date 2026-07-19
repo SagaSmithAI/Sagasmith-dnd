@@ -1790,7 +1790,84 @@ def validate_party_state(state: dict[str, Any]) -> dict[str, Any]:
         "inventory": validate_inventory(party.get("inventory") or {}),
         "notes": _text(party.get("notes"), "campaign.state.party.notes", maximum=1200),
     }
+    world_effects = [
+        validate_world_effect(item, field=f"campaign.state.world_effects[{index}]")
+        for index, item in enumerate(
+            _array(value.get("world_effects") or [], "campaign.state.world_effects")
+        )
+    ]
+    world_effect_ids = [item["id"] for item in world_effects]
+    if len(world_effect_ids) != len(set(world_effect_ids)):
+        raise ValueError("campaign.state.world_effects contains duplicate ids")
+    value["world_effects"] = world_effects
     return value
+
+
+def validate_world_effect(value: Any, *, field: str = "world_effect") -> dict[str, Any]:
+    """Normalize a timed effect attached to campaign space rather than an actor."""
+    effect = _object(value, field)
+    _reject_unknown(
+        effect,
+        field,
+        {
+            "id",
+            "name",
+            "kind",
+            "source",
+            "source_spell_id",
+            "source_actor_id",
+            "target",
+            "active",
+            "duration",
+            "description",
+            "created_at_elapsed_minutes",
+            "metadata",
+        },
+    )
+    duration = _object(effect.get("duration") or {}, f"{field}.duration")
+    _reject_unknown(duration, f"{field}.duration", {"period", "remaining"})
+    period = _text(duration.get("period"), f"{field}.duration.period", default="manual")
+    if period not in {"manual", "round", "encounter", "minute", "hour", "day"}:
+        raise ValueError(f"{field}.duration.period is invalid")
+    target = _object(effect.get("target") or {}, f"{field}.target")
+    _reject_unknown(target, f"{field}.target", {"kind", "id", "label"})
+    target_kind = _text(target.get("kind"), f"{field}.target.kind", default="campaign")
+    if target_kind not in {"campaign", "scene", "location", "object"}:
+        raise ValueError(f"{field}.target.kind is invalid")
+    target_id = _text(target.get("id"), f"{field}.target.id", maximum=300)
+    if target_kind != "campaign" and not target_id:
+        raise ValueError(f"{field}.target.id is required for {target_kind} effects")
+    return {
+        "id": _text(effect.get("id"), f"{field}.id", default=_uuid(), maximum=100),
+        "name": _text(effect.get("name"), f"{field}.name", maximum=300),
+        "kind": _text(effect.get("kind"), f"{field}.kind", default="custom", maximum=100),
+        "source": _text(effect.get("source"), f"{field}.source", maximum=300),
+        "source_spell_id": _text(
+            effect.get("source_spell_id"), f"{field}.source_spell_id", maximum=300
+        ),
+        "source_actor_id": _text(
+            effect.get("source_actor_id"), f"{field}.source_actor_id", maximum=100
+        ),
+        "target": {
+            "kind": target_kind,
+            "id": target_id,
+            "label": _text(target.get("label"), f"{field}.target.label", maximum=300),
+        },
+        "active": _boolean(effect.get("active"), f"{field}.active", default=True),
+        "duration": {
+            "period": period,
+            "remaining": _integer(
+                duration.get("remaining"), f"{field}.duration.remaining", minimum=0
+            ),
+        },
+        "description": _text(effect.get("description"), f"{field}.description", maximum=1200),
+        "created_at_elapsed_minutes": _integer(
+            effect.get("created_at_elapsed_minutes"),
+            f"{field}.created_at_elapsed_minutes",
+            minimum=0,
+        ),
+        "metadata": _object(effect.get("metadata") or {}, f"{field}.metadata"),
+    }
 
 
 def _derive_armor_class(

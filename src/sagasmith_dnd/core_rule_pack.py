@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-CORE_RULE_PACK_VERSION = "1.7.0"
+CORE_RULE_PACK_VERSION = "1.8.0"
 
 
 @dataclass(frozen=True)
@@ -306,9 +306,14 @@ BOUNDARIES = (
     CoreBoundary(
         "dnd5e.core.mcp.duration_clock",
         ("2014", "2024"),
-        "sagasmith_dnd_mcp.server.combat_end_turn",
-        ("SagaSmith-dnd-mcp/tests/test_runtime_integrity_mcp.py",),
-        "runtime:mcp/round-minute-clock",
+        "sagasmith_dnd_mcp.server.campaign_advance_effects",
+        (
+            "SagaSmith-dnd-mcp/tests/test_runtime_integrity_mcp.py",
+            "SagaSmith-dnd-mcp/tests/test_campaign_clock_mcp.py",
+            "SagaSmith-dnd-mcp/tests/test_stable_recovery_mcp.py",
+            "SagaSmith-dnd-mcp/tests/test_spellbook_copy_mcp.py",
+        ),
+        "runtime:mcp/actor-and-world-duration-clock",
     ),
     CoreBoundary(
         "dnd5e.core.mcp.combat_spell_boundary",

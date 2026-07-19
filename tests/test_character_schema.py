@@ -14,6 +14,7 @@ from sagasmith_dnd.character_schema import (
     set_spell_prepared,
     validate_character_notes,
     validate_character_sheet,
+    validate_party_state,
 )
 
 
@@ -188,6 +189,37 @@ def test_spellbook_inventory_preserves_structured_copy_sources() -> None:
                 "kind": "spellbook",
                 "mechanics": {"spell_ids": ["spell:a", "spell:a"]},
             },
+        )
+
+
+def test_party_state_validates_structured_world_effect_targets() -> None:
+    state = validate_party_state(
+        {
+            "world_effects": [
+                {
+                    "id": "mace-light",
+                    "name": "Light on Mara's mace",
+                    "kind": "light",
+                    "source_spell_id": "dnd5e.content.srd2014.spell.light",
+                    "source_actor_id": "mara",
+                    "target": {"kind": "object", "id": "mara-mace", "label": "Mace"},
+                    "duration": {"period": "hour", "remaining": 1},
+                }
+            ]
+        }
+    )
+    assert state["world_effects"][0]["target"]["kind"] == "object"
+
+    with pytest.raises(ValueError, match="target.id is required"):
+        validate_party_state(
+            {
+                "world_effects": [
+                    {
+                        "name": "Invalid",
+                        "target": {"kind": "scene"},
+                    }
+                ]
+            }
         )
 
 

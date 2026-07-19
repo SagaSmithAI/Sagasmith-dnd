@@ -4,6 +4,7 @@ from sagasmith_dnd.character_schema import default_character_sheet
 from sagasmith_dnd.combat_engine import CombatEngineError
 from sagasmith_dnd.lifecycle import (
     advance_effect_durations,
+    advance_world_effect_durations,
     apply_rest,
     recover_stable_creature,
     stand_outside_combat,
@@ -101,6 +102,21 @@ def test_effect_duration_advance_accepts_audited_multi_period_amount() -> None:
 def test_effect_duration_advance_rejects_nonpositive_amount() -> None:
     with pytest.raises(CombatEngineError, match="positive integer"):
         advance_effect_durations(default_character_sheet(), period="hour", amount=0)
+
+
+def test_world_effect_duration_uses_the_same_expiry_boundary() -> None:
+    state = {
+        "world_effects": [
+            {
+                "id": "mace-light",
+                "active": True,
+                "duration": {"period": "hour", "remaining": 1},
+            }
+        ]
+    }
+    result = advance_world_effect_durations(state, period="hour", amount=3)
+    assert result["expired"] == ["mace-light"]
+    assert result["state"]["world_effects"][0]["active"] is False
 
 
 def test_short_rest_uses_explicit_hit_die_roll_and_2024_long_rest_recovers_all() -> None:

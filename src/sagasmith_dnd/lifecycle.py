@@ -44,6 +44,39 @@ def advance_effect_durations(
     }
 
 
+def advance_world_effect_durations(
+    state: dict[str, Any], *, period: str, amount: int = 1
+) -> dict[str, Any]:
+    """Advance structured campaign-space effects with the actor-effect semantics."""
+    if isinstance(amount, bool) or not isinstance(amount, int) or amount < 1:
+        raise CombatEngineError("world effect duration advance amount must be positive")
+    normalized = str(period).strip().lower().replace("-", "_")
+    value = deepcopy(state)
+    advanced: list[str] = []
+    expired: list[str] = []
+    for effect in value.get("world_effects", []):
+        if not effect.get("active"):
+            continue
+        duration = dict(effect.get("duration") or {})
+        if duration.get("period") != normalized:
+            continue
+        remaining = int(duration.get("remaining", 0) or 0)
+        if remaining <= amount:
+            effect["active"] = False
+            expired.append(str(effect.get("id")))
+        else:
+            duration["remaining"] = remaining - amount
+            effect["duration"] = duration
+            advanced.append(str(effect.get("id")))
+    return {
+        "state": value,
+        "period": normalized,
+        "amount": amount,
+        "advanced": advanced,
+        "expired": expired,
+    }
+
+
 def recover_stable_creature(
     sheet: dict[str, Any], *, recovery_hours: int
 ) -> dict[str, Any]:
