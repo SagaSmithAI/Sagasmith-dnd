@@ -644,6 +644,21 @@ def test_multi_damage_preserves_types_and_massive_damage() -> None:
     assert "dead" not in result["sheet"]["conditions"]
 
 
+@pytest.mark.parametrize("ruleset", ["2014", "2024"])
+def test_multi_damage_kills_target_that_does_not_use_death_saves(ruleset: str) -> None:
+    actor = _actor("monster", hp=5)
+
+    result = apply_damage_parts_to_sheet(
+        actor["sheet"],
+        [{"amount": 5, "damage_type": "radiant"}],
+        ruleset=ruleset,
+        death_saves=False,
+    )
+
+    assert {"dead", "prone"} <= set(result["sheet"]["conditions"])
+    assert "unconscious" not in result["sheet"]["conditions"]
+
+
 def test_simultaneous_damage_parts_create_one_concentration_dc_from_total() -> None:
     actor = _actor("target", hp=30)
     actor["sheet"]["effects"] = [

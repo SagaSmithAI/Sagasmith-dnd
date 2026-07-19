@@ -1390,19 +1390,21 @@ def _apply_adjusted_damage(
     max_hp = int(hp.get("max", before_hp) or before_hp)
     massive_excess = max(0, hp_damage - before_hp)
     became_zero = hp["value"] == 0 and before_hp > 0
+    normalized_ruleset = _normalize_ruleset(ruleset or value.get("edition"))
     if became_zero:
         conditions.update({"prone", "unconscious"})
-        normalized_ruleset = _normalize_ruleset(ruleset or value.get("edition"))
         if knock_out and not melee:
             raise CombatEngineError("only a melee attack can knock a creature out")
         if knock_out and melee:
             if normalized_ruleset == "2024":
                 hp["value"] = 1
-            conditions.add("stable")
+                conditions.discard("stable")
+            else:
+                conditions.add("stable")
         elif massive_excess >= max_hp:
             conditions.discard("unconscious")
             conditions.add("dead")
-        elif normalized_ruleset == "2014" and not death_saves:
+        elif not death_saves:
             conditions.discard("unconscious")
             conditions.add("dead")
     death = dict(combat.setdefault("death_saves", {"successes": 0, "failures": 0}))
@@ -1418,7 +1420,8 @@ def _apply_adjusted_damage(
                 conditions.discard("unconscious")
                 conditions.add("dead")
     combat["death_saves"] = death
-    if hp["value"] > 0:
+    knocked_out_2024 = became_zero and knock_out and melee and normalized_ruleset == "2024"
+    if hp["value"] > 0 and not knocked_out_2024:
         conditions.discard("unconscious")
     value["conditions"] = sorted(conditions)
     if hp["value"] == 0 and ("unconscious" in conditions or "dead" in conditions):
@@ -1465,6 +1468,10 @@ def apply_damage_parts_to_sheet(
     *,
     source: str = "",
     critical: bool = False,
+    ruleset: str | None = None,
+    death_saves: bool = True,
+    knock_out: bool = False,
+    melee: bool = False,
 ) -> dict[str, Any]:
     """Apply one simultaneous multi-type damage instance and preserve each part.
 
@@ -1506,10 +1513,10 @@ def apply_damage_parts_to_sheet(
         adjustment="per_part" if len(details) > 1 else details[0]["adjustment"],
         source=source,
         critical=critical,
-        ruleset=None,
-        death_saves=True,
-        knock_out=False,
-        melee=False,
+        ruleset=ruleset,
+        death_saves=death_saves,
+        knock_out=knock_out,
+        melee=melee,
     )
     remaining_temp = applied["before_temp"]
     for detail in details:

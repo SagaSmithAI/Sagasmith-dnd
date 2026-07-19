@@ -127,7 +127,8 @@ def test_core_pack_preserves_hidden_reveal_and_2024_knockout() -> None:
         melee=True,
     )
     assert knocked_out["sheet"]["combat"]["hp"]["value"] == 1
-    assert "stable" in knocked_out["sheet"]["conditions"]
+    assert "unconscious" in knocked_out["sheet"]["conditions"]
+    assert "stable" not in knocked_out["sheet"]["conditions"]
 
 
 def test_core_pack_preserves_prone_grapple_and_ready_boundaries() -> None:
