@@ -391,6 +391,7 @@ def parse_2014_statblock(
     weapons: list[dict[str, Any]] = []
     multiattacks: list[tuple[str, str]] = []
     descriptive: list[tuple[str, str, str]] = []
+    unresolved_multiattacks: set[str] = set()
     for section, entry_name, description in entries:
         if entry_name.casefold() == "multiattack":
             multiattacks.append((entry_name, description))
@@ -424,7 +425,7 @@ def parse_2014_statblock(
                 }
             )
         else:
-            warnings.append(f"{entry_name}: Multiattack composition requires a DM ruling")
+            unresolved_multiattacks.add(entry_name)
             descriptive.append(("actions", entry_name, description))
     for section, entry_name, description in descriptive:
         activation = (
@@ -444,7 +445,11 @@ def parse_2014_statblock(
                 "rule_refs": refs,
             }
         )
-        warnings.append(f"{entry_name}: descriptive {activation} is not automatically settled")
+        warnings.append(
+            f"{entry_name}: Multiattack composition requires a DM ruling"
+            if entry_name in unresolved_multiattacks
+            else f"{entry_name}: descriptive {activation} is not automatically settled"
+        )
 
     validated = validate_character_sheet(sheet)
     summary = f"{identity_text}; CR {challenge or 'unrecorded'}"

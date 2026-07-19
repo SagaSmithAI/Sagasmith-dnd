@@ -214,3 +214,17 @@ def test_statblock_variant_rejects_unbound_or_broad_sheet_patches() -> None:
             parsed.sheet,
             {"source_ref": "module-scene:d12", "remove_actions": ["missing"]},
         )
+
+
+def test_unresolved_multiattack_produces_one_specific_warning() -> None:
+    parsed = parse_2014_statblock(
+        COMMONER.replace(
+            "###### Actions",
+            "###### Actions\n\n***Multiattack***. The commoner attacks and shouts a command.",
+        ),
+        source_key="module-review:commanding-commoner",
+    )
+
+    assert parsed.warnings == (
+        "Multiattack: Multiattack composition requires a DM ruling",
+    )
