@@ -2230,6 +2230,41 @@ def pay_activity_activation(
     return value
 
 
+def settle_core_activity_effect(
+    encounter: dict[str, Any], *, actor_id_value: str, activity_id: str
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Settle narrow engine-owned effects for canonical Core activity cards."""
+    value = deepcopy(encounter)
+    if activity_id != "dnd5e.content.srd2014.feature.fighter-action-surge":
+        return value, None
+    current = current_combatant(value)
+    if current is None or current.get("actor_id") != actor_id_value:
+        raise CombatEngineError("Action Surge can be used only on the actor's turn")
+    combatant = next(
+        item
+        for item in value.get("combatants", [])
+        if item.get("actor_id") == actor_id_value
+    )
+    flags = dict(combatant.get("turn_flags") or {})
+    if flags.get("action_surge_used"):
+        raise CombatEngineError("Action Surge can be used only once on the same turn")
+    budget = dict(combatant.get("turn_budget") or {})
+    budget["extra_action"] = int(budget.get("extra_action", 0) or 0) + 1
+    combatant["turn_budget"] = budget
+    flags["action_surge_used"] = True
+    combatant["turn_flags"] = flags
+    effect = {
+        "kind": "action_surge",
+        "extra_actions_granted": 1,
+        "extra_actions_available": budget["extra_action"],
+    }
+    value["log"] = [
+        *list(value.get("log") or []),
+        {"type": "action_surge", "actor_id": actor_id_value, "effect": effect},
+    ][-100:]
+    return value, effect
+
+
 def available_reactions(encounter: dict[str, Any], actor_id_value: str) -> list[dict[str, Any]]:
     """Return reaction windows owned by an actor, even outside its own turn."""
     combatant = next(
@@ -2683,6 +2718,7 @@ def end_turn(encounter: dict[str, Any], *, actor_id_value: str | None = None) ->
             movement=int(budget.get("speed", 30) or 30),
             object_interaction=1,
             attack_budget=0,
+            extra_action=0,
         )
         if next_actor.get("surprised") and _normalize_ruleset(value.get("ruleset")) == "2014":
             budget.update(

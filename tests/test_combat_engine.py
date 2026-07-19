@@ -34,6 +34,7 @@ from sagasmith_dnd.combat_engine import (
     resolve_death_save_to_sheet,
     resolve_readied_spell_window,
     roll_attack_action,
+    settle_core_activity_effect,
     spend_movement,
     stabilize_sheet,
     start_encounter,
@@ -1157,6 +1158,37 @@ def test_common_cast_can_pay_available_bonus_action_without_spending_main_action
     assert actor["turn_budget"]["main_action"] == 1
     assert actor["turn_flags"]["cast_declared"]["spell_id"] == "healing-word"
     assert "bonus_action" not in available_actions(cast, current)
+
+
+def test_action_surge_grants_one_current_turn_action_and_never_carries_forward() -> None:
+    encounter = start_encounter([_actor("a"), _actor("b")], rng=random.Random(1))
+    actor_id = encounter["combatants"][encounter["turn_index"]]["actor_id"]
+    surged, effect = settle_core_activity_effect(
+        encounter,
+        actor_id_value=actor_id,
+        activity_id="dnd5e.content.srd2014.feature.fighter-action-surge",
+    )
+
+    current = surged["combatants"][surged["turn_index"]]
+    assert effect == {
+        "kind": "action_surge",
+        "extra_actions_granted": 1,
+        "extra_actions_available": 1,
+    }
+    assert current["turn_budget"]["extra_action"] == 1
+    with pytest.raises(ValueError, match="once on the same turn"):
+        settle_core_activity_effect(
+            surged,
+            actor_id_value=actor_id,
+            activity_id="dnd5e.content.srd2014.feature.fighter-action-surge",
+        )
+
+    next_turn = end_turn(surged, actor_id_value=actor_id)
+    other_id = next_turn["combatants"][next_turn["turn_index"]]["actor_id"]
+    returned = end_turn(next_turn, actor_id_value=other_id)
+    returned_actor = returned["combatants"][returned["turn_index"]]
+    assert returned_actor["actor_id"] == actor_id
+    assert returned_actor["turn_budget"]["extra_action"] == 0
 
 
 def test_common_stabilize_action_pays_main_action_and_records_target() -> None:
