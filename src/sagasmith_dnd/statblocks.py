@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
@@ -457,4 +458,180 @@ def parse_2014_statblock(
     )
 
 
-__all__ = ["ParsedStatblock", "StatblockImportError", "parse_2014_statblock"]
+def apply_statblock_variant(
+    sheet: dict[str, Any],
+    variant: dict[str, Any],
+) -> dict[str, Any]:
+    """Apply a narrow, source-cited module variant to a parsed creature sheet.
+
+    Adventures commonly instantiate a published creature with a changed current HP,
+    armor, languages, or weapon damage type.  This deliberately does not accept a
+    generic sheet patch: every supported override has explicit validation so a module
+    citation cannot silently replace unrelated actor rules.
+    """
+
+    if not isinstance(variant, dict):
+        raise StatblockImportError("statblock variant must be an object")
+    allowed = {
+        "source_ref",
+        "current_hit_points",
+        "maximum_hit_points",
+        "armor_class",
+        "languages",
+        "remove_actions",
+        "action_overrides",
+    }
+    unknown = set(variant) - allowed
+    if unknown:
+        raise StatblockImportError(f"unsupported statblock variant fields: {sorted(unknown)}")
+    source_ref = str(variant.get("source_ref") or "").strip()
+    if not source_ref:
+        raise StatblockImportError("statblock variant source_ref is required")
+
+    result = deepcopy(sheet)
+    hp = result["combat"]["hp"]
+    if "maximum_hit_points" in variant:
+        maximum = variant["maximum_hit_points"]
+        if not isinstance(maximum, int) or isinstance(maximum, bool) or maximum < 1:
+            raise StatblockImportError("maximum_hit_points must be a positive integer")
+        hp["max"] = maximum
+        hp["value"] = min(int(hp.get("value", maximum)), maximum)
+    if "current_hit_points" in variant:
+        current = variant["current_hit_points"]
+        if (
+            not isinstance(current, int)
+            or isinstance(current, bool)
+            or current < 0
+            or current > int(hp["max"])
+        ):
+            raise StatblockImportError(
+                "current_hit_points must be an integer between 0 and maximum_hit_points"
+            )
+        hp["value"] = current
+
+    if "armor_class" in variant:
+        armor_class = variant["armor_class"]
+        if (
+            not isinstance(armor_class, int)
+            or isinstance(armor_class, bool)
+            or not 0 <= armor_class <= 99
+        ):
+            raise StatblockImportError("armor_class must be an integer between 0 and 99")
+        result["combat"]["ac"] = {"base": armor_class, "override": armor_class}
+
+    if "languages" in variant:
+        languages = variant["languages"]
+        if not isinstance(languages, list):
+            raise StatblockImportError("languages must be a list")
+        normalized_languages = [str(item).strip() for item in languages]
+        if (
+            any(not item for item in normalized_languages)
+            or len(normalized_languages) != len(set(normalized_languages))
+        ):
+            raise StatblockImportError("languages must contain unique non-empty strings")
+        result["traits"]["languages"] = normalized_languages
+
+    items = list(result["inventory"]["items"])
+    remove_actions = variant.get("remove_actions", [])
+    if not isinstance(remove_actions, list):
+        raise StatblockImportError("remove_actions must be a list")
+    remove_keys = [str(item).strip().casefold() for item in remove_actions]
+    if any(not item for item in remove_keys) or len(remove_keys) != len(set(remove_keys)):
+        raise StatblockImportError("remove_actions must contain unique non-empty ids or names")
+    removed_ids: set[str] = set()
+    for key in remove_keys:
+        matches = [
+            item
+            for item in items
+            if key in {str(item.get("id") or "").casefold(), str(item.get("name") or "").casefold()}
+        ]
+        if len(matches) != 1:
+            raise StatblockImportError(
+                f"remove_actions entry must identify exactly one weapon action: {key}"
+            )
+        removed_ids.add(str(matches[0]["id"]))
+        items.remove(matches[0])
+
+    action_overrides = variant.get("action_overrides", {})
+    if not isinstance(action_overrides, dict):
+        raise StatblockImportError("action_overrides must be an object keyed by weapon action id")
+    renamed_ids: dict[str, str] = {}
+    for raw_key, raw_patch in action_overrides.items():
+        key = str(raw_key).strip()
+        if not key or not isinstance(raw_patch, dict):
+            raise StatblockImportError("each action override must be a non-empty id and object")
+        matches = [item for item in items if str(item.get("id") or "") == key]
+        if len(matches) != 1:
+            raise StatblockImportError(
+                f"action override must identify exactly one remaining weapon action: {key}"
+            )
+        patch_allowed = {
+            "id",
+            "name",
+            "damage_type",
+            "damage_formula",
+            "attack_bonus_override",
+            "damage_bonus_override",
+        }
+        patch_unknown = set(raw_patch) - patch_allowed
+        if patch_unknown:
+            raise StatblockImportError(
+                f"unsupported action override fields for {key}: {sorted(patch_unknown)}"
+            )
+        item = matches[0]
+        mechanics = item["mechanics"]
+        if "id" in raw_patch:
+            new_id = str(raw_patch["id"] or "").strip()
+            if not new_id or _slug(new_id) != new_id:
+                raise StatblockImportError("action override id must be a lowercase slug")
+            renamed_ids[key] = new_id
+            item["id"] = new_id
+        if "name" in raw_patch:
+            name = str(raw_patch["name"] or "").strip()
+            if not name:
+                raise StatblockImportError("action override name must be non-empty")
+            item["name"] = name
+        if "damage_type" in raw_patch:
+            damage_type = str(raw_patch["damage_type"] or "").strip().casefold()
+            if not damage_type:
+                raise StatblockImportError("action override damage_type must be non-empty")
+            mechanics["damage_type"] = damage_type
+        if "damage_formula" in raw_patch:
+            damage_formula = str(raw_patch["damage_formula"] or "").replace(" ", "")
+            if not re.fullmatch(r"\d+d\d+", damage_formula):
+                raise StatblockImportError("action override damage_formula must be NdM dice")
+            mechanics["damage_formula"] = damage_formula
+        for field in ("attack_bonus_override", "damage_bonus_override"):
+            if field in raw_patch:
+                value = raw_patch[field]
+                if not isinstance(value, int) or isinstance(value, bool):
+                    raise StatblockImportError(f"action override {field} must be an integer")
+                mechanics[field] = value
+
+    remaining_ids = [str(item.get("id") or "") for item in items]
+    if len(remaining_ids) != len(set(remaining_ids)):
+        raise StatblockImportError("statblock variant produces duplicate weapon action ids")
+    result["inventory"]["items"] = items
+    for activity in result["content"]["activities"]:
+        choices = activity.get("choices")
+        if not isinstance(choices, dict):
+            continue
+        for option in choices.get("multiattack_options", []):
+            for attack in option.get("attacks", []):
+                weapon_id = str(attack.get("weapon_id") or "")
+                if weapon_id in renamed_ids:
+                    attack["weapon_id"] = renamed_ids[weapon_id]
+                if weapon_id in removed_ids:
+                    raise StatblockImportError(
+                        f"cannot remove action {weapon_id!r} while a multiattack references it"
+                    )
+
+    return validate_character_sheet(result)
+
+
+__all__ = [
+    "ParsedStatblock",
+    "StatblockImportError",
+    "apply_statblock_variant",
+    "parse_2014_statblock",
+]

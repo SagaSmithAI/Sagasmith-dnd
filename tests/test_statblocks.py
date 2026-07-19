@@ -1,5 +1,11 @@
+import pytest
+
 from sagasmith_dnd.character_schema import derive_character_sheet
-from sagasmith_dnd.statblocks import parse_2014_statblock
+from sagasmith_dnd.statblocks import (
+    StatblockImportError,
+    apply_statblock_variant,
+    parse_2014_statblock,
+)
 
 COMMONER = """### Commoner
 
@@ -163,3 +169,48 @@ def test_numeric_statblock_spell_attack_is_executable() -> None:
     assert claws["mechanics"]["damage_bonus_override"] == 3
     assert claws["mechanics"]["damage_type"] == "necrotic"
     assert parsed.warnings == ()
+
+
+def test_source_bound_variant_can_apply_common_module_instance_changes() -> None:
+    parsed = parse_2014_statblock(COMMONER, source_key="srd-commoner")
+
+    sheet = apply_statblock_variant(
+        parsed.sheet,
+        {
+            "source_ref": "module-scene:d12",
+            "current_hit_points": 1,
+            "armor_class": 12,
+            "languages": ["Common", "Elvish"],
+            "action_overrides": {
+                "club": {
+                    "id": "gauntlet-slam",
+                    "name": "Gauntlet Slam",
+                    "damage_type": "force",
+                }
+            },
+        },
+    )
+    derived = derive_character_sheet(sheet)
+
+    assert sheet["combat"]["hp"] == {"value": 1, "max": 4, "temp": 0}
+    assert derived["armor_class"] == 12
+    assert sheet["traits"]["languages"] == ["Common", "Elvish"]
+    assert derived["inventory"]["weapon_attacks"][0]["item_id"] == "gauntlet-slam"
+    assert derived["inventory"]["weapon_attacks"][0]["damage_type"] == "force"
+
+
+def test_statblock_variant_rejects_unbound_or_broad_sheet_patches() -> None:
+    parsed = parse_2014_statblock(COMMONER, source_key="srd-commoner")
+
+    with pytest.raises(StatblockImportError, match="source_ref"):
+        apply_statblock_variant(parsed.sheet, {"current_hit_points": 1})
+    with pytest.raises(StatblockImportError, match="unsupported statblock variant fields"):
+        apply_statblock_variant(
+            parsed.sheet,
+            {"source_ref": "module-scene:d12", "sheet": {"abilities": {}}},
+        )
+    with pytest.raises(StatblockImportError, match="exactly one weapon action"):
+        apply_statblock_variant(
+            parsed.sheet,
+            {"source_ref": "module-scene:d12", "remove_actions": ["missing"]},
+        )
