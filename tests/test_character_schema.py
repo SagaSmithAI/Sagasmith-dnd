@@ -162,6 +162,7 @@ def test_spellbook_inventory_preserves_structured_copy_sources() -> None:
                     "dnd5e.content.srd2014.spell.burning-hands",
                     "dnd5e.content.srd2014.spell.detect-magic",
                 ],
+                "unresolved_spell_names": ["Ray of Sickness"],
                 "owner_mark": "No recorded owner mark",
                 "source_scene_id": "d11-scene",
                 "deciphered": True,
@@ -177,6 +178,7 @@ def test_spellbook_inventory_preserves_structured_copy_sources() -> None:
         "dnd5e.content.srd2014.spell.burning-hands",
         "dnd5e.content.srd2014.spell.detect-magic",
     ]
+    assert item["mechanics"]["unresolved_spell_names"] == ["Ray of Sickness"]
 
     with pytest.raises(ValueError, match="duplicate ids"):
         add_inventory_item(

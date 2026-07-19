@@ -485,6 +485,7 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
             {
                 "edition",
                 "spell_ids",
+                "unresolved_spell_names",
                 "owner_mark",
                 "source_scene_id",
                 "deciphered",
@@ -497,9 +498,16 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
         spell_ids = _string_list(mechanics.get("spell_ids"), f"{field}.spell_ids")
         if len(spell_ids) != len(set(spell_ids)):
             raise ValueError(f"{field}.spell_ids contains duplicate ids")
+        unresolved_spell_names = _string_list(
+            mechanics.get("unresolved_spell_names"),
+            f"{field}.unresolved_spell_names",
+        )
+        if len(unresolved_spell_names) != len(set(unresolved_spell_names)):
+            raise ValueError(f"{field}.unresolved_spell_names contains duplicate names")
         return {
             "edition": edition,
             "spell_ids": spell_ids,
+            "unresolved_spell_names": unresolved_spell_names,
             "owner_mark": _text(
                 mechanics.get("owner_mark"), f"{field}.owner_mark", maximum=300
             ),
