@@ -62,6 +62,21 @@ _NUMBER_WORDS = {
     "six": 6,
 }
 
+_2014_ARMOR = {
+    "padded": (11, "full", None, True),
+    "leather": (11, "full", None, False),
+    "studded leather": (12, "full", None, False),
+    "hide": (12, "max", 2, False),
+    "chain shirt": (13, "max", 2, False),
+    "scale mail": (14, "max", 2, True),
+    "breastplate": (14, "max", 2, False),
+    "half plate": (15, "max", 2, True),
+    "ring mail": (14, "none", None, True),
+    "chain mail": (16, "none", None, True),
+    "splint": (17, "none", None, True),
+    "plate": (18, "none", None, True),
+}
+
 
 def _slug(value: str) -> str:
     result = re.sub(r"[^a-z0-9]+", "-", value.casefold()).strip("-")
@@ -85,6 +100,69 @@ def _signed(value: str) -> int:
 
 def _split_list(value: str) -> list[str]:
     return [item.strip() for item in re.split(r"[,;]", value) if item.strip() and item != "-"]
+
+
+def _parse_armor_equipment(
+    ac_text: str, source_key: str
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """Recover explicit standard armor without inferring gear from a numeric AC."""
+
+    detail = re.search(r"\(([^)]*)\)", ac_text)
+    if not detail:
+        return [], {}
+    normalized = detail.group(1).casefold()
+    items: list[dict[str, Any]] = []
+    slots: dict[str, str] = {}
+    armor_name = next(
+        (
+            name
+            for name in sorted(_2014_ARMOR, key=len, reverse=True)
+            if re.search(rf"\b{re.escape(name)}(?:\s+armor)?\b", normalized)
+        ),
+        None,
+    )
+    if armor_name is not None:
+        base_ac, dexterity_mode, dexterity_max, stealth_disadvantage = _2014_ARMOR[
+            armor_name
+        ]
+        armor_id = f"statblock-{_slug(armor_name)}"
+        mechanics: dict[str, Any] = {
+            "base_ac": base_ac,
+            "dexterity_mode": dexterity_mode,
+            "magic_bonus": 0,
+            "stealth_disadvantage": stealth_disadvantage,
+        }
+        if dexterity_max is not None:
+            mechanics["dexterity_max"] = dexterity_max
+        items.append(
+            {
+                "id": armor_id,
+                "name": armor_name.title(),
+                "kind": "armor",
+                "source_key": source_key,
+                "description": f"Explicitly listed in Armor Class: {ac_text}",
+                "equipped": True,
+                "equipped_slot": "armor",
+                "mechanics": mechanics,
+            }
+        )
+        slots["armor"] = armor_id
+    if re.search(r"\bshield\b", normalized):
+        shield_id = "statblock-shield"
+        items.append(
+            {
+                "id": shield_id,
+                "name": "Shield",
+                "kind": "shield",
+                "source_key": source_key,
+                "description": f"Explicitly listed in Armor Class: {ac_text}",
+                "equipped": True,
+                "equipped_slot": "shield",
+                "mechanics": {"ac_bonus": 2, "magic_bonus": 0},
+            }
+        )
+        slots["shield"] = shield_id
+    return items, slots
 
 
 def _parse_speed(value: str) -> dict[str, int]:
@@ -406,7 +484,9 @@ def parse_2014_statblock(
     ids = [item["id"] for item in weapons]
     if len(ids) != len(set(ids)):
         raise StatblockImportError("statblock contains duplicate weapon action names")
-    sheet["inventory"]["items"] = weapons
+    armor_items, armor_slots = _parse_armor_equipment(ac_text, source_key)
+    sheet["inventory"]["items"] = [*armor_items, *weapons]
+    sheet["inventory"]["equipment_slots"].update(armor_slots)
 
     warnings: list[str] = []
     refs = list(dict.fromkeys(str(item) for item in rule_refs if str(item)))

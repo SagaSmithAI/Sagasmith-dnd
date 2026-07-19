@@ -2097,6 +2097,15 @@ def derive_character_sheet(
     armor_class, armor_class_breakdown, unresolved_effects = _derive_armor_class(
         value, ability_modifiers, active_effects
     )
+    equipped_armor_id = inventory["equipment_slots"]["armor"]
+    equipped_armor = next(
+        (item for item in inventory["items"] if item["id"] == equipped_armor_id),
+        None,
+    )
+    stealth_disadvantage = bool(
+        equipped_armor
+        and dict(equipped_armor.get("mechanics") or {}).get("stealth_disadvantage", False)
+    )
     size_multiplier = {
         "tiny": 0.5,
         "small": 1,
@@ -2156,9 +2165,7 @@ def derive_character_sheet(
         + value["traits"]["senses"]["passive_perception_bonus"],
         "armor_class": armor_class,
         "armor_class_breakdown": armor_class_breakdown,
-        "stealth_disadvantage": bool(
-            dict(armor_class_breakdown.get("armor") or {}).get("stealth_disadvantage", False)
-        ),
+        "stealth_disadvantage": stealth_disadvantage,
         "initiative": ability_modifiers[value["combat"]["initiative"]["ability"]]
         + value["combat"]["initiative"]["bonus"],
         "attacks_per_action": max(

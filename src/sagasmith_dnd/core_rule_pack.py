@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-CORE_RULE_PACK_VERSION = "1.11.0"
+CORE_RULE_PACK_VERSION = "1.12.0"
 
 
 @dataclass(frozen=True)
@@ -80,7 +80,11 @@ BOUNDARIES = (
         "dnd5e.core.check.armor_stealth_disadvantage",
         ("2014", "2024"),
         "combat_engine.resolve_actor_check",
-        ("tests/test_combat_engine.py", "tests/test_character_schema.py"),
+        (
+            "tests/test_combat_engine.py",
+            "tests/test_character_schema.py",
+            "tests/test_statblocks.py",
+        ),
         "bundled:srd2014/04_Equipment/Armor.md",
     ),
     CoreBoundary(

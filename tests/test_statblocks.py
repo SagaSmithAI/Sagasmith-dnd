@@ -109,6 +109,8 @@ def test_bandit_captain_preserves_exact_overrides_and_multiattack_composition() 
     derived = derive_character_sheet(parsed.sheet)
 
     assert derived["armor_class"] == 15
+    assert parsed.sheet["inventory"]["equipment_slots"]["armor"] == "statblock-studded-leather"
+    assert derived["stealth_disadvantage"] is False
     assert derived["saving_throws"]["strength"] == 4
     assert derived["saving_throws"]["dexterity"] == 5
     assert derived["skills"]["athletics"] == 4
@@ -128,6 +130,22 @@ def test_bandit_captain_preserves_exact_overrides_and_multiattack_composition() 
         {"weapon_id": "dagger", "attack_mode": "ranged", "count": 2}
     ]
     assert parsed.warnings == ("Parry: descriptive reaction is not automatically settled",)
+
+
+def test_statblock_explicit_heavy_armor_preserves_non_ac_mechanics_with_override() -> None:
+    parsed = parse_2014_statblock(
+        BANDIT_CAPTAIN.replace(
+            "**Armor Class** 15 (studded leather)",
+            "**Armor Class** 18 (chain mail, shield)",
+        ),
+        source_key="module-review:fist-of-bane",
+    )
+    derived = derive_character_sheet(parsed.sheet)
+
+    assert derived["armor_class"] == 18
+    assert parsed.sheet["inventory"]["equipment_slots"]["armor"] == "statblock-chain-mail"
+    assert parsed.sheet["inventory"]["equipment_slots"]["shield"] == "statblock-shield"
+    assert derived["stealth_disadvantage"] is True
 
 
 def test_numeric_statblock_spell_attack_is_executable() -> None:

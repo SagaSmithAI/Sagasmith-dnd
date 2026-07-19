@@ -285,6 +285,36 @@ def test_equipment_slots_and_ac_derive_from_armor_shield_magic_and_effects() -> 
     assert derived["unresolved_rules"] == []
 
 
+def test_ac_override_does_not_erase_equipped_armor_stealth_disadvantage() -> None:
+    sheet = validate_character_sheet(
+        {
+            "abilities": {"dexterity": {"score": 12}},
+            "combat": {"ac": {"base": 10, "override": 19}},
+        }
+    )
+    sheet, armor_id = add_inventory_item(
+        sheet,
+        {
+            "id": "scale-mail",
+            "name": "Scale Mail",
+            "kind": "armor",
+            "mechanics": {
+                "base_ac": 14,
+                "dexterity_mode": "max",
+                "dexterity_max": 2,
+                "magic_bonus": 0,
+                "stealth_disadvantage": True,
+            },
+        },
+    )
+    sheet = equip_inventory_item(sheet, armor_id, "armor")
+
+    derived = derive_character_sheet(sheet)
+    assert derived["armor_class"] == 19
+    assert derived["armor_class_breakdown"]["mode"] == "override"
+    assert derived["stealth_disadvantage"] is True
+
+
 def test_equipment_schema_rejects_incompatible_slots_and_inconsistent_state() -> None:
     with pytest.raises(ValueError, match="base_ac is required"):
         add_inventory_item(
