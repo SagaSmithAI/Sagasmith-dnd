@@ -820,6 +820,30 @@ def test_2014_surprised_actor_regains_reaction_when_first_turn_ends() -> None:
     assert combatant["turn_budget"]["object_interaction"] == 0
 
 
+def test_end_turn_skips_dead_actor_but_keeps_death_save_turn() -> None:
+    first = _actor("first")
+    first["initiative"] = 30
+    dead = _actor("dead")
+    dead["initiative"] = 20
+    dead["sheet"]["conditions"] = ["dead", "prone"]
+    dying = _actor("dying")
+    dying.update(initiative=10, death_saves=True)
+    dying["sheet"]["conditions"] = ["unconscious", "prone"]
+    encounter = start_encounter([first, dead, dying])
+
+    advanced = end_turn(encounter, actor_id_value="first")
+
+    assert current_combatant(advanced)["actor_id"] == "dying"
+    assert any(
+        item.get("type") == "turn_skipped"
+        and item.get("actor_id") == "dead"
+        and item.get("reason") == "dead"
+        for item in advanced["log"]
+    )
+    with pytest.raises(ValueError, match="death save"):
+        end_turn(advanced, actor_id_value="dying")
+
+
 def test_dodge_lasts_until_start_of_next_turn_and_affects_attacks() -> None:
     dodger = _actor("dodger")
     dodger["initiative"] = 20

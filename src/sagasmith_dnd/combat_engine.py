@@ -2560,7 +2560,9 @@ def end_turn(encounter: dict[str, Any], *, actor_id_value: str | None = None) ->
         current.setdefault("turn_budget", {})["reaction"] = 1
     combatants = list(value.get("combatants") or [])
     next_index = (int(value.get("turn_index", 0)) + 1) % len(combatants)
-    if next_index == 0:
+
+    def begin_next_round() -> None:
+        nonlocal combatants
         value["round"] = int(value.get("round", 1)) + 1
         joining = [
             item
@@ -2596,7 +2598,39 @@ def end_turn(encounter: dict[str, Any], *, actor_id_value: str | None = None) ->
                     for item in joining
                 ],
             ][-100:]
-        next_index = 0
+        combatants = list(value.get("combatants") or combatants)
+
+    if next_index == 0:
+        begin_next_round()
+
+    # Dead creatures no longer take turns.  Do not apply this to an unconscious
+    # combatant that uses death saves: that turn is still required so the save
+    # can be resolved at its start.  Keep one dead index if nobody remains able
+    # to take a turn so the encounter can still be ended explicitly.
+    skipped_dead: list[str] = []
+    checked = 0
+    while checked < len(combatants) and "dead" in _condition_set(
+        combatants[next_index].get("conditions")
+    ):
+        skipped_dead.append(str(combatants[next_index].get("actor_id") or ""))
+        checked += 1
+        candidate_index = (next_index + 1) % len(combatants)
+        if candidate_index == 0:
+            begin_next_round()
+        next_index = candidate_index
+    if skipped_dead and checked < len(combatants):
+        value["log"] = [
+            *list(value.get("log") or []),
+            *[
+                {
+                    "type": "turn_skipped",
+                    "actor_id": skipped_actor_id,
+                    "reason": "dead",
+                    "round": int(value.get("round", 1)),
+                }
+                for skipped_actor_id in skipped_dead
+            ],
+        ][-100:]
     value["turn_index"] = next_index
     next_actor = current_combatant(value)
     if next_actor:
