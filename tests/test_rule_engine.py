@@ -80,6 +80,50 @@ def test_rule_extension_settles_whitelisted_operation_with_receipt() -> None:
     assert result["ruleset_fingerprint"] == rules.fingerprint
 
 
+def test_spellbook_copy_event_accepts_only_cost_and_time_modifiers() -> None:
+    rules = resolution_context(
+        _effective(
+            [
+                {
+                    "id": "dnd5e.extension.copy.discount",
+                    "event": "spellbook.copy.before",
+                    "predicates": [
+                        {"kind": "fact_equals", "key": "spell_school", "value": "illusion"}
+                    ],
+                    "operations": [
+                        {
+                            "op": "modifier.add",
+                            "target": "copy_cost_percent",
+                            "value": -50,
+                        },
+                        {
+                            "op": "modifier.add",
+                            "target": "copy_time_percent",
+                            "value": -50,
+                        },
+                    ],
+                    "citations": [{"source": "local:extension", "section": "Savant"}],
+                }
+            ]
+        ),
+        facts={"spell_school": "illusion"},
+    )
+    result = apply_rule_event({}, "spellbook.copy.before", rules)
+    assert [modifier["target"] for modifier in result.modifiers] == [
+        "copy_cost_percent",
+        "copy_time_percent",
+    ]
+
+    invalid = {
+        "id": "dnd5e.extension.copy.invalid",
+        "event": "spellbook.copy.before",
+        "operations": [{"op": "modifier.add", "target": "attack_bonus", "value": 1}],
+        "citations": [{"source": "local:extension"}],
+    }
+    with pytest.raises(RuleCompilationError, match="cannot consume modifier target"):
+        resolution_context(_effective([invalid]))
+
+
 def test_pending_choice_is_atomic_and_unsafe_opcode_is_rejected() -> None:
     sheet = default_character_sheet()
     rules = resolution_context(

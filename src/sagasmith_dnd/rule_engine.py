@@ -16,6 +16,7 @@ ALLOWED_EVENTS = {
     "activity.after",
     "spell.before",
     "spell.after",
+    "spellbook.copy.before",
     "rest.before",
     "rest.after",
     "attack.preflight",
@@ -43,7 +44,13 @@ ALLOWED_OPS = {
     "ruling.require",
 }
 
-READ_ONLY_EVENTS = {"attack.preflight", "check.before", "character.validate", "character.derive"}
+READ_ONLY_EVENTS = {
+    "attack.preflight",
+    "check.before",
+    "character.validate",
+    "character.derive",
+    "spellbook.copy.before",
+}
 READ_ONLY_OPS = {
     "modifier.add",
     "advantage.add",
@@ -438,6 +445,7 @@ def _validate_event_operation(event: str, operation: dict[str, Any]) -> None:
             "attack.preflight": {"attack_bonus", "target_ac"},
             "check.before": {"check_bonus"},
             "character.derive": {"armor_class", "initiative", "passive_perception"},
+            "spellbook.copy.before": {"copy_cost_percent", "copy_time_percent"},
         }.get(event, set())
         if target not in allowed_targets:
             raise RuleCompilationError(

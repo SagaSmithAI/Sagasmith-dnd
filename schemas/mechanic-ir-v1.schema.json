@@ -11,7 +11,7 @@
       "enum": [
         "character.validate", "character.derive", "activity.before", "activity.after",
         "spell.before", "spell.after", "rest.before", "rest.after", "attack.preflight",
-        "attack.after", "check.before", "turn.end", "duration.advance"
+        "attack.after", "check.before", "spellbook.copy.before", "turn.end", "duration.advance"
       ]
     },
     "priority": {"type": "integer"},
