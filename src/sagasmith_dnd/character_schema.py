@@ -1818,6 +1818,7 @@ def validate_world_effect(value: Any, *, field: str = "world_effect") -> dict[st
             "source_actor_id",
             "target",
             "active",
+            "visibility",
             "duration",
             "description",
             "created_at_elapsed_minutes",
@@ -1837,7 +1838,7 @@ def validate_world_effect(value: Any, *, field: str = "world_effect") -> dict[st
     target_id = _text(target.get("id"), f"{field}.target.id", maximum=300)
     if target_kind != "campaign" and not target_id:
         raise ValueError(f"{field}.target.id is required for {target_kind} effects")
-    return {
+    normalized = {
         "id": _text(effect.get("id"), f"{field}.id", default=_uuid(), maximum=100),
         "name": _text(effect.get("name"), f"{field}.name", maximum=300),
         "kind": _text(effect.get("kind"), f"{field}.kind", default="custom", maximum=100),
@@ -1854,6 +1855,9 @@ def validate_world_effect(value: Any, *, field: str = "world_effect") -> dict[st
             "label": _text(target.get("label"), f"{field}.target.label", maximum=300),
         },
         "active": _boolean(effect.get("active"), f"{field}.active", default=True),
+        "visibility": _text(
+            effect.get("visibility"), f"{field}.visibility", default="party"
+        ),
         "duration": {
             "period": period,
             "remaining": _integer(
@@ -1868,6 +1872,9 @@ def validate_world_effect(value: Any, *, field: str = "world_effect") -> dict[st
         ),
         "metadata": _object(effect.get("metadata") or {}, f"{field}.metadata"),
     }
+    if normalized["visibility"] not in {"public", "party", "dm"}:
+        raise ValueError(f"{field}.visibility is invalid")
+    return normalized
 
 
 def _derive_armor_class(
