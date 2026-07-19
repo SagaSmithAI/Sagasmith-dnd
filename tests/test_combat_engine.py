@@ -1065,6 +1065,18 @@ def test_death_save_persists_nat20_recovery() -> None:
     assert "unconscious" not in result["sheet"]["conditions"]
 
 
+def test_fatal_death_save_does_not_leave_actor_unconscious() -> None:
+    actor = _actor("target", hp=10)
+    actor["sheet"]["combat"]["hp"]["value"] = 0
+    actor["sheet"]["combat"]["death_saves"] = {"successes": 1, "failures": 2}
+    actor["sheet"]["conditions"] = ["prone", "unconscious"]
+
+    result = resolve_death_save_to_sheet(actor["sheet"], rng=_SequenceRng(2))
+
+    assert result["outcome"] == "dead"
+    assert set(result["sheet"]["conditions"]) == {"dead", "prone"}
+
+
 def test_stabilize_sheet_requires_zero_hp_and_clears_death_saves() -> None:
     actor = _actor("dying")
     actor["sheet"]["combat"]["hp"]["value"] = 0

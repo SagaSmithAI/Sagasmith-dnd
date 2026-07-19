@@ -1618,7 +1618,11 @@ def resolve_death_save_to_sheet(
         value["conditions"] = sorted(set(value.get("conditions", [])) | {"stable", "unconscious"})
     combat["death_saves"] = death
     if result["outcome"] == "dead":
-        value["conditions"] = sorted(set(value.get("conditions", [])) | {"dead"})
+        final_conditions = set(value.get("conditions", []))
+        final_conditions.discard("stable")
+        final_conditions.discard("unconscious")
+        final_conditions.add("dead")
+        value["conditions"] = sorted(final_conditions)
     return {"sheet": value, **result}
 
 
