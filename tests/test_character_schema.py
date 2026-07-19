@@ -240,6 +240,7 @@ def test_equipment_slots_and_ac_derive_from_armor_shield_magic_and_effects() -> 
                 "base_ac": 11,
                 "dexterity_mode": "full",
                 "magic_bonus": 0,
+                "stealth_disadvantage": True,
             },
         },
     )
@@ -276,6 +277,7 @@ def test_equipment_slots_and_ac_derive_from_armor_shield_magic_and_effects() -> 
     derived = derive_character_sheet(sheet)
     assert derived["armor_class"] == 19
     assert derived["armor_class_breakdown"]["armor"]["dexterity_bonus"] == 3
+    assert derived["stealth_disadvantage"] is True
     assert derived["armor_class_breakdown"]["shield"]["bonus"] == 2
     assert derived["armor_class_breakdown"]["magic_items"] == [
         {"item_id": "cloak", "name": "Cloak of Protection", "bonus": 1}

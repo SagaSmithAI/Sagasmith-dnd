@@ -2,7 +2,12 @@ import random
 
 import pytest
 
-from sagasmith_dnd.character_schema import default_character_sheet, derive_character_sheet
+from sagasmith_dnd.character_schema import (
+    add_inventory_item,
+    default_character_sheet,
+    derive_character_sheet,
+    equip_inventory_item,
+)
 from sagasmith_dnd.combat_engine import (
     NeedsRulingError,
     add_choice_window,
@@ -958,6 +963,38 @@ def test_condition_saving_throw_effects_are_not_left_to_client_modifiers() -> No
         rng=random.Random(1),
     )
     assert save["bonus"] == -4
+
+
+def test_equipped_armor_automatically_imposes_stealth_disadvantage() -> None:
+    actor = _actor("armored-scout")
+    sheet, armor_id = add_inventory_item(
+        actor["sheet"],
+        {
+            "id": "scale-mail",
+            "name": "Scale mail",
+            "kind": "armor",
+            "mechanics": {
+                "base_ac": 14,
+                "dexterity_mode": "max",
+                "dexterity_max": 2,
+                "stealth_disadvantage": True,
+            },
+        },
+    )
+    actor["sheet"] = equip_inventory_item(sheet, armor_id, "armor")
+    actor["derived"] = derive_character_sheet(actor["sheet"])
+
+    result = resolve_actor_check(
+        actor,
+        kind="ability",
+        ability="stealth",
+        dc=10,
+        rng=_SequenceRng(18, 2),
+    )
+
+    assert result["rolls"] == [18, 2]
+    assert result["natural"] == 2
+    assert result["success"] is False
 
 
 def test_death_save_persists_nat20_recovery() -> None:

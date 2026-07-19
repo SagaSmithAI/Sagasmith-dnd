@@ -525,7 +525,13 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
         _reject_unknown(
             mechanics,
             field,
-            {"base_ac", "dexterity_mode", "dexterity_max", "magic_bonus"},
+            {
+                "base_ac",
+                "dexterity_mode",
+                "dexterity_max",
+                "magic_bonus",
+                "stealth_disadvantage",
+            },
         )
         if "base_ac" not in mechanics:
             raise ValueError(f"{field}.base_ac is required for armor")
@@ -546,6 +552,11 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
             "dexterity_mode": dexterity_mode,
             "dexterity_max": dexterity_max,
             "magic_bonus": _integer(mechanics.get("magic_bonus"), f"{field}.magic_bonus"),
+            "stealth_disadvantage": _boolean(
+                mechanics.get("stealth_disadvantage"),
+                f"{field}.stealth_disadvantage",
+                default=False,
+            ),
         }
     if kind == "shield":
         _reject_unknown(mechanics, field, {"ac_bonus", "magic_bonus"})
@@ -1914,6 +1925,7 @@ def _derive_armor_class(
                 "name": armor["name"],
                 "dexterity_bonus": dexterity_bonus,
                 "magic_bonus": mechanics["magic_bonus"],
+                "stealth_disadvantage": mechanics["stealth_disadvantage"],
             }
         elif ac["base"] == 10:
             dexterity_bonus = ability_modifiers["dexterity"]
@@ -2144,6 +2156,9 @@ def derive_character_sheet(
         + value["traits"]["senses"]["passive_perception_bonus"],
         "armor_class": armor_class,
         "armor_class_breakdown": armor_class_breakdown,
+        "stealth_disadvantage": bool(
+            dict(armor_class_breakdown.get("armor") or {}).get("stealth_disadvantage", False)
+        ),
         "initiative": ability_modifiers[value["combat"]["initiative"]["ability"]]
         + value["combat"]["initiative"]["bonus"],
         "attacks_per_action": max(

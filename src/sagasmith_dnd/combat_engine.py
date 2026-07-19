@@ -2414,6 +2414,7 @@ def resolve_actor_check(
     rng: Any = None,
 ) -> dict[str, Any]:
     sheet = actor_sheet(actor)
+    derived = actor_derived(actor)
     normalized_ruleset = _normalize_ruleset(ruleset or sheet.get("edition"))
     conditions = _condition_set(sheet.get("conditions"))
     exhaustion = int(sheet.get("combat", {}).get("exhaustion", 0) or 0)
@@ -2431,15 +2432,23 @@ def resolve_actor_check(
             advantage = True
         elif modifier["op"] == "disadvantage.add":
             disadvantage = True
-    boundary_ids = (
-        ["dnd5e.core.save.restrained_dexterity"]
-        if (
+    normalized_ability = str(ability).strip().casefold().replace(" ", "_")
+    armor_stealth_disadvantage = (
+        kind in {"ability", "check"}
+        and normalized_ability == "stealth"
+        and bool(derived.get("stealth_disadvantage", False))
+    )
+    if armor_stealth_disadvantage:
+        disadvantage = True
+    boundary_ids = []
+    if (
             kind == "save"
             and _long_ability_name(ability) == "dexterity"
             and "restrained" in conditions
-        )
-        else []
-    )
+    ):
+        boundary_ids.append("dnd5e.core.save.restrained_dexterity")
+    if armor_stealth_disadvantage:
+        boundary_ids.append("dnd5e.core.check.armor_stealth_disadvantage")
 
     def with_rule_receipts(result: dict[str, Any]) -> dict[str, Any]:
         result["rule_receipts"] = [
@@ -2476,7 +2485,7 @@ def resolve_actor_check(
         kind in {"save", "death_save"} and exhaustion >= 3
     ):
         disadvantage = True
-    derived_skills = dict(actor_derived(actor).get("skills") or {})
+    derived_skills = dict(derived.get("skills") or {})
     if kind in {"ability", "check"} and ability in derived_skills:
         return with_rule_receipts(resolve_check(
             dc=dc,

@@ -6,6 +6,7 @@ from sagasmith_dnd.rule_engine import core_receipts, resolution_context
 REQUIRED_BOUNDARIES = {
     "dnd5e.core.ability_generation",
     "dnd5e.core.armor_class.unarmored",
+    "dnd5e.core.check.armor_stealth_disadvantage",
     "dnd5e.core.weapon.reach",
     "dnd5e.core.initiative.tie",
     "dnd5e.core.action.edition_list",
