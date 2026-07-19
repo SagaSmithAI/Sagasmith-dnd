@@ -427,7 +427,7 @@ def test_bandit_captain_multiattack_preserves_recorded_weapon_composition() -> N
         }
     ]
     captain["derived"] = derive_character_sheet(captain["sheet"])
-    assert captain["derived"]["attacks_per_action"] == 3
+    assert captain["derived"]["attacks_per_action"] == 1
     assert {item["id"] for item in captain["derived"]["multiattack_options"]} == {
         "melee",
         "ranged",
@@ -468,6 +468,51 @@ def test_bandit_captain_multiattack_preserves_recorded_weapon_composition() -> N
     current = encounter["combatants"][encounter["turn_index"]]
     assert current["turn_budget"]["attack_budget"] == 0
     assert "multiattack" not in current.get("turn_flags", {})
+
+    ordinary = start_encounter([captain, target])
+    ordinary, payment = pay_attack_action(
+        ordinary, captain, weapon_id="scimitar", attack_mode="melee"
+    )
+    assert payment["kind"] == "attack_action"
+    assert payment["attack_count"] == 1
+    assert ordinary["combatants"][0]["turn_budget"]["attack_budget"] == 0
+
+
+def test_unstructured_multiattack_does_not_block_an_ordinary_weapon_attack() -> None:
+    attacker = _actor("attacker")
+    attacker["sheet"]["content"]["activities"] = [
+        {
+            "id": "unresolved-multiattack",
+            "name": "Multiattack",
+            "activation": {"type": "action"},
+            "description": "The actor attacks and uses a descriptive command.",
+        }
+    ]
+    attacker["derived"] = derive_character_sheet(attacker["sheet"])
+    target = _actor("target")
+    participants = [
+        {**attacker, "initiative": 20, "tie_breaker": 0},
+        {**target, "initiative": 10, "tie_breaker": 1},
+    ]
+    encounter = start_encounter(participants)
+
+    encounter, payment = pay_attack_action(
+        encounter,
+        attacker,
+        weapon_id="unarmed-strike",
+        attack_mode="melee",
+    )
+    assert payment["kind"] == "attack_action"
+    assert payment["attack_count"] == 1
+
+    with pytest.raises(CombatEngineError, match="no structured options"):
+        pay_attack_action(
+            start_encounter(participants),
+            attacker,
+            weapon_id="unarmed-strike",
+            attack_mode="melee",
+            multiattack_option_id="invented",
+        )
 
 
 def test_thrown_weapon_requires_explicit_ranged_attack_mode() -> None:

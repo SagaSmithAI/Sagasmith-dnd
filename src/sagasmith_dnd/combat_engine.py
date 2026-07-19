@@ -474,8 +474,8 @@ def pay_attack_action(
         )
         if not payment_key:
             raise CombatEngineError("actor has no attack payment available")
-        multiattack_options = _validated_multiattack_options(attacker)
-        if multiattack_options:
+        if multiattack_option_id:
+            multiattack_options = _validated_multiattack_options(attacker)
             option = _select_multiattack_option(
                 multiattack_options, multiattack_option_id
             )
@@ -498,8 +498,6 @@ def pay_attack_action(
                 "attack_count": total,
             }
         else:
-            if multiattack_option_id:
-                raise CombatEngineError("actor has no recorded Multiattack option")
             count = int(actor_derived(attacker).get("attacks_per_action", 1) or 1)
             budget["attack_budget"] = max(0, count - 1)
             payment = {

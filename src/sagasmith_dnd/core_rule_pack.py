@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-CORE_RULE_PACK_VERSION = "1.13.0"
+CORE_RULE_PACK_VERSION = "1.14.0"
 
 
 @dataclass(frozen=True)
@@ -107,6 +107,13 @@ BOUNDARIES = (
         "combat_engine.available_actions",
         ("tests/test_combat_engine.py",),
         "bundled:srd/actions",
+    ),
+    CoreBoundary(
+        "dnd5e.core.action.multiattack_choice",
+        ("2014", "2024"),
+        "combat_engine.pay_attack_action",
+        ("tests/test_combat_engine.py", "tests/test_statblocks.py"),
+        "bundled:srd2014/10_Monsters/Monsters.md",
     ),
     CoreBoundary(
         "dnd5e.core.attack.cover",

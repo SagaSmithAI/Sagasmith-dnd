@@ -120,7 +120,7 @@ def test_bandit_captain_preserves_exact_overrides_and_multiattack_composition() 
     assert attacks["scimitar"]["damage_expression"] == "1d6 + 3"
     assert attacks["dagger"]["damage_expression"] == "1d4 + 2"
     assert attacks["dagger"]["thrown_range_ft"] == {"normal": 20, "long": 60}
-    assert derived["attacks_per_action"] == 3
+    assert derived["attacks_per_action"] == 1
     options = {item["id"]: item["attacks"] for item in derived["multiattack_options"]}
     assert options["melee"] == [
         {"weapon_id": "scimitar", "attack_mode": "melee", "count": 2},

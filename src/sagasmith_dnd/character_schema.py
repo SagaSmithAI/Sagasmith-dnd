@@ -2143,18 +2143,6 @@ def derive_character_sheet(
         options = dict(activity.get("choices") or {}).get("multiattack_options")
         if isinstance(options, list):
             multiattack_options.extend(copy.deepcopy(options))
-    multiattack_max = max(
-        (
-            sum(
-                int(attack.get("count", 0) or 0)
-                for attack in option.get("attacks", [])
-                if isinstance(attack, dict)
-            )
-            for option in multiattack_options
-            if isinstance(option, dict)
-        ),
-        default=0,
-    )
     derived = {
         "proficiency_bonus": proficiency,
         "ability_modifiers": ability_modifiers,
@@ -2168,9 +2156,7 @@ def derive_character_sheet(
         "stealth_disadvantage": stealth_disadvantage,
         "initiative": ability_modifiers[value["combat"]["initiative"]["ability"]]
         + value["combat"]["initiative"]["bonus"],
-        "attacks_per_action": max(
-            value["combat"]["attacks_per_action"], multiattack_max
-        ),
+        "attacks_per_action": value["combat"]["attacks_per_action"],
         "multiattack_options": multiattack_options,
         "hit_points": dict(value["combat"]["hp"]),
         "hit_point_progression": {
