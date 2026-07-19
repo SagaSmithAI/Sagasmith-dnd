@@ -50,6 +50,7 @@ ITEM_KINDS = {
     "loot",
     "magic_item",
     "focus",
+    "spellbook",
 }
 EQUIPMENT_SLOTS = (
     "armor",
@@ -475,6 +476,41 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
             ),
             "extra_dimensional": _boolean(
                 mechanics.get("extra_dimensional"), f"{field}.extra_dimensional"
+            ),
+        }
+    if kind == "spellbook":
+        _reject_unknown(
+            mechanics,
+            field,
+            {
+                "edition",
+                "spell_ids",
+                "owner_mark",
+                "source_scene_id",
+                "deciphered",
+                "copyable",
+            },
+        )
+        edition = _text(mechanics.get("edition"), f"{field}.edition", default="2014")
+        if edition not in {"2014", "2024"}:
+            raise ValueError(f"{field}.edition must be 2014 or 2024")
+        spell_ids = _string_list(mechanics.get("spell_ids"), f"{field}.spell_ids")
+        if len(spell_ids) != len(set(spell_ids)):
+            raise ValueError(f"{field}.spell_ids contains duplicate ids")
+        return {
+            "edition": edition,
+            "spell_ids": spell_ids,
+            "owner_mark": _text(
+                mechanics.get("owner_mark"), f"{field}.owner_mark", maximum=300
+            ),
+            "source_scene_id": _text(
+                mechanics.get("source_scene_id"), f"{field}.source_scene_id", maximum=100
+            ),
+            "deciphered": _boolean(
+                mechanics.get("deciphered"), f"{field}.deciphered", default=True
+            ),
+            "copyable": _boolean(
+                mechanics.get("copyable"), f"{field}.copyable", default=True
             ),
         }
     if kind == "armor":

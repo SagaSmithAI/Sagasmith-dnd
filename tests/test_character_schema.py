@@ -148,6 +148,47 @@ def test_inventory_wallet_effect_and_memory_contracts() -> None:
     assert notes["memories"][0]["id"] == memory_id
 
 
+def test_spellbook_inventory_preserves_structured_copy_sources() -> None:
+    sheet, item_id = add_inventory_item(
+        validate_character_sheet({}),
+        {
+            "id": "d11-red-spellbook",
+            "name": "Red leather spellbook",
+            "kind": "spellbook",
+            "source_key": "module:avernus:d11:red-spellbook",
+            "mechanics": {
+                "edition": "2014",
+                "spell_ids": [
+                    "dnd5e.content.srd2014.spell.burning-hands",
+                    "dnd5e.content.srd2014.spell.detect-magic",
+                ],
+                "owner_mark": "No recorded owner mark",
+                "source_scene_id": "d11-scene",
+                "deciphered": True,
+                "copyable": True,
+            },
+        },
+    )
+
+    assert item_id == "d11-red-spellbook"
+    item = sheet["inventory"]["items"][0]
+    assert item["kind"] == "spellbook"
+    assert item["mechanics"]["spell_ids"] == [
+        "dnd5e.content.srd2014.spell.burning-hands",
+        "dnd5e.content.srd2014.spell.detect-magic",
+    ]
+
+    with pytest.raises(ValueError, match="duplicate ids"):
+        add_inventory_item(
+            validate_character_sheet({}),
+            {
+                "name": "Invalid spellbook",
+                "kind": "spellbook",
+                "mechanics": {"spell_ids": ["spell:a", "spell:a"]},
+            },
+        )
+
+
 def test_equipment_slots_and_ac_derive_from_armor_shield_magic_and_effects() -> None:
     sheet = validate_character_sheet(
         {
