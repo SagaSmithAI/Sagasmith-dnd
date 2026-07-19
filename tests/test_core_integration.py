@@ -81,6 +81,7 @@ def test_dnd_module_spatial_manifest_and_temporary_map() -> None:
     assert battle_map["map_revision"] == 1
     assert battle_map["source"]["location_key"] == "a1-cellar"
     assert battle_map["source"]["encounter_scene_id"] == "scene-1"
+    assert battle_map["dm_overrides"] is True
     validate_position(battle_map, {"x": 1, "y": 1})
     try:
         validate_position(battle_map, {"x": 2, "y": 1})
@@ -100,6 +101,7 @@ def test_dnd_module_spatial_manifest_and_temporary_map() -> None:
     assert linked_map["source"]["scene_id"] == "spatial-scene"
     assert linked_map["source"]["encounter_scene_id"] == "ambush-scene"
     assert linked_map["bounds"] == {"width_cells": 12, "height_cells": 12}
+    assert linked_map["dm_overrides"] is False
 
     updated = patch_battle_map(battle_map, [{"key": "gate.open", "value": True}])
     assert updated["map_revision"] == 2

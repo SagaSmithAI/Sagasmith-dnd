@@ -59,7 +59,7 @@ def compile_battle_map(
         "bounds": {"width_cells": width, "height_cells": height},
         "blocked_cells": blocked,
         "difficult_cells": difficult,
-        "dm_overrides": bool(request),
+        "dm_overrides": bool(set(request) - {"location_key"}),
         "world_patches": [],
     }
     value["checksum"] = _checksum(value)
