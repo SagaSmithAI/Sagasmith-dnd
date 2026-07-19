@@ -165,7 +165,9 @@ def start_encounter(
     if not participants:
         raise CombatEngineError("combat requires at least one participant")
     normalized_ruleset = _normalize_ruleset(ruleset)
-    combatants: list[dict[str, Any]] = []
+    validated_participants: list[
+        tuple[int, dict[str, Any], str, dict[str, Any], dict[str, Any], set[str], int]
+    ] = []
     for index, actor in enumerate(participants):
         identifier = actor_id(actor)
         derived = actor_derived(actor)
@@ -176,6 +178,14 @@ def start_encounter(
             raise CombatEngineError(
                 f"actor {identifier} has exhaustion level 6 and must be marked dead"
             )
+        validated_participants.append(
+            (index, actor, identifier, derived, sheet, conditions, exhaustion)
+        )
+
+    combatants: list[dict[str, Any]] = []
+    for index, actor, identifier, derived, sheet, conditions, exhaustion in (
+        validated_participants
+    ):
         initiative_bonus = int(derived.get("initiative", 0))
         if normalized_ruleset == "2024":
             initiative_bonus -= 2 * exhaustion

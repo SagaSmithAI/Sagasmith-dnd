@@ -9,6 +9,7 @@ from sagasmith_dnd.character_schema import (
     equip_inventory_item,
 )
 from sagasmith_dnd.combat_engine import (
+    CombatEngineError,
     NeedsRulingError,
     add_choice_window,
     apply_attack_ac_bonus,
@@ -512,6 +513,18 @@ def test_encounter_uses_actor_references_and_turn_budget() -> None:
     assert encounter["active"] is True
     assert {item["actor_id"] for item in encounter["combatants"]} == {"a", "b"}
     assert encounter["combatants"][0]["turn_budget"]["reaction"] == 1
+
+
+def test_encounter_validates_every_participant_before_rolling_initiative() -> None:
+    valid = _actor("valid")
+    invalid = _actor("invalid")
+    invalid["sheet"]["combat"]["exhaustion"] = 6
+    rng = _SequenceRng(7)
+
+    with pytest.raises(CombatEngineError, match="exhaustion level 6"):
+        start_encounter([valid, invalid], rng=rng)
+
+    assert rng.values == [7]
 
 
 def test_initiative_ties_require_explicit_tie_breakers() -> None:
