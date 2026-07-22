@@ -4,6 +4,7 @@ from sagasmith_dnd.spell_resolution import (
     known_spell_resolution,
     normalize_spell_resolution,
     overlay_spell_attack_action,
+    overlay_spell_attack_card,
     scaled_roll_expression,
     spell_attack_action_resolution,
     spell_attack_count,
@@ -76,3 +77,34 @@ def test_statblock_spell_attack_overlay_keeps_reviewed_ray_count() -> None:
     assert overlaid["attack"]["count"]["base"] == 3
     assert overlaid["attack"]["attack_bonus_override"] == 6
     assert overlaid["attack"]["damage"]["base_dice"] == "2d6"
+
+
+def test_statblock_spell_attack_card_keeps_display_and_settlement_consistent() -> None:
+    description = (
+        "*Ranged Spell Attack:* +6 to hit, range 60 ft., one target. "
+        "*Hit:* 7 (2d6) fire damage."
+    )
+    core = {
+        "id": "dnd5e.content.srd2014.spell.scorching-ray",
+        "definition": {
+            "casting_time": "1 action",
+            "range": {"kind": "distance", "normal_ft": 120, "long_ft": 120},
+            "components": {"verbal": True, "somatic": True},
+            "effect": "Base spell text with a 120-foot range.",
+        },
+        "resolution": known_spell_resolution("Scorching Ray"),
+        "notes": "",
+    }
+
+    overlaid = overlay_spell_attack_card(core, description)
+
+    assert overlaid["definition"]["range"] == {
+        "kind": "distance",
+        "normal_ft": 60,
+        "long_ft": 60,
+    }
+    assert overlaid["definition"]["components"] == {"verbal": True, "somatic": True}
+    assert overlaid["definition"]["effect"] == description
+    assert overlaid["resolution"]["attack"]["range_ft_override"] == 60
+    assert overlaid["resolution"]["attack"]["count"]["base"] == 3
+    assert "Statblock action overrides" in overlaid["notes"]

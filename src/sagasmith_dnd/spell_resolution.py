@@ -548,11 +548,49 @@ def overlay_spell_attack_action(
     return normalize_spell_resolution(value)
 
 
+def overlay_spell_attack_card(card: dict[str, Any], description: str) -> dict[str, Any]:
+    """Apply one complete statblock spell action to both display and settlement data.
+
+    A monster statblock can deliberately shorten a spell's range or replace its
+    damage at the creature's printed level. Keeping only a resolution override
+    leaves ``definition`` contradictory, which can make an Agent or UI narrate the
+    base spell while the engine settles the statblock action. Preserve the exact
+    catalog card and its components, but make the printed action authoritative for
+    the displayed effect, range, and structured resolution.
+    """
+
+    parsed = spell_attack_action_resolution(description)
+    resolution = card.get("resolution")
+    if parsed is None or not isinstance(resolution, dict):
+        return deepcopy(card)
+    if resolution.get("kind") != "spell_attack":
+        return deepcopy(card)
+
+    value = deepcopy(card)
+    value["resolution"] = overlay_spell_attack_action(resolution, description)
+    actor_attack = dict(parsed["attack"])
+    range_ft = int(actor_attack["range_ft_override"])
+    definition = dict(value.get("definition") or {})
+    definition["range"] = {
+        **dict(definition.get("range") or {}),
+        "kind": "distance",
+        "normal_ft": range_ft,
+        "long_ft": range_ft,
+    }
+    definition["effect"] = str(description).strip()
+    value["definition"] = definition
+    note = "Statblock action overrides the base spell's displayed range and effect."
+    existing_notes = str(value.get("notes") or "").strip()
+    value["notes"] = f"{existing_notes} {note}".strip()
+    return value
+
+
 __all__ = [
     "SPELL_RESOLUTION_MECHANIC_ID",
     "known_spell_resolution",
     "normalize_spell_resolution",
     "overlay_spell_attack_action",
+    "overlay_spell_attack_card",
     "scaled_roll_expression",
     "spell_attack_action_resolution",
     "spell_attack_count",
