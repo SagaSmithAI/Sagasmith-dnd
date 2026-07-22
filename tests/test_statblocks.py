@@ -189,6 +189,87 @@ def test_numeric_statblock_spell_attack_is_executable() -> None:
     assert parsed.warnings == ()
 
 
+def test_spellcasting_metadata_and_named_spell_actions_are_not_free_weapons() -> None:
+    parsed = parse_2014_statblock(
+        """# Master of Souls
+
+*Medium humanoid (human), neutral evil*
+
+**Armor Class** 12
+**Hit Points** 45 (6d8 + 18)
+**Speed** 30 ft.
+
+| STR | DEX | CON | INT | WIS | CHA |
+|---|---|---|---|---|---|
+| 10 (+0) | 14 (+2) | 17 (+3) | 19 (+4) | 14 (+2) | 13 (+1) |
+
+**Senses** passive Perception 12
+**Languages** Common
+**Challenge** 4 (1,100 XP)
+
+***Spellcasting***. The master of souls is a 5th-level spellcaster. Its spellcasting
+ability is Intelligence (spell save DC 14, +6 to hit with spell attacks). It has the
+following wizard spells prepared:
+
+Cantrips (at will): chill touch, mage hand
+
+1st level (4 slots): ray of sickness, shield
+
+2nd level (3 slots): scorching ray
+
+## Actions
+
+***Multiattack***. The master of souls makes two attacks with its silvered skull flail.
+
+***Silvered Skull Flail***. *Melee Weapon Attack:* +2 to hit, reach 5 ft., one target.
+*Hit:* 4 (1d8) bludgeoning damage.
+
+***Chill Touch***. *Ranged Spell Attack:* +6 to hit, range 120 ft., one target.
+*Hit:* 13 (2d8) necrotic damage.
+
+***Ray of Sickness (1st-Level Spell; Requires a Spell Slot)***.
+*Ranged Spell Attack:* +6 to hit, range 60 ft., one target.
+*Hit:* 9 (2d8) poison damage.
+
+***Scorching Ray (2nd-Level Spell; Requires a Spell Slot)***.
+*Ranged Spell Attack:* +6 to hit, range 60 ft., one target.
+*Hit:* 7 (2d6) fire damage.
+""",
+        source_key="module-review:master-of-souls",
+    )
+    derived = derive_character_sheet(parsed.sheet)
+
+    assert parsed.spellcasting is not None
+    assert parsed.spellcasting["ability"] == "intelligence"
+    assert parsed.spellcasting["save_dc"] == 14
+    assert parsed.spellcasting["attack_bonus"] == 6
+    assert parsed.spellcasting["slots"] == {"1": 4, "2": 3}
+    assert [item["name"] for item in parsed.spellcasting["spells"]] == [
+        "chill touch",
+        "mage hand",
+        "ray of sickness",
+        "shield",
+        "scorching ray",
+    ]
+    assert {
+        item["name"]: item.get("action_description")
+        for item in parsed.spellcasting["spells"]
+        if item.get("action_description")
+    }.keys() == {"chill touch", "ray of sickness", "scorching ray"}
+    assert [item["item_id"] for item in derived["inventory"]["weapon_attacks"]] == [
+        "silvered-skull-flail"
+    ]
+    assert derived["multiattack_options"] == [
+        {
+            "id": "melee",
+            "attacks": [
+                {"weapon_id": "silvered-skull-flail", "attack_mode": "melee", "count": 2}
+            ],
+        }
+    ]
+    assert parsed.warnings == ()
+
+
 def test_source_bound_variant_can_apply_common_module_instance_changes() -> None:
     parsed = parse_2014_statblock(COMMONER, source_key="srd-commoner")
 

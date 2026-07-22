@@ -22,6 +22,7 @@ class ParsedStatblock:
     challenge_rating: str
     experience_points: int | None
     warnings: tuple[str, ...]
+    spellcasting: dict[str, Any] | None = None
 
 
 _ABILITIES = ("strength", "dexterity", "constitution", "intelligence", "wisdom", "charisma")
@@ -336,7 +337,8 @@ def _parse_multiattack(description: str, items: list[dict[str, Any]]) -> list[di
         attacks: list[dict[str, Any]] = []
         for match in re.finditer(
             r"(?i)(one|two|three|four|five|six|\d+)"
-            r"(?:\s+(?:melee|ranged)\s+attacks?)?\s+with\s+(?:its|his|her|their)\s+"
+            r"(?:\s+(?:(?:melee|ranged)\s+)?attacks?)?\s+with\s+"
+            r"(?:its|his|her|their)\s+"
             r"([a-z][a-z '\-]+?)(?=\s+and\s+|\s*,\s*|\.|$)",
             group,
         ):
@@ -354,6 +356,52 @@ def _parse_multiattack(description: str, items: list[dict[str, Any]]) -> list[di
         if ids[base] > 1:
             option["id"] = f"{base}-{ids[base]}"
     return options
+
+
+def _parse_spellcasting(description: str) -> dict[str, Any] | None:
+    ability_match = re.search(
+        r"(?i)spellcasting ability is\s+"
+        r"(Strength|Dexterity|Constitution|Intelligence|Wisdom|Charisma)",
+        description,
+    )
+    if not ability_match:
+        return None
+    save_match = re.search(r"(?i)spell save DC\s*(\d+)", description)
+    attack_match = re.search(r"(?i)([+\-]\d+)\s+to hit with spell attacks", description)
+    headers = list(
+        re.finditer(
+            r"(?i)(Cantrips?\s*\(at will\)|"
+            r"([1-9])(?:st|nd|rd|th) level\s*\((\d+) slots?\))\s*:\s*",
+            description,
+        )
+    )
+    if not headers:
+        return None
+    spells: list[dict[str, Any]] = []
+    slots: dict[str, int] = {}
+    for index, header in enumerate(headers):
+        end = headers[index + 1].start() if index + 1 < len(headers) else len(description)
+        names = [item.strip() for item in description[header.end() : end].split(",")]
+        names = [item for item in names if item]
+        level = int(header.group(2) or 0)
+        if level:
+            slots[str(level)] = int(header.group(3))
+        spells.extend(
+            {"name": name, "level": level, "at_will": level == 0}
+            for name in names
+        )
+    return {
+        "ability": ability_match.group(1).casefold(),
+        "save_dc": int(save_match.group(1)) if save_match else None,
+        "attack_bonus": int(attack_match.group(1)) if attack_match else None,
+        "slots": slots,
+        "spells": spells,
+        "description": description,
+    }
+
+
+def _spell_action_name(value: str) -> str:
+    return re.sub(r"\s*\([^)]*\)\s*$", "", value).strip().casefold()
 
 
 def parse_2014_statblock(
@@ -466,13 +514,35 @@ def parse_2014_statblock(
     )
 
     entries = _entry_blocks(markdown)
+    spellcasting: dict[str, Any] | None = None
+    spellcasting_entry: tuple[str, str, str] | None = next(
+        (
+            entry
+            for entry in entries
+            if entry[1].strip().casefold() == "spellcasting"
+        ),
+        None,
+    )
+    if spellcasting_entry is not None:
+        spellcasting = _parse_spellcasting(spellcasting_entry[2])
+    spell_specs = {
+        str(item["name"]).casefold(): item
+        for item in (spellcasting or {}).get("spells", [])
+    }
     weapons: list[dict[str, Any]] = []
     multiattacks: list[tuple[str, str]] = []
     descriptive: list[tuple[str, str, str]] = []
     unresolved_multiattacks: set[str] = set()
     for section, entry_name, description in entries:
+        if entry_name.casefold() == "spellcasting" and spellcasting is not None:
+            continue
         if entry_name.casefold() == "multiattack":
             multiattacks.append((entry_name, description))
+            continue
+        spell_spec = spell_specs.get(_spell_action_name(entry_name))
+        if spell_spec is not None:
+            spell_spec["action_name"] = entry_name
+            spell_spec["action_description"] = description
             continue
         weapon = _parse_weapon(entry_name, description, source_key)
         if weapon:
@@ -490,6 +560,17 @@ def parse_2014_statblock(
 
     warnings: list[str] = []
     refs = list(dict.fromkeys(str(item) for item in rule_refs if str(item)))
+    if spellcasting is not None:
+        sheet["content"]["features"].append(
+            {
+                "id": "spellcasting-passive",
+                "name": "Spellcasting",
+                "source_key": source_key,
+                "description": spellcasting["description"],
+                "activation": {"type": "passive", "cost": 0},
+                "rule_refs": refs,
+            }
+        )
     for entry_name, description in multiattacks:
         options = _parse_multiattack(description, weapons)
         if options:
@@ -540,6 +621,7 @@ def parse_2014_statblock(
         challenge_rating=challenge,
         experience_points=xp,
         warnings=tuple(warnings),
+        spellcasting=deepcopy(spellcasting),
     )
 
 
