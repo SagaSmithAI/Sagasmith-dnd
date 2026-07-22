@@ -37,6 +37,61 @@ def test_dnd_scene_parser_matches_agent_hierarchy_behavior() -> None:
     assert scenes[1].metadata["headings"] == ["遭遇", "A1. Cellar"]
 
 
+def test_dnd_profile_parses_generated_runtime_manifest() -> None:
+    content = """<!-- sagasmith-runtime-manifest
+{
+  "schema_version": 1,
+  "module_key": "keep-on-borderlands",
+  "entities": [{"id": "npc:keeper", "kind": "npc", "name": "Keeper"}],
+  "secrets": [{"id": "secret:keeper-oath", "initial_knowers": ["npc:keeper"]}],
+  "clues": [{"id": "clue:broken-seal", "trigger": "inspect the gate"}],
+  "plot_nodes": [{"id": "plot:open-gate", "trigger": "repair the seal", "consequences": []}],
+  "foreshadowing": [{"id": "foreshadow:red-ravens"}],
+  "branches": [{"id": "branch:parley", "trigger": "offer terms", "consequences": []}]
+}
+-->
+# Chapter
+## Arrival
+The party arrives.
+"""
+
+    metadata = MarkdownModuleParser(profile=DndModuleProfile()).document_metadata(content)
+
+    assert metadata["runtime_manifest"]["module_key"] == "keep-on-borderlands"
+    assert metadata["runtime_manifest_errors"] == []
+
+
+def test_dnd_profile_rejects_duplicate_or_unroutable_manifest_entries() -> None:
+    content = """<!-- sagasmith-runtime-manifest
+{
+  "schema_version": 1,
+  "module_key": "Bad Key",
+  "entities": [{"id": "npc:keeper"}],
+  "secrets": [{"id": "npc:keeper", "initial_knowers": "everyone"}],
+  "clues": [{"id": "clue:seal"}]
+}
+-->
+# Chapter
+## Arrival
+Text.
+"""
+
+    metadata = MarkdownModuleParser(profile=DndModuleProfile()).document_metadata(content)
+
+    assert "runtime manifest module_key must be a stable lowercase id" in metadata[
+        "runtime_manifest_errors"
+    ]
+    assert "runtime manifest contains duplicate id: npc:keeper" in metadata[
+        "runtime_manifest_errors"
+    ]
+    assert "runtime manifest secrets[0].initial_knowers must be a list" in metadata[
+        "runtime_manifest_errors"
+    ]
+    assert "runtime manifest clues[0].trigger is required" in metadata[
+        "runtime_manifest_errors"
+    ]
+
+
 def test_dnd_scene_parser_promotes_h3_when_it_dominates_h2() -> None:
     content = (
         "# Chapter\n"
