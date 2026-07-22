@@ -8,12 +8,14 @@ from sagasmith_dnd.character_schema import (
     default_character_sheet,
     derive_character_sheet,
     equip_inventory_item,
+    validate_character_sheet,
 )
 from sagasmith_dnd.combat_engine import (
     CombatEngineError,
     NeedsRulingError,
     add_choice_window,
     apply_attack_ac_bonus,
+    apply_concentration_result,
     apply_damage_parts_to_sheet,
     apply_damage_to_sheet,
     apply_healing_to_sheet,
@@ -1074,6 +1076,58 @@ def test_simultaneous_damage_parts_create_one_concentration_dc_from_total() -> N
     )
     assert result["concentration"]["dc"] == 12
     assert result["after_hp"] == 6
+
+
+def test_zero_hp_ends_concentration_with_a_schema_valid_audit_reason() -> None:
+    actor = _actor("target", hp=10)
+    actor["sheet"]["effects"] = [
+        {
+            "id": "bless",
+            "name": "Bless",
+            "kind": "concentration",
+            "active": True,
+            "concentration": True,
+            "duration": {"period": "minute", "remaining": 1},
+            "changes": [],
+            "description": "",
+        }
+    ]
+
+    damaged = apply_damage_to_sheet(
+        validate_character_sheet(actor["sheet"]),
+        amount=10,
+        damage_type="fire",
+    )
+
+    assert damaged["ended_effect_ids"] == ["bless"]
+    effect = damaged["sheet"]["effects"][0]
+    assert effect["active"] is False
+    assert effect["ended_reason"] == "unconscious"
+    assert validate_character_sheet(damaged["sheet"])["effects"][0] == effect
+
+
+def test_failed_concentration_save_records_why_the_effect_ended() -> None:
+    actor = _actor("target", hp=10)
+    actor["sheet"]["effects"] = [
+        {
+            "id": "bless",
+            "name": "Bless",
+            "kind": "concentration",
+            "active": True,
+            "concentration": True,
+            "duration": {"period": "minute", "remaining": 1},
+        }
+    ]
+
+    resolved = apply_concentration_result(
+        validate_character_sheet(actor["sheet"]),
+        effect_ids=["bless"],
+        success=False,
+    )
+
+    assert resolved["effects"][0]["active"] is False
+    assert resolved["effects"][0]["ended_reason"] == "failed_concentration_save"
+    validate_character_sheet(resolved)
 
 
 def test_same_type_simultaneous_parts_round_resistance_only_once() -> None:

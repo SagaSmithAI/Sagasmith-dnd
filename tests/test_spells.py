@@ -112,6 +112,10 @@ def test_shield_reaction_pays_slot_and_expires_at_turn_start() -> None:
     assert derive_character_sheet(ended["sheet"])["armor_class"] == 18
     started = advance_effect_durations(ended["sheet"], period="turn_start")
     assert started["expired"] == [applied["effect_id"]]
+    expired_effect = next(
+        effect for effect in started["sheet"]["effects"] if effect["id"] == applied["effect_id"]
+    )
+    assert expired_effect["ended_reason"] == "duration_expired"
     assert derive_character_sheet(started["sheet"])["armor_class"] == 13
 
 
@@ -282,6 +286,12 @@ def test_readied_spell_pays_now_and_replaces_existing_concentration() -> None:
     assert len(active) == 1
     assert active[0]["id"] == result["holding_effect_id"]
     assert active[0]["kind"] == "readied_spell"
+    old = next(
+        effect
+        for effect in result["sheet"]["effects"]
+        if effect["id"] == "old-concentration"
+    )
+    assert old["ended_reason"] == "replaced_by_readied_spell"
 
 
 def test_only_one_action_spells_can_be_readied() -> None:

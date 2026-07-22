@@ -83,6 +83,7 @@ def advance_effect_durations(
         remaining = int(duration.get("remaining", 0) or 0)
         if remaining <= amount:
             effect["active"] = False
+            effect["ended_reason"] = "duration_expired"
             expired.append(str(effect.get("id")))
         else:
             duration["remaining"] = remaining - amount
@@ -125,6 +126,7 @@ def advance_world_effect_durations(
         remaining = int(duration.get("remaining", 0) or 0)
         if remaining <= amount:
             effect["active"] = False
+            effect["ended_reason"] = "duration_expired"
             expired.append(str(effect.get("id")))
         else:
             duration["remaining"] = remaining - amount

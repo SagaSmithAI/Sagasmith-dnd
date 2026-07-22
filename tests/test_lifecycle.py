@@ -168,6 +168,7 @@ def test_turn_undead_condition_expires_with_its_minute_effect() -> None:
 
     assert result["expired"] == ["turned"]
     assert "turned" not in result["sheet"]["conditions"]
+    assert result["sheet"]["effects"][0]["ended_reason"] == "duration_expired"
 
 
 def test_effect_duration_advance_accepts_audited_multi_period_amount() -> None:
@@ -190,6 +191,7 @@ def test_effect_duration_advance_accepts_audited_multi_period_amount() -> None:
     expired = advance_effect_durations(result["sheet"], period="hour", amount=2)
     assert expired["expired"] == ["hourly-ward"]
     assert expired["sheet"]["effects"][0]["active"] is False
+    assert expired["sheet"]["effects"][0]["ended_reason"] == "duration_expired"
 
 
 def test_effect_duration_advance_rejects_nonpositive_amount() -> None:
@@ -210,6 +212,7 @@ def test_world_effect_duration_uses_the_same_expiry_boundary() -> None:
     result = advance_world_effect_durations(state, period="hour", amount=3)
     assert result["expired"] == ["mace-light"]
     assert result["state"]["world_effects"][0]["active"] is False
+    assert result["state"]["world_effects"][0]["ended_reason"] == "duration_expired"
 
 
 def test_short_rest_engine_rolls_hit_die_and_2024_long_rest_recovers_all() -> None:

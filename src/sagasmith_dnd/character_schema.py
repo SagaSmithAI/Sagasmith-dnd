@@ -947,6 +947,7 @@ def _normalize_effect(value: Any, field: str) -> dict[str, Any]:
         "duration",
         "changes",
         "description",
+        "ended_reason",
     }
     _reject_unknown(effect, field, allowed)
     duration = _object(effect.get("duration") or {}, f"{field}.duration")
@@ -970,7 +971,7 @@ def _normalize_effect(value: Any, field: str) -> dict[str, Any]:
                 "value": item.get("value"),
             }
         )
-    return {
+    normalized = {
         "id": _text(effect.get("id"), f"{field}.id", default=_uuid(), maximum=100),
         "name": _text(effect.get("name"), f"{field}.name", maximum=300),
         "kind": _text(effect.get("kind"), f"{field}.kind", default="custom", maximum=100),
@@ -989,6 +990,14 @@ def _normalize_effect(value: Any, field: str) -> dict[str, Any]:
         "changes": changes,
         "description": _text(effect.get("description"), f"{field}.description", maximum=1200),
     }
+    ended_reason = _text(
+        effect.get("ended_reason"), f"{field}.ended_reason", maximum=300
+    )
+    if ended_reason:
+        if normalized["active"]:
+            raise ValueError(f"{field}.ended_reason requires an inactive effect")
+        normalized["ended_reason"] = ended_reason
+    return normalized
 
 
 def validate_character_sheet(
@@ -1918,6 +1927,7 @@ def validate_world_effect(value: Any, *, field: str = "world_effect") -> dict[st
             "description",
             "created_at_elapsed_minutes",
             "metadata",
+            "ended_reason",
         },
     )
     duration = _object(effect.get("duration") or {}, f"{field}.duration")
@@ -1969,6 +1979,13 @@ def validate_world_effect(value: Any, *, field: str = "world_effect") -> dict[st
     }
     if normalized["visibility"] not in {"public", "party", "dm"}:
         raise ValueError(f"{field}.visibility is invalid")
+    ended_reason = _text(
+        effect.get("ended_reason"), f"{field}.ended_reason", maximum=300
+    )
+    if ended_reason:
+        if normalized["active"]:
+            raise ValueError(f"{field}.ended_reason requires an inactive effect")
+        normalized["ended_reason"] = ended_reason
     return normalized
 
 

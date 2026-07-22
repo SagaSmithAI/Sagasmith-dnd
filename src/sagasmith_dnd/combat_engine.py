@@ -1500,6 +1500,7 @@ def _apply_adjusted_damage(
         for effect in value.get("effects", []):
             if effect.get("active") and effect.get("kind") == "turn_undead":
                 effect["active"] = False
+                effect["ended_reason"] = "damaged"
                 ended_effect_ids.append(str(effect.get("id") or ""))
         if ended_effect_ids:
             conditions.discard("turned")
@@ -1542,9 +1543,12 @@ def _apply_adjusted_damage(
     value["conditions"] = sorted(conditions)
     if hp["value"] == 0 and ("unconscious" in conditions or "dead" in conditions):
         for effect in value.get("effects", []):
-            if bool(effect.get("concentration")):
+            if effect.get("active") and bool(effect.get("concentration")):
                 effect["active"] = False
                 effect["ended_reason"] = "unconscious"
+                effect_id = str(effect.get("id") or "")
+                if effect_id and effect_id not in ended_effect_ids:
+                    ended_effect_ids.append(effect_id)
     concentration_effects = [
         effect.get("id")
         for effect in value.get("effects", [])
@@ -1773,6 +1777,7 @@ def apply_concentration_result(
         for effect in value.get("effects", []):
             if effect.get("id") in ids:
                 effect["active"] = False
+                effect["ended_reason"] = "failed_concentration_save"
     return value
 
 
@@ -2862,6 +2867,7 @@ def resolve_turn_undead_to_sheets(
             for effect in value.get("effects", []):
                 if effect.get("active") and effect.get("kind") == "turn_undead":
                     effect["active"] = False
+                    effect["ended_reason"] = "replaced_by_turn_undead"
             effect_id = f"turn-undead-{uuid4().hex}"
             value.setdefault("effects", []).append(
                 {

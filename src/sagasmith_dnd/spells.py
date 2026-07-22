@@ -205,6 +205,7 @@ def consume_shield_reaction(
     for effect in value.get("effects", []):
         if effect.get("active") and effect.get("kind") == "spell_shield":
             effect["active"] = False
+            effect["ended_reason"] = "replaced_by_shield"
     effect_id = f"shield-{uuid4().hex}"
     value.setdefault("effects", []).append(
         {
@@ -357,6 +358,7 @@ def consume_spell_cast(
         for effect in value.get("effects", []):
             if effect.get("active") and effect.get("concentration"):
                 effect["active"] = False
+                effect["ended_reason"] = "replaced_by_concentration"
         value.setdefault("effects", []).append(
             {
                 "id": f"concentration-{uuid4().hex}",
@@ -446,6 +448,7 @@ def consume_readied_spell(
     for effect in value.get("effects", []):
         if effect.get("active") and effect.get("concentration"):
             effect["active"] = False
+            effect["ended_reason"] = "replaced_by_readied_spell"
 
     duration = dict(spell.get("definition", {}).get("duration") or {})
     release_concentration = bool(duration.get("concentration"))
@@ -459,6 +462,7 @@ def consume_readied_spell(
         if candidates:
             holding_effect = candidates[-1]
             holding_effect["active"] = True
+            holding_effect.pop("ended_reason", None)
     if holding_effect is None:
         holding_effect = {
             "id": f"readied-spell-{uuid4().hex}",
