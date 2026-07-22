@@ -385,6 +385,18 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
         return []
     if "incapacitated" in conditions:
         return ["move"] if "grappled" not in conditions and "restrained" not in conditions else []
+    if "turned" in conditions:
+        actions = (
+            ["move"]
+            if budget.get("movement", 0) > 0
+            and not conditions & {"grappled", "restrained"}
+            else []
+        )
+        if budget.get("main_action", 0) > 0 or budget.get("extra_action", 0) > 0:
+            actions.extend(["dash", "dodge"])
+            if conditions & {"grappled", "restrained"}:
+                actions.append("escape")
+        return actions
     actions = (
         ["move"]
         if budget.get("movement", 0) > 0 and not conditions & {"grappled", "restrained"}
@@ -1483,6 +1495,14 @@ def _apply_adjusted_damage(
     hp["value"] = max(0, before_hp - hp_damage)
     combat["hp"] = hp
     conditions = set(value.get("conditions") or [])
+    ended_effect_ids: list[str] = []
+    if adjusted > 0:
+        for effect in value.get("effects", []):
+            if effect.get("active") and effect.get("kind") == "turn_undead":
+                effect["active"] = False
+                ended_effect_ids.append(str(effect.get("id") or ""))
+        if ended_effect_ids:
+            conditions.discard("turned")
     max_hp = int(hp.get("max", before_hp) or before_hp)
     massive_excess = max(0, hp_damage - before_hp)
     became_zero = hp["value"] == 0 and before_hp > 0
@@ -1554,6 +1574,7 @@ def _apply_adjusted_damage(
         "adjustment": adjustment,
         "source": source,
         "concentration": concentration,
+        "ended_effect_ids": ended_effect_ids,
         "massive_damage": massive_excess >= max_hp,
     }
 
@@ -1631,6 +1652,7 @@ def apply_damage_parts_to_sheet(
         "before_temp": applied["before_temp"],
         "after_temp": applied["after_temp"],
         "concentration": applied["concentration"],
+        "ended_effect_ids": applied["ended_effect_ids"],
         "massive_damage": applied["massive_damage"],
     }
 
@@ -1864,6 +1886,38 @@ def spend_movement(
                 "an effect-specific ruling is required for an occupied destination",
                 missing=("occupied_destination_resolution",),
             )
+    turning = dict(combatant.get("turned") or {})
+    if (
+        movement_mode == "voluntary"
+        and "turned" in conditions
+        and origin is not None
+        and target_position is not None
+    ):
+        source_id = str(turning.get("source_actor_id") or "")
+        source = next(
+            (
+                item
+                for item in value.get("combatants", [])
+                if str(item.get("actor_id") or "") == source_id
+            ),
+            None,
+        )
+        source_position = _position((source or {}).get("position"))
+        if source_position is None:
+            raise NeedsRulingError(
+                "turned movement requires the turning source position",
+                missing=("turn_undead_source_position",),
+            )
+        before_distance = _grid_distance(origin, source_position)
+        after_distance = _grid_distance(target_position, source_position)
+        if after_distance <= before_distance:
+            raise CombatEngineError(
+                "a turned creature must voluntarily move farther from the turning source"
+            )
+        if before_distance >= 30 and after_distance < 30:
+            raise CombatEngineError(
+                "a turned creature cannot willingly move within 30 feet of the turning source"
+            )
     budget["movement"] = available - movement_cost
     combatant["turn_budget"] = budget
     if destination is not None:
@@ -1981,6 +2035,7 @@ def resolve_common_action(
         "dash",
         "disengage",
         "dodge",
+        "escape",
         "help",
         "hide",
         "ready",
@@ -2031,6 +2086,20 @@ def resolve_common_action(
     budget[payment] = int(budget[payment]) - 1
     acting["turn_budget"] = budget
     flags = dict(acting.get("turn_flags") or {})
+    if "turned" in _condition_set(acting.get("conditions")):
+        if action not in {"dash", "dodge", "escape"}:
+            raise CombatEngineError("a turned creature can use its action only to Dash or escape")
+        if action == "dodge" and dict(payload or {}).get("nowhere_to_move") is not True:
+            raise CombatEngineError(
+                "a turned creature can Dodge only after the DM confirms nowhere to move"
+            )
+        if action == "escape" and not _condition_set(acting.get("conditions")) & {
+            "grappled",
+            "restrained",
+        }:
+            raise CombatEngineError(
+                "a turned creature can try to escape only from an effect preventing movement"
+            )
     if action == "cast":
         flags["cast_declared"] = deepcopy(payload or {})
     elif action == "dash":
@@ -2050,6 +2119,8 @@ def resolve_common_action(
             "target_id": target_id,
             "payload": deepcopy(payload or {}),
         }
+    elif action == "escape":
+        flags["escape_declared"] = deepcopy(payload or {})
     elif action in {
         "hide",
         "search",
@@ -2313,6 +2384,7 @@ def pay_activity_activation(
         "incapacitated",
         "paralyzed",
         "petrified",
+        "turned",
     }:
         raise CombatEngineError("actor cannot activate content under its current conditions")
     if activation in {"action", "bonus_action"}:
@@ -2707,6 +2779,107 @@ def resolve_preserve_life_to_sheets(
     }
 
 
+def resolve_turn_undead_to_sheets(
+    source_actor: dict[str, Any],
+    target_actors: dict[str, dict[str, Any]],
+    *,
+    rules: ResolutionContext | None = None,
+    rng: Any = None,
+) -> dict[str, Any]:
+    """Resolve 2014 Turn Undead saves and apply its damage-ended minute effect."""
+    source_sheet = actor_sheet(source_actor)
+    feature = next(
+        (
+            item
+            for item in source_sheet.get("content", {}).get("features", [])
+            if item.get("id") == "dnd5e.content.srd2014.feature.cleric-channel-divinity"
+            and "turn undead" in {
+                str(option).strip().casefold()
+                for option in dict(item.get("choices") or {}).get("options", [])
+            }
+        ),
+        None,
+    )
+    if feature is None:
+        raise CombatEngineError("source actor does not have source-bound Turn Undead")
+    cleric_level = sum(
+        int(item.get("level", 0) or 0)
+        for item in source_sheet.get("progression", {}).get("classes", [])
+        if str(item.get("name") or "").casefold() == "cleric"
+    )
+    if cleric_level < 2:
+        raise CombatEngineError("Turn Undead requires at least two Cleric levels")
+    save_dc = int(
+        dict(actor_derived(source_actor).get("spellcasting") or {}).get("save_dc", 0) or 0
+    )
+    if save_dc < 1:
+        raise CombatEngineError("Turn Undead requires the cleric's canonical spell save DC")
+    if not target_actors:
+        raise CombatEngineError("Turn Undead requires at least one perceiving undead target")
+
+    updated: dict[str, dict[str, Any]] = {}
+    results: list[dict[str, Any]] = []
+    for target_id, target_actor in target_actors.items():
+        target_sheet = actor_sheet(target_actor)
+        creature_type = str(
+            target_sheet.get("progression", {}).get("species") or ""
+        ).casefold()
+        if "undead" not in creature_type:
+            raise CombatEngineError(f"Turn Undead target is not Undead: {target_id}")
+        save = resolve_actor_check(
+            target_actor,
+            kind="save",
+            ability="wisdom",
+            dc=save_dc,
+            rules=rules,
+            rng=rng,
+        )
+        effect_id = None
+        if not save["success"]:
+            value = deepcopy(target_sheet)
+            for effect in value.get("effects", []):
+                if effect.get("active") and effect.get("kind") == "turn_undead":
+                    effect["active"] = False
+            effect_id = f"turn-undead-{uuid4().hex}"
+            value.setdefault("effects", []).append(
+                {
+                    "id": effect_id,
+                    "name": "Turn Undead",
+                    "kind": "turn_undead",
+                    "source": actor_id(source_actor),
+                    "active": True,
+                    "concentration": False,
+                    "duration": {"period": "minute", "remaining": 1},
+                    "changes": [],
+                    "description": (
+                        "Must move as far from the turning source as possible; cannot "
+                        "willingly approach within 30 feet; cannot react; action is Dash, "
+                        "escape, or Dodge only if nowhere to move. Ends on any damage."
+                    ),
+                }
+            )
+            value["conditions"] = sorted(
+                _condition_set(value.get("conditions")) | {"turned"}
+            )
+            updated[target_id] = value
+        else:
+            updated[target_id] = target_sheet
+        results.append(
+            {
+                "target_id": target_id,
+                "save": save,
+                "turned": not save["success"],
+                "effect_id": effect_id,
+            }
+        )
+    return {
+        "sheets": updated,
+        "save_dc": save_dc,
+        "duration": {"period": "minute", "remaining": 1},
+        "targets": results,
+    }
+
+
 def resolve_actor_check(
     actor: dict[str, Any],
     *,
@@ -2981,6 +3154,8 @@ def end_turn(encounter: dict[str, Any], *, actor_id_value: str | None = None) ->
             attack_budget=0,
             extra_action=0,
         )
+        if "turned" in _condition_set(next_actor.get("conditions")):
+            budget["reaction"] = 0
         if next_actor.get("surprised") and _normalize_ruleset(value.get("ruleset")) == "2014":
             budget.update(
                 main_action=0,
@@ -3069,6 +3244,7 @@ def _can_make_opportunity_attack(threat: dict[str, Any], moving: dict[str, Any])
         "incapacitated",
         "paralyzed",
         "petrified",
+        "turned",
     }:
         return False
     if int(dict(threat.get("turn_budget") or {}).get("reaction", 0) or 0) <= 0:

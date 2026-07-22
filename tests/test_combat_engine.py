@@ -1,4 +1,5 @@
 import random
+from copy import deepcopy
 
 import pytest
 
@@ -35,6 +36,7 @@ from sagasmith_dnd.combat_engine import (
     resolve_preserve_life_to_sheets,
     resolve_readied_spell_window,
     resolve_second_wind_to_sheet,
+    resolve_turn_undead_to_sheets,
     roll_attack_action,
     settle_core_activity_effect,
     spend_movement,
@@ -259,6 +261,90 @@ def test_preserve_life_enforces_pool_half_hp_and_creature_type() -> None:
             {"undead": undead},
             allocations=[{"target_id": "undead", "amount": 1}],
         )
+
+
+def test_turn_undead_applies_and_enforces_turned() -> None:
+    cleric = _actor("cleric")
+    cleric["sheet"]["edition"] = "2014"
+    cleric["sheet"]["progression"] = {
+        "level": 2,
+        "classes": [{"name": "Cleric", "level": 2, "hit_die": 8}],
+    }
+    cleric["sheet"]["abilities"]["wisdom"]["score"] = 16
+    cleric["sheet"]["spellcasting"]["ability"] = "wisdom"
+    cleric["sheet"]["content"]["features"] = [
+        {
+            "id": "dnd5e.content.srd2014.feature.cleric-channel-divinity",
+            "name": "Channel Divinity",
+            "source_key": "Cleric",
+            "activation": {"type": "action", "cost": 1},
+            "resource_key": "channel_divinity",
+            "choices": {"options": ["Turn Undead", "selected-domain option"]},
+        }
+    ]
+    cleric["derived"] = derive_character_sheet(cleric["sheet"])
+    undead = _actor("undead")
+    undead["sheet"]["edition"] = "2014"
+    undead["sheet"]["progression"]["species"] = "undead"
+    undead["derived"] = derive_character_sheet(undead["sheet"])
+
+    resolved = resolve_turn_undead_to_sheets(
+        cleric,
+        {"undead": undead},
+        rng=_SequenceRng(1),
+    )
+
+    assert resolved["save_dc"] == 13
+    assert resolved["targets"][0]["turned"] is True
+    turned_sheet = resolved["sheets"]["undead"]
+    assert "turned" in turned_sheet["conditions"]
+    assert turned_sheet["effects"][-1]["kind"] == "turn_undead"
+    assert turned_sheet["effects"][-1]["duration"] == {
+        "period": "minute",
+        "remaining": 1,
+    }
+
+    cleric["initiative"] = 20
+    cleric["position"] = {"x": 0, "y": 0}
+    undead["sheet"] = turned_sheet
+    undead["derived"] = derive_character_sheet(turned_sheet)
+    undead["initiative"] = 10
+    undead["position"] = {"x": 2, "y": 0}
+    encounter = start_encounter([cleric, undead], ruleset="2014")
+    target_state = next(
+        item for item in encounter["combatants"] if item["actor_id"] == "undead"
+    )
+    target_state["turned"] = {
+        "source_actor_id": "cleric",
+        "effect_id": resolved["targets"][0]["effect_id"],
+    }
+    encounter = end_turn(encounter, actor_id_value="cleric")
+    assert available_actions(encounter, "undead") == ["move", "dash", "dodge"]
+    assert current_combatant(encounter)["turn_budget"]["reaction"] == 0
+    with pytest.raises(CombatEngineError, match="farther"):
+        spend_movement(encounter, "undead", 5, destination={"x": 1, "y": 0})
+    moved = spend_movement(encounter, "undead", 5, destination={"x": 3, "y": 0})
+    with pytest.raises(CombatEngineError, match="nowhere to move"):
+        resolve_common_action(moved, actor_id_value="undead", action="dodge")
+
+    restrained = deepcopy(encounter)
+    restrained_target = current_combatant(restrained)
+    assert restrained_target is not None
+    restrained_target["conditions"].append("restrained")
+    assert available_actions(restrained, "undead") == ["dash", "dodge", "escape"]
+    escaping = resolve_common_action(
+        restrained,
+        actor_id_value="undead",
+        action="escape",
+        payload={"effect_id": "net"},
+    )
+    assert current_combatant(escaping)["turn_flags"]["escape_declared"] == {
+        "effect_id": "net"
+    }
+
+    damaged = apply_damage_to_sheet(turned_sheet, amount=1, damage_type="radiant")
+    assert "turned" not in damaged["sheet"]["conditions"]
+    assert damaged["ended_effect_ids"] == [resolved["targets"][0]["effect_id"]]
 
 
 def test_halfling_lucky_rerolls_only_one_natural_one_and_keeps_replacement() -> None:

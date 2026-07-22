@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-CORE_RULE_PACK_VERSION = "1.26.0"
+CORE_RULE_PACK_VERSION = "1.27.0"
 
 
 @dataclass(frozen=True)
@@ -47,6 +47,13 @@ BOUNDARIES = (
         "activities.consume_activity",
         ("tests/test_activities.py",),
         "bundled:srd/limited-use-features",
+    ),
+    CoreBoundary(
+        "dnd5e.core.activity.turn_undead",
+        ("2014",),
+        "combat_engine.resolve_turn_undead_to_sheets|spend_movement|available_actions",
+        ("tests/test_combat_engine.py::test_turn_undead_applies_and_enforces_turned",),
+        "bundled:srd2014/02_Classes/Cleric.md#channel-divinity-turn-undead",
     ),
     CoreBoundary(
         "dnd5e.core.activity.action_surge",

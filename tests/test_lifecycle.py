@@ -151,6 +151,25 @@ def test_elapsed_time_only_advances_matching_effect_periods() -> None:
     assert result["sheet"]["effects"][1]["active"] is True
 
 
+def test_turn_undead_condition_expires_with_its_minute_effect() -> None:
+    sheet = default_character_sheet()
+    sheet["conditions"] = ["turned"]
+    sheet["effects"] = [
+        {
+            "id": "turned",
+            "name": "Turn Undead",
+            "kind": "turn_undead",
+            "active": True,
+            "duration": {"period": "minute", "remaining": 1},
+        }
+    ]
+
+    result = advance_effect_durations(sheet, period="minute")
+
+    assert result["expired"] == ["turned"]
+    assert "turned" not in result["sheet"]["conditions"]
+
+
 def test_effect_duration_advance_accepts_audited_multi_period_amount() -> None:
     sheet = default_character_sheet()
     sheet["effects"] = [

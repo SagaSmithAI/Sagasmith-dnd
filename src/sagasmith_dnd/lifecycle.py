@@ -88,6 +88,15 @@ def advance_effect_durations(
             duration["remaining"] = remaining - amount
             effect["duration"] = duration
             advanced.append(str(effect.get("id")))
+    if not any(
+        effect.get("active") and effect.get("kind") == "turn_undead"
+        for effect in value.get("effects", [])
+    ):
+        value["conditions"] = [
+            condition
+            for condition in value.get("conditions", [])
+            if str(condition).casefold() != "turned"
+        ]
     return {
         "sheet": value,
         "period": normalized,
