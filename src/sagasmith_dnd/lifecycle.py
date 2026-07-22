@@ -10,6 +10,57 @@ from sagasmith_dnd.combat_engine import CombatEngineError
 from sagasmith_dnd.engine import roll
 from sagasmith_dnd.rule_engine import ResolutionContext, apply_rule_event, core_receipts
 
+REST_MINIMUM_MINUTES = {"short_rest": 60, "long_rest": 480}
+
+
+def record_rest_completion(
+    sheet: dict[str, Any],
+    *,
+    rest_type: str,
+    started_elapsed_minutes: int,
+    completed_elapsed_minutes: int,
+) -> dict[str, Any]:
+    """Validate campaign-clock rest timing and preserve the last benefit time."""
+    normalized = str(rest_type).strip().lower().replace("-", "_")
+    if normalized not in REST_MINIMUM_MINUTES:
+        raise CombatEngineError("rest_type must be short_rest or long_rest")
+    started = int(started_elapsed_minutes)
+    completed = int(completed_elapsed_minutes)
+    if started < 0 or completed < started:
+        raise CombatEngineError("rest clock bounds are invalid")
+    if completed - started < REST_MINIMUM_MINUTES[normalized]:
+        raise CombatEngineError(
+            f"{normalized} requires at least {REST_MINIMUM_MINUTES[normalized]} minutes"
+        )
+    hp = int(dict(sheet.get("combat", {}).get("hp") or {}).get("value", 0) or 0)
+    conditions = {str(item).casefold() for item in sheet.get("conditions", [])}
+    if hp <= 0 or "dead" in conditions:
+        raise CombatEngineError("a creature must have at least 1 hit point at the start of a rest")
+    history = dict(dict(sheet.get("combat") or {}).get("rest_history") or {})
+    previous_long = history.get("last_long_rest_elapsed_minutes")
+    if (
+        normalized == "long_rest"
+        and previous_long is not None
+        and completed - int(previous_long) < 1440
+    ):
+        raise CombatEngineError(
+            "a creature cannot benefit from more than one long rest in 24 hours"
+        )
+    value = deepcopy(sheet)
+    next_history = value.setdefault("combat", {}).setdefault("rest_history", {})
+    next_history.update(
+        {
+            "last_rest_type": normalized,
+            "last_rest_started_elapsed_minutes": started,
+            "last_rest_completed_elapsed_minutes": completed,
+        }
+    )
+    if normalized == "long_rest":
+        next_history["last_long_rest_elapsed_minutes"] = completed
+    else:
+        next_history.setdefault("last_long_rest_elapsed_minutes", previous_long)
+    return value
+
 
 def advance_effect_durations(
     sheet: dict[str, Any], *, period: str, amount: int = 1

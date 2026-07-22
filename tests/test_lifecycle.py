@@ -6,10 +6,45 @@ from sagasmith_dnd.lifecycle import (
     advance_effect_durations,
     advance_world_effect_durations,
     apply_rest,
+    record_rest_completion,
     recover_stable_creature,
     roll_rest_hit_dice,
     stand_outside_combat,
 )
+
+
+def test_rest_completion_enforces_duration_and_daily_limit() -> None:
+    sheet = default_character_sheet()
+    with pytest.raises(CombatEngineError, match="at least 480"):
+        record_rest_completion(
+            sheet,
+            rest_type="long_rest",
+            started_elapsed_minutes=0,
+            completed_elapsed_minutes=479,
+        )
+
+    recorded = record_rest_completion(
+        sheet,
+        rest_type="long_rest",
+        started_elapsed_minutes=0,
+        completed_elapsed_minutes=480,
+    )
+    assert recorded["combat"]["rest_history"]["last_long_rest_elapsed_minutes"] == 480
+    with pytest.raises(CombatEngineError, match="in 24 hours"):
+        record_rest_completion(
+            recorded,
+            rest_type="long_rest",
+            started_elapsed_minutes=1000,
+            completed_elapsed_minutes=1480,
+        )
+
+    next_day = record_rest_completion(
+        recorded,
+        rest_type="long_rest",
+        started_elapsed_minutes=1440,
+        completed_elapsed_minutes=1920,
+    )
+    assert next_day["combat"]["rest_history"]["last_long_rest_elapsed_minutes"] == 1920
 
 
 class _SequenceRng:

@@ -305,6 +305,13 @@ BOUNDARIES = (
         "bundled:srd/exhaustion",
     ),
     CoreBoundary(
+        "dnd5e.core.rest.long_rest_timing",
+        ("2014", "2024"),
+        "lifecycle.record_rest_completion",
+        ("tests/test_lifecycle.py::test_rest_completion_enforces_duration_and_daily_limit",),
+        "bundled:srd/resting",
+    ),
+    CoreBoundary(
         "dnd5e.core.spell.cantrip_ritual_level",
         ("2014", "2024"),
         "spells.consume_spell_cast",

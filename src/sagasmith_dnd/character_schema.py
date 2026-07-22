@@ -259,6 +259,12 @@ def default_character_sheet() -> dict[str, Any]:
             "exhaustion": 0,
             "inspiration": False,
             "wounded": False,
+            "rest_history": {
+                "last_rest_type": "",
+                "last_rest_started_elapsed_minutes": None,
+                "last_rest_completed_elapsed_minutes": None,
+                "last_long_rest_elapsed_minutes": None,
+            },
         },
         "traits": {
             "size": "medium",
@@ -1109,6 +1115,7 @@ def validate_character_sheet(
             "exhaustion",
             "inspiration",
             "wounded",
+            "rest_history",
         },
     )
     hp = _object(combat["hp"], "sheet.combat.hp")
@@ -1165,6 +1172,49 @@ def validate_character_sheet(
         )
     death_saves = _object(combat["death_saves"], "sheet.combat.death_saves")
     _reject_unknown(death_saves, "sheet.combat.death_saves", {"successes", "failures"})
+    rest_history = _object(combat["rest_history"], "sheet.combat.rest_history")
+    _reject_unknown(
+        rest_history,
+        "sheet.combat.rest_history",
+        {
+            "last_rest_type",
+            "last_rest_started_elapsed_minutes",
+            "last_rest_completed_elapsed_minutes",
+            "last_long_rest_elapsed_minutes",
+        },
+    )
+    last_rest_type = _text(
+        rest_history.get("last_rest_type"), "sheet.combat.rest_history.last_rest_type"
+    )
+    if last_rest_type not in {"", "short_rest", "long_rest"}:
+        raise ValueError("sheet.combat.rest_history.last_rest_type is invalid")
+
+    def optional_elapsed(key: str) -> int | None:
+        raw = rest_history.get(key)
+        return (
+            _integer(raw, f"sheet.combat.rest_history.{key}", minimum=0)
+            if raw is not None
+            else None
+        )
+
+    normalized_rest_history = {
+        "last_rest_type": last_rest_type,
+        "last_rest_started_elapsed_minutes": optional_elapsed(
+            "last_rest_started_elapsed_minutes"
+        ),
+        "last_rest_completed_elapsed_minutes": optional_elapsed(
+            "last_rest_completed_elapsed_minutes"
+        ),
+        "last_long_rest_elapsed_minutes": optional_elapsed(
+            "last_long_rest_elapsed_minutes"
+        ),
+    }
+    started = normalized_rest_history["last_rest_started_elapsed_minutes"]
+    completed = normalized_rest_history["last_rest_completed_elapsed_minutes"]
+    if (started is None) != (completed is None):
+        raise ValueError("sheet.combat.rest_history must record rest start and completion together")
+    if started is not None and completed is not None and completed < started:
+        raise ValueError("sheet.combat.rest_history completion cannot precede its start")
 
     traits = _object(value["traits"], "sheet.traits")
     _reject_unknown(
@@ -1629,6 +1679,7 @@ def validate_character_sheet(
             ),
             "inspiration": _boolean(combat["inspiration"], "sheet.combat.inspiration"),
             "wounded": _boolean(combat["wounded"], "sheet.combat.wounded"),
+            "rest_history": normalized_rest_history,
         },
         "traits": {
             "size": _text(traits["size"], "sheet.traits.size", maximum=100),
