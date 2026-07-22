@@ -69,8 +69,10 @@ def roll_d20(
     rng: random.Random | None = None,
 ) -> dict:
     generator = rng or random
+    advantage_applied = bool(advantage and not disadvantage)
+    disadvantage_applied = bool(disadvantage and not advantage)
     values = [generator.randint(1, 20)]
-    if advantage != disadvantage:
+    if advantage_applied or disadvantage_applied:
         values.append(generator.randint(1, 20))
     rerolls = []
     if reroll_ones and 1 in values:
@@ -87,13 +89,22 @@ def roll_d20(
                 "source": "halfling_lucky",
             }
         )
-    selected = max(values) if advantage and not disadvantage else min(values)
-    if advantage == disadvantage:
+    selected = max(values) if advantage_applied else min(values)
+    if not advantage_applied and not disadvantage_applied:
         selected = values[0]
     return {
         "natural": selected,
         "rolls": values,
         "rerolls": rerolls,
+        "roll_mode": (
+            "advantage"
+            if advantage_applied
+            else "disadvantage"
+            if disadvantage_applied
+            else "normal"
+        ),
+        "advantage_applied": advantage_applied,
+        "disadvantage_applied": disadvantage_applied,
         "critical": selected == 20,
         "fumble": selected == 1,
     }

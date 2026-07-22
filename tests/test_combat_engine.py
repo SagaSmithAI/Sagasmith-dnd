@@ -272,6 +272,30 @@ def test_halfling_lucky_rerolls_only_one_natural_one_and_keeps_replacement() -> 
     assert result["rerolls"] == [
         {"index": 0, "from": 1, "to": 18, "source": "halfling_lucky"}
     ]
+    assert result["roll_mode"] == "advantage"
+    assert result["advantage_applied"] is True
+    assert result["disadvantage_applied"] is False
+
+
+def test_d20_result_audits_disadvantage_and_cancellation() -> None:
+    disadvantaged = roll_d20(
+        disadvantage=True,
+        rng=_SequenceRng(18, 2),
+    )
+    assert disadvantaged["natural"] == 2
+    assert disadvantaged["roll_mode"] == "disadvantage"
+    assert disadvantaged["advantage_applied"] is False
+    assert disadvantaged["disadvantage_applied"] is True
+
+    cancelled = roll_d20(
+        advantage=True,
+        disadvantage=True,
+        rng=_SequenceRng(12),
+    )
+    assert cancelled["rolls"] == [12]
+    assert cancelled["roll_mode"] == "normal"
+    assert cancelled["advantage_applied"] is False
+    assert cancelled["disadvantage_applied"] is False
 
 
 def test_halfling_lucky_applies_to_actor_checks_attacks_and_death_saves() -> None:
@@ -1271,6 +1295,8 @@ def test_equipped_armor_automatically_imposes_stealth_disadvantage() -> None:
 
     assert result["rolls"] == [18, 2]
     assert result["natural"] == 2
+    assert result["roll_mode"] == "disadvantage"
+    assert result["disadvantage_applied"] is True
     assert result["success"] is False
 
 
