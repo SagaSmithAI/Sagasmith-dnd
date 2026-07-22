@@ -229,6 +229,32 @@ def test_costly_material_component_requires_dm_confirmation() -> None:
     assert "material_component" in result["ruling_required"]
 
 
+def test_source_bound_spell_with_unknown_components_requires_confirmation_before_payment() -> None:
+    sheet = default_character_sheet()
+    sheet["spellcasting"]["spell_slots"] = {
+        "1": {"label": "1st", "value": 1, "max": 1, "recovers_on": "long_rest", "source_key": ""}
+    }
+    spell = _spell("source-ray", level=1)
+    spell["custom_definition"] = {
+        "source": "module-review:master-of-souls",
+        "component_details": "not_repeated_in_statblock",
+    }
+    sheet["content"]["spells"] = [spell]
+    sheet = validate_character_sheet(sheet)
+
+    with pytest.raises(ValueError, match="source_components_confirmed"):
+        consume_spell_cast(sheet, spell_id="source-ray")
+
+    assert sheet["spellcasting"]["spell_slots"]["1"]["value"] == 1
+    result = consume_spell_cast(
+        sheet,
+        spell_id="source-ray",
+        component_ruling={"source_components_confirmed": True},
+    )
+    assert result["sheet"]["spellcasting"]["spell_slots"]["1"]["value"] == 0
+    assert "source_components" in result["ruling_required"]
+
+
 def test_readied_spell_pays_now_and_replaces_existing_concentration() -> None:
     sheet = default_character_sheet()
     sheet["spellcasting"]["spell_slots"] = {

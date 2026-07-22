@@ -303,6 +303,15 @@ def consume_spell_cast(
             raise CombatEngineError("ritual casting does not allow an upcast spell level")
     components = dict(spell.get("definition", {}).get("components") or {})
     ruling = dict(component_ruling or {})
+    custom_definition = dict(spell.get("custom_definition") or {})
+    source_components_unknown = (
+        custom_definition.get("component_details") == "not_repeated_in_statblock"
+    )
+    if source_components_unknown and ruling.get("source_components_confirmed") is not True:
+        raise CombatEngineError(
+            "a source-bound spell whose components were not repeated in the statblock "
+            "needs source_components_confirmed DM ruling"
+        )
     if (
         int(components.get("material_cost_cp", 0) or 0) > 0 or components.get("consumed")
     ) and ruling.get("material_confirmed") is not True:
@@ -381,6 +390,7 @@ def consume_spell_cast(
         "payment": paid,
         "concentration_started": concentration,
         "ruling_required": [
+            *(["source_components"] if source_components_unknown else []),
             *(["verbal_component"] if components.get("verbal") else []),
             *(["somatic_component"] if components.get("somatic") else []),
             *(["material_component"] if components.get("material") else []),
