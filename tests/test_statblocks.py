@@ -196,6 +196,7 @@ def test_source_bound_variant_can_apply_common_module_instance_changes() -> None
         parsed.sheet,
         {
             "source_ref": "module-scene:d12",
+            "creature_type": "undead",
             "current_hit_points": 1,
             "armor_class": 12,
             "languages": ["Common", "Elvish"],
@@ -211,6 +212,7 @@ def test_source_bound_variant_can_apply_common_module_instance_changes() -> None
     derived = derive_character_sheet(sheet)
 
     assert sheet["combat"]["hp"] == {"value": 1, "max": 4, "temp": 0}
+    assert sheet["progression"]["species"] == "undead"
     assert derived["armor_class"] == 12
     assert sheet["traits"]["languages"] == ["Common", "Elvish"]
     assert derived["inventory"]["weapon_attacks"][0]["item_id"] == "gauntlet-slam"
@@ -236,6 +238,11 @@ def test_statblock_variant_rejects_unbound_or_broad_sheet_patches() -> None:
         apply_statblock_variant(
             parsed.sheet,
             {"source_ref": "module-scene:d12", "remove_actions": ["missing"]},
+        )
+    with pytest.raises(StatblockImportError, match="creature_type"):
+        apply_statblock_variant(
+            parsed.sheet,
+            {"source_ref": "module-scene:d12", "creature_type": ""},
         )
 
 

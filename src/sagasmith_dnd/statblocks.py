@@ -586,6 +586,7 @@ def apply_statblock_variant(
         raise StatblockImportError("statblock variant must be an object")
     allowed = {
         "source_ref",
+        "creature_type",
         "current_hit_points",
         "maximum_hit_points",
         "armor_class",
@@ -601,6 +602,14 @@ def apply_statblock_variant(
         raise StatblockImportError("statblock variant source_ref is required")
 
     result = deepcopy(sheet)
+    if "creature_type" in variant:
+        creature_type = str(variant["creature_type"] or "").strip()
+        if not creature_type or len(creature_type) > 100:
+            raise StatblockImportError(
+                "creature_type must be a non-empty string of at most 100 characters"
+            )
+        result["progression"]["species"] = creature_type
+
     hp = result["combat"]["hp"]
     if "maximum_hit_points" in variant:
         maximum = variant["maximum_hit_points"]
