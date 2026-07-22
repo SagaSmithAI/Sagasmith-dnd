@@ -45,9 +45,21 @@ _GENERIC_TITLES = {
     "spells",
     "subclass",
 }
+_GENERIC_FEATURE_TITLES = {
+    "class features",
+    "equipment",
+    "hit points",
+    "proficiencies",
+    "quick build",
+}
+_PAGE_HEADER_RE = re.compile(r"(?i)^(?:chapter|part|appendix)\b")
 
 
-def extract_content_candidates(chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def extract_content_candidates(
+    chunks: list[dict[str, Any]],
+    *,
+    source_title: str = "",
+) -> list[dict[str, Any]]:
     """Extract review-required cards; never claim unsupported mechanics are executable."""
     sections: dict[tuple[str, ...], dict[str, Any]] = {}
     for chunk in chunks:
@@ -79,7 +91,17 @@ def extract_content_candidates(chunks: list[dict[str, Any]]) -> list[dict[str, A
             section.get("page_end"), chunk.get("page_end")
         )
 
+    own_classifications = {
+        key: _classify(
+            str(section["title"]),
+            list(section["heading_path"]),
+            "\n\n".join(section["content"]),
+            source_title=source_title,
+        )
+        for key, section in sections.items()
+    }
     candidates: list[dict[str, Any]] = []
+    source_class_name = _class_name_from_source(source_title)
     for key, section in sections.items():
         descendants = [
             value
@@ -100,17 +122,43 @@ def extract_content_candidates(chunks: list[dict[str, Any]]) -> list[dict[str, A
             str(section["title"]),
             list(section["heading_path"]),
             content,
+            source_title=source_title,
         )
         if classification is None:
             continue
         kind, signals = classification
+        candidate_name = (
+            source_class_name
+            if kind == "class"
+            and source_class_name
+            and str(section["title"]).casefold() == "class features"
+            else section["title"]
+        )
+        if kind == "class" and source_class_name:
+            source_chunk_ids = [
+                chunk_id
+                for value in sections.values()
+                for chunk_id in value["source_chunk_ids"]
+            ]
+        if own_classifications[key] is None and any(
+            candidate_key[: len(key)] == key
+            and len(candidate_key) > len(key)
+            and descendant_classification is not None
+            and descendant_classification[0] == kind
+            for candidate_key, descendant_classification in own_classifications.items()
+        ):
+            # A heading-only catalog such as "Optional Spells" must not become a
+            # duplicate entity merely because its descendant spell text was
+            # aggregated. Entity parents such as a class still aggregate their
+            # differently classified feature descendants.
+            continue
         identity = "\x1f".join((kind, *key))
         candidates.append(
             {
                 "id": "candidate:"
                 + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20],
                 "kind": kind,
-                "name": section["title"],
+                "name": candidate_name,
                 "source_chunk_ids": list(dict.fromkeys(source_chunk_ids)),
                 "source_heading_path": section["heading_path"],
                 "page_start": page_start,
@@ -123,7 +171,7 @@ def extract_content_candidates(chunks: list[dict[str, Any]]) -> list[dict[str, A
                 "artifact": {
                     "kind": kind,
                     "application_state": "catalog_only",
-                    "card": {"name": section["title"], "description": content[:2000]},
+                    "card": {"name": candidate_name, "description": content[:2000]},
                 },
             }
         )
@@ -235,6 +283,8 @@ def _classify(
     title: str,
     heading_path: list[str],
     content: str,
+    *,
+    source_title: str = "",
 ) -> tuple[str, tuple[str, ...]] | None:
     title_folded = title.casefold().strip()
     ancestors = " ".join(heading_path[:-1]).casefold()
@@ -275,8 +325,13 @@ def _classify(
         return "background", background_signals
 
     feat_section = bool(re.search(r"\bfeats?\b", ancestors))
-    if title_folded not in _GENERIC_TITLES and feat_section and (
+    if (
+        title_folded not in _GENERIC_TITLES
+        and not _PAGE_HEADER_RE.match(title_folded)
+        and feat_section
+        and (
         "prerequisite" in folded or len(folded) >= 80
+        )
     ):
         signals = ["feat section"]
         if "prerequisite" in folded:
@@ -302,16 +357,29 @@ def _classify(
         ]
         return "subclass", tuple(signals)
 
-    class_signals = tuple(
+    class_signals = [
         label
         for label in ("class features", "hit dice", "primary ability", "saving throw proficiencies")
         if label in folded
-    )
+    ]
+    if title_folded == "class features" and "class features" not in class_signals:
+        class_signals.insert(0, "class features")
+    source_class_name = _class_name_from_source(source_title).casefold()
+    known_source_class = source_class_name in _CLASS_NAMES or source_class_name == "revised ranger"
+    if (
+        title_folded == "class features"
+        and known_source_class
+        and "source class" not in class_signals
+    ):
+        class_signals.append("source class")
     class_title = title_folded in _CLASS_NAMES or any(
         name in title_folded for name in ("artificer", "blood hunter")
     )
+    class_title = class_title or (
+        title_folded == "class features" and known_source_class
+    )
     if class_title and "class features" in class_signals and len(class_signals) >= 2:
-        return "class", class_signals
+        return "class", tuple(class_signals)
 
     species_signals = tuple(
         label
@@ -329,11 +397,32 @@ def _classify(
                 signals.append(label)
         return "item", tuple(signals)
 
-    feature_section = "class features" in ancestors or "subclass features" in ancestors
+    feature_section = (
+        "class features" in ancestors
+        or "subclass features" in ancestors
+        or known_source_class
+    )
     level_grant = bool(re.search(r"(?i)\bat\s+\d+(?:st|nd|rd|th)\s+level\b", folded))
-    if title_folded not in _GENERIC_TITLES and feature_section and level_grant:
+    if (
+        title_folded not in _GENERIC_FEATURE_TITLES
+        and feature_section
+        and level_grant
+    ):
         return "feature", ("feature section", "level grant")
     return None
+
+
+def _class_name_from_source(source_title: str) -> str:
+    folded = source_title.casefold()
+    compact = re.sub(r"[^a-z]+", "", folded)
+    if "revisedranger" in compact:
+        return "Revised Ranger"
+    if "bloodhunter" in compact:
+        return "Blood Hunter"
+    for name in sorted(_CLASS_NAMES, key=len, reverse=True):
+        if re.search(rf"\b{re.escape(name)}(?:v\d+)?\b", folded):
+            return name.title()
+    return ""
 
 
 def _minimum_page(left: Any, right: Any) -> int | None:

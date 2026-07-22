@@ -106,12 +106,97 @@ def test_class_features_are_not_misclassified_as_feats() -> None:
                 ],
                 "content": "At 1st level, you fight with primal ferocity.",
             },
-        ]
+            {
+                "id": "spell",
+                "heading_path": ["Chapter 11: Spells", "Spark"],
+                "content": "1st-level evocation\nCasting Time: 1 action",
+            },
+        ],
+        source_title="D&D 5E - Player's Handbook",
     )
 
     assert [(item["kind"], item["name"]) for item in candidates] == [
         ("class", "Barbarian"),
         ("feature", "Rage"),
+        ("spell", "Spark"),
+    ]
+    assert candidates[0]["source_chunk_ids"] == ["class", "class-features", "rage"]
+
+
+def test_source_title_recovers_a_supplement_class_heading() -> None:
+    candidates = extract_content_candidates(
+        [
+            {
+                "id": "class-features",
+                "heading_path": ["Class Features"],
+                "content": "Class Features\nHit Dice: 1d8 per artificer level",
+            },
+            {
+                "id": "proficiencies",
+                "heading_path": ["Class Features", "Proficiencies"],
+                "content": "Saving Throw Proficiencies: Constitution, Intelligence",
+            },
+            {
+                "id": "infuse-item",
+                "heading_path": ["Class Features", "Infuse Item"],
+                "content": "At 2nd level, you gain the ability to imbue mundane items.",
+            },
+        ],
+        source_title="D&D 5E - UA - ArtificerV2",
+    )
+
+    assert [(item["kind"], item["name"]) for item in candidates] == [
+        ("class", "Artificer"),
+        ("feature", "Infuse Item"),
+    ]
+    assert candidates[0]["source_chunk_ids"] == [
+        "class-features",
+        "proficiencies",
+        "infuse-item",
+    ]
+
+
+def test_source_title_recovers_flat_ocr_class_headings() -> None:
+    candidates = extract_content_candidates(
+        [
+            {
+                "id": "class-features",
+                "heading_path": ["CLASS FEATURES"],
+                "content": "As a blood hunter, you gain the following class features.",
+            },
+            {
+                "id": "hit-points",
+                "heading_path": ["HIT POINTS"],
+                "content": "Hit Dice: 1d10 per blood hunter level",
+            },
+        ],
+        source_title="D&D 5E - UA - Blood Hunter Class 1.2",
+    )
+
+    assert [(item["kind"], item["name"]) for item in candidates] == [
+        ("class", "Blood Hunter")
+    ]
+    assert candidates[0]["source_chunk_ids"] == ["class-features", "hit-points"]
+
+
+def test_parent_catalog_does_not_duplicate_a_descendant_spell() -> None:
+    candidates = extract_content_candidates(
+        [
+            {
+                "id": "catalog",
+                "heading_path": ["Optional Spells"],
+                "content": "Optional Spells",
+            },
+            {
+                "id": "spark",
+                "heading_path": ["Optional Spells", "Spark"],
+                "content": "1st-level evocation\nCasting Time: 1 action",
+            },
+        ]
+    )
+
+    assert [(item["kind"], item["name"]) for item in candidates] == [
+        ("spell", "Spark")
     ]
 
 
