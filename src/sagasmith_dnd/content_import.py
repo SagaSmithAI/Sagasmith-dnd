@@ -11,6 +11,7 @@ from sagasmith_dnd.spell_resolution import (
     SPELL_RESOLUTION_MECHANIC_ID,
     normalize_spell_resolution,
 )
+from sagasmith_dnd.statblocks import StatblockImportError, parse_2014_statblock
 
 _ITEM_HEADER_RE = re.compile(
     r"(?im)^(?:wondrous item|weapon|armor|potion|ring|rod|staff|wand)(?:\s*[,—-]|\s*$)"
@@ -53,6 +54,28 @@ _GENERIC_FEATURE_TITLES = {
     "quick build",
 }
 _PAGE_HEADER_RE = re.compile(r"(?i)^(?:chapter|part|appendix)\b")
+_ABILITY_LABELS = ("STR", "DEX", "CON", "INT", "WIS", "CHA")
+_STATBLOCK_FIELD_LABELS = (
+    "Saving Throws",
+    "Skills",
+    "Damage Vulnerabilities",
+    "Damage Resistances",
+    "Damage Immunities",
+    "Condition Immunities",
+    "Senses",
+    "Languages",
+    "Challenge",
+)
+_CREATURE_CORE_RE = re.compile(
+    r"(?is)^\s*(?P<identity>(?:Tiny|Small|Medium|Large|Huge|Gargantuan)\s+.+?)"
+    r"\s+Armor Class\s+(?P<armor>.+?)"
+    r"\s+Hit Points\s+(?P<hit_points>.+?)"
+    r"\s+Speed\s+(?P<speed>.+?)\s*$"
+)
+_ENTRY_START_RE = re.compile(
+    r"(?<![\w*])(?P<name>[A-Z][A-Za-z0-9'’() /-]{1,60})\.\s+"
+    r"(?=(?:Melee|Ranged|The|When|If|While|At|Once|As|A\s|An\s|This|Each|On|Until)\b)"
+)
 
 
 def extract_content_candidates(
@@ -176,6 +199,254 @@ def extract_content_candidates(
             }
         )
     return candidates
+
+
+def module_statblock_review_candidates(
+    chunks: list[dict[str, Any]],
+    *,
+    source_title: str = "",
+) -> list[dict[str, Any]]:
+    """Build review-only executable statblocks from source-proven module chunks.
+
+    Candidates that retain ambiguous OCR or omit a required combat fact remain
+    visible with a manual-review error. They are never silently repaired.
+    """
+    del source_title
+    indexed_chunks = list(enumerate(chunks))
+    ordered = [
+        chunk
+        for _index, chunk in sorted(
+            indexed_chunks,
+            key=lambda item: (
+                item[1].get("ordinal")
+                if isinstance(item[1].get("ordinal"), int)
+                else item[0]
+            ),
+        )
+    ]
+    roots: list[int] = []
+    for index, chunk in enumerate(ordered):
+        content = str(chunk.get("content") or "").strip()
+        path = [str(item).strip() for item in chunk.get("heading_path") or [] if str(item).strip()]
+        if not path or _CREATURE_CORE_RE.match(content) is None:
+            continue
+        roots.append(index)
+    candidates: list[dict[str, Any]] = []
+    scoped_by_candidate: dict[str, list[dict[str, Any]]] = {}
+    for root_index, start in enumerate(roots):
+        end = roots[root_index + 1] if root_index + 1 < len(roots) else len(ordered)
+        root = ordered[start]
+        path = [str(item).strip() for item in root.get("heading_path") or [] if str(item).strip()]
+        key = tuple(item.casefold() for item in path)
+        scene_id = str(root.get("scene_id") or "")
+        scoped = [
+            chunk
+            for chunk in ordered[start:end]
+            if str(chunk.get("scene_id") or "") == scene_id
+        ]
+        identity = "\x1f".join(("statblock", *key))
+        candidate_id = "candidate:" + hashlib.sha256(
+            identity.encode("utf-8")
+        ).hexdigest()[:20]
+        scoped_by_candidate[candidate_id] = scoped
+        candidates.append(
+            {
+                "id": candidate_id,
+                "kind": "statblock",
+                "name": path[-1],
+                "source_chunk_ids": list(
+                    dict.fromkeys(
+                        str(chunk.get("id") or "")
+                        for chunk in scoped
+                        if str(chunk.get("id") or "")
+                    )
+                ),
+                "source_heading_path": path,
+                "page_start": _minimum_page_values(
+                    chunk.get("page_start") for chunk in scoped
+                ),
+                "page_end": _maximum_page_values(chunk.get("page_end") for chunk in scoped),
+                "extraction_confidence": "high",
+                "extraction_signals": [
+                    "armor class",
+                    "hit points",
+                    "speed",
+                    "six ability headings",
+                ],
+                "review_status": "pending",
+                "application_state": "review_only",
+                "execution_state": "not_compiled",
+            }
+        )
+    for candidate in candidates:
+        scoped = scoped_by_candidate[str(candidate["id"])]
+        candidate["source_scene_ids"] = list(
+            dict.fromkeys(
+                str(chunk.get("scene_id") or "")
+                for chunk in scoped
+                if str(chunk.get("scene_id") or "")
+            )
+        )
+        try:
+            normalized = _normalize_module_statblock(str(candidate["name"]), scoped)
+            parsed = parse_2014_statblock(
+                normalized,
+                source_key=f"module-candidate:{candidate['id']}",
+            )
+        except (StatblockImportError, ValueError) as error:
+            candidate["review_status"] = "manual_review_required"
+            candidate["execution_state"] = "blocked"
+            candidate["review_error"] = str(error)
+            continue
+        candidate["normalized_content"] = normalized
+        candidate["review_status"] = "pending"
+        candidate["execution_state"] = "review_ready"
+        candidate["validation"] = {
+            "name": parsed.name,
+            "challenge_rating": parsed.challenge_rating,
+            "experience_points": parsed.experience_points,
+            "warnings": list(parsed.warnings),
+            "settlement": "automatic" if not parsed.warnings else "mixed",
+        }
+    return candidates
+
+
+def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
+    if not chunks:
+        raise StatblockImportError("statblock candidate has no source chunks")
+    root = next(
+        (
+            chunk
+            for chunk in chunks
+            if _CREATURE_CORE_RE.match(str(chunk.get("content") or "").strip())
+        ),
+        None,
+    )
+    if root is None:
+        raise StatblockImportError("statblock candidate has no creature core chunk")
+    root_path = list(root.get("heading_path") or [])
+    root_text = str(root.get("content") or "").strip()
+    core_text = re.split(r"(?m)^#{2,6}\s+", root_text, maxsplit=1)[0].strip()
+    core = _CREATURE_CORE_RE.match(" ".join(core_text.splitlines()))
+    if core is None:
+        raise StatblockImportError(
+            "statblock candidate needs an unambiguous size/type, Armor Class, Hit Points, and Speed"
+        )
+
+    ability_values: dict[str, str] = {}
+    detail_parts: list[str] = []
+    section_parts: dict[str, list[str]] = {
+        "ACTIONS": [],
+        "REACTIONS": [],
+        "LEGENDARY ACTIONS": [],
+    }
+    expanded_chunks = [chunk for chunk in chunks if chunk is not root]
+    heading_matches = list(re.finditer(r"(?m)^#{2,6}\s+(.+?)\s*$", root_text))
+    for index, match in enumerate(heading_matches):
+        end = (
+            heading_matches[index + 1].start()
+            if index + 1 < len(heading_matches)
+            else len(root_text)
+        )
+        expanded_chunks.append(
+            {
+                "heading_path": [*root_path, match.group(1).strip()],
+                "content": root_text[match.end() : end].strip(),
+            }
+        )
+    for chunk in expanded_chunks:
+        path = [str(item).strip() for item in chunk.get("heading_path") or []]
+        title = path[-1].upper()
+        content = str(chunk.get("content") or "").strip()
+        if title in _ABILITY_LABELS:
+            score = re.match(r"^\s*(\d+)\s*\(([+\-−]?\d+)\)(?P<tail>.*)$", content, re.S)
+            if score is None:
+                raise StatblockImportError(f"statblock {title} score is ambiguous")
+            ability_values[title] = f"{score.group(1)} ({score.group(2).replace('−', '-')})"
+            tail = score.group("tail").strip()
+            if tail:
+                detail_parts.append(tail)
+            continue
+        upper_path = {item.upper() for item in path}
+        section = next((value for value in section_parts if value in upper_path), None)
+        if section is not None:
+            if title != section and content:
+                section_parts[section].append(f"{path[-1]}. {content}")
+            elif content:
+                section_parts[section].append(content)
+        elif content:
+            detail_parts.append(content)
+    missing_abilities = [label for label in _ABILITY_LABELS if label not in ability_values]
+    if missing_abilities:
+        raise StatblockImportError(
+            "statblock candidate is missing ability scores: " + ", ".join(missing_abilities)
+        )
+
+    fields, traits = _split_statblock_details(" ".join(detail_parts))
+    rendered = [
+        f"# {name}",
+        "",
+        f"*{core.group('identity').strip()}*",
+        "",
+        f"**Armor Class** {core.group('armor').strip()}",
+        f"**Hit Points** {core.group('hit_points').strip()}",
+        f"**Speed** {core.group('speed').strip()}",
+        "",
+        "| STR | DEX | CON | INT | WIS | CHA |",
+        "|---:|---:|---:|---:|---:|---:|",
+        "| " + " | ".join(ability_values[label] for label in _ABILITY_LABELS) + " |",
+    ]
+    for label in _STATBLOCK_FIELD_LABELS:
+        if fields.get(label):
+            rendered.append(f"**{label}** {fields[label]}")
+    if traits:
+        rendered.extend(("", "## Traits", "", _mark_statblock_entries(traits)))
+    for section, parts in section_parts.items():
+        content = " ".join(parts).strip()
+        if content:
+            rendered.extend(
+                ("", f"## {section.title()}", "", _mark_statblock_entries(content))
+            )
+    return "\n".join(rendered).strip() + "\n"
+
+
+def _split_statblock_details(content: str) -> tuple[dict[str, str], str]:
+    matches: list[tuple[int, int, str]] = []
+    for label in _STATBLOCK_FIELD_LABELS:
+        match = re.search(rf"(?i)(?<!\w){re.escape(label)}\s+", content)
+        if match:
+            matches.append((match.start(), match.end(), label))
+    matches.sort()
+    fields: dict[str, str] = {}
+    traits = content[: matches[0][0]].strip() if matches else content.strip()
+    for index, (start, end, label) in enumerate(matches):
+        next_start = matches[index + 1][0] if index + 1 < len(matches) else len(content)
+        value = content[end:next_start].strip()
+        if label == "Challenge":
+            challenge = re.match(r"([^\s(]+(?:\s*\([\d,]+\s+XP\))?)(?P<tail>.*)", value, re.S)
+            if challenge:
+                fields[label] = challenge.group(1).strip()
+                tail = challenge.group("tail").strip()
+                traits = " ".join(part for part in (traits, tail) if part).strip()
+                continue
+        fields[label] = value
+    return fields, traits
+
+
+def _mark_statblock_entries(content: str) -> str:
+    return _ENTRY_START_RE.sub(
+        lambda match: f"***{match.group('name').strip()}***. ", content
+    )
+
+
+def _minimum_page_values(values: Any) -> int | None:
+    pages = [value for value in values if isinstance(value, int) and not isinstance(value, bool)]
+    return min(pages) if pages else None
+
+
+def _maximum_page_values(values: Any) -> int | None:
+    pages = [value for value in values if isinstance(value, int) and not isinstance(value, bool)]
+    return max(pages) if pages else None
 
 
 def compiled_artifacts_from_candidates(

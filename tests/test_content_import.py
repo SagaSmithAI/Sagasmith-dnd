@@ -3,6 +3,7 @@ import pytest
 from sagasmith_dnd.content_import import (
     compiled_artifacts_from_candidates,
     extract_content_candidates,
+    module_statblock_review_candidates,
     validate_selection_ready_artifacts,
 )
 
@@ -81,6 +82,124 @@ def test_extractor_requires_structural_signals_instead_of_loose_keywords() -> No
     assert [(item["kind"], item["name"]) for item in candidates] == [
         ("statblock", "Goblin")
     ]
+
+
+def test_module_statblock_chunks_become_review_ready_without_guessing_ocr() -> None:
+    base = ["Appendix B: Monsters", "MONSTER DESCRIPTIONS", "GOBLIN"]
+    chunks = [
+        {
+            "id": "goblin-core",
+            "scene_id": "monster-scene",
+            "heading_path": base,
+            "content": (
+                "Small humanoid (goblinoid), neutral evil Armor Class 15 "
+                "(leather armor, shield) Hit Points 7 (2d6) Speed 30 ft."
+            ),
+            "page_start": 58,
+            "page_end": 58,
+        },
+    ]
+    values = {
+        "STR": "8 (-1)",
+        "DEX": "14 (+2)",
+        "CON": "10 (+0)",
+        "INT": "10 (+0)",
+        "WIS": "8 (-1)",
+        "CHA": (
+            "8 (-1) Skills Stealth +6 Senses darkvision 60 ft., passive Perception 9 "
+            "Languages Common, Goblin Challenge 1/4 (50 XP) Nimble Escape. "
+            "The goblin can take the Disengage or Hide action as a bonus action."
+        ),
+    }
+    chunks.extend(
+        {
+            "id": f"goblin-{ability.casefold()}",
+            "scene_id": "monster-scene",
+            "heading_path": [*base, ability],
+            "content": content,
+            "page_start": 58,
+            "page_end": 58,
+        }
+        for ability, content in values.items()
+    )
+    chunks.append(
+        {
+            "id": "goblin-actions",
+            "scene_id": "monster-scene",
+            "heading_path": [*base, "ACTIONS"],
+            "content": (
+                "Scimitar. Melee Weapon Attack: +4 to hit, reach 5 ft., one target. "
+                "Hit: 5 (1d6 + 2) slashing damage. Shortbow. Ranged Weapon Attack: "
+                "+4 to hit, range 80 ft./320 ft., one target. Hit: 5 (1d6 + 2) "
+                "piercing damage."
+            ),
+            "page_start": 58,
+            "page_end": 58,
+        }
+    )
+
+    candidates = module_statblock_review_candidates(chunks, source_title="Lost Mine")
+
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate["name"] == "GOBLIN"
+    assert candidate["execution_state"] == "review_ready"
+    assert candidate["source_scene_ids"] == ["monster-scene"]
+    assert candidate["page_start"] == 58
+    assert candidate["page_end"] == 58
+    assert candidate["validation"]["challenge_rating"] == "1/4"
+    assert "**Armor Class** 15 (leather armor, shield)" in candidate["normalized_content"]
+    assert "***Scimitar***. Melee Weapon Attack" in candidate["normalized_content"]
+
+
+def test_module_statblock_candidate_keeps_ambiguous_ocr_blocked() -> None:
+    base = ["Monsters", "HOBGOBLIN"]
+    chunks = [
+        {
+            "id": "core",
+            "scene_id": "scene",
+            "heading_path": base,
+            "content": (
+                "Medium humanoid (goblinoid), lawful evil Armor Class lS "
+                "(chain mail, shield) Hit Points 11 (2d8 + 2) Speed 30 ft."
+            ),
+        }
+    ]
+    for ability, score in zip(
+        ("STR", "DEX", "CON", "INT", "WIS", "CHA"),
+        (13, 12, 12, 10, 10, 9),
+        strict=True,
+    ):
+        suffix = (
+            " Challenge 1/2 (100 XP)"
+            if ability == "CHA"
+            else ""
+        )
+        chunks.append(
+            {
+                "id": ability,
+                "scene_id": "scene",
+                "heading_path": [*base, ability],
+                "content": f"{score} (+0){suffix}",
+            }
+        )
+    chunks.append(
+        {
+            "id": "actions",
+            "scene_id": "scene",
+            "heading_path": [*base, "ACTIONS"],
+            "content": (
+                "Longsword. Melee Weapon Attack: +3 to hit, reach 5 ft., one target. "
+                "Hit: 5 (1d8 + 1) slashing damage."
+            ),
+        }
+    )
+
+    candidate = module_statblock_review_candidates(chunks)[0]
+
+    assert candidate["execution_state"] == "blocked"
+    assert candidate["review_status"] == "manual_review_required"
+    assert "Armor Class or Hit Points is invalid" in candidate["review_error"]
 
 
 def test_class_features_are_not_misclassified_as_feats() -> None:
