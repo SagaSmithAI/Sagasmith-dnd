@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-CORE_RULE_PACK_VERSION = "1.25.0"
+CORE_RULE_PACK_VERSION = "1.26.0"
 
 
 @dataclass(frozen=True)
@@ -226,6 +226,13 @@ BOUNDARIES = (
         "combat_engine.spend_movement",
         ("tests/test_combat_engine.py",),
         "bundled:srd/grappled",
+    ),
+    CoreBoundary(
+        "dnd5e.core.movement.occupied_destination",
+        ("2014", "2024"),
+        "combat_engine.spend_movement",
+        ("tests/test_combat_engine.py",),
+        "bundled:srd/movement-around-other-creatures",
     ),
     CoreBoundary(
         "dnd5e.core.reaction.opportunity_path",

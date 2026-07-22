@@ -19,6 +19,7 @@ REQUIRED_BOUNDARIES = {
     "dnd5e.core.damage.stable_recovery",
     "dnd5e.core.movement.prone_crawl_stand",
     "dnd5e.core.movement.grapple_source",
+    "dnd5e.core.movement.occupied_destination",
     "dnd5e.core.reaction.opportunity_path",
     "dnd5e.core.reaction.post_hit_defense",
     "dnd5e.core.spell.shield_attack_ac",

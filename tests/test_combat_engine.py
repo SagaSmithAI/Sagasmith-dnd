@@ -1594,6 +1594,52 @@ def test_positioned_movement_rejects_declared_distance_that_disagrees_with_grid(
         spend_movement(encounter, "mover", 5, destination={"x": 2, "y": 0})
 
 
+def test_voluntary_movement_cannot_end_in_another_living_creatures_space() -> None:
+    mover = _actor("mover")
+    mover.update(initiative=20, position={"x": 0, "y": 0})
+    occupant = _actor("occupant")
+    occupant.update(initiative=10, position={"x": 1, "y": 0})
+    encounter = start_encounter([mover, occupant])
+
+    with pytest.raises(ValueError, match="cannot willingly end"):
+        spend_movement(encounter, "mover", 5, destination={"x": 1, "y": 0})
+
+
+def test_space_sharing_trait_allows_an_occupied_destination() -> None:
+    mover = _actor("swarm")
+    mover.update(
+        initiative=20,
+        position={"x": 0, "y": 0},
+        can_share_space=True,
+    )
+    occupant = _actor("occupant")
+    occupant.update(initiative=10, position={"x": 1, "y": 0})
+    encounter = start_encounter([mover, occupant])
+
+    moved = spend_movement(encounter, "swarm", 5, destination={"x": 1, "y": 0})
+
+    assert moved["combatants"][0]["position"] == {"x": 1, "y": 0}
+
+
+def test_forced_movement_into_occupied_space_requires_effect_specific_ruling() -> None:
+    mover = _actor("mover")
+    mover.update(initiative=20, position={"x": 0, "y": 0})
+    occupant = _actor("occupant")
+    occupant.update(initiative=10, position={"x": 1, "y": 0})
+    encounter = start_encounter([mover, occupant])
+
+    with pytest.raises(NeedsRulingError) as error:
+        spend_movement(
+            encounter,
+            "mover",
+            5,
+            destination={"x": 1, "y": 0},
+            movement_mode="forced",
+        )
+
+    assert error.value.missing == ("occupied_destination_resolution",)
+
+
 def test_hidden_mover_does_not_automatically_reveal_itself_with_a_reaction_window() -> None:
     mover = _actor("mover")
     mover.update(

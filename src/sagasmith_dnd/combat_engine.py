@@ -238,6 +238,7 @@ def start_encounter(
                 "visible_to_actor_ids": deepcopy(actor.get("visible_to_actor_ids")),
                 "disposition": _normalize_disposition(actor.get("disposition")),
                 "reach_ft": _positive_int(actor.get("reach_ft"), default=5),
+                "can_share_space": bool(actor.get("can_share_space", False)),
                 "surprised": bool(actor.get("surprised", False)),
                 "death_saves": bool(actor.get("death_saves", actor.get("character_type") == "pc")),
                 "exhaustion": exhaustion,
@@ -1792,6 +1793,26 @@ def spend_movement(
         if geometric_distance != distance:
             raise CombatEngineError(
                 "movement distance must equal the grid distance between origin and destination"
+            )
+    if target_position is not None:
+        occupants = [
+            item
+            for item in value.get("combatants", [])
+            if item.get("actor_id") != actor_id_value
+            and _position(item.get("position")) == target_position
+            and "dead" not in _condition_set(item.get("conditions"))
+        ]
+        sharing_allowed = bool(combatant.get("can_share_space")) or any(
+            bool(item.get("can_share_space")) for item in occupants
+        )
+        if occupants and not sharing_allowed:
+            if movement_mode == "voluntary":
+                raise CombatEngineError(
+                    "an actor cannot willingly end movement in another creature's space"
+                )
+            raise NeedsRulingError(
+                "an effect-specific ruling is required for an occupied destination",
+                missing=("occupied_destination_resolution",),
             )
     budget["movement"] = available - movement_cost
     combatant["turn_budget"] = budget
