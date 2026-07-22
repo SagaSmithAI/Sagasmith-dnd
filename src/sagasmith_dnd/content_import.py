@@ -12,19 +12,6 @@ from sagasmith_dnd.spell_resolution import (
     normalize_spell_resolution,
 )
 
-_SUBCLASS_WORDS = (
-    "archetype",
-    "domain",
-    "circle",
-    "college",
-    "oath",
-    "path",
-    "tradition",
-    "school",
-    "patron",
-    "origin",
-    "bloodline",
-)
 _ITEM_HEADER_RE = re.compile(
     r"(?im)^(?:wondrous item|weapon|armor|potion|ring|rod|staff|wand)(?:\s*[,—-]|\s*$)"
 )
@@ -32,6 +19,22 @@ _SPELL_LEVEL_RE = re.compile(
     r"(?im)^(?:\d+(?:st|nd|rd|th)[ -]level\s+[a-z]+|[a-z]+\s+cantrip)\b"
 )
 _STATBLOCK_LABELS = ("armor class", "hit points", "speed", "challenge")
+_CLASS_NAMES = {
+    "artificer",
+    "barbarian",
+    "bard",
+    "blood hunter",
+    "cleric",
+    "druid",
+    "fighter",
+    "monk",
+    "paladin",
+    "ranger",
+    "rogue",
+    "sorcerer",
+    "warlock",
+    "wizard",
+}
 _GENERIC_TITLES = {
     "background",
     "backgrounds",
@@ -78,7 +81,21 @@ def extract_content_candidates(chunks: list[dict[str, Any]]) -> list[dict[str, A
 
     candidates: list[dict[str, Any]] = []
     for key, section in sections.items():
-        content = "\n\n".join(section["content"])
+        descendants = [
+            value
+            for candidate_key, value in sections.items()
+            if len(candidate_key) > len(key) and candidate_key[: len(key)] == key
+        ]
+        content_parts = [*section["content"]]
+        source_chunk_ids = list(section["source_chunk_ids"])
+        page_start = section["page_start"]
+        page_end = section["page_end"]
+        for descendant in descendants:
+            content_parts.extend(descendant["content"])
+            source_chunk_ids.extend(descendant["source_chunk_ids"])
+            page_start = _minimum_page(page_start, descendant.get("page_start"))
+            page_end = _maximum_page(page_end, descendant.get("page_end"))
+        content = "\n\n".join(content_parts)
         classification = _classify(
             str(section["title"]),
             list(section["heading_path"]),
@@ -94,10 +111,10 @@ def extract_content_candidates(chunks: list[dict[str, Any]]) -> list[dict[str, A
                 + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20],
                 "kind": kind,
                 "name": section["title"],
-                "source_chunk_ids": section["source_chunk_ids"],
+                "source_chunk_ids": list(dict.fromkeys(source_chunk_ids)),
                 "source_heading_path": section["heading_path"],
-                "page_start": section["page_start"],
-                "page_end": section["page_end"],
+                "page_start": page_start,
+                "page_end": page_end,
                 "extraction_confidence": "high" if len(signals) >= 3 else "medium",
                 "extraction_signals": list(signals),
                 "review_status": "pending",
@@ -227,7 +244,7 @@ def _classify(
     spell_labels = tuple(
         label
         for label in ("casting time", "range", "components", "duration")
-        if re.search(rf"(?im)^\s*{re.escape(label)}\s*:", sample)
+        if re.search(rf"(?i)\b{re.escape(label)}\s*:", sample)
     )
     spell_level = bool(_SPELL_LEVEL_RE.search(sample))
     if "casting time" in spell_labels and (spell_level or len(spell_labels) >= 3):
@@ -236,7 +253,9 @@ def _classify(
 
     statblock_labels = tuple(label for label in _STATBLOCK_LABELS if label in folded)
     ability_row = all(value in folded for value in ("str", "dex", "con", "int", "wis", "cha"))
-    if len(statblock_labels) >= 3 and ability_row:
+    if title_folded not in {"actions", "cha", "legendary actions"} and len(
+        statblock_labels
+    ) >= 3 and ability_row:
         return "statblock", (*statblock_labels, "six abilities")
 
     background_signals = tuple(
@@ -255,15 +274,22 @@ def _classify(
     ):
         return "background", background_signals
 
-    if title_folded not in _GENERIC_TITLES and (
-        "feats" in ancestors or "feat" in ancestors
-    ) and ("prerequisite" in folded or len(folded) >= 80):
+    feat_section = bool(re.search(r"\bfeats?\b", ancestors))
+    if title_folded not in _GENERIC_TITLES and feat_section and (
+        "prerequisite" in folded or len(folded) >= 80
+    ):
         signals = ["feat section"]
         if "prerequisite" in folded:
             signals.append("prerequisite")
         return "feat", tuple(signals)
 
-    subclass_title = any(word in title_folded for word in _SUBCLASS_WORDS)
+    subclass_title = bool(
+        re.search(
+            r"\b(?:path|college|domain|circle|oath|school|patron|origin|bloodline|"
+            r"archetype|tradition)\s+of\b|\b\w+\s+domain(?:\s+features)?$",
+            title_folded,
+        )
+    )
     subclass_section = "subclass" in ancestors or "subclasses" in ancestors
     subclass_features = "subclass features" in folded
     if title_folded not in _GENERIC_TITLES and (
@@ -281,15 +307,16 @@ def _classify(
         for label in ("class features", "hit dice", "primary ability", "saving throw proficiencies")
         if label in folded
     )
-    if title_folded not in _GENERIC_TITLES and "class features" in class_signals and len(
-        class_signals
-    ) >= 2:
+    class_title = title_folded in _CLASS_NAMES or any(
+        name in title_folded for name in ("artificer", "blood hunter")
+    )
+    if class_title and "class features" in class_signals and len(class_signals) >= 2:
         return "class", class_signals
 
     species_signals = tuple(
         label
         for label in ("ability score increase", "age", "alignment", "size", "speed", "languages")
-        if re.search(rf"(?im)^\s*{re.escape(label)}\s*[.:]", sample)
+        if re.search(rf"(?i)\b{re.escape(label)}\s*[.:]", sample)
     )
     if len(species_signals) >= 4:
         return "species", species_signals

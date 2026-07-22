@@ -83,6 +83,38 @@ def test_extractor_requires_structural_signals_instead_of_loose_keywords() -> No
     ]
 
 
+def test_class_features_are_not_misclassified_as_feats() -> None:
+    candidates = extract_content_candidates(
+        [
+            {
+                "id": "class",
+                "heading_path": ["Chapter 3: Classes", "Barbarian"],
+                "content": "The Barbarian",
+            },
+            {
+                "id": "class-features",
+                "heading_path": ["Chapter 3: Classes", "Barbarian", "Class Features"],
+                "content": "Class Features\nHit Dice: 1d12 per barbarian level",
+            },
+            {
+                "id": "rage",
+                "heading_path": [
+                    "Chapter 3: Classes",
+                    "Barbarian",
+                    "Class Features",
+                    "Rage",
+                ],
+                "content": "At 1st level, you fight with primal ferocity.",
+            },
+        ]
+    )
+
+    assert [(item["kind"], item["name"]) for item in candidates] == [
+        ("class", "Barbarian"),
+        ("feature", "Rage"),
+    ]
+
+
 def test_compiler_requires_review_and_selection_ready_structure() -> None:
     candidates = extract_content_candidates(
         [
