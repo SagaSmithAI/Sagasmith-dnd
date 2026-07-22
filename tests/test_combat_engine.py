@@ -1305,6 +1305,17 @@ def test_disciple_of_life_uses_recorded_spell_and_cast_level_before_hp_clamp() -
     assert result["bonus_amount"] == 4
     assert result["source"]["modifiers"][0]["name"] == "Disciple of Life"
 
+    zero_roll = apply_healing_to_sheet(
+        target["sheet"],
+        amount=0,
+        source_sheet=cleric["sheet"],
+        spell_id="cure-wounds",
+        spell_level=1,
+    )
+    assert zero_roll["requested_amount"] == 0
+    assert zero_roll["bonus_amount"] == 3
+    assert zero_roll["amount"] == 3
+
 
 def test_spell_healing_rejects_unrecorded_spells_and_illegal_cast_levels() -> None:
     target = _actor("target")

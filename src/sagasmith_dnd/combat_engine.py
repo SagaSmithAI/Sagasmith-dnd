@@ -2776,11 +2776,12 @@ def apply_healing_to_sheet(
     if "dead" in _condition_set(value.get("conditions")):
         raise CombatEngineError("ordinary healing cannot restore a dead actor")
     requested_amount = int(amount)
-    if requested_amount <= 0:
-        raise CombatEngineError("healing amount must be positive")
+    source_supplied = source_sheet is not None or spell_id is not None or spell_level is not None
+    if requested_amount < 0 or (requested_amount == 0 and not source_supplied):
+        raise CombatEngineError("healing amount must be positive unless a spell rolled zero")
     bonus = 0
     source: dict[str, Any] | None = None
-    if source_sheet is not None or spell_id is not None or spell_level is not None:
+    if source_supplied:
         if source_sheet is None or not spell_id or spell_level is None:
             raise CombatEngineError(
                 "spell healing requires source_sheet, spell_id, and spell_level"
@@ -2834,7 +2835,7 @@ def apply_healing_to_sheet(
             ),
         }
     maximum = int(hp.get("max", before) or before)
-    effective_amount = requested_amount + bonus
+    effective_amount = max(0, requested_amount + bonus)
     hp["value"] = min(maximum, before + effective_amount)
     value["combat"]["hp"] = hp
     if hp["value"] > 0:
