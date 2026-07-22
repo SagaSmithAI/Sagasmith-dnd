@@ -543,6 +543,33 @@ def parse_2014_statblock(
     )
 
 
+def _variant_attack_description(item: dict[str, Any], source_ref: str) -> str:
+    """Render display text from the same structured mechanics the engine will use."""
+    mechanics = dict(item.get("mechanics") or {})
+    mode = str(mechanics.get("attack_type") or "melee").strip().casefold()
+    attack_kind = "Spell" if mechanics.get("attack_ability") == "spell" else "Weapon"
+    attack_bonus = mechanics.get("attack_bonus_override")
+    attack_bonus_text = (
+        f"{int(attack_bonus):+d}" if attack_bonus is not None else "derived bonus"
+    )
+    if mode == "ranged":
+        normal = int(mechanics.get("normal_range_ft", 0) or 0)
+        long = int(mechanics.get("long_range_ft", 0) or 0)
+        range_text = f"range {normal}/{long} ft." if long > normal else f"range {normal} ft."
+    else:
+        range_text = f"reach {int(mechanics.get('reach_ft', 5) or 5)} ft."
+    formula = str(mechanics.get("damage_formula") or "structured damage")
+    damage_bonus = mechanics.get("damage_bonus_override")
+    if damage_bonus:
+        formula = f"{formula} {'+' if int(damage_bonus) > 0 else '-'} {abs(int(damage_bonus))}"
+    damage_type = str(mechanics.get("damage_type") or "untyped")
+    return (
+        f"*{mode.title()} {attack_kind} Attack:* {attack_bonus_text} to hit, "
+        f"{range_text}, one target. *Hit:* {formula} {damage_type} damage. "
+        f"Variant source: {source_ref}."
+    )
+
+
 def apply_statblock_variant(
     sheet: dict[str, Any],
     variant: dict[str, Any],
@@ -692,6 +719,7 @@ def apply_statblock_variant(
                 if not isinstance(value, int) or isinstance(value, bool):
                     raise StatblockImportError(f"action override {field} must be an integer")
                 mechanics[field] = value
+        item["description"] = _variant_attack_description(item, source_ref)
 
     remaining_ids = [str(item.get("id") or "") for item in items]
     if len(remaining_ids) != len(set(remaining_ids)):

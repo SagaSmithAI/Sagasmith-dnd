@@ -215,6 +215,11 @@ def test_source_bound_variant_can_apply_common_module_instance_changes() -> None
     assert sheet["traits"]["languages"] == ["Common", "Elvish"]
     assert derived["inventory"]["weapon_attacks"][0]["item_id"] == "gauntlet-slam"
     assert derived["inventory"]["weapon_attacks"][0]["damage_type"] == "force"
+    attack = sheet["inventory"]["items"][0]
+    assert "*Melee Weapon Attack:* +2 to hit" in attack["description"]
+    assert "1d4 bludgeoning damage" not in attack["description"]
+    assert "1d4 force damage" in attack["description"]
+    assert "Variant source: module-scene:d12" in attack["description"]
 
 
 def test_statblock_variant_rejects_unbound_or_broad_sheet_patches() -> None:
