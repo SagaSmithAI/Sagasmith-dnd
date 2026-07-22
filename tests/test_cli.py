@@ -454,7 +454,12 @@ def test_cli_character_v2_inventory_party_and_memory_workflow(
         "--item",
         "bow",
     )
-    assert shot["data"]["consumed"] == {"item_id": "arrows", "name": "Arrows", "quantity": 1}
+    assert shot["data"]["consumed"] == {
+        "item_id": "arrows",
+        "name": "Arrows",
+        "quantity": 1,
+        "remaining": 2,
+    }
     assert (
         _call(
             capsys,
