@@ -33,6 +33,7 @@ from sagasmith_dnd.combat_engine import (
     resolve_common_action,
     resolve_death_save_to_sheet,
     resolve_readied_spell_window,
+    resolve_second_wind_to_sheet,
     roll_attack_action,
     settle_core_activity_effect,
     spend_movement,
@@ -1189,6 +1190,77 @@ def test_action_surge_grants_one_current_turn_action_and_never_carries_forward()
     returned_actor = returned["combatants"][returned["turn_index"]]
     assert returned_actor["actor_id"] == actor_id
     assert returned_actor["turn_budget"]["extra_action"] == 0
+
+
+def test_cunning_action_settles_dash_and_disengage_but_not_hide_outcome() -> None:
+    rogue = _actor("rogue")
+    rogue["initiative"] = 20
+    threat = _actor("threat")
+    threat["initiative"] = 10
+    encounter = start_encounter([rogue, threat])
+
+    paid_dash = pay_activity_activation(
+        encounter, actor_id_value="rogue", activation_type="bonus_action"
+    )
+    dashed, dash_effect = settle_core_activity_effect(
+        paid_dash,
+        actor_id_value="rogue",
+        activity_id="dnd5e.content.srd2014.feature.rogue-cunning-action",
+        declaration={"action": "Dash"},
+    )
+    assert dash_effect == {
+        "kind": "cunning_action",
+        "action": "dash",
+        "requires_ruling": False,
+    }
+    assert dashed["combatants"][0]["turn_budget"]["movement"] == 60
+    assert dashed["combatants"][0]["turn_budget"]["bonus_action"] == 0
+
+    encounter = start_encounter([rogue, threat])
+    paid_disengage = pay_activity_activation(
+        encounter, actor_id_value="rogue", activation_type="bonus_action"
+    )
+    disengaged, effect = settle_core_activity_effect(
+        paid_disengage,
+        actor_id_value="rogue",
+        activity_id="dnd5e.content.srd2014.feature.rogue-cunning-action",
+        declaration={"action": "disengage"},
+    )
+    assert effect["requires_ruling"] is False
+    assert disengaged["combatants"][0]["turn_flags"]["disengaged"] is True
+
+    encounter = start_encounter([rogue, threat])
+    paid_hide = pay_activity_activation(
+        encounter, actor_id_value="rogue", activation_type="bonus_action"
+    )
+    hiding, effect = settle_core_activity_effect(
+        paid_hide,
+        actor_id_value="rogue",
+        activity_id="dnd5e.content.srd2014.feature.rogue-cunning-action",
+        declaration={"action": "hide", "cover": "larger ally"},
+    )
+    assert effect["requires_ruling"] is True
+    assert hiding["combatants"][0]["hidden"] is False
+    assert hiding["combatants"][0]["turn_flags"]["hide_declared"] == {
+        "source_activity_id": "dnd5e.content.srd2014.feature.rogue-cunning-action",
+        "declaration": {"action": "hide", "cover": "larger ally"},
+    }
+
+
+def test_second_wind_rolls_fighter_level_healing_and_clamps_at_maximum() -> None:
+    actor = _actor("fighter")
+    actor["sheet"]["progression"]["level"] = 2
+    actor["sheet"]["progression"]["classes"] = [
+        {"name": "Fighter", "level": 2, "subclass": "", "hit_die": 10}
+    ]
+    actor["sheet"]["combat"]["hp"] = {"value": 5, "max": 10, "temp": 0}
+
+    result = resolve_second_wind_to_sheet(actor["sheet"], rng=_SequenceRng(8))
+
+    assert result["roll"]["total"] == 8
+    assert result["healing_amount"] == 10
+    assert result["applied_amount"] == 5
+    assert result["sheet"]["combat"]["hp"]["value"] == 10
 
 
 def test_common_stabilize_action_pays_main_action_and_records_target() -> None:

@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-CORE_RULE_PACK_VERSION = "1.16.0"
+CORE_RULE_PACK_VERSION = "1.17.0"
 
 
 @dataclass(frozen=True)
@@ -54,6 +54,20 @@ BOUNDARIES = (
         "combat_engine.settle_core_activity_effect",
         ("tests/test_combat_engine.py",),
         "bundled:srd2014/02_Classes/Fighter.md#action-surge",
+    ),
+    CoreBoundary(
+        "dnd5e.core.activity.second_wind",
+        ("2014",),
+        "combat_engine.resolve_second_wind_to_sheet",
+        ("tests/test_combat_engine.py",),
+        "bundled:srd2014/02_Classes/Fighter.md#second-wind",
+    ),
+    CoreBoundary(
+        "dnd5e.core.activity.cunning_action",
+        ("2014",),
+        "combat_engine.settle_core_activity_effect",
+        ("tests/test_combat_engine.py",),
+        "bundled:srd2014/02_Classes/Rogue.md#cunning-action",
     ),
     CoreBoundary(
         "dnd5e.core.ability_generation",

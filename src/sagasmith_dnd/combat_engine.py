@@ -2231,20 +2231,59 @@ def pay_activity_activation(
 
 
 def settle_core_activity_effect(
-    encounter: dict[str, Any], *, actor_id_value: str, activity_id: str
+    encounter: dict[str, Any],
+    *,
+    actor_id_value: str,
+    activity_id: str,
+    declaration: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Settle narrow engine-owned effects for canonical Core activity cards."""
     value = deepcopy(encounter)
-    if activity_id != "dnd5e.content.srd2014.feature.fighter-action-surge":
+    action_surge_id = "dnd5e.content.srd2014.feature.fighter-action-surge"
+    cunning_action_id = "dnd5e.content.srd2014.feature.rogue-cunning-action"
+    if activity_id not in {action_surge_id, cunning_action_id}:
         return value, None
     current = current_combatant(value)
     if current is None or current.get("actor_id") != actor_id_value:
-        raise CombatEngineError("Action Surge can be used only on the actor's turn")
+        raise CombatEngineError("this Core activity can be used only on the actor's turn")
     combatant = next(
         item
         for item in value.get("combatants", [])
         if item.get("actor_id") == actor_id_value
     )
+    if activity_id == cunning_action_id:
+        selected = str(dict(declaration or {}).get("action") or "")
+        selected = selected.strip().lower().replace("-", "_").replace(" ", "_")
+        if selected not in {"dash", "disengage", "hide"}:
+            raise CombatEngineError(
+                "Cunning Action declaration.action must be dash, disengage, or hide"
+            )
+        budget = dict(combatant.get("turn_budget") or {})
+        flags = dict(combatant.get("turn_flags") or {})
+        if selected == "dash":
+            budget["movement"] = int(budget.get("movement", 0) or 0) + int(
+                budget.get("speed", 0) or 0
+            )
+            combatant["turn_budget"] = budget
+        elif selected == "disengage":
+            flags["disengaged"] = True
+            combatant["turn_flags"] = flags
+        else:
+            flags["hide_declared"] = {
+                "source_activity_id": activity_id,
+                "declaration": deepcopy(declaration or {}),
+            }
+            combatant["turn_flags"] = flags
+        effect = {
+            "kind": "cunning_action",
+            "action": selected,
+            "requires_ruling": selected == "hide",
+        }
+        value["log"] = [
+            *list(value.get("log") or []),
+            {"type": "cunning_action", "actor_id": actor_id_value, "effect": effect},
+        ][-100:]
+        return value, effect
     flags = dict(combatant.get("turn_flags") or {})
     if flags.get("action_surge_used"):
         raise CombatEngineError("Action Surge can be used only once on the same turn")
@@ -2263,6 +2302,33 @@ def settle_core_activity_effect(
         {"type": "action_surge", "actor_id": actor_id_value, "effect": effect},
     ][-100:]
     return value, effect
+
+
+def resolve_second_wind_to_sheet(
+    sheet: dict[str, Any], *, rng: Any = None
+) -> dict[str, Any]:
+    """Roll and apply the 2014 Fighter's canonical Second Wind healing."""
+    value = deepcopy(sheet)
+    fighter_level = sum(
+        int(item.get("level", 0) or 0)
+        for item in value.get("progression", {}).get("classes", [])
+        if str(item.get("name") or "").strip().casefold() == "fighter"
+    )
+    if fighter_level <= 0:
+        raise CombatEngineError("Second Wind requires a recorded Fighter class level")
+    rolled = asdict(roll("1d10", rng=rng))
+    amount = int(rolled["total"]) + fighter_level
+    healed = apply_healing_to_sheet(value, amount=amount)
+    return {
+        "sheet": healed["sheet"],
+        "kind": "second_wind",
+        "fighter_level": fighter_level,
+        "roll": rolled,
+        "healing_amount": amount,
+        "before_hp": healed["before_hp"],
+        "after_hp": healed["after_hp"],
+        "applied_amount": healed["amount"],
+    }
 
 
 def available_reactions(encounter: dict[str, Any], actor_id_value: str) -> list[dict[str, Any]]:
