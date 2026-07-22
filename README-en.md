@@ -29,6 +29,17 @@ Agents should normally connect through [SagaSmith-dnd-mcp](https://github.com/Sa
 - **Non-combat activities** — checks, rests, resources, and common activities with guards against bypassing the combat state machine.
 - **Content ingestion** — D&D module profiles, structured core content, and extension rulebook draft/validation flows.
 
+## Long-term memory boundary
+
+- Objective world facts belong to Core CampaignMemory and use stable `fact_key`
+  identities; the CLI exposes `memory upsert/revise` for diagnostics.
+- A PC or NPC's memories, beliefs, rumors, and misconceptions belong to ActorKnowledge.
+- `character.notes.memories` remains only for legacy character documents.
+  `character memory migrate` emits ActorKnowledge candidates; new features must
+  not treat the embedded list as authoritative memory.
+- `continuity commit --payload ...` atomically persists a scene event, fact
+  changes, actor knowledge, and an optional snapshot.
+
 ## Automation versus rulings
 
 The engine automates mechanics only when rules inputs are settled: attack bonus, AC, dice expression, damage type, save DC, resources, and current state. It must not invent intent, targets, line of sight, cover, hidden state, missing distances, optional-rule selection, precedence, homebrew, NPC decisions, or narrative consequences.

@@ -29,6 +29,15 @@ flowchart LR
 - **非战斗活动** — 检定、休息、资源与常见角色活动；战斗中禁止绕过战斗状态机修改同一状态。
 - **内容导入** — D&D 模组 profile、结构化规则内容、扩展规则书草稿与校验路径。
 
+## 长期记忆边界
+
+- 客观世界事实写入 Core CampaignMemory，并使用稳定 `fact_key`；CLI 提供
+  `memory upsert/revise` 作为诊断接口。
+- PC/NPC 的记忆、信念、谣言和误解写入 ActorKnowledge。
+- `character.notes.memories` 只为旧角色文档保留。`character memory migrate`
+  可以生成 ActorKnowledge 候选；新功能不得继续把它当作权威记忆库。
+- 场景收尾可用 `continuity commit --payload ...` 原子写入事件、事实、角色认知和快照。
+
 ## 自动结算与 GM 裁决的边界
 
 引擎只自动结算 **规则输入已经明确** 的机械部分，例如攻击加值、AC、骰式、伤害类型、豁免 DC、资源和当前状态。以下信息不应由引擎猜测：

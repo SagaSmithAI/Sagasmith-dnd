@@ -10,6 +10,7 @@ from sagasmith_dnd.character_schema import (
     consume_weapon_ammunition,
     derive_character_sheet,
     equip_inventory_item,
+    legacy_memory_candidates,
     remove_inventory_item,
     set_spell_prepared,
     validate_character_notes,
@@ -137,16 +138,38 @@ def test_inventory_wallet_effect_and_memory_contracts() -> None:
     assert moved["quantity"] == 1
     assert remaining["inventory"]["items"][0]["quantity"] == 1
 
-    notes, memory_id = add_memory(
-        validate_character_notes({}),
-        {
-            "kind": "promise",
-            "summary": "Mira promised to return the signet ring.",
-            "importance": 4,
-            "visibility": "dm",
-        },
-    )
+    with pytest.warns(DeprecationWarning, match="ActorKnowledge"):
+        notes, memory_id = add_memory(
+            validate_character_notes({}),
+            {
+                "kind": "promise",
+                "summary": "Mira promised to return the signet ring.",
+                "importance": 4,
+                "visibility": "dm",
+            },
+        )
     assert notes["memories"][0]["id"] == memory_id
+    candidates = legacy_memory_candidates(notes, actor_id="mira")
+    assert candidates == [
+        {
+            "action": "add",
+            "actor_id": "mira",
+            "knowledge_key": f"legacy-memory:{memory_id}",
+            "subject_ref": "",
+            "proposition": "Mira promised to return the signet ring.",
+            "epistemic_status": "known",
+            "confidence": 4,
+            "source_event_id": None,
+            "cause": "legacy_character_note",
+            "disclosure_scope": "dm",
+            "legacy_memory": {
+                "id": memory_id,
+                "kind": "promise",
+                "participants": [],
+                "status": "active",
+            },
+        }
+    ]
 
 
 def test_spellbook_inventory_preserves_structured_copy_sources() -> None:

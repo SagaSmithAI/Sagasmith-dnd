@@ -6,6 +6,7 @@ import argparse
 import json
 import sys
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,7 @@ from sagasmith_core import (
     CampaignService,
     CharacterService,
     CharacterStateUpdate,
+    ContinuityCommitService,
     ContinuityService,
     EventService,
     MemoryService,
@@ -39,6 +41,7 @@ from sagasmith_dnd.character_schema import (
     default_character_sheet,
     derive_character_sheet,
     equip_inventory_item,
+    legacy_memory_candidates,
     receive_inventory_item,
     remove_effect,
     remove_inventory_item,
@@ -79,6 +82,15 @@ def _dict(raw: str | None) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise CliError("object_required", "expected a JSON object", exit_code=2)
     return value
+
+
+def _datetime(raw: str | None, name: str) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise CliError("invalid_datetime", f"--{name} must be ISO-8601", exit_code=2) from exc
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -141,6 +153,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--slot-name")
     parser.add_argument("--effect")
     parser.add_argument("--memory-id")
+    parser.add_argument("--fact-key")
+    parser.add_argument("--subject-ref")
+    parser.add_argument("--predicate")
+    parser.add_argument("--expected-revision")
+    parser.add_argument("--importance", type=int)
+    parser.add_argument("--source-events", nargs="*")
+    parser.add_argument("--valid-from")
+    parser.add_argument("--valid-to")
+    parser.add_argument("--include-inactive", action="store_true")
     parser.add_argument("--spell")
     parser.add_argument("--resource")
     parser.add_argument("--method")
@@ -154,7 +175,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--epistemic-status", default="known")
     parser.add_argument("--confidence", type=int, default=3)
     parser.add_argument("--cause", default="witnessed")
-    parser.add_argument("--disclosure", default="dm")
+    parser.add_argument("--disclosure")
     parser.add_argument("--event-id")
     parser.add_argument("--audience", default="dm")
     return parser
@@ -297,6 +318,7 @@ def _dispatch(args) -> Any:
         branches = BranchService(db)
         knowledge = ActorKnowledgeService(db)
         continuity = ContinuityService(db)
+        continuity_commits = ContinuityCommitService(db)
         revisions = RevisionService(db)
 
         if args.group == "campaign":
@@ -709,7 +731,11 @@ def _dispatch(args) -> Any:
                     updated = _persist_character(
                         characters, revisions, before, notes=notes, operation="character.memory.add"
                     )
-                    return {"character": _character_view(updated), "memory_id": memory_id}
+                    return {
+                        "character": _character_view(updated),
+                        "memory_id": memory_id,
+                        "deprecated": "write new subjective memory with ActorKnowledge",
+                    }
                 if args.subaction == "resolve":
                     notes = resolve_memory(before.notes, _require(args.memory_id, "memory-id"))
                     updated = _persist_character(
@@ -719,7 +745,20 @@ def _dispatch(args) -> Any:
                         notes=notes,
                         operation="character.memory.resolve",
                     )
-                    return _character_view(updated)
+                    return {
+                        "character": _character_view(updated),
+                        "deprecated": "revise ActorKnowledge for new runtime memory",
+                    }
+                if args.subaction == "migrate":
+                    return {
+                        "actor_id": before.id,
+                        "target": "actor_knowledge",
+                        "candidates": legacy_memory_candidates(
+                            before.notes,
+                            actor_id=before.id,
+                            include_inactive=args.include_inactive,
+                        ),
+                    }
             if args.action == "spell":
                 before = characters.get(_require(args.id, "id"))
                 if args.subaction == "list":
@@ -1119,7 +1158,7 @@ def _dispatch(args) -> Any:
                         confidence=args.confidence,
                         source_event_id=args.event_id,
                         cause=args.cause,
-                        disclosure_scope=args.disclosure,
+                        disclosure_scope=args.disclosure or "dm",
                         branch_id=args.branch,
                     )
                 )
@@ -1132,8 +1171,9 @@ def _dispatch(args) -> Any:
                         confidence=args.confidence,
                         source_event_id=args.event_id,
                         cause=args.cause,
-                        disclosure_scope=args.disclosure,
+                        disclosure_scope=args.disclosure or "dm",
                         branch_id=args.branch,
+                        expected_revision_id=args.expected_revision,
                     )
                 )
             if args.action in {"list", "search"}:
@@ -1151,16 +1191,33 @@ def _dispatch(args) -> Any:
                 )
                 return {"knowledge": [asdict(item) for item in values]}
 
-        if args.group == "continuity" and args.action == "context":
-            return continuity.context(
-                _require(args.campaign, "campaign"),
-                query=args.query or "",
-                actor_id=args.actor_id,
-                scope_id=args.scope,
-                audience=args.audience,
-                branch_id=args.branch,
-                limit=args.limit,
-            )
+        if args.group == "continuity":
+            campaign_id = _require(args.campaign, "campaign")
+            if args.action == "context":
+                return continuity.context(
+                    campaign_id,
+                    query=args.query or "",
+                    actor_id=args.actor_id,
+                    scope_id=args.scope,
+                    audience=args.audience,
+                    branch_id=args.branch,
+                    limit=args.limit,
+                )
+            if args.action == "commit":
+                data = _dict(args.payload)
+                event = data.get("event")
+                if not isinstance(event, dict):
+                    raise CliError(
+                        "object_required", "--payload.event must be an object", exit_code=2
+                    )
+                return continuity_commits.commit(
+                    campaign_id,
+                    event=event,
+                    facts=list(data.get("facts") or []),
+                    actor_knowledge=list(data.get("actor_knowledge") or []),
+                    snapshot=(dict(data["snapshot"]) if data.get("snapshot") is not None else None),
+                    branch_id=args.branch,
+                )
 
         if args.group == "save":
             campaign_id = _require(args.campaign, "campaign")
@@ -1202,6 +1259,52 @@ def _dispatch(args) -> Any:
                         subject=args.subject or "",
                         metadata=_dict(args.metadata),
                         branch_id=args.branch,
+                        fact_key=args.fact_key,
+                        subject_ref=args.subject_ref or "",
+                        predicate=args.predicate or "",
+                        status=args.status or "active",
+                        valid_from=_datetime(args.valid_from, "valid-from"),
+                        valid_to=_datetime(args.valid_to, "valid-to"),
+                        source_event_ids=args.source_events,
+                        importance=args.importance or 3,
+                        disclosure_scope=args.disclosure,
+                    )
+                )
+            if args.action == "upsert":
+                return asdict(
+                    memories.upsert(
+                        campaign_id,
+                        fact_key=_require(args.fact_key, "fact-key"),
+                        content=_require(args.content, "content"),
+                        kind=args.type or "fact",
+                        subject=args.subject or "",
+                        subject_ref=args.subject_ref or "",
+                        predicate=args.predicate or "",
+                        metadata=_dict(args.metadata),
+                        branch_id=args.branch,
+                        expected_revision_id=args.expected_revision,
+                        status=args.status or "active",
+                        valid_from=_datetime(args.valid_from, "valid-from"),
+                        valid_to=_datetime(args.valid_to, "valid-to"),
+                        source_event_ids=args.source_events,
+                        importance=args.importance or 3,
+                        disclosure_scope=args.disclosure,
+                    )
+                )
+            if args.action == "revise":
+                return asdict(
+                    memories.revise(
+                        _require(args.id, "id"),
+                        content=_require(args.content, "content"),
+                        metadata=(_dict(args.metadata) if args.metadata is not None else None),
+                        branch_id=args.branch,
+                        expected_revision_id=args.expected_revision,
+                        status=args.status,
+                        valid_from=_datetime(args.valid_from, "valid-from"),
+                        valid_to=_datetime(args.valid_to, "valid-to"),
+                        source_event_ids=args.source_events,
+                        importance=args.importance,
+                        disclosure_scope=args.disclosure,
                     )
                 )
             if args.action == "list":
@@ -1209,7 +1312,10 @@ def _dispatch(args) -> Any:
                     "memories": [
                         asdict(item)
                         for item in memories.list(
-                            campaign_id, kind=args.type, branch_id=args.branch
+                            campaign_id,
+                            kind=args.type,
+                            branch_id=args.branch,
+                            include_inactive=args.include_inactive,
                         )
                     ]
                 }
@@ -1222,11 +1328,17 @@ def _dispatch(args) -> Any:
                             _require(args.query, "query"),
                             limit=args.limit,
                             branch_id=args.branch,
+                            include_inactive=args.include_inactive,
                         )
                     ]
                 }
             if args.action in {"scope", "status"}:
-                values = memories.list(campaign_id, kind=args.type, branch_id=args.branch)
+                values = memories.list(
+                    campaign_id,
+                    kind=args.type,
+                    branch_id=args.branch,
+                    include_inactive=args.include_inactive,
+                )
                 return {
                     "campaign_id": campaign_id,
                     "count": len(values),
