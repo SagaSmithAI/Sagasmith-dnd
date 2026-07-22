@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-CORE_RULE_PACK_VERSION = "1.21.0"
+CORE_RULE_PACK_VERSION = "1.22.0"
 
 
 @dataclass(frozen=True)
@@ -261,6 +261,13 @@ BOUNDARIES = (
         "lifecycle.roll_rest_hit_dice|apply_rest",
         ("tests/test_lifecycle.py",),
         "bundled:srd/resting",
+    ),
+    CoreBoundary(
+        "dnd5e.core.rest.arcane_recovery",
+        ("2014",),
+        "lifecycle.validate_arcane_recovery_choice|apply_arcane_recovery_choice",
+        ("tests/test_lifecycle.py",),
+        "bundled:srd2014/02_Classes/Wizard.md",
     ),
     CoreBoundary(
         "dnd5e.core.rest.exhaustion",

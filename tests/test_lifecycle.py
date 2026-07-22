@@ -199,6 +199,68 @@ def test_rest_rejects_irrelevant_recovery_inputs_before_rng() -> None:
         apply_rest(sheet, rest_type="short_rest", food_and_drink=True)
 
 
+def test_arcane_recovery_is_a_once_per_long_rest_short_rest_choice() -> None:
+    sheet = default_character_sheet()
+    sheet["progression"] = {
+        "level": 2,
+        "classes": [{"name": "Wizard", "level": 2, "hit_die": 6}],
+    }
+    sheet["combat"]["hp"] = {"value": 8, "max": 12, "temp": 0}
+    sheet["spellcasting"]["spell_slots"] = {
+        "1": {
+            "label": "Level 1 spell slots",
+            "value": 0,
+            "max": 3,
+            "recovers_on": "long_rest",
+            "source_key": "Wizard",
+            "slot_level": 1,
+        }
+    }
+    sheet["content"]["features"] = [
+        {
+            "id": "dnd5e.content.srd2014.feature.wizard-arcane-recovery",
+            "name": "Arcane Recovery",
+            "source_key": "Wizard",
+            "uses": {
+                "label": "",
+                "value": 0,
+                "max": 0,
+                "recovers_on": "none",
+            },
+        }
+    ]
+
+    recovered = apply_rest(
+        sheet,
+        rest_type="short_rest",
+        arcane_recovery={"1": 1},
+    )
+
+    assert recovered["arcane_recovery"] == {
+        "allowance": 1,
+        "used_levels": 1,
+        "recovered": {"1": 1},
+    }
+    assert recovered["sheet"]["spellcasting"]["spell_slots"]["1"]["value"] == 1
+    feature_uses = recovered["sheet"]["content"]["features"][0]["uses"]
+    assert feature_uses["value"] == 0
+    assert feature_uses["max"] == 1
+    assert feature_uses["recovers_on"] == "long_rest"
+    with pytest.raises(CombatEngineError, match="already been used"):
+        apply_rest(
+            recovered["sheet"],
+            rest_type="short_rest",
+            arcane_recovery={"1": 1},
+        )
+    long_rested = apply_rest(recovered["sheet"], rest_type="long_rest")
+    assert long_rested["sheet"]["content"]["features"][0]["uses"]["value"] == 1
+
+    with pytest.raises(CombatEngineError, match="exceeds half"):
+        apply_rest(sheet, rest_type="short_rest", arcane_recovery={"1": 2})
+    with pytest.raises(CombatEngineError, match="only when finishing a short rest"):
+        apply_rest(sheet, rest_type="long_rest", arcane_recovery={"1": 1})
+
+
 def test_stable_creature_recovers_one_hp_after_rolled_hours() -> None:
     sheet = default_character_sheet()
     sheet["combat"]["hp"] = {"value": 0, "max": 12, "temp": 0}

@@ -133,6 +133,7 @@ def apply_rest(
     rest_type: str,
     hit_dice_spends: list[dict[str, Any]] | None = None,
     hit_dice_recovery: dict[str, int] | None = None,
+    arcane_recovery: dict[str, int] | None = None,
     food_and_drink: bool = False,
     rules: ResolutionContext | None = None,
     rng: Any = None,
@@ -147,8 +148,11 @@ def apply_rest(
         raise CombatEngineError("hit dice recover only during a long rest")
     if rest_type == "short_rest" and food_and_drink:
         raise CombatEngineError("food_and_drink affects exhaustion recovery only on a long rest")
+    if rest_type != "short_rest" and arcane_recovery:
+        raise CombatEngineError("Arcane Recovery can be used only when finishing a short rest")
     if rest_type == "short_rest":
         validate_rest_hit_dice_requests(sheet, hit_dice_spends)
+        validate_arcane_recovery_choice(sheet, arcane_recovery)
     before_rules = apply_rule_event(sheet, "rest.before", rules)
     if before_rules.status != "committed":
         return {
@@ -170,6 +174,7 @@ def apply_rest(
     recovered: dict[str, int] = {}
     hit_die_healing = 0
     hit_dice_rolls: list[dict[str, Any]] = []
+    arcane_recovery_result: dict[str, Any] | None = None
     if rest_type == "long_rest":
         hp["value"] = int(hp.get("max", 0) or 0)
         hp["temp"] = 0
@@ -195,6 +200,10 @@ def apply_rest(
             hp["value"] = min(
                 int(hp.get("max", 0) or 0), int(hp.get("value", 0) or 0) + hit_die_healing
             )
+        if arcane_recovery:
+            arcane_recovery_result = apply_arcane_recovery_choice(value, arcane_recovery)
+            for level, amount in arcane_recovery_result["recovered"].items():
+                recovered[f"spell_slot:{level}"] = amount
 
     def recover_resource(resource: object, key: str) -> None:
         if not isinstance(resource, dict):
@@ -290,6 +299,7 @@ def apply_rest(
             "rest_type": rest_type,
             "status": after_rules.status,
             "hit_dice_rolls": hit_dice_rolls,
+            "arcane_recovery": arcane_recovery_result,
             "rule_receipts": [*before_rules.receipts, *after_rules.receipts],
             "pending": list(after_rules.pending),
         }
@@ -299,12 +309,21 @@ def apply_rest(
         "recovered": recovered,
         "hit_die_healing": hit_die_healing,
         "hit_dice_rolls": hit_dice_rolls,
+        "arcane_recovery": arcane_recovery_result,
         "effects_expired": duration["expired"],
         "status": "committed",
         "rule_receipts": [
             *core_receipts(
                 rules,
-                ["dnd5e.core.rest.hit_dice", "dnd5e.core.rest.exhaustion"],
+                [
+                    "dnd5e.core.rest.hit_dice",
+                    "dnd5e.core.rest.exhaustion",
+                    *(
+                        ["dnd5e.core.rest.arcane_recovery"]
+                        if arcane_recovery_result is not None
+                        else []
+                    ),
+                ],
                 "rest.apply",
             ),
             *before_rules.receipts,
@@ -339,6 +358,98 @@ def validate_rest_hit_dice_requests(
         if count > int(resource.get("value", 0) or 0):
             raise CombatEngineError(f"not enough hit dice remain for {key}")
     return [(key, requested[key]) for key in order]
+
+
+def validate_arcane_recovery_choice(
+    sheet: dict[str, Any], choice: dict[str, int] | None
+) -> dict[str, Any] | None:
+    """Validate the Wizard's once-per-day short-rest slot allocation."""
+    if not choice:
+        return None
+    if not isinstance(choice, dict):
+        raise CombatEngineError("arcane_recovery must map spell-slot levels to counts")
+    feature = _arcane_recovery_feature(sheet)
+    if feature is None:
+        raise CombatEngineError("the actor does not have Arcane Recovery")
+    uses = dict(feature.get("uses") or {})
+    available = 1 if int(uses.get("max", 0) or 0) == 0 else int(uses.get("value", 0) or 0)
+    if available < 1:
+        raise CombatEngineError("Arcane Recovery has already been used since the last long rest")
+    wizard_level = next(
+        (
+            int(item.get("level", 0) or 0)
+            for item in sheet.get("progression", {}).get("classes", [])
+            if str(item.get("name") or "").casefold() == "wizard"
+        ),
+        0,
+    )
+    if wizard_level < 1:
+        raise CombatEngineError("Arcane Recovery requires a Wizard class level")
+    allowance = (wizard_level + 1) // 2
+    slots = dict(sheet.get("spellcasting", {}).get("spell_slots") or {})
+    normalized: dict[str, int] = {}
+    for raw_level, raw_count in choice.items():
+        level_text = str(raw_level).strip()
+        if not level_text.isdigit():
+            raise CombatEngineError("Arcane Recovery spell-slot levels must be integers")
+        level = int(level_text)
+        count = raw_count
+        if level < 1 or level >= 6:
+            raise CombatEngineError("Arcane Recovery cannot restore a level 6 or higher slot")
+        if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+            raise CombatEngineError("Arcane Recovery slot counts must be positive integers")
+        resource = slots.get(str(level))
+        if not isinstance(resource, dict):
+            raise CombatEngineError(f"the actor has no level {level} spell slots")
+        missing = int(resource.get("max", 0) or 0) - int(resource.get("value", 0) or 0)
+        if count > missing:
+            raise CombatEngineError(f"Arcane Recovery exceeds missing level {level} slots")
+        normalized[str(level)] = normalized.get(str(level), 0) + count
+    if not normalized:
+        raise CombatEngineError("Arcane Recovery requires at least one spell-slot choice")
+    for level, count in normalized.items():
+        resource = slots[level]
+        missing = int(resource.get("max", 0) or 0) - int(resource.get("value", 0) or 0)
+        if count > missing:
+            raise CombatEngineError(f"Arcane Recovery exceeds missing level {level} slots")
+    used_levels = sum(int(level) * count for level, count in normalized.items())
+    if used_levels > allowance:
+        raise CombatEngineError("Arcane Recovery exceeds half the Wizard level rounded up")
+    return {"allowance": allowance, "used_levels": used_levels, "recovered": normalized}
+
+
+def apply_arcane_recovery_choice(
+    sheet: dict[str, Any], choice: dict[str, int]
+) -> dict[str, Any]:
+    """Apply one previously validated Arcane Recovery allocation in place."""
+    result = validate_arcane_recovery_choice(sheet, choice)
+    assert result is not None
+    slots = sheet["spellcasting"]["spell_slots"]
+    for level, count in result["recovered"].items():
+        slots[level]["value"] = int(slots[level].get("value", 0) or 0) + count
+    feature = _arcane_recovery_feature(sheet)
+    assert feature is not None
+    feature["uses"] = {
+        "label": "Arcane Recovery",
+        "value": 0,
+        "max": 1,
+        "recovers_on": "long_rest",
+        "source_key": "Wizard",
+        "slot_level": 0,
+    }
+    return result
+
+
+def _arcane_recovery_feature(sheet: dict[str, Any]) -> dict[str, Any] | None:
+    return next(
+        (
+            item
+            for item in sheet.get("content", {}).get("features", [])
+            if str(item.get("id") or "").endswith("wizard-arcane-recovery")
+            or str(item.get("name") or "").casefold() == "arcane recovery"
+        ),
+        None,
+    )
 
 
 def roll_rest_hit_dice(
