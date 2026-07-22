@@ -14,6 +14,7 @@ ABILITY_NAMES = (
     "wisdom",
     "charisma",
 )
+PENDING_ROLL_METHOD = "roll_4d6_drop_lowest_pending"
 
 ABILITY_GENERATION_RULESETS = {
     "dnd5e-2014": {
@@ -104,6 +105,16 @@ def apply_ability_generation(
             "point_buy": {"budget": point_buy["budget"], "spent": spent},
             "rolls": [],
         }
+    elif method == "manual":
+        if any(score < 1 or score > 30 for score in normalized_assignments.values()):
+            raise ValueError("manual ability assignments must be between 1 and 30")
+        record = {
+            "ruleset": ruleset_id,
+            "method": method,
+            "assignments": normalized_assignments,
+            "point_buy": None,
+            "rolls": [],
+        }
     elif method == "roll_4d6_drop_lowest":
         normalized_rolls = _rolls(rolls, ruleset["roll"])
         if sorted(normalized_assignments.values()) != sorted(
@@ -124,6 +135,52 @@ def apply_ability_generation(
         result["abilities"][ability]["score"] = score
     result["ability_generation"] = record
     return result
+
+
+def begin_rolled_ability_generation(
+    sheet: dict[str, Any],
+    *,
+    rng: random.Random | None = None,
+) -> dict[str, Any]:
+    """Generate and record one immutable pending score set before assignment."""
+    result = copy.deepcopy(sheet)
+    edition = str(result.get("edition") or "")
+    current = normalize_ability_generation(result.get("ability_generation"), edition)
+    if current["method"] != "unrecorded":
+        raise ValueError("ability scores have already been generated or a roll is pending")
+    rolled = roll_ability_scores(edition, rng=rng)
+    result["ability_generation"] = {
+        "ruleset": rolled["ruleset"],
+        "method": PENDING_ROLL_METHOD,
+        "assignments": {},
+        "point_buy": None,
+        "rolls": rolled["rolls"],
+    }
+    return {
+        "sheet": result,
+        "status": "pending_choice",
+        "ruleset": rolled["ruleset"],
+        "method": PENDING_ROLL_METHOD,
+        "rolls": rolled["rolls"],
+    }
+
+
+def apply_pending_rolled_ability_generation(
+    sheet: dict[str, Any],
+    *,
+    assignments: dict[str, Any],
+) -> dict[str, Any]:
+    """Assign a previously recorded engine-owned score set exactly once."""
+    edition = str(sheet.get("edition") or "")
+    current = normalize_ability_generation(sheet.get("ability_generation"), edition)
+    if current["method"] != PENDING_ROLL_METHOD:
+        raise ValueError("no engine-owned rolled ability score set is pending")
+    return apply_ability_generation(
+        sheet,
+        method="roll_4d6_drop_lowest",
+        assignments=assignments,
+        rolls=current["rolls"],
+    )
 
 
 def normalize_ability_generation(value: Any, edition: str) -> dict[str, Any]:
@@ -149,6 +206,22 @@ def normalize_ability_generation(value: Any, edition: str) -> dict[str, Any]:
             "assignments": {},
             "point_buy": None,
             "rolls": [],
+        }
+    if method == PENDING_ROLL_METHOD:
+        if value.get("assignments") not in ({}, None):
+            raise ValueError("pending rolled ability scores cannot have assignments")
+        if value.get("point_buy") is not None:
+            raise ValueError("pending rolled ability scores cannot have point-buy data")
+        ruleset_id, ruleset = ruleset_for_edition(edition)
+        normalized_rolls = _rolls(value.get("rolls"), ruleset["roll"])
+        if value.get("ruleset", ruleset_id) != ruleset_id:
+            raise ValueError("sheet.ability_generation.ruleset does not match the sheet edition")
+        return {
+            "ruleset": ruleset_id,
+            "method": PENDING_ROLL_METHOD,
+            "assignments": {},
+            "point_buy": None,
+            "rolls": normalized_rolls,
         }
     assignments = value.get("assignments")
     if not isinstance(assignments, dict):
