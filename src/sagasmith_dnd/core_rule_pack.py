@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-CORE_RULE_PACK_VERSION = "1.20.0"
+CORE_RULE_PACK_VERSION = "1.21.0"
 
 
 @dataclass(frozen=True)
@@ -142,6 +142,13 @@ BOUNDARIES = (
         "combat_engine.preflight_attack",
         ("tests/test_combat_engine.py::test_half_cover_uses_the_rules_ac_bonus",),
         "bundled:srd/cover",
+    ),
+    CoreBoundary(
+        "dnd5e.core.attack.ammunition",
+        ("2014", "2024"),
+        "combat_engine.preflight_attack|character_schema.consume_weapon_ammunition",
+        ("tests/test_combat_engine.py", "tests/test_character_schema.py"),
+        "bundled:srd/weapon-properties",
     ),
     CoreBoundary(
         "dnd5e.core.attack.condition_source",

@@ -118,6 +118,34 @@ def test_ordinary_checks_do_not_use_attack_natural_rules() -> None:
     assert result["success"] is False
 
 
+def test_attack_preflight_rejects_exhausted_linked_ammunition() -> None:
+    attacker = _actor("archer")
+    attacker["sheet"]["inventory"]["items"] = [
+        {"id": "arrows", "name": "Arrows", "kind": "ammunition", "quantity": 0},
+        {
+            "id": "longbow",
+            "name": "Longbow",
+            "kind": "weapon",
+            "equipped": True,
+            "equipped_slot": "main_hand",
+            "mechanics": {
+                "attack_type": "ranged",
+                "attack_ability": "dexterity",
+                "damage_formula": "1d8",
+                "damage_type": "piercing",
+                "normal_range_ft": 150,
+                "long_range_ft": 600,
+                "ammunition_item_id": "arrows",
+            },
+        },
+    ]
+    attacker["sheet"]["inventory"]["equipment_slots"]["main_hand"] = "longbow"
+    attacker["derived"] = derive_character_sheet(attacker["sheet"])
+
+    with pytest.raises(CombatEngineError, match="no linked ammunition remaining"):
+        preflight_attack(attacker, _actor("target"), action={"weapon_id": "longbow"})
+
+
 def test_halfling_lucky_rerolls_only_one_natural_one_and_keeps_replacement() -> None:
     result = roll_d20(
         advantage=True,

@@ -503,6 +503,17 @@ def test_complete_card_supports_identity_weapons_spells_encumbrance_and_adventur
         ]
         == 19
     )
+    last_shot_sheet = validate_character_sheet(after_shot)
+    next(
+        item for item in last_shot_sheet["inventory"]["items"] if item["id"] == "arrows"
+    )["quantity"] = 1
+    empty_quiver, last_arrow = consume_weapon_ammunition(last_shot_sheet, "longbow")
+    assert last_arrow["remaining"] == 0
+    assert next(
+        item for item in empty_quiver["inventory"]["items"] if item["id"] == "arrows"
+    )["quantity"] == 0
+    with pytest.raises(ValueError, match="not enough"):
+        consume_weapon_ammunition(empty_quiver, "longbow")
 
     notes = validate_character_notes({"profile": {"backstory": "A veteran of the border wars."}})
     assert notes["profile"]["backstory"] == "A veteran of the border wars."

@@ -625,7 +625,12 @@ def _normalize_item(value: Any, field: str, *, generate_id: bool = True) -> dict
         "id": item_id,
         "name": _text(item.get("name"), f"{field}.name", maximum=300),
         "kind": kind,
-        "quantity": _integer(item.get("quantity"), f"{field}.quantity", default=1, minimum=1),
+        "quantity": _integer(
+            item.get("quantity"),
+            f"{field}.quantity",
+            default=1,
+            minimum=0 if kind == "ammunition" else 1,
+        ),
         "weight_oz": _integer(item.get("weight_oz"), f"{field}.weight_oz", minimum=0),
         "price_cp": _integer(item.get("price_cp"), f"{field}.price_cp", minimum=0),
         "description": _text(item.get("description"), f"{field}.description", maximum=1200),
@@ -2285,11 +2290,21 @@ def consume_weapon_ammunition(
     ammunition_item_id = weapon["mechanics"]["ammunition_item_id"]
     if ammunition_item_id is None:
         raise ValueError("weapon has no linked ammunition")
-    updated, removed = remove_inventory_item(value, ammunition_item_id, quantity)
-    return updated, {
+    count = _integer(quantity, "quantity", minimum=1)
+    ammunition = next(
+        (item for item in value["inventory"]["items"] if item["id"] == ammunition_item_id),
+        None,
+    )
+    if ammunition is None or ammunition["kind"] != "ammunition":
+        raise ValueError("weapon ammunition is not present in inventory")
+    if count > int(ammunition["quantity"]):
+        raise ValueError("not enough weapon ammunition remains")
+    ammunition["quantity"] = int(ammunition["quantity"]) - count
+    return validate_character_sheet(value), {
         "item_id": ammunition_item_id,
-        "name": removed["name"],
-        "quantity": removed["quantity"],
+        "name": ammunition["name"],
+        "quantity": count,
+        "remaining": ammunition["quantity"],
     }
 
 

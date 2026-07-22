@@ -580,6 +580,22 @@ def preflight_attack(
             }
         else:
             raise CombatEngineError("weapon_id is required when actor has multiple attacks")
+    ammunition_item_id = weapon.get("ammunition_item_id")
+    if ammunition_item_id:
+        ammunition = next(
+            (
+                item
+                for item in actor_sheet(attacker).get("inventory", {}).get("items", [])
+                if item.get("id") == ammunition_item_id
+            ),
+            None,
+        )
+        if (
+            not isinstance(ammunition, dict)
+            or ammunition.get("kind") != "ammunition"
+            or int(ammunition.get("quantity", 0) or 0) < 1
+        ):
+            raise CombatEngineError("weapon has no linked ammunition remaining")
     attack_bonus = int(weapon.get("attack_bonus", 0))
     context = dict(action.get("context") or {})
     cover = dict(context.get("cover") or {})
@@ -749,6 +765,8 @@ def preflight_attack(
         requested=bool(action.get("use_sneak_attack", False)),
     )
     core_boundary_ids: list[str] = []
+    if ammunition_item_id:
+        core_boundary_ids.append("dnd5e.core.attack.ammunition")
     if cover_degree or cover.get("ac_bonus") is not None:
         core_boundary_ids.append("dnd5e.core.attack.cover")
     if helped_by:
