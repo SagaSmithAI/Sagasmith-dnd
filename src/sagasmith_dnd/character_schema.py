@@ -447,7 +447,7 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
                 mechanics.get("reach_ft"),
                 f"{field}.reach_ft",
                 default=10 if "reach" in {item.casefold() for item in properties} else 5,
-                minimum=1,
+                minimum=0,
             ),
             "attack_bonus_override": (
                 _integer(mechanics["attack_bonus_override"], f"{field}.attack_bonus_override")

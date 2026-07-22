@@ -690,6 +690,32 @@ def test_thrown_weapon_requires_explicit_ranged_attack_mode() -> None:
     assert plan["range"]["normal_ft"] == 20
 
 
+def test_zero_reach_weapon_can_attack_only_a_target_in_the_same_space() -> None:
+    attacker = _actor("swarm")
+    attacker["derived"]["inventory"]["weapon_attacks"] = [
+        {
+            "item_id": "bites",
+            "attack_type": "melee",
+            "reach_ft": 0,
+            "attack_bonus": 2,
+            "damage_expression": "2d6",
+            "damage_type": "piercing",
+            "properties": [],
+        }
+    ]
+    target = _actor("target")
+    attacker["position"] = {"x": 0, "y": 0}
+    target["position"] = {"x": 0, "y": 0}
+
+    plan = preflight_attack(attacker, target, action={"weapon_id": "bites"})
+    assert plan["range"]["normal_ft"] == 0
+    assert plan["range"]["distance_ft"] == 0
+
+    target["position"] = {"x": 1, "y": 0}
+    with pytest.raises(ValueError, match="outside melee reach"):
+        preflight_attack(attacker, target, action={"weapon_id": "bites"})
+
+
 def test_preflight_stops_on_unresolved_rules() -> None:
     attacker = _actor("attacker")
     target = _actor("target")

@@ -237,7 +237,7 @@ def start_encounter(
                 "hidden": bool(actor.get("hidden", False)),
                 "visible_to_actor_ids": deepcopy(actor.get("visible_to_actor_ids")),
                 "disposition": _normalize_disposition(actor.get("disposition")),
-                "reach_ft": _positive_int(actor.get("reach_ft"), default=5),
+                "reach_ft": _nonnegative_int(actor.get("reach_ft"), default=5),
                 "can_share_space": bool(actor.get("can_share_space", False)),
                 "surprised": bool(actor.get("surprised", False)),
                 "death_saves": bool(actor.get("death_saves", actor.get("character_type") == "pc")),
@@ -1844,7 +1844,7 @@ def spend_movement(
             threat_position = _position(threat.get("position"))
             if threat_position is None:
                 continue
-            reach = _positive_int(threat.get("reach_ft"), default=5)
+            reach = _nonnegative_int(threat.get("reach_ft"), default=5)
             leaving_segment = next(
                 (
                     start
@@ -2979,6 +2979,14 @@ def _positive_int(value: Any, *, default: int) -> int:
     return result if result > 0 else default
 
 
+def _nonnegative_int(value: Any, *, default: int) -> int:
+    try:
+        result = int(value)
+    except (TypeError, ValueError):
+        return default
+    return result if result >= 0 else default
+
+
 def _position(value: Any) -> tuple[float, float] | None:
     if not isinstance(value, dict):
         return None
@@ -3062,7 +3070,7 @@ def _attack_range(
         else weapon.get("thrown_range_ft")
     )
     if attack_mode == "melee":
-        reach = _positive_int(weapon.get("reach_ft"), default=5)
+        reach = _nonnegative_int(weapon.get("reach_ft"), default=5)
         if distance > reach:
             raise CombatEngineError("target is outside melee reach")
         return {
