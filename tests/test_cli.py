@@ -745,3 +745,110 @@ def test_cli_equipment_command_derives_armor_class(tmp_path: Path, monkeypatch, 
     )
     assert equipped["data"]["sheet"]["inventory"]["equipment_slots"]["armor"] == "leather"
     assert equipped["data"]["derived"]["armor_class"] == 14
+
+
+def test_cli_long_term_memory_v2_and_atomic_continuity_commit(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    monkeypatch.setenv(
+        "DND_DATABASE_URL", f"sqlite+pysqlite:///{(tmp_path / 'memory-v2.db').as_posix()}"
+    )
+    campaign_id = _call(capsys, "campaign", "start", "--name", "Memory v2")[1]["data"][
+        "campaign"
+    ]["id"]
+    _, actor = _call(
+        capsys,
+        "character",
+        "create",
+        "--campaign",
+        campaign_id,
+        "--name",
+        "Witness",
+        "--notes",
+        '{"memories":[{"id":"old-promise","kind":"promise",'
+        '"summary":"The witness promised to return.","importance":4}]}',
+    )
+    actor_id = actor["data"]["id"]
+
+    _, migration = _call(
+        capsys, "character", "memory", "migrate", "--id", actor_id
+    )
+    assert migration["data"]["target"] == "actor_knowledge"
+    assert migration["data"]["candidates"][0]["knowledge_key"] == (
+        "legacy-memory:old-promise"
+    )
+
+    _, created = _call(
+        capsys,
+        "memory",
+        "upsert",
+        "--campaign",
+        campaign_id,
+        "--fact-key",
+        "location:gate:state",
+        "--subject",
+        "Gate",
+        "--subject-ref",
+        "location:gate",
+        "--predicate",
+        "state",
+        "--content",
+        "The gate is closed.",
+        "--importance",
+        "4",
+        "--disclosure",
+        "party",
+    )
+    _, revised = _call(
+        capsys,
+        "memory",
+        "upsert",
+        "--campaign",
+        campaign_id,
+        "--fact-key",
+        "location:gate:state",
+        "--content",
+        "The gate is open.",
+        "--expected-revision",
+        created["data"]["revision_id"],
+    )
+    assert revised["data"]["id"] == created["data"]["id"]
+    assert revised["data"]["content"] == "The gate is open."
+
+    payload = json.dumps(
+        {
+            "event": {"summary": "The witness hears the midnight bell."},
+            "facts": [
+                {
+                    "fact_key": "world:midnight-bell:heard",
+                    "content": "The midnight bell rang.",
+                    "disclosure_scope": "party",
+                }
+            ],
+            "actor_knowledge": [
+                {
+                    "actor_id": actor_id,
+                    "knowledge_key": "midnight-bell",
+                    "proposition": "I heard the midnight bell.",
+                    "disclosure_scope": "owner",
+                }
+            ],
+            "snapshot": {"label": "Midnight bell"},
+        }
+    )
+    _, committed = _call(
+        capsys,
+        "continuity",
+        "commit",
+        "--campaign",
+        campaign_id,
+        "--payload",
+        payload,
+    )
+    assert committed["data"]["snapshot"] is not None
+    assert committed["data"]["facts"][0]["source_event_ids"] == [
+        committed["data"]["event"]["id"]
+    ]
+    assert committed["data"]["actor_knowledge"][0]["source_event_id"] == (
+        committed["data"]["event"]["id"]
+    )
