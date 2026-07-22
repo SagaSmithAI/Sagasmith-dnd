@@ -270,6 +270,50 @@ Cantrips (at will): chill touch, mage hand
     assert parsed.warnings == ()
 
 
+def test_statblock_weapon_preserves_additional_damage_and_on_hit_ruling() -> None:
+    parsed = parse_2014_statblock(
+        """# Master of Souls
+
+*Medium humanoid (human), neutral evil*
+
+**Armor Class** 12
+**Hit Points** 45 (6d8 + 18)
+**Speed** 30 ft.
+
+| STR | DEX | CON | INT | WIS | CHA |
+|---|---|---|---|---|---|
+| 10 (+0) | 14 (+2) | 17 (+3) | 19 (+4) | 14 (+2) | 13 (+1) |
+
+**Senses** passive Perception 12
+**Languages** Common
+**Challenge** 4 (1,100 XP)
+
+## Actions
+
+***Silvered Skull Flail***. *Melee Weapon Attack:* +2 to hit, reach 5 ft., one target.
+*Hit:* 4 (1d8) bludgeoning damage plus 14 (4d6) necrotic damage. Until the end of
+the target's next turn, it has disadvantage on saving throws against effects that
+turn undead.
+""",
+        source_key="module-review:master-of-souls",
+    )
+    attack = derive_character_sheet(parsed.sheet)["inventory"]["weapon_attacks"][0]
+
+    assert attack["damage_expression"] == "1d8"
+    assert attack["additional_damage"] == [
+        {
+            "damage_formula": "4d6",
+            "damage_bonus": 0,
+            "damage_type": "necrotic",
+            "damage_expression": "4d6",
+        }
+    ]
+    assert attack["on_hit_effect"].startswith("Until the end of the target's next turn")
+    assert parsed.warnings == (
+        "Silvered Skull Flail: on-hit effect requires DM settlement",
+    )
+
+
 def test_source_bound_variant_can_apply_common_module_instance_changes() -> None:
     parsed = parse_2014_statblock(COMMONER, source_key="srd-commoner")
 

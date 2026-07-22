@@ -266,6 +266,28 @@ def _parse_weapon(name: str, description: str, source_key: str) -> dict[str, Any
     damage = re.fullmatch(r"(\d+d\d+)(?:([+\-]\d+))?", expression)
     if not damage:
         raise StatblockImportError(f"weapon action {name!r} has an invalid damage expression")
+    additional_damage: list[dict[str, Any]] = []
+    last_damage_end = hit.end()
+    for extra in re.finditer(
+        r"(?i)\bplus\s+\d+\s*\((\d+d\d+(?:\s*[+\-]\s*\d+)?)\)\s*"
+        r"([a-z]+)\s+damage",
+        description[hit.end() :],
+    ):
+        extra_expression = extra.group(1).replace(" ", "")
+        parsed_extra = re.fullmatch(r"(\d+d\d+)(?:([+\-]\d+))?", extra_expression)
+        if not parsed_extra:
+            raise StatblockImportError(
+                f"weapon action {name!r} has an invalid additional damage expression"
+            )
+        additional_damage.append(
+            {
+                "damage_formula": parsed_extra.group(1),
+                "damage_bonus": int(parsed_extra.group(2) or 0),
+                "damage_type": extra.group(2).casefold(),
+            }
+        )
+        last_damage_end = hit.end() + extra.end()
+    on_hit_effect = description[last_damage_end:].strip().lstrip(". ,;").strip()
     reach = re.search(r"(?i)reach\s+(\d+)\s*ft", description)
     ranges = re.search(r"(?i)range\s+(\d+)(?:\s*/\s*(\d+))?\s*ft", description)
     properties: list[str] = []
@@ -282,6 +304,8 @@ def _parse_weapon(name: str, description: str, source_key: str) -> dict[str, Any
         ),
         "damage_formula": damage.group(1),
         "damage_type": hit.group(2).casefold(),
+        "additional_damage": additional_damage,
+        "on_hit_effect": on_hit_effect,
         "properties": properties,
         "proficient": False,
         "attack_bonus_override": _signed(attack.group(3).replace("−", "-")),
@@ -571,6 +595,9 @@ def parse_2014_statblock(
                 "rule_refs": refs,
             }
         )
+    for weapon in weapons:
+        if str(dict(weapon.get("mechanics") or {}).get("on_hit_effect") or "").strip():
+            warnings.append(f"{weapon['name']}: on-hit effect requires DM settlement")
     for entry_name, description in multiattacks:
         options = _parse_multiattack(description, weapons)
         if options:

@@ -165,6 +165,26 @@ def _string_list(value: Any, field: str) -> list[str]:
     return [_text(item, f"{field}[]", maximum=300) for item in values]
 
 
+def _damage_parts(value: Any, field: str) -> list[dict[str, Any]]:
+    parts: list[dict[str, Any]] = []
+    for index, raw in enumerate(_array(value or [], field)):
+        part_field = f"{field}[{index}]"
+        part = _object(raw, part_field)
+        _reject_unknown(part, part_field, {"damage_formula", "damage_bonus", "damage_type"})
+        formula = _text(part.get("damage_formula"), f"{part_field}.damage_formula", maximum=100)
+        damage_type = _text(part.get("damage_type"), f"{part_field}.damage_type", maximum=100)
+        if not formula or not damage_type:
+            raise ValueError(f"{part_field} requires damage_formula and damage_type")
+        parts.append(
+            {
+                "damage_formula": formula,
+                "damage_bonus": _integer(part.get("damage_bonus"), f"{part_field}.damage_bonus"),
+                "damage_type": damage_type,
+            }
+        )
+    return parts
+
+
 def _reject_unknown(value: dict[str, Any], field: str, allowed: set[str]) -> None:
     unknown = sorted(set(value) - allowed)
     if unknown:
@@ -377,6 +397,8 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
                 "attack_ability",
                 "damage_formula",
                 "damage_type",
+                "additional_damage",
+                "on_hit_effect",
                 "versatile_damage_formula",
                 "properties",
                 "normal_range_ft",
@@ -412,6 +434,12 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
                 mechanics.get("damage_formula"), f"{field}.damage_formula", maximum=100
             ),
             "damage_type": _text(mechanics.get("damage_type"), f"{field}.damage_type", maximum=100),
+            "additional_damage": _damage_parts(
+                mechanics.get("additional_damage"), f"{field}.additional_damage"
+            ),
+            "on_hit_effect": _text(
+                mechanics.get("on_hit_effect"), f"{field}.on_hit_effect", maximum=4000
+            ),
             "versatile_damage_formula": _text(
                 mechanics.get("versatile_damage_formula"),
                 f"{field}.versatile_damage_formula",
@@ -2053,6 +2081,20 @@ def _weapon_attacks(
                 "damage_bonus": damage_bonus,
                 "damage_expression": damage_expression,
                 "damage_type": mechanics["damage_type"],
+                "additional_damage": [
+                    {
+                        **part,
+                        "damage_expression": (
+                            f"{part['damage_formula']} "
+                            f"{'+' if part['damage_bonus'] > 0 else '-'} "
+                            f"{abs(part['damage_bonus'])}"
+                            if part["damage_bonus"]
+                            else part["damage_formula"]
+                        ),
+                    }
+                    for part in mechanics["additional_damage"]
+                ],
+                "on_hit_effect": mechanics["on_hit_effect"],
                 "versatile_damage_formula": mechanics["versatile_damage_formula"],
                 "properties": mechanics["properties"],
                 "range_ft": {

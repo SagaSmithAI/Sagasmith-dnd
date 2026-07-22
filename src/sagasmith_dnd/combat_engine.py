@@ -640,6 +640,8 @@ def preflight_attack(
     if dueling_bonus and expression:
         expression = f"{expression} + {dueling_bonus}"
     damage_type = str(weapon.get("damage_type") or "")
+    additional_damage = deepcopy(list(weapon.get("additional_damage") or []))
+    on_hit_effect = str(weapon.get("on_hit_effect") or "").strip()
     range_result = _attack_range(attacker, target, weapon, attack_mode=attack_mode)
     if range_result["disadvantage"]:
         context["disadvantage"] = True
@@ -805,6 +807,8 @@ def preflight_attack(
             else []
         ),
         "damage_type": damage_type,
+        "additional_damage": additional_damage,
+        "on_hit_effect": on_hit_effect,
         "advantage": bool(context.get("advantage", False)),
         "disadvantage": bool(context.get("disadvantage", False)),
         "advantage_sources": list(context.get("advantage_sources") or []),
@@ -1027,17 +1031,57 @@ def resolve_attack_damage(
             )
             sneak_roll = roll(rolled_sneak_expression, rng=rng)
         target_sheet = actor_sheet(updated_target)
-        damage = apply_damage_to_sheet(
-            target_sheet,
-            amount=max(0, damage_roll.total + (sneak_roll.total if sneak_roll else 0)),
-            damage_type=str(plan.get("damage_type") or ""),
-            source=actor_id(attacker),
-            critical=bool(attack["critical"]),
-            ruleset=str(plan.get("ruleset") or "2014"),
-            death_saves=bool(plan.get("target_uses_death_saves", True)),
-            knock_out=bool(plan.get("knock_out", False)),
-            melee=bool(plan.get("melee_attack", False)),
-        )
+        rolled_parts = [
+            {
+                "expression": expression,
+                "rolled_expression": damage_expression,
+                "rolls": list(damage_roll.rolls),
+                "detail": damage_roll.detail,
+                "amount": max(0, damage_roll.total + (sneak_roll.total if sneak_roll else 0)),
+                "damage_type": str(plan.get("damage_type") or ""),
+            }
+        ]
+        for extra in list(plan.get("additional_damage") or []):
+            extra_expression = str(extra.get("damage_expression") or "")
+            if not extra_expression:
+                continue
+            rolled_expression = (
+                _critical_expression(extra_expression) if attack["critical"] else extra_expression
+            )
+            extra_roll = roll(rolled_expression, rng=rng)
+            rolled_parts.append(
+                {
+                    "expression": extra_expression,
+                    "rolled_expression": rolled_expression,
+                    "rolls": list(extra_roll.rolls),
+                    "detail": extra_roll.detail,
+                    "amount": max(0, extra_roll.total),
+                    "damage_type": str(extra.get("damage_type") or ""),
+                }
+            )
+        if len(rolled_parts) == 1:
+            damage = apply_damage_to_sheet(
+                target_sheet,
+                amount=rolled_parts[0]["amount"],
+                damage_type=rolled_parts[0]["damage_type"],
+                source=actor_id(attacker),
+                critical=bool(attack["critical"]),
+                ruleset=str(plan.get("ruleset") or "2014"),
+                death_saves=bool(plan.get("target_uses_death_saves", True)),
+                knock_out=bool(plan.get("knock_out", False)),
+                melee=bool(plan.get("melee_attack", False)),
+            )
+        else:
+            damage = apply_damage_parts_to_sheet(
+                target_sheet,
+                rolled_parts,
+                source=actor_id(attacker),
+                critical=bool(attack["critical"]),
+                ruleset=str(plan.get("ruleset") or "2014"),
+                death_saves=bool(plan.get("target_uses_death_saves", True)),
+                knock_out=bool(plan.get("knock_out", False)),
+                melee=bool(plan.get("melee_attack", False)),
+            )
         updated_target["sheet"] = damage["sheet"]
         result["damage"] = {
             **damage,
@@ -1045,6 +1089,7 @@ def resolve_attack_damage(
             "rolled_expression": damage_expression,
             "rolls": list(damage_roll.rolls),
             "detail": damage_roll.detail,
+            "roll_parts": rolled_parts,
         }
         if sneak_roll is not None:
             result["sneak_attack"] = {
@@ -1056,6 +1101,11 @@ def resolve_attack_damage(
                 "detail": sneak_roll.detail,
             }
             result["damage"]["sneak_attack"] = deepcopy(result["sneak_attack"])
+        if plan.get("on_hit_effect"):
+            result["on_hit_ruling"] = {
+                "required": True,
+                "effect": str(plan["on_hit_effect"]),
+            }
     elif plan.get("sneak_attack"):
         result["sneak_attack"] = {**dict(plan["sneak_attack"]), "used": False}
     was_hidden = bool(plan.get("attacker_was_hidden", updated_attacker.get("hidden")))

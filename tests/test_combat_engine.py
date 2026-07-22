@@ -359,6 +359,54 @@ def test_attack_preflight_and_resolution_keep_target_sheet_auditable() -> None:
     assert updated_target["sheet"]["combat"]["hp"]["value"] < 10
 
 
+def test_attack_settles_each_source_bound_damage_type_and_surfaces_on_hit_ruling() -> None:
+    attacker = _actor("attacker")
+    target = _actor("target", hp=30, ac=1)
+    target["sheet"]["traits"]["resistances"] = ["necrotic"]
+    attacker["derived"]["inventory"]["weapon_attacks"] = [
+        {
+            "item_id": "silvered-skull-flail",
+            "attack_type": "melee",
+            "reach_ft": 5,
+            "properties": [],
+            "attack_bonus": 99,
+            "damage_expression": "1d8",
+            "damage_type": "bludgeoning",
+            "additional_damage": [
+                {
+                    "damage_expression": "4d6",
+                    "damage_type": "necrotic",
+                }
+            ],
+            "on_hit_effect": "The target has disadvantage on specified saving throws.",
+        }
+    ]
+    plan = preflight_attack(
+        attacker,
+        target,
+        action={"weapon_id": "silvered-skull-flail"},
+    )
+
+    _, updated_target, result = resolve_attack_action(
+        attacker,
+        target,
+        plan=plan,
+        rng=_SequenceRng(19, 4, 3, 3, 3, 3),
+    )
+
+    assert result["damage"]["input_amount"] == 16
+    assert result["damage"]["applied_amount"] == 10
+    assert [part["damage_type"] for part in result["damage"]["roll_parts"]] == [
+        "bludgeoning",
+        "necrotic",
+    ]
+    assert updated_target["sheet"]["combat"]["hp"]["value"] == 20
+    assert result["on_hit_ruling"] == {
+        "required": True,
+        "effect": "The target has disadvantage on specified saving throws.",
+    }
+
+
 def test_structured_parry_opens_after_hit_and_before_damage() -> None:
     attacker = _actor("attacker")
     attacker["derived"]["inventory"]["weapon_attacks"] = [
