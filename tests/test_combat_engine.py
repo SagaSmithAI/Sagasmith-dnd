@@ -147,6 +147,69 @@ def test_attack_preflight_rejects_exhausted_linked_ammunition() -> None:
         preflight_attack(attacker, _actor("target"), action={"weapon_id": "longbow"})
 
 
+def test_unarmed_strike_remains_available_with_an_unusable_equipped_weapon() -> None:
+    attacker = _actor("archer")
+    attacker["sheet"]["inventory"]["items"] = [
+        {"id": "arrows", "name": "Arrows", "kind": "ammunition", "quantity": 0},
+        {
+            "id": "longbow",
+            "name": "Longbow",
+            "kind": "weapon",
+            "equipped": True,
+            "equipped_slot": "main_hand",
+            "mechanics": {
+                "attack_type": "ranged",
+                "attack_ability": "dexterity",
+                "damage_formula": "1d8",
+                "damage_type": "piercing",
+                "normal_range_ft": 150,
+                "long_range_ft": 600,
+                "ammunition_item_id": "arrows",
+            },
+        },
+    ]
+    attacker["sheet"]["inventory"]["equipment_slots"]["main_hand"] = "longbow"
+    attacker["derived"] = derive_character_sheet(attacker["sheet"])
+
+    plan = preflight_attack(
+        attacker,
+        _actor("target"),
+        action={"weapon_id": "unarmed-strike"},
+    )
+
+    assert plan["weapon_id"] == "unarmed-strike"
+    assert plan["damage_expression"] == "1 + 3"
+
+
+def test_positioned_ranged_attack_requires_recorded_range() -> None:
+    attacker = _actor("archer")
+    attacker["sheet"]["inventory"]["items"] = [
+        {
+            "id": "mystery-bow",
+            "name": "Mystery Bow",
+            "kind": "weapon",
+            "equipped": True,
+            "equipped_slot": "main_hand",
+            "mechanics": {
+                "attack_type": "ranged",
+                "attack_ability": "dexterity",
+                "damage_formula": "1d8",
+                "damage_type": "piercing",
+            },
+        }
+    ]
+    attacker["sheet"]["inventory"]["equipment_slots"]["main_hand"] = "mystery-bow"
+    attacker["derived"] = derive_character_sheet(attacker["sheet"])
+    target = _actor("target")
+    attacker["position"] = {"x": 0, "y": 0}
+    target["position"] = {"x": 1, "y": 0}
+
+    with pytest.raises(NeedsRulingError, match="no recorded range") as raised:
+        preflight_attack(attacker, target, action={"weapon_id": "mystery-bow"})
+
+    assert raised.value.missing == ("weapon.range:mystery-bow",)
+
+
 def test_preserve_life_enforces_pool_half_hp_and_creature_type() -> None:
     cleric = _actor("cleric", hp=21)
     cleric["sheet"]["progression"] = {

@@ -562,7 +562,22 @@ def preflight_attack(
     attacks = list(actor_derived(attacker).get("inventory", {}).get("weapon_attacks", []))
     weapon_id = action.get("weapon_id") or action.get("item_id")
     weapon = next((item for item in attacks if item.get("item_id") == weapon_id), None)
-    if weapon is None:
+    if weapon_id == "unarmed-strike":
+        strength = int(
+            (actor_sheet(attacker).get("abilities", {}).get("strength") or {}).get("score", 10)
+        )
+        modifier = (strength - 10) // 2
+        weapon = {
+            "item_id": "unarmed-strike",
+            "name": "Unarmed Strike",
+            "attack_type": "melee",
+            "reach_ft": 5,
+            "properties": [],
+            "attack_bonus": modifier + int(actor_derived(attacker).get("proficiency_bonus", 2)),
+            "damage_expression": f"1 {'+' if modifier >= 0 else '-'} {abs(modifier)}",
+            "damage_type": "bludgeoning",
+        }
+    elif weapon is None:
         if weapon_id:
             raise CombatEngineError("weapon is not present in the actor's derived attacks")
         if len(attacks) == 1:
@@ -765,6 +780,10 @@ def preflight_attack(
         requested=bool(action.get("use_sneak_attack", False)),
     )
     core_boundary_ids: list[str] = []
+    if weapon.get("item_id") == "unarmed-strike":
+        core_boundary_ids.append("dnd5e.core.attack.unarmed_strike")
+    if attack_mode == "ranged" and range_result.get("enforced"):
+        core_boundary_ids.append("dnd5e.core.attack.range")
     if ammunition_item_id:
         core_boundary_ids.append("dnd5e.core.attack.ammunition")
     if cover_degree or cover.get("ac_bonus") is not None:
@@ -3033,7 +3052,10 @@ def _attack_range(
             "disadvantage": False,
         }
     if not isinstance(range_data, dict) or not range_data.get("normal"):
-        return {"enforced": False, "distance_ft": distance, "disadvantage": False}
+        raise NeedsRulingError(
+            "weapon ranged attack has no recorded range",
+            missing=[f"weapon.range:{weapon.get('item_id') or 'unknown'}"],
+        )
     normal = _positive_int(range_data.get("normal"), default=5)
     long = _positive_int(range_data.get("long"), default=normal)
     if long < normal:
