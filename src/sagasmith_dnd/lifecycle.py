@@ -137,6 +137,7 @@ def apply_rest(
     food_and_drink: bool = False,
     rules: ResolutionContext | None = None,
     rng: Any = None,
+    world_day: int | None = None,
 ) -> dict[str, Any]:
     """Settle a short or long rest without inventing player-choice allocations."""
     rest_type = str(rest_type).strip().lower().replace("-", "_")
@@ -152,7 +153,7 @@ def apply_rest(
         raise CombatEngineError("Arcane Recovery can be used only when finishing a short rest")
     if rest_type == "short_rest":
         validate_rest_hit_dice_requests(sheet, hit_dice_spends)
-        validate_arcane_recovery_choice(sheet, arcane_recovery)
+        validate_arcane_recovery_choice(sheet, arcane_recovery, world_day=world_day)
     before_rules = apply_rule_event(sheet, "rest.before", rules)
     if before_rules.status != "committed":
         return {
@@ -201,7 +202,11 @@ def apply_rest(
                 int(hp.get("max", 0) or 0), int(hp.get("value", 0) or 0) + hit_die_healing
             )
         if arcane_recovery:
-            arcane_recovery_result = apply_arcane_recovery_choice(value, arcane_recovery)
+            arcane_recovery_result = apply_arcane_recovery_choice(
+                value,
+                arcane_recovery,
+                world_day=world_day,
+            )
             for level, amount in arcane_recovery_result["recovered"].items():
                 recovered[f"spell_slot:{level}"] = amount
 
@@ -361,7 +366,10 @@ def validate_rest_hit_dice_requests(
 
 
 def validate_arcane_recovery_choice(
-    sheet: dict[str, Any], choice: dict[str, int] | None
+    sheet: dict[str, Any],
+    choice: dict[str, int] | None,
+    *,
+    world_day: int | None = None,
 ) -> dict[str, Any] | None:
     """Validate the Wizard's once-per-day short-rest slot allocation."""
     if not choice:
@@ -371,10 +379,21 @@ def validate_arcane_recovery_choice(
     feature = _arcane_recovery_feature(sheet)
     if feature is None:
         raise CombatEngineError("the actor does not have Arcane Recovery")
+    if isinstance(world_day, bool) or not isinstance(world_day, int) or world_day < 1:
+        raise CombatEngineError("Arcane Recovery requires the current campaign day")
+    choices = dict(feature.get("choices") or {})
+    last_used_day = choices.get("_arcane_recovery_last_used_day")
+    if last_used_day is not None and int(last_used_day) == world_day:
+        raise CombatEngineError("Arcane Recovery has already been used on this campaign day")
     uses = dict(feature.get("uses") or {})
-    available = 1 if int(uses.get("max", 0) or 0) == 0 else int(uses.get("value", 0) or 0)
-    if available < 1:
-        raise CombatEngineError("Arcane Recovery has already been used since the last long rest")
+    if (
+        last_used_day is None
+        and int(uses.get("max", 0) or 0) == 1
+        and int(uses.get("value", 0) or 0) == 0
+    ):
+        raise CombatEngineError(
+            "Arcane Recovery has a legacy used marker without a campaign day; reconcile it first"
+        )
     wizard_level = next(
         (
             int(item.get("level", 0) or 0)
@@ -415,14 +434,22 @@ def validate_arcane_recovery_choice(
     used_levels = sum(int(level) * count for level, count in normalized.items())
     if used_levels > allowance:
         raise CombatEngineError("Arcane Recovery exceeds half the Wizard level rounded up")
-    return {"allowance": allowance, "used_levels": used_levels, "recovered": normalized}
+    return {
+        "allowance": allowance,
+        "used_levels": used_levels,
+        "recovered": normalized,
+        "campaign_day": world_day,
+    }
 
 
 def apply_arcane_recovery_choice(
-    sheet: dict[str, Any], choice: dict[str, int]
+    sheet: dict[str, Any],
+    choice: dict[str, int],
+    *,
+    world_day: int,
 ) -> dict[str, Any]:
     """Apply one previously validated Arcane Recovery allocation in place."""
-    result = validate_arcane_recovery_choice(sheet, choice)
+    result = validate_arcane_recovery_choice(sheet, choice, world_day=world_day)
     assert result is not None
     slots = sheet["spellcasting"]["spell_slots"]
     for level, count in result["recovered"].items():
@@ -433,10 +460,13 @@ def apply_arcane_recovery_choice(
         "label": "Arcane Recovery",
         "value": 0,
         "max": 1,
-        "recovers_on": "long_rest",
+        "recovers_on": "manual",
         "source_key": "Wizard",
         "slot_level": 0,
     }
+    feature_choices = dict(feature.get("choices") or {})
+    feature_choices["_arcane_recovery_last_used_day"] = world_day
+    feature["choices"] = feature_choices
     return result
 
 

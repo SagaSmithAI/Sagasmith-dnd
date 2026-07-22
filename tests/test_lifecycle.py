@@ -234,31 +234,53 @@ def test_arcane_recovery_is_a_once_per_long_rest_short_rest_choice() -> None:
         sheet,
         rest_type="short_rest",
         arcane_recovery={"1": 1},
+        world_day=1,
     )
 
     assert recovered["arcane_recovery"] == {
         "allowance": 1,
         "used_levels": 1,
         "recovered": {"1": 1},
+        "campaign_day": 1,
     }
     assert recovered["sheet"]["spellcasting"]["spell_slots"]["1"]["value"] == 1
     feature_uses = recovered["sheet"]["content"]["features"][0]["uses"]
     assert feature_uses["value"] == 0
     assert feature_uses["max"] == 1
-    assert feature_uses["recovers_on"] == "long_rest"
-    with pytest.raises(CombatEngineError, match="already been used"):
+    assert feature_uses["recovers_on"] == "manual"
+    with pytest.raises(CombatEngineError, match="campaign day"):
         apply_rest(
             recovered["sheet"],
             rest_type="short_rest",
             arcane_recovery={"1": 1},
+            world_day=1,
         )
     long_rested = apply_rest(recovered["sheet"], rest_type="long_rest")
-    assert long_rested["sheet"]["content"]["features"][0]["uses"]["value"] == 1
+    assert long_rested["sheet"]["content"]["features"][0]["uses"]["value"] == 0
+    next_day_sheet = long_rested["sheet"]
+    next_day_sheet["spellcasting"]["spell_slots"]["1"]["value"] = 0
+    next_day = apply_rest(
+        next_day_sheet,
+        rest_type="short_rest",
+        arcane_recovery={"1": 1},
+        world_day=2,
+    )
+    assert next_day["arcane_recovery"]["campaign_day"] == 2
 
     with pytest.raises(CombatEngineError, match="exceeds half"):
-        apply_rest(sheet, rest_type="short_rest", arcane_recovery={"1": 2})
+        apply_rest(
+            sheet,
+            rest_type="short_rest",
+            arcane_recovery={"1": 2},
+            world_day=1,
+        )
     with pytest.raises(CombatEngineError, match="only when finishing a short rest"):
-        apply_rest(sheet, rest_type="long_rest", arcane_recovery={"1": 1})
+        apply_rest(
+            sheet,
+            rest_type="long_rest",
+            arcane_recovery={"1": 1},
+            world_day=1,
+        )
 
 
 def test_stable_creature_recovers_one_hp_after_rolled_hours() -> None:
