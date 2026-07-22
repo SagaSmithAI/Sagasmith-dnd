@@ -575,7 +575,7 @@ def overlay_spell_attack_card(card: dict[str, Any], description: str) -> dict[st
         **dict(definition.get("range") or {}),
         "kind": "distance",
         "normal_ft": range_ft,
-        "long_ft": range_ft,
+        "long_ft": 0,
     }
     definition["effect"] = str(description).strip()
     value["definition"] = definition

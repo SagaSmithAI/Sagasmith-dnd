@@ -101,7 +101,7 @@ def test_statblock_spell_attack_card_keeps_display_and_settlement_consistent() -
     assert overlaid["definition"]["range"] == {
         "kind": "distance",
         "normal_ft": 60,
-        "long_ft": 60,
+        "long_ft": 0,
     }
     assert overlaid["definition"]["components"] == {"verbal": True, "somatic": True}
     assert overlaid["definition"]["effect"] == description
