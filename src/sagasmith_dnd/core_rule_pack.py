@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-CORE_RULE_PACK_VERSION = "1.22.0"
+CORE_RULE_PACK_VERSION = "1.23.0"
 
 
 @dataclass(frozen=True)
@@ -68,6 +68,13 @@ BOUNDARIES = (
         "combat_engine.settle_core_activity_effect",
         ("tests/test_combat_engine.py",),
         "bundled:srd2014/02_Classes/Rogue.md#cunning-action",
+    ),
+    CoreBoundary(
+        "dnd5e.core.activity.preserve_life",
+        ("2014",),
+        "combat_engine.resolve_preserve_life_to_sheets",
+        ("tests/test_combat_engine.py",),
+        "bundled:srd2014/02_Classes/Cleric.md#preserve-life",
     ),
     CoreBoundary(
         "dnd5e.core.ability_generation",

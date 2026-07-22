@@ -32,6 +32,7 @@ from sagasmith_dnd.combat_engine import (
     resolve_choice_window,
     resolve_common_action,
     resolve_death_save_to_sheet,
+    resolve_preserve_life_to_sheets,
     resolve_readied_spell_window,
     resolve_second_wind_to_sheet,
     roll_attack_action,
@@ -144,6 +145,57 @@ def test_attack_preflight_rejects_exhausted_linked_ammunition() -> None:
 
     with pytest.raises(CombatEngineError, match="no linked ammunition remaining"):
         preflight_attack(attacker, _actor("target"), action={"weapon_id": "longbow"})
+
+
+def test_preserve_life_enforces_pool_half_hp_and_creature_type() -> None:
+    cleric = _actor("cleric", hp=21)
+    cleric["sheet"]["progression"] = {
+        "level": 2,
+        "classes": [{"name": "Cleric", "level": 2, "hit_die": 8}],
+    }
+    cleric["sheet"]["content"]["features"] = [
+        {
+            "id": (
+                "dnd5e.content.srd2014.feature."
+                "life-domain-channel-divinity-preserve-life"
+            ),
+            "name": "Channel Divinity: Preserve Life",
+            "source_key": "Life Domain",
+        }
+    ]
+    rogue = _actor("rogue", hp=17)["sheet"]
+    rogue["combat"]["hp"]["value"] = 1
+    rogue["conditions"] = ["unconscious", "stable", "prone"]
+    cleric_target = cleric["sheet"]
+    cleric_target["combat"]["hp"]["value"] = 7
+
+    result = resolve_preserve_life_to_sheets(
+        cleric["sheet"],
+        {"rogue": rogue, "cleric": cleric_target},
+        allocations=[
+            {"target_id": "rogue", "amount": 7},
+            {"target_id": "cleric", "amount": 3},
+        ],
+    )
+
+    assert result["allocated"] == result["pool"] == 10
+    assert result["sheets"]["rogue"]["combat"]["hp"]["value"] == 8
+    assert result["sheets"]["rogue"]["conditions"] == ["prone"]
+    assert result["sheets"]["cleric"]["combat"]["hp"]["value"] == 10
+    with pytest.raises(CombatEngineError, match="above half"):
+        resolve_preserve_life_to_sheets(
+            cleric["sheet"],
+            {"rogue": rogue},
+            allocations=[{"target_id": "rogue", "amount": 8}],
+        )
+    undead = _actor("undead")["sheet"]
+    undead["progression"]["species"] = "undead"
+    with pytest.raises(CombatEngineError, match="Undead or Constructs"):
+        resolve_preserve_life_to_sheets(
+            cleric["sheet"],
+            {"undead": undead},
+            allocations=[{"target_id": "undead", "amount": 1}],
+        )
 
 
 def test_halfling_lucky_rerolls_only_one_natural_one_and_keeps_replacement() -> None:

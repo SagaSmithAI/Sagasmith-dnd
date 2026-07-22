@@ -2530,6 +2530,93 @@ def apply_healing_to_sheet(
     }
 
 
+def resolve_preserve_life_to_sheets(
+    source_sheet: dict[str, Any],
+    target_sheets: dict[str, dict[str, Any]],
+    *,
+    allocations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Settle the Life Domain's deterministic Channel Divinity allocation."""
+    feature = next(
+        (
+            item
+            for item in source_sheet.get("content", {}).get("features", [])
+            if str(item.get("id") or "").endswith(
+                "life-domain-channel-divinity-preserve-life"
+            )
+            or str(item.get("name") or "").casefold() == "channel divinity: preserve life"
+        ),
+        None,
+    )
+    if feature is None:
+        raise CombatEngineError("source actor does not have Preserve Life")
+    cleric_level = next(
+        (
+            int(item.get("level", 0) or 0)
+            for item in source_sheet.get("progression", {}).get("classes", [])
+            if str(item.get("name") or "").casefold() == "cleric"
+        ),
+        0,
+    )
+    if cleric_level < 2:
+        raise CombatEngineError("Preserve Life requires at least two Cleric levels")
+    pool = cleric_level * 5
+    if not isinstance(allocations, list) or not allocations:
+        raise CombatEngineError("Preserve Life requires at least one healing allocation")
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    total = 0
+    for allocation in allocations:
+        if not isinstance(allocation, dict):
+            raise CombatEngineError("each Preserve Life allocation must be an object")
+        target_id = str(allocation.get("target_id") or "").strip()
+        amount = allocation.get("amount")
+        if not target_id or target_id in seen:
+            raise CombatEngineError("Preserve Life target ids must be present and unique")
+        if isinstance(amount, bool) or not isinstance(amount, int) or amount < 1:
+            raise CombatEngineError("Preserve Life amounts must be positive integers")
+        target = target_sheets.get(target_id)
+        if target is None:
+            raise CombatEngineError(f"Preserve Life target sheet is missing: {target_id}")
+        creature_type = str(target.get("progression", {}).get("species") or "").casefold()
+        if "undead" in creature_type or "construct" in creature_type:
+            raise CombatEngineError("Preserve Life has no effect on Undead or Constructs")
+        hp = dict(target.get("combat", {}).get("hp") or {})
+        current = int(hp.get("value", 0) or 0)
+        maximum = int(hp.get("max", 0) or 0)
+        capacity = maximum // 2 - current
+        if capacity < 1 or amount > capacity:
+            raise CombatEngineError(
+                f"Preserve Life allocation would raise {target_id} above half maximum HP"
+            )
+        seen.add(target_id)
+        total += amount
+        normalized.append({"target_id": target_id, "amount": amount})
+    if total > pool:
+        raise CombatEngineError("Preserve Life allocations exceed five times Cleric level")
+    updated = {target_id: deepcopy(sheet) for target_id, sheet in target_sheets.items()}
+    results: list[dict[str, Any]] = []
+    for allocation in normalized:
+        target_id = allocation["target_id"]
+        healed = apply_healing_to_sheet(updated[target_id], amount=allocation["amount"])
+        updated[target_id] = healed["sheet"]
+        results.append(
+            {
+                "target_id": target_id,
+                "before_hp": healed["before_hp"],
+                "after_hp": healed["after_hp"],
+                "amount": healed["amount"],
+            }
+        )
+    return {
+        "sheets": updated,
+        "pool": pool,
+        "allocated": total,
+        "remaining_unallocated": pool - total,
+        "targets": results,
+    }
+
+
 def resolve_actor_check(
     actor: dict[str, Any],
     *,
