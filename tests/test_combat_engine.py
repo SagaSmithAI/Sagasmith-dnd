@@ -45,6 +45,7 @@ from sagasmith_dnd.combat_engine import (
     trigger_readied_spell,
 )
 from sagasmith_dnd.engine import resolve_check, roll_d20
+from sagasmith_dnd.spatial import compile_battle_map
 
 
 class _SequenceRng:
@@ -1778,6 +1779,35 @@ def test_positioned_movement_rejects_declared_distance_that_disagrees_with_grid(
     encounter = start_encounter([mover, threat])
     with pytest.raises(ValueError, match="grid distance"):
         spend_movement(encounter, "mover", 5, destination={"x": 2, "y": 0})
+
+
+def test_explicit_path_pays_difficult_terrain_cost() -> None:
+    mover = _actor("mover")
+    mover.update(initiative=20, position={"x": 0, "y": 0})
+    other = _actor("other")
+    other.update(initiative=10, position={"x": 4, "y": 0})
+    encounter = start_encounter([mover, other])
+    encounter["battle_map"] = compile_battle_map(
+        {"scene_id": "terrain", "spatial": {}},
+        {
+            "width_cells": 6,
+            "height_cells": 4,
+            "difficult_cells": [{"x": 1, "y": 0}],
+        },
+    )
+
+    with pytest.raises(NeedsRulingError) as missing_path:
+        spend_movement(encounter, "mover", 10, destination={"x": 2, "y": 0})
+    assert missing_path.value.missing == ("movement_path_for_difficult_terrain",)
+
+    moved = spend_movement(
+        encounter,
+        "mover",
+        10,
+        destination={"x": 2, "y": 0},
+        path=[{"x": 0, "y": 0}, {"x": 1, "y": 0}, {"x": 2, "y": 0}],
+    )
+    assert current_combatant(moved)["turn_budget"]["movement"] == 15
 
 
 def test_voluntary_movement_cannot_end_in_another_living_creatures_space() -> None:

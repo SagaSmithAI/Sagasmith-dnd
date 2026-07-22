@@ -1788,9 +1788,9 @@ def spend_movement(
 ) -> dict[str, Any]:
     """Consume movement and open opportunity-reaction windows from known geometry.
 
-    Only explicit token positions, reach values, and an encounter-local map's
-    bounds/blocked cells are automated. Terrain cost, forced movement, and
-    line-of-effect remain DM-rulable unless a later rules module supplies them.
+    Explicit token positions, reach values, map bounds/blocked cells, and
+    difficult cells crossed by a cell-by-cell path are automated. Other terrain,
+    forced-movement causes, and line-of-effect remain DM-rulable.
     """
     value = deepcopy(encounter)
     distance = int(distance)
@@ -1837,10 +1837,8 @@ def spend_movement(
         raise CombatEngineError("surprised actor cannot move on its first turn")
     budget = dict(combatant.get("turn_budget") or {})
     available = int(budget.get("movement", 0) or 0)
-    movement_cost = distance * 2 if crawl else distance
-    if movement_cost > available:
-        raise CombatEngineError("movement exceeds the remaining speed")
     origin = _position(combatant.get("position"))
+    waypoints: list[tuple[float, float]] = []
     if path is not None:
         if not path:
             raise CombatEngineError("path must contain at least one waypoint")
@@ -1866,6 +1864,31 @@ def spend_movement(
             raise CombatEngineError(
                 "movement distance must equal the grid distance between origin and destination"
             )
+    battle_map = dict(value.get("battle_map") or {})
+    difficult_cells = set(battle_map.get("difficult_cells") or [])
+    terrain_cost = 0
+    if movement_mode == "voluntary" and difficult_cells and distance > 0:
+        if path is None and distance > 5:
+            raise NeedsRulingError(
+                "a cell-by-cell path is required to settle difficult terrain",
+                missing=("movement_path_for_difficult_terrain",),
+            )
+        route = waypoints[1:] if path is not None else [target_position]
+        if path is not None and any(
+            _grid_distance(left, right) != 5
+            for left, right in zip(waypoints, waypoints[1:])
+        ):
+            raise CombatEngineError(
+                "difficult-terrain paths must enumerate each crossed five-foot cell"
+            )
+        terrain_cost = sum(
+            5
+            for point in route
+            if point is not None and f"{int(point[0])},{int(point[1])}" in difficult_cells
+        )
+    movement_cost = distance + (distance if crawl else 0) + terrain_cost
+    if movement_cost > available:
+        raise CombatEngineError("movement exceeds the remaining speed")
     if target_position is not None:
         occupants = [
             item
@@ -1923,8 +1946,7 @@ def spend_movement(
     if destination is not None:
         from sagasmith_dnd.spatial import validate_position
 
-        if encounter.get("battle_map") is not None:
-            battle_map = dict(encounter["battle_map"])
+        if battle_map:
             for point in (path or [destination]):
                 validate_position(battle_map, point)
         combatant["position"] = deepcopy(destination)
