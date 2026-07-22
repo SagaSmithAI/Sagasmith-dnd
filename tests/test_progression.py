@@ -5,6 +5,16 @@ from sagasmith_dnd.combat_engine import CombatEngineError
 from sagasmith_dnd.progression import advance_single_class_level
 
 
+class _SequenceRng:
+    def __init__(self, *values: int) -> None:
+        self.values = list(values)
+
+    def randint(self, minimum: int, maximum: int) -> int:
+        value = self.values.pop(0)
+        assert minimum <= value <= maximum
+        return value
+
+
 def _single_class_sheet(
     class_name: str, *, hit_die: int, constitution: int, hp: tuple[int, int]
 ) -> dict:
@@ -109,23 +119,28 @@ def test_wizard_gains_only_new_slot_capacity_and_reports_spellbook_choices() -> 
         }
     }
 
-    result = advance_single_class_level(sheet, class_name="Wizard", hp_method="rolled", hp_roll=3)
+    result = advance_single_class_level(
+        sheet,
+        class_name="Wizard",
+        hp_method="rolled",
+        rng=_SequenceRng(3),
+    )
 
     updated = validate_character_sheet(result["sheet"])
     assert updated["combat"]["hp"]["max"] == 11
     assert updated["spellcasting"]["spell_slots"]["1"]["value"] == 1
     assert updated["spellcasting"]["preparation"]["max_prepared"] == 4
     assert result["spell_choices"]["leveled_spells_to_add"] == 2
+    assert result["hit_points"]["roll"]["expression"] == "1d6"
+    assert result["hit_points"]["roll"]["total"] == 3
 
 
-def test_level_advancement_rejects_multiclass_mismatch_and_invalid_roll() -> None:
+def test_level_advancement_rejects_multiclass_mismatch_and_invalid_method() -> None:
     sheet = _single_class_sheet("Fighter", hit_die=10, constitution=14, hp=(12, 12))
     with pytest.raises(CombatEngineError, match="match"):
         advance_single_class_level(sheet, class_name="Rogue", hp_method="fixed")
-    with pytest.raises(CombatEngineError, match="1 to 10"):
-        advance_single_class_level(
-            sheet, class_name="Fighter", hp_method="rolled", hp_roll=11
-        )
+    with pytest.raises(CombatEngineError, match="fixed or rolled"):
+        advance_single_class_level(sheet, class_name="Fighter", hp_method="unknown")
     sheet["progression"]["classes"].append(
         {"name": "Rogue", "level": 1, "subclass": "", "hit_die": 8}
     )

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import asdict
 from typing import Any
 
 from sagasmith_dnd.combat_engine import CombatEngineError
+from sagasmith_dnd.engine import roll
 
 FULL_CASTER_SLOTS: dict[int, tuple[int, ...]] = {
     1: (2,),
@@ -109,9 +111,9 @@ def advance_single_class_level(
     *,
     class_name: str,
     hp_method: str,
-    hp_roll: int | None = None,
     hp_per_level_bonus: int = 0,
     source: str = "",
+    rng: Any = None,
 ) -> dict[str, Any]:
     """Advance an existing 2014 class exactly one level.
 
@@ -139,21 +141,22 @@ def advance_single_class_level(
     hit_die = int(target.get("hit_die", 0) or 0)
     if hit_die not in {6, 8, 10, 12}:
         raise CombatEngineError("class hit_die must be one of 6, 8, 10, or 12")
-    normalized_method = str(hp_method).strip().casefold().replace("-", "_")
-    if normalized_method == "fixed":
-        if hp_roll is not None:
-            raise CombatEngineError("hp_roll must be omitted when hp_method is fixed")
-        die_value = hit_die // 2 + 1
-    elif normalized_method == "rolled":
-        if isinstance(hp_roll, bool) or not isinstance(hp_roll, int) or not 1 <= hp_roll <= hit_die:
-            raise CombatEngineError(f"hp_roll must be an integer from 1 to {hit_die}")
-        die_value = hp_roll
-    else:
-        raise CombatEngineError("hp_method must be fixed or rolled")
     if isinstance(hp_per_level_bonus, bool) or not isinstance(hp_per_level_bonus, int):
         raise CombatEngineError("hp_per_level_bonus must be an integer")
     if hp_per_level_bonus < 0:
         raise CombatEngineError("hp_per_level_bonus cannot be negative")
+    hp_progression = value.setdefault("combat", {}).setdefault("hp_progression", [])
+    if any(int(item.get("level", 0) or 0) == new_level for item in hp_progression):
+        raise CombatEngineError("hit-point progression already records the new level")
+    normalized_method = str(hp_method).strip().casefold().replace("-", "_")
+    hp_roll_result: dict[str, Any] | None = None
+    if normalized_method == "fixed":
+        die_value = hit_die // 2 + 1
+    elif normalized_method == "rolled":
+        hp_roll_result = asdict(roll(f"1d{hit_die}", rng=rng))
+        die_value = int(hp_roll_result["total"])
+    else:
+        raise CombatEngineError("hp_method must be fixed or rolled")
     constitution_modifier = _ability_modifier(value, "constitution")
     class_hp_gain = max(1, die_value + constitution_modifier)
     hp_gain = class_hp_gain + hp_per_level_bonus
@@ -163,9 +166,6 @@ def advance_single_class_level(
     hp["max"] = old_hp_max + hp_gain
     # The 2014 rule increases maximum HP; it does not say that leveling heals
     # damage already taken. Current HP therefore remains unchanged.
-    hp_progression = value["combat"].setdefault("hp_progression", [])
-    if any(int(item.get("level", 0) or 0) == new_level for item in hp_progression):
-        raise CombatEngineError("hit-point progression already records the new level")
     hp_progression.append(
         {
             "level": new_level,
@@ -195,6 +195,7 @@ def advance_single_class_level(
             "method": normalized_method,
             "hit_die": hit_die,
             "die_value": die_value,
+            "roll": hp_roll_result,
             "constitution_modifier": constitution_modifier,
             "class_gain": class_hp_gain,
             "per_level_bonus": hp_per_level_bonus,
