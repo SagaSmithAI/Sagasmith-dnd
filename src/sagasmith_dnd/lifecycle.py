@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import asdict
 from typing import Any
 
 from sagasmith_dnd.combat_engine import CombatEngineError
+from sagasmith_dnd.engine import roll
 from sagasmith_dnd.rule_engine import ResolutionContext, apply_rule_event, core_receipts
 
 
@@ -133,17 +135,27 @@ def apply_rest(
     hit_dice_recovery: dict[str, int] | None = None,
     food_and_drink: bool = False,
     rules: ResolutionContext | None = None,
+    rng: Any = None,
 ) -> dict[str, Any]:
     """Settle a short or long rest without inventing player-choice allocations."""
     rest_type = str(rest_type).strip().lower().replace("-", "_")
     if rest_type not in {"short_rest", "long_rest"}:
         raise CombatEngineError("rest_type must be short_rest or long_rest")
+    if rest_type == "long_rest" and hit_dice_spends:
+        raise CombatEngineError("hit dice can be spent only during a short rest")
+    if rest_type == "short_rest" and hit_dice_recovery:
+        raise CombatEngineError("hit dice recover only during a long rest")
+    if rest_type == "short_rest" and food_and_drink:
+        raise CombatEngineError("food_and_drink affects exhaustion recovery only on a long rest")
+    if rest_type == "short_rest":
+        validate_rest_hit_dice_requests(sheet, hit_dice_spends)
     before_rules = apply_rule_event(sheet, "rest.before", rules)
     if before_rules.status != "committed":
         return {
             "sheet": deepcopy(sheet),
             "rest_type": rest_type,
             "status": before_rules.status,
+            "hit_dice_rolls": [],
             "rule_receipts": list(before_rules.receipts),
             "pending": list(before_rules.pending),
         }
@@ -157,6 +169,7 @@ def apply_rest(
     edition = "2024" if "2024" in str(value.get("edition") or "") else "2014"
     recovered: dict[str, int] = {}
     hit_die_healing = 0
+    hit_dice_rolls: list[dict[str, Any]] = []
     if rest_type == "long_rest":
         hp["value"] = int(hp.get("max", 0) or 0)
         hp["temp"] = 0
@@ -169,19 +182,14 @@ def apply_rest(
             combat["exhaustion"] = max(0, exhaustion - 1)
     else:
         hit_dice = combat.get("hit_dice", {})
-        for spend in hit_dice_spends or []:
-            if not isinstance(spend, dict):
-                raise CombatEngineError("each hit-die spend must be an object")
-            key = str(spend.get("key") or "")
+        hit_die_resolution = roll_rest_hit_dice(value, hit_dice_spends, rng=rng)
+        hit_dice_rolls = hit_die_resolution["rolls"]
+        for spend in hit_die_resolution["spends"]:
+            key = str(spend["key"])
             resource = hit_dice.get(key)
-            if not isinstance(resource, dict) or int(resource.get("value", 0) or 0) <= 0:
-                raise CombatEngineError(f"no hit die remains for {key}")
-            sides = _hit_die_sides(key, resource)
-            roll = spend.get("roll")
-            if isinstance(roll, bool) or not isinstance(roll, int) or not 1 <= roll <= sides:
-                raise CombatEngineError(f"{key} hit-die roll must be an integer from 1 to {sides}")
+            roll_value = int(spend["roll"])
             resource["value"] = int(resource["value"]) - 1
-            healing = roll + _constitution_modifier(value)
+            healing = roll_value + _constitution_modifier(value)
             hit_die_healing += max(1 if edition == "2024" else 0, healing)
         if hit_die_healing:
             hp["value"] = min(
@@ -281,6 +289,7 @@ def apply_rest(
             "sheet": deepcopy(sheet),
             "rest_type": rest_type,
             "status": after_rules.status,
+            "hit_dice_rolls": hit_dice_rolls,
             "rule_receipts": [*before_rules.receipts, *after_rules.receipts],
             "pending": list(after_rules.pending),
         }
@@ -289,6 +298,7 @@ def apply_rest(
         "rest_type": rest_type,
         "recovered": recovered,
         "hit_die_healing": hit_die_healing,
+        "hit_dice_rolls": hit_dice_rolls,
         "effects_expired": duration["expired"],
         "status": "committed",
         "rule_receipts": [
@@ -302,6 +312,53 @@ def apply_rest(
         ],
         "ruleset_fingerprint": rules.fingerprint if rules else "",
     }
+
+
+def validate_rest_hit_dice_requests(
+    sheet: dict[str, Any],
+    spends: list[dict[str, Any]] | None,
+) -> list[tuple[str, int]]:
+    """Validate and aggregate player hit-die choices without consuming RNG."""
+    hit_dice = dict(sheet.get("combat", {}).get("hit_dice") or {})
+    requested: dict[str, int] = {}
+    order: list[str] = []
+    for spend in spends or []:
+        if not isinstance(spend, dict) or set(spend) - {"key", "count"}:
+            raise CombatEngineError("each hit-die request accepts only key and count")
+        key = str(spend.get("key") or "").strip()
+        count = spend.get("count", 1)
+        if not key or isinstance(count, bool) or not isinstance(count, int) or count < 1:
+            raise CombatEngineError("hit-die request count must be a positive integer")
+        if key not in requested:
+            order.append(key)
+        requested[key] = requested.get(key, 0) + count
+    for key, count in requested.items():
+        resource = hit_dice.get(key)
+        if not isinstance(resource, dict):
+            raise CombatEngineError(f"hit die is not recorded: {key}")
+        if count > int(resource.get("value", 0) or 0):
+            raise CombatEngineError(f"not enough hit dice remain for {key}")
+    return [(key, requested[key]) for key in order]
+
+
+def roll_rest_hit_dice(
+    sheet: dict[str, Any],
+    spends: list[dict[str, Any]] | None,
+    *,
+    rng: Any = None,
+) -> dict[str, Any]:
+    """Produce engine-owned rolls after validating requested hit-die counts."""
+    hit_dice = dict(sheet.get("combat", {}).get("hit_dice") or {})
+    requested = validate_rest_hit_dice_requests(sheet, spends)
+    resolved: list[dict[str, Any]] = []
+    audits: list[dict[str, Any]] = []
+    for key, count in requested:
+        sides = _hit_die_sides(key, hit_dice[key])
+        for _ in range(count):
+            rolled = asdict(roll(f"1d{sides}", rng=rng))
+            resolved.append({"key": key, "roll": int(rolled["total"])})
+            audits.append({"key": key, **rolled})
+    return {"spends": resolved, "rolls": audits}
 
 
 def _constitution_modifier(sheet: dict[str, Any]) -> int:

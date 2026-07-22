@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-CORE_RULE_PACK_VERSION = "1.17.0"
+CORE_RULE_PACK_VERSION = "1.18.0"
 
 
 @dataclass(frozen=True)
@@ -251,7 +251,7 @@ BOUNDARIES = (
     CoreBoundary(
         "dnd5e.core.rest.hit_dice",
         ("2014", "2024"),
-        "lifecycle.apply_rest",
+        "lifecycle.roll_rest_hit_dice|apply_rest",
         ("tests/test_lifecycle.py",),
         "bundled:srd/resting",
     ),

@@ -7,8 +7,47 @@ from sagasmith_dnd.lifecycle import (
     advance_world_effect_durations,
     apply_rest,
     recover_stable_creature,
+    roll_rest_hit_dice,
     stand_outside_combat,
 )
+
+
+class _SequenceRng:
+    def __init__(self, *values: int) -> None:
+        self.values = list(values)
+
+    def randint(self, minimum: int, maximum: int) -> int:
+        value = self.values.pop(0)
+        assert minimum <= value <= maximum
+        return value
+
+
+def test_rest_hit_dice_are_engine_rolled_from_validated_counts() -> None:
+    sheet = default_character_sheet()
+    sheet["combat"]["hit_dice"] = {
+        "fighter:d10": {
+            "label": "Fighter d10",
+            "value": 2,
+            "max": 2,
+            "recovers_on": "long_rest",
+        }
+    }
+
+    result = roll_rest_hit_dice(
+        sheet,
+        [{"key": "fighter:d10", "count": 2}],
+        rng=_SequenceRng(4, 9),
+    )
+
+    assert result["spends"] == [
+        {"key": "fighter:d10", "roll": 4},
+        {"key": "fighter:d10", "roll": 9},
+    ]
+    assert [item["total"] for item in result["rolls"]] == [4, 9]
+    with pytest.raises(CombatEngineError, match="only key and count"):
+        roll_rest_hit_dice(sheet, [{"key": "fighter:d10", "roll": 10}])
+    with pytest.raises(CombatEngineError, match="not enough"):
+        roll_rest_hit_dice(sheet, [{"key": "fighter:d10", "count": 3}])
 
 
 def test_effect_duration_and_long_rest_recovery_are_card_local() -> None:
@@ -119,7 +158,7 @@ def test_world_effect_duration_uses_the_same_expiry_boundary() -> None:
     assert result["state"]["world_effects"][0]["active"] is False
 
 
-def test_short_rest_uses_explicit_hit_die_roll_and_2024_long_rest_recovers_all() -> None:
+def test_short_rest_engine_rolls_hit_die_and_2024_long_rest_recovers_all() -> None:
     sheet = default_character_sheet()
     sheet["edition"] = "2024"
     sheet["abilities"]["constitution"]["score"] = 14
@@ -128,12 +167,36 @@ def test_short_rest_uses_explicit_hit_die_roll_and_2024_long_rest_recovers_all()
         "d8": {"label": "d8", "value": 1, "max": 3, "recovers_on": "none", "source_key": "cleric"}
     }
     short_rest = apply_rest(
-        sheet, rest_type="short_rest", hit_dice_spends=[{"key": "d8", "roll": 4}]
+        sheet,
+        rest_type="short_rest",
+        hit_dice_spends=[{"key": "d8", "count": 1}],
+        rng=_SequenceRng(4),
     )
     assert short_rest["hit_die_healing"] == 6
+    assert short_rest["hit_dice_rolls"][0]["total"] == 4
     assert short_rest["sheet"]["combat"]["hp"]["value"] == 8
     long_rest = apply_rest(short_rest["sheet"], rest_type="long_rest")
     assert long_rest["sheet"]["combat"]["hit_dice"]["d8"]["value"] == 3
+
+
+def test_rest_rejects_irrelevant_recovery_inputs_before_rng() -> None:
+    sheet = default_character_sheet()
+    sheet["combat"]["hp"] = {"value": 5, "max": 10, "temp": 0}
+    sheet["combat"]["hit_dice"] = {
+        "d8": {"label": "d8", "value": 1, "max": 1, "recovers_on": "none"}
+    }
+
+    with pytest.raises(CombatEngineError, match="only during a short rest"):
+        apply_rest(
+            sheet,
+            rest_type="long_rest",
+            hit_dice_spends=[{"key": "d8", "count": 1}],
+            rng=_SequenceRng(),
+        )
+    with pytest.raises(CombatEngineError, match="recover only during a long rest"):
+        apply_rest(sheet, rest_type="short_rest", hit_dice_recovery={"d8": 1})
+    with pytest.raises(CombatEngineError, match="only on a long rest"):
+        apply_rest(sheet, rest_type="short_rest", food_and_drink=True)
 
 
 def test_stable_creature_recovers_one_hp_after_rolled_hours() -> None:
