@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-CORE_RULE_PACK_VERSION = "1.29.0"
+CORE_RULE_PACK_VERSION = "1.30.0"
 
 
 @dataclass(frozen=True)
@@ -172,6 +172,13 @@ BOUNDARIES = (
         "bundled:srd/ranged-attacks",
     ),
     CoreBoundary(
+        "dnd5e.core.attack.ranged_close_combat",
+        ("2014", "2024"),
+        "combat_engine.preflight_attack",
+        ("tests/test_combat_engine.py::test_ranged_attack_has_close_combat_disadvantage",),
+        "bundled:srd/ranged-attacks-in-close-combat",
+    ),
+    CoreBoundary(
         "dnd5e.core.attack.unarmed_strike",
         ("2014", "2024"),
         "combat_engine.preflight_attack",
@@ -282,6 +289,13 @@ BOUNDARIES = (
         "spells.validate_magic_missile_allocations",
         ("tests/test_spells.py::test_magic_missile_allocation_and_shield_trigger_are_source_bound",),
         "bundled:srd/magic-missile",
+    ),
+    CoreBoundary(
+        "dnd5e.core.spell.structured_resolution",
+        ("2014", "2024"),
+        "spell_resolution.py|combat_engine.preflight_spell_attack",
+        ("tests/test_spell_resolution.py", "tests/test_core_content.py"),
+        "bundled:srd2014/07_Spells",
     ),
     CoreBoundary(
         "dnd5e.core.ready.action",

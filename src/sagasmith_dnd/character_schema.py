@@ -8,6 +8,7 @@ from typing import Any
 
 from sagasmith_dnd.ability_generation import normalize_ability_generation
 from sagasmith_dnd.rule_engine import ResolutionContext, apply_rule_event, core_receipts
+from sagasmith_dnd.spell_resolution import normalize_spell_resolution
 
 ABILITY_NAMES = (
     "strength",
@@ -298,6 +299,8 @@ def default_character_sheet() -> dict[str, Any]:
             "spellbook": {"enabled": False, "spell_ids": []},
             "casting_economy": "slots",
             "spell_points": None,
+            "attack_bonus_override": None,
+            "save_dc_override": None,
         },
         "content": {
             "spells": [],
@@ -798,6 +801,7 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
         "pack_version",
         "rule_refs",
         "mechanic_refs",
+        "resolution",
     }
     _reject_unknown(spell, field, allowed)
     grant = _object(spell.get("grant") or {}, f"{field}.grant")
@@ -931,6 +935,11 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
         "pack_version": _text(spell.get("pack_version"), f"{field}.pack_version", maximum=64),
         "rule_refs": _string_list(spell.get("rule_refs") or [], f"{field}.rule_refs"),
         "mechanic_refs": _string_list(spell.get("mechanic_refs") or [], f"{field}.mechanic_refs"),
+        "resolution": (
+            normalize_spell_resolution(spell["resolution"], f"{field}.resolution")
+            if spell.get("resolution") is not None
+            else None
+        ),
     }
 
 
@@ -1263,6 +1272,8 @@ def validate_character_sheet(
             "spellbook",
             "casting_economy",
             "spell_points",
+            "attack_bonus_override",
+            "save_dc_override",
         },
     )
     spell_ability = spellcasting["ability"]
@@ -1288,6 +1299,26 @@ def validate_character_sheet(
         spell_points = _normalize_resource(spell_points, "sheet.spellcasting.spell_points")
     if casting_economy == "spell_points" and spell_points is None:
         raise ValueError("sheet.spellcasting.spell_points is required for spell_points casting")
+    spell_attack_bonus_override = (
+        _integer(
+            spellcasting["attack_bonus_override"],
+            "sheet.spellcasting.attack_bonus_override",
+            minimum=-20,
+            maximum=40,
+        )
+        if spellcasting["attack_bonus_override"] is not None
+        else None
+    )
+    spell_save_dc_override = (
+        _integer(
+            spellcasting["save_dc_override"],
+            "sheet.spellcasting.save_dc_override",
+            minimum=0,
+            maximum=99,
+        )
+        if spellcasting["save_dc_override"] is not None
+        else None
+    )
     preparation = _object(spellcasting["preparation"], "sheet.spellcasting.preparation")
     _reject_unknown(
         preparation,
@@ -1724,6 +1755,8 @@ def validate_character_sheet(
             "pact_magic": pact_magic,
             "casting_economy": casting_economy,
             "spell_points": spell_points,
+            "attack_bonus_override": spell_attack_bonus_override,
+            "save_dc_override": spell_save_dc_override,
             "preparation": {
                 "mode": preparation_mode,
                 "max_prepared": _integer(
@@ -2208,6 +2241,8 @@ def derive_character_sheet(
         for name, multiplier in {"cp": 1, "sp": 10, "ep": 50, "gp": 100, "pp": 1000}.items()
     )
     spell_ability = value["spellcasting"]["ability"]
+    spell_attack_bonus_override = value["spellcasting"]["attack_bonus_override"]
+    spell_save_dc_override = value["spellcasting"]["save_dc_override"]
     active_effects = [effect for effect in value["effects"] if effect["active"]]
     armor_class, armor_class_breakdown, unresolved_effects = _derive_armor_class(
         value, ability_modifiers, active_effects
@@ -2282,8 +2317,16 @@ def derive_character_sheet(
         "spellcasting": (
             {
                 "ability": spell_ability,
-                "attack_bonus": ability_modifiers[spell_ability] + proficiency,
-                "save_dc": 8 + ability_modifiers[spell_ability] + proficiency,
+                "attack_bonus": (
+                    spell_attack_bonus_override
+                    if spell_attack_bonus_override is not None
+                    else ability_modifiers[spell_ability] + proficiency
+                ),
+                "save_dc": (
+                    spell_save_dc_override
+                    if spell_save_dc_override is not None
+                    else 8 + ability_modifiers[spell_ability] + proficiency
+                ),
                 "prepared_spell_ids": [
                     spell["id"]
                     for spell in value["content"]["spells"]

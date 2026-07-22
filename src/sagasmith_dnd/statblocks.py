@@ -549,6 +549,10 @@ def parse_2014_statblock(
     )
     if spellcasting_entry is not None:
         spellcasting = _parse_spellcasting(spellcasting_entry[2])
+    if spellcasting is not None:
+        sheet["spellcasting"]["ability"] = spellcasting["ability"]
+        sheet["spellcasting"]["attack_bonus_override"] = spellcasting.get("attack_bonus")
+        sheet["spellcasting"]["save_dc_override"] = spellcasting.get("save_dc")
     spell_specs = {
         str(item["name"]).casefold(): item
         for item in (spellcasting or {}).get("spells", [])

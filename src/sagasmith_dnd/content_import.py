@@ -7,6 +7,11 @@ import re
 from copy import deepcopy
 from typing import Any
 
+from sagasmith_dnd.spell_resolution import (
+    SPELL_RESOLUTION_MECHANIC_ID,
+    normalize_spell_resolution,
+)
+
 _SUBCLASS_WORDS = (
     "archetype",
     "domain",
@@ -20,43 +25,88 @@ _SUBCLASS_WORDS = (
     "origin",
     "bloodline",
 )
-_ITEM_WORDS = ("wondrous item", "weapon", "armor", "potion", "ring", "rod", "staff", "wand")
+_ITEM_HEADER_RE = re.compile(
+    r"(?im)^(?:wondrous item|weapon|armor|potion|ring|rod|staff|wand)(?:\s*[,—-]|\s*$)"
+)
+_SPELL_LEVEL_RE = re.compile(
+    r"(?im)^(?:\d+(?:st|nd|rd|th)[ -]level\s+[a-z]+|[a-z]+\s+cantrip)\b"
+)
+_STATBLOCK_LABELS = ("armor class", "hit points", "speed", "challenge")
+_GENERIC_TITLES = {
+    "background",
+    "backgrounds",
+    "class",
+    "class features",
+    "feats",
+    "magic items",
+    "spells",
+    "subclass",
+}
 
 
 def extract_content_candidates(chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Extract review-required cards; never claim unsupported mechanics are executable."""
-    candidates: list[dict[str, Any]] = []
+    sections: dict[tuple[str, ...], dict[str, Any]] = {}
     for chunk in chunks:
         content = str(chunk.get("content") or "").strip()
         heading_path = [str(item).strip() for item in chunk.get("heading_path") or []]
         title = next((item for item in reversed(heading_path) if item), "")
-        kind = _kind_for(title, heading_path, content)
-        if not kind or not title:
-            continue
         chunk_id = str(chunk.get("id") or "").strip()
-        if not chunk_id:
+        if not chunk_id or not title:
             continue
-        candidate_id = (
-            "candidate:"
-            + hashlib.sha256(f"{chunk_id}:{kind}:{title}".encode("utf-8")).hexdigest()[:20]
+        key = tuple(item.casefold() for item in heading_path)
+        section = sections.setdefault(
+            key,
+            {
+                "title": title,
+                "heading_path": heading_path,
+                "source_chunk_ids": [],
+                "content": [],
+                "page_start": None,
+                "page_end": None,
+            },
         )
+        section["source_chunk_ids"].append(chunk_id)
+        if content and content not in section["content"]:
+            section["content"].append(content)
+        section["page_start"] = _minimum_page(
+            section.get("page_start"), chunk.get("page_start")
+        )
+        section["page_end"] = _maximum_page(
+            section.get("page_end"), chunk.get("page_end")
+        )
+
+    candidates: list[dict[str, Any]] = []
+    for key, section in sections.items():
+        content = "\n\n".join(section["content"])
+        classification = _classify(
+            str(section["title"]),
+            list(section["heading_path"]),
+            content,
+        )
+        if classification is None:
+            continue
+        kind, signals = classification
+        identity = "\x1f".join((kind, *key))
         candidates.append(
             {
-                "id": candidate_id,
+                "id": "candidate:"
+                + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20],
                 "kind": kind,
-                "name": title,
-                "source_chunk_ids": [chunk_id],
-                "source_heading_path": heading_path,
-                "page_start": chunk.get("page_start"),
-                "page_end": chunk.get("page_end"),
-                "extraction_confidence": "heuristic",
+                "name": section["title"],
+                "source_chunk_ids": section["source_chunk_ids"],
+                "source_heading_path": section["heading_path"],
+                "page_start": section["page_start"],
+                "page_end": section["page_end"],
+                "extraction_confidence": "high" if len(signals) >= 3 else "medium",
+                "extraction_signals": list(signals),
                 "review_status": "pending",
                 "application_state": "catalog_only",
                 "execution_state": "not_compiled",
                 "artifact": {
                     "kind": kind,
                     "application_state": "catalog_only",
-                    "card": {"name": title, "description": content[:1200]},
+                    "card": {"name": section["title"], "description": content[:2000]},
                 },
             }
         )
@@ -95,6 +145,21 @@ def compiled_artifacts_from_candidates(
         )
         if state not in {"catalog_only", "selection_ready"}:
             raise ValueError("application_state must be catalog_only or selection_ready")
+        if kind == "spell" and card.get("resolution") is not None:
+            card["resolution"] = normalize_spell_resolution(
+                card["resolution"], f"candidate {candidate.get('id')} spell.resolution"
+            )
+            mechanic_refs = list(
+                dict.fromkeys(
+                    [
+                        *list(value.get("mechanic_refs") or []),
+                        *list(card.get("mechanic_refs") or []),
+                        SPELL_RESOLUTION_MECHANIC_ID,
+                    ]
+                )
+            )
+            value["mechanic_refs"] = mechanic_refs
+            card["mechanic_refs"] = mechanic_refs
         artifacts.append(
             {
                 **value,
@@ -125,6 +190,13 @@ def validate_selection_ready_artifacts(artifacts: list[dict[str, Any]]) -> list[
                 errors.append(f"{prefix} spell level must be an integer from 0 to 9")
             if not isinstance(card.get("definition"), dict):
                 errors.append(f"{prefix} spell needs a structured definition")
+            if card.get("resolution") is not None:
+                try:
+                    normalize_spell_resolution(
+                        card["resolution"], f"{prefix}.card.resolution"
+                    )
+                except ValueError as error:
+                    errors.append(str(error))
         elif kind == "subclass":
             if not str(card.get("class_name") or "").strip():
                 errors.append(f"{prefix} subclass needs class_name")
@@ -142,19 +214,117 @@ def validate_selection_ready_artifacts(artifacts: list[dict[str, Any]]) -> list[
     return errors
 
 
-def _kind_for(title: str, heading_path: list[str], content: str) -> str | None:
-    folded = " ".join([*heading_path, title, content[:600]]).casefold()
-    if "casting time" in folded and ("spell" in folded or "level" in folded):
-        return "spell"
-    if "skill proficiencies" in folded or "background" in folded:
-        return "background"
-    if "feat" in folded:
-        return "feat"
-    if any(word in folded for word in _SUBCLASS_WORDS):
-        return "subclass"
-    if any(word in folded for word in _ITEM_WORDS):
-        return "item"
+def _classify(
+    title: str,
+    heading_path: list[str],
+    content: str,
+) -> tuple[str, tuple[str, ...]] | None:
+    title_folded = title.casefold().strip()
+    ancestors = " ".join(heading_path[:-1]).casefold()
+    sample = content[:2400]
+    folded = sample.casefold()
+
+    spell_labels = tuple(
+        label
+        for label in ("casting time", "range", "components", "duration")
+        if re.search(rf"(?im)^\s*{re.escape(label)}\s*:", sample)
+    )
+    spell_level = bool(_SPELL_LEVEL_RE.search(sample))
+    if "casting time" in spell_labels and (spell_level or len(spell_labels) >= 3):
+        signals = [*spell_labels, *(["spell level"] if spell_level else [])]
+        return "spell", tuple(signals)
+
+    statblock_labels = tuple(label for label in _STATBLOCK_LABELS if label in folded)
+    ability_row = all(value in folded for value in ("str", "dex", "con", "int", "wis", "cha"))
+    if len(statblock_labels) >= 3 and ability_row:
+        return "statblock", (*statblock_labels, "six abilities")
+
+    background_signals = tuple(
+        label
+        for label in (
+            "skill proficiencies",
+            "tool proficiencies",
+            "languages",
+            "equipment",
+            "background feature",
+        )
+        if label in folded
+    )
+    if "skill proficiencies" in background_signals and (
+        "background" in ancestors or len(background_signals) >= 2
+    ):
+        return "background", background_signals
+
+    if title_folded not in _GENERIC_TITLES and (
+        "feats" in ancestors or "feat" in ancestors
+    ) and ("prerequisite" in folded or len(folded) >= 80):
+        signals = ["feat section"]
+        if "prerequisite" in folded:
+            signals.append("prerequisite")
+        return "feat", tuple(signals)
+
+    subclass_title = any(word in title_folded for word in _SUBCLASS_WORDS)
+    subclass_section = "subclass" in ancestors or "subclasses" in ancestors
+    subclass_features = "subclass features" in folded
+    if title_folded not in _GENERIC_TITLES and (
+        subclass_features or (subclass_title and (subclass_section or "level" in folded))
+    ):
+        signals = [
+            *(["subclass title"] if subclass_title else []),
+            *(["subclass section"] if subclass_section else []),
+            *(["subclass features"] if subclass_features else []),
+        ]
+        return "subclass", tuple(signals)
+
+    class_signals = tuple(
+        label
+        for label in ("class features", "hit dice", "primary ability", "saving throw proficiencies")
+        if label in folded
+    )
+    if title_folded not in _GENERIC_TITLES and "class features" in class_signals and len(
+        class_signals
+    ) >= 2:
+        return "class", class_signals
+
+    species_signals = tuple(
+        label
+        for label in ("ability score increase", "age", "alignment", "size", "speed", "languages")
+        if re.search(rf"(?im)^\s*{re.escape(label)}\s*[.:]", sample)
+    )
+    if len(species_signals) >= 4:
+        return "species", species_signals
+
+    item_header = _ITEM_HEADER_RE.search(sample[:500])
+    if item_header:
+        signals = ["item category"]
+        for label in ("rarity", "requires attunement", "charges"):
+            if label in folded:
+                signals.append(label)
+        return "item", tuple(signals)
+
+    feature_section = "class features" in ancestors or "subclass features" in ancestors
+    level_grant = bool(re.search(r"(?i)\bat\s+\d+(?:st|nd|rd|th)\s+level\b", folded))
+    if title_folded not in _GENERIC_TITLES and feature_section and level_grant:
+        return "feature", ("feature section", "level grant")
     return None
+
+
+def _minimum_page(left: Any, right: Any) -> int | None:
+    values = [
+        value
+        for value in (left, right)
+        if isinstance(value, int) and not isinstance(value, bool)
+    ]
+    return min(values) if values else None
+
+
+def _maximum_page(left: Any, right: Any) -> int | None:
+    values = [
+        value
+        for value in (left, right)
+        if isinstance(value, int) and not isinstance(value, bool)
+    ]
+    return max(values) if values else None
 
 
 def _artifact_id(pack_id: str, kind: str, name: str) -> str:

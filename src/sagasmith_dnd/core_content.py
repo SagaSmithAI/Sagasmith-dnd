@@ -8,8 +8,13 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable
 
+from sagasmith_dnd.spell_resolution import (
+    SPELL_RESOLUTION_MECHANIC_ID,
+    known_spell_resolution,
+)
+
 PACK_ID = "dnd5e.content.srd2014"
-PACK_VERSION = "1.5.0"
+PACK_VERSION = "1.6.0"
 
 _SUBCLASS_LEVELS = {
     "barbarian": 3,
@@ -108,10 +113,17 @@ def _spells(folder: Path, spell_classes: dict[str, list[str]]) -> list[dict[str,
                 "effect": _body_after_metadata(text),
             },
         }
+        mechanic_refs: list[str] = []
+        resolution = known_spell_resolution(name)
+        if resolution is not None:
+            card["resolution"] = resolution
+            mechanic_refs.append(SPELL_RESOLUTION_MECHANIC_ID)
         if _name_key(name) == "shield":
-            card["mechanic_refs"] = ["dnd5e.core.spell.shield"]
+            mechanic_refs.append("dnd5e.core.spell.shield")
         elif _name_key(name) == "magic-missile":
-            card["mechanic_refs"] = ["dnd5e.core.spell.magic_missile"]
+            mechanic_refs.append("dnd5e.core.spell.magic_missile")
+        if mechanic_refs:
+            card["mechanic_refs"] = mechanic_refs
         result.append(
             _artifact(
                 "spell",

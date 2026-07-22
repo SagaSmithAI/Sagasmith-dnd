@@ -28,6 +28,7 @@ from sagasmith_dnd.combat_engine import (
     pay_activity_activation,
     pay_attack_action,
     preflight_attack,
+    preflight_spell_attack,
     queue_combatant,
     resolve_actor_check,
     resolve_attack_action,
@@ -211,8 +212,111 @@ def test_positioned_ranged_attack_requires_recorded_range() -> None:
 
     with pytest.raises(NeedsRulingError, match="no recorded range") as raised:
         preflight_attack(attacker, target, action={"weapon_id": "mystery-bow"})
-
     assert raised.value.missing == ("weapon.range:mystery-bow",)
+
+
+def test_ranged_attack_has_close_combat_disadvantage() -> None:
+    attacker = _actor("archer")
+    target = _actor("target")
+    attacker.update(
+        initiative=20,
+        tie_breaker=0,
+        position={"x": 0, "y": 0},
+        disposition="friendly",
+    )
+    target.update(
+        initiative=10,
+        tie_breaker=0,
+        position={"x": 1, "y": 0},
+        disposition="hostile",
+    )
+    attacker["derived"]["inventory"]["weapon_attacks"] = [
+        {
+            "item_id": "shortbow",
+            "attack_type": "ranged",
+            "attack_bonus": 4,
+            "damage_expression": "1d6",
+            "damage_type": "piercing",
+            "range_ft": {"normal": 80, "long": 320},
+        }
+    ]
+    encounter = start_encounter([attacker, target])
+
+    plan = preflight_attack(
+        attacker,
+        target,
+        action={"weapon_id": "shortbow"},
+        encounter=encounter,
+    )
+
+    assert plan["disadvantage"] is True
+    assert plan["close_combat_threat_ids"] == ["target"]
+    assert "hostile_creature_within_5_ft" in plan["disadvantage_sources"]
+
+    encounter["combatants"][1]["conditions"] = ["incapacitated"]
+    safe = preflight_attack(
+        attacker,
+        target,
+        action={"weapon_id": "shortbow"},
+        encounter=encounter,
+    )
+    assert safe["close_combat_threat_ids"] == []
+
+
+def test_spell_attack_preflight_uses_source_card_and_spellcasting_override() -> None:
+    attacker = _actor("caster")
+    target = _actor("target")
+    attacker["sheet"]["spellcasting"].update(
+        ability="intelligence",
+        attack_bonus_override=6,
+    )
+    attacker["sheet"]["content"]["spells"] = [
+        {
+            "id": "module.spell.scorching-ray",
+            "name": "Scorching Ray",
+            "level": 2,
+            "definition": {
+                "range": {"kind": "distance", "normal_ft": 60},
+            },
+            "resolution": {
+                "kind": "spell_attack",
+                "targeting": {"mode": "creature", "max_targets": 100},
+                "attack": {
+                    "mode": "ranged",
+                    "count": {"base": 3, "per_slot_above": 1, "slot_base_level": 2},
+                    "damage": {"base_dice": "2d6", "damage_type": "fire"},
+                },
+            },
+        }
+    ]
+    attacker["sheet"] = validate_character_sheet(attacker["sheet"])
+    attacker["derived"] = derive_character_sheet(attacker["sheet"])
+    attacker.update(
+        initiative=20,
+        tie_breaker=0,
+        position={"x": 0, "y": 0},
+        disposition="friendly",
+    )
+    target.update(
+        initiative=10,
+        tie_breaker=0,
+        position={"x": 5, "y": 0},
+        disposition="hostile",
+    )
+    encounter = start_encounter([attacker, target])
+
+    plan = preflight_spell_attack(
+        attacker,
+        target,
+        spell_id="module.spell.scorching-ray",
+        cast_level=2,
+        encounter=encounter,
+    )
+
+    assert plan["kind"] == "spell_attack"
+    assert plan["attack_bonus"] == 6
+    assert plan["damage_expression"] == "2d6"
+    assert plan["range"]["normal_ft"] == 60
 
 
 def test_preserve_life_enforces_pool_half_hp_and_creature_type() -> None:

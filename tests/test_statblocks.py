@@ -244,6 +244,8 @@ Cantrips (at will): chill touch, mage hand
     assert parsed.spellcasting["save_dc"] == 14
     assert parsed.spellcasting["attack_bonus"] == 6
     assert parsed.spellcasting["slots"] == {"1": 4, "2": 3}
+    assert derived["spellcasting"]["attack_bonus"] == 6
+    assert derived["spellcasting"]["save_dc"] == 14
     assert [item["name"] for item in parsed.spellcasting["spells"]] == [
         "chill touch",
         "mage hand",

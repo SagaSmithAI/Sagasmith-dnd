@@ -9,7 +9,7 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     manifest, artifacts = build_srd2014_content(workspace / "SagaSmith-dnd-skills")
     counts = Counter(item["kind"] for item in artifacts)
 
-    assert manifest["version"] == PACK_VERSION == "1.5.0"
+    assert manifest["version"] == PACK_VERSION == "1.6.0"
     assert counts["spell"] == 319
     assert counts["species"] == 13
     assert counts["class"] == 12
@@ -31,6 +31,29 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     assert fireball["card"]["classes"] == ["sorcerer", "wizard"]
     assert fireball["card"]["access"]["known"] is False
     assert fireball["card"]["definition"]["components"]["material"] is True
+    assert fireball["card"]["resolution"]["kind"] == "saving_throw"
+    assert fireball["card"]["resolution"]["targeting"]["area"] == {
+        "shape": "sphere",
+        "radius_ft": 20,
+    }
+    scorching_ray = next(
+        item
+        for item in artifacts
+        if item["id"] == "dnd5e.content.srd2014.spell.scorching-ray"
+    )
+    assert scorching_ray["card"]["resolution"]["attack"]["count"] == {
+        "base": 3,
+        "per_slot_above": 1,
+        "slot_base_level": 2,
+    }
+    healing_word = next(
+        item
+        for item in artifacts
+        if item["id"] == "dnd5e.content.srd2014.spell.healing-word"
+    )
+    assert healing_word["card"]["resolution"]["healing"][
+        "add_spellcasting_modifier"
+    ] is True
 
     shield = next(
         item for item in artifacts if item["id"] == "dnd5e.content.srd2014.spell.shield"

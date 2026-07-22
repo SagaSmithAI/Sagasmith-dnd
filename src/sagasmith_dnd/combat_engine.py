@@ -26,6 +26,10 @@ from sagasmith_dnd.rule_engine import (
     context_with_facts,
     core_receipts,
 )
+from sagasmith_dnd.spell_resolution import (
+    SPELL_RESOLUTION_MECHANIC_ID,
+    scaled_roll_expression,
+)
 
 
 class CombatEngineError(ValueError):
@@ -535,6 +539,7 @@ def preflight_attack(
     action: dict[str, Any],
     encounter: dict[str, Any] | None = None,
     allow_out_of_turn: bool = False,
+    require_attack_action: bool = True,
     rules: ResolutionContext | None = None,
 ) -> dict[str, Any]:
     """Validate an attack declaration without changing any state or rolling."""
@@ -544,7 +549,7 @@ def preflight_attack(
         current = current_combatant(encounter)
         if not allow_out_of_turn and current and current.get("actor_id") != actor_id(attacker):
             raise CombatEngineError("it is not this actor's turn")
-        if not allow_out_of_turn and "attack" not in available_actions(
+        if require_attack_action and not allow_out_of_turn and "attack" not in available_actions(
             encounter, actor_id(attacker)
         ):
             raise CombatEngineError("actor has no legal attack action")
@@ -658,6 +663,34 @@ def preflight_attack(
     if range_result["disadvantage"]:
         context["disadvantage"] = True
         context.setdefault("disadvantage_sources", []).append("weapon_long_range")
+    close_combat_threat_ids: list[str] = []
+    attacker_position = _position(attacker.get("position"))
+    if attack_mode == "ranged" and encounter is not None and attacker_position is not None:
+        for candidate in encounter.get("combatants", []):
+            candidate_id = str(candidate.get("actor_id") or "")
+            candidate_position = _position(candidate.get("position"))
+            if (
+                not candidate_id
+                or candidate_id == actor_id(attacker)
+                or candidate_position is None
+                or _grid_distance(attacker_position, candidate_position) > 5
+                or not _are_hostile(candidate, attacker)
+                or not _can_see(candidate, attacker)
+                or _condition_set(candidate.get("conditions"))
+                & {
+                    "dead",
+                    "unconscious",
+                    "stunned",
+                    "incapacitated",
+                    "paralyzed",
+                    "petrified",
+                }
+            ):
+                continue
+            close_combat_threat_ids.append(candidate_id)
+        if close_combat_threat_ids:
+            context["disadvantage"] = True
+            context.setdefault("disadvantage_sources", []).append("hostile_creature_within_5_ft")
     attacker_conditions = _condition_set(
         attacker.get("conditions") or actor_sheet(attacker).get("conditions")
     )
@@ -799,6 +832,8 @@ def preflight_attack(
         core_boundary_ids.append("dnd5e.core.attack.unarmed_strike")
     if attack_mode == "ranged" and range_result.get("enforced"):
         core_boundary_ids.append("dnd5e.core.attack.range")
+    if close_combat_threat_ids:
+        core_boundary_ids.append("dnd5e.core.attack.ranged_close_combat")
     if ammunition_item_id:
         core_boundary_ids.append("dnd5e.core.attack.ammunition")
     if cover_degree or cover.get("ac_bonus") is not None:
@@ -830,6 +865,7 @@ def preflight_attack(
         "attack_mode": attack_mode,
         "resource_cost": deepcopy(weapon.get("resource_cost") or {}),
         "range": range_result,
+        "close_combat_threat_ids": close_combat_threat_ids,
         "automatic_critical_on_hit": automatic_critical,
         "ruleset": ruleset,
         "target_uses_death_saves": bool(target.get("death_saves", True)),
@@ -850,6 +886,105 @@ def preflight_attack(
         ],
         "ruleset_fingerprint": rules.fingerprint if rules else "",
     }
+
+
+def preflight_spell_attack(
+    attacker: dict[str, Any],
+    target: dict[str, Any],
+    *,
+    spell_id: str,
+    cast_level: int,
+    encounter: dict[str, Any] | None = None,
+    context: dict[str, Any] | None = None,
+    rules: ResolutionContext | None = None,
+) -> dict[str, Any]:
+    """Build an attack only from the spell card's reviewed resolution contract."""
+    sheet = actor_sheet(attacker)
+    spell = next(
+        (
+            item
+            for item in sheet.get("content", {}).get("spells", [])
+            if str(item.get("id") or "") == str(spell_id)
+        ),
+        None,
+    )
+    if spell is None:
+        raise CombatEngineError("spell is not recorded on the attacker card")
+    resolution = dict(spell.get("resolution") or {})
+    if resolution.get("kind") != "spell_attack":
+        raise CombatEngineError("spell does not have a reviewed spell-attack resolution")
+    attack = dict(resolution.get("attack") or {})
+    damage = dict(attack.get("damage") or {})
+    derived = deepcopy(actor_derived(attacker))
+    spellcasting = dict(derived.get("spellcasting") or {})
+    attack_bonus = attack.get("attack_bonus_override")
+    if attack_bonus is None:
+        attack_bonus = spellcasting.get("attack_bonus")
+    if attack_bonus is None:
+        raise CombatEngineError("spell attack bonus is not derivable from the attacker card")
+    attack_mode = str(attack.get("mode") or "").casefold()
+    definition_range = dict(dict(spell.get("definition") or {}).get("range") or {})
+    range_ft = attack.get("range_ft_override")
+    if range_ft is None:
+        if definition_range.get("kind") == "touch":
+            range_ft = 5
+        else:
+            range_ft = definition_range.get("normal_ft")
+    range_ft = int(range_ft or 0)
+    if range_ft <= 0:
+        raise NeedsRulingError(
+            "spell attack has no recorded range",
+            missing=(f"spell.range:{spell_id}",),
+        )
+    synthetic_id = f"spell-attack:{spell_id}"
+    synthetic = {
+        "item_id": synthetic_id,
+        "name": str(spell.get("name") or spell_id),
+        "attack_type": attack_mode,
+        "attack_bonus": int(attack_bonus),
+        "damage_expression": scaled_roll_expression(
+            damage,
+            cast_level=int(cast_level),
+            actor_level=int(sheet.get("progression", {}).get("level", 1) or 1),
+        ),
+        "damage_type": str(damage.get("damage_type") or ""),
+        "on_hit_effect": str(attack.get("on_hit_ruling") or ""),
+        "properties": [],
+    }
+    if attack_mode == "ranged":
+        synthetic["range_ft"] = {"normal": range_ft, "long": range_ft}
+    else:
+        synthetic["reach_ft"] = range_ft
+    derived.setdefault("inventory", {}).setdefault("weapon_attacks", []).append(synthetic)
+    spell_attacker = {**deepcopy(attacker), "derived": derived}
+    plan = preflight_attack(
+        spell_attacker,
+        target,
+        action={
+            "weapon_id": synthetic_id,
+            "attack_mode": attack_mode,
+            "context": deepcopy(context or {}),
+        },
+        encounter=encounter,
+        require_attack_action=False,
+        rules=rules,
+    )
+    plan.update(
+        kind="spell_attack",
+        spell_id=str(spell_id),
+        spell_name=str(spell.get("name") or spell_id),
+        cast_level=int(cast_level),
+        mechanic_id=SPELL_RESOLUTION_MECHANIC_ID,
+    )
+    plan["rule_receipts"] = [
+        *list(plan.get("rule_receipts") or []),
+        *core_receipts(
+            rules,
+            [SPELL_RESOLUTION_MECHANIC_ID],
+            "spell.attack.preflight",
+        ),
+    ]
+    return plan
 
 
 def roll_attack_action(
@@ -3277,17 +3412,20 @@ def _can_make_opportunity_attack(threat: dict[str, Any], moving: dict[str, Any])
         return False
     if int(dict(threat.get("turn_budget") or {}).get("reaction", 0) or 0) <= 0:
         return False
-    # A reaction requires an opposed relationship.  Disposition is relative to
-    # the party, so the check must be symmetric: a friendly PC can threaten a
-    # hostile NPC just as an hostile NPC can threaten a friendly PC.  Factions
-    # take precedence when the scene supplies them.
-    threat_faction = threat.get("faction") or threat.get("team")
-    moving_faction = moving.get("faction") or moving.get("team")
-    if threat_faction and moving_faction:
-        return threat_faction != moving_faction
-    threat_disposition = _normalize_disposition(threat.get("disposition"))
-    moving_disposition = _normalize_disposition(moving.get("disposition"))
-    return {threat_disposition, moving_disposition} == {"hostile", "friendly"}
+    return _are_hostile(threat, moving)
+
+
+def _are_hostile(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    """Resolve an opposed relationship from factions first, then party disposition."""
+    # Disposition is relative to the party, so the check is symmetric: a
+    # friendly PC opposes a hostile NPC just as the NPC opposes the PC.
+    left_faction = left.get("faction") or left.get("team")
+    right_faction = right.get("faction") or right.get("team")
+    if left_faction and right_faction:
+        return left_faction != right_faction
+    left_disposition = _normalize_disposition(left.get("disposition"))
+    right_disposition = _normalize_disposition(right.get("disposition"))
+    return {left_disposition, right_disposition} == {"hostile", "friendly"}
 
 
 def _can_see(viewer: dict[str, Any], subject: dict[str, Any]) -> bool:
