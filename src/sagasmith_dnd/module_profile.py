@@ -6,7 +6,11 @@ import re
 
 from sagasmith_core.modules import GenericModuleProfile, SceneBoundary
 
-_ROOM = re.compile(r"^[A-Z]{1,3}\d+[A-Za-z]?\s*[.．]")
+_ROOM = re.compile(
+    r"^(?:(?:[A-Z]{1,3}\s*[0-9IlO]{1,3})|(?:\d{1,3}\s*[A-Za-z]?))"
+    r"\s*[.．。:：-]\s*\S",
+    re.IGNORECASE,
+)
 _STAT_SIGNALS = (
     "armor class",
     "hit points",
@@ -30,6 +34,39 @@ _KEYWORDS = {
     "clue": ("clue", "线索"),
 }
 _COMBAT_SUBSECTION_SIGNALS = ("战斗", "遭遇", "陷阱", "推销", "巡逻")
+_LOCATION_TITLE_SIGNALS = (
+    "alcove",
+    "bridge",
+    "cave",
+    "cellar",
+    "chamber",
+    "chapel",
+    "corridor",
+    "courtyard",
+    "crypt",
+    "dungeon",
+    "gate",
+    "hall",
+    "hideout",
+    "keep",
+    "kitchen",
+    "lair",
+    "library",
+    "passage",
+    "room",
+    "shrine",
+    "temple",
+    "tower",
+    "vault",
+    "洞",
+    "厅",
+    "地窖",
+    "墓",
+    "室",
+    "庭院",
+    "神殿",
+    "通道",
+)
 _CJK_RANGES = (("一", "鿿"), ("㐀", "䶿"), ("豈", "﫿"))
 _DIMENSIONS = re.compile(
     r"(?P<width>\d{1,3})\s*(?:(?:-?foot|feet|ft\.?|\u5c3a)\s*)?"
@@ -37,11 +74,67 @@ _DIMENSIONS = re.compile(
     r"(?P<height>\d{1,3})\s*(?:-?foot|feet|ft\.?|\u5c3a)",
     re.IGNORECASE,
 )
-_ROOM_CODE = re.compile(r"^(?P<code>[A-Z]{1,3}\d+[A-Za-z]?)", re.IGNORECASE)
+_ROOM_CODE = re.compile(
+    r"^(?P<code>(?:[A-Z]{1,3}\s*[0-9IlO]{1,3})|(?:\d{1,3}\s*[A-Za-z]?))"
+    r"\s*[.．。:：-]",
+    re.IGNORECASE,
+)
 _ROOM_HEADING = re.compile(
-    r"^#{1,6}\s+(?P<code>[A-Z]{1,3}\d+[A-Za-z]?)\s*[.．。:：-]?",
+    r"^#{1,6}\s+(?P<code>(?:[A-Z]{1,3}\s*[0-9IlO]{1,3})|"
+    r"(?:\d{1,3}\s*[A-Za-z]?))"
+    r"\s*[.．。:：-]",
     re.IGNORECASE | re.MULTILINE,
 )
+
+
+def _is_reference_chapter(title: str) -> bool:
+    folded = title.casefold().strip()
+    return bool(
+        folded in {"front matter", "rules index", "chapter intro"}
+        or re.match(r"^(?:app(?:endix)?\s*\.?|附录)", folded)
+    )
+
+
+def _looks_like_location_heading(title: str) -> bool:
+    text = title.strip()
+    folded = text.casefold()
+    return bool(
+        _ROOM.match(text)
+        or (
+            1 <= len(text.split()) <= 10
+            and any(signal in folded for signal in _LOCATION_TITLE_SIGNALS)
+        )
+    )
+
+
+def _looks_like_scene_heading(title: str) -> bool:
+    """Reject visual-font fragments while preserving short authored headings."""
+    text = re.sub(r"\s+", " ", title).strip()
+    words = re.findall(r"[A-Za-z][A-Za-z'’.-]*|[\u4e00-\u9fff]+", text)
+    alphanumeric = sum(char.isalnum() for char in text)
+    if not text or len(text) > 110 or len(words) > 16:
+        return False
+    if alphanumeric / max(len(text), 1) < 0.45:
+        return False
+    if re.match(r"^[a-z]", text) or re.match(r"^(?:By|由)\s+\S+", text):
+        return False
+    if re.match(
+        r"^[I|]\s*[\"'“”‘’]?\s*(?:A|An|The|This|These|You|Your|Behind|In)\b",
+        text,
+    ):
+        return False
+    if re.match(r"^(?:Ch(?:apter)?|App(?:endix)?)\b", text, re.IGNORECASE):
+        return False
+    if re.match(r"^[A-Z]\s+(?:CHAPTER|ENCOUNTER)\b", text, re.IGNORECASE):
+        return False
+    if re.search(r"[•~_=]{1,}", text) and alphanumeric < 8:
+        return False
+    if len(words) >= 8 and re.search(r"[,.;。；，]$", text):
+        return False
+    coded = _ROOM.match(text)
+    if coded and len(words) >= 10:
+        return False
+    return True
 _EXPLICIT_ROUTE_PATTERNS = (
     re.compile(
         r"(?:通向|通往|连接到|连接至|直达)\s*(?:了|着)?\s*"
@@ -236,9 +329,21 @@ def _explicit_connections(
 
 
 def _spatial_manifest(
-    title: str, text: str, subsections: list[dict[str, object]]
+    title: str,
+    text: str,
+    subsections: list[dict[str, object]],
+    *,
+    reference: bool = False,
+    allow_fallback: bool = True,
 ) -> dict[str, object]:
     """Emit conservative scene-space evidence; it is not an inferred battle map."""
+    if reference or not allow_fallback:
+        return {
+            "schema_version": 1,
+            "grid": {"kind": "square", "cell_ft": 5},
+            "locations": [],
+            "connections": [],
+        }
     locations: list[dict[str, object]] = []
     for ordinal, item in enumerate(subsections):
         if item.get("type") != "room":
@@ -256,11 +361,12 @@ def _spatial_manifest(
         )
     if not locations:
         dimensions = _DIMENSIONS.search(text)
+        location_heading = bool(_ROOM.match(title.strip()))
         locations.append(
             {
                 "key": _location_key(title, 0),
                 "title": title,
-                "kind": "scene",
+                "kind": "room" if location_heading else "scene",
                 "dimensions_ft": (
                     {
                         "width": int(dimensions.group("width")),
@@ -269,7 +375,9 @@ def _spatial_manifest(
                     if dimensions
                     else None
                 ),
-                "confidence": "scene_fallback",
+                "confidence": (
+                    "explicit_heading" if location_heading else "scene_fallback"
+                ),
             }
         )
     return {
@@ -283,7 +391,7 @@ def _spatial_manifest(
 
 class DndModuleProfile(GenericModuleProfile):
     name = "dnd5e"
-    version = "4"
+    version = "7"
 
     def classify_chunk(self, heading: str, text: str) -> str:
         if _ROOM.match(heading):
@@ -309,8 +417,14 @@ class DndModuleProfile(GenericModuleProfile):
         chapter_content: str,
     ) -> list[SceneBoundary]:
         headings = list(re.finditer(r"^(#{1,6})\s+(.+?)\s*$", chapter_content, re.MULTILINE))
+        plausible_headings = [
+            heading
+            for heading in headings
+            if _looks_like_scene_heading(heading.group(2))
+        ]
         counts = {
-            level: sum(len(match.group(1)) == level for match in headings) for level in (2, 3, 4)
+            level: sum(len(match.group(1)) == level for match in plausible_headings)
+            for level in (2, 3, 4)
         }
         if counts[2] and counts[3] >= counts[2] * 5:
             scene_level = 3
@@ -322,7 +436,12 @@ class DndModuleProfile(GenericModuleProfile):
             scene_level = 4
         sub_level = scene_level + 1 if scene_level < 4 else None
         room_level = scene_level + 2 if scene_level < 3 else None
-        scene_headings = [heading for heading in headings if len(heading.group(1)) == scene_level]
+        scene_headings = [
+            heading
+            for heading in plausible_headings
+            if len(heading.group(1)) == scene_level
+        ]
+        reference_chapter = _is_reference_chapter(chapter_title)
         if not scene_headings:
             return [
                 SceneBoundary(
@@ -335,6 +454,13 @@ class DndModuleProfile(GenericModuleProfile):
                         "subsections": [],
                         "headings": [],
                         "tags": ["exploration"],
+                        "reference": reference_chapter,
+                        "spatial": _spatial_manifest(
+                            chapter_title,
+                            chapter_content,
+                            [],
+                            reference=reference_chapter,
+                        ),
                         "line_count": max(1, len(chapter_content.splitlines())),
                     },
                 )
@@ -350,7 +476,7 @@ class DndModuleProfile(GenericModuleProfile):
                     0,
                     first_start,
                     {
-                        "scene_type": "section",
+                        "scene_type": "reference" if reference_chapter else "overview",
                         "scene_level": scene_level,
                         "subsections": self._subsections(
                             headings,
@@ -361,7 +487,19 @@ class DndModuleProfile(GenericModuleProfile):
                             chapter_content,
                         ),
                         "headings": [],
-                        "tags": _scene_tags(_preamble_title(preamble)),
+                        "tags": (
+                            ["reference"]
+                            if reference_chapter
+                            else _scene_tags(_preamble_title(preamble))
+                        ),
+                        "reference": reference_chapter,
+                        "spatial": _spatial_manifest(
+                            _preamble_title(preamble),
+                            preamble,
+                            [],
+                            reference=reference_chapter,
+                            allow_fallback=False,
+                        ),
                         "line_count": max(1, len(preamble.splitlines())),
                     },
                 )
@@ -382,7 +520,7 @@ class DndModuleProfile(GenericModuleProfile):
                 room_level,
                 chapter_content,
             )
-            tags = _scene_tags(title)
+            tags = ["reference"] if reference_chapter else _scene_tags(title)
             if (
                 any(
                     any(signal in str(item["title"]) for signal in _COMBAT_SUBSECTION_SIGNALS)
@@ -397,13 +535,17 @@ class DndModuleProfile(GenericModuleProfile):
                     heading.start(),
                     end,
                     {
-                        "scene_type": "section",
+                        "scene_type": "reference" if reference_chapter else "section",
                         "scene_level": scene_level,
                         "subsections": subsections,
                         "headings": [str(item["title"]) for item in subsections],
                         "tags": tags,
+                        "reference": reference_chapter,
                         "spatial": _spatial_manifest(
-                            title, chapter_content[heading.start() : end], subsections
+                            title,
+                            chapter_content[heading.start() : end],
+                            subsections,
+                            reference=reference_chapter,
                         ),
                         "line_count": max(
                             1,
@@ -431,7 +573,12 @@ class DndModuleProfile(GenericModuleProfile):
                 continue
             level = len(heading.group(1))
             item: dict[str, object] | None = None
-            if room_level is not None and level == room_level:
+            title = heading.group(2).strip()
+            if (
+                room_level is not None
+                and level == room_level
+                and _looks_like_location_heading(title)
+            ):
                 next_boundary = next(
                     (
                         candidate.start()
@@ -443,7 +590,7 @@ class DndModuleProfile(GenericModuleProfile):
                 )
                 dimensions = _DIMENSIONS.search(content[heading.end() : next_boundary])
                 item = {
-                    "title": heading.group(2).strip(),
+                    "title": title,
                     "line": _line_number(content, heading.start()),
                     "type": "room",
                 }

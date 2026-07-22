@@ -120,3 +120,67 @@ def test_spatial_connections_recognize_explicit_chinese_route_language() -> None
     assert connection["to"] == "d5"
     assert connection["confidence"] == "explicit_text"
     assert connection["evidence"]["text"] == "通向 D5"
+
+
+def test_statblock_headings_do_not_become_spatial_rooms() -> None:
+    content = (
+        "# Appendix B: Monsters\n## Statistics\n"
+        "Armor Class 12\nHit Points 30\nSpeed 30 ft.\n"
+        "#### SIZE\nA creature occupies a 5 by 5 feet space.\n"
+        "#### SPEED\nWalking speed.\n"
+        "## Monster Descriptions\n#### OGRE\nArmor Class 11\nHit Points 59\n"
+    )
+
+    scenes = MarkdownModuleParser(profile=DndModuleProfile()).parse(content)[0].scenes
+
+    assert all(scene.metadata["scene_type"] == "reference" for scene in scenes)
+    assert all(scene.metadata["spatial"]["locations"] == [] for scene in scenes)
+
+
+def test_uncoded_location_heading_can_be_a_room_outside_reference_chapter() -> None:
+    content = (
+        "# The Spider's Web\n## Conyberry\n"
+        "#### AGATHA'S LAIR\nThe banshee waits here.\n"
+        "#### DEVELOPMENTS\nShe may answer one question.\n"
+    )
+    scene = next(
+        item
+        for item in MarkdownModuleParser(profile=DndModuleProfile()).parse(content)[0].scenes
+        if item.title == "Conyberry"
+    )
+
+    assert [item["title"] for item in scene.metadata["spatial"]["locations"]] == [
+        "AGATHA'S LAIR"
+    ]
+
+
+def test_read_aloud_fragments_do_not_split_scenes() -> None:
+    content = (
+        "# Tomb\n## Nine Shrines\nDescription.\n"
+        "## I A strange grid is etched into the far wall of this stone cell. I\n"
+        "Read-aloud continuation.\n## Final Chamber\nDescription.\n"
+    )
+
+    scenes = MarkdownModuleParser(profile=DndModuleProfile()).parse(content)[0].scenes
+
+    assert [scene.title for scene in scenes] == ["Tomb", "Nine Shrines", "Final Chamber"]
+
+
+def test_coded_scene_fallback_is_typed_as_room_even_with_ocr_digit() -> None:
+    content = "# Lair\n## Ql. Central Hub\nThe corridor leads onward.\n"
+
+    scene = MarkdownModuleParser(profile=DndModuleProfile()).parse(content)[0].scenes[1]
+
+    assert scene.title == "Ql. Central Hub"
+    assert scene.metadata["spatial"]["locations"][0]["kind"] == "room"
+    assert scene.metadata["spatial"]["locations"][0]["confidence"] == "explicit_heading"
+
+
+def test_chapter_preamble_does_not_create_a_spatial_room() -> None:
+    content = "# Tomb of the Nine Gods\nOverview.\n## Rotten Halls\nDescription.\n"
+
+    scenes = MarkdownModuleParser(profile=DndModuleProfile()).parse(content)[0].scenes
+
+    assert scenes[0].metadata["scene_type"] == "overview"
+    assert scenes[0].metadata["spatial"]["locations"] == []
+    assert scenes[1].metadata["spatial"]["locations"][0]["kind"] == "scene"
