@@ -227,6 +227,60 @@ def apply_per_level_hit_point_bonus(
     return value
 
 
+def apply_constitution_score_hit_point_change(
+    sheet: dict[str, Any],
+    *,
+    previous_score: int,
+    new_score: int,
+    source: str,
+) -> dict[str, Any]:
+    """Apply the retrospective per-level HP change caused by Constitution."""
+
+    if any(
+        isinstance(score, bool) or not isinstance(score, int) or score < 1 or score > 30
+        for score in (previous_score, new_score)
+    ):
+        raise CombatEngineError("Constitution scores must be integers from 1 to 30")
+    normalized_source = str(source).strip()
+    if not normalized_source:
+        raise CombatEngineError("Constitution hit-point change source is required")
+    if len(normalized_source) > 300:
+        raise CombatEngineError("Constitution hit-point change source exceeds 300 characters")
+    modifier_delta = (new_score - 10) // 2 - (previous_score - 10) // 2
+    value = deepcopy(sheet)
+    if modifier_delta == 0:
+        return value
+    level = int(value.get("progression", {}).get("level", 0) or 0)
+    if level < 1 or level > 20:
+        raise CombatEngineError("character level must be from 1 to 20")
+    combat = value.setdefault("combat", {})
+    hp = combat.setdefault("hp", {})
+    total_delta = modifier_delta * level
+    new_maximum = int(hp.get("max", 0) or 0) + total_delta
+    new_current = int(hp.get("value", 0) or 0) + total_delta
+    if new_maximum < 1 or new_current < 0:
+        raise CombatEngineError("Constitution change would produce invalid hit points")
+    hp["max"] = new_maximum
+    hp["value"] = min(new_maximum, new_current)
+    progression = list(combat.setdefault("hp_progression", []))
+    if progression:
+        by_level = {int(item.get("level", 0) or 0): item for item in progression}
+        missing = [item for item in range(1, level + 1) if item not in by_level]
+        if missing:
+            raise CombatEngineError(
+                "hit-point progression must record every existing level before "
+                "applying a Constitution modifier change"
+            )
+        for existing_level in range(1, level + 1):
+            entry = by_level[existing_level]
+            entry["value"] = int(entry.get("value", 0) or 0) + modifier_delta
+            old_source = str(entry.get("source") or "").strip()
+            entry["source"] = (
+                f"{old_source}; {normalized_source}" if old_source else normalized_source
+            )
+    return value
+
+
 def advance_single_class_level(
     sheet: dict[str, Any],
     *,

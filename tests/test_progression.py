@@ -4,6 +4,7 @@ from sagasmith_dnd.character_schema import default_character_sheet, validate_cha
 from sagasmith_dnd.combat_engine import CombatEngineError
 from sagasmith_dnd.progression import (
     advance_single_class_level,
+    apply_constitution_score_hit_point_change,
     apply_per_level_hit_point_bonus,
     award_experience,
     experience_status,
@@ -233,3 +234,27 @@ def test_per_level_hit_point_bonus_rejects_a_partial_existing_ledger() -> None:
             amount=1,
             source="Hill Dwarf: Dwarven Toughness",
         )
+
+
+def test_constitution_score_change_updates_existing_hp_and_ledger() -> None:
+    sheet = default_character_sheet()
+    sheet["progression"]["level"] = 2
+    sheet["combat"]["hp"] = {"value": 14, "max": 14, "temp": 0}
+    sheet["combat"]["hp_progression"] = [
+        {"level": 1, "method": "fixed", "value": 8, "source": "Bard level 1"},
+        {"level": 2, "method": "fixed", "value": 6, "source": "Bard level 2"},
+    ]
+
+    updated = apply_constitution_score_hit_point_change(
+        sheet,
+        previous_score=13,
+        new_score=14,
+        source="Half-Elf Constitution increase",
+    )
+
+    assert updated["combat"]["hp"] == {"value": 16, "max": 16, "temp": 0}
+    assert [item["value"] for item in updated["combat"]["hp_progression"]] == [9, 7]
+    assert all(
+        "Half-Elf Constitution increase" in item["source"]
+        for item in updated["combat"]["hp_progression"]
+    )
