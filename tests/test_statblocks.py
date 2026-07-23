@@ -123,6 +123,7 @@ def test_multiple_statblock_actions_can_share_one_normalized_line() -> None:
 ***Scimitar***. Melee Weapon Attack: +4 to hit, reach 5 ft., one target.
 Hit: 5 (1d6 + 2) slashing damage. ***Shortbow***. Ranged Weapon Attack:
 +4 to hit, range 80 ft./320 ft., one target. Hit: 5 (1d6 + 2) piercing damage.
+Goblins are black-hearted and gather in overwhelming numbers.
 """,
         source_key="module-review:goblin",
     )
@@ -131,6 +132,10 @@ Hit: 5 (1d6 + 2) slashing damage. ***Shortbow***. Ranged Weapon Attack:
     assert [attack["item_id"] for attack in attacks] == ["scimitar", "shortbow"]
     assert attacks[1]["attack_type"] == "ranged"
     assert attacks[1]["range_ft"] == {"normal": 80, "long": 320}
+    assert attacks[1]["on_hit_effect"] == ""
+    assert parsed.warnings == (
+        "Shortbow: trailing creature prose excluded from action settlement",
+    )
 
 
 def test_bandit_captain_preserves_exact_overrides_and_multiattack_composition() -> None:

@@ -251,7 +251,13 @@ def _entry_blocks(markdown: str) -> list[tuple[str, str, str]]:
     return result
 
 
-def _parse_weapon(name: str, description: str, source_key: str) -> dict[str, Any] | None:
+def _parse_weapon(
+    name: str,
+    description: str,
+    source_key: str,
+    *,
+    actor_name: str = "",
+) -> dict[str, Any] | None:
     attack = re.search(
         r"(?i)\*?(Melee|Ranged|Melee or Ranged)\s+(Weapon|Spell)\s+Attack:\*?\s*"
         r"([+\-−]\s*\d+)\s+to hit",
@@ -293,6 +299,14 @@ def _parse_weapon(name: str, description: str, source_key: str) -> dict[str, Any
         )
         last_damage_end = hit.end() + extra.end()
     on_hit_effect = description[last_damage_end:].strip().lstrip(". ,;").strip()
+    trailing_prose = ""
+    normalized_actor_name = actor_name.strip()
+    if normalized_actor_name and re.match(
+        rf"(?i)^{re.escape(normalized_actor_name)}s?\b",
+        on_hit_effect,
+    ):
+        trailing_prose = on_hit_effect
+        on_hit_effect = ""
     reach = re.search(r"(?i)reach\s+(\d+)\s*ft", description)
     ranges = re.search(
         r"(?i)range\s+(\d+)(?:\s*ft\.?)?(?:\s*/\s*(\d+))?\s*ft\.?",
@@ -327,7 +341,7 @@ def _parse_weapon(name: str, description: str, source_key: str) -> dict[str, Any
         if mode == "melee or ranged":
             mechanics["thrown_normal_range_ft"] = int(ranges.group(1))
             mechanics["thrown_long_range_ft"] = int(ranges.group(2) or ranges.group(1))
-    return {
+    result = {
         "id": _slug(name),
         "name": name,
         "kind": "weapon",
@@ -335,6 +349,11 @@ def _parse_weapon(name: str, description: str, source_key: str) -> dict[str, Any
         "source_key": source_key,
         "mechanics": mechanics,
     }
+    if trailing_prose:
+        result["_parser_warning"] = (
+            f"{name}: trailing creature prose excluded from action settlement"
+        )
+    return result
 
 
 def _count(value: str) -> int | None:
@@ -569,6 +588,7 @@ def parse_2014_statblock(
     multiattacks: list[tuple[str, str]] = []
     descriptive: list[tuple[str, str, str]] = []
     unresolved_multiattacks: set[str] = set()
+    warnings: list[str] = []
     for section, entry_name, description in entries:
         if entry_name.casefold() == "spellcasting" and spellcasting is not None:
             continue
@@ -580,8 +600,16 @@ def parse_2014_statblock(
             spell_spec["action_name"] = entry_name
             spell_spec["action_description"] = description
             continue
-        weapon = _parse_weapon(entry_name, description, source_key)
+        weapon = _parse_weapon(
+            entry_name,
+            description,
+            source_key,
+            actor_name=actor_name,
+        )
         if weapon:
+            parser_warning = str(weapon.pop("_parser_warning", "") or "")
+            if parser_warning:
+                warnings.append(parser_warning)
             weapons.append(weapon)
         else:
             descriptive.append((section, entry_name, description))
@@ -594,7 +622,6 @@ def parse_2014_statblock(
     sheet["inventory"]["items"] = [*armor_items, *weapons]
     sheet["inventory"]["equipment_slots"].update(armor_slots)
 
-    warnings: list[str] = []
     refs = list(dict.fromkeys(str(item) for item in rule_refs if str(item)))
     if spellcasting is not None:
         sheet["content"]["features"].append(
