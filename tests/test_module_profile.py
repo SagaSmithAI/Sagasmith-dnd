@@ -133,6 +133,30 @@ def test_room_dimensions_are_bound_to_their_own_heading_content() -> None:
     assert locations[1]["dimensions_ft"] == {"width": 15, "height": 10}
 
 
+def test_deep_numbered_adventure_areas_populate_scene_atlas() -> None:
+    content = (
+        "# Part 1\n## CRAGMAW HIDEOUT\n"
+        "##### 1. CAVE MOUTH\nA stream flows out of the cave.\n"
+        "##### 2. GOBLIN BLIND\nTwo goblins keep watch.\n"
+        "##### 3. KENNEL\nThree wolves are chained here.\n"
+    )
+    scene = next(
+        item
+        for item in MarkdownModuleParser(profile=DndModuleProfile()).parse(content)[0].scenes
+        if item.title == "CRAGMAW HIDEOUT"
+    )
+
+    assert [item["key"] for item in scene.metadata["spatial"]["locations"]] == [
+        "1-cave-mouth",
+        "2-goblin-blind",
+        "3-kennel",
+    ]
+    assert all(
+        item["confidence"] == "explicit_heading"
+        for item in scene.metadata["spatial"]["locations"]
+    )
+
+
 def test_spatial_connections_require_explicit_route_language() -> None:
     content = (
         "# Dungeon\n## Locations\n"

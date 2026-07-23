@@ -460,7 +460,7 @@ def _spatial_manifest(
 
 class DndModuleProfile(GenericModuleProfile):
     name = "dnd5e"
-    version = "8"
+    version = "9"
 
     def document_metadata(self, content: str) -> dict[str, object]:
         """Parse and validate the optional generated-module runtime manifest."""
@@ -507,8 +507,8 @@ class DndModuleProfile(GenericModuleProfile):
             scene_level = 3
         else:
             scene_level = 4
-        sub_level = scene_level + 1 if scene_level < 4 else None
-        room_level = scene_level + 2 if scene_level < 3 else None
+        sub_level = scene_level + 1 if scene_level < 6 else None
+        room_level = scene_level + 2 if scene_level < 5 else None
         scene_headings = [
             heading
             for heading in plausible_headings
@@ -649,7 +649,7 @@ class DndModuleProfile(GenericModuleProfile):
             title = heading.group(2).strip()
             if (
                 room_level is not None
-                and level == room_level
+                and level >= room_level
                 and _looks_like_location_heading(title)
             ):
                 next_boundary = next(
