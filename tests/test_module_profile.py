@@ -138,6 +138,7 @@ def test_deep_numbered_adventure_areas_populate_scene_atlas() -> None:
         "# Part 1\n## CRAGMAW HIDEOUT\n"
         "##### 1. CAVE MOUTH\nA stream flows out of the cave.\n"
         "##### 2. GOBLIN BLIND\nTwo goblins keep watch.\n"
+        "##### HIDEOUT\nA repeated PDF page header.\n"
         "##### 3. KENNEL\nThree wolves are chained here.\n"
     )
     scene = next(
