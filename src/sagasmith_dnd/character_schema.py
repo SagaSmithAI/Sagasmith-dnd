@@ -1921,6 +1921,7 @@ def validate_character_notes(
 
 
 def validate_party_state(state: dict[str, Any]) -> dict[str, Any]:
+    from sagasmith_dnd.playthrough import validate_playthrough_manifest
     from sagasmith_dnd.random_stream import validate_random_stream_state
 
     value = copy.deepcopy(_object(state, "campaign.state"))
@@ -1942,6 +1943,10 @@ def validate_party_state(state: dict[str, Any]) -> dict[str, Any]:
     value["world_effects"] = world_effects
     if "random_stream" in value:
         value["random_stream"] = validate_random_stream_state(value["random_stream"])
+    if "playthrough_manifest" in value:
+        value["playthrough_manifest"] = validate_playthrough_manifest(
+            value["playthrough_manifest"]
+        )
     return value
 
 
