@@ -105,6 +105,127 @@ CANTRIPS_KNOWN = {
     "wizard": (3, 3, 3, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5),
 }
 
+# D&D 5e uses cumulative experience totals: reaching the threshold makes a
+# character eligible to advance, but the level transaction is still separate.
+EXPERIENCE_THRESHOLDS: tuple[int, ...] = (
+    0,
+    300,
+    900,
+    2_700,
+    6_500,
+    14_000,
+    23_000,
+    34_000,
+    48_000,
+    64_000,
+    85_000,
+    100_000,
+    120_000,
+    140_000,
+    165_000,
+    195_000,
+    225_000,
+    265_000,
+    305_000,
+    355_000,
+)
+
+
+def experience_status(sheet: dict[str, Any]) -> dict[str, Any]:
+    """Return the current cumulative-XP advancement status without mutating the card."""
+    progression = dict(sheet.get("progression") or {})
+    level = int(progression.get("level", 0) or 0)
+    experience = int(progression.get("xp", 0) or 0)
+    if level < 1 or level > 20:
+        raise CombatEngineError("character level must be from 1 to 20")
+    if experience < 0:
+        raise CombatEngineError("experience cannot be negative")
+    next_level = level + 1 if level < 20 else None
+    next_threshold = EXPERIENCE_THRESHOLDS[level] if next_level is not None else None
+    return {
+        "level": level,
+        "xp": experience,
+        "current_level_threshold": EXPERIENCE_THRESHOLDS[level - 1],
+        "next_level": next_level,
+        "next_level_threshold": next_threshold,
+        "xp_to_next_level": (
+            max(0, int(next_threshold) - experience)
+            if next_threshold is not None
+            else None
+        ),
+        "eligible": next_threshold is not None and experience >= next_threshold,
+    }
+
+
+def award_experience(sheet: dict[str, Any], *, amount: int) -> dict[str, Any]:
+    """Add cumulative XP without silently applying the separate level transaction."""
+    if isinstance(amount, bool) or not isinstance(amount, int) or amount <= 0:
+        raise CombatEngineError("experience award amount must be a positive integer")
+    value = deepcopy(sheet)
+    before = experience_status(value)
+    value.setdefault("progression", {})["xp"] = before["xp"] + amount
+    after = experience_status(value)
+    return {
+        "sheet": value,
+        "amount": amount,
+        "old_xp": before["xp"],
+        "new_xp": after["xp"],
+        "advancement": after,
+    }
+
+
+def apply_per_level_hit_point_bonus(
+    sheet: dict[str, Any],
+    *,
+    amount: int,
+    source: str,
+) -> dict[str, Any]:
+    """Apply a species-style HP bonus and keep an existing HP ledger balanced."""
+    if isinstance(amount, bool) or not isinstance(amount, int) or amount < 0:
+        raise CombatEngineError("per-level hit-point bonus must be a non-negative integer")
+    value = deepcopy(sheet)
+    if amount == 0:
+        return value
+    level = int(value.get("progression", {}).get("level", 0) or 0)
+    if level < 1 or level > 20:
+        raise CombatEngineError("character level must be from 1 to 20")
+    normalized_source = str(source).strip()
+    if not normalized_source:
+        raise CombatEngineError("per-level hit-point bonus source is required")
+    if len(normalized_source) > 300:
+        raise CombatEngineError("per-level hit-point bonus source exceeds 300 characters")
+
+    combat = value.setdefault("combat", {})
+    hp = combat.setdefault("hp", {})
+    total_bonus = amount * level
+    hp["max"] = int(hp.get("max", 0) or 0) + total_bonus
+    hp["value"] = int(hp.get("value", 0) or 0) + total_bonus
+
+    # The ledger is optional for imported/manual cards. If it is present, it
+    # must describe every existing level so recorded_gain_total remains exact.
+    progression = list(combat.setdefault("hp_progression", []))
+    if progression:
+        by_level = {int(item.get("level", 0) or 0): item for item in progression}
+        missing = [item for item in range(1, level + 1) if item not in by_level]
+        if missing:
+            raise CombatEngineError(
+                "hit-point progression must record every existing level before "
+                "applying a per-level bonus"
+            )
+        for existing_level in range(1, level + 1):
+            entry = by_level[existing_level]
+            entry["value"] = int(entry.get("value", 0) or 0) + amount
+            old_source = str(entry.get("source") or "").strip()
+            combined_source = (
+                f"{old_source}; {normalized_source}" if old_source else normalized_source
+            )
+            if len(combined_source) > 300:
+                raise CombatEngineError(
+                    "combined hit-point progression source exceeds 300 characters"
+                )
+            entry["source"] = combined_source
+    return value
+
 
 def advance_single_class_level(
     sheet: dict[str, Any],

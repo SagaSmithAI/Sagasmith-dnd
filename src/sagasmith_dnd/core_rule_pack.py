@@ -105,6 +105,13 @@ BOUNDARIES = (
         "bundled:srd2014/02_Classes",
     ),
     CoreBoundary(
+        "dnd5e.core.progression.experience",
+        ("2014", "2024"),
+        "progression.award_experience",
+        ("tests/test_progression.py",),
+        "bundled:srd/character-creation",
+    ),
+    CoreBoundary(
         "dnd5e.core.armor_class.unarmored",
         ("2014", "2024"),
         "character_schema._derive_armor_class",

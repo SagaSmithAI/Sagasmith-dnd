@@ -2,7 +2,12 @@ import pytest
 
 from sagasmith_dnd.character_schema import default_character_sheet, validate_character_sheet
 from sagasmith_dnd.combat_engine import CombatEngineError
-from sagasmith_dnd.progression import advance_single_class_level
+from sagasmith_dnd.progression import (
+    advance_single_class_level,
+    apply_per_level_hit_point_bonus,
+    award_experience,
+    experience_status,
+)
 
 
 class _SequenceRng:
@@ -146,3 +151,85 @@ def test_level_advancement_rejects_multiclass_mismatch_and_invalid_method() -> N
     )
     with pytest.raises(CombatEngineError, match="single-class"):
         advance_single_class_level(sheet, class_name="Fighter", hp_method="fixed")
+
+
+def test_experience_award_reports_eligibility_without_auto_leveling() -> None:
+    sheet = _single_class_sheet("Fighter", hit_die=10, constitution=14, hp=(12, 12))
+
+    first = award_experience(sheet, amount=299)
+    assert first["sheet"]["progression"]["level"] == 1
+    assert first["advancement"] == {
+        "level": 1,
+        "xp": 299,
+        "current_level_threshold": 0,
+        "next_level": 2,
+        "next_level_threshold": 300,
+        "xp_to_next_level": 1,
+        "eligible": False,
+    }
+
+    second = award_experience(first["sheet"], amount=1)
+    assert second["sheet"]["progression"]["level"] == 1
+    assert second["advancement"]["eligible"] is True
+    assert second["advancement"]["xp_to_next_level"] == 0
+    assert sheet["progression"]["xp"] == 0
+
+    with pytest.raises(CombatEngineError, match="positive integer"):
+        award_experience(sheet, amount=0)
+
+
+def test_experience_status_handles_level_twenty_without_a_false_next_level() -> None:
+    sheet = _single_class_sheet("Fighter", hit_die=10, constitution=14, hp=(12, 12))
+    sheet["progression"]["level"] = 20
+    sheet["progression"]["classes"][0]["level"] = 20
+    sheet["progression"]["xp"] = 400_000
+
+    assert experience_status(sheet) == {
+        "level": 20,
+        "xp": 400_000,
+        "current_level_threshold": 355_000,
+        "next_level": None,
+        "next_level_threshold": None,
+        "xp_to_next_level": None,
+        "eligible": False,
+    }
+
+
+def test_per_level_hit_point_bonus_updates_every_recorded_level() -> None:
+    sheet = _single_class_sheet("Cleric", hit_die=8, constitution=16, hp=(11, 20))
+    sheet["progression"]["level"] = 2
+    sheet["progression"]["classes"][0]["level"] = 2
+    sheet["combat"]["hp_progression"] = [
+        {"level": 1, "method": "manual", "value": 11, "source": "Cleric level 1"},
+        {"level": 2, "method": "fixed", "value": 9, "source": "Cleric level 2"},
+    ]
+
+    updated = apply_per_level_hit_point_bonus(
+        sheet,
+        amount=1,
+        source="Hill Dwarf: Dwarven Toughness",
+    )
+
+    assert updated["combat"]["hp"] == {"value": 13, "max": 22, "temp": 0}
+    assert [entry["value"] for entry in updated["combat"]["hp_progression"]] == [12, 10]
+    assert all(
+        "Dwarven Toughness" in entry["source"]
+        for entry in updated["combat"]["hp_progression"]
+    )
+    assert sheet["combat"]["hp"]["max"] == 20
+
+
+def test_per_level_hit_point_bonus_rejects_a_partial_existing_ledger() -> None:
+    sheet = _single_class_sheet("Cleric", hit_die=8, constitution=16, hp=(11, 20))
+    sheet["progression"]["level"] = 2
+    sheet["progression"]["classes"][0]["level"] = 2
+    sheet["combat"]["hp_progression"] = [
+        {"level": 2, "method": "fixed", "value": 9, "source": "Cleric level 2"}
+    ]
+
+    with pytest.raises(CombatEngineError, match="every existing level"):
+        apply_per_level_hit_point_bonus(
+            sheet,
+            amount=1,
+            source="Hill Dwarf: Dwarven Toughness",
+        )

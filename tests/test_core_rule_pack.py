@@ -33,6 +33,7 @@ REQUIRED_BOUNDARIES = {
     "dnd5e.core.spell.cantrip_ritual_level",
     "dnd5e.core.spell.material_components",
     "dnd5e.core.spell.preparation",
+    "dnd5e.core.progression.experience",
     "dnd5e.core.mcp.combat_mutation_guard",
     "dnd5e.core.mcp.opportunity_melee_only",
     "dnd5e.core.mcp.reaction_defense_atomicity",
