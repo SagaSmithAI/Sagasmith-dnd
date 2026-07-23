@@ -18,6 +18,7 @@ REQUIRED_BOUNDARIES = {
     "dnd5e.core.damage.zero_hp",
     "dnd5e.core.damage.knockout",
     "dnd5e.core.damage.stable_recovery",
+    "dnd5e.core.item.healing_potion",
     "dnd5e.core.movement.prone_crawl_stand",
     "dnd5e.core.movement.grapple_source",
     "dnd5e.core.movement.occupied_destination",

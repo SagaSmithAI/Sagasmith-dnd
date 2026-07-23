@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-CORE_RULE_PACK_VERSION = "1.31.0"
+CORE_RULE_PACK_VERSION = "1.32.0"
 
 
 @dataclass(frozen=True)
@@ -233,6 +233,13 @@ BOUNDARIES = (
         "lifecycle.recover_stable_creature",
         ("tests/test_lifecycle.py::test_stable_creature_recovers_one_hp_after_rolled_hours",),
         "bundled:srd/damage-and-healing",
+    ),
+    CoreBoundary(
+        "dnd5e.core.item.healing_potion",
+        ("2014", "2024"),
+        "consumables.healing_potion_formula",
+        ("tests/test_consumables.py::test_standard_healing_potion_is_edition_bound",),
+        "bundled:srd/potion-of-healing",
     ),
     CoreBoundary(
         "dnd5e.core.movement.prone_crawl_stand",
