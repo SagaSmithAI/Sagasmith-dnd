@@ -416,11 +416,18 @@ def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
 
 
 def _normalize_statblock_dice_ocr(content: str) -> str:
-    """Repair only an unambiguous one-die OCR token such as ``ld6`` or ``Id8``."""
+    """Repair an unambiguous one-die OCR token such as ``ld6`` or ``ldl0``."""
+
+    def normalize(match: re.Match[str]) -> str:
+        token = match.group(0)
+        sides = token[2:].replace("l", "1").replace("I", "1")
+        if not sides.isdigit() or int(sides) < 2:
+            return token
+        return f"1d{sides}"
 
     return re.sub(
-        r"(?<![A-Za-z0-9])[lI](?=d\d+\b)",
-        "1",
+        r"(?<![A-Za-z0-9])[1lI]d[0-9lI]+(?![A-Za-z0-9])",
+        normalize,
         content,
     )
 
