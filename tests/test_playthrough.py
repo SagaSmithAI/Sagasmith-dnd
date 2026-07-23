@@ -100,3 +100,40 @@ def test_ending_conditions_require_exact_source_and_machine_checks() -> None:
     manifest["ending"]["conditions"][0]["all_of"] = []
     with pytest.raises(ValueError, match="at least one machine check"):
         validate_party_state({"playthrough_manifest": manifest})
+
+
+def test_manifest_cannot_leave_lobby_before_quality_gate_passes() -> None:
+    manifest = _manifest()
+    manifest["status"] = "ready"
+    manifest["review_blocks"] = [{"kind": "pregen_review"}]
+    with pytest.raises(ValueError, match="review blocks"):
+        validate_party_state({"playthrough_manifest": manifest})
+
+    manifest["review_blocks"] = []
+    with pytest.raises(ValueError, match="members match selected_size"):
+        validate_party_state({"playthrough_manifest": manifest})
+
+    member = {
+        "actor_id": "",
+        "name": "Party member",
+        "status": "active",
+        "source": "generated",
+        "source_asset_path": "",
+        "level": 1,
+        "xp": 0,
+        "hit_points": {"current": 8, "maximum": 8},
+        "resources": {},
+        "equipment": [],
+        "knowledge_scope_actor_id": "",
+    }
+    manifest["party"]["members"] = []
+    for index in range(6):
+        current = deepcopy(member)
+        current["actor_id"] = f"actor-{index}"
+        current["knowledge_scope_actor_id"] = current["actor_id"]
+        manifest["party"]["members"].append(current)
+    validate_party_state({"playthrough_manifest": manifest})
+
+    manifest["status"] = "in_progress"
+    with pytest.raises(ValueError, match="current scene"):
+        validate_party_state({"playthrough_manifest": manifest})

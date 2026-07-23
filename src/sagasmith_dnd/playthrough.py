@@ -141,7 +141,7 @@ def validate_playthrough_manifest(value: Any) -> dict[str, Any]:
     _require_unique(npcs, "actor_id", "npcs")
     _require_unique(quests, "id", "quests")
     _require_unique(clues, "id", "clues")
-    return {
+    normalized = {
         "schema_version": SCHEMA_VERSION,
         "run_id": _required_text(manifest.get("run_id"), "run_id"),
         "campaign_line_id": _required_text(
@@ -168,6 +168,19 @@ def validate_playthrough_manifest(value: Any) -> dict[str, Any]:
             for index, item in enumerate(_list(manifest.get("review_blocks")))
         ],
     }
+    if status in {"ready", "in_progress", "completed"}:
+        if normalized["review_blocks"]:
+            raise ValueError("playthrough cannot leave lobby while review blocks remain")
+        selected_size = party["selected_size"]
+        if selected_size is None:
+            raise ValueError("playthrough cannot leave lobby without a selected party size")
+        if len(party["members"]) != selected_size:
+            raise ValueError(
+                "playthrough cannot leave lobby until party members match selected_size"
+            )
+    if status in {"in_progress", "completed"} and not current["scene_id"]:
+        raise ValueError("active playthrough requires a current scene")
+    return normalized
 
 
 def validate_source_ref(value: Any, *, field: str = "source_ref") -> dict[str, Any]:
@@ -636,4 +649,3 @@ def _require_unique(items: list[dict[str, Any]], key: str, field: str) -> None:
 
 def _is_sha256(value: str) -> bool:
     return len(value) == 64 and all(character in "0123456789abcdef" for character in value)
-
