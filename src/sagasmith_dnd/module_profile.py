@@ -49,16 +49,27 @@ _LOCATION_TITLE_SIGNALS = (
     "gate",
     "hall",
     "hideout",
+    "inn",
     "keep",
     "kitchen",
     "lair",
     "library",
+    "manor",
+    "orchard",
     "passage",
+    "provisions",
     "room",
     "shrine",
+    "shop",
+    "store",
+    "tap house",
+    "taphouse",
     "temple",
     "tower",
     "vault",
+    "coster",
+    "exchange",
+    "farm",
     "洞",
     "厅",
     "地窖",
@@ -655,9 +666,10 @@ class DndModuleProfile(GenericModuleProfile):
             level = len(heading.group(1))
             item: dict[str, object] | None = None
             title = heading.group(2).strip()
+            location_level = sub_level if sub_level is not None else room_level
             if (
-                room_level is not None
-                and level >= room_level
+                location_level is not None
+                and level >= location_level
                 and _looks_like_location_heading(title)
             ):
                 next_boundary = next(

@@ -234,6 +234,43 @@ def test_uncoded_location_heading_can_be_a_room_outside_reference_chapter() -> N
     ]
 
 
+def test_town_businesses_at_subsection_level_populate_scene_atlas() -> None:
+    content = (
+        "# Part 2: Phandalin\n"
+        "## TOWN DESCRIPTION\n"
+        "### STONEHILL INN\nThe local inn has six rooms for rent.\n"
+        "### BARTHEN'S PROVISIONS\nBarthen accepts wagon deliveries here.\n"
+        "### LIONSHIELD COSTER\nLinene trades from this merchant house.\n"
+        "### PHANDALIN MINER'S EXCHANGE\nLocal miners have their finds weighed.\n"
+        "### ALDERLEAF FARM\nThe farm lies at the edge of town.\n"
+        "### EDERMATH ORCHARD\nFruit trees surround a tidy cottage.\n"
+        "### SLEEPING GIANT TAP HOUSE\nRedbrands frequent this place.\n"
+        "### QUEST: ORE TROUBLE\nHarbin offers a reward.\n"
+        "#### SHRINE OF LUCK\nA small shrine stands nearby.\n"
+        "## REDBRAND HIDEOUT\nThe cellar lies under Tresendar Manor.\n"
+    )
+
+    scene = next(
+        item
+        for item in MarkdownModuleParser(profile=DndModuleProfile()).parse(content)[0].scenes
+        if item.title == "TOWN DESCRIPTION"
+    )
+
+    assert [item["title"] for item in scene.metadata["spatial"]["locations"]] == [
+        "STONEHILL INN",
+        "BARTHEN'S PROVISIONS",
+        "LIONSHIELD COSTER",
+        "PHANDALIN MINER'S EXCHANGE",
+        "ALDERLEAF FARM",
+        "EDERMATH ORCHARD",
+        "SLEEPING GIANT TAP HOUSE",
+        "SHRINE OF LUCK",
+    ]
+    assert "QUEST: ORE TROUBLE" not in [
+        item["title"] for item in scene.metadata["spatial"]["locations"]
+    ]
+
+
 def test_read_aloud_fragments_do_not_split_scenes() -> None:
     content = (
         "# Tomb\n## Nine Shrines\nDescription.\n"
