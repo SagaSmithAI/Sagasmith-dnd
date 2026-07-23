@@ -389,7 +389,7 @@ def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
         f"*{core.group('identity').strip()}*",
         "",
         f"**Armor Class** {core.group('armor').strip()}",
-        f"**Hit Points** {core.group('hit_points').strip()}",
+        f"**Hit Points** {_normalize_statblock_dice_ocr(core.group('hit_points').strip())}",
         f"**Speed** {core.group('speed').strip()}",
         "",
         "| STR | DEX | CON | INT | WIS | CHA |",
@@ -405,9 +405,24 @@ def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
         content = " ".join(parts).strip()
         if content:
             rendered.extend(
-                ("", f"## {section.title()}", "", _mark_statblock_entries(content))
+                (
+                    "",
+                    f"## {section.title()}",
+                    "",
+                    _mark_statblock_entries(_normalize_statblock_dice_ocr(content)),
+                )
             )
     return "\n".join(rendered).strip() + "\n"
+
+
+def _normalize_statblock_dice_ocr(content: str) -> str:
+    """Repair only an unambiguous one-die OCR token such as ``ld6`` or ``Id8``."""
+
+    return re.sub(
+        r"(?<![A-Za-z0-9])[lI](?=d\d+\b)",
+        "1",
+        content,
+    )
 
 
 def _split_statblock_details(content: str) -> tuple[dict[str, str], str]:

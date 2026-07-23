@@ -129,7 +129,7 @@ def test_module_statblock_chunks_become_review_ready_without_guessing_ocr() -> N
             "heading_path": [*base, "ACTIONS"],
             "content": (
                 "Scimitar. Melee Weapon Attack: +4 to hit, reach 5 ft., one target. "
-                "Hit: 5 (1d6 + 2) slashing damage. Shortbow. Ranged Weapon Attack: "
+                "Hit: 5 (ld6 + 2) slashing damage. Shortbow. Ranged Weapon Attack: "
                 "+4 to hit, range 80 ft./320 ft., one target. Hit: 5 (1d6 + 2) "
                 "piercing damage."
             ),
@@ -150,6 +150,7 @@ def test_module_statblock_chunks_become_review_ready_without_guessing_ocr() -> N
     assert candidate["validation"]["challenge_rating"] == "1/4"
     assert "**Armor Class** 15 (leather armor, shield)" in candidate["normalized_content"]
     assert "***Scimitar***. Melee Weapon Attack" in candidate["normalized_content"]
+    assert "Hit: 5 (1d6 + 2) slashing damage" in candidate["normalized_content"]
 
 
 def test_module_statblock_candidate_keeps_ambiguous_ocr_blocked() -> None:
