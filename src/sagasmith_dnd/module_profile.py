@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 
 from sagasmith_core.modules import GenericModuleProfile, SceneBoundary
@@ -55,6 +56,74 @@ _EXPLICIT_ROUTE_PATTERNS = (
         re.IGNORECASE,
     ),
 )
+_RUNTIME_MANIFEST = re.compile(
+    r"<!--\s*sagasmith-runtime-manifest\s*(?P<body>\{.*?\})\s*-->",
+    re.IGNORECASE | re.DOTALL,
+)
+_MANIFEST_ID = re.compile(r"^[a-z0-9][a-z0-9:_-]{0,199}$")
+_MANIFEST_COLLECTIONS = (
+    "entities",
+    "secrets",
+    "clues",
+    "plot_nodes",
+    "foreshadowing",
+    "branches",
+)
+
+
+def _runtime_manifest_metadata(content: str) -> dict[str, object]:
+    matches = list(_RUNTIME_MANIFEST.finditer(content))
+    if not matches:
+        return {}
+    errors: list[str] = []
+    if len(matches) > 1:
+        errors.append("module must contain at most one runtime manifest")
+    try:
+        manifest = json.loads(matches[0].group("body"))
+    except json.JSONDecodeError as exc:
+        return {"runtime_manifest_errors": [f"runtime manifest is invalid JSON: {exc.msg}"]}
+    if not isinstance(manifest, dict):
+        return {"runtime_manifest_errors": ["runtime manifest must be an object"]}
+    if manifest.get("schema_version") != 1:
+        errors.append("runtime manifest schema_version must be 1")
+    module_key = manifest.get("module_key")
+    if not isinstance(module_key, str) or not _MANIFEST_ID.fullmatch(module_key):
+        errors.append("runtime manifest module_key must be a stable lowercase id")
+
+    seen: set[str] = set()
+    for collection in _MANIFEST_COLLECTIONS:
+        values = manifest.get(collection, [])
+        if not isinstance(values, list):
+            errors.append(f"runtime manifest {collection} must be a list")
+            continue
+        for index, item in enumerate(values):
+            if not isinstance(item, dict):
+                errors.append(f"runtime manifest {collection}[{index}] must be an object")
+                continue
+            item_id = item.get("id")
+            if not isinstance(item_id, str) or not _MANIFEST_ID.fullmatch(item_id):
+                errors.append(
+                    f"runtime manifest {collection}[{index}].id must be a stable lowercase id"
+                )
+                continue
+            if item_id in seen:
+                errors.append(f"runtime manifest contains duplicate id: {item_id}")
+            seen.add(item_id)
+            if collection == "secrets" and not isinstance(item.get("initial_knowers", []), list):
+                errors.append(
+                    f"runtime manifest secrets[{index}].initial_knowers must be a list"
+                )
+            if collection in {"clues", "plot_nodes", "branches"} and not item.get(
+                "trigger"
+            ):
+                errors.append(f"runtime manifest {collection}[{index}].trigger is required")
+            if collection in {"plot_nodes", "branches"} and not isinstance(
+                item.get("consequences", []), list
+            ):
+                errors.append(
+                    f"runtime manifest {collection}[{index}].consequences must be a list"
+                )
+    return {"runtime_manifest": manifest, "runtime_manifest_errors": errors}
 
 
 def _has_cjk(text: str) -> bool:
@@ -283,7 +352,11 @@ def _spatial_manifest(
 
 class DndModuleProfile(GenericModuleProfile):
     name = "dnd5e"
-    version = "4"
+    version = "5"
+
+    def document_metadata(self, content: str) -> dict[str, object]:
+        """Parse and validate the optional generated-module runtime manifest."""
+        return _runtime_manifest_metadata(content)
 
     def classify_chunk(self, heading: str, text: str) -> str:
         if _ROOM.match(heading):

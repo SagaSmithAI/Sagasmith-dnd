@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import uuid
+import warnings
 from typing import Any
 
 from sagasmith_dnd.ability_generation import normalize_ability_generation
@@ -2569,6 +2570,12 @@ def set_resource_value(sheet: dict[str, Any], key: str, value: int) -> dict[str,
 
 
 def add_memory(notes: dict[str, Any], memory: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    """Append a legacy embedded note retained for character-document compatibility."""
+    warnings.warn(
+        "notes.memories is deprecated; persist new subjective memory as ActorKnowledge",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     value = validate_character_notes(notes)
     candidate = _object(memory, "memory")
     candidate.setdefault("id", _uuid())
@@ -2580,9 +2587,50 @@ def add_memory(notes: dict[str, Any], memory: dict[str, Any]) -> tuple[dict[str,
 def resolve_memory(
     notes: dict[str, Any], memory_id: str, status: str = "resolved"
 ) -> dict[str, Any]:
+    """Resolve a legacy embedded memory retained for document compatibility."""
+    warnings.warn(
+        "notes.memories is deprecated; revise ActorKnowledge for new runtime memory",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     value = validate_character_notes(notes)
     memory = next((entry for entry in value["memories"] if entry["id"] == memory_id), None)
     if memory is None:
         raise LookupError(memory_id)
     memory["status"] = status
     return validate_character_notes(value)
+
+
+def legacy_memory_candidates(
+    notes: dict[str, Any],
+    *,
+    actor_id: str,
+    include_inactive: bool = False,
+) -> list[dict[str, Any]]:
+    """Convert embedded v2 memories into explicit ActorKnowledge add payloads."""
+    normalized = validate_character_notes(notes)
+    candidates = []
+    for memory in normalized["memories"]:
+        if not include_inactive and memory["status"] != "active":
+            continue
+        candidates.append(
+            {
+                "action": "add",
+                "actor_id": actor_id,
+                "knowledge_key": f"legacy-memory:{memory['id']}",
+                "subject_ref": "",
+                "proposition": memory["summary"],
+                "epistemic_status": "known",
+                "confidence": memory["importance"],
+                "source_event_id": memory.get("source_event_id") or None,
+                "cause": "legacy_character_note",
+                "disclosure_scope": memory["visibility"],
+                "legacy_memory": {
+                    "id": memory["id"],
+                    "kind": memory["kind"],
+                    "participants": list(memory["participants"]),
+                    "status": memory["status"],
+                },
+            }
+        )
+    return candidates
