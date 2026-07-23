@@ -227,7 +227,12 @@ def _parse_senses(value: str, sheet: dict[str, Any], ability_scores: dict[str, i
 
 
 def _entry_blocks(markdown: str) -> list[tuple[str, str, str]]:
-    markers = list(re.finditer(r"(?m)^\*\*\*(.+?)\*\*\*\.\s*", markdown))
+    markers = list(
+        re.finditer(
+            r"(?<!\*)\*\*\*(.+?)\*\*\*\.\s*",
+            markdown,
+        )
+    )
     headings = list(re.finditer(r"(?im)^#{2,6}\s+(.+?)\s*$", markdown))
     result: list[tuple[str, str, str]] = []
     for index, marker in enumerate(markers):
@@ -289,7 +294,10 @@ def _parse_weapon(name: str, description: str, source_key: str) -> dict[str, Any
         last_damage_end = hit.end() + extra.end()
     on_hit_effect = description[last_damage_end:].strip().lstrip(". ,;").strip()
     reach = re.search(r"(?i)reach\s+(\d+)\s*ft", description)
-    ranges = re.search(r"(?i)range\s+(\d+)(?:\s*/\s*(\d+))?\s*ft", description)
+    ranges = re.search(
+        r"(?i)range\s+(\d+)(?:\s*ft\.?)?(?:\s*/\s*(\d+))?\s*ft\.?",
+        description,
+    )
     properties: list[str] = []
     if mode == "melee or ranged":
         properties.append("thrown")

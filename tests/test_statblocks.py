@@ -100,6 +100,39 @@ def test_commoner_statblock_becomes_an_exact_executable_actor_sheet() -> None:
     assert club["reach_ft"] == 5
 
 
+def test_multiple_statblock_actions_can_share_one_normalized_line() -> None:
+    parsed = parse_2014_statblock(
+        """# GOBLIN
+
+*Small humanoid (goblinoid), neutral evil*
+
+**Armor Class** 15 (leather armor, shield)
+**Hit Points** 7 (2d6)
+**Speed** 30 ft.
+
+| STR | DEX | CON | INT | WIS | CHA |
+|---:|---:|---:|---:|---:|---:|
+| 8 (-1) | 14 (+2) | 10 (+0) | 10 (+0) | 8 (-1) | 8 (-1) |
+**Skills** Stealth +6
+**Senses** darkvision 60 ft., passive Perception 9
+**Languages** Common, Goblin
+**Challenge** 1/4 (50 XP)
+
+## Actions
+
+***Scimitar***. Melee Weapon Attack: +4 to hit, reach 5 ft., one target.
+Hit: 5 (1d6 + 2) slashing damage. ***Shortbow***. Ranged Weapon Attack:
++4 to hit, range 80 ft./320 ft., one target. Hit: 5 (1d6 + 2) piercing damage.
+""",
+        source_key="module-review:goblin",
+    )
+
+    attacks = derive_character_sheet(parsed.sheet)["inventory"]["weapon_attacks"]
+    assert [attack["item_id"] for attack in attacks] == ["scimitar", "shortbow"]
+    assert attacks[1]["attack_type"] == "ranged"
+    assert attacks[1]["range_ft"] == {"normal": 80, "long": 320}
+
+
 def test_bandit_captain_preserves_exact_overrides_and_multiattack_composition() -> None:
     parsed = parse_2014_statblock(
         BANDIT_CAPTAIN,
