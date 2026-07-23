@@ -1921,6 +1921,8 @@ def validate_character_notes(
 
 
 def validate_party_state(state: dict[str, Any]) -> dict[str, Any]:
+    from sagasmith_dnd.random_stream import validate_random_stream_state
+
     value = copy.deepcopy(_object(state, "campaign.state"))
     party = _object(value.get("party") or {}, "campaign.state.party")
     _reject_unknown(party, "campaign.state.party", {"inventory", "notes"})
@@ -1938,6 +1940,8 @@ def validate_party_state(state: dict[str, Any]) -> dict[str, Any]:
     if len(world_effect_ids) != len(set(world_effect_ids)):
         raise ValueError("campaign.state.world_effects contains duplicate ids")
     value["world_effects"] = world_effects
+    if "random_stream" in value:
+        value["random_stream"] = validate_random_stream_state(value["random_stream"])
     return value
 
 

@@ -6,6 +6,8 @@ import copy
 import random
 from typing import Any
 
+from sagasmith_dnd.random_stream import RandomSource, active_random_source
+
 ABILITY_NAMES = (
     "strength",
     "dexterity",
@@ -52,10 +54,10 @@ def ruleset_for_edition(edition: str) -> tuple[str, dict[str, Any]]:
 def roll_ability_scores(
     edition: str,
     *,
-    rng: random.Random | None = None,
+    rng: RandomSource | None = None,
 ) -> dict[str, Any]:
     ruleset_id, ruleset = ruleset_for_edition(edition)
-    generator = rng or random
+    generator = rng or active_random_source() or random
     roll_rule = ruleset["roll"]
     values = []
     for _ in range(roll_rule["count"]):
@@ -140,7 +142,7 @@ def apply_ability_generation(
 def begin_rolled_ability_generation(
     sheet: dict[str, Any],
     *,
-    rng: random.Random | None = None,
+    rng: RandomSource | None = None,
 ) -> dict[str, Any]:
     """Generate and record one immutable pending score set before assignment."""
     result = copy.deepcopy(sheet)

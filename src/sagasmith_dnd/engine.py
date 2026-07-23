@@ -11,6 +11,8 @@ import random
 import re
 from dataclasses import dataclass
 
+from sagasmith_dnd.random_stream import RandomSource, active_random_source
+
 _DICE_TERM = re.compile(r"(?P<sign>[+-]?)(?P<count>\d*)d(?P<sides>\d+)|(?P<flat>[+-]?\d+)", re.I)
 
 
@@ -30,8 +32,8 @@ def proficiency_bonus(level: int) -> int:
     return 2 + (max(1, level) - 1) // 4
 
 
-def roll(expression: str, *, rng: random.Random | None = None) -> DiceResult:
-    generator = rng or random
+def roll(expression: str, *, rng: RandomSource | None = None) -> DiceResult:
+    generator = rng or active_random_source() or random
     normalized = expression.replace(" ", "")
     cursor = 0
     total = 0
@@ -66,9 +68,9 @@ def roll_d20(
     advantage: bool = False,
     disadvantage: bool = False,
     reroll_ones: bool = False,
-    rng: random.Random | None = None,
+    rng: RandomSource | None = None,
 ) -> dict:
-    generator = rng or random
+    generator = rng or active_random_source() or random
     advantage_applied = bool(advantage and not disadvantage)
     disadvantage_applied = bool(disadvantage and not advantage)
     values = [generator.randint(1, 20)]
@@ -121,7 +123,7 @@ def resolve_check(
     disadvantage: bool = False,
     kind: str = "ability",
     reroll_ones: bool = False,
-    rng: random.Random | None = None,
+    rng: RandomSource | None = None,
 ) -> dict:
     """Resolve an ability check or saving throw.
 
@@ -160,7 +162,7 @@ def resolve_attack(
     advantage: bool = False,
     disadvantage: bool = False,
     reroll_ones: bool = False,
-    rng: random.Random | None = None,
+    rng: RandomSource | None = None,
 ) -> dict:
     """Resolve an attack roll with attack-specific natural 1/20 semantics."""
     die = roll_d20(
@@ -189,7 +191,7 @@ def resolve_death_save(
     disadvantage: bool = False,
     bonus: int = 0,
     reroll_ones: bool = False,
-    rng: random.Random | None = None,
+    rng: RandomSource | None = None,
 ) -> dict:
     """Resolve a death save, including natural 1/20 special cases."""
     die = roll_d20(
