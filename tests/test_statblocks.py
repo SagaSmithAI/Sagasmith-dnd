@@ -178,7 +178,7 @@ def test_generic_multiattack_uses_only_unambiguous_compatible_weapon() -> None:
             "###### Actions",
             (
                 "###### Actions\n\n"
-                "***Multiattack***. The commoner makes two melee weapon attacks."
+                "***Multiattack***. The commoner makes two melee attacks."
             ),
         ),
         source_key="module-review:generic-multiattack",

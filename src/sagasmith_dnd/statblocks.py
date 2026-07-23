@@ -402,7 +402,7 @@ def _parse_multiattack(description: str, items: list[dict[str, Any]]) -> list[di
             generic = re.search(
                 r"(?i)\b(?:makes?|can make)\s+"
                 r"(one|two|three|four|five|six|\d+)\s+"
-                r"(melee|ranged)\s+weapon\s+attacks?\b",
+                r"(melee|ranged)\s+(?:weapon\s+)?attacks?\b",
                 group,
             )
             if generic:
