@@ -741,6 +741,8 @@ def apply_statblock_variant(
         "armor_class",
         "languages",
         "remove_actions",
+        "remove_items",
+        "remove_activities",
         "action_overrides",
     }
     unknown = set(variant) - allowed
@@ -822,6 +824,27 @@ def apply_statblock_variant(
         removed_ids.add(str(matches[0]["id"]))
         items.remove(matches[0])
 
+    remove_items = variant.get("remove_items", [])
+    if not isinstance(remove_items, list):
+        raise StatblockImportError("remove_items must be a list")
+    remove_item_keys = [str(item).strip().casefold() for item in remove_items]
+    if any(not item for item in remove_item_keys) or len(remove_item_keys) != len(
+        set(remove_item_keys)
+    ):
+        raise StatblockImportError("remove_items must contain unique non-empty ids or names")
+    for key in remove_item_keys:
+        matches = [
+            item
+            for item in items
+            if key in {str(item.get("id") or "").casefold(), str(item.get("name") or "").casefold()}
+        ]
+        if len(matches) != 1:
+            raise StatblockImportError(
+                f"remove_items entry must identify exactly one inventory item: {key}"
+            )
+        removed_ids.add(str(matches[0]["id"]))
+        items.remove(matches[0])
+
     action_overrides = variant.get("action_overrides", {})
     if not isinstance(action_overrides, dict):
         raise StatblockImportError("action_overrides must be an object keyed by weapon action id")
@@ -883,19 +906,62 @@ def apply_statblock_variant(
     if len(remaining_ids) != len(set(remaining_ids)):
         raise StatblockImportError("statblock variant produces duplicate weapon action ids")
     result["inventory"]["items"] = items
-    for activity in result["content"]["activities"]:
+    for slot, item_id in result["inventory"]["equipment_slots"].items():
+        if item_id in removed_ids:
+            result["inventory"]["equipment_slots"][slot] = None
+
+    remove_activities = variant.get("remove_activities", [])
+    if not isinstance(remove_activities, list):
+        raise StatblockImportError("remove_activities must be a list")
+    remove_activity_keys = [str(item).strip().casefold() for item in remove_activities]
+    if any(not item for item in remove_activity_keys) or len(remove_activity_keys) != len(
+        set(remove_activity_keys)
+    ):
+        raise StatblockImportError(
+            "remove_activities must contain unique non-empty ids or names"
+        )
+    activities = list(result["content"]["activities"])
+    for key in remove_activity_keys:
+        matches = [
+            activity
+            for activity in activities
+            if key
+            in {
+                str(activity.get("id") or "").casefold(),
+                str(activity.get("name") or "").casefold(),
+            }
+        ]
+        if len(matches) != 1:
+            raise StatblockImportError(
+                f"remove_activities entry must identify exactly one activity: {key}"
+            )
+        activities.remove(matches[0])
+
+    retained_activities: list[dict[str, Any]] = []
+    for activity in activities:
         choices = activity.get("choices")
         if not isinstance(choices, dict):
+            retained_activities.append(activity)
             continue
-        for option in choices.get("multiattack_options", []):
+        options = choices.get("multiattack_options")
+        if not isinstance(options, list):
+            retained_activities.append(activity)
+            continue
+        retained_options = []
+        for option in options:
+            references_removed_action = False
             for attack in option.get("attacks", []):
                 weapon_id = str(attack.get("weapon_id") or "")
                 if weapon_id in renamed_ids:
                     attack["weapon_id"] = renamed_ids[weapon_id]
                 if weapon_id in removed_ids:
-                    raise StatblockImportError(
-                        f"cannot remove action {weapon_id!r} while a multiattack references it"
-                    )
+                    references_removed_action = True
+            if not references_removed_action:
+                retained_options.append(option)
+        if retained_options:
+            choices["multiattack_options"] = retained_options
+            retained_activities.append(activity)
+    result["content"]["activities"] = retained_activities
 
     return validate_character_sheet(result)
 

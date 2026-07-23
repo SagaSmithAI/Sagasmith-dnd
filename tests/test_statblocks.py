@@ -391,6 +391,28 @@ def test_source_bound_variant_can_apply_common_module_instance_changes() -> None
     assert "Variant source: module-scene:d12" in attack["description"]
 
 
+def test_source_bound_variant_can_remove_confiscated_gear_and_dependent_activities() -> None:
+    parsed = parse_2014_statblock(BANDIT_CAPTAIN, source_key="srd-bandit-captain")
+
+    sheet = apply_statblock_variant(
+        parsed.sheet,
+        {
+            "source_ref": "module-scene:prisoner",
+            "armor_class": 10,
+            "remove_items": ["Studded Leather", "Scimitar", "Dagger"],
+            "remove_activities": ["Parry"],
+        },
+    )
+    derived = derive_character_sheet(sheet)
+
+    assert sheet["inventory"]["items"] == []
+    assert sheet["inventory"]["equipment_slots"]["armor"] is None
+    assert derived["armor_class"] == 10
+    assert derived["inventory"]["weapon_attacks"] == []
+    assert derived["multiattack_options"] == []
+    assert sheet["content"]["activities"] == []
+
+
 def test_statblock_variant_rejects_unbound_or_broad_sheet_patches() -> None:
     parsed = parse_2014_statblock(COMMONER, source_key="srd-commoner")
 
