@@ -397,7 +397,10 @@ def test_source_bound_variant_can_remove_confiscated_gear_and_dependent_activiti
     sheet = apply_statblock_variant(
         parsed.sheet,
         {
-            "source_ref": "module-scene:prisoner",
+            "source_refs": [
+                "module-chunk:prisoner-condition",
+                "module-chunk:prisoner-gear",
+            ],
             "armor_class": 10,
             "remove_items": ["Studded Leather", "Scimitar", "Dagger"],
             "remove_activities": ["Parry"],

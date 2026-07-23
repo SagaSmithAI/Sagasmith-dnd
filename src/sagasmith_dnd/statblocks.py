@@ -735,6 +735,7 @@ def apply_statblock_variant(
         raise StatblockImportError("statblock variant must be an object")
     allowed = {
         "source_ref",
+        "source_refs",
         "creature_type",
         "current_hit_points",
         "maximum_hit_points",
@@ -748,9 +749,23 @@ def apply_statblock_variant(
     unknown = set(variant) - allowed
     if unknown:
         raise StatblockImportError(f"unsupported statblock variant fields: {sorted(unknown)}")
+    source_refs = []
     source_ref = str(variant.get("source_ref") or "").strip()
-    if not source_ref:
-        raise StatblockImportError("statblock variant source_ref is required")
+    if source_ref:
+        source_refs.append(source_ref)
+    additional_source_refs = variant.get("source_refs", [])
+    if not isinstance(additional_source_refs, list):
+        raise StatblockImportError("statblock variant source_refs must be a list")
+    source_refs.extend(str(item).strip() for item in additional_source_refs)
+    if any(not item for item in source_refs):
+        raise StatblockImportError(
+            "statblock variant source_refs must contain non-empty strings"
+        )
+    if not source_refs:
+        raise StatblockImportError("statblock variant source_ref or source_refs is required")
+    if len(source_refs) != len(set(source_refs)):
+        raise StatblockImportError("statblock variant source refs must be unique")
+    source_ref = ", ".join(source_refs)
 
     result = deepcopy(sheet)
     if "creature_type" in variant:
