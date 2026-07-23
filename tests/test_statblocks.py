@@ -172,6 +172,47 @@ def test_bandit_captain_preserves_exact_overrides_and_multiattack_composition() 
     assert parsed.warnings == ("Parry: descriptive reaction is not automatically settled",)
 
 
+def test_generic_multiattack_uses_only_unambiguous_compatible_weapon() -> None:
+    parsed = parse_2014_statblock(
+        COMMONER.replace(
+            "###### Actions",
+            (
+                "###### Actions\n\n"
+                "***Multiattack***. The commoner makes two melee weapon attacks."
+            ),
+        ),
+        source_key="module-review:generic-multiattack",
+    )
+    derived = derive_character_sheet(parsed.sheet)
+
+    assert derived["multiattack_options"] == [
+        {
+            "id": "melee",
+            "attacks": [{"weapon_id": "club", "attack_mode": "melee", "count": 2}],
+        }
+    ]
+    assert parsed.warnings == ()
+
+
+def test_generic_multiattack_requires_one_compatible_weapon() -> None:
+    parsed = parse_2014_statblock(
+        BANDIT_CAPTAIN.replace(
+            (
+                "The captain makes three melee attacks: two with its scimitar and one with its\n"
+                "dagger. Or the captain makes two ranged attacks with its daggers."
+            ),
+            "The captain makes two melee weapon attacks.",
+        ),
+        source_key="module-review:ambiguous-generic-multiattack",
+    )
+
+    assert derive_character_sheet(parsed.sheet)["multiattack_options"] == []
+    assert parsed.warnings == (
+        "Parry: descriptive reaction is not automatically settled",
+        "Multiattack: Multiattack composition requires a DM ruling",
+    )
+
+
 def test_statblock_explicit_heavy_armor_preserves_non_ac_mechanics_with_override() -> None:
     parsed = parse_2014_statblock(
         BANDIT_CAPTAIN.replace(

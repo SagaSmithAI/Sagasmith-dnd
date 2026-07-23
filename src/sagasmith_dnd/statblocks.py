@@ -398,6 +398,40 @@ def _parse_multiattack(description: str, items: list[dict[str, Any]]) -> list[di
             if count is None or weapon_id is None:
                 return []
             attacks.append({"weapon_id": weapon_id, "attack_mode": attack_mode, "count": count})
+        if not attacks:
+            generic = re.search(
+                r"(?i)\b(?:makes?|can make)\s+"
+                r"(one|two|three|four|five|six|\d+)\s+"
+                r"(melee|ranged)\s+weapon\s+attacks?\b",
+                group,
+            )
+            if generic:
+                count = _count(generic.group(1))
+                attack_mode = generic.group(2).casefold()
+                compatible: list[dict[str, Any]] = []
+                for item in items:
+                    mechanics = dict(item.get("mechanics") or {})
+                    properties = {
+                        str(value).casefold() for value in mechanics.get("properties") or []
+                    }
+                    if attack_mode == "melee":
+                        supported = mechanics.get("attack_type") == "melee"
+                    else:
+                        supported = (
+                            mechanics.get("attack_type") == "ranged"
+                            or "thrown" in properties
+                        )
+                    if supported:
+                        compatible.append(item)
+                if count is None or len(compatible) != 1:
+                    return []
+                attacks.append(
+                    {
+                        "weapon_id": compatible[0]["id"],
+                        "attack_mode": attack_mode,
+                        "count": count,
+                    }
+                )
         if attacks:
             options.append({"id": attack_mode, "attacks": attacks})
     ids: dict[str, int] = {}
