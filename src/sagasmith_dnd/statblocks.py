@@ -472,7 +472,8 @@ def parse_2014_statblock(
     if not isinstance(markdown, str) or not markdown.strip():
         raise StatblockImportError("statblock source text is empty")
     heading = re.search(r"(?m)^#{1,6}\s+(.+?)\s*$", markdown)
-    actor_name = (name or (heading.group(1) if heading else "")).strip()
+    source_actor_name = (heading.group(1) if heading else "").strip()
+    actor_name = (name or source_actor_name).strip()
     if not actor_name:
         raise StatblockImportError("statblock is missing a creature heading")
     identity = re.search(r"(?m)^\*([^*\n]+)\*\s*$", markdown)
@@ -604,7 +605,7 @@ def parse_2014_statblock(
             entry_name,
             description,
             source_key,
-            actor_name=actor_name,
+            actor_name=source_actor_name,
         )
         if weapon:
             parser_warning = str(weapon.pop("_parser_warning", "") or "")

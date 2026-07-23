@@ -126,8 +126,10 @@ Hit: 5 (1d6 + 2) slashing damage. ***Shortbow***. Ranged Weapon Attack:
 Goblins are black-hearted and gather in overwhelming numbers.
 """,
         source_key="module-review:goblin",
+        name="Goblin Ambusher 1",
     )
 
+    assert parsed.name == "Goblin Ambusher 1"
     attacks = derive_character_sheet(parsed.sheet)["inventory"]["weapon_attacks"]
     assert [attack["item_id"] for attack in attacks] == ["scimitar", "shortbow"]
     assert attacks[1]["attack_type"] == "ranged"
