@@ -189,6 +189,21 @@ def stand_outside_combat(sheet: dict[str, Any]) -> dict[str, Any]:
     return {"sheet": value, "status": "stood", "removed_condition": "prone"}
 
 
+def knock_prone_outside_combat(sheet: dict[str, Any]) -> dict[str, Any]:
+    """Apply Prone to a conscious living creature without arbitrary condition edits."""
+    value = deepcopy(sheet)
+    hp = int(dict(value.get("combat", {}).get("hp") or {}).get("value", 0) or 0)
+    conditions = [str(item).casefold() for item in value.get("conditions", [])]
+    if hp <= 0 or "dead" in conditions or "unconscious" in conditions:
+        raise CombatEngineError(
+            "knocking prone outside combat requires a conscious living creature above 0 hit points"
+        )
+    if "prone" in conditions:
+        return {"sheet": value, "status": "already_prone", "added_condition": None}
+    value.setdefault("conditions", []).append("prone")
+    return {"sheet": value, "status": "knocked_prone", "added_condition": "prone"}
+
+
 def apply_rest(
     sheet: dict[str, Any],
     *,

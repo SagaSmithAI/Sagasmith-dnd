@@ -6,6 +6,7 @@ from sagasmith_dnd.lifecycle import (
     advance_effect_durations,
     advance_world_effect_durations,
     apply_rest,
+    knock_prone_outside_combat,
     record_rest_completion,
     recover_stable_creature,
     roll_rest_hit_dice,
@@ -377,6 +378,29 @@ def test_conscious_recovered_creature_can_stand_outside_combat() -> None:
     assert result["status"] == "stood"
     assert result["sheet"]["conditions"] == []
     assert sheet["conditions"] == ["prone"]
+
+
+def test_conscious_creature_can_be_knocked_prone_outside_combat() -> None:
+    sheet = default_character_sheet()
+    sheet["combat"]["hp"] = {"value": 7, "max": 12, "temp": 0}
+
+    result = knock_prone_outside_combat(sheet)
+    replay = knock_prone_outside_combat(result["sheet"])
+
+    assert result["status"] == "knocked_prone"
+    assert result["added_condition"] == "prone"
+    assert result["sheet"]["conditions"] == ["prone"]
+    assert replay["status"] == "already_prone"
+    assert sheet["conditions"] == []
+
+
+def test_outside_combat_knock_prone_rejects_incapacitated_creature() -> None:
+    sheet = default_character_sheet()
+    sheet["combat"]["hp"] = {"value": 0, "max": 12, "temp": 0}
+    sheet["conditions"] = ["unconscious"]
+
+    with pytest.raises(CombatEngineError, match="conscious living creature"):
+        knock_prone_outside_combat(sheet)
 
 
 def test_outside_combat_stand_rejects_unconscious_or_nonprone_creature() -> None:
