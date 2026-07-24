@@ -9,7 +9,7 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     manifest, artifacts = build_srd2014_content(workspace / "SagaSmith-dnd-skills")
     counts = Counter(item["kind"] for item in artifacts)
 
-    assert manifest["version"] == PACK_VERSION == "1.7.1"
+    assert manifest["version"] == PACK_VERSION == "1.7.2"
     assert counts["spell"] == 319
     assert counts["species"] == 13
     assert counts["class"] == 12
@@ -171,6 +171,30 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
         if item["id"] == "dnd5e.content.srd2014.feature.thief-use-magic-device"
     )
     assert use_magic_device["card"]["minimum_level"] == 13
+    subclass_minimums = {
+        item["card"]["name"]: item["card"]["minimum_level"]
+        for item in artifacts
+        if item["kind"] == "subclass"
+    }
+    subclass_features = [
+        item
+        for item in artifacts
+        if item["kind"] == "feature" and item["card"].get("subclass_name")
+    ]
+    assert all(
+        item["card"]["minimum_level"] >= subclass_minimums[item["card"]["subclass_name"]]
+        for item in subclass_features
+    )
+    assert next(
+        item
+        for item in subclass_features
+        if item["id"] == "dnd5e.content.srd2014.feature.circle-of-the-land-circle-spells"
+    )["card"]["minimum_level"] == 2
+    assert next(
+        item
+        for item in subclass_features
+        if item["id"] == "dnd5e.content.srd2014.feature.oath-of-devotion-oath-spells"
+    )["card"]["minimum_level"] == 3
 
     hill_dwarf = next(
         item

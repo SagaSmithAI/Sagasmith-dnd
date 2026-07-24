@@ -14,7 +14,7 @@ from sagasmith_dnd.spell_resolution import (
 )
 
 PACK_ID = "dnd5e.content.srd2014"
-PACK_VERSION = "1.7.1"
+PACK_VERSION = "1.7.2"
 
 _SUBCLASS_LEVELS = {
     "barbarian": 3,
@@ -193,9 +193,14 @@ def _subclass_features(folder: Path) -> list[dict[str, Any]]:
     for path in _markdown_files(folder):
         text = path.read_text(encoding="utf-8")
         class_name = _heading_or_stem(text, path)
+        subclass_floor = _SUBCLASS_LEVELS.get(class_name.casefold(), 1)
         for subclass_name, subclass_body in _subclass_sections(text):
             for title, body in _h4_sections(subclass_body):
-                level = _level_from_feature_text(body)
+                # Some source-authored subclass sections (for example, oath
+                # tenets and spell tables) do not repeat the level in prose.
+                # A missing prose match must never unlock a subclass feature
+                # before the class can select that subclass.
+                level = max(subclass_floor, _level_from_feature_text(body))
                 card = {
                     "name": title,
                     "source_key": subclass_name,
