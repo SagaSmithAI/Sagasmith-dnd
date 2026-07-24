@@ -465,6 +465,20 @@ def _parse_spellcasting(description: str) -> dict[str, Any] | None:
     )
     if not headers:
         return None
+    class_lists = [
+        match.group(1).casefold()
+        for match in re.finditer(
+            r"(?i)\b(?:from\s+the\s+)?([A-Za-z]+)'s\s+spell\s+list\b",
+            description,
+        )
+    ]
+    if not class_lists:
+        prepared_class = re.search(
+            r"(?i)\bfollowing\s+([A-Za-z]+)\s+spells?\s+(?:prepared|known)\b",
+            description,
+        )
+        if prepared_class:
+            class_lists.append(prepared_class.group(1).casefold())
     spells: list[dict[str, Any]] = []
     slots: dict[str, int] = {}
     for index, header in enumerate(headers):
@@ -484,6 +498,7 @@ def _parse_spellcasting(description: str) -> dict[str, Any] | None:
         ).casefold(),
         "save_dc": int(save_match.group(1)) if save_match else None,
         "attack_bonus": int(attack_match.group(1)) if attack_match else None,
+        "class_lists": list(dict.fromkeys(class_lists)),
         "slots": slots,
         "spells": spells,
         "description": description,
@@ -618,6 +633,7 @@ def parse_2014_statblock(
         spellcasting = _parse_spellcasting(spellcasting_entry[2])
     if spellcasting is not None:
         sheet["spellcasting"]["ability"] = spellcasting["ability"]
+        sheet["spellcasting"]["class_lists"] = list(spellcasting.get("class_lists") or [])
         sheet["spellcasting"]["attack_bonus_override"] = spellcasting.get("attack_bonus")
         sheet["spellcasting"]["save_dc_override"] = spellcasting.get("save_dc")
     spell_specs = {

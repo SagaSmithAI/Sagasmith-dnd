@@ -13,7 +13,13 @@ _SPELL_POINT_COSTS = {1: 2, 2: 3, 3: 5, 4: 6, 5: 7, 6: 9, 7: 10, 8: 11, 9: 13}
 CORE_SHIELD_MECHANIC_ID = "dnd5e.core.spell.shield"
 CORE_SHIELD_ATTACK_BOUNDARY_ID = "dnd5e.core.spell.shield_attack_ac"
 CORE_SHIELD_MAGIC_MISSILE_BOUNDARY_ID = "dnd5e.core.spell.shield_magic_missile"
+CORE_SHIELD_ITEM_BOUNDARY_ID = "dnd5e.core.spell.shield_item_ac"
 CORE_SHIELD_SPELL_ID = "dnd5e.content.srd2014.spell.shield"
+CORE_MAGE_ARMOR_MECHANIC_ID = "dnd5e.core.spell.mage_armor"
+CORE_MAGE_ARMOR_SPELL_ID = "dnd5e.content.srd2014.spell.mage-armor"
+CORE_MAGIC_ITEM_LAST_CHARGE_MECHANIC_ID = "dnd5e.core.magic_item.last_charge"
+CORE_MAGIC_ITEM_RECHARGE_MECHANIC_ID = "dnd5e.core.magic_item.charge_recovery"
+CORE_MAGIC_ITEM_SPELL_MECHANIC_ID = "dnd5e.core.spell.magic_item_charges"
 CORE_MAGIC_MISSILE_MECHANIC_ID = "dnd5e.core.spell.magic_missile"
 CORE_MAGIC_MISSILE_BOUNDARY_ID = "dnd5e.core.spell.magic_missile_darts"
 CORE_MAGIC_MISSILE_SPELL_ID = "dnd5e.content.srd2014.spell.magic-missile"
@@ -47,6 +53,354 @@ def is_core_magic_missile_spell(spell: dict[str, Any]) -> bool:
         CORE_MAGIC_MISSILE_MECHANIC_ID
         in {str(item) for item in spell.get("mechanic_refs", [])}
     )
+
+
+def magic_item_spell_card(
+    sheet: dict[str, Any],
+    *,
+    source_item_id: str,
+    spell_id: str,
+) -> dict[str, Any]:
+    """Return one server-hydrated spell card granted by a held magic item."""
+    _, specification, card = _magic_item_spell_binding(
+        sheet,
+        source_item_id=source_item_id,
+        spell_id=spell_id,
+    )
+    result = deepcopy(card)
+    definition = deepcopy(dict(result.get("definition") or {}))
+    casting_time = str(specification.get("casting_time") or "").strip()
+    if casting_time:
+        definition["casting_time"] = casting_time
+    spellcasting = dict(
+        dict(
+            next(
+                item
+                for item in sheet.get("inventory", {}).get("items", [])
+                if str(item.get("id") or "") == source_item_id
+            ).get("mechanics")
+            or {}
+        ).get("spellcasting")
+        or {}
+    )
+    if spellcasting.get("components_required") is False:
+        definition["components"] = {
+            "verbal": False,
+            "somatic": False,
+            "material": False,
+            "material_description": "",
+            "material_cost_cp": 0,
+            "consumed": False,
+        }
+    result["definition"] = definition
+    return result
+
+
+def consume_magic_item_spell_cast(
+    sheet: dict[str, Any],
+    *,
+    source_item_id: str,
+    spell_id: str,
+    cast_level: int | None = None,
+    ritual: bool = False,
+    rules: ResolutionContext | None = None,
+) -> dict[str, Any]:
+    """Pay one held magic item's charges and settle supported self-defense spells."""
+    before = apply_rule_event(sheet, "spell.before", rules)
+    if before.status != "committed":
+        return {
+            "sheet": deepcopy(sheet),
+            "spell_id": spell_id,
+            "status": before.status,
+            "rule_receipts": list(before.receipts),
+            "pending": list(before.pending),
+        }
+    value = before.sheet
+    item, specification, card = _magic_item_spell_binding(
+        value,
+        source_item_id=source_item_id,
+        spell_id=spell_id,
+    )
+    if ritual:
+        raise CombatEngineError("magic item spell casting cannot be declared as a ritual")
+    level = int(card.get("level", 0) or 0)
+    if cast_level is not None and int(cast_level) != level:
+        raise CombatEngineError("magic item spell cast_level must match its bound spell card")
+    charge_cost = int(specification.get("charge_cost", 0) or 0)
+    if charge_cost <= 0:
+        raise CombatEngineError("magic item spell charge_cost must be positive")
+    charges = item.get("charges")
+    if not isinstance(charges, dict) or int(charges.get("max", 0) or 0) <= 0:
+        raise CombatEngineError("magic item has no structured charge resource")
+    if int(charges.get("value", 0) or 0) < charge_cost:
+        raise CombatEngineError("magic item has insufficient charges")
+    charges["value"] = int(charges["value"]) - charge_cost
+    last_charge_expended = int(charges["value"]) == 0
+    charge_rules = dict(dict(item.get("mechanics") or {}).get("charge_rules") or {})
+    last_charge_rule = (
+        {
+            "formula": str(charge_rules.get("last_charge_check_formula") or ""),
+            "destroy_on": list(charge_rules.get("destroy_on") or []),
+        }
+        if last_charge_expended and charge_rules.get("last_charge_check_formula")
+        else None
+    )
+
+    effect_id = None
+    automatic_effect = None
+    mechanic_ids = [CORE_MAGIC_ITEM_SPELL_MECHANIC_ID]
+    if spell_id == CORE_MAGE_ARMOR_SPELL_ID:
+        effect_id = _apply_mage_armor_effect(
+            value,
+            spell_id=spell_id,
+            source=f"magic_item:{source_item_id}",
+        )
+        automatic_effect = "mage_armor"
+        mechanic_ids.append(CORE_MAGE_ARMOR_MECHANIC_ID)
+    elif is_core_shield_spell(card):
+        effect_id = _apply_shield_effect(
+            value,
+            spell_id=spell_id,
+            source=f"magic_item:{source_item_id}",
+        )
+        automatic_effect = "shield"
+        mechanic_ids.append(CORE_SHIELD_ITEM_BOUNDARY_ID)
+
+    after = apply_rule_event(value, "spell.after", rules)
+    if after.status != "committed":
+        return {
+            "sheet": deepcopy(sheet),
+            "spell_id": spell_id,
+            "status": after.status,
+            "rule_receipts": [*before.receipts, *after.receipts],
+            "pending": list(after.pending),
+        }
+    return {
+        "sheet": after.sheet,
+        "spell_id": spell_id,
+        "cast_level": level,
+        "payment": {
+            "economy": "item_charges",
+            "item_id": source_item_id,
+            "cost": charge_cost,
+            "level": level,
+            "ritual": False,
+        },
+        "source_item_id": source_item_id,
+        "effect_id": effect_id,
+        "automatic_effect": automatic_effect,
+        "last_charge_expended": last_charge_expended,
+        "last_charge_rule": last_charge_rule,
+        "concentration_started": False,
+        "ruling_required": [] if automatic_effect else ["targets_and_effect"],
+        "status": "committed",
+        "rule_receipts": [
+            *core_receipts(rules, mechanic_ids, "spell.magic_item.cast"),
+            *before.receipts,
+            *after.receipts,
+        ],
+        "ruleset_fingerprint": rules.fingerprint if rules else "",
+    }
+
+
+def recharge_magic_item_charges(
+    sheet: dict[str, Any],
+    *,
+    source_item_id: str,
+    trigger: str,
+    rolled_total: int,
+) -> dict[str, Any]:
+    """Apply a source-declared charge recovery roll to one magic item."""
+    value = deepcopy(sheet)
+    item = _magic_item_by_id(value, source_item_id)
+    if str(item.get("condition") or "normal") != "normal":
+        raise CombatEngineError("destroyed or damaged magic items cannot recover charges")
+    charges = item.get("charges")
+    if not isinstance(charges, dict) or int(charges.get("max", 0) or 0) <= 0:
+        raise CombatEngineError("magic item has no structured charge resource")
+    charge_rules = dict(dict(item.get("mechanics") or {}).get("charge_rules") or {})
+    expected_trigger = str(charge_rules.get("recovery_trigger") or "")
+    if not expected_trigger or not charge_rules.get("recovery_formula"):
+        raise CombatEngineError("magic item has no source-declared charge recovery")
+    if trigger != expected_trigger or str(charges.get("recovers_on") or "") != expected_trigger:
+        raise CombatEngineError("magic item charge recovery trigger does not match its source")
+    amount = int(rolled_total)
+    if amount < 0:
+        raise CombatEngineError("magic item charge recovery roll cannot be negative")
+    before = int(charges.get("value", 0) or 0)
+    charges["value"] = min(int(charges["max"]), before + amount)
+    return {
+        "sheet": value,
+        "item_id": source_item_id,
+        "trigger": trigger,
+        "formula": str(charge_rules["recovery_formula"]),
+        "rolled_total": amount,
+        "recovered": int(charges["value"]) - before,
+        "charges": deepcopy(charges),
+        "rule_receipts": [],
+    }
+
+
+def resolve_magic_item_last_charge(
+    sheet: dict[str, Any],
+    *,
+    source_item_id: str,
+    rolled_total: int,
+) -> dict[str, Any]:
+    """Resolve a source-declared check made after the item's last charge is spent."""
+    value = deepcopy(sheet)
+    item = _magic_item_by_id(value, source_item_id)
+    charges = item.get("charges")
+    if not isinstance(charges, dict) or int(charges.get("value", 0) or 0) != 0:
+        raise CombatEngineError("last-charge check requires an empty charge resource")
+    charge_rules = dict(dict(item.get("mechanics") or {}).get("charge_rules") or {})
+    formula = str(charge_rules.get("last_charge_check_formula") or "")
+    destroy_on = [int(result) for result in charge_rules.get("destroy_on") or []]
+    if not formula or not destroy_on:
+        raise CombatEngineError("magic item has no source-declared last-charge check")
+    result = int(rolled_total)
+    destroyed = result in destroy_on
+    if destroyed:
+        equipped_slot = item.get("equipped_slot")
+        item["condition"] = "destroyed"
+        item["equipped"] = False
+        item["equipped_slot"] = None
+        if equipped_slot:
+            slots = value.get("inventory", {}).get("equipment_slots", {})
+            if slots.get(equipped_slot) == source_item_id:
+                slots[equipped_slot] = None
+    return {
+        "sheet": value,
+        "item_id": source_item_id,
+        "formula": formula,
+        "rolled_total": result,
+        "destroy_on": destroy_on,
+        "destroyed": destroyed,
+        "rule_receipts": [],
+    }
+
+
+def _magic_item_by_id(sheet: dict[str, Any], source_item_id: str) -> dict[str, Any]:
+    item = next(
+        (
+            item
+            for item in sheet.get("inventory", {}).get("items", [])
+            if str(item.get("id") or "") == source_item_id
+        ),
+        None,
+    )
+    if item is None or item.get("kind") != "magic_item":
+        raise CombatEngineError("source_item_id is not a magic item on this actor card")
+    return item
+
+
+def _magic_item_spell_binding(
+    sheet: dict[str, Any],
+    *,
+    source_item_id: str,
+    spell_id: str,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    item = _magic_item_by_id(sheet, source_item_id)
+    if not item.get("equipped") or item.get("equipped_slot") not in {
+        "main_hand",
+        "off_hand",
+    }:
+        raise CombatEngineError("magic item spell casting requires the item to be held")
+    if str(item.get("condition") or "normal") != "normal":
+        raise CombatEngineError("magic item is not in a usable condition")
+    spellcasting = dict(dict(item.get("mechanics") or {}).get("spellcasting") or {})
+    if spellcasting.get("requires_attunement") and item.get("attunement") != "attuned":
+        raise CombatEngineError("magic item spell casting requires attunement")
+    matches = [
+        specification
+        for specification in spellcasting.get("spells") or []
+        if isinstance(specification, dict)
+        and str(dict(specification.get("card") or {}).get("id") or "") == spell_id
+    ]
+    if len(matches) != 1:
+        raise CombatEngineError("spell is not bound exactly once to this magic item")
+    specification = matches[0]
+    card = dict(specification.get("card") or {})
+    if (
+        not card.get("pack_id")
+        or not card.get("pack_version")
+        or not card.get("rule_refs")
+    ):
+        raise CombatEngineError("magic item spell card is not source-bound")
+    if spellcasting.get("requires_class_spell_list"):
+        actor_lists = {
+            _class_key(value)
+            for value in sheet.get("spellcasting", {}).get("class_lists", [])
+            if str(value).strip()
+        }
+        allowed = {
+            _class_key(value) for value in card.get("classes", []) if str(value).strip()
+        }
+        if not actor_lists:
+            raise CombatEngineError("magic item requires a recorded actor spell class list")
+        if not actor_lists & allowed:
+            raise CombatEngineError("magic item spell is not on this actor's spell class list")
+    return item, specification, card
+
+
+def _apply_mage_armor_effect(
+    sheet: dict[str, Any],
+    *,
+    spell_id: str,
+    source: str,
+) -> str:
+    if sheet.get("inventory", {}).get("equipment_slots", {}).get("armor"):
+        raise CombatEngineError("Mage Armor requires a target that is not wearing armor")
+    for effect in sheet.get("effects", []):
+        if effect.get("active") and effect.get("kind") == "spell_mage_armor":
+            effect["active"] = False
+            effect["ended_reason"] = "replaced_by_mage_armor"
+    effect_id = f"mage-armor-{uuid4().hex}"
+    sheet.setdefault("effects", []).append(
+        {
+            "id": effect_id,
+            "name": "Mage Armor",
+            "kind": "spell_mage_armor",
+            "source": source,
+            "source_spell_id": spell_id,
+            "active": True,
+            "concentration": False,
+            "duration": {"period": "hour", "remaining": 8},
+            "changes": [
+                {"path": "combat.ac.unarmored_base", "mode": "override", "value": 13}
+            ],
+            "description": "",
+        }
+    )
+    return effect_id
+
+
+def _apply_shield_effect(
+    sheet: dict[str, Any],
+    *,
+    spell_id: str,
+    source: str,
+) -> str:
+    for effect in sheet.get("effects", []):
+        if effect.get("active") and effect.get("kind") == "spell_shield":
+            effect["active"] = False
+            effect["ended_reason"] = "replaced_by_shield"
+    effect_id = f"shield-{uuid4().hex}"
+    sheet.setdefault("effects", []).append(
+        {
+            "id": effect_id,
+            "name": "Shield",
+            "kind": "spell_shield",
+            "source": source,
+            "source_spell_id": spell_id,
+            "active": True,
+            "concentration": False,
+            "duration": {"period": "turn_start", "remaining": 1},
+            "changes": [{"path": "derived.armor_class", "mode": "add", "value": 5}],
+            "description": "",
+        }
+    )
+    return effect_id
 
 
 def magic_missile_dart_count(cast_level: int) -> int:
@@ -202,24 +556,10 @@ def consume_shield_reaction(
     if applied.get("status") != "committed":
         return applied
     value = applied["sheet"]
-    for effect in value.get("effects", []):
-        if effect.get("active") and effect.get("kind") == "spell_shield":
-            effect["active"] = False
-            effect["ended_reason"] = "replaced_by_shield"
-    effect_id = f"shield-{uuid4().hex}"
-    value.setdefault("effects", []).append(
-        {
-            "id": effect_id,
-            "name": "Shield",
-            "kind": "spell_shield",
-            "source": CORE_SHIELD_MECHANIC_ID,
-            "source_spell_id": spell_id,
-            "active": True,
-            "concentration": False,
-            "duration": {"period": "turn_start", "remaining": 1},
-            "changes": [{"path": "derived.armor_class", "mode": "add", "value": 5}],
-            "description": "",
-        }
+    effect_id = _apply_shield_effect(
+        value,
+        spell_id=spell_id,
+        source=CORE_SHIELD_MECHANIC_ID,
     )
     normalized_trigger = str(trigger).strip().casefold().replace("-", "_")
     if normalized_trigger not in {"attack", "magic_missile"}:

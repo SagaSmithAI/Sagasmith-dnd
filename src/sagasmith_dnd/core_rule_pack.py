@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-CORE_RULE_PACK_VERSION = "1.32.0"
+CORE_RULE_PACK_VERSION = "1.33.0"
 
 
 @dataclass(frozen=True)
@@ -296,6 +296,41 @@ BOUNDARIES = (
         "spells.available_shield_magic_missile_defenses|consume_shield_reaction",
         ("tests/test_spells.py::test_magic_missile_allocation_and_shield_trigger_are_source_bound",),
         "bundled:srd/shield",
+    ),
+    CoreBoundary(
+        "dnd5e.core.spell.shield_item_ac",
+        ("2014", "2024"),
+        "spells.consume_magic_item_spell_cast",
+        ("tests/test_spells.py::test_magic_item_charges_cast_source_bound_defenses",),
+        "bundled:srd/shield",
+    ),
+    CoreBoundary(
+        "dnd5e.core.spell.mage_armor",
+        ("2014", "2024"),
+        "spells.consume_magic_item_spell_cast|character_schema._derive_armor_class",
+        ("tests/test_spells.py::test_magic_item_charges_cast_source_bound_defenses",),
+        "bundled:srd/mage-armor",
+    ),
+    CoreBoundary(
+        "dnd5e.core.spell.magic_item_charges",
+        ("2014", "2024"),
+        "spells.consume_magic_item_spell_cast",
+        ("tests/test_spells.py::test_magic_item_charges_cast_source_bound_defenses",),
+        "bundled:srd/magic-items",
+    ),
+    CoreBoundary(
+        "dnd5e.core.magic_item.charge_recovery",
+        ("2014", "2024"),
+        "spells.recharge_magic_item_charges",
+        ("tests/test_spells.py::test_magic_item_charge_recovery_and_last_charge_check",),
+        "bundled:srd/magic-items",
+    ),
+    CoreBoundary(
+        "dnd5e.core.magic_item.last_charge",
+        ("2014", "2024"),
+        "spells.resolve_magic_item_last_charge",
+        ("tests/test_spells.py::test_magic_item_charge_recovery_and_last_charge_check",),
+        "bundled:srd/magic-items",
     ),
     CoreBoundary(
         "dnd5e.core.spell.magic_missile_darts",

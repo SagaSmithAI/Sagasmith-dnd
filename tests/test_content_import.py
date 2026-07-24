@@ -230,6 +230,7 @@ def test_module_statblock_repairs_bounded_spellcasting_ocr() -> None:
     assert parsed.spellcasting["ability"] == "intelligence"
     assert parsed.spellcasting["save_dc"] == 13
     assert parsed.spellcasting["attack_bonus"] == 5
+    assert parsed.spellcasting["class_lists"] == ["wizard"]
     assert parsed.spellcasting["slots"] == {"1": 4, "2": 3}
     assert [item["name"] for item in parsed.spellcasting["spells"]] == [
         "light",

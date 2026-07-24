@@ -7,16 +7,20 @@ from sagasmith_dnd.character_schema import (
 )
 from sagasmith_dnd.lifecycle import advance_effect_durations
 from sagasmith_dnd.spells import (
+    CORE_MAGE_ARMOR_SPELL_ID,
     CORE_MAGIC_MISSILE_MECHANIC_ID,
     CORE_MAGIC_MISSILE_SPELL_ID,
     CORE_SHIELD_MECHANIC_ID,
     CORE_SHIELD_SPELL_ID,
     available_shield_attack_defenses,
     available_shield_magic_missile_defenses,
+    consume_magic_item_spell_cast,
     consume_readied_spell,
     consume_shield_reaction,
     consume_spell_cast,
+    recharge_magic_item_charges,
     replace_prepared_spells,
+    resolve_magic_item_last_charge,
     validate_magic_missile_allocations,
 )
 
@@ -117,6 +121,209 @@ def test_shield_reaction_pays_slot_and_expires_at_turn_start() -> None:
     )
     assert expired_effect["ended_reason"] == "duration_expired"
     assert derive_character_sheet(started["sheet"])["armor_class"] == 13
+
+
+def test_magic_item_charges_cast_source_bound_defenses() -> None:
+    sheet = default_character_sheet()
+    sheet["abilities"]["dexterity"]["score"] = 14
+    sheet["spellcasting"]["ability"] = "intelligence"
+    sheet["spellcasting"]["class_lists"] = ["wizard"]
+    mage_armor = _spell(CORE_MAGE_ARMOR_SPELL_ID, level=1)
+    mage_armor.update(
+        name="Mage Armor",
+        classes=["wizard", "sorcerer"],
+        pack_id="dnd5e.content.srd2014",
+        pack_version="1.6.0",
+        rule_refs=["bundled:srd2014/spells/mage-armor"],
+    )
+    shield = _spell(CORE_SHIELD_SPELL_ID, level=1)
+    shield.update(
+        name="Shield",
+        classes=["wizard", "sorcerer"],
+        pack_id="dnd5e.content.srd2014",
+        pack_version="1.6.0",
+        rule_refs=["bundled:srd2014/spells/shield"],
+        mechanic_refs=[CORE_SHIELD_MECHANIC_ID],
+    )
+    shield["definition"]["casting_time"] = "1 reaction, which you take when hit"
+    sheet["inventory"]["items"] = [
+        {
+            "id": "staff-of-defense",
+            "name": "Staff of Defense",
+            "kind": "magic_item",
+            "equipped": True,
+            "equipped_slot": "main_hand",
+            "attunement": "attuned",
+            "charges": {
+                "label": "Staff charges",
+                "value": 10,
+                "max": 10,
+                "recovers_on": "dawn",
+                "source_key": "module-chunk:staff",
+            },
+            "source_key": "module-chunk:staff",
+            "mechanics": {
+                "ac_bonus": 1,
+                "charge_rules": {
+                    "recovery_trigger": "dawn",
+                    "recovery_formula": "1d6+4",
+                    "last_charge_check_formula": "1d20",
+                    "destroy_on": [1],
+                },
+                "spellcasting": {
+                    "requires_attunement": True,
+                    "requires_class_spell_list": True,
+                    "components_required": False,
+                    "spells": [
+                        {
+                            "artifact_id": CORE_MAGE_ARMOR_SPELL_ID,
+                            "charge_cost": 1,
+                            "casting_time": "1 action",
+                            "card": mage_armor,
+                        },
+                        {
+                            "artifact_id": CORE_SHIELD_SPELL_ID,
+                            "charge_cost": 2,
+                            "casting_time": "1 action",
+                            "card": shield,
+                        },
+                    ],
+                },
+            },
+        }
+    ]
+    sheet["inventory"]["equipment_slots"]["main_hand"] = "staff-of-defense"
+    sheet = validate_character_sheet(sheet)
+
+    assert derive_character_sheet(sheet)["armor_class"] == 13
+    assert available_shield_attack_defenses(sheet) == []
+
+    armored = consume_magic_item_spell_cast(
+        sheet,
+        source_item_id="staff-of-defense",
+        spell_id=CORE_MAGE_ARMOR_SPELL_ID,
+    )
+    assert armored["status"] == "committed"
+    assert armored["automatic_effect"] == "mage_armor"
+    assert armored["payment"] == {
+        "economy": "item_charges",
+        "item_id": "staff-of-defense",
+        "cost": 1,
+        "level": 1,
+        "ritual": False,
+    }
+    staff = armored["sheet"]["inventory"]["items"][0]
+    assert staff["charges"]["value"] == 9
+    assert derive_character_sheet(armored["sheet"])["armor_class"] == 16
+
+    shielded = consume_magic_item_spell_cast(
+        armored["sheet"],
+        source_item_id="staff-of-defense",
+        spell_id=CORE_SHIELD_SPELL_ID,
+    )
+    assert shielded["automatic_effect"] == "shield"
+    assert shielded["sheet"]["inventory"]["items"][0]["charges"]["value"] == 7
+    assert derive_character_sheet(shielded["sheet"])["armor_class"] == 21
+
+    started = advance_effect_durations(shielded["sheet"], period="turn_start")
+    assert derive_character_sheet(started["sheet"])["armor_class"] == 16
+
+
+def test_magic_item_charge_recovery_and_last_charge_check() -> None:
+    sheet = default_character_sheet()
+    sheet["inventory"]["items"] = [
+        {
+            "id": "staff",
+            "name": "Staff",
+            "kind": "magic_item",
+            "equipped": True,
+            "equipped_slot": "main_hand",
+            "charges": {
+                "label": "Charges",
+                "value": 0,
+                "max": 10,
+                "recovers_on": "dawn",
+            },
+            "mechanics": {
+                "charge_rules": {
+                    "recovery_trigger": "dawn",
+                    "recovery_formula": "1d6+4",
+                    "last_charge_check_formula": "1d20",
+                    "destroy_on": [1],
+                }
+            },
+        }
+    ]
+    sheet["inventory"]["equipment_slots"]["main_hand"] = "staff"
+    sheet = validate_character_sheet(sheet)
+
+    safe = resolve_magic_item_last_charge(sheet, source_item_id="staff", rolled_total=2)
+    assert safe["destroyed"] is False
+    destroyed = resolve_magic_item_last_charge(sheet, source_item_id="staff", rolled_total=1)
+    assert destroyed["destroyed"] is True
+    assert destroyed["sheet"]["inventory"]["items"][0]["condition"] == "destroyed"
+    assert destroyed["sheet"]["inventory"]["equipment_slots"]["main_hand"] is None
+
+    recharged = recharge_magic_item_charges(
+        safe["sheet"],
+        source_item_id="staff",
+        trigger="dawn",
+        rolled_total=9,
+    )
+    assert recharged["recovered"] == 9
+    assert recharged["charges"]["value"] == 9
+
+
+def test_magic_item_spell_cast_requires_attunement_and_class_list() -> None:
+    sheet = default_character_sheet()
+    mage_armor = _spell(CORE_MAGE_ARMOR_SPELL_ID, level=1)
+    mage_armor.update(
+        classes=["wizard"],
+        pack_id="dnd5e.content.srd2014",
+        pack_version="1.6.0",
+        rule_refs=["bundled:srd2014/spells/mage-armor"],
+    )
+    sheet["inventory"]["items"] = [
+        {
+            "id": "staff",
+            "name": "Staff",
+            "kind": "magic_item",
+            "equipped": True,
+            "equipped_slot": "main_hand",
+            "attunement": "required",
+            "charges": {"label": "Charges", "value": 1, "max": 1, "recovers_on": "dawn"},
+            "mechanics": {
+                "spellcasting": {
+                    "requires_attunement": True,
+                    "requires_class_spell_list": True,
+                    "spells": [
+                        {
+                            "artifact_id": CORE_MAGE_ARMOR_SPELL_ID,
+                            "charge_cost": 1,
+                            "card": mage_armor,
+                        }
+                    ],
+                }
+            },
+        }
+    ]
+    sheet["inventory"]["equipment_slots"]["main_hand"] = "staff"
+    sheet = validate_character_sheet(sheet)
+
+    with pytest.raises(ValueError, match="requires attunement"):
+        consume_magic_item_spell_cast(
+            sheet,
+            source_item_id="staff",
+            spell_id=CORE_MAGE_ARMOR_SPELL_ID,
+        )
+
+    sheet["inventory"]["items"][0]["attunement"] = "attuned"
+    with pytest.raises(ValueError, match="recorded actor spell class list"):
+        consume_magic_item_spell_cast(
+            validate_character_sheet(sheet),
+            source_item_id="staff",
+            spell_id=CORE_MAGE_ARMOR_SPELL_ID,
+        )
 
 
 def test_shield_name_without_source_bound_mechanic_is_not_executable() -> None:

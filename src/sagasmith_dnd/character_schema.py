@@ -288,6 +288,7 @@ def default_character_sheet() -> dict[str, Any]:
         "resources": {},
         "spellcasting": {
             "ability": None,
+            "class_lists": [],
             "spell_slots": {},
             "pact_magic": None,
             "preparation": {
@@ -604,8 +605,67 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
             "ac_bonus": _integer(mechanics["ac_bonus"], f"{field}.ac_bonus", minimum=0),
             "magic_bonus": _integer(mechanics.get("magic_bonus"), f"{field}.magic_bonus"),
         }
-    if kind == "magic_item" and "ac_bonus" in mechanics:
-        mechanics["ac_bonus"] = _integer(mechanics["ac_bonus"], f"{field}.ac_bonus")
+    if kind == "magic_item":
+        if "ac_bonus" in mechanics:
+            mechanics["ac_bonus"] = _integer(mechanics["ac_bonus"], f"{field}.ac_bonus")
+        if "charge_rules" in mechanics:
+            charge_rules = _object(mechanics["charge_rules"], f"{field}.charge_rules")
+            _reject_unknown(
+                charge_rules,
+                f"{field}.charge_rules",
+                {
+                    "recovery_trigger",
+                    "recovery_formula",
+                    "last_charge_check_formula",
+                    "destroy_on",
+                },
+            )
+            recovery_trigger = _text(
+                charge_rules.get("recovery_trigger"),
+                f"{field}.charge_rules.recovery_trigger",
+                maximum=40,
+            )
+            if recovery_trigger and recovery_trigger not in RECOVERY_PERIODS:
+                raise ValueError(f"{field}.charge_rules.recovery_trigger is invalid")
+            destroy_on_raw = charge_rules.get("destroy_on") or []
+            if not isinstance(destroy_on_raw, list):
+                raise ValueError(f"{field}.charge_rules.destroy_on must be an array")
+            destroy_on = [
+                _integer(
+                    result,
+                    f"{field}.charge_rules.destroy_on[{index}]",
+                    minimum=1,
+                    maximum=1000,
+                )
+                for index, result in enumerate(destroy_on_raw)
+            ]
+            if len(destroy_on) != len(set(destroy_on)):
+                raise ValueError(f"{field}.charge_rules.destroy_on contains duplicate results")
+            recovery_formula = _text(
+                charge_rules.get("recovery_formula"),
+                f"{field}.charge_rules.recovery_formula",
+                maximum=100,
+            )
+            last_charge_check_formula = _text(
+                charge_rules.get("last_charge_check_formula"),
+                f"{field}.charge_rules.last_charge_check_formula",
+                maximum=100,
+            )
+            if bool(recovery_trigger) != bool(recovery_formula):
+                raise ValueError(
+                    f"{field}.charge_rules recovery trigger and formula must be supplied together"
+                )
+            if bool(last_charge_check_formula) != bool(destroy_on):
+                raise ValueError(
+                    f"{field}.charge_rules last-charge formula and destroy results "
+                    "must be supplied together"
+                )
+            mechanics["charge_rules"] = {
+                "recovery_trigger": recovery_trigger,
+                "recovery_formula": recovery_formula,
+                "last_charge_check_formula": last_charge_check_formula,
+                "destroy_on": destroy_on,
+            }
     return mechanics
 
 
@@ -1266,6 +1326,7 @@ def validate_character_sheet(
         "sheet.spellcasting",
         {
             "ability",
+            "class_lists",
             "spell_slots",
             "pact_magic",
             "preparation",
@@ -1280,6 +1341,9 @@ def validate_character_sheet(
     spell_ability = spellcasting["ability"]
     if spell_ability is not None and spell_ability not in ABILITY_NAMES:
         raise ValueError("sheet.spellcasting.ability is invalid")
+    spell_class_lists = _string_list(
+        spellcasting["class_lists"], "sheet.spellcasting.class_lists"
+    )
     slots = _object(spellcasting["spell_slots"], "sheet.spellcasting.spell_slots")
     normalized_slots = {
         key: _normalize_resource(item, f"sheet.spellcasting.spell_slots.{key}")
@@ -1582,6 +1646,20 @@ def validate_character_sheet(
     if len(selection_ids) != len(set(selection_ids)):
         raise ValueError("sheet.content.selections contains duplicate artifact ids")
 
+    inventory = validate_inventory(value["inventory"])
+    item_spell_ids = {
+        str(dict(specification.get("card") or {}).get("id") or "")
+        for item in inventory["items"]
+        for specification in (
+            dict(dict(item.get("mechanics") or {}).get("spellcasting") or {}).get(
+                "spells"
+            )
+            or []
+        )
+        if isinstance(specification, dict)
+    }
+    item_spell_ids.discard("")
+
     conditions = _string_list(value["conditions"], "sheet.conditions")
     effects = [
         _normalize_effect(item, f"sheet.effects[{index}]")
@@ -1597,7 +1675,7 @@ def validate_character_sheet(
         raise ValueError("a character can have only one active concentration effect")
     for effect in effects:
         source_spell_id = effect["source_spell_id"]
-        if source_spell_id and source_spell_id not in spell_ids:
+        if source_spell_id and source_spell_id not in spell_ids | item_spell_ids:
             raise ValueError("effect source_spell_id references an unknown spell")
 
     adventure_state = _object(value["adventure_state"], "sheet.adventure_state")
@@ -1608,7 +1686,6 @@ def validate_character_sheet(
     )
     reputation = _object(adventure_state["reputation"], "sheet.adventure_state.reputation")
     contributions = _object(adventure_state["contributions"], "sheet.adventure_state.contributions")
-    inventory = validate_inventory(value["inventory"])
     background_item_ids = _string_list(
         background_grants["equipment_item_ids"],
         "sheet.progression.background_grants.equipment_item_ids",
@@ -1752,6 +1829,7 @@ def validate_character_sheet(
         "resources": normalized_resources,
         "spellcasting": {
             "ability": spell_ability,
+            "class_lists": spell_class_lists,
             "spell_slots": normalized_slots,
             "pact_magic": pact_magic,
             "casting_economy": casting_economy,
@@ -2047,9 +2125,22 @@ def _derive_armor_class(
         "magic_items": [],
         "effects": [],
     }
+    mage_armor_effect_ids: set[str] = set()
+    mage_armor_base: int | None = None
+    for effect in active_effects:
+        for change in effect["changes"]:
+            if (
+                change["path"] == "combat.ac.unarmored_base"
+                and change["mode"] == "override"
+                and not isinstance(change["value"], bool)
+                and isinstance(change["value"], int)
+            ):
+                mage_armor_base = int(change["value"])
+                mage_armor_effect_ids.add(effect["id"])
+
+    armor_id = inventory["equipment_slots"]["armor"]
     total = breakdown["base"]
     if override is None:
-        armor_id = inventory["equipment_slots"]["armor"]
         if armor_id:
             armor = items[armor_id]
             mechanics = armor["mechanics"]
@@ -2071,6 +2162,12 @@ def _derive_armor_class(
                 "magic_bonus": mechanics["magic_bonus"],
                 "stealth_disadvantage": mechanics["stealth_disadvantage"],
             }
+        elif mage_armor_base is not None:
+            dexterity_bonus = ability_modifiers["dexterity"]
+            total = mage_armor_base + dexterity_bonus
+            breakdown["mode"] = "mage_armor"
+            breakdown["base"] = mage_armor_base
+            breakdown["dexterity_bonus"] = dexterity_bonus
         elif ac["base"] == 10:
             dexterity_bonus = ability_modifiers["dexterity"]
             total += dexterity_bonus
@@ -2100,6 +2197,19 @@ def _derive_armor_class(
     unresolved_effects: set[str] = set()
     for effect in active_effects:
         for change in effect["changes"]:
+            if change["path"] == "combat.ac.unarmored_base":
+                if effect["id"] in mage_armor_effect_ids and override is None and not armor_id:
+                    breakdown["effects"].append(
+                        {
+                            "effect_id": effect["id"],
+                            "name": effect["name"],
+                            "mode": change["mode"],
+                            "value": change["value"],
+                        }
+                    )
+                else:
+                    unresolved_effects.add(effect["id"])
+                continue
             if change["path"] not in {"derived.armor_class", "combat.ac"}:
                 unresolved_effects.add(effect["id"])
                 continue
