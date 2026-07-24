@@ -14,7 +14,7 @@ from sagasmith_dnd.spell_resolution import (
 )
 
 PACK_ID = "dnd5e.content.srd2014"
-PACK_VERSION = "1.7.2"
+PACK_VERSION = "1.8.0"
 
 _SUBCLASS_LEVELS = {
     "barbarian": 3,
@@ -166,17 +166,20 @@ def _class_features(folder: Path) -> list[dict[str, Any]]:
         class_name = _heading_or_stem(text, path)
         levels = _class_feature_levels(text)
         for title, body in _h3_sections_before_first_h2(text):
-            minimum_level = levels.get(_feature_key(title))
-            if minimum_level is None:
+            unlock_levels = levels.get(_feature_key(title))
+            if not unlock_levels:
                 continue
             card = {
                 "name": title,
                 "source_key": class_name,
                 "class_name": class_name,
-                "minimum_level": minimum_level,
+                "minimum_level": unlock_levels[0],
+                "unlock_levels": unlock_levels,
                 "description": body[:2000],
             }
             card.update(_known_feature_structure(class_name, title, body))
+            if len(unlock_levels) > 1 and card.get("selection_requirements"):
+                card["repeatable_selection_levels"] = unlock_levels
             result.append(
                 _artifact(
                     "feature",
@@ -468,7 +471,7 @@ def _h4_sections(text: str) -> Iterable[tuple[str, str]]:
         yield match.group(1).strip(), text[match.end() : end].strip()
 
 
-def _class_feature_levels(text: str) -> dict[str, int]:
+def _class_feature_levels(text: str) -> dict[str, list[int]]:
     lines = text.splitlines()
     for index, line in enumerate(lines):
         if not line.lstrip().startswith("|"):
@@ -476,7 +479,7 @@ def _class_feature_levels(text: str) -> dict[str, int]:
         headers = _table_cells(line)
         if "Level" not in headers or "Features" not in headers:
             continue
-        result: dict[str, int] = {}
+        result: dict[str, list[int]] = {}
         row_index = index + 2
         while row_index < len(lines) and lines[row_index].lstrip().startswith("|"):
             values = _table_cells(lines[row_index])
@@ -487,7 +490,9 @@ def _class_feature_levels(text: str) -> dict[str, int]:
                 for feature in row.get("Features", "").split(","):
                     key = _feature_key(feature)
                     if key and key != "-":
-                        result.setdefault(key, level)
+                        unlocks = result.setdefault(key, [])
+                        if level not in unlocks:
+                            unlocks.append(level)
             row_index += 1
         return result
     return {}
@@ -514,6 +519,15 @@ def _level_from_feature_text(body: str) -> int:
 
 def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str, Any]:
     key = (class_name.casefold(), title.casefold())
+    if title.casefold() == "ability score improvement":
+        return {
+            "selection_requirements": {
+                "field": "ability_score_increases",
+                "kind": "ability_score_increase",
+                "allowed_distributions": [[2], [1, 1]],
+                "maximum_score": 20,
+            }
+        }
     if key == ("fighter", "second wind"):
         return {
             "activation": {"type": "bonus_action", "cost": 1},
@@ -586,6 +600,7 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
                 "field": "proficiencies",
                 "count": 2,
                 "requires_existing_proficiency": True,
+                "requires_new_expertise": True,
             }
         }
     if key == ("bard", "expertise"):
@@ -594,6 +609,7 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
                 "field": "proficiencies",
                 "count": 2,
                 "requires_existing_proficiency": True,
+                "requires_new_expertise": True,
                 "skills_only": True,
             }
         }

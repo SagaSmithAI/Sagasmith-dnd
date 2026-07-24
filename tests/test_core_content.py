@@ -9,7 +9,7 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     manifest, artifacts = build_srd2014_content(workspace / "SagaSmith-dnd-skills")
     counts = Counter(item["kind"] for item in artifacts)
 
-    assert manifest["version"] == PACK_VERSION == "1.7.2"
+    assert manifest["version"] == PACK_VERSION == "1.8.0"
     assert counts["spell"] == 319
     assert counts["species"] == 13
     assert counts["class"] == 12
@@ -151,6 +151,7 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
         "field": "proficiencies",
         "count": 2,
         "requires_existing_proficiency": True,
+        "requires_new_expertise": True,
         "skills_only": True,
     }
     lore_proficiencies = next(
@@ -195,6 +196,35 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
         for item in subclass_features
         if item["id"] == "dnd5e.content.srd2014.feature.oath-of-devotion-oath-spells"
     )["card"]["minimum_level"] == 3
+    rogue_expertise = next(
+        item
+        for item in artifacts
+        if item["id"] == "dnd5e.content.srd2014.feature.rogue-expertise"
+    )
+    assert rogue_expertise["card"]["unlock_levels"] == [1, 6]
+    assert rogue_expertise["card"]["repeatable_selection_levels"] == [1, 6]
+    assert rogue_expertise["card"]["selection_requirements"]["requires_new_expertise"] is True
+    fighter_asi = next(
+        item
+        for item in artifacts
+        if item["id"] == "dnd5e.content.srd2014.feature.fighter-ability-score-improvement"
+    )
+    assert fighter_asi["card"]["unlock_levels"] == [4, 6, 8, 12, 14, 16, 19]
+    assert fighter_asi["card"]["repeatable_selection_levels"] == [
+        4,
+        6,
+        8,
+        12,
+        14,
+        16,
+        19,
+    ]
+    assert fighter_asi["card"]["selection_requirements"] == {
+        "field": "ability_score_increases",
+        "kind": "ability_score_increase",
+        "allowed_distributions": [[2], [1, 1]],
+        "maximum_score": 20,
+    }
 
     hill_dwarf = next(
         item

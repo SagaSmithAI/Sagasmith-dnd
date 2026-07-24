@@ -272,7 +272,12 @@ def default_character_sheet() -> dict[str, Any]:
             "size": "medium",
             "alignment": "",
             "languages": [],
-            "proficiencies": {"armor": [], "weapons": [], "tools": []},
+            "proficiencies": {
+                "armor": [],
+                "weapons": [],
+                "tools": [],
+                "tool_expertise": [],
+            },
             "resistances": [],
             "immunities": [],
             "vulnerabilities": [],
@@ -1312,7 +1317,11 @@ def validate_character_sheet(
         },
     )
     proficiencies = _object(traits["proficiencies"], "sheet.traits.proficiencies")
-    _reject_unknown(proficiencies, "sheet.traits.proficiencies", {"armor", "weapons", "tools"})
+    _reject_unknown(
+        proficiencies,
+        "sheet.traits.proficiencies",
+        {"armor", "weapons", "tools", "tool_expertise"},
+    )
     senses = _object(traits["senses"], "sheet.traits.senses")
     _reject_unknown(senses, "sheet.traits.senses", {*SENSE_NAMES, "passive_perception_bonus"})
 
@@ -1464,6 +1473,7 @@ def validate_character_sheet(
                     "activation",
                     "scaling",
                     "choices",
+                    "advancement_grants",
                     "pack_id",
                     "pack_version",
                     "rule_refs",
@@ -1516,6 +1526,79 @@ def validate_character_sheet(
                         ),
                     }
                 )
+            advancement_grants = []
+            seen_grant_levels: set[int] = set()
+            for grant_index, grant in enumerate(
+                _array(
+                    entry.get("advancement_grants") or [],
+                    f"sheet.content.{name}[{index}].advancement_grants",
+                )
+            ):
+                grant_entry = _object(
+                    grant,
+                    (
+                        f"sheet.content.{name}[{index}]."
+                        f"advancement_grants[{grant_index}]"
+                    ),
+                )
+                _reject_unknown(
+                    grant_entry,
+                    (
+                        f"sheet.content.{name}[{index}]."
+                        f"advancement_grants[{grant_index}]"
+                    ),
+                    {"level", "choices", "pack_id", "pack_version", "rule_refs"},
+                )
+                grant_level = _integer(
+                    grant_entry.get("level"),
+                    (
+                        f"sheet.content.{name}[{index}]."
+                        f"advancement_grants[{grant_index}].level"
+                    ),
+                    minimum=1,
+                    maximum=20,
+                )
+                if grant_level in seen_grant_levels:
+                    raise ValueError(
+                        f"sheet.content.{name}[{index}].advancement_grants "
+                        "contains duplicate levels"
+                    )
+                seen_grant_levels.add(grant_level)
+                advancement_grants.append(
+                    {
+                        "level": grant_level,
+                        "choices": _object(
+                            grant_entry.get("choices") or {},
+                            (
+                                f"sheet.content.{name}[{index}]."
+                                f"advancement_grants[{grant_index}].choices"
+                            ),
+                        ),
+                        "pack_id": _text(
+                            grant_entry.get("pack_id"),
+                            (
+                                f"sheet.content.{name}[{index}]."
+                                f"advancement_grants[{grant_index}].pack_id"
+                            ),
+                            maximum=200,
+                        ),
+                        "pack_version": _text(
+                            grant_entry.get("pack_version"),
+                            (
+                                f"sheet.content.{name}[{index}]."
+                                f"advancement_grants[{grant_index}].pack_version"
+                            ),
+                            maximum=64,
+                        ),
+                        "rule_refs": _string_list(
+                            grant_entry.get("rule_refs") or [],
+                            (
+                                f"sheet.content.{name}[{index}]."
+                                f"advancement_grants[{grant_index}].rule_refs"
+                            ),
+                        ),
+                    }
+                )
             result.append(
                 {
                     "id": _text(
@@ -1562,6 +1645,7 @@ def validate_character_sheet(
                     "choices": _object(
                         entry.get("choices") or {}, f"sheet.content.{name}[{index}].choices"
                     ),
+                    "advancement_grants": advancement_grants,
                     "pack_id": _text(
                         entry.get("pack_id"),
                         f"sheet.content.{name}[{index}].pack_id",
@@ -1805,7 +1889,7 @@ def validate_character_sheet(
             "languages": _string_list(traits["languages"], "sheet.traits.languages"),
             "proficiencies": {
                 key: _string_list(proficiencies[key], f"sheet.traits.proficiencies.{key}")
-                for key in ("armor", "weapons", "tools")
+                for key in ("armor", "weapons", "tools", "tool_expertise")
             },
             "resistances": _string_list(traits["resistances"], "sheet.traits.resistances"),
             "immunities": _string_list(traits["immunities"], "sheet.traits.immunities"),
