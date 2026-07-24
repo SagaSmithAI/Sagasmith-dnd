@@ -14,7 +14,7 @@ from sagasmith_dnd.spell_resolution import (
 )
 
 PACK_ID = "dnd5e.content.srd2014"
-PACK_VERSION = "1.9.0"
+PACK_VERSION = "1.10.0"
 
 _SUBCLASS_LEVELS = {
     "barbarian": 3,
@@ -165,6 +165,7 @@ def _class_features(folder: Path) -> list[dict[str, Any]]:
         text = path.read_text(encoding="utf-8")
         class_name = _heading_or_stem(text, path)
         levels = _class_feature_levels(text)
+        resource_structures = _class_resource_structures(class_name, text)
         sections: dict[str, tuple[str, list[str]]] = {}
         for title, body in _h3_sections_before_first_h2(text):
             key = _feature_key(title)
@@ -186,6 +187,7 @@ def _class_features(folder: Path) -> list[dict[str, Any]]:
                 "description": body[:2000],
             }
             card.update(_known_feature_structure(class_name, title, body))
+            card.update(resource_structures.get(feature_key, {}))
             if len(unlock_levels) > 1 and card.get("selection_requirements"):
                 card["repeatable_selection_levels"] = unlock_levels
             result.append(
@@ -569,6 +571,16 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
             },
             "choices": {"outcome": "take one additional action on the current turn"},
         }
+    if key == ("wizard", "arcane recovery"):
+        return {
+            "uses": {
+                "label": "Arcane Recovery",
+                "value": 1,
+                "max": 1,
+                "recovers_on": "manual",
+                "source_key": "Wizard",
+            }
+        }
     if key == ("rogue", "cunning action"):
         return {
             "activation": {"type": "bonus_action", "cost": 1},
@@ -880,6 +892,344 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
     if key == ("cleric", "bonus proficiency") and "heavy armor" in body.casefold():
         return {"mechanical_grants": {"armor_proficiencies": ["heavy armor"]}}
     return {}
+
+
+def _class_resource_structures(class_name: str, text: str) -> dict[str, dict[str, Any]]:
+    """Compile deterministic class-table resource growth into portable cards."""
+
+    rows = _primary_class_table_rows(text)
+    if not rows:
+        return {}
+    key = class_name.casefold()
+    result: dict[str, dict[str, Any]] = {}
+
+    def add_uses(
+        feature: str,
+        *,
+        label: str,
+        maximum_by_level: dict[int, int],
+        recovers_on: str,
+        recovery_by_level: dict[int, str] | None = None,
+        unlimited_at_level: int | None = None,
+        maximum_formula: dict[str, Any] | None = None,
+        activation: dict[str, Any] | None = None,
+    ) -> None:
+        scaling = _resource_scaling(
+            target="uses",
+            label=label,
+            class_name=class_name,
+            maximum_by_level=maximum_by_level,
+            recovers_on=recovers_on,
+            recovery_by_level=recovery_by_level,
+            unlimited_at_level=unlimited_at_level,
+            maximum_formula=maximum_formula,
+        )
+        initial = _initial_resource_from_scaling(scaling)
+        structure: dict[str, Any] = {
+            "uses": initial,
+            "resource_scaling": scaling,
+        }
+        if activation:
+            structure["activation"] = activation
+        result[feature] = structure
+
+    def add_shared(
+        feature: str,
+        *,
+        resource_key: str,
+        label: str,
+        maximum_by_level: dict[int, int],
+        recovers_on: str,
+        unlimited_at_level: int | None = None,
+        maximum_formula: dict[str, Any] | None = None,
+        activation: dict[str, Any] | None = None,
+    ) -> None:
+        scaling = _resource_scaling(
+            target=resource_key,
+            label=label,
+            class_name=class_name,
+            maximum_by_level=maximum_by_level,
+            recovers_on=recovers_on,
+            unlimited_at_level=unlimited_at_level,
+            maximum_formula=maximum_formula,
+        )
+        structure = {
+            "resource_key": resource_key,
+            "mechanical_grants": {
+                "resources": {resource_key: _initial_resource_from_scaling(scaling)}
+            },
+            "resource_scaling": scaling,
+        }
+        if activation:
+            structure["activation"] = activation
+        result[feature] = structure
+
+    if key == "barbarian":
+        rage_maximum, rage_unlimited = _numeric_column_scaling(rows, "Rages")
+        add_uses(
+            "rage",
+            label="Rage",
+            maximum_by_level=rage_maximum,
+            recovers_on="long_rest",
+            unlimited_at_level=rage_unlimited,
+            activation={"type": "bonus_action", "cost": 1},
+        )
+        result["rage"]["scaling"] = _numeric_column_display_scaling(
+            rows, "Rage Damage", "rage damage bonus"
+        )
+    elif key == "bard":
+        add_uses(
+            "bardic inspiration",
+            label="Bardic Inspiration",
+            maximum_by_level={},
+            recovers_on="long_rest",
+            recovery_by_level={5: "short_rest"},
+            maximum_formula={
+                "kind": "ability_modifier",
+                "ability": "charisma",
+                "minimum": 1,
+                "multiplier": 1,
+                "offset": 0,
+            },
+            activation={"type": "bonus_action", "cost": 1},
+        )
+        result["bardic inspiration"]["scaling"] = _feature_display_scaling(
+            rows, "Bardic Inspiration", "inspiration die"
+        )
+        result["song of rest"] = {
+            "scaling": _feature_display_scaling(rows, "Song of Rest", "rest healing die")
+        }
+    elif key == "cleric":
+        channel_maximum = _feature_use_scaling(rows, "Channel Divinity")
+        add_shared(
+            "channel divinity",
+            resource_key="channel_divinity",
+            label="Channel Divinity",
+            maximum_by_level=channel_maximum,
+            recovers_on="short_rest",
+            activation={"type": "action", "cost": 1},
+        )
+    elif key == "druid":
+        add_uses(
+            "wild shape",
+            label="Wild Shape",
+            maximum_by_level={2: 2},
+            recovers_on="short_rest",
+            unlimited_at_level=20,
+            activation={"type": "action", "cost": 1},
+        )
+    elif key == "fighter":
+        add_uses(
+            "action surge",
+            label="Action Surge",
+            maximum_by_level=_feature_use_scaling(rows, "Action Surge"),
+            recovers_on="short_rest",
+            activation={"type": "special", "cost": 0},
+        )
+        add_uses(
+            "indomitable",
+            label="Indomitable",
+            maximum_by_level=_feature_use_scaling(rows, "Indomitable"),
+            recovers_on="long_rest",
+            activation={"type": "special", "cost": 0},
+        )
+    elif key == "monk":
+        ki_maximum, _ = _numeric_column_scaling(rows, "Ki Points")
+        add_shared(
+            "ki",
+            resource_key="ki",
+            label="Ki Points",
+            maximum_by_level=ki_maximum,
+            recovers_on="short_rest",
+        )
+        result["martial arts"] = {
+            "scaling": _numeric_column_display_scaling(
+                rows, "Martial Arts", "martial arts die"
+            )
+        }
+    elif key == "paladin":
+        add_uses(
+            "divine sense",
+            label="Divine Sense",
+            maximum_by_level={},
+            recovers_on="long_rest",
+            maximum_formula={
+                "kind": "ability_modifier",
+                "ability": "charisma",
+                "minimum": 1,
+                "multiplier": 1,
+                "offset": 1,
+            },
+            activation={"type": "action", "cost": 1},
+        )
+        add_shared(
+            "lay on hands",
+            resource_key="lay_on_hands",
+            label="Lay on Hands",
+            maximum_by_level={},
+            recovers_on="long_rest",
+            maximum_formula={
+                "kind": "class_level",
+                "minimum": 5,
+                "multiplier": 5,
+                "offset": 0,
+            },
+            activation={"type": "action", "cost": 1},
+        )
+    elif key == "sorcerer":
+        sorcery_maximum, _ = _numeric_column_scaling(rows, "Sorcery Points")
+        add_shared(
+            "font of magic",
+            resource_key="sorcery_points",
+            label="Sorcery Points",
+            maximum_by_level=sorcery_maximum,
+            recovers_on="long_rest",
+        )
+    return result
+
+
+def _primary_class_table_rows(text: str) -> list[tuple[int, dict[str, str]]]:
+    result: list[tuple[int, dict[str, str]]] = []
+    for _, fields in _markdown_table_rows(text):
+        if "Level" not in fields or "Features" not in fields:
+            continue
+        match = re.match(r"(\d+)", fields["Level"])
+        if match:
+            result.append((int(match.group(1)), fields))
+    return result[:20]
+
+
+def _resource_scaling(
+    *,
+    target: str,
+    label: str,
+    class_name: str,
+    maximum_by_level: dict[int, int],
+    recovers_on: str,
+    recovery_by_level: dict[int, str] | None = None,
+    unlimited_at_level: int | None = None,
+    maximum_formula: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "target": target,
+        "label": label,
+        "class_name": class_name,
+        "maximum_by_level": {
+            str(level): maximum for level, maximum in _changes_only(maximum_by_level).items()
+        },
+        "recovers_on": recovers_on,
+        "recovery_by_level": {
+            str(level): recovery for level, recovery in (recovery_by_level or {}).items()
+        },
+    }
+    if unlimited_at_level is not None:
+        result["unlimited_at_level"] = unlimited_at_level
+    if maximum_formula is not None:
+        result["maximum_formula"] = maximum_formula
+    return result
+
+
+def _initial_resource_from_scaling(scaling: dict[str, Any]) -> dict[str, Any]:
+    maximums = dict(scaling.get("maximum_by_level") or {})
+    maximum = int(next(iter(maximums.values()), 1))
+    formula = dict(scaling.get("maximum_formula") or {})
+    if formula:
+        maximum = int(formula.get("minimum", 1) or 1)
+    return {
+        "label": str(scaling["label"]),
+        "value": maximum,
+        "max": maximum,
+        "recovers_on": str(scaling["recovers_on"]),
+        "source_key": str(scaling["class_name"]),
+    }
+
+
+def _numeric_column_scaling(
+    rows: list[tuple[int, dict[str, str]]], column: str
+) -> tuple[dict[int, int], int | None]:
+    maximums: dict[int, int] = {}
+    unlimited_at_level: int | None = None
+    for level, fields in rows:
+        raw = str(fields.get(column) or "").strip()
+        if raw.casefold() == "unlimited":
+            unlimited_at_level = level
+            continue
+        match = re.fullmatch(r"[+]?(\d+)", raw)
+        if match:
+            maximums[level] = int(match.group(1))
+    return maximums, unlimited_at_level
+
+
+def _feature_use_scaling(
+    rows: list[tuple[int, dict[str, str]]], feature_name: str
+) -> dict[int, int]:
+    result: dict[int, int] = {}
+    words = {"one": 1, "two": 2, "three": 3, "four": 4}
+    pattern = re.compile(
+        rf"\b{re.escape(feature_name)}\s*\(([^)]+)\)",
+        re.IGNORECASE,
+    )
+    for level, fields in rows:
+        match = pattern.search(str(fields.get("Features") or ""))
+        if not match:
+            continue
+        token = match.group(1).casefold()
+        number = re.search(r"\d+", token)
+        if number:
+            result[level] = int(number.group())
+            continue
+        for word, value in words.items():
+            if re.search(rf"\b{word}\b", token):
+                result[level] = value
+                break
+    return result
+
+
+def _feature_display_scaling(
+    rows: list[tuple[int, dict[str, str]]], feature_name: str, description: str
+) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    pattern = re.compile(
+        rf"\b{re.escape(feature_name)}\s*\(d(\d+)\)",
+        re.IGNORECASE,
+    )
+    previous: int | None = None
+    for level, fields in rows:
+        match = pattern.search(str(fields.get("Features") or ""))
+        if not match:
+            continue
+        value = int(match.group(1))
+        if value != previous:
+            result.append({"level": level, "value": value, "description": description})
+            previous = value
+    return result
+
+
+def _numeric_column_display_scaling(
+    rows: list[tuple[int, dict[str, str]]], column: str, description: str
+) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    previous: int | None = None
+    for level, fields in rows:
+        raw = str(fields.get(column) or "")
+        match = re.search(r"\d+", raw)
+        if not match:
+            continue
+        value = int(match.group())
+        if value != previous:
+            result.append({"level": level, "value": value, "description": description})
+            previous = value
+    return result
+
+
+def _changes_only(values: dict[int, int]) -> dict[int, int]:
+    result: dict[int, int] = {}
+    previous: int | None = None
+    for level, value in sorted(values.items()):
+        if value != previous:
+            result[level] = value
+            previous = value
+    return result
 
 
 def _subclass_spell_grants(body: str) -> list[dict[str, Any]]:

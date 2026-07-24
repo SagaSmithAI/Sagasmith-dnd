@@ -9,7 +9,7 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     manifest, artifacts = build_srd2014_content(workspace / "SagaSmith-dnd-skills")
     counts = Counter(item["kind"] for item in artifacts)
 
-    assert manifest["version"] == PACK_VERSION == "1.9.0"
+    assert manifest["version"] == PACK_VERSION == "1.10.0"
     assert counts["spell"] == 319
     assert counts["species"] == 13
     assert counts["class"] == 12
@@ -132,6 +132,10 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     )
     assert action_surge["card"]["activation"]["type"] == "special"
     assert action_surge["card"]["uses"]["value"] == 1
+    assert action_surge["card"]["resource_scaling"]["maximum_by_level"] == {
+        "2": 1,
+        "17": 2,
+    }
 
     channel_divinity = next(
         item
@@ -142,6 +146,60 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     assert channel_divinity["card"]["mechanical_grants"]["resources"][
         "channel_divinity"
     ]["recovers_on"] == "short_rest"
+    assert channel_divinity["card"]["resource_scaling"]["maximum_by_level"] == {
+        "2": 1,
+        "6": 2,
+        "18": 3,
+    }
+
+    rage = next(
+        item
+        for item in artifacts
+        if item["id"] == "dnd5e.content.srd2014.feature.barbarian-rage"
+    )
+    assert rage["card"]["resource_scaling"]["maximum_by_level"] == {
+        "1": 2,
+        "3": 3,
+        "6": 4,
+        "12": 5,
+        "17": 6,
+    }
+    assert rage["card"]["resource_scaling"]["unlimited_at_level"] == 20
+    assert rage["card"]["scaling"] == [
+        {"level": 1, "value": 2, "description": "rage damage bonus"},
+        {"level": 9, "value": 3, "description": "rage damage bonus"},
+        {"level": 16, "value": 4, "description": "rage damage bonus"},
+    ]
+
+    ki = next(
+        item for item in artifacts if item["id"] == "dnd5e.content.srd2014.feature.monk-ki"
+    )
+    assert ki["card"]["resource_key"] == "ki"
+    assert ki["card"]["resource_scaling"]["maximum_by_level"]["20"] == 20
+
+    sorcery = next(
+        item
+        for item in artifacts
+        if item["id"] == "dnd5e.content.srd2014.feature.sorcerer-font-of-magic"
+    )
+    assert sorcery["card"]["resource_key"] == "sorcery_points"
+    assert sorcery["card"]["resource_scaling"]["maximum_by_level"]["20"] == 20
+
+    bardic = next(
+        item
+        for item in artifacts
+        if item["id"] == "dnd5e.content.srd2014.feature.bard-bardic-inspiration"
+    )
+    assert bardic["card"]["resource_scaling"]["maximum_formula"] == {
+        "kind": "ability_modifier",
+        "ability": "charisma",
+        "minimum": 1,
+        "multiplier": 1,
+        "offset": 0,
+    }
+    assert bardic["card"]["resource_scaling"]["recovery_by_level"] == {
+        "5": "short_rest"
+    }
 
     preserve_life = next(
         item

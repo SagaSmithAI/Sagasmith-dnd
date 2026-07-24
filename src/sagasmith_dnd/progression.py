@@ -360,6 +360,8 @@ def advance_single_class_level(
     progression["classes"] = [target]
     progression["level"] = new_level
     spellcasting = _advance_spellcasting(value, class_name, old_level, new_level)
+    resource_sync = synchronize_class_feature_resources(value)
+    value = resource_sync["sheet"]
     return {
         "sheet": value,
         "status": "committed",
@@ -386,7 +388,119 @@ def advance_single_class_level(
         },
         "spellcasting": spellcasting,
         "spell_choices": _spell_choice_delta(class_name, old_level, new_level),
+        "feature_resource_changes": resource_sync["changes"],
     }
+
+
+def synchronize_class_feature_resources(sheet: dict[str, Any]) -> dict[str, Any]:
+    """Materialize source-card resource scaling without refilling spent capacity."""
+
+    value = deepcopy(sheet)
+    class_levels = {
+        str(item.get("name") or "").casefold(): int(item.get("level", 0) or 0)
+        for item in value.get("progression", {}).get("classes", [])
+    }
+    changes: list[dict[str, Any]] = []
+    for feature in value.get("content", {}).get("features", []):
+        scaling = dict(feature.get("resource_scaling") or {})
+        if not scaling:
+            continue
+        class_name = str(scaling.get("class_name") or "").casefold()
+        class_level = class_levels.get(class_name, 0)
+        if class_level < 1:
+            raise CombatEngineError(
+                "feature resource scaling references a class absent from the actor card"
+            )
+        new_maximum = _scaled_resource_maximum(value, scaling, class_level)
+        if new_maximum is None:
+            continue
+        recovery = str(scaling.get("recovers_on") or "none")
+        for raw_level, candidate in sorted(
+            dict(scaling.get("recovery_by_level") or {}).items(),
+            key=lambda item: int(item[0]),
+        ):
+            if int(raw_level) <= class_level:
+                recovery = str(candidate)
+        target = str(scaling.get("target") or "")
+        resources = value.setdefault("resources", {})
+        if target == "uses":
+            old_resource = dict(feature.get("uses") or {})
+        else:
+            old_resource = dict(resources.get(target) or {})
+        old_maximum = int(old_resource.get("max", 0) or 0)
+        old_value = int(old_resource.get("value", old_maximum) or 0)
+        unlimited = new_maximum == 0
+        if not old_resource:
+            new_value = 0 if unlimited else new_maximum
+        elif unlimited:
+            new_value = 0
+        else:
+            new_value = min(
+                new_maximum,
+                old_value + max(0, new_maximum - old_maximum),
+            )
+        updated = {
+            "label": str(scaling.get("label") or old_resource.get("label") or target),
+            "value": new_value,
+            "max": new_maximum,
+            "recovers_on": recovery,
+            "source_key": str(
+                scaling.get("class_name") or old_resource.get("source_key") or ""
+            ),
+            "slot_level": int(old_resource.get("slot_level", 0) or 0),
+        }
+        if target == "uses":
+            feature["uses"] = updated
+        else:
+            if not target:
+                raise CombatEngineError("feature resource scaling target is empty")
+            resources[target] = updated
+        if updated != old_resource:
+            changes.append(
+                {
+                    "feature_id": str(feature.get("id") or ""),
+                    "target": target,
+                    "class_level": class_level,
+                    "old_max": old_maximum,
+                    "new_max": new_maximum,
+                    "old_value": old_value,
+                    "new_value": new_value,
+                    "recovers_on": recovery,
+                    "unlimited": unlimited,
+                }
+            )
+    return {"sheet": value, "changes": changes}
+
+
+def _scaled_resource_maximum(
+    sheet: dict[str, Any], scaling: dict[str, Any], class_level: int
+) -> int | None:
+    unlimited_at = int(scaling.get("unlimited_at_level", 0) or 0)
+    if unlimited_at and class_level >= unlimited_at:
+        return 0
+    formula = dict(scaling.get("maximum_formula") or {})
+    if formula:
+        kind = str(formula.get("kind") or "")
+        if kind == "class_level":
+            base = class_level
+        elif kind == "ability_modifier":
+            ability = str(formula.get("ability") or "")
+            base = _ability_modifier(sheet, ability)
+        else:
+            raise CombatEngineError("feature resource scaling formula is invalid")
+        return max(
+            int(formula.get("minimum", 0) or 0),
+            base * int(formula.get("multiplier", 1) or 1)
+            + int(formula.get("offset", 0) or 0),
+        )
+    maximum: int | None = None
+    for raw_level, candidate in sorted(
+        dict(scaling.get("maximum_by_level") or {}).items(),
+        key=lambda item: int(item[0]),
+    ):
+        if int(raw_level) <= class_level:
+            maximum = int(candidate)
+    return maximum
 
 
 def _advance_spellcasting(

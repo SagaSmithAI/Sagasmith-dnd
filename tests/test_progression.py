@@ -9,6 +9,7 @@ from sagasmith_dnd.progression import (
     apply_per_level_hit_point_bonus,
     award_experience,
     experience_status,
+    synchronize_class_feature_resources,
 )
 
 
@@ -78,6 +79,104 @@ def test_fixed_level_advancement_updates_max_hp_and_hit_die_without_healing() ->
     assert result["spellcasting"]["kind"] == "none"
     assert result["spell_choices"] == {"cantrips_to_add": 0, "leveled_spells_to_add": 0}
     assert sheet["progression"]["level"] == 1
+
+
+def test_feature_resources_scale_without_refilling_spent_capacity() -> None:
+    sheet = _single_class_sheet("Fighter", hit_die=10, constitution=14, hp=(12, 12))
+    sheet["progression"]["level"] = 16
+    sheet["progression"]["classes"][0]["level"] = 16
+    sheet["combat"]["hit_dice"]["d10"]["value"] = 8
+    sheet["combat"]["hit_dice"]["d10"]["max"] = 16
+    sheet["content"]["features"] = [
+        {
+            "id": "action-surge",
+            "name": "Action Surge",
+            "source_key": "Fighter",
+            "uses": {
+                "label": "Action Surge",
+                "value": 0,
+                "max": 1,
+                "recovers_on": "short_rest",
+                "source_key": "Fighter",
+            },
+            "resource_scaling": {
+                "target": "uses",
+                "label": "Action Surge",
+                "class_name": "Fighter",
+                "maximum_by_level": {"2": 1, "17": 2},
+                "recovers_on": "short_rest",
+                "recovery_by_level": {},
+            },
+        }
+    ]
+
+    result = advance_single_class_level(
+        sheet,
+        class_name="Fighter",
+        hp_method="fixed",
+    )
+
+    uses = result["sheet"]["content"]["features"][0]["uses"]
+    assert uses["max"] == 2
+    assert uses["value"] == 1
+    assert result["feature_resource_changes"] == [
+        {
+            "feature_id": "action-surge",
+            "target": "uses",
+            "class_level": 17,
+            "old_max": 1,
+            "new_max": 2,
+            "old_value": 0,
+            "new_value": 1,
+            "recovers_on": "short_rest",
+            "unlimited": False,
+        }
+    ]
+
+
+def test_feature_resource_formula_reacts_to_ability_changes_and_unlimited_levels() -> None:
+    sheet = _single_class_sheet("Bard", hit_die=8, constitution=12, hp=(8, 8))
+    sheet["abilities"]["charisma"]["score"] = 16
+    sheet["content"]["features"] = [
+        {
+            "id": "bardic-inspiration",
+            "name": "Bardic Inspiration",
+            "source_key": "Bard",
+            "uses": {
+                "label": "Bardic Inspiration",
+                "value": 1,
+                "max": 1,
+                "recovers_on": "long_rest",
+                "source_key": "Bard",
+            },
+            "resource_scaling": {
+                "target": "uses",
+                "label": "Bardic Inspiration",
+                "class_name": "Bard",
+                "maximum_by_level": {},
+                "maximum_formula": {
+                    "kind": "ability_modifier",
+                    "ability": "charisma",
+                    "minimum": 1,
+                    "multiplier": 1,
+                    "offset": 0,
+                },
+                "recovers_on": "long_rest",
+                "recovery_by_level": {"5": "short_rest"},
+            },
+        }
+    ]
+
+    synchronized = synchronize_class_feature_resources(sheet)
+
+    assert synchronized["sheet"]["content"]["features"][0]["uses"] == {
+        "label": "Bardic Inspiration",
+        "value": 3,
+        "max": 3,
+        "recovers_on": "long_rest",
+        "source_key": "Bard",
+        "slot_level": 0,
+    }
 
 
 def test_per_level_hp_bonus_is_separate_from_the_minimum_class_gain() -> None:

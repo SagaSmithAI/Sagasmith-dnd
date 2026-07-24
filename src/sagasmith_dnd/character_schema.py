@@ -401,6 +401,133 @@ def _normalize_resource(value: Any, field: str) -> dict[str, Any]:
     }
 
 
+def _normalize_resource_scaling(value: Any, field: str) -> dict[str, Any]:
+    item = _object(value or {}, field)
+    if not item:
+        return {}
+    _reject_unknown(
+        item,
+        field,
+        {
+            "target",
+            "label",
+            "class_name",
+            "maximum_by_level",
+            "maximum_formula",
+            "recovers_on",
+            "recovery_by_level",
+            "unlimited_at_level",
+        },
+    )
+    target = _text(item.get("target"), f"{field}.target", maximum=200)
+    if not target:
+        raise ValueError(f"{field}.target is required")
+    class_name = _text(item.get("class_name"), f"{field}.class_name", maximum=200)
+    if not class_name:
+        raise ValueError(f"{field}.class_name is required")
+    maximum_by_level = _object(item.get("maximum_by_level") or {}, f"{field}.maximum_by_level")
+    normalized_maximums: dict[str, int] = {}
+    for raw_level, raw_maximum in maximum_by_level.items():
+        level_text = str(raw_level).strip()
+        if not level_text.isdigit():
+            raise ValueError(f"{field}.maximum_by_level level must be an integer")
+        level = _integer(
+            int(level_text),
+            f"{field}.maximum_by_level level",
+            minimum=1,
+            maximum=20,
+        )
+        normalized_maximums[str(level)] = _integer(
+            raw_maximum,
+            f"{field}.maximum_by_level.{level}",
+            minimum=0,
+        )
+    formula = _object(item.get("maximum_formula") or {}, f"{field}.maximum_formula")
+    normalized_formula: dict[str, Any] = {}
+    if formula:
+        _reject_unknown(
+            formula,
+            f"{field}.maximum_formula",
+            {"kind", "ability", "minimum", "multiplier", "offset"},
+        )
+        kind = _text(formula.get("kind"), f"{field}.maximum_formula.kind")
+        if kind not in {"class_level", "ability_modifier"}:
+            raise ValueError(f"{field}.maximum_formula.kind is invalid")
+        ability = _text(
+            formula.get("ability"),
+            f"{field}.maximum_formula.ability",
+            default="",
+        )
+        if kind == "ability_modifier" and ability not in ABILITY_NAMES:
+            raise ValueError(f"{field}.maximum_formula.ability is invalid")
+        if kind == "class_level" and ability:
+            raise ValueError(f"{field}.maximum_formula.ability is not allowed")
+        normalized_formula = {
+            "kind": kind,
+            "ability": ability,
+            "minimum": _integer(
+                formula.get("minimum"),
+                f"{field}.maximum_formula.minimum",
+                minimum=0,
+            ),
+            "multiplier": _integer(
+                formula.get("multiplier"),
+                f"{field}.maximum_formula.multiplier",
+                default=1,
+                minimum=1,
+            ),
+            "offset": _integer(
+                formula.get("offset"),
+                f"{field}.maximum_formula.offset",
+                default=0,
+            ),
+        }
+    recovery = _text(
+        item.get("recovers_on"),
+        f"{field}.recovers_on",
+        default="none",
+    )
+    if recovery not in RECOVERY_PERIODS:
+        raise ValueError(f"{field}.recovers_on is invalid")
+    recovery_by_level = _object(
+        item.get("recovery_by_level") or {},
+        f"{field}.recovery_by_level",
+    )
+    normalized_recoveries: dict[str, str] = {}
+    for raw_level, raw_recovery in recovery_by_level.items():
+        level_text = str(raw_level).strip()
+        if not level_text.isdigit():
+            raise ValueError(f"{field}.recovery_by_level level must be an integer")
+        level = _integer(
+            int(level_text),
+            f"{field}.recovery_by_level level",
+            minimum=1,
+            maximum=20,
+        )
+        level_recovery = _text(raw_recovery, f"{field}.recovery_by_level.{level}")
+        if level_recovery not in RECOVERY_PERIODS:
+            raise ValueError(f"{field}.recovery_by_level.{level} is invalid")
+        normalized_recoveries[str(level)] = level_recovery
+    unlimited_at_level = _integer(
+        item.get("unlimited_at_level"),
+        f"{field}.unlimited_at_level",
+        minimum=0,
+        maximum=20,
+    )
+    if not normalized_maximums and not normalized_formula and not unlimited_at_level:
+        raise ValueError(f"{field} needs a maximum or unlimited level")
+    return {
+        "target": target,
+        "label": _text(item.get("label"), f"{field}.label", maximum=200),
+        "class_name": class_name,
+        "maximum_by_level": normalized_maximums,
+        "maximum_formula": normalized_formula,
+        "recovers_on": recovery,
+        "recovery_by_level": normalized_recoveries,
+        "unlimited_at_level": unlimited_at_level,
+    }
+
+
 def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, Any]:
     mechanics = _object(value or {}, field)
     if kind == "weapon":
@@ -1472,6 +1599,7 @@ def validate_character_sheet(
                     "resource_key",
                     "activation",
                     "scaling",
+                    "resource_scaling",
                     "choices",
                     "advancement_grants",
                     "pack_id",
@@ -1642,6 +1770,10 @@ def validate_character_sheet(
                         ),
                     },
                     "scaling": scaling,
+                    "resource_scaling": _normalize_resource_scaling(
+                        entry.get("resource_scaling") or {},
+                        f"sheet.content.{name}[{index}].resource_scaling",
+                    ),
                     "choices": _object(
                         entry.get("choices") or {}, f"sheet.content.{name}[{index}].choices"
                     ),
