@@ -14,7 +14,7 @@ from sagasmith_dnd.spell_resolution import (
 )
 
 PACK_ID = "dnd5e.content.srd2014"
-PACK_VERSION = "1.8.1"
+PACK_VERSION = "1.8.2"
 
 _SUBCLASS_LEVELS = {
     "barbarian": 3,
@@ -781,7 +781,14 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
 def _subclass_spell_grants(body: str) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for _, fields in _markdown_table_rows(body):
-        spell_text = fields.get("Spells")
+        spell_text = next(
+            (
+                value
+                for key, value in fields.items()
+                if key.casefold().endswith("spells")
+            ),
+            "",
+        )
         level_text = next(
             (value for key, value in fields.items() if key.casefold().endswith("level")),
             "",

@@ -9,7 +9,7 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     manifest, artifacts = build_srd2014_content(workspace / "SagaSmith-dnd-skills")
     counts = Counter(item["kind"] for item in artifacts)
 
-    assert manifest["version"] == PACK_VERSION == "1.8.1"
+    assert manifest["version"] == PACK_VERSION == "1.8.2"
     assert counts["spell"] == 319
     assert counts["species"] == 13
     assert counts["class"] == 12
@@ -89,6 +89,15 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
         if item["kind"] == "subclass" and item["card"]["name"] == "The Fiend"
     )
     assert fiend["card"]["always_prepared_spells"] == []
+    oath_of_devotion = next(
+        item
+        for item in artifacts
+        if item["kind"] == "subclass" and item["card"]["name"] == "Oath of Devotion"
+    )
+    assert oath_of_devotion["card"]["always_prepared_spells"][:2] == [
+        {"name": "protection from evil and good", "minimum_level": 3},
+        {"name": "sanctuary", "minimum_level": 3},
+    ]
 
     life_bonus_proficiency = next(
         item
