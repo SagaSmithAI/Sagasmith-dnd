@@ -338,6 +338,58 @@ def test_ac_override_does_not_erase_equipped_armor_stealth_disadvantage() -> Non
     assert derived["stealth_disadvantage"] is True
 
 
+def test_imported_ac_override_accepts_magic_item_bonus_and_mage_armor_alternative() -> None:
+    sheet = validate_character_sheet(
+        {
+            "abilities": {"dexterity": {"score": 14}},
+            "combat": {"ac": {"base": 12, "override": 12}},
+        }
+    )
+    sheet, staff_id = add_inventory_item(
+        sheet,
+        {
+            "id": "staff-of-defense",
+            "name": "Staff of Defense",
+            "kind": "magic_item",
+            "mechanics": {"ac_bonus": 1},
+        },
+    )
+    sheet = equip_inventory_item(sheet, staff_id, "main_hand")
+
+    held = derive_character_sheet(sheet)
+    assert held["armor_class"] == 13
+    assert held["armor_class_breakdown"]["mode"] == "override"
+    assert held["armor_class_breakdown"]["magic_items"] == [
+        {"item_id": "staff-of-defense", "name": "Staff of Defense", "bonus": 1}
+    ]
+
+    sheet, effect_id = add_effect(
+        sheet,
+        {
+            "id": "mage-armor",
+            "name": "Mage Armor",
+            "kind": "spell",
+            "changes": [
+                {"path": "combat.ac.unarmored_base", "mode": "override", "value": 13}
+            ],
+        },
+    )
+    protected = derive_character_sheet(sheet)
+
+    assert protected["armor_class"] == 16
+    assert protected["armor_class_breakdown"]["mode"] == "mage_armor"
+    assert protected["armor_class_breakdown"]["effects"] == [
+        {
+            "effect_id": effect_id,
+            "name": "Mage Armor",
+            "mode": "override",
+            "value": 13,
+            "applied": True,
+        }
+    ]
+    assert protected["unresolved_rules"] == []
+
+
 def test_equipment_schema_rejects_incompatible_slots_and_inconsistent_state() -> None:
     with pytest.raises(ValueError, match="base_ac is required"):
         add_inventory_item(

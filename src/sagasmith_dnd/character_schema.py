@@ -2162,12 +2162,6 @@ def _derive_armor_class(
                 "magic_bonus": mechanics["magic_bonus"],
                 "stealth_disadvantage": mechanics["stealth_disadvantage"],
             }
-        elif mage_armor_base is not None:
-            dexterity_bonus = ability_modifiers["dexterity"]
-            total = mage_armor_base + dexterity_bonus
-            breakdown["mode"] = "mage_armor"
-            breakdown["base"] = mage_armor_base
-            breakdown["dexterity_bonus"] = dexterity_bonus
         elif ac["base"] == 10:
             dexterity_bonus = ability_modifiers["dexterity"]
             total += dexterity_bonus
@@ -2184,27 +2178,42 @@ def _derive_armor_class(
                 "name": shield["name"],
                 "bonus": bonus,
             }
-        for item in inventory["items"]:
-            if item["kind"] != "magic_item" or not item["equipped"]:
-                continue
-            bonus = item["mechanics"].get("ac_bonus", 0)
-            if bonus:
-                total += bonus
-                breakdown["magic_items"].append(
-                    {"item_id": item["id"], "name": item["name"], "bonus": bonus}
-                )
+
+    if mage_armor_base is not None and not armor_id:
+        dexterity_bonus = ability_modifiers["dexterity"]
+        mage_armor_total = mage_armor_base + dexterity_bonus
+        if override is None or mage_armor_total > total:
+            total = mage_armor_total
+            breakdown["mode"] = "mage_armor"
+            breakdown["base"] = mage_armor_base
+            breakdown["dexterity_bonus"] = dexterity_bonus
+
+    # A statblock AC override is the creature's printed AC calculation. Explicit
+    # equipped magic-item bonuses still modify that calculation, just as active
+    # effects do below. Keeping these bonuses outside the override branch lets a
+    # source-bound item such as the Staff of Defense work on imported NPCs.
+    for item in inventory["items"]:
+        if item["kind"] != "magic_item" or not item["equipped"]:
+            continue
+        bonus = item["mechanics"].get("ac_bonus", 0)
+        if bonus:
+            total += bonus
+            breakdown["magic_items"].append(
+                {"item_id": item["id"], "name": item["name"], "bonus": bonus}
+            )
 
     unresolved_effects: set[str] = set()
     for effect in active_effects:
         for change in effect["changes"]:
             if change["path"] == "combat.ac.unarmored_base":
-                if effect["id"] in mage_armor_effect_ids and override is None and not armor_id:
+                if effect["id"] in mage_armor_effect_ids and not armor_id:
                     breakdown["effects"].append(
                         {
                             "effect_id": effect["id"],
                             "name": effect["name"],
                             "mode": change["mode"],
                             "value": change["value"],
+                            "applied": breakdown["mode"] == "mage_armor",
                         }
                     )
                 else:
