@@ -1,5 +1,6 @@
 import pytest
 
+import sagasmith_dnd.progression as progression_module
 from sagasmith_dnd.character_schema import default_character_sheet, validate_character_sheet
 from sagasmith_dnd.combat_engine import CombatEngineError
 from sagasmith_dnd.progression import (
@@ -19,6 +20,19 @@ class _SequenceRng:
         value = self.values.pop(0)
         assert minimum <= value <= maximum
         return value
+
+
+def test_bard_magical_secrets_are_not_double_counted_as_class_list_spells() -> None:
+    assert progression_module._spell_choice_delta("Bard", 9, 10) == {
+        "cantrips_to_add": 1,
+        "leveled_spells_to_add": 0,
+    }
+    assert progression_module._spell_choice_delta("Bard", 13, 14)[
+        "leveled_spells_to_add"
+    ] == 0
+    assert progression_module._spell_choice_delta("Bard", 17, 18)[
+        "leveled_spells_to_add"
+    ] == 0
 
 
 def _single_class_sheet(

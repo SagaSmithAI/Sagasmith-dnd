@@ -9,7 +9,7 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     manifest, artifacts = build_srd2014_content(workspace / "SagaSmith-dnd-skills")
     counts = Counter(item["kind"] for item in artifacts)
 
-    assert manifest["version"] == PACK_VERSION == "1.8.2"
+    assert manifest["version"] == PACK_VERSION == "1.9.0"
     assert counts["spell"] == 319
     assert counts["species"] == 13
     assert counts["class"] == 12
@@ -288,6 +288,30 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
         )
     ]
     assert len(warlock_invocations) == 1
+    invocations = warlock_invocations[0]["card"]
+    assert invocations["repeatable_selection_levels"] == [2, 5, 7, 9, 12, 15, 18]
+    assert invocations["selection_requirements_by_level"]["2"]["count"] == 2
+    assert invocations["selection_requirements_by_level"]["5"]["count"] == 1
+    assert invocations["selection_requirements"]["option_prerequisites"][
+        "Ascendant Step"
+    ] == {"minimum_level": 9}
+    assert invocations["selection_requirements"]["at_will_spells"][
+        "Armor of Shadows"
+    ] == "mage armor"
+    magical_secrets = next(
+        item
+        for item in artifacts
+        if item["id"] == "dnd5e.content.srd2014.feature.bard-magical-secrets"
+    )
+    assert magical_secrets["card"]["selection_requirements"]["eligible_class"] == "any"
+    mystic_arcanum = next(
+        item
+        for item in artifacts
+        if item["id"] == "dnd5e.content.srd2014.feature.warlock-mystic-arcanum"
+    )
+    assert mystic_arcanum["card"]["selection_requirements_by_level"]["15"][
+        "spell_level"
+    ] == 8
 
     hill_dwarf = next(
         item

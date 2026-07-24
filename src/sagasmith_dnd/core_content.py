@@ -14,7 +14,7 @@ from sagasmith_dnd.spell_resolution import (
 )
 
 PACK_ID = "dnd5e.content.srd2014"
-PACK_VERSION = "1.8.2"
+PACK_VERSION = "1.9.0"
 
 _SUBCLASS_LEVELS = {
     "barbarian": 3,
@@ -724,6 +724,110 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
                 "count": 1,
                 "options": [name for name, _ in _h4_sections(body)],
             }
+        }
+    if key in {
+        ("bard", "magical secrets"),
+        ("bard", "additional magical secrets"),
+    }:
+        return {
+            "selection_requirements": {
+                "field": "spell_artifact_ids",
+                "kind": "known_spell_grants",
+                "count": 2,
+                "eligible_class": "any",
+                "maximum_spell_level": "available_slots",
+                "source_class": "bard",
+            }
+        }
+    if key == ("warlock", "mystic arcanum"):
+        base = {
+            "field": "spell_artifact_ids",
+            "kind": "mystic_arcanum",
+            "count": 1,
+            "eligible_class": "warlock",
+        }
+        return {
+            "selection_requirements": {**base, "spell_level": 6},
+            "selection_requirements_by_level": {
+                "11": {**base, "spell_level": 6},
+                "13": {**base, "spell_level": 7},
+                "15": {**base, "spell_level": 8},
+                "17": {**base, "spell_level": 9},
+            },
+            "repeatable_selection_levels": [11, 13, 15, 17],
+        }
+    if key == ("wizard", "spell mastery"):
+        return {
+            "selection_requirements": {
+                "field": "spell_artifact_ids",
+                "kind": "spell_mastery",
+                "count": 2,
+                "eligible_class": "wizard",
+                "required_spell_levels": [1, 2],
+                "requires_spellbook": True,
+            }
+        }
+    if key == ("warlock", "eldritch invocations"):
+        options = list(_h4_sections(body))
+        option_prerequisites: dict[str, dict[str, Any]] = {}
+        at_will_spells: dict[str, str] = {}
+        for name, option_body in options:
+            prerequisite = re.search(
+                r"\*Prerequisite:\s*(.+?)\*",
+                option_body,
+                re.IGNORECASE,
+            )
+            metadata: dict[str, Any] = {}
+            if prerequisite:
+                text = prerequisite.group(1)
+                level = re.search(
+                    r"(\d+)(?:st|nd|rd|th)\s+level",
+                    text,
+                    re.IGNORECASE,
+                )
+                if level:
+                    metadata["minimum_level"] = int(level.group(1))
+                pact = re.search(
+                    r"Pact of the (Chain|Blade|Tome)",
+                    text,
+                    re.IGNORECASE,
+                )
+                if pact:
+                    metadata["required_pact_boon"] = (
+                        f"Pact of the {pact.group(1).title()}"
+                    )
+                spell = re.search(
+                    r"([A-Za-z' -]+)\s+cantrip",
+                    text,
+                    re.IGNORECASE,
+                )
+                if spell:
+                    metadata["required_cantrip"] = spell.group(1).strip().title()
+            if metadata:
+                option_prerequisites[name] = metadata
+            at_will = re.search(
+                r"cast\s+\*([^*]+)\*.+?at will",
+                option_body,
+                re.IGNORECASE | re.DOTALL,
+            )
+            if at_will:
+                at_will_spells[name] = at_will.group(1).strip()
+        base = {
+            "field": "options",
+            "count": 1,
+            "options": [name for name, _ in options],
+            "requires_new_choice": True,
+            "option_prerequisites": option_prerequisites,
+            "at_will_spells": at_will_spells,
+        }
+        levels = [2, 5, 7, 9, 12, 15, 18]
+        return {
+            "selection_requirements": {**base, "count": 2},
+            "selection_requirements_by_level": {
+                str(level): {**base, "count": 2 if level == 2 else 1}
+                for level in levels
+            },
+            "repeatable_selection_levels": levels,
         }
     if key == ("druid", "bonus cantrip"):
         return {

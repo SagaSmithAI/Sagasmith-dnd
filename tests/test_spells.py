@@ -419,6 +419,40 @@ def test_pact_magic_uses_its_recorded_slot_level() -> None:
     assert result["sheet"]["spellcasting"]["pact_magic"]["value"] == 0
 
 
+def test_mystic_arcanum_spends_its_own_long_rest_resource() -> None:
+    sheet = default_character_sheet()
+    arcanum = _spell("mass-suggestion", level=6)
+    arcanum["grant"] = {
+        "source_type": "feature",
+        "source_key": "Warlock",
+        "method": "mystic_arcanum",
+    }
+    sheet["content"]["spells"] = [arcanum]
+    sheet["resources"]["mystic_arcanum:mass-suggestion"] = {
+        "label": "Mystic Arcanum: Mass Suggestion",
+        "value": 1,
+        "max": 1,
+        "recovers_on": "long_rest",
+        "source_key": "Warlock",
+    }
+
+    result = consume_spell_cast(
+        validate_character_sheet(sheet),
+        spell_id="mass-suggestion",
+        cast_level=6,
+    )
+
+    assert result["payment"] == {
+        "economy": "mystic_arcanum",
+        "resource_key": "mystic_arcanum:mass-suggestion",
+        "level": 6,
+        "ritual": False,
+    }
+    assert result["sheet"]["resources"]["mystic_arcanum:mass-suggestion"]["value"] == 0
+    with pytest.raises(ValueError, match="unavailable"):
+        consume_spell_cast(result["sheet"], spell_id="mass-suggestion")
+
+
 def test_costly_material_component_requires_dm_confirmation() -> None:
     sheet = default_character_sheet()
     sheet["spellcasting"]["spell_slots"] = {

@@ -474,6 +474,14 @@ def _spell_choice_delta(class_name: str, old_level: int, new_level: int) -> dict
         result["leveled_spells_to_add"] = max(
             0, known[new_level - 1] - known[old_level - 1]
         )
+        # The Bard table includes the two unrestricted Magical Secrets in
+        # Spells Known at levels 10, 14, and 18. The corresponding feature
+        # artifact settles those choices, so they must not also be requested
+        # as ordinary Bard-list spells.
+        if key == "bard" and new_level in {10, 14, 18}:
+            result["leveled_spells_to_add"] = max(
+                0, result["leveled_spells_to_add"] - 2
+            )
     if key == "wizard":
         result["leveled_spells_to_add"] = 2
     return result

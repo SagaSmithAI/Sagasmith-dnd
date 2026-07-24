@@ -661,7 +661,24 @@ def consume_spell_cast(
         )
     paid: dict[str, Any] = {"economy": "none", "level": level, "ritual": ritual}
     if base_level > 0 and not ritual and not access.get("at_will"):
-        if spellcasting.get("casting_economy", "slots") == "spell_points":
+        grant_method = str(dict(spell.get("grant") or {}).get("method") or "")
+        if grant_method == "mystic_arcanum":
+            if level != base_level:
+                raise CombatEngineError(
+                    "Mystic Arcanum must be cast at its recorded spell level"
+                )
+            resource_key = f"mystic_arcanum:{spell_id}"
+            resource = value.setdefault("resources", {}).get(resource_key)
+            if not isinstance(resource, dict) or int(resource.get("value", 0) or 0) <= 0:
+                raise CombatEngineError("Mystic Arcanum use is unavailable")
+            resource["value"] = int(resource["value"]) - 1
+            paid = {
+                "economy": "mystic_arcanum",
+                "resource_key": resource_key,
+                "level": level,
+                "ritual": False,
+            }
+        elif spellcasting.get("casting_economy", "slots") == "spell_points":
             points = spellcasting.get("spell_points")
             if not isinstance(points, dict):
                 raise CombatEngineError("spell-point casting is not configured")
