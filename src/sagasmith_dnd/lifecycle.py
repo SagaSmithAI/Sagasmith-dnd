@@ -174,6 +174,36 @@ def recover_stable_creature(
     }
 
 
+def initialize_source_state(
+    sheet: dict[str, Any], *, state: str
+) -> dict[str, Any]:
+    """Apply one narrow, source-authored initial creature state.
+
+    This is intentionally not a generic condition editor. Adventures sometimes
+    introduce a creature already at 0 HP, unconscious, and stable; representing
+    that authored state must not require inventing healing and damage events.
+    """
+    normalized = str(state).strip().lower().replace("-", "_")
+    if normalized != "stable_unconscious":
+        raise CombatEngineError("source state must be stable_unconscious")
+    value = deepcopy(sheet)
+    combat = value.setdefault("combat", {})
+    hp = dict(combat.get("hp") or {})
+    conditions = {str(item).casefold() for item in value.get("conditions", [])}
+    if int(hp.get("value", 0) or 0) != 0:
+        raise CombatEngineError("stable_unconscious source state requires 0 hit points")
+    if "dead" in conditions:
+        raise CombatEngineError("a dead creature cannot be initialized as stable unconscious")
+    conditions.update({"prone", "stable", "unconscious"})
+    combat["death_saves"] = {"successes": 0, "failures": 0}
+    value["conditions"] = sorted(conditions)
+    return {
+        "sheet": value,
+        "status": "initialized",
+        "source_state": normalized,
+    }
+
+
 def stand_outside_combat(sheet: dict[str, Any]) -> dict[str, Any]:
     """Stand a conscious living creature without exposing arbitrary condition edits."""
     value = deepcopy(sheet)

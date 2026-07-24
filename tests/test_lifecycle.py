@@ -6,6 +6,7 @@ from sagasmith_dnd.lifecycle import (
     advance_effect_durations,
     advance_world_effect_durations,
     apply_rest,
+    initialize_source_state,
     knock_prone_outside_combat,
     record_rest_completion,
     recover_stable_creature,
@@ -366,6 +367,33 @@ def test_stable_recovery_rejects_nonstable_dead_or_invalid_roll() -> None:
         recover_stable_creature(sheet, recovery_hours=1)
     with pytest.raises(CombatEngineError, match="integer from 1 to 4"):
         recover_stable_creature(sheet, recovery_hours=5)
+
+
+def test_source_authored_stable_unconscious_state_is_atomic_and_narrow() -> None:
+    sheet = default_character_sheet()
+    sheet["combat"]["hp"] = {"value": 0, "max": 12, "temp": 0}
+    sheet["combat"]["death_saves"] = {"successes": 1, "failures": 2}
+
+    result = initialize_source_state(sheet, state="stable_unconscious")
+
+    assert result["status"] == "initialized"
+    assert result["source_state"] == "stable_unconscious"
+    assert result["sheet"]["combat"]["hp"]["value"] == 0
+    assert result["sheet"]["combat"]["death_saves"] == {"successes": 0, "failures": 0}
+    assert result["sheet"]["conditions"] == ["prone", "stable", "unconscious"]
+    assert sheet["conditions"] == []
+
+
+def test_source_state_rejects_broad_condition_edits_and_incompatible_hp() -> None:
+    sheet = default_character_sheet()
+    with pytest.raises(CombatEngineError, match="must be stable_unconscious"):
+        initialize_source_state(sheet, state="restrained")
+    with pytest.raises(CombatEngineError, match="requires 0 hit points"):
+        initialize_source_state(sheet, state="stable_unconscious")
+    sheet["combat"]["hp"]["value"] = 0
+    sheet["conditions"] = ["dead"]
+    with pytest.raises(CombatEngineError, match="dead creature"):
+        initialize_source_state(sheet, state="stable_unconscious")
 
 
 def test_conscious_recovered_creature_can_stand_outside_combat() -> None:
