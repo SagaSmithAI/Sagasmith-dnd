@@ -14,7 +14,7 @@ from sagasmith_dnd.spell_resolution import (
 )
 
 PACK_ID = "dnd5e.content.srd2014"
-PACK_VERSION = "1.7.0"
+PACK_VERSION = "1.7.1"
 
 _SUBCLASS_LEVELS = {
     "barbarian": 3,
@@ -496,7 +496,8 @@ def _feature_key(value: str) -> str:
 
 def _level_from_feature_text(body: str) -> int:
     patterns = (
-        r"(?:at|when you reach|starting at|beginning at)\s+(\d+)(?:st|nd|rd|th)\s+level",
+        r"(?:at|by|when you reach|starting at|beginning at)\s+"
+        r"(\d+)(?:st|nd|rd|th)\s+level",
         r"when you choose .+? at\s+(\d+)(?:st|nd|rd|th)\s+level",
     )
     for pattern in patterns:

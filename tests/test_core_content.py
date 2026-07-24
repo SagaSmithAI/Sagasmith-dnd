@@ -9,7 +9,7 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     manifest, artifacts = build_srd2014_content(workspace / "SagaSmith-dnd-skills")
     counts = Counter(item["kind"] for item in artifacts)
 
-    assert manifest["version"] == PACK_VERSION == "1.7.0"
+    assert manifest["version"] == PACK_VERSION == "1.7.1"
     assert counts["spell"] == 319
     assert counts["species"] == 13
     assert counts["class"] == 12
@@ -165,6 +165,12 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
         "requires_untrained_skill": True,
         "grants_skill_proficiency": True,
     }
+    use_magic_device = next(
+        item
+        for item in artifacts
+        if item["id"] == "dnd5e.content.srd2014.feature.thief-use-magic-device"
+    )
+    assert use_magic_device["card"]["minimum_level"] == 13
 
     hill_dwarf = next(
         item
