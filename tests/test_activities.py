@@ -49,3 +49,28 @@ def test_activity_rejects_passive_and_exhausted_cards() -> None:
     ]
     with pytest.raises(ActivityError, match="passive"):
         consume_activity(sheet, activity_id="passive")
+
+
+def test_activity_distinguishes_zero_capacity_from_unlimited_uses() -> None:
+    sheet = default_character_sheet()
+    sheet["content"]["features"] = [
+        {
+            "id": "no-divine-sense",
+            "name": "Divine Sense",
+            "uses": {"value": 0, "max": 0, "unlimited": False},
+            "activation": {"type": "action", "cost": 1},
+        },
+        {
+            "id": "archdruid-wild-shape",
+            "name": "Wild Shape",
+            "uses": {"value": 0, "max": 0, "unlimited": True},
+            "activation": {"type": "action", "cost": 1},
+        },
+    ]
+
+    with pytest.raises(ActivityError, match="exhausted"):
+        consume_activity(sheet, activity_id="no-divine-sense")
+
+    result = consume_activity(sheet, activity_id="archdruid-wild-shape")
+    assert result["payment"] is None
+    assert result["sheet"]["content"]["features"][1]["uses"]["unlimited"] is True

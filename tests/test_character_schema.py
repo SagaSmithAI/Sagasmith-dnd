@@ -7,10 +7,12 @@ from sagasmith_dnd.character_schema import (
     add_inventory_item,
     add_memory,
     adjust_wallet,
+    attune_inventory_item,
     consume_weapon_ammunition,
     derive_character_sheet,
     equip_inventory_item,
     legacy_memory_candidates,
+    receive_inventory_item,
     remove_inventory_item,
     set_spell_prepared,
     validate_character_notes,
@@ -369,9 +371,7 @@ def test_imported_ac_override_accepts_magic_item_bonus_and_mage_armor_alternativ
             "id": "mage-armor",
             "name": "Mage Armor",
             "kind": "spell",
-            "changes": [
-                {"path": "combat.ac.unarmored_base", "mode": "override", "value": 13}
-            ],
+            "changes": [{"path": "combat.ac.unarmored_base", "mode": "override", "value": 13}],
         },
     )
     protected = derive_character_sheet(sheet)
@@ -388,6 +388,291 @@ def test_imported_ac_override_accepts_magic_item_bonus_and_mage_armor_alternativ
         }
     ]
     assert protected["unresolved_rules"] == []
+
+
+def test_magic_item_ac_bonus_waits_for_required_attunement() -> None:
+    sheet = validate_character_sheet(
+        {
+            "abilities": {"dexterity": {"score": 14}},
+            "combat": {"ac": {"base": 10}},
+        }
+    )
+    sheet, staff_id = add_inventory_item(
+        sheet,
+        {
+            "id": "staff-of-defense",
+            "name": "Staff of Defense",
+            "kind": "magic_item",
+            "attunement": "required",
+            "mechanics": {"ac_bonus": 1},
+        },
+    )
+    sheet = equip_inventory_item(sheet, staff_id, "main_hand")
+
+    assert derive_character_sheet(sheet)["armor_class"] == 12
+
+    staff = next(item for item in sheet["inventory"]["items"] if item["id"] == staff_id)
+    staff["attunement"] = "attuned"
+    assert derive_character_sheet(validate_character_sheet(sheet))["armor_class"] == 13
+
+
+def test_required_attunement_suppresses_all_equipment_magic_properties() -> None:
+    sheet = validate_character_sheet(
+        {
+            "abilities": {
+                "strength": {"score": 16},
+                "dexterity": {"score": 14},
+            },
+            "combat": {"ac": {"base": 10}},
+        }
+    )
+    sheet, armor_id = add_inventory_item(
+        sheet,
+        {
+            "id": "warded-mail",
+            "name": "Warded Mail",
+            "kind": "armor",
+            "attunement": "required",
+            "mechanics": {
+                "base_ac": 14,
+                "dexterity_mode": "none",
+                "magic_bonus": 2,
+            },
+        },
+    )
+    sheet = equip_inventory_item(sheet, armor_id, "armor")
+    sheet, shield_id = add_inventory_item(
+        sheet,
+        {
+            "id": "warded-shield",
+            "name": "Warded Shield",
+            "kind": "shield",
+            "attunement": "required",
+            "mechanics": {"ac_bonus": 2, "magic_bonus": 1},
+        },
+    )
+    sheet = equip_inventory_item(sheet, shield_id, "shield")
+    sheet, weapon_id = add_inventory_item(
+        sheet,
+        {
+            "id": "flame-blade",
+            "name": "Flame Blade",
+            "kind": "weapon",
+            "attunement": "required",
+            "mechanics": {
+                "damage_formula": "1d8",
+                "damage_type": "slashing",
+                "magic_bonus": 2,
+                "additional_damage": [{"damage_formula": "1d6", "damage_type": "fire"}],
+                "on_hit_effect": "target burns",
+            },
+        },
+    )
+    sheet = equip_inventory_item(sheet, weapon_id, "main_hand")
+
+    unattuned = derive_character_sheet(sheet)
+    assert unattuned["armor_class"] == 16
+    assert unattuned["armor_class_breakdown"]["armor"]["magic_bonus"] == 0
+    assert unattuned["armor_class_breakdown"]["shield"]["magic_bonus"] == 0
+    attack = unattuned["inventory"]["weapon_attacks"][0]
+    assert attack["attack_bonus"] == 5
+    assert attack["damage_bonus"] == 3
+    assert attack["additional_damage"] == []
+    assert attack["on_hit_effect"] == ""
+    assert attack["magic_suppressed_by_attunement"] is True
+
+    for item in sheet["inventory"]["items"]:
+        if item["id"] in {armor_id, shield_id, weapon_id}:
+            item["attunement"] = "attuned"
+    attuned = derive_character_sheet(validate_character_sheet(sheet))
+    assert attuned["armor_class"] == 19
+    attack = attuned["inventory"]["weapon_attacks"][0]
+    assert attack["attack_bonus"] == 7
+    assert attack["damage_bonus"] == 5
+    assert attack["additional_damage"][0]["damage_type"] == "fire"
+    assert attack["on_hit_effect"] == "target burns"
+
+
+def test_attunement_enforces_capacity_copies_transfer_and_death() -> None:
+    sheet = validate_character_sheet({})
+    for index, name in enumerate(("Ring A", "Ring B", "Ring C", "Ring D"), start=1):
+        sheet, _ = add_inventory_item(
+            sheet,
+            {
+                "id": f"ring-{index}",
+                "name": name,
+                "kind": "magic_item",
+                "source_key": f"core:item/ring-{index}",
+                "attunement": "required",
+            },
+        )
+    for item_id in ("ring-1", "ring-2", "ring-3"):
+        sheet = attune_inventory_item(sheet, item_id)
+    with pytest.raises(ValueError, match="more than three"):
+        attune_inventory_item(sheet, "ring-4")
+
+    duplicate_sheet, _ = add_inventory_item(
+        validate_character_sheet({}),
+        {
+            "id": "ring-copy-1",
+            "name": "Ring of Protection",
+            "kind": "magic_item",
+            "source_key": "core:item/ring-of-protection",
+            "attunement": "required",
+        },
+    )
+    duplicate_sheet, _ = add_inventory_item(
+        duplicate_sheet,
+        {
+            "id": "ring-copy-2",
+            "name": "Ring of Protection",
+            "kind": "magic_item",
+            "source_key": "core:item/ring-of-protection",
+            "attunement": "required",
+        },
+    )
+    duplicate_sheet = attune_inventory_item(duplicate_sheet, "ring-copy-1")
+    with pytest.raises(ValueError, match="more than one copy"):
+        attune_inventory_item(duplicate_sheet, "ring-copy-2")
+
+    with pytest.raises(ValueError, match="cannot be transferred"):
+        receive_inventory_item(
+            validate_character_sheet({}),
+            next(
+                item
+                for item in sheet["inventory"]["items"]
+                if item["id"] == "ring-1"
+            ),
+        )
+
+    sheet["conditions"] = ["dead"]
+    dead = validate_character_sheet(sheet)
+    assert {
+        item["attunement"] for item in dead["inventory"]["items"]
+    } == {"required"}
+
+
+def test_unarmored_base_formula_keeps_shield_and_chooses_highest_source() -> None:
+    sheet = validate_character_sheet(
+        {
+            "abilities": {"dexterity": {"score": 16}},
+            "combat": {"ac": {"base": 10}},
+        }
+    )
+    sheet, shield_id = add_inventory_item(
+        sheet,
+        {
+            "id": "shield",
+            "name": "Shield",
+            "kind": "shield",
+            "mechanics": {"ac_bonus": 2, "magic_bonus": 0},
+        },
+    )
+    sheet = equip_inventory_item(sheet, shield_id, "shield")
+    sheet, weaker_id = add_effect(
+        sheet,
+        {
+            "name": "Weaker Formula",
+            "kind": "feature",
+            "changes": [{"path": "combat.ac.unarmored_base", "mode": "override", "value": 12}],
+        },
+    )
+    sheet, stronger_id = add_effect(
+        sheet,
+        {
+            "name": "Draconic Resilience",
+            "kind": "feature",
+            "changes": [{"path": "combat.ac.unarmored_base", "mode": "override", "value": 13}],
+        },
+    )
+
+    derived = derive_character_sheet(sheet)
+
+    assert derived["armor_class"] == 18
+    assert derived["armor_class_breakdown"]["mode"] == "unarmored_formula"
+    assert derived["armor_class_breakdown"]["shield"]["bonus"] == 2
+    applied = {
+        item["effect_id"]: item["applied"] for item in derived["armor_class_breakdown"]["effects"]
+    }
+    assert applied == {weaker_id: False, stronger_id: True}
+
+
+def test_class_unarmored_formulas_honor_ability_and_shield_conditions() -> None:
+    sheet = validate_character_sheet(
+        {
+            "abilities": {
+                "dexterity": {"score": 14},
+                "constitution": {"score": 14},
+                "wisdom": {"score": 18},
+            },
+            "combat": {"ac": {"base": 10}},
+        }
+    )
+    sheet, shield_id = add_inventory_item(
+        sheet,
+        {
+            "id": "shield",
+            "name": "Shield",
+            "kind": "shield",
+            "mechanics": {"ac_bonus": 2, "magic_bonus": 0},
+        },
+    )
+    sheet = equip_inventory_item(sheet, shield_id, "shield")
+    sheet, barbarian_id = add_effect(
+        sheet,
+        {
+            "name": "Barbarian Unarmored Defense",
+            "kind": "feature",
+            "changes": [
+                {
+                    "path": "combat.ac.unarmored_formula",
+                    "mode": "override",
+                    "value": {
+                        "base": 10,
+                        "ability": "constitution",
+                        "allows_shield": True,
+                    },
+                }
+            ],
+        },
+    )
+    sheet, monk_id = add_effect(
+        sheet,
+        {
+            "name": "Monk Unarmored Defense",
+            "kind": "feature",
+            "changes": [
+                {
+                    "path": "combat.ac.unarmored_formula",
+                    "mode": "override",
+                    "value": {
+                        "base": 10,
+                        "ability": "wisdom",
+                        "allows_shield": False,
+                    },
+                }
+            ],
+        },
+    )
+
+    shielded = derive_character_sheet(sheet)
+    assert shielded["armor_class"] == 16
+    assert shielded["armor_class_breakdown"]["ability_bonus"] == {
+        "ability": "constitution",
+        "bonus": 2,
+    }
+    shielded_effects = {
+        item["effect_id"]: item["applied"] for item in shielded["armor_class_breakdown"]["effects"]
+    }
+    assert shielded_effects == {barbarian_id: True, monk_id: False}
+
+    unshielded = equip_inventory_item(sheet, shield_id, None)
+    derived = derive_character_sheet(unshielded)
+    assert derived["armor_class"] == 16
+    assert derived["armor_class_breakdown"]["ability_bonus"] == {
+        "ability": "wisdom",
+        "bonus": 4,
+    }
 
 
 def test_equipment_schema_rejects_incompatible_slots_and_inconsistent_state() -> None:
@@ -579,14 +864,17 @@ def test_complete_card_supports_identity_weapons_spells_encumbrance_and_adventur
         == 19
     )
     last_shot_sheet = validate_character_sheet(after_shot)
-    next(
-        item for item in last_shot_sheet["inventory"]["items"] if item["id"] == "arrows"
-    )["quantity"] = 1
+    next(item for item in last_shot_sheet["inventory"]["items"] if item["id"] == "arrows")[
+        "quantity"
+    ] = 1
     empty_quiver, last_arrow = consume_weapon_ammunition(last_shot_sheet, "longbow")
     assert last_arrow["remaining"] == 0
-    assert next(
-        item for item in empty_quiver["inventory"]["items"] if item["id"] == "arrows"
-    )["quantity"] == 0
+    assert (
+        next(item for item in empty_quiver["inventory"]["items"] if item["id"] == "arrows")[
+            "quantity"
+        ]
+        == 0
+    )
     with pytest.raises(ValueError, match="not enough"):
         consume_weapon_ammunition(empty_quiver, "longbow")
 

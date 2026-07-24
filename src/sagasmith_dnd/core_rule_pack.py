@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-CORE_RULE_PACK_VERSION = "1.33.0"
+CORE_RULE_PACK_VERSION = "1.34.0"
 
 
 @dataclass(frozen=True)
@@ -294,7 +294,9 @@ BOUNDARIES = (
         "dnd5e.core.spell.shield_magic_missile",
         ("2014", "2024"),
         "spells.available_shield_magic_missile_defenses|consume_shield_reaction",
-        ("tests/test_spells.py::test_magic_missile_allocation_and_shield_trigger_are_source_bound",),
+        (
+            "tests/test_spells.py::test_magic_missile_allocation_and_shield_trigger_are_source_bound",
+        ),
         "bundled:srd/shield",
     ),
     CoreBoundary(
@@ -336,7 +338,9 @@ BOUNDARIES = (
         "dnd5e.core.spell.magic_missile_darts",
         ("2014", "2024"),
         "spells.validate_magic_missile_allocations",
-        ("tests/test_spells.py::test_magic_missile_allocation_and_shield_trigger_are_source_bound",),
+        (
+            "tests/test_spells.py::test_magic_missile_allocation_and_shield_trigger_are_source_bound",
+        ),
         "bundled:srd/magic-missile",
     ),
     CoreBoundary(

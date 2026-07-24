@@ -229,6 +229,89 @@ def test_magic_item_charges_cast_source_bound_defenses() -> None:
     assert derive_character_sheet(started["sheet"])["armor_class"] == 16
 
 
+def test_magic_item_concentration_spell_replaces_existing_concentration() -> None:
+    sheet = default_character_sheet()
+    sheet["spellcasting"]["class_lists"] = ["wizard"]
+    web = _spell("core:spell/web", level=2, concentration=True)
+    web.update(
+        name="Web",
+        classes=["wizard"],
+        pack_id="dnd5e.content.srd2014",
+        pack_version="1.6.0",
+        rule_refs=["bundled:srd2014/spells/web"],
+    )
+    sheet["inventory"]["items"] = [
+        {
+            "id": "wand-of-web",
+            "name": "Wand of Web",
+            "kind": "magic_item",
+            "equipped": True,
+            "equipped_slot": "main_hand",
+            "attunement": "attuned",
+            "charges": {
+                "label": "Wand charges",
+                "value": 3,
+                "max": 3,
+                "recovers_on": "dawn",
+                "source_key": "module-chunk:wand-of-web",
+            },
+            "source_key": "module-chunk:wand-of-web",
+            "mechanics": {
+                "spellcasting": {
+                    "requires_attunement": True,
+                    "requires_class_spell_list": True,
+                    "components_required": False,
+                    "spells": [
+                        {
+                            "artifact_id": "core:spell/web",
+                            "charge_cost": 1,
+                            "casting_time": "1 action",
+                            "card": web,
+                        }
+                    ],
+                }
+            },
+        }
+    ]
+    sheet["inventory"]["equipment_slots"]["main_hand"] = "wand-of-web"
+    sheet["effects"] = [
+        {
+            "id": "old-concentration",
+            "name": "Old concentration",
+            "kind": "concentration",
+            "source": "spell.cast",
+            "source_spell_id": "",
+            "active": True,
+            "concentration": True,
+            "duration": {"period": "minute", "remaining": 1},
+            "changes": [],
+            "description": "",
+        }
+    ]
+
+    result = consume_magic_item_spell_cast(
+        validate_character_sheet(sheet),
+        source_item_id="wand-of-web",
+        spell_id="core:spell/web",
+    )
+
+    assert result["concentration_started"] is True
+    assert result["sheet"]["inventory"]["items"][0]["charges"]["value"] == 2
+    active = [
+        effect
+        for effect in result["sheet"]["effects"]
+        if effect["active"] and effect["concentration"]
+    ]
+    assert len(active) == 1
+    assert active[0]["source"] == "magic_item:wand-of-web"
+    assert active[0]["source_spell_id"] == "core:spell/web"
+    old = next(
+        effect for effect in result["sheet"]["effects"] if effect["id"] == "old-concentration"
+    )
+    assert old["active"] is False
+    assert old["ended_reason"] == "replaced_by_concentration"
+
+
 def test_magic_item_charge_recovery_and_last_charge_check() -> None:
     sheet = default_character_sheet()
     sheet["inventory"]["items"] = [
@@ -349,9 +432,7 @@ def test_magic_missile_allocation_and_shield_trigger_are_source_bound() -> None:
         {"target_id": "goblin-b", "darts": 1},
     ]
     with pytest.raises(ValueError, match="exactly 4 darts"):
-        validate_magic_missile_allocations(
-            [{"target_id": "goblin-a", "darts": 3}], cast_level=2
-        )
+        validate_magic_missile_allocations([{"target_id": "goblin-a", "darts": 3}], cast_level=2)
 
     sheet = default_character_sheet()
     sheet["spellcasting"]["spell_slots"] = {
@@ -528,9 +609,7 @@ def test_readied_spell_pays_now_and_replaces_existing_concentration() -> None:
     assert active[0]["id"] == result["holding_effect_id"]
     assert active[0]["kind"] == "readied_spell"
     old = next(
-        effect
-        for effect in result["sheet"]["effects"]
-        if effect["id"] == "old-concentration"
+        effect for effect in result["sheet"]["effects"] if effect["id"] == "old-concentration"
     )
     assert old["ended_reason"] == "replaced_by_readied_spell"
 
@@ -571,6 +650,138 @@ def test_prepared_caster_cannot_cast_unprepared_known_spell() -> None:
     sheet = validate_character_sheet(sheet)
     with pytest.raises(ValueError, match="not available"):
         consume_spell_cast(sheet, spell_id="command")
+
+
+def test_spell_mastery_requires_preparation_and_upcasts_spend_slots() -> None:
+    sheet = default_character_sheet()
+    sheet["progression"] = {
+        "level": 18,
+        "classes": [{"name": "Wizard", "level": 18, "hit_die": 6}],
+    }
+    sheet["spellcasting"]["preparation"] = {
+        "mode": "spellbook",
+        "max_prepared": 23,
+        "changes_on": "long_rest",
+        "selected_spell_ids": [],
+    }
+    sheet["spellcasting"]["spell_slots"] = {
+        "2": {"value": 1, "max": 3, "recovers_on": "long_rest", "slot_level": 2}
+    }
+    spell = _spell("shield", level=1)
+    spell["access"].update(
+        {"known": True, "prepared": False, "in_spellbook": True, "at_will": True}
+    )
+    sheet["content"]["spells"] = [spell]
+    sheet["content"]["features"] = [
+        {
+            "id": "spell-mastery",
+            "name": "Spell Mastery",
+            "choices": {"spell_artifact_ids": ["shield", "misty-step"]},
+        }
+    ]
+
+    with pytest.raises(ValueError, match="not available"):
+        consume_spell_cast(sheet, spell_id="shield")
+
+    sheet["content"]["spells"][0]["access"]["prepared"] = True
+    base_cast = consume_spell_cast(sheet, spell_id="shield", cast_level=1)
+    assert base_cast["payment"]["economy"] == "none"
+    upcast = consume_spell_cast(sheet, spell_id="shield", cast_level=2)
+    assert upcast["payment"]["economy"] == "slots"
+    assert upcast["sheet"]["spellcasting"]["spell_slots"]["2"]["value"] == 0
+
+
+def test_invocation_at_will_spell_cannot_be_upcast_for_free() -> None:
+    sheet = default_character_sheet()
+    spell = _spell("false-life", level=1)
+    spell["access"].update({"at_will": True, "known": False, "prepared": False})
+    spell["grant"] = {
+        "source_type": "feature",
+        "source_key": "Fiendish Vigor",
+        "method": "eldritch_invocation",
+    }
+    sheet["content"]["spells"] = [spell]
+
+    with pytest.raises(ValueError, match="lowest level"):
+        consume_spell_cast(sheet, spell_id="false-life", cast_level=2)
+
+
+def test_at_will_spell_with_independent_known_access_can_upcast_with_a_slot() -> None:
+    sheet = default_character_sheet()
+    sheet["spellcasting"]["spell_slots"] = {
+        "2": {"value": 1, "max": 1, "recovers_on": "long_rest", "slot_level": 2}
+    }
+    spell = _spell("false-life", level=1)
+    spell["access"].update({"at_will": True, "known": True})
+    sheet["content"]["spells"] = [spell]
+
+    result = consume_spell_cast(sheet, spell_id="false-life", cast_level=2)
+
+    assert result["payment"]["economy"] == "slots"
+    assert result["sheet"]["spellcasting"]["spell_slots"]["2"]["value"] == 0
+
+
+def test_signature_spell_free_use_is_explicit_and_limited_to_third_level() -> None:
+    sheet = default_character_sheet()
+    sheet["progression"] = {
+        "level": 20,
+        "classes": [{"name": "Wizard", "level": 20, "hit_die": 6}],
+    }
+    sheet["spellcasting"]["preparation"] = {
+        "mode": "spellbook",
+        "max_prepared": 25,
+        "changes_on": "long_rest",
+        "selected_spell_ids": [],
+    }
+    sheet["spellcasting"]["spell_slots"] = {
+        "3": {"value": 1, "max": 3, "recovers_on": "long_rest", "slot_level": 3},
+        "4": {"value": 1, "max": 3, "recovers_on": "long_rest", "slot_level": 4},
+    }
+    spell = _spell("fireball", level=3)
+    spell["access"].update(
+        {
+            "known": True,
+            "prepared": True,
+            "always_prepared": True,
+            "in_spellbook": True,
+        }
+    )
+    sheet["content"]["spells"] = [spell]
+    sheet["content"]["features"] = [
+        {
+            "id": "signature-spells",
+            "name": "Signature Spells",
+            "choices": {"spell_artifact_ids": ["fireball", "counterspell"]},
+        }
+    ]
+    sheet["resources"]["signature_spell:fireball"] = {
+        "label": "Signature Spell: Fireball",
+        "value": 1,
+        "max": 1,
+        "recovers_on": "short_rest",
+        "source_key": "Wizard",
+    }
+
+    ordinary = consume_spell_cast(sheet, spell_id="fireball", cast_level=3)
+    assert ordinary["payment"]["economy"] == "slots"
+    assert ordinary["sheet"]["resources"]["signature_spell:fireball"]["value"] == 1
+
+    free = consume_spell_cast(
+        sheet,
+        spell_id="fireball",
+        cast_level=3,
+        signature_free_cast=True,
+    )
+    assert free["payment"]["economy"] == "signature_spell"
+    assert free["sheet"]["resources"]["signature_spell:fireball"]["value"] == 0
+
+    with pytest.raises(ValueError, match="3rd level"):
+        consume_spell_cast(
+            sheet,
+            spell_id="fireball",
+            cast_level=4,
+            signature_free_cast=True,
+        )
 
 
 def test_2024_ranger_long_rest_replaces_only_one_spell() -> None:

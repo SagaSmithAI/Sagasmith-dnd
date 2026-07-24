@@ -11,6 +11,82 @@ from sagasmith_dnd.engine import roll
 from sagasmith_dnd.rule_engine import ResolutionContext, apply_rule_event, core_receipts
 
 REST_MINIMUM_MINUTES = {"short_rest": 60, "long_rest": 480}
+REST_SCHEDULE_FIELDS = {
+    "sleep_minutes",
+    "light_activity_minutes",
+    "strenuous_activity_minutes",
+}
+REST_SCHEDULE_OPTIONAL_FIELDS = {"trance_minutes"}
+
+
+def allows_trance_rest(sheet: dict[str, Any]) -> bool:
+    """Return whether a source-bound actor feature grants the elf Trance rest."""
+    return any(
+        str(feature.get("name") or "").strip().casefold() == "trance"
+        and str(feature.get("source_key") or "").strip()
+        for feature in sheet.get("content", {}).get("features", [])
+        if isinstance(feature, dict)
+    )
+
+
+def validate_rest_schedule(
+    *,
+    rest_type: str,
+    duration_minutes: int,
+    rest_schedule: dict[str, int] | None,
+    allows_trance: bool = False,
+) -> dict[str, int]:
+    """Require a complete rest schedule matching the 2014 rest definition."""
+    normalized_type = str(rest_type).strip().lower().replace("-", "_")
+    if normalized_type not in REST_MINIMUM_MINUTES:
+        raise CombatEngineError("rest_type must be short_rest or long_rest")
+    minimum_minutes = (
+        240
+        if normalized_type == "long_rest" and allows_trance
+        else REST_MINIMUM_MINUTES[normalized_type]
+    )
+    if (
+        isinstance(duration_minutes, bool)
+        or not isinstance(duration_minutes, int)
+        or duration_minutes < minimum_minutes
+    ):
+        raise CombatEngineError(f"{normalized_type} requires at least {minimum_minutes} minutes")
+    if not isinstance(rest_schedule, dict):
+        raise CombatEngineError("rest requires an explicit rest_schedule")
+    unknown = set(rest_schedule) - REST_SCHEDULE_FIELDS - REST_SCHEDULE_OPTIONAL_FIELDS
+    missing = REST_SCHEDULE_FIELDS - set(rest_schedule)
+    if unknown or missing:
+        raise CombatEngineError(
+            "rest_schedule requires exactly sleep_minutes, "
+            "light_activity_minutes, strenuous_activity_minutes, and optional "
+            "trance_minutes"
+        )
+    normalized: dict[str, int] = {}
+    for field in sorted(REST_SCHEDULE_FIELDS | REST_SCHEDULE_OPTIONAL_FIELDS):
+        value = rest_schedule.get(field, 0)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise CombatEngineError(f"rest_schedule.{field} must be a nonnegative integer")
+        normalized[field] = value
+    if sum(normalized.values()) != duration_minutes:
+        raise CombatEngineError("rest_schedule minutes must equal the campaign-clock rest duration")
+    if normalized_type == "short_rest":
+        if normalized["strenuous_activity_minutes"] != 0:
+            raise CombatEngineError(
+                "a short rest permits no activity more strenuous than light activity"
+            )
+    else:
+        trance_satisfies_sleep = allows_trance and normalized["trance_minutes"] >= 240
+        if not trance_satisfies_sleep and normalized["sleep_minutes"] < 360:
+            raise CombatEngineError(
+                "a long rest requires at least 6 hours of sleep or a source-granted 4-hour trance"
+            )
+        if not trance_satisfies_sleep and duration_minutes < 480:
+            raise CombatEngineError("a long rest requires at least 8 hours")
+        if normalized["light_activity_minutes"] > 120:
+            raise CombatEngineError("a long rest permits no more than 2 hours of light activity")
+        if normalized["strenuous_activity_minutes"] >= 60:
+            raise CombatEngineError("at least 1 hour of strenuous activity interrupts a long rest")
+    return normalized
 
 
 def record_rest_completion(
@@ -19,6 +95,7 @@ def record_rest_completion(
     rest_type: str,
     started_elapsed_minutes: int,
     completed_elapsed_minutes: int,
+    rest_schedule: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Validate campaign-clock rest timing and preserve the last benefit time."""
     normalized = str(rest_type).strip().lower().replace("-", "_")
@@ -28,15 +105,28 @@ def record_rest_completion(
     completed = int(completed_elapsed_minutes)
     if started < 0 or completed < started:
         raise CombatEngineError("rest clock bounds are invalid")
-    if completed - started < REST_MINIMUM_MINUTES[normalized]:
-        raise CombatEngineError(
-            f"{normalized} requires at least {REST_MINIMUM_MINUTES[normalized]} minutes"
-        )
+    allows_trance = allows_trance_rest(sheet)
+    minimum_minutes = (
+        240 if normalized == "long_rest" and allows_trance else REST_MINIMUM_MINUTES[normalized]
+    )
+    if completed - started < minimum_minutes:
+        raise CombatEngineError(f"{normalized} requires at least {minimum_minutes} minutes")
+    validate_rest_schedule(
+        rest_type=normalized,
+        duration_minutes=completed - started,
+        rest_schedule=rest_schedule,
+        allows_trance=allows_trance,
+    )
     hp = int(dict(sheet.get("combat", {}).get("hp") or {}).get("value", 0) or 0)
     conditions = {str(item).casefold() for item in sheet.get("conditions", [])}
     if hp <= 0 or "dead" in conditions:
         raise CombatEngineError("a creature must have at least 1 hit point at the start of a rest")
     history = dict(dict(sheet.get("combat") or {}).get("rest_history") or {})
+    previous_completed = history.get("last_rest_completed_elapsed_minutes")
+    if previous_completed is not None and completed <= int(previous_completed):
+        raise CombatEngineError(
+            "a creature cannot benefit from more than one rest ending at the same campaign time"
+        )
     previous_long = history.get("last_long_rest_elapsed_minutes")
     if (
         normalized == "long_rest"
@@ -141,9 +231,7 @@ def advance_world_effect_durations(
     }
 
 
-def recover_stable_creature(
-    sheet: dict[str, Any], *, recovery_hours: int
-) -> dict[str, Any]:
+def recover_stable_creature(sheet: dict[str, Any], *, recovery_hours: int) -> dict[str, Any]:
     """Resolve the automatic 1 HP recovery of an unhealed Stable creature."""
     if isinstance(recovery_hours, bool) or not isinstance(recovery_hours, int):
         raise CombatEngineError("stable recovery hours must be an integer from 1 to 4")
@@ -174,9 +262,7 @@ def recover_stable_creature(
     }
 
 
-def initialize_source_state(
-    sheet: dict[str, Any], *, state: str
-) -> dict[str, Any]:
+def initialize_source_state(sheet: dict[str, Any], *, state: str) -> dict[str, Any]:
     """Apply one narrow, source-authored initial creature state.
 
     This is intentionally not a generic condition editor. Adventures sometimes
@@ -234,6 +320,26 @@ def knock_prone_outside_combat(sheet: dict[str, Any]) -> dict[str, Any]:
     return {"sheet": value, "status": "knocked_prone", "added_condition": "prone"}
 
 
+def validate_rest_activity_minutes(
+    rest_activity_minutes: dict[str, int] | None,
+) -> dict[str, int]:
+    """Normalize explicit activities that gate resource recovery during a rest."""
+    normalized: dict[str, int] = {}
+    for raw_activity, raw_minutes in (rest_activity_minutes or {}).items():
+        activity = str(raw_activity).strip().casefold()
+        if (
+            not activity
+            or isinstance(raw_minutes, bool)
+            or not isinstance(raw_minutes, int)
+            or raw_minutes < 0
+        ):
+            raise CombatEngineError(
+                "rest_activity_minutes requires named activities and nonnegative integer minutes"
+            )
+        normalized[activity] = raw_minutes
+    return normalized
+
+
 def apply_rest(
     sheet: dict[str, Any],
     *,
@@ -241,6 +347,7 @@ def apply_rest(
     hit_dice_spends: list[dict[str, Any]] | None = None,
     hit_dice_recovery: dict[str, int] | None = None,
     arcane_recovery: dict[str, int] | None = None,
+    rest_activity_minutes: dict[str, int] | None = None,
     food_and_drink: bool = False,
     rules: ResolutionContext | None = None,
     rng: Any = None,
@@ -258,6 +365,7 @@ def apply_rest(
         raise CombatEngineError("food_and_drink affects exhaustion recovery only on a long rest")
     if rest_type != "short_rest" and arcane_recovery:
         raise CombatEngineError("Arcane Recovery can be used only when finishing a short rest")
+    normalized_rest_activities = validate_rest_activity_minutes(rest_activity_minutes)
     if rest_type == "short_rest":
         validate_rest_hit_dice_requests(sheet, hit_dice_spends)
         validate_arcane_recovery_choice(sheet, arcane_recovery, world_day=world_day)
@@ -280,6 +388,7 @@ def apply_rest(
         raise CombatEngineError("a creature at 0 hit points or dead cannot benefit from a rest")
     edition = "2024" if "2024" in str(value.get("edition") or "") else "2014"
     recovered: dict[str, int] = {}
+    unmet_recovery_requirements: dict[str, dict[str, Any]] = {}
     hit_die_healing = 0
     hit_dice_rolls: list[dict[str, Any]] = []
     arcane_recovery_result: dict[str, Any] | None = None
@@ -321,9 +430,22 @@ def apply_rest(
         if not isinstance(resource, dict):
             return
         recovery = resource.get("recovers_on")
-        if recovery != rest_type and not (
-            rest_type == "long_rest" and recovery == "short_rest"
-        ):
+        if recovery != rest_type and not (rest_type == "long_rest" and recovery == "short_rest"):
+            return
+        requirements = dict(resource.get("recovery_requirements") or {})
+        required_activities = dict(requirements.get("activity_minutes") or {})
+        unmet = {
+            str(activity): {
+                "required_minutes": int(required_minutes),
+                "actual_minutes": int(normalized_rest_activities.get(str(activity).casefold(), 0)),
+            }
+            for activity, required_minutes in required_activities.items()
+            if normalized_rest_activities.get(str(activity).casefold(), 0) < int(required_minutes)
+        }
+        if unmet:
+            unmet_recovery_requirements[key] = {"activity_minutes": unmet}
+            return
+        if bool(resource.get("unlimited", False)):
             return
         before = int(resource.get("value", 0) or 0)
         resource["value"] = int(resource.get("max", 0) or 0)
@@ -419,6 +541,7 @@ def apply_rest(
         "sheet": after_rules.sheet,
         "rest_type": rest_type,
         "recovered": recovered,
+        "unmet_recovery_requirements": unmet_recovery_requirements,
         "hit_die_healing": hit_die_healing,
         "hit_dice_rolls": hit_dice_rolls,
         "arcane_recovery": arcane_recovery_result,

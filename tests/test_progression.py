@@ -28,12 +28,8 @@ def test_bard_magical_secrets_are_not_double_counted_as_class_list_spells() -> N
         "cantrips_to_add": 1,
         "leveled_spells_to_add": 0,
     }
-    assert progression_module._spell_choice_delta("Bard", 13, 14)[
-        "leveled_spells_to_add"
-    ] == 0
-    assert progression_module._spell_choice_delta("Bard", 17, 18)[
-        "leveled_spells_to_add"
-    ] == 0
+    assert progression_module._spell_choice_delta("Bard", 13, 14)["leveled_spells_to_add"] == 0
+    assert progression_module._spell_choice_delta("Bard", 17, 18)["leveled_spells_to_add"] == 0
 
 
 def _single_class_sheet(
@@ -173,9 +169,119 @@ def test_feature_resource_formula_reacts_to_ability_changes_and_unlimited_levels
         "label": "Bardic Inspiration",
         "value": 3,
         "max": 3,
+        "unlimited": False,
         "recovers_on": "long_rest",
+        "recovery_requirements": {},
         "source_key": "Bard",
         "slot_level": 0,
+    }
+
+
+def test_zero_capacity_and_unlimited_class_resources_remain_distinct() -> None:
+    paladin = _single_class_sheet("Paladin", hit_die=10, constitution=12, hp=(10, 10))
+    paladin["abilities"]["charisma"]["score"] = 6
+    paladin["content"]["features"] = [
+        {
+            "id": "divine-sense",
+            "name": "Divine Sense",
+            "uses": {"value": 0, "max": 0, "unlimited": False},
+            "resource_scaling": {
+                "target": "uses",
+                "label": "Divine Sense",
+                "class_name": "Paladin",
+                "maximum_by_level": {},
+                "maximum_formula": {
+                    "kind": "ability_modifier",
+                    "ability": "charisma",
+                    "minimum": 0,
+                    "multiplier": 1,
+                    "offset": 1,
+                },
+                "recovers_on": "long_rest",
+                "recovery_by_level": {},
+            },
+        }
+    ]
+    paladin_result = synchronize_class_feature_resources(paladin)
+    assert paladin_result["sheet"]["content"]["features"][0]["uses"]["max"] == 0
+    assert paladin_result["sheet"]["content"]["features"][0]["uses"]["unlimited"] is False
+
+    barbarian = _single_class_sheet("Barbarian", hit_die=12, constitution=14, hp=(14, 14))
+    barbarian["progression"]["level"] = 20
+    barbarian["progression"]["classes"][0]["level"] = 20
+    barbarian["content"]["features"] = [
+        {
+            "id": "rage",
+            "name": "Rage",
+            "uses": {"value": 0, "max": 6, "unlimited": False},
+            "resource_scaling": {
+                "target": "uses",
+                "label": "Rage",
+                "class_name": "Barbarian",
+                "maximum_by_level": {"1": 2, "17": 6},
+                "unlimited_at_level": 20,
+                "recovers_on": "long_rest",
+                "recovery_by_level": {},
+            },
+        }
+    ]
+    barbarian_result = synchronize_class_feature_resources(barbarian)
+    assert barbarian_result["sheet"]["content"]["features"][0]["uses"]["max"] == 0
+    assert barbarian_result["sheet"]["content"]["features"][0]["uses"]["unlimited"] is True
+
+
+def test_extra_attack_scaling_uses_the_highest_class_feature_without_stacking() -> None:
+    sheet = default_character_sheet()
+    sheet["progression"].update(
+        {
+            "level": 16,
+            "classes": [
+                {
+                    "name": "Fighter",
+                    "level": 11,
+                    "subclass": "Champion",
+                    "hit_die": 10,
+                },
+                {
+                    "name": "Ranger",
+                    "level": 5,
+                    "subclass": "Hunter",
+                    "hit_die": 10,
+                },
+            ],
+        }
+    )
+    sheet["content"]["features"] = [
+        {
+            "id": "fighter-extra-attack",
+            "name": "Extra Attack",
+            "attack_scaling": {
+                "class_name": "Fighter",
+                "attacks_per_action_by_level": {
+                    "5": 2,
+                    "11": 3,
+                    "20": 4,
+                },
+            },
+        },
+        {
+            "id": "ranger-extra-attack",
+            "name": "Extra Attack",
+            "attack_scaling": {
+                "class_name": "Ranger",
+                "attacks_per_action_by_level": {"5": 2},
+            },
+        },
+    ]
+
+    synchronized = synchronize_class_feature_resources(sheet)
+
+    assert synchronized["sheet"]["combat"]["attacks_per_action"] == 3
+    assert synchronized["changes"][-1] == {
+        "target": "combat.attacks_per_action",
+        "old_value": 1,
+        "new_value": 3,
+        "source_feature_ids": ["fighter-extra-attack"],
     }
 
 
@@ -324,11 +430,10 @@ def test_per_level_hit_point_bonus_updates_every_recorded_level() -> None:
         source="Hill Dwarf: Dwarven Toughness",
     )
 
-    assert updated["combat"]["hp"] == {"value": 13, "max": 22, "temp": 0}
+    assert updated["combat"]["hp"] == {"value": 11, "max": 22, "temp": 0}
     assert [entry["value"] for entry in updated["combat"]["hp_progression"]] == [12, 10]
     assert all(
-        "Dwarven Toughness" in entry["source"]
-        for entry in updated["combat"]["hp_progression"]
+        "Dwarven Toughness" in entry["source"] for entry in updated["combat"]["hp_progression"]
     )
     assert sheet["combat"]["hp"]["max"] == 20
 
@@ -349,7 +454,7 @@ def test_per_level_hit_point_bonus_rejects_a_partial_existing_ledger() -> None:
         )
 
 
-def test_constitution_score_change_updates_existing_hp_and_ledger() -> None:
+def test_constitution_score_change_updates_maximum_not_current_hp_and_ledger() -> None:
     sheet = default_character_sheet()
     sheet["progression"]["level"] = 2
     sheet["combat"]["hp"] = {"value": 14, "max": 14, "temp": 0}
@@ -365,9 +470,25 @@ def test_constitution_score_change_updates_existing_hp_and_ledger() -> None:
         source="Half-Elf Constitution increase",
     )
 
-    assert updated["combat"]["hp"] == {"value": 16, "max": 16, "temp": 0}
+    assert updated["combat"]["hp"] == {"value": 14, "max": 16, "temp": 0}
     assert [item["value"] for item in updated["combat"]["hp_progression"]] == [9, 7]
     assert all(
         "Half-Elf Constitution increase" in item["source"]
         for item in updated["combat"]["hp_progression"]
     )
+
+
+def test_constitution_score_change_can_fill_setup_hp_explicitly() -> None:
+    sheet = default_character_sheet()
+    sheet["progression"]["level"] = 1
+    sheet["combat"]["hp"] = {"value": 9, "max": 9, "temp": 0}
+
+    updated = apply_constitution_score_hit_point_change(
+        sheet,
+        previous_score=13,
+        new_score=14,
+        source="Character creation species increase",
+        adjust_current=True,
+    )
+
+    assert updated["combat"]["hp"] == {"value": 10, "max": 10, "temp": 0}

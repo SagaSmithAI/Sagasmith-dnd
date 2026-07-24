@@ -17,6 +17,16 @@ from sagasmith_dnd.lifecycle import (
 
 def test_rest_completion_enforces_duration_and_daily_limit() -> None:
     sheet = default_character_sheet()
+    long_schedule = {
+        "sleep_minutes": 360,
+        "light_activity_minutes": 120,
+        "strenuous_activity_minutes": 0,
+    }
+    short_schedule = {
+        "sleep_minutes": 0,
+        "light_activity_minutes": 60,
+        "strenuous_activity_minutes": 0,
+    }
     with pytest.raises(CombatEngineError, match="at least 480"):
         record_rest_completion(
             sheet,
@@ -30,6 +40,7 @@ def test_rest_completion_enforces_duration_and_daily_limit() -> None:
         rest_type="long_rest",
         started_elapsed_minutes=0,
         completed_elapsed_minutes=480,
+        rest_schedule=long_schedule,
     )
     assert recorded["combat"]["rest_history"]["last_long_rest_elapsed_minutes"] == 480
     with pytest.raises(CombatEngineError, match="in 24 hours"):
@@ -38,6 +49,15 @@ def test_rest_completion_enforces_duration_and_daily_limit() -> None:
             rest_type="long_rest",
             started_elapsed_minutes=1000,
             completed_elapsed_minutes=1480,
+            rest_schedule=long_schedule,
+        )
+    with pytest.raises(CombatEngineError, match="same campaign time"):
+        record_rest_completion(
+            recorded,
+            rest_type="short_rest",
+            started_elapsed_minutes=420,
+            completed_elapsed_minutes=480,
+            rest_schedule=short_schedule,
         )
 
     next_day = record_rest_completion(
@@ -45,8 +65,92 @@ def test_rest_completion_enforces_duration_and_daily_limit() -> None:
         rest_type="long_rest",
         started_elapsed_minutes=1440,
         completed_elapsed_minutes=1920,
+        rest_schedule=long_schedule,
     )
     assert next_day["combat"]["rest_history"]["last_long_rest_elapsed_minutes"] == 1920
+
+
+def test_rest_completion_rejects_incomplete_or_interrupted_schedules() -> None:
+    sheet = default_character_sheet()
+    with pytest.raises(CombatEngineError, match="explicit rest_schedule"):
+        record_rest_completion(
+            sheet,
+            rest_type="short_rest",
+            started_elapsed_minutes=0,
+            completed_elapsed_minutes=60,
+        )
+    with pytest.raises(CombatEngineError, match="more strenuous"):
+        record_rest_completion(
+            sheet,
+            rest_type="short_rest",
+            started_elapsed_minutes=0,
+            completed_elapsed_minutes=60,
+            rest_schedule={
+                "sleep_minutes": 0,
+                "light_activity_minutes": 59,
+                "strenuous_activity_minutes": 1,
+            },
+        )
+    with pytest.raises(CombatEngineError, match="at least 6 hours"):
+        record_rest_completion(
+            sheet,
+            rest_type="long_rest",
+            started_elapsed_minutes=0,
+            completed_elapsed_minutes=480,
+            rest_schedule={
+                "sleep_minutes": 359,
+                "light_activity_minutes": 121,
+                "strenuous_activity_minutes": 0,
+            },
+        )
+    with pytest.raises(CombatEngineError, match="interrupts"):
+        record_rest_completion(
+            sheet,
+            rest_type="long_rest",
+            started_elapsed_minutes=0,
+            completed_elapsed_minutes=480,
+            rest_schedule={
+                "sleep_minutes": 360,
+                "light_activity_minutes": 60,
+                "strenuous_activity_minutes": 60,
+            },
+        )
+
+
+def test_source_granted_trance_completes_a_long_rest_in_four_hours() -> None:
+    sheet = default_character_sheet()
+    sheet["content"]["features"] = [
+        {
+            "id": "dnd5e.content.srd2014.species-feature.elf-trance",
+            "name": "Trance",
+            "source_key": "Elf",
+            "description": "Four hours of trance grants the benefit of eight hours of sleep.",
+        }
+    ]
+    schedule = {
+        "sleep_minutes": 0,
+        "trance_minutes": 240,
+        "light_activity_minutes": 0,
+        "strenuous_activity_minutes": 0,
+    }
+
+    recorded = record_rest_completion(
+        sheet,
+        rest_type="long_rest",
+        started_elapsed_minutes=0,
+        completed_elapsed_minutes=240,
+        rest_schedule=schedule,
+    )
+
+    assert recorded["combat"]["rest_history"]["last_long_rest_elapsed_minutes"] == 240
+    with pytest.raises(CombatEngineError, match="at least 480"):
+        record_rest_completion(
+            default_character_sheet(),
+            rest_type="long_rest",
+            started_elapsed_minutes=0,
+            completed_elapsed_minutes=240,
+            rest_schedule=schedule,
+        )
 
 
 class _SequenceRng:
@@ -130,6 +234,38 @@ def test_long_rest_also_recovers_short_rest_resources() -> None:
 
     assert result["sheet"]["resources"]["channel_divinity"]["value"] == 1
     assert result["recovered"]["channel_divinity"] == 1
+
+
+@pytest.mark.parametrize("rest_type", ["short_rest", "long_rest"])
+def test_ki_recovery_requires_thirty_minutes_of_meditation(rest_type: str) -> None:
+    sheet = default_character_sheet()
+    sheet["resources"] = {
+        "ki": {
+            "label": "Ki Points",
+            "value": 0,
+            "max": 3,
+            "recovers_on": "short_rest",
+            "recovery_requirements": {
+                "activity_minutes": {"meditation": 30},
+            },
+            "source_key": "Monk",
+        }
+    }
+
+    not_meditated = apply_rest(sheet, rest_type=rest_type)
+    assert not_meditated["sheet"]["resources"]["ki"]["value"] == 0
+    assert not_meditated["unmet_recovery_requirements"]["ki"] == {
+        "activity_minutes": {"meditation": {"required_minutes": 30, "actual_minutes": 0}}
+    }
+
+    meditated = apply_rest(
+        sheet,
+        rest_type=rest_type,
+        rest_activity_minutes={"meditation": 30},
+    )
+    assert meditated["sheet"]["resources"]["ki"]["value"] == 3
+    assert meditated["recovered"]["ki"] == 3
+    assert meditated["unmet_recovery_requirements"] == {}
 
 
 def test_elapsed_time_only_advances_matching_effect_periods() -> None:
@@ -258,7 +394,7 @@ def test_rest_rejects_irrelevant_recovery_inputs_before_rng() -> None:
         apply_rest(sheet, rest_type="short_rest", food_and_drink=True)
 
 
-def test_arcane_recovery_is_a_once_per_long_rest_short_rest_choice() -> None:
+def test_arcane_recovery_is_a_once_per_day_short_rest_choice() -> None:
     sheet = default_character_sheet()
     sheet["progression"] = {
         "level": 2,

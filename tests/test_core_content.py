@@ -9,7 +9,7 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     manifest, artifacts = build_srd2014_content(workspace / "SagaSmith-dnd-skills")
     counts = Counter(item["kind"] for item in artifacts)
 
-    assert manifest["version"] == PACK_VERSION == "1.10.0"
+    assert manifest["version"] == PACK_VERSION == "1.11.0"
     assert counts["spell"] == 319
     assert counts["species"] == 13
     assert counts["class"] == 12
@@ -37,9 +37,7 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
         "radius_ft": 20,
     }
     scorching_ray = next(
-        item
-        for item in artifacts
-        if item["id"] == "dnd5e.content.srd2014.spell.scorching-ray"
+        item for item in artifacts if item["id"] == "dnd5e.content.srd2014.spell.scorching-ray"
     )
     assert scorching_ray["card"]["resolution"]["attack"]["count"] == {
         "base": 3,
@@ -47,17 +45,11 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
         "slot_base_level": 2,
     }
     healing_word = next(
-        item
-        for item in artifacts
-        if item["id"] == "dnd5e.content.srd2014.spell.healing-word"
+        item for item in artifacts if item["id"] == "dnd5e.content.srd2014.spell.healing-word"
     )
-    assert healing_word["card"]["resolution"]["healing"][
-        "add_spellcasting_modifier"
-    ] is True
+    assert healing_word["card"]["resolution"]["healing"]["add_spellcasting_modifier"] is True
 
-    shield = next(
-        item for item in artifacts if item["id"] == "dnd5e.content.srd2014.spell.shield"
-    )
+    shield = next(item for item in artifacts if item["id"] == "dnd5e.content.srd2014.spell.shield")
     assert shield["mechanic_refs"] == ["dnd5e.core.spell.shield"]
     assert shield["card"]["mechanic_refs"] == ["dnd5e.core.spell.shield"]
     magic_missile = next(
@@ -102,8 +94,7 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     life_bonus_proficiency = next(
         item
         for item in artifacts
-        if item["id"]
-        == "dnd5e.content.srd2014.feature.life-domain-bonus-proficiency"
+        if item["id"] == "dnd5e.content.srd2014.feature.life-domain-bonus-proficiency"
     )
     assert life_bonus_proficiency["card"]["mechanical_grants"] == {
         "armor_proficiencies": ["heavy armor"]
@@ -143,9 +134,12 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
         if item["id"] == "dnd5e.content.srd2014.feature.cleric-channel-divinity"
     )
     assert channel_divinity["card"]["resource_key"] == "channel_divinity"
-    assert channel_divinity["card"]["mechanical_grants"]["resources"][
-        "channel_divinity"
-    ]["recovers_on"] == "short_rest"
+    assert (
+        channel_divinity["card"]["mechanical_grants"]["resources"]["channel_divinity"][
+            "recovers_on"
+        ]
+        == "short_rest"
+    )
     assert channel_divinity["card"]["resource_scaling"]["maximum_by_level"] == {
         "2": 1,
         "6": 2,
@@ -153,9 +147,7 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     }
 
     rage = next(
-        item
-        for item in artifacts
-        if item["id"] == "dnd5e.content.srd2014.feature.barbarian-rage"
+        item for item in artifacts if item["id"] == "dnd5e.content.srd2014.feature.barbarian-rage"
     )
     assert rage["card"]["resource_scaling"]["maximum_by_level"] == {
         "1": 2,
@@ -171,11 +163,12 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
         {"level": 16, "value": 4, "description": "rage damage bonus"},
     ]
 
-    ki = next(
-        item for item in artifacts if item["id"] == "dnd5e.content.srd2014.feature.monk-ki"
-    )
+    ki = next(item for item in artifacts if item["id"] == "dnd5e.content.srd2014.feature.monk-ki")
     assert ki["card"]["resource_key"] == "ki"
     assert ki["card"]["resource_scaling"]["maximum_by_level"]["20"] == 20
+    assert ki["card"]["mechanical_grants"]["resources"]["ki"]["recovery_requirements"] == {
+        "activity_minutes": {"meditation": 30}
+    }
 
     sorcery = next(
         item
@@ -197,22 +190,136 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
         "multiplier": 1,
         "offset": 0,
     }
-    assert bardic["card"]["resource_scaling"]["recovery_by_level"] == {
-        "5": "short_rest"
+    assert bardic["card"]["resource_scaling"]["recovery_by_level"] == {"5": "short_rest"}
+
+    divine_sense = next(
+        item
+        for item in artifacts
+        if item["id"] == "dnd5e.content.srd2014.feature.paladin-divine-sense"
+    )
+    assert divine_sense["card"]["resource_scaling"]["maximum_formula"]["minimum"] == 0
+    assert divine_sense["card"]["uses"]["unlimited"] is False
+
+    favored_enemy = next(
+        item
+        for item in artifacts
+        if item["id"] == "dnd5e.content.srd2014.feature.ranger-favored-enemy"
+    )
+    requirements = favored_enemy["card"]["selection_requirements"]
+    assert requirements["language_if_spoken"] is True
+    assert "requires_language" not in requirements
+
+    draconic_resilience = next(
+        item
+        for item in artifacts
+        if item["id"] == "dnd5e.content.srd2014.feature.draconic-bloodline-draconic-resilience"
+    )
+    assert draconic_resilience["card"]["mechanical_grants"] == {
+        "hp_per_class_level": 1,
+        "unarmored_base": 13,
     }
+    unarmored_defenses = {
+        artifact["card"]["class_name"]: artifact["card"]["mechanical_grants"]["unarmored_formula"]
+        for artifact in artifacts
+        if artifact["id"]
+        in {
+            "dnd5e.content.srd2014.feature.barbarian-unarmored-defense",
+            "dnd5e.content.srd2014.feature.monk-unarmored-defense",
+        }
+    }
+    assert unarmored_defenses == {
+        "Barbarian": {
+            "base": 10,
+            "ability": "constitution",
+            "allows_shield": True,
+        },
+        "Monk": {
+            "base": 10,
+            "ability": "wisdom",
+            "allows_shield": False,
+        },
+    }
+    dragon_ancestor = next(
+        artifact
+        for artifact in artifacts
+        if artifact["id"].endswith("draconic-bloodline-dragon-ancestor")
+    )
+    assert dragon_ancestor["card"]["mechanical_grants"]["languages"] == ["Draconic"]
+
+    fighting_styles = [
+        artifact
+        for artifact in artifacts
+        if artifact["kind"] == "feature" and artifact["card"].get("name") == "Fighting Style"
+    ]
+    assert len(fighting_styles) == 3
+    assert all(
+        artifact["card"]["selection_requirements"]["requires_new_choice"] is True
+        for artifact in fighting_styles
+    )
+    assert {
+        artifact["card"]["selection_requirements"]["choice_uniqueness_scope"]
+        for artifact in fighting_styles
+    } == {"fighting_style"}
+    extra_attacks = {
+        artifact["card"]["class_name"]: artifact["card"]["attack_scaling"][
+            "attacks_per_action_by_level"
+        ]
+        for artifact in artifacts
+        if artifact["kind"] == "feature" and artifact["card"].get("name") == "Extra Attack"
+    }
+    assert extra_attacks == {
+        "Barbarian": {"5": 2},
+        "Fighter": {"5": 2, "11": 3, "20": 4},
+        "Monk": {"5": 2},
+        "Paladin": {"5": 2},
+        "Ranger": {"5": 2},
+    }
+
+    signature = next(
+        artifact for artifact in artifacts if artifact["id"].endswith("wizard-signature-spells")
+    )
+    assert signature["card"]["selection_requirements"] == {
+        "field": "spell_artifact_ids",
+        "kind": "signature_spells",
+        "count": 2,
+        "eligible_class": "wizard",
+        "required_spell_levels": [3, 3],
+        "requires_spellbook": True,
+    }
+    relentless_rage = next(
+        artifact for artifact in artifacts if artifact["id"].endswith("barbarian-relentless-rage")
+    )
+    assert relentless_rage["card"]["minimum_level"] == 11
+
+    paladin_channel = next(
+        artifact
+        for artifact in artifacts
+        if artifact["id"].endswith("oath-of-devotion-channel-divinity")
+    )
+    assert paladin_channel["card"]["minimum_level"] == 3
+    assert paladin_channel["card"]["resource_key"] == "channel_divinity"
+    assert paladin_channel["card"]["mechanical_grants"]["resources"]["channel_divinity"] == {
+        "label": "Channel Divinity",
+        "value": 1,
+        "max": 1,
+        "unlimited": False,
+        "recovers_on": "short_rest",
+        "source_key": "Paladin",
+    }
+    assert paladin_channel["card"]["choices"]["options"] == [
+        "Sacred Weapon",
+        "Turn the Unholy",
+    ]
 
     preserve_life = next(
         item
         for item in artifacts
-        if item["id"]
-        == "dnd5e.content.srd2014.feature.life-domain-channel-divinity-preserve-life"
+        if item["id"] == "dnd5e.content.srd2014.feature.life-domain-channel-divinity-preserve-life"
     )
     assert preserve_life["card"]["resource_key"] == "channel_divinity"
 
     bard_expertise = next(
-        item
-        for item in artifacts
-        if item["id"] == "dnd5e.content.srd2014.feature.bard-expertise"
+        item for item in artifacts if item["id"] == "dnd5e.content.srd2014.feature.bard-expertise"
     )
     assert bard_expertise["card"]["selection_requirements"] == {
         "field": "proficiencies",
@@ -224,8 +331,7 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     lore_proficiencies = next(
         item
         for item in artifacts
-        if item["id"]
-        == "dnd5e.content.srd2014.feature.college-of-lore-bonus-proficiencies"
+        if item["id"] == "dnd5e.content.srd2014.feature.college-of-lore-bonus-proficiencies"
     )
     assert lore_proficiencies["card"]["selection_requirements"] == {
         "field": "skills",
@@ -253,20 +359,24 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
         item["card"]["minimum_level"] >= subclass_minimums[item["card"]["subclass_name"]]
         for item in subclass_features
     )
-    assert next(
-        item
-        for item in subclass_features
-        if item["id"] == "dnd5e.content.srd2014.feature.circle-of-the-land-circle-spells"
-    )["card"]["minimum_level"] == 2
-    assert next(
-        item
-        for item in subclass_features
-        if item["id"] == "dnd5e.content.srd2014.feature.oath-of-devotion-oath-spells"
-    )["card"]["minimum_level"] == 3
+    assert (
+        next(
+            item
+            for item in subclass_features
+            if item["id"] == "dnd5e.content.srd2014.feature.circle-of-the-land-circle-spells"
+        )["card"]["minimum_level"]
+        == 2
+    )
+    assert (
+        next(
+            item
+            for item in subclass_features
+            if item["id"] == "dnd5e.content.srd2014.feature.oath-of-devotion-oath-spells"
+        )["card"]["minimum_level"]
+        == 3
+    )
     rogue_expertise = next(
-        item
-        for item in artifacts
-        if item["id"] == "dnd5e.content.srd2014.feature.rogue-expertise"
+        item for item in artifacts if item["id"] == "dnd5e.content.srd2014.feature.rogue-expertise"
     )
     assert rogue_expertise["card"]["unlock_levels"] == [1, 6]
     assert rogue_expertise["card"]["repeatable_selection_levels"] == [1, 6]
@@ -341,21 +451,19 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     warlock_invocations = [
         item
         for item in artifacts
-        if item["id"].startswith(
-            "dnd5e.content.srd2014.feature.warlock-eldritch-invocations"
-        )
+        if item["id"].startswith("dnd5e.content.srd2014.feature.warlock-eldritch-invocations")
     ]
     assert len(warlock_invocations) == 1
     invocations = warlock_invocations[0]["card"]
     assert invocations["repeatable_selection_levels"] == [2, 5, 7, 9, 12, 15, 18]
     assert invocations["selection_requirements_by_level"]["2"]["count"] == 2
     assert invocations["selection_requirements_by_level"]["5"]["count"] == 1
-    assert invocations["selection_requirements"]["option_prerequisites"][
-        "Ascendant Step"
-    ] == {"minimum_level": 9}
-    assert invocations["selection_requirements"]["at_will_spells"][
-        "Armor of Shadows"
-    ] == "mage armor"
+    assert invocations["selection_requirements"]["option_prerequisites"]["Ascendant Step"] == {
+        "minimum_level": 9
+    }
+    assert (
+        invocations["selection_requirements"]["at_will_spells"]["Armor of Shadows"] == "mage armor"
+    )
     magical_secrets = next(
         item
         for item in artifacts
@@ -367,9 +475,7 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
         for item in artifacts
         if item["id"] == "dnd5e.content.srd2014.feature.warlock-mystic-arcanum"
     )
-    assert mystic_arcanum["card"]["selection_requirements_by_level"]["15"][
-        "spell_level"
-    ] == 8
+    assert mystic_arcanum["card"]["selection_requirements_by_level"]["15"]["spell_level"] == 8
 
     hill_dwarf = next(
         item

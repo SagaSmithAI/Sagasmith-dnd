@@ -149,9 +149,7 @@ def experience_status(sheet: dict[str, Any]) -> dict[str, Any]:
         "next_level": next_level,
         "next_level_threshold": next_threshold,
         "xp_to_next_level": (
-            max(0, int(next_threshold) - experience)
-            if next_threshold is not None
-            else None
+            max(0, int(next_threshold) - experience) if next_threshold is not None else None
         ),
         "eligible": next_threshold is not None and experience >= next_threshold,
     }
@@ -179,6 +177,7 @@ def apply_per_level_hit_point_bonus(
     *,
     amount: int,
     source: str,
+    adjust_current: bool = False,
 ) -> dict[str, Any]:
     """Apply a species-style HP bonus and keep an existing HP ledger balanced."""
     if isinstance(amount, bool) or not isinstance(amount, int) or amount < 0:
@@ -199,7 +198,11 @@ def apply_per_level_hit_point_bonus(
     hp = combat.setdefault("hp", {})
     total_bonus = amount * level
     hp["max"] = int(hp.get("max", 0) or 0) + total_bonus
-    hp["value"] = int(hp.get("value", 0) or 0) + total_bonus
+    if adjust_current:
+        hp["value"] = min(
+            int(hp["max"]),
+            int(hp.get("value", 0) or 0) + total_bonus,
+        )
 
     # The ledger is optional for imported/manual cards. If it is present, it
     # must describe every existing level so recorded_gain_total remains exact.
@@ -233,8 +236,9 @@ def apply_constitution_score_hit_point_change(
     previous_score: int,
     new_score: int,
     source: str,
+    adjust_current: bool = False,
 ) -> dict[str, Any]:
-    """Apply the retrospective per-level HP change caused by Constitution."""
+    """Apply Constitution's retrospective per-level maximum hit-point change."""
 
     if any(
         isinstance(score, bool) or not isinstance(score, int) or score < 1 or score > 30
@@ -257,11 +261,14 @@ def apply_constitution_score_hit_point_change(
     hp = combat.setdefault("hp", {})
     total_delta = modifier_delta * level
     new_maximum = int(hp.get("max", 0) or 0) + total_delta
-    new_current = int(hp.get("value", 0) or 0) + total_delta
-    if new_maximum < 1 or new_current < 0:
+    current = int(hp.get("value", 0) or 0)
+    if new_maximum < 1:
         raise CombatEngineError("Constitution change would produce invalid hit points")
     hp["max"] = new_maximum
-    hp["value"] = min(new_maximum, new_current)
+    hp["value"] = min(
+        new_maximum,
+        current + total_delta if adjust_current else current,
+    )
     progression = list(combat.setdefault("hp_progression", []))
     if progression:
         by_level = {int(item.get("level", 0) or 0): item for item in progression}
@@ -393,7 +400,7 @@ def advance_single_class_level(
 
 
 def synchronize_class_feature_resources(sheet: dict[str, Any]) -> dict[str, Any]:
-    """Materialize source-card resource scaling without refilling spent capacity."""
+    """Materialize source-card resource and attack scaling without stacking."""
 
     value = deepcopy(sheet)
     class_levels = {
@@ -411,7 +418,7 @@ def synchronize_class_feature_resources(sheet: dict[str, Any]) -> dict[str, Any]
             raise CombatEngineError(
                 "feature resource scaling references a class absent from the actor card"
             )
-        new_maximum = _scaled_resource_maximum(value, scaling, class_level)
+        new_maximum, unlimited = _scaled_resource_capacity(value, scaling, class_level)
         if new_maximum is None:
             continue
         recovery = str(scaling.get("recovers_on") or "none")
@@ -429,7 +436,6 @@ def synchronize_class_feature_resources(sheet: dict[str, Any]) -> dict[str, Any]
             old_resource = dict(resources.get(target) or {})
         old_maximum = int(old_resource.get("max", 0) or 0)
         old_value = int(old_resource.get("value", old_maximum) or 0)
-        unlimited = new_maximum == 0
         if not old_resource:
             new_value = 0 if unlimited else new_maximum
         elif unlimited:
@@ -443,10 +449,10 @@ def synchronize_class_feature_resources(sheet: dict[str, Any]) -> dict[str, Any]
             "label": str(scaling.get("label") or old_resource.get("label") or target),
             "value": new_value,
             "max": new_maximum,
+            "unlimited": unlimited,
             "recovers_on": recovery,
-            "source_key": str(
-                scaling.get("class_name") or old_resource.get("source_key") or ""
-            ),
+            "recovery_requirements": dict(old_resource.get("recovery_requirements") or {}),
+            "source_key": str(scaling.get("class_name") or old_resource.get("source_key") or ""),
             "slot_level": int(old_resource.get("slot_level", 0) or 0),
         }
         if target == "uses":
@@ -469,15 +475,50 @@ def synchronize_class_feature_resources(sheet: dict[str, Any]) -> dict[str, Any]
                     "unlimited": unlimited,
                 }
             )
+    current_attacks = int(value.setdefault("combat", {}).get("attacks_per_action", 1) or 1)
+    scaled_attacks = 1
+    attack_sources: list[str] = []
+    for feature in value.get("content", {}).get("features", []):
+        scaling = dict(feature.get("attack_scaling") or {})
+        if not scaling:
+            continue
+        class_name = str(scaling.get("class_name") or "").casefold()
+        class_level = class_levels.get(class_name)
+        if class_level is None:
+            raise CombatEngineError("attack scaling references a class absent from the actor card")
+        candidate = 1
+        for raw_level, amount in sorted(
+            dict(scaling.get("attacks_per_action_by_level") or {}).items(),
+            key=lambda item: int(item[0]),
+        ):
+            if int(raw_level) <= class_level:
+                candidate = int(amount)
+        source_id = str(feature.get("id") or feature.get("name") or "")
+        if candidate > scaled_attacks:
+            scaled_attacks = candidate
+            attack_sources = [source_id]
+        elif candidate == scaled_attacks and candidate > 1:
+            attack_sources.append(source_id)
+    new_attacks = max(current_attacks, scaled_attacks)
+    if new_attacks != current_attacks:
+        value["combat"]["attacks_per_action"] = new_attacks
+        changes.append(
+            {
+                "target": "combat.attacks_per_action",
+                "old_value": current_attacks,
+                "new_value": new_attacks,
+                "source_feature_ids": list(dict.fromkeys(attack_sources)),
+            }
+        )
     return {"sheet": value, "changes": changes}
 
 
-def _scaled_resource_maximum(
+def _scaled_resource_capacity(
     sheet: dict[str, Any], scaling: dict[str, Any], class_level: int
-) -> int | None:
+) -> tuple[int | None, bool]:
     unlimited_at = int(scaling.get("unlimited_at_level", 0) or 0)
     if unlimited_at and class_level >= unlimited_at:
-        return 0
+        return 0, True
     formula = dict(scaling.get("maximum_formula") or {})
     if formula:
         kind = str(formula.get("kind") or "")
@@ -488,10 +529,12 @@ def _scaled_resource_maximum(
             base = _ability_modifier(sheet, ability)
         else:
             raise CombatEngineError("feature resource scaling formula is invalid")
-        return max(
-            int(formula.get("minimum", 0) or 0),
-            base * int(formula.get("multiplier", 1) or 1)
-            + int(formula.get("offset", 0) or 0),
+        return (
+            max(
+                int(formula.get("minimum", 0) or 0),
+                base * int(formula.get("multiplier", 1) or 1) + int(formula.get("offset", 0) or 0),
+            ),
+            False,
         )
     maximum: int | None = None
     for raw_level, candidate in sorted(
@@ -500,7 +543,7 @@ def _scaled_resource_maximum(
     ):
         if int(raw_level) <= class_level:
             maximum = int(candidate)
-    return maximum
+    return maximum, False
 
 
 def _advance_spellcasting(
@@ -585,17 +628,13 @@ def _spell_choice_delta(class_name: str, old_level: int, new_level: int) -> dict
         result["cantrips_to_add"] = max(0, cantrips[new_level - 1] - cantrips[old_level - 1])
     known = KNOWN_SPELLS.get(key)
     if known:
-        result["leveled_spells_to_add"] = max(
-            0, known[new_level - 1] - known[old_level - 1]
-        )
+        result["leveled_spells_to_add"] = max(0, known[new_level - 1] - known[old_level - 1])
         # The Bard table includes the two unrestricted Magical Secrets in
         # Spells Known at levels 10, 14, and 18. The corresponding feature
         # artifact settles those choices, so they must not also be requested
         # as ordinary Bard-list spells.
         if key == "bard" and new_level in {10, 14, 18}:
-            result["leveled_spells_to_add"] = max(
-                0, result["leveled_spells_to_add"] - 2
-            )
+            result["leveled_spells_to_add"] = max(0, result["leveled_spells_to_add"] - 2)
     if key == "wizard":
         result["leveled_spells_to_add"] = 2
     return result

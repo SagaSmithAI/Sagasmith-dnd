@@ -382,16 +382,61 @@ def _normalize_skill(value: Any, field: str) -> dict[str, Any]:
 def _normalize_resource(value: Any, field: str) -> dict[str, Any]:
     item = _object(value, field)
     _reject_unknown(
-        item, field, {"label", "value", "max", "recovers_on", "source_key", "slot_level"}
+        item,
+        field,
+        {
+            "label",
+            "value",
+            "max",
+            "unlimited",
+            "recovers_on",
+            "recovery_requirements",
+            "source_key",
+            "slot_level",
+        },
     )
     maximum = _integer(item.get("max"), f"{field}.max", minimum=0)
     current = _integer(item.get("value"), f"{field}.value", default=maximum, minimum=0)
     if current > maximum:
         raise ValueError(f"{field}.value cannot exceed max")
+    unlimited = _boolean(
+        item.get("unlimited"),
+        f"{field}.unlimited",
+        default=maximum == 0,
+    )
+    if unlimited and (maximum != 0 or current != 0):
+        raise ValueError(f"{field}.unlimited resources must have zero value and max")
     recovery = _text(item.get("recovers_on"), f"{field}.recovers_on", default="none")
     if recovery not in RECOVERY_PERIODS:
         raise ValueError(f"{field}.recovers_on is invalid")
-    return {
+    raw_requirements = _object(
+        item.get("recovery_requirements") or {},
+        f"{field}.recovery_requirements",
+    )
+    _reject_unknown(
+        raw_requirements,
+        f"{field}.recovery_requirements",
+        {"activity_minutes"},
+    )
+    raw_activity_minutes = _object(
+        raw_requirements.get("activity_minutes") or {},
+        f"{field}.recovery_requirements.activity_minutes",
+    )
+    activity_minutes = {
+        _text(
+            raw_activity,
+            f"{field}.recovery_requirements.activity_minutes activity",
+            maximum=100,
+        ): _integer(
+            raw_minutes,
+            f"{field}.recovery_requirements.activity_minutes.{raw_activity}",
+            minimum=1,
+        )
+        for raw_activity, raw_minutes in raw_activity_minutes.items()
+    }
+    if "" in activity_minutes:
+        raise ValueError(f"{field}.recovery_requirements.activity_minutes activity is required")
+    normalized = {
         "label": _text(item.get("label"), f"{field}.label", default="", maximum=200),
         "value": current,
         "max": maximum,
@@ -399,6 +444,11 @@ def _normalize_resource(value: Any, field: str) -> dict[str, Any]:
         "source_key": _text(item.get("source_key"), f"{field}.source_key", default="", maximum=300),
         "slot_level": _integer(item.get("slot_level"), f"{field}.slot_level", minimum=0, maximum=9),
     }
+    if "unlimited" in item:
+        normalized["unlimited"] = unlimited
+    if activity_minutes:
+        normalized["recovery_requirements"] = {"activity_minutes": activity_minutes}
+    return normalized
 
 
 def _normalize_resource_scaling(value: Any, field: str) -> dict[str, Any]:
@@ -679,18 +729,14 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
             "edition": edition,
             "spell_ids": spell_ids,
             "unresolved_spell_names": unresolved_spell_names,
-            "owner_mark": _text(
-                mechanics.get("owner_mark"), f"{field}.owner_mark", maximum=300
-            ),
+            "owner_mark": _text(mechanics.get("owner_mark"), f"{field}.owner_mark", maximum=300),
             "source_scene_id": _text(
                 mechanics.get("source_scene_id"), f"{field}.source_scene_id", maximum=100
             ),
             "deciphered": _boolean(
                 mechanics.get("deciphered"), f"{field}.deciphered", default=False
             ),
-            "copyable": _boolean(
-                mechanics.get("copyable"), f"{field}.copyable", default=True
-            ),
+            "copyable": _boolean(mechanics.get("copyable"), f"{field}.copyable", default=True),
         }
     if kind == "armor":
         _reject_unknown(
@@ -901,6 +947,15 @@ def validate_inventory(value: Any) -> dict[str, Any]:
     item_ids = {item["id"] for item in items}
     if len(item_ids) != len(items):
         raise ValueError("inventory.items contains duplicate ids")
+    attuned_items = [item for item in items if item["attunement"] == "attuned"]
+    if len(attuned_items) > 3:
+        raise ValueError("a character cannot be attuned to more than three magic items")
+    attuned_identities = [
+        str(item.get("source_key") or item.get("name") or "").strip().casefold()
+        for item in attuned_items
+    ]
+    if len(attuned_identities) != len(set(attuned_identities)):
+        raise ValueError("a character cannot attune to more than one copy of an item")
     by_id = {item["id"]: item for item in items}
     for item in items:
         container_id = item["container_id"]
@@ -1003,7 +1058,15 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
     _reject_unknown(
         access,
         f"{field}.access",
-        {"known", "prepared", "always_prepared", "in_spellbook", "ritual_available", "at_will"},
+        {
+            "known",
+            "prepared",
+            "always_prepared",
+            "in_spellbook",
+            "ritual_available",
+            "at_will",
+            "at_will_sources",
+        },
     )
     definition = _object(spell.get("definition") or {}, f"{field}.definition")
     _reject_unknown(
@@ -1038,6 +1101,12 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
         f"{field}.definition.components",
         {"verbal", "somatic", "material", "material_description", "material_cost_cp", "consumed"},
     )
+    at_will_sources = _string_list(
+        access.get("at_will_sources") or [],
+        f"{field}.access.at_will_sources",
+    )
+    if len(at_will_sources) != len(set(at_will_sources)):
+        raise ValueError(f"{field}.access.at_will_sources contains duplicates")
     return {
         "id": _text(spell.get("id"), f"{field}.id", default=_uuid(), maximum=100),
         "source_key": _text(spell.get("source_key"), f"{field}.source_key", maximum=300),
@@ -1062,7 +1131,10 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
             "ritual_available": _boolean(
                 access.get("ritual_available"), f"{field}.access.ritual_available"
             ),
-            "at_will": _boolean(access.get("at_will"), f"{field}.access.at_will"),
+            "at_will": (
+                _boolean(access.get("at_will"), f"{field}.access.at_will") or bool(at_will_sources)
+            ),
+            "at_will_sources": at_will_sources,
         },
         "definition": {
             "school": _text(definition.get("school"), f"{field}.definition.school", maximum=100),
@@ -1192,9 +1264,7 @@ def _normalize_effect(value: Any, field: str) -> dict[str, Any]:
         "changes": changes,
         "description": _text(effect.get("description"), f"{field}.description", maximum=1200),
     }
-    ended_reason = _text(
-        effect.get("ended_reason"), f"{field}.ended_reason", maximum=300
-    )
+    ended_reason = _text(effect.get("ended_reason"), f"{field}.ended_reason", maximum=300)
     if ended_reason:
         if normalized["active"]:
             raise ValueError(f"{field}.ended_reason requires an inactive effect")
@@ -1410,15 +1480,11 @@ def validate_character_sheet(
 
     normalized_rest_history = {
         "last_rest_type": last_rest_type,
-        "last_rest_started_elapsed_minutes": optional_elapsed(
-            "last_rest_started_elapsed_minutes"
-        ),
+        "last_rest_started_elapsed_minutes": optional_elapsed("last_rest_started_elapsed_minutes"),
         "last_rest_completed_elapsed_minutes": optional_elapsed(
             "last_rest_completed_elapsed_minutes"
         ),
-        "last_long_rest_elapsed_minutes": optional_elapsed(
-            "last_long_rest_elapsed_minutes"
-        ),
+        "last_long_rest_elapsed_minutes": optional_elapsed("last_long_rest_elapsed_minutes"),
     }
     started = normalized_rest_history["last_rest_started_elapsed_minutes"]
     completed = normalized_rest_history["last_rest_completed_elapsed_minutes"]
@@ -1477,9 +1543,7 @@ def validate_character_sheet(
     spell_ability = spellcasting["ability"]
     if spell_ability is not None and spell_ability not in ABILITY_NAMES:
         raise ValueError("sheet.spellcasting.ability is invalid")
-    spell_class_lists = _string_list(
-        spellcasting["class_lists"], "sheet.spellcasting.class_lists"
-    )
+    spell_class_lists = _string_list(spellcasting["class_lists"], "sheet.spellcasting.class_lists")
     slots = _object(spellcasting["spell_slots"], "sheet.spellcasting.spell_slots")
     normalized_slots = {
         key: _normalize_resource(item, f"sheet.spellcasting.spell_slots.{key}")
@@ -1574,9 +1638,7 @@ def validate_character_sheet(
             class_names = {item["name"].strip().casefold() for item in classes}
             if source_class not in class_names:
                 raise ValueError("class-prepared spell grant must name a recorded class")
-        if not (
-            spell["access"]["known"] or spell["id"] in spellbook_ids or class_prepared
-        ):
+        if not (spell["access"]["known"] or spell["id"] in spellbook_ids or class_prepared):
             raise ValueError("prepared spell must be known or in the spellbook")
     for spell in spells:
         spell["access"]["prepared"] = (
@@ -1600,6 +1662,7 @@ def validate_character_sheet(
                     "activation",
                     "scaling",
                     "resource_scaling",
+                    "attack_scaling",
                     "choices",
                     "advancement_grants",
                     "pack_id",
@@ -1664,25 +1727,16 @@ def validate_character_sheet(
             ):
                 grant_entry = _object(
                     grant,
-                    (
-                        f"sheet.content.{name}[{index}]."
-                        f"advancement_grants[{grant_index}]"
-                    ),
+                    (f"sheet.content.{name}[{index}].advancement_grants[{grant_index}]"),
                 )
                 _reject_unknown(
                     grant_entry,
-                    (
-                        f"sheet.content.{name}[{index}]."
-                        f"advancement_grants[{grant_index}]"
-                    ),
+                    (f"sheet.content.{name}[{index}].advancement_grants[{grant_index}]"),
                     {"level", "choices", "pack_id", "pack_version", "rule_refs"},
                 )
                 grant_level = _integer(
                     grant_entry.get("level"),
-                    (
-                        f"sheet.content.{name}[{index}]."
-                        f"advancement_grants[{grant_index}].level"
-                    ),
+                    (f"sheet.content.{name}[{index}].advancement_grants[{grant_index}].level"),
                     minimum=1,
                     maximum=20,
                 )
@@ -1727,6 +1781,56 @@ def validate_character_sheet(
                         ),
                     }
                 )
+            raw_attack_scaling = _object(
+                entry.get("attack_scaling") or {},
+                f"sheet.content.{name}[{index}].attack_scaling",
+            )
+            _reject_unknown(
+                raw_attack_scaling,
+                f"sheet.content.{name}[{index}].attack_scaling",
+                {"class_name", "attacks_per_action_by_level"},
+            )
+            attacks_by_level: dict[str, int] = {}
+            raw_attacks_by_level = _object(
+                raw_attack_scaling.get("attacks_per_action_by_level") or {},
+                (f"sheet.content.{name}[{index}].attack_scaling.attacks_per_action_by_level"),
+            )
+            for raw_level, amount in raw_attacks_by_level.items():
+                level_text = str(raw_level).strip()
+                if not level_text.isdigit():
+                    raise ValueError(
+                        f"sheet.content.{name}[{index}].attack_scaling level must be an integer"
+                    )
+                level = _integer(
+                    int(level_text),
+                    (
+                        f"sheet.content.{name}[{index}].attack_scaling."
+                        "attacks_per_action_by_level level"
+                    ),
+                    minimum=1,
+                    maximum=20,
+                )
+                attacks_by_level[str(level)] = _integer(
+                    amount,
+                    (
+                        f"sheet.content.{name}[{index}].attack_scaling."
+                        f"attacks_per_action_by_level.{level}"
+                    ),
+                    minimum=1,
+                    maximum=10,
+                )
+            attack_scaling = (
+                {
+                    "class_name": _text(
+                        raw_attack_scaling.get("class_name"),
+                        (f"sheet.content.{name}[{index}].attack_scaling.class_name"),
+                        maximum=200,
+                    ),
+                    "attacks_per_action_by_level": attacks_by_level,
+                }
+                if raw_attack_scaling
+                else {}
+            )
             result.append(
                 {
                     "id": _text(
@@ -1774,6 +1878,7 @@ def validate_character_sheet(
                         entry.get("resource_scaling") or {},
                         f"sheet.content.{name}[{index}].resource_scaling",
                     ),
+                    "attack_scaling": attack_scaling,
                     "choices": _object(
                         entry.get("choices") or {}, f"sheet.content.{name}[{index}].choices"
                     ),
@@ -1867,16 +1972,17 @@ def validate_character_sheet(
         str(dict(specification.get("card") or {}).get("id") or "")
         for item in inventory["items"]
         for specification in (
-            dict(dict(item.get("mechanics") or {}).get("spellcasting") or {}).get(
-                "spells"
-            )
-            or []
+            dict(dict(item.get("mechanics") or {}).get("spellcasting") or {}).get("spells") or []
         )
         if isinstance(specification, dict)
     }
     item_spell_ids.discard("")
 
     conditions = _string_list(value["conditions"], "sheet.conditions")
+    if "dead" in {condition.casefold() for condition in conditions}:
+        for item in inventory["items"]:
+            if item["attunement"] == "attuned":
+                item["attunement"] = "required"
     effects = [
         _normalize_effect(item, f"sheet.effects[{index}]")
         for index, item in enumerate(_array(value["effects"], "sheet.effects"))
@@ -2238,9 +2344,7 @@ def validate_party_state(state: dict[str, Any]) -> dict[str, Any]:
     if "random_stream" in value:
         value["random_stream"] = validate_random_stream_state(value["random_stream"])
     if "playthrough_manifest" in value:
-        value["playthrough_manifest"] = validate_playthrough_manifest(
-            value["playthrough_manifest"]
-        )
+        value["playthrough_manifest"] = validate_playthrough_manifest(value["playthrough_manifest"])
     return value
 
 
@@ -2297,9 +2401,7 @@ def validate_world_effect(value: Any, *, field: str = "world_effect") -> dict[st
             "label": _text(target.get("label"), f"{field}.target.label", maximum=300),
         },
         "active": _boolean(effect.get("active"), f"{field}.active", default=True),
-        "visibility": _text(
-            effect.get("visibility"), f"{field}.visibility", default="party"
-        ),
+        "visibility": _text(effect.get("visibility"), f"{field}.visibility", default="party"),
         "duration": {
             "period": period,
             "remaining": _integer(
@@ -2316,9 +2418,7 @@ def validate_world_effect(value: Any, *, field: str = "world_effect") -> dict[st
     }
     if normalized["visibility"] not in {"public", "party", "dm"}:
         raise ValueError(f"{field}.visibility is invalid")
-    ended_reason = _text(
-        effect.get("ended_reason"), f"{field}.ended_reason", maximum=300
-    )
+    ended_reason = _text(effect.get("ended_reason"), f"{field}.ended_reason", maximum=300)
     if ended_reason:
         if normalized["active"]:
             raise ValueError(f"{field}.ended_reason requires an inactive effect")
@@ -2341,8 +2441,8 @@ def _derive_armor_class(
         "magic_items": [],
         "effects": [],
     }
-    mage_armor_effect_ids: set[str] = set()
-    mage_armor_base: int | None = None
+    unarmored_formulas: list[dict[str, Any]] = []
+    valid_unarmored_changes: set[tuple[str, str]] = set()
     for effect in active_effects:
         for change in effect["changes"]:
             if (
@@ -2351,15 +2451,54 @@ def _derive_armor_class(
                 and not isinstance(change["value"], bool)
                 and isinstance(change["value"], int)
             ):
-                mage_armor_base = int(change["value"])
-                mage_armor_effect_ids.add(effect["id"])
+                unarmored_formulas.append(
+                    {
+                        "base": int(change["value"]),
+                        "ability": None,
+                        "allows_shield": True,
+                        "effect_id": effect["id"],
+                        "effect_name": effect["name"],
+                        "path": change["path"],
+                    }
+                )
+                valid_unarmored_changes.add((effect["id"], change["path"]))
+            elif (
+                change["path"] == "combat.ac.unarmored_formula"
+                and change["mode"] == "override"
+                and isinstance(change["value"], dict)
+            ):
+                formula = dict(change["value"])
+                ability = str(formula.get("ability") or "").casefold()
+                base = formula.get("base")
+                allows_shield = formula.get("allows_shield")
+                if (
+                    set(formula) == {"base", "ability", "allows_shield"}
+                    and not isinstance(base, bool)
+                    and isinstance(base, int)
+                    and base >= 0
+                    and ability in ability_modifiers
+                    and isinstance(allows_shield, bool)
+                ):
+                    unarmored_formulas.append(
+                        {
+                            "base": base,
+                            "ability": ability,
+                            "allows_shield": allows_shield,
+                            "effect_id": effect["id"],
+                            "effect_name": effect["name"],
+                            "path": change["path"],
+                        }
+                    )
+                    valid_unarmored_changes.add((effect["id"], change["path"]))
 
     armor_id = inventory["equipment_slots"]["armor"]
     total = breakdown["base"]
+    shield_bonus = 0
     if override is None:
         if armor_id:
             armor = items[armor_id]
             mechanics = armor["mechanics"]
+            magic_bonus = mechanics["magic_bonus"] if armor.get("attunement") != "required" else 0
             dexterity_modifier = ability_modifiers["dexterity"]
             dexterity_mode = mechanics["dexterity_mode"]
             if dexterity_mode == "none":
@@ -2368,14 +2507,17 @@ def _derive_armor_class(
                 dexterity_bonus = dexterity_modifier
             else:
                 dexterity_bonus = min(dexterity_modifier, mechanics["dexterity_max"])
-            total = mechanics["base_ac"] + dexterity_bonus + mechanics["magic_bonus"]
+            total = mechanics["base_ac"] + dexterity_bonus + magic_bonus
             breakdown["mode"] = "armor"
             breakdown["base"] = mechanics["base_ac"]
             breakdown["armor"] = {
                 "item_id": armor_id,
                 "name": armor["name"],
                 "dexterity_bonus": dexterity_bonus,
-                "magic_bonus": mechanics["magic_bonus"],
+                "magic_bonus": magic_bonus,
+                "magic_suppressed_by_attunement": (
+                    armor.get("attunement") == "required" and mechanics["magic_bonus"] != 0
+                ),
                 "stealth_disadvantage": mechanics["stealth_disadvantage"],
             }
         elif ac["base"] == 10:
@@ -2387,22 +2529,65 @@ def _derive_armor_class(
         if shield_id:
             shield = items[shield_id]
             mechanics = shield["mechanics"]
-            bonus = mechanics["ac_bonus"] + mechanics["magic_bonus"]
-            total += bonus
+            shield_magic_bonus = (
+                mechanics["magic_bonus"] if shield.get("attunement") != "required" else 0
+            )
+            shield_bonus = mechanics["ac_bonus"] + shield_magic_bonus
+            total += shield_bonus
             breakdown["shield"] = {
                 "item_id": shield_id,
                 "name": shield["name"],
-                "bonus": bonus,
+                "bonus": shield_bonus,
+                "magic_bonus": shield_magic_bonus,
+                "magic_suppressed_by_attunement": (
+                    shield.get("attunement") == "required" and mechanics["magic_bonus"] != 0
+                ),
             }
 
-    if mage_armor_base is not None and not armor_id:
-        dexterity_bonus = ability_modifiers["dexterity"]
-        mage_armor_total = mage_armor_base + dexterity_bonus
-        if override is None or mage_armor_total > total:
-            total = mage_armor_total
-            breakdown["mode"] = "mage_armor"
-            breakdown["base"] = mage_armor_base
+    selected_unarmored_change: tuple[str, str] | None = None
+    shield_id = inventory["equipment_slots"]["shield"]
+    candidates = []
+    if not armor_id:
+        for formula in unarmored_formulas:
+            if shield_id and not formula["allows_shield"]:
+                continue
+            dexterity_bonus = ability_modifiers["dexterity"]
+            ability = formula["ability"]
+            ability_bonus = ability_modifiers[ability] if ability else 0
+            candidate_total = (
+                formula["base"]
+                + dexterity_bonus
+                + ability_bonus
+                + (shield_bonus if formula["allows_shield"] else 0)
+            )
+            candidates.append(
+                (
+                    candidate_total,
+                    formula,
+                    dexterity_bonus,
+                    ability_bonus,
+                )
+            )
+    if candidates:
+        unarmored_total, formula, dexterity_bonus, ability_bonus = max(
+            candidates,
+            key=lambda candidate: candidate[0],
+        )
+        if override is None or unarmored_total > total:
+            total = unarmored_total
+            selected_unarmored_change = (formula["effect_id"], formula["path"])
+            breakdown["mode"] = (
+                "mage_armor"
+                if formula["effect_name"].casefold() == "mage armor"
+                else "unarmored_formula"
+            )
+            breakdown["base"] = formula["base"]
             breakdown["dexterity_bonus"] = dexterity_bonus
+            if formula["ability"]:
+                breakdown["ability_bonus"] = {
+                    "ability": formula["ability"],
+                    "bonus": ability_bonus,
+                }
 
     # A statblock AC override is the creature's printed AC calculation. Explicit
     # equipped magic-item bonuses still modify that calculation, just as active
@@ -2410,6 +2595,8 @@ def _derive_armor_class(
     # source-bound item such as the Staff of Defense work on imported NPCs.
     for item in inventory["items"]:
         if item["kind"] != "magic_item" or not item["equipped"]:
+            continue
+        if item.get("attunement") == "required":
             continue
         bonus = item["mechanics"].get("ac_bonus", 0)
         if bonus:
@@ -2421,15 +2608,19 @@ def _derive_armor_class(
     unresolved_effects: set[str] = set()
     for effect in active_effects:
         for change in effect["changes"]:
-            if change["path"] == "combat.ac.unarmored_base":
-                if effect["id"] in mage_armor_effect_ids and not armor_id:
+            if change["path"] in {
+                "combat.ac.unarmored_base",
+                "combat.ac.unarmored_formula",
+            }:
+                change_key = (effect["id"], change["path"])
+                if change_key in valid_unarmored_changes:
                     breakdown["effects"].append(
                         {
                             "effect_id": effect["id"],
                             "name": effect["name"],
                             "mode": change["mode"],
                             "value": change["value"],
-                            "applied": breakdown["mode"] == "mage_armor",
+                            "applied": change_key == selected_unarmored_change,
                         }
                     )
                 else:
@@ -2494,6 +2685,8 @@ def _weapon_attacks(
         ):
             continue
         mechanics = item["mechanics"]
+        magic_properties_active = item.get("attunement") != "required"
+        magic_bonus = mechanics["magic_bonus"] if magic_properties_active else 0
         ability = mechanics["attack_ability"]
         modifier = (
             ability_modifiers.get(spell_ability or "", 0)
@@ -2502,12 +2695,12 @@ def _weapon_attacks(
         )
         attack_bonus = mechanics.get("attack_bonus_override")
         if attack_bonus is None:
-            attack_bonus = modifier + mechanics["magic_bonus"]
+            attack_bonus = modifier + magic_bonus
             if mechanics["proficient"]:
                 attack_bonus += proficiency
         damage_bonus = mechanics.get("damage_bonus_override")
         if damage_bonus is None:
-            damage_bonus = modifier + mechanics["magic_bonus"]
+            damage_bonus = modifier + magic_bonus
         damage_formula = mechanics["damage_formula"]
         damage_expression = damage_formula
         if damage_formula and damage_bonus:
@@ -2538,9 +2731,18 @@ def _weapon_attacks(
                             else part["damage_formula"]
                         ),
                     }
-                    for part in mechanics["additional_damage"]
+                    for part in (mechanics["additional_damage"] if magic_properties_active else [])
                 ],
-                "on_hit_effect": mechanics["on_hit_effect"],
+                "on_hit_effect": (mechanics["on_hit_effect"] if magic_properties_active else ""),
+                "magic_bonus": magic_bonus,
+                "magic_suppressed_by_attunement": (
+                    not magic_properties_active
+                    and (
+                        mechanics["magic_bonus"] != 0
+                        or bool(mechanics["additional_damage"])
+                        or bool(mechanics["on_hit_effect"])
+                    )
+                ),
                 "versatile_damage_formula": mechanics["versatile_damage_formula"],
                 "properties": mechanics["properties"],
                 "range_ft": {
@@ -2750,6 +2952,37 @@ def update_inventory_item(
     return validate_character_sheet(value)
 
 
+def attune_inventory_item(sheet: dict[str, Any], item_id: str) -> dict[str, Any]:
+    """Complete one source-required item attunement after its rest gate."""
+    value = validate_character_sheet(sheet)
+    item = next(
+        (entry for entry in value["inventory"]["items"] if entry["id"] == item_id),
+        None,
+    )
+    if item is None:
+        raise LookupError(item_id)
+    if item["attunement"] == "none":
+        raise ValueError("item does not require attunement")
+    if item["attunement"] == "attuned":
+        raise ValueError("item is already attuned")
+    attuned = [
+        entry
+        for entry in value["inventory"]["items"]
+        if entry["attunement"] == "attuned"
+    ]
+    if len(attuned) >= 3:
+        raise ValueError("a character cannot be attuned to more than three magic items")
+    identity = str(item.get("source_key") or item.get("name") or "").strip().casefold()
+    if any(
+        str(entry.get("source_key") or entry.get("name") or "").strip().casefold()
+        == identity
+        for entry in attuned
+    ):
+        raise ValueError("a character cannot attune to more than one copy of an item")
+    item["attunement"] = "attuned"
+    return validate_character_sheet(value)
+
+
 def remove_inventory_item(
     sheet: dict[str, Any], item_id: str, quantity: int | None = None
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -2809,6 +3042,11 @@ def consume_weapon_ammunition(
 def receive_inventory_item(sheet: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:
     value = validate_character_sheet(sheet)
     entry = _normalize_item(item, "item", generate_id=False)
+    if entry["attunement"] == "attuned":
+        raise ValueError(
+            "an attuned item cannot be transferred until its attunement "
+            "ends under a source-defined condition"
+        )
     if any(current["id"] == entry["id"] for current in value["inventory"]["items"]):
         entry["id"] = _uuid()
     entry["container_id"] = None

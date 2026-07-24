@@ -44,14 +44,15 @@ def consume_activity(
         resource = dict(value.get("resources", {}).get(resource_key) or {})
         if not resource:
             raise ActivityError("activity resource_key does not exist on this character")
-        if int(resource.get("value", 0) or 0) < 1:
-            raise ActivityError("activity resource is exhausted")
-        resource["value"] = int(resource["value"]) - 1
-        value["resources"][resource_key] = resource
-        payment = {"kind": "resource", "key": resource_key, "amount": 1}
+        if not bool(resource.get("unlimited", False)):
+            if int(resource.get("value", 0) or 0) < 1:
+                raise ActivityError("activity resource is exhausted")
+            resource["value"] = int(resource["value"]) - 1
+            value["resources"][resource_key] = resource
+            payment = {"kind": "resource", "key": resource_key, "amount": 1}
     else:
         uses = dict(activity.get("uses") or {})
-        if int(uses.get("max", 0) or 0) > 0:
+        if uses and not bool(uses.get("unlimited", int(uses.get("max", 0) or 0) == 0)):
             if int(uses.get("value", 0) or 0) < 1:
                 raise ActivityError("activity uses are exhausted")
             uses["value"] = int(uses["value"]) - 1
@@ -85,9 +86,7 @@ def consume_activity(
         "requires_ruling": bool(activity.get("choices")),
         "status": "committed",
         "rule_receipts": [
-            *core_receipts(
-                rules, ["dnd5e.core.activity.resource_accounting"], "activity.consume"
-            ),
+            *core_receipts(rules, ["dnd5e.core.activity.resource_accounting"], "activity.consume"),
             *before.receipts,
             *after.receipts,
         ],

@@ -50,8 +50,7 @@ def is_core_shield_spell(spell: dict[str, Any]) -> bool:
 def is_core_magic_missile_spell(spell: dict[str, Any]) -> bool:
     """Recognize only the source-bound Core Magic Missile mechanic."""
     return str(spell.get("id") or "") == CORE_MAGIC_MISSILE_SPELL_ID or (
-        CORE_MAGIC_MISSILE_MECHANIC_ID
-        in {str(item) for item in spell.get("mechanic_refs", [])}
+        CORE_MAGIC_MISSILE_MECHANIC_ID in {str(item) for item in spell.get("mechanic_refs", [])}
     )
 
 
@@ -165,6 +164,16 @@ def consume_magic_item_spell_cast(
         )
         automatic_effect = "shield"
         mechanic_ids.append(CORE_SHIELD_ITEM_BOUNDARY_ID)
+    duration = dict(card.get("definition", {}).get("duration") or {})
+    concentration = bool(duration.get("concentration"))
+    if concentration:
+        _apply_concentration_effect(
+            value,
+            spell_id=spell_id,
+            spell_name=str(card.get("name") or spell_id),
+            duration=duration,
+            source=f"magic_item:{source_item_id}",
+        )
 
     after = apply_rule_event(value, "spell.after", rules)
     if after.status != "committed":
@@ -191,7 +200,7 @@ def consume_magic_item_spell_cast(
         "automatic_effect": automatic_effect,
         "last_charge_expended": last_charge_expended,
         "last_charge_rule": last_charge_rule,
-        "concentration_started": False,
+        "concentration_started": concentration,
         "ruling_required": [] if automatic_effect else ["targets_and_effect"],
         "status": "committed",
         "rule_receipts": [
@@ -321,11 +330,7 @@ def _magic_item_spell_binding(
         raise CombatEngineError("spell is not bound exactly once to this magic item")
     specification = matches[0]
     card = dict(specification.get("card") or {})
-    if (
-        not card.get("pack_id")
-        or not card.get("pack_version")
-        or not card.get("rule_refs")
-    ):
+    if not card.get("pack_id") or not card.get("pack_version") or not card.get("rule_refs"):
         raise CombatEngineError("magic item spell card is not source-bound")
     if spellcasting.get("requires_class_spell_list"):
         actor_lists = {
@@ -333,9 +338,7 @@ def _magic_item_spell_binding(
             for value in sheet.get("spellcasting", {}).get("class_lists", [])
             if str(value).strip()
         }
-        allowed = {
-            _class_key(value) for value in card.get("classes", []) if str(value).strip()
-        }
+        allowed = {_class_key(value) for value in card.get("classes", []) if str(value).strip()}
         if not actor_lists:
             raise CombatEngineError("magic item requires a recorded actor spell class list")
         if not actor_lists & allowed:
@@ -366,9 +369,7 @@ def _apply_mage_armor_effect(
             "active": True,
             "concentration": False,
             "duration": {"period": "hour", "remaining": 8},
-            "changes": [
-                {"path": "combat.ac.unarmored_base", "mode": "override", "value": 13}
-            ],
+            "changes": [{"path": "combat.ac.unarmored_base", "mode": "override", "value": 13}],
             "description": "",
         }
     )
@@ -397,6 +398,39 @@ def _apply_shield_effect(
             "concentration": False,
             "duration": {"period": "turn_start", "remaining": 1},
             "changes": [{"path": "derived.armor_class", "mode": "add", "value": 5}],
+            "description": "",
+        }
+    )
+    return effect_id
+
+
+def _apply_concentration_effect(
+    sheet: dict[str, Any],
+    *,
+    spell_id: str,
+    spell_name: str,
+    duration: dict[str, Any],
+    source: str,
+) -> str:
+    for effect in sheet.get("effects", []):
+        if effect.get("active") and effect.get("concentration"):
+            effect["active"] = False
+            effect["ended_reason"] = "replaced_by_concentration"
+    effect_id = f"concentration-{uuid4().hex}"
+    sheet.setdefault("effects", []).append(
+        {
+            "id": effect_id,
+            "name": f"Concentrating: {spell_name}",
+            "kind": "concentration",
+            "source": source,
+            "source_spell_id": spell_id,
+            "active": True,
+            "concentration": True,
+            "duration": {
+                "period": _duration_period(duration.get("unit")),
+                "remaining": int(duration.get("value", 0) or 0),
+            },
+            "changes": [],
             "description": "",
         }
     )
@@ -592,6 +626,7 @@ def consume_spell_cast(
     spell_id: str,
     cast_level: int | None = None,
     ritual: bool = False,
+    signature_free_cast: bool = False,
     component_ruling: dict[str, Any] | None = None,
     rules: ResolutionContext | None = None,
 ) -> dict[str, Any]:
@@ -614,12 +649,19 @@ def consume_spell_cast(
         raise CombatEngineError("spell is not on this actor card")
     access = dict(spell.get("access") or {})
     mode = str(value.get("spellcasting", {}).get("preparation", {}).get("mode") or "known")
-    available = bool(access.get("at_will") or access.get("always_prepared"))
+    spell_mastery = _is_spell_mastery_choice(value, spell_id)
+    signature_spell = _is_signature_spell_choice(value, spell_id)
+    at_will_available = bool(access.get("at_will")) and (
+        not spell_mastery or bool(access.get("prepared"))
+    )
+    ordinary_available = bool(access.get("always_prepared"))
+    available = bool(at_will_available or ordinary_available)
     if base_level := int(spell.get("level", 0) or 0):
         if mode in {"prepared", "spellbook"}:
-            available = available or bool(access.get("prepared"))
+            ordinary_available = ordinary_available or bool(access.get("prepared"))
         else:
-            available = available or bool(access.get("known"))
+            ordinary_available = ordinary_available or bool(access.get("known"))
+        available = available or ordinary_available
         if (
             ritual
             and access.get("ritual_available")
@@ -636,6 +678,20 @@ def consume_spell_cast(
         raise CombatEngineError("cantrips cannot be cast with a spell slot")
     if level < base_level or level > 9:
         raise CombatEngineError("cast_level is invalid for this spell")
+    if (
+        base_level > 0
+        and access.get("at_will")
+        and level > base_level
+        and not spell_mastery
+        and not ordinary_available
+    ):
+        raise CombatEngineError("an at-will spell must be cast at its lowest level")
+    if signature_free_cast and not signature_spell:
+        raise CombatEngineError("signature_free_cast requires a selected Signature Spell")
+    if signature_free_cast and (base_level != 3 or level != 3 or ritual):
+        raise CombatEngineError(
+            "a Signature Spell free cast must be cast at 3rd level and cannot be a ritual"
+        )
     spellcasting = value.setdefault("spellcasting", {})
     if ritual:
         if not access.get("ritual_available") or not spellcasting.get("ritual_casting"):
@@ -660,13 +716,24 @@ def consume_spell_cast(
             "a costly or consumed material component needs material_confirmed DM ruling"
         )
     paid: dict[str, Any] = {"economy": "none", "level": level, "ritual": ritual}
-    if base_level > 0 and not ritual and not access.get("at_will"):
+    free_at_will = bool(at_will_available and level == base_level)
+    if signature_free_cast:
+        resource_key = f"signature_spell:{spell_id}"
+        resource = value.setdefault("resources", {}).get(resource_key)
+        if not isinstance(resource, dict) or int(resource.get("value", 0) or 0) <= 0:
+            raise CombatEngineError("Signature Spell free use is unavailable")
+        resource["value"] = int(resource["value"]) - 1
+        paid = {
+            "economy": "signature_spell",
+            "resource_key": resource_key,
+            "level": level,
+            "ritual": False,
+        }
+    elif base_level > 0 and not ritual and not free_at_will:
         grant_method = str(dict(spell.get("grant") or {}).get("method") or "")
         if grant_method == "mystic_arcanum":
             if level != base_level:
-                raise CombatEngineError(
-                    "Mystic Arcanum must be cast at its recorded spell level"
-                )
+                raise CombatEngineError("Mystic Arcanum must be cast at its recorded spell level")
             resource_key = f"mystic_arcanum:{spell_id}"
             resource = value.setdefault("resources", {}).get(resource_key)
             if not isinstance(resource, dict) or int(resource.get("value", 0) or 0) <= 0:
@@ -712,26 +779,12 @@ def consume_spell_cast(
     duration = dict(spell.get("definition", {}).get("duration") or {})
     concentration = bool(duration.get("concentration"))
     if concentration:
-        for effect in value.get("effects", []):
-            if effect.get("active") and effect.get("concentration"):
-                effect["active"] = False
-                effect["ended_reason"] = "replaced_by_concentration"
-        value.setdefault("effects", []).append(
-            {
-                "id": f"concentration-{uuid4().hex}",
-                "name": f"Concentrating: {spell.get('name') or spell_id}",
-                "kind": "concentration",
-                "source": "spell.cast",
-                "source_spell_id": spell_id,
-                "active": True,
-                "concentration": True,
-                "duration": {
-                    "period": _duration_period(duration.get("unit")),
-                    "remaining": int(duration.get("value", 0) or 0),
-                },
-                "changes": [],
-                "description": "",
-            }
+        _apply_concentration_effect(
+            value,
+            spell_id=spell_id,
+            spell_name=str(spell.get("name") or spell_id),
+            duration=duration,
+            source="spell.cast",
         )
     after = apply_rule_event(value, "spell.after", rules)
     if after.status != "committed":
@@ -775,6 +828,38 @@ def consume_spell_cast(
         ],
         "ruleset_fingerprint": rules.fingerprint if rules else "",
     }
+
+
+def _is_spell_mastery_choice(sheet: dict[str, Any], spell_id: str) -> bool:
+    return _is_feature_spell_choice(sheet, "spell mastery", spell_id)
+
+
+def _is_signature_spell_choice(sheet: dict[str, Any], spell_id: str) -> bool:
+    return _is_feature_spell_choice(sheet, "signature spells", spell_id)
+
+
+def _is_feature_spell_choice(
+    sheet: dict[str, Any],
+    feature_name: str,
+    spell_id: str,
+) -> bool:
+    for feature in sheet.get("content", {}).get("features", []):
+        if str(feature.get("name") or "").casefold() != feature_name:
+            continue
+        choices = [
+            dict(feature.get("choices") or {}),
+            *[
+                dict(item.get("choices") or {})
+                for item in feature.get("advancement_grants", [])
+                if isinstance(item, dict)
+            ],
+        ]
+        if any(
+            spell_id in [str(item) for item in choice.get("spell_artifact_ids", [])]
+            for choice in choices
+        ):
+            return True
+    return False
 
 
 def consume_readied_spell(

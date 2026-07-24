@@ -14,7 +14,7 @@ from sagasmith_dnd.spell_resolution import (
 )
 
 PACK_ID = "dnd5e.content.srd2014"
-PACK_VERSION = "1.10.0"
+PACK_VERSION = "1.11.0"
 
 _SUBCLASS_LEVELS = {
     "barbarian": 3,
@@ -402,9 +402,10 @@ def _species_grants(name: str, traits: list[tuple[str, str]]) -> dict[str, Any]:
             grants["cantrip_choice"] = {"class": "wizard", "level": 0}
         elif key == "draconic ancestry":
             grants["unresolved"].append("draconic_ancestry")
-        elif key in {"breath weapon", "damage resistance"} and "draconic_ancestry" in grants[
-            "unresolved"
-        ]:
+        elif (
+            key in {"breath weapon", "damage resistance"}
+            and "draconic_ancestry" in grants["unresolved"]
+        ):
             grants["unresolved"].append(_name_key(title))
         elif key == "infernal legacy":
             grants["unresolved"].append("level_granted_species_spells")
@@ -522,7 +523,14 @@ def _class_feature_levels(text: str) -> dict[str, list[int]]:
 def _feature_key(value: str) -> str:
     normalized = re.sub(r"\s*\([^)]*\)\s*", " ", value).strip().casefold()
     normalized = re.sub(r"\s+improvement$", "", normalized)
-    return re.sub(r"\s+", " ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized)
+    return {
+        # The class table abbreviates the full feature heading.
+        "relentless": "relentless rage",
+        # The source table uses the singular while its feature heading and
+        # mechanics explicitly select two spells.
+        "signature spell": "signature spells",
+    }.get(normalized, normalized)
 
 
 def _level_from_feature_text(body: str) -> int:
@@ -603,6 +611,24 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
             },
             "choices": {"options": ["Turn Undead", "selected-domain option"]},
         }
+    if key == ("paladin", "channel divinity"):
+        return {
+            "activation": {"type": "action", "cost": 1},
+            "resource_key": "channel_divinity",
+            "mechanical_grants": {
+                "resources": {
+                    "channel_divinity": {
+                        "label": "Channel Divinity",
+                        "value": 1,
+                        "max": 1,
+                        "unlimited": False,
+                        "recovers_on": "short_rest",
+                        "source_key": "Paladin",
+                    }
+                }
+            },
+            "choices": {"options": [name for name, _ in _trait_paragraphs(body)]},
+        }
     if key == ("cleric", "channel divinity: preserve life"):
         return {
             "activation": {"type": "action", "cost": 1},
@@ -614,8 +640,51 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
                 )
             },
         }
+    if key == ("barbarian", "unarmored defense"):
+        return {
+            "mechanical_grants": {
+                "unarmored_formula": {
+                    "base": 10,
+                    "ability": "constitution",
+                    "allows_shield": True,
+                }
+            }
+        }
+    if key == ("monk", "unarmored defense"):
+        return {
+            "mechanical_grants": {
+                "unarmored_formula": {
+                    "base": 10,
+                    "ability": "wisdom",
+                    "allows_shield": False,
+                }
+            }
+        }
+    if title.casefold() == "extra attack":
+        maximums_by_class = {
+            "barbarian": {5: 2},
+            "fighter": {5: 2, 11: 3, 20: 4},
+            "monk": {5: 2},
+            "paladin": {5: 2},
+            "ranger": {5: 2},
+        }
+        maximums = maximums_by_class.get(class_name.casefold())
+        if maximums:
+            return {
+                "attack_scaling": {
+                    "class_name": class_name,
+                    "attacks_per_action_by_level": {
+                        str(level): amount for level, amount in maximums.items()
+                    },
+                }
+            }
     if key == ("sorcerer", "draconic resilience"):
-        return {"mechanical_grants": {"hp_per_class_level": 1}}
+        return {
+            "mechanical_grants": {
+                "hp_per_class_level": 1,
+                "unarmored_base": 13,
+            }
+        }
     if title.casefold() == "fighting style":
         options = [name for name, _ in _h4_sections(body)]
         return {
@@ -623,6 +692,8 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
                 "field": "option",
                 "count": 1,
                 "options": options,
+                "requires_new_choice": True,
+                "choice_uniqueness_scope": "fighting_style",
             }
         }
     if key == ("fighter", "additional fighting style"):
@@ -639,6 +710,7 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
                     "Two-Weapon Fighting",
                 ],
                 "requires_new_choice": True,
+                "choice_uniqueness_scope": "fighting_style",
             }
         }
     if key == ("rogue", "expertise"):
@@ -684,6 +756,7 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
                     "Swamp",
                 ],
                 "requires_new_choice": True,
+                "choice_uniqueness_scope": "ranger_natural_explorer",
             },
             "repeatable_selection_levels": [1, 6, 10],
         }
@@ -708,7 +781,7 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
                     "Undead",
                 ],
                 "humanoid_race_count": 2,
-                "requires_language": True,
+                "language_if_spoken": True,
             },
             "repeatable_selection_levels": [1, 6, 14],
         }
@@ -719,6 +792,7 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
             "count": 2,
             "options": options,
             "requires_new_choice": True,
+            "choice_uniqueness_scope": "sorcerer_metamagic",
         }
         return {
             "selection_requirements": base,
@@ -777,6 +851,18 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
                 "eligible_class": "wizard",
                 "required_spell_levels": [1, 2],
                 "requires_spellbook": True,
+                "replacement_study_minutes": 480,
+            }
+        }
+    if key == ("wizard", "signature spells"):
+        return {
+            "selection_requirements": {
+                "field": "spell_artifact_ids",
+                "kind": "signature_spells",
+                "count": 2,
+                "eligible_class": "wizard",
+                "required_spell_levels": [3, 3],
+                "requires_spellbook": True,
             }
         }
     if key == ("warlock", "eldritch invocations"):
@@ -805,9 +891,7 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
                     re.IGNORECASE,
                 )
                 if pact:
-                    metadata["required_pact_boon"] = (
-                        f"Pact of the {pact.group(1).title()}"
-                    )
+                    metadata["required_pact_boon"] = f"Pact of the {pact.group(1).title()}"
                 spell = re.search(
                     r"([A-Za-z' -]+)\s+cantrip",
                     text,
@@ -829,6 +913,7 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
             "count": 1,
             "options": [name for name, _ in options],
             "requires_new_choice": True,
+            "choice_uniqueness_scope": "warlock_eldritch_invocation",
             "option_prerequisites": option_prerequisites,
             "at_will_spells": at_will_spells,
         }
@@ -836,8 +921,7 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
         return {
             "selection_requirements": {**base, "count": 2},
             "selection_requirements_by_level": {
-                str(level): {**base, "count": 2 if level == 2 else 1}
-                for level in levels
+                str(level): {**base, "count": 2 if level == 2 else 1} for level in levels
             },
             "repeatable_selection_levels": levels,
         }
@@ -865,6 +949,7 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
                 "options": list(ancestry),
             },
             "choice_metadata": {"damage_type_by_option": ancestry},
+            "mechanical_grants": {"languages": ["Draconic"]},
         }
     if class_name.casefold() == "ranger" and key[1] in {
         "hunter's prey",
@@ -940,6 +1025,7 @@ def _class_resource_structures(class_name: str, text: str) -> dict[str, dict[str
         label: str,
         maximum_by_level: dict[int, int],
         recovers_on: str,
+        recovery_requirements: dict[str, Any] | None = None,
         unlimited_at_level: int | None = None,
         maximum_formula: dict[str, Any] | None = None,
         activation: dict[str, Any] | None = None,
@@ -956,7 +1042,16 @@ def _class_resource_structures(class_name: str, text: str) -> dict[str, dict[str
         structure = {
             "resource_key": resource_key,
             "mechanical_grants": {
-                "resources": {resource_key: _initial_resource_from_scaling(scaling)}
+                "resources": {
+                    resource_key: {
+                        **_initial_resource_from_scaling(scaling),
+                        **(
+                            {"recovery_requirements": recovery_requirements}
+                            if recovery_requirements
+                            else {}
+                        ),
+                    }
+                }
             },
             "resource_scaling": scaling,
         }
@@ -1041,11 +1136,12 @@ def _class_resource_structures(class_name: str, text: str) -> dict[str, dict[str
             label="Ki Points",
             maximum_by_level=ki_maximum,
             recovers_on="short_rest",
+            recovery_requirements={
+                "activity_minutes": {"meditation": 30},
+            },
         )
         result["martial arts"] = {
-            "scaling": _numeric_column_display_scaling(
-                rows, "Martial Arts", "martial arts die"
-            )
+            "scaling": _numeric_column_display_scaling(rows, "Martial Arts", "martial arts die")
         }
     elif key == "paladin":
         add_uses(
@@ -1056,7 +1152,7 @@ def _class_resource_structures(class_name: str, text: str) -> dict[str, dict[str
             maximum_formula={
                 "kind": "ability_modifier",
                 "ability": "charisma",
-                "minimum": 1,
+                "minimum": 0,
                 "multiplier": 1,
                 "offset": 1,
             },
@@ -1134,11 +1230,12 @@ def _initial_resource_from_scaling(scaling: dict[str, Any]) -> dict[str, Any]:
     maximum = int(next(iter(maximums.values()), 1))
     formula = dict(scaling.get("maximum_formula") or {})
     if formula:
-        maximum = int(formula.get("minimum", 1) or 1)
+        maximum = int(formula.get("minimum", 0))
     return {
         "label": str(scaling["label"]),
         "value": maximum,
         "max": maximum,
+        "unlimited": False,
         "recovers_on": str(scaling["recovers_on"]),
         "source_key": str(scaling["class_name"]),
     }
@@ -1236,11 +1333,7 @@ def _subclass_spell_grants(body: str) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for _, fields in _markdown_table_rows(body):
         spell_text = next(
-            (
-                value
-                for key, value in fields.items()
-                if key.casefold().endswith("spells")
-            ),
+            (value for key, value in fields.items() if key.casefold().endswith("spells")),
             "",
         )
         level_text = next(
@@ -1269,11 +1362,7 @@ def _subclass_spell_options(
             continue
         option = table_name[: -len(table_suffix)].strip()
         spell_text = next(
-            (
-                value
-                for key, value in fields.items()
-                if key.casefold().endswith("spells")
-            ),
+            (value for key, value in fields.items() if key.casefold().endswith("spells")),
             "",
         )
         level_text = next(
