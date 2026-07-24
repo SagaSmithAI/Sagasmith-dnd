@@ -6,6 +6,7 @@ from sagasmith_dnd.content_import import (
     module_statblock_review_candidates,
     validate_selection_ready_artifacts,
 )
+from sagasmith_dnd.statblocks import parse_2014_statblock
 
 
 def test_extracts_review_required_catalog_candidates() -> None:
@@ -153,6 +154,93 @@ def test_module_statblock_chunks_become_review_ready_without_guessing_ocr() -> N
     assert "***Scimitar***. Melee Weapon Attack" in candidate["normalized_content"]
     assert "Hit: 5 (1d6 + 2) slashing damage" in candidate["normalized_content"]
     assert "Hit: 5 (1d10) piercing damage" in candidate["normalized_content"]
+
+
+def test_module_statblock_repairs_bounded_spellcasting_ocr() -> None:
+    base = ["Appendix B: Monsters", "MONSTER DESCRIPTIONS", "EVILMAGE"]
+    chunks = [
+        {
+            "id": "evil-mage-core",
+            "scene_id": "monster-scene",
+            "heading_path": base,
+            "content": (
+                "Medium humanoid (human), lawful evil Armor Class 12 "
+                "Hit Points 22 (5d8) Speed 30 ft."
+            ),
+            "page_start": 57,
+            "page_end": 57,
+        },
+    ]
+    values = {
+        "STR": "9 (-1)",
+        "DEX": "14 (+2)",
+        "CON": "11 (+0)",
+        "INT": "17 (+3)",
+        "WIS": "12 (+1)",
+        "CHA": (
+            "11 (+0) Saving Throws Int +5, Wis +3 Skills Arcana +5, History +5 "
+            "Senses passive Perception 11 Languages Common, Draconic, Dwarvish, Elvish "
+            "Challenge 1 (200 XP) Spellcasting. The mage is a 4th·level spellcaster "
+            "that uses Intelligence as its spellcasting ability (spell save DC 13; "
+            "+5 to hit with spell attacks). The mage knows the following spells from "
+            "the wizard's spell list: Cantrips (at will): light, mage hand, shocking "
+            "grasp l st Level (4 slots): charm person, magic missile 2nd Level "
+            "(3 slots): hold person, misty step"
+        ),
+    }
+    chunks.extend(
+        {
+            "id": f"evil-mage-{ability.casefold()}",
+            "scene_id": "monster-scene",
+            "heading_path": [*base, ability],
+            "content": content,
+            "page_start": 57,
+            "page_end": 57,
+        }
+        for ability, content in values.items()
+    )
+    chunks.append(
+        {
+            "id": "evil-mage-actions",
+            "scene_id": "monster-scene",
+            "heading_path": [*base, "ACTIONS"],
+            "content": (
+                "Quarterstaff. Melee Weapon Attack: +1 to hit, reach 5 ft., one target. "
+                "Hit: 3 (1d8 - 1) bludgeoning damage."
+            ),
+            "page_start": 57,
+            "page_end": 57,
+        }
+    )
+
+    candidates = module_statblock_review_candidates(chunks, source_title="Lost Mine")
+
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate["execution_state"] == "review_ready"
+    assert candidate["validation"]["warnings"] == []
+    assert "4th-level spellcaster" in candidate["normalized_content"]
+    assert "1st level (4 slots)" in candidate["normalized_content"]
+
+    parsed = parse_2014_statblock(
+        candidate["normalized_content"],
+        source_key="module-candidate:evil-mage",
+    )
+    assert parsed.spellcasting is not None
+    assert parsed.spellcasting["ability"] == "intelligence"
+    assert parsed.spellcasting["save_dc"] == 13
+    assert parsed.spellcasting["attack_bonus"] == 5
+    assert parsed.spellcasting["slots"] == {"1": 4, "2": 3}
+    assert [item["name"] for item in parsed.spellcasting["spells"]] == [
+        "light",
+        "mage hand",
+        "shocking grasp",
+        "charm person",
+        "magic missile",
+        "hold person",
+        "misty step",
+    ]
+    assert parsed.warnings == ()
 
 
 def test_module_statblock_candidate_keeps_ambiguous_ocr_blocked() -> None:

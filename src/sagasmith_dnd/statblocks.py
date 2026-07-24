@@ -445,8 +445,11 @@ def _parse_multiattack(description: str, items: list[dict[str, Any]]) -> list[di
 
 def _parse_spellcasting(description: str) -> dict[str, Any] | None:
     ability_match = re.search(
-        r"(?i)spellcasting ability is\s+"
-        r"(Strength|Dexterity|Constitution|Intelligence|Wisdom|Charisma)",
+        r"(?i)(?:spellcasting ability is\s+"
+        r"(?P<ability_after>Strength|Dexterity|Constitution|Intelligence|Wisdom|Charisma)"
+        r"|uses\s+"
+        r"(?P<ability_before>Strength|Dexterity|Constitution|Intelligence|Wisdom|Charisma)"
+        r"\s+as\s+(?:its|his|her|their)\s+spellcasting ability)",
         description,
     )
     if not ability_match:
@@ -476,7 +479,9 @@ def _parse_spellcasting(description: str) -> dict[str, Any] | None:
             for name in names
         )
     return {
-        "ability": ability_match.group(1).casefold(),
+        "ability": (
+            ability_match.group("ability_after") or ability_match.group("ability_before")
+        ).casefold(),
         "save_dc": int(save_match.group(1)) if save_match else None,
         "attack_bonus": int(attack_match.group(1)) if attack_match else None,
         "slots": slots,

@@ -389,7 +389,7 @@ def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
         f"*{core.group('identity').strip()}*",
         "",
         f"**Armor Class** {core.group('armor').strip()}",
-        f"**Hit Points** {_normalize_statblock_dice_ocr(core.group('hit_points').strip())}",
+        f"**Hit Points** {_normalize_statblock_ocr(core.group('hit_points').strip())}",
         f"**Speed** {core.group('speed').strip()}",
         "",
         "| STR | DEX | CON | INT | WIS | CHA |",
@@ -400,7 +400,9 @@ def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
         if fields.get(label):
             rendered.append(f"**{label}** {fields[label]}")
     if traits:
-        rendered.extend(("", "## Traits", "", _mark_statblock_entries(traits)))
+        rendered.extend(
+            ("", "## Traits", "", _mark_statblock_entries(_normalize_statblock_ocr(traits)))
+        )
     for section, parts in section_parts.items():
         content = " ".join(parts).strip()
         if content:
@@ -409,14 +411,14 @@ def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
                     "",
                     f"## {section.title()}",
                     "",
-                    _mark_statblock_entries(_normalize_statblock_dice_ocr(content)),
+                    _mark_statblock_entries(_normalize_statblock_ocr(content)),
                 )
             )
     return "\n".join(rendered).strip() + "\n"
 
 
-def _normalize_statblock_dice_ocr(content: str) -> str:
-    """Repair an unambiguous one-die OCR token such as ``ld6`` or ``ldl0``."""
+def _normalize_statblock_ocr(content: str) -> str:
+    """Repair only context-bounded, unambiguous statblock OCR tokens."""
 
     def normalize(match: re.Match[str]) -> str:
         token = match.group(0)
@@ -425,10 +427,21 @@ def _normalize_statblock_dice_ocr(content: str) -> str:
             return token
         return f"1d{sides}"
 
-    return re.sub(
+    normalized = re.sub(
         r"(?<![A-Za-z0-9])[1lI]d[0-9lI]+(?![A-Za-z0-9])",
         normalize,
         content,
+    )
+    normalized = re.sub(
+        r"(?i)\b(\d+)(st|nd|rd|th)[\u00b7\u2022]\s*level\b",
+        r"\1\2-level",
+        normalized,
+    )
+    return re.sub(
+        r"(?i)(?<![A-Za-z0-9])[lI]\s+st\s+level"
+        r"(?=\s*\(\s*\d+\s+slots?\s*\)\s*:)",
+        "1st level",
+        normalized,
     )
 
 
