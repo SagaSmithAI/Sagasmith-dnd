@@ -14,7 +14,7 @@ from sagasmith_dnd.spell_resolution import (
 )
 
 PACK_ID = "dnd5e.content.srd2014"
-PACK_VERSION = "1.8.0"
+PACK_VERSION = "1.8.1"
 
 _SUBCLASS_LEVELS = {
     "barbarian": 3,
@@ -165,8 +165,16 @@ def _class_features(folder: Path) -> list[dict[str, Any]]:
         text = path.read_text(encoding="utf-8")
         class_name = _heading_or_stem(text, path)
         levels = _class_feature_levels(text)
+        sections: dict[str, tuple[str, list[str]]] = {}
         for title, body in _h3_sections_before_first_h2(text):
-            unlock_levels = levels.get(_feature_key(title))
+            key = _feature_key(title)
+            if key in sections:
+                sections[key][1].append(body)
+            else:
+                sections[key] = (title, [body])
+        for feature_key, (title, bodies) in sections.items():
+            body = "\n\n".join(bodies)
+            unlock_levels = levels.get(feature_key)
             if not unlock_levels:
                 continue
             card = {
@@ -487,7 +495,18 @@ def _class_feature_levels(text: str) -> dict[str, list[int]]:
             level_match = re.match(r"(\d+)", row.get("Level", ""))
             if level_match:
                 level = int(level_match.group(1))
+                feature_names: list[str] = []
                 for feature in row.get("Features", "").split(","):
+                    composite = re.fullmatch(
+                        r"\s*(.+?)\s+and\s+(.+?)\s+improvements?\s*",
+                        feature,
+                        re.IGNORECASE,
+                    )
+                    if composite:
+                        feature_names.extend([composite.group(1), composite.group(2)])
+                    else:
+                        feature_names.append(feature)
+                for feature in feature_names:
                     key = _feature_key(feature)
                     if key and key != "-":
                         unlocks = result.setdefault(key, [])
@@ -594,6 +613,22 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
                 "options": options,
             }
         }
+    if key == ("fighter", "additional fighting style"):
+        return {
+            "selection_requirements": {
+                "field": "option",
+                "count": 1,
+                "options": [
+                    "Archery",
+                    "Defense",
+                    "Dueling",
+                    "Great Weapon Fighting",
+                    "Protection",
+                    "Two-Weapon Fighting",
+                ],
+                "requires_new_choice": True,
+            }
+        }
     if key == ("rogue", "expertise"):
         return {
             "selection_requirements": {
@@ -622,6 +657,122 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
                 "grants_skill_proficiency": True,
             }
         }
+    if key == ("ranger", "natural explorer"):
+        return {
+            "selection_requirements": {
+                "field": "terrain",
+                "count": 1,
+                "options": [
+                    "Arctic",
+                    "Coast",
+                    "Desert",
+                    "Forest",
+                    "Grassland",
+                    "Mountain",
+                    "Swamp",
+                ],
+                "requires_new_choice": True,
+            },
+            "repeatable_selection_levels": [1, 6, 10],
+        }
+    if key == ("ranger", "favored enemy"):
+        return {
+            "selection_requirements": {
+                "field": "favored_enemy",
+                "kind": "favored_enemy",
+                "creature_type_options": [
+                    "Aberrations",
+                    "Beasts",
+                    "Celestials",
+                    "Constructs",
+                    "Dragons",
+                    "Elementals",
+                    "Fey",
+                    "Fiends",
+                    "Giants",
+                    "Monstrosities",
+                    "Oozes",
+                    "Plants",
+                    "Undead",
+                ],
+                "humanoid_race_count": 2,
+                "requires_language": True,
+            },
+            "repeatable_selection_levels": [1, 6, 14],
+        }
+    if key == ("sorcerer", "metamagic"):
+        options = [name for name, _ in _h4_sections(body)]
+        base = {
+            "field": "options",
+            "count": 2,
+            "options": options,
+            "requires_new_choice": True,
+        }
+        return {
+            "selection_requirements": base,
+            "selection_requirements_by_level": {
+                "3": base,
+                "10": {**base, "count": 1},
+                "17": {**base, "count": 1},
+            },
+            "repeatable_selection_levels": [3, 10, 17],
+        }
+    if key == ("warlock", "pact boon"):
+        return {
+            "selection_requirements": {
+                "field": "option",
+                "count": 1,
+                "options": [name for name, _ in _h4_sections(body)],
+            }
+        }
+    if key == ("druid", "bonus cantrip"):
+        return {
+            "selection_requirements": {
+                "field": "spell_artifact_id",
+                "kind": "bonus_cantrip",
+                "spell_level": 0,
+                "eligible_class": "druid",
+            }
+        }
+    if key == ("sorcerer", "dragon ancestor"):
+        ancestry = {
+            fields["Dragon"]: fields["Damage Type"]
+            for table_name, fields in _markdown_table_rows(body)
+            if table_name == "Draconic Ancestry"
+            and fields.get("Dragon")
+            and fields.get("Damage Type")
+        }
+        return {
+            "selection_requirements": {
+                "field": "option",
+                "count": 1,
+                "options": list(ancestry),
+            },
+            "choice_metadata": {"damage_type_by_option": ancestry},
+        }
+    if class_name.casefold() == "ranger" and key[1] in {
+        "hunter's prey",
+        "defensive tactics",
+        "multiattack",
+        "superior hunter's defense",
+    }:
+        return {
+            "selection_requirements": {
+                "field": "option",
+                "count": 1,
+                "options": [name for name, _ in _trait_paragraphs(body)],
+            }
+        }
+    if key == ("druid", "circle spells"):
+        spell_options = _subclass_spell_options(body, table_suffix="Circle Spells")
+        return {
+            "selection_requirements": {
+                "field": "option",
+                "count": 1,
+                "options": list(spell_options),
+            },
+            "always_prepared_spell_options": spell_options,
+        }
     if key == ("cleric", "bonus proficiency") and "heavy armor" in body.casefold():
         return {"mechanical_grants": {"armor_proficiencies": ["heavy armor"]}}
     return {}
@@ -643,6 +794,40 @@ def _subclass_spell_grants(body: str) -> list[dict[str, Any]]:
             cleaned = re.sub(r"[*_`]", "", name).strip()
             if cleaned and cleaned != "-":
                 result.append({"name": cleaned, "minimum_level": minimum_level})
+    return result
+
+
+def _subclass_spell_options(
+    body: str,
+    *,
+    table_suffix: str,
+) -> dict[str, list[dict[str, Any]]]:
+    result: dict[str, list[dict[str, Any]]] = {}
+    for table_name, fields in _markdown_table_rows(body):
+        if not table_name.casefold().endswith(table_suffix.casefold()):
+            continue
+        option = table_name[: -len(table_suffix)].strip()
+        spell_text = next(
+            (
+                value
+                for key, value in fields.items()
+                if key.casefold().endswith("spells")
+            ),
+            "",
+        )
+        level_text = next(
+            (value for key, value in fields.items() if key.casefold().endswith("level")),
+            "",
+        )
+        level_match = re.match(r"(\d+)", level_text)
+        if not option or not spell_text or not level_match:
+            continue
+        minimum_level = int(level_match.group(1))
+        grants = result.setdefault(option, [])
+        for name in spell_text.split(","):
+            cleaned = re.sub(r"[*_`]", "", name).strip()
+            if cleaned and cleaned != "-":
+                grants.append({"name": cleaned, "minimum_level": minimum_level})
     return result
 
 

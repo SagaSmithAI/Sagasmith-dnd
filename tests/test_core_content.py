@@ -9,7 +9,7 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     manifest, artifacts = build_srd2014_content(workspace / "SagaSmith-dnd-skills")
     counts = Counter(item["kind"] for item in artifacts)
 
-    assert manifest["version"] == PACK_VERSION == "1.8.0"
+    assert manifest["version"] == PACK_VERSION == "1.8.1"
     assert counts["spell"] == 319
     assert counts["species"] == 13
     assert counts["class"] == 12
@@ -225,6 +225,60 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
         "allowed_distributions": [[2], [1, 1]],
         "maximum_score": 20,
     }
+    favored_enemy = next(
+        item
+        for item in artifacts
+        if item["id"] == "dnd5e.content.srd2014.feature.ranger-favored-enemy"
+    )
+    natural_explorer = next(
+        item
+        for item in artifacts
+        if item["id"] == "dnd5e.content.srd2014.feature.ranger-natural-explorer"
+    )
+    assert favored_enemy["card"]["unlock_levels"] == [1, 6, 14]
+    assert favored_enemy["card"]["repeatable_selection_levels"] == [1, 6, 14]
+    assert natural_explorer["card"]["unlock_levels"] == [1, 6, 10]
+    assert natural_explorer["card"]["repeatable_selection_levels"] == [1, 6, 10]
+    metamagic = next(
+        item
+        for item in artifacts
+        if item["id"] == "dnd5e.content.srd2014.feature.sorcerer-metamagic"
+    )
+    assert metamagic["card"]["selection_requirements_by_level"]["3"]["count"] == 2
+    assert metamagic["card"]["selection_requirements_by_level"]["10"]["count"] == 1
+    assert metamagic["card"]["repeatable_selection_levels"] == [3, 10, 17]
+    dragon_ancestor = next(
+        item
+        for item in artifacts
+        if item["id"] == "dnd5e.content.srd2014.feature.draconic-bloodline-dragon-ancestor"
+    )
+    assert dragon_ancestor["card"]["choice_metadata"]["damage_type_by_option"]["Gold"] == "Fire"
+    circle_spells = next(
+        item
+        for item in artifacts
+        if item["id"] == "dnd5e.content.srd2014.feature.circle-of-the-land-circle-spells"
+    )
+    assert circle_spells["card"]["selection_requirements"]["options"] == [
+        "Arctic",
+        "Coast",
+        "Desert",
+        "Forest",
+        "Grassland",
+        "Mountain",
+        "Swamp",
+    ]
+    assert circle_spells["card"]["always_prepared_spell_options"]["Coast"][:2] == [
+        {"name": "mirror image", "minimum_level": 3},
+        {"name": "misty step", "minimum_level": 3},
+    ]
+    warlock_invocations = [
+        item
+        for item in artifacts
+        if item["id"].startswith(
+            "dnd5e.content.srd2014.feature.warlock-eldritch-invocations"
+        )
+    ]
+    assert len(warlock_invocations) == 1
 
     hill_dwarf = next(
         item
