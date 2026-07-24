@@ -14,7 +14,7 @@ from sagasmith_dnd.spell_resolution import (
 )
 
 PACK_ID = "dnd5e.content.srd2014"
-PACK_VERSION = "1.6.0"
+PACK_VERSION = "1.7.0"
 
 _SUBCLASS_LEVELS = {
     "barbarian": 3,
@@ -580,6 +580,24 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
                 "field": "proficiencies",
                 "count": 2,
                 "requires_existing_proficiency": True,
+            }
+        }
+    if key == ("bard", "expertise"):
+        return {
+            "selection_requirements": {
+                "field": "proficiencies",
+                "count": 2,
+                "requires_existing_proficiency": True,
+                "skills_only": True,
+            }
+        }
+    if key == ("bard", "bonus proficiencies"):
+        return {
+            "selection_requirements": {
+                "field": "skills",
+                "count": 3,
+                "requires_untrained_skill": True,
+                "grants_skill_proficiency": True,
             }
         }
     if key == ("cleric", "bonus proficiency") and "heavy armor" in body.casefold():

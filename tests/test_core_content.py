@@ -9,7 +9,7 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     manifest, artifacts = build_srd2014_content(workspace / "SagaSmith-dnd-skills")
     counts = Counter(item["kind"] for item in artifacts)
 
-    assert manifest["version"] == PACK_VERSION == "1.6.0"
+    assert manifest["version"] == PACK_VERSION == "1.7.0"
     assert counts["spell"] == 319
     assert counts["species"] == 13
     assert counts["class"] == 12
@@ -141,6 +141,30 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
         == "dnd5e.content.srd2014.feature.life-domain-channel-divinity-preserve-life"
     )
     assert preserve_life["card"]["resource_key"] == "channel_divinity"
+
+    bard_expertise = next(
+        item
+        for item in artifacts
+        if item["id"] == "dnd5e.content.srd2014.feature.bard-expertise"
+    )
+    assert bard_expertise["card"]["selection_requirements"] == {
+        "field": "proficiencies",
+        "count": 2,
+        "requires_existing_proficiency": True,
+        "skills_only": True,
+    }
+    lore_proficiencies = next(
+        item
+        for item in artifacts
+        if item["id"]
+        == "dnd5e.content.srd2014.feature.college-of-lore-bonus-proficiencies"
+    )
+    assert lore_proficiencies["card"]["selection_requirements"] == {
+        "field": "skills",
+        "count": 3,
+        "requires_untrained_skill": True,
+        "grants_skill_proficiency": True,
+    }
 
     hill_dwarf = next(
         item
