@@ -288,9 +288,11 @@ def test_proper_named_destination_uses_authored_arrival_prose_as_location_eviden
         "# A Friend in Need\n"
         "## FINDING FLOON\n"
         "The investigation begins.\n"
+        "### WHERE TO START\n"
+        "When the characters arrive at the Yawning Portal, begin the chapter.\n"
         "### THE SKEWERED DRAGON\n"
         "The Skewered Dragon faces an alley in the Dock Ward. "
-        "When the characters approach it, read the following.\n"
+        "When the characters ap\u0002proach it, read the following.\n"
         "### DEVELOPMENTS\n"
         "When the characters approach the end of the investigation, guards arrive.\n"
     )

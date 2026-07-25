@@ -96,6 +96,7 @@ _NON_LOCATION_HEADINGS = {
     "level advancement",
     "roleplaying",
     "treasure",
+    "where to start",
 }
 _DIMENSIONS = re.compile(
     r"(?P<width>\d{1,3})\s*(?:(?:-?foot|feet|ft\.?|\u5c3a)\s*)?"
@@ -127,6 +128,11 @@ def _is_reference_chapter(title: str) -> bool:
 def _looks_like_location_heading(title: str, body: str = "") -> bool:
     text = title.strip()
     folded = text.casefold()
+    normalized_body = re.sub(
+        r"(?<=[A-Za-z])[\x00-\x1f\x7f-\x9f\u00ad](?=[A-Za-z])",
+        "",
+        body,
+    )
     if not _looks_like_scene_heading(text):
         return False
     return bool(
@@ -140,7 +146,7 @@ def _looks_like_location_heading(title: str, body: str = "") -> bool:
             and 1 <= len(text.split()) <= 6
             and any(char.isalpha() for char in text)
             and text.upper() == text
-            and bool(_LOCATION_BODY_SIGNAL.search(body))
+            and bool(_LOCATION_BODY_SIGNAL.search(normalized_body))
         )
     )
 
@@ -534,7 +540,7 @@ def _spatial_manifest(
 
 class DndModuleProfile(GenericModuleProfile):
     name = "dnd5e"
-    version = "15"
+    version = "16"
 
     def document_metadata(self, content: str) -> dict[str, object]:
         """Parse and validate the optional generated-module runtime manifest."""
