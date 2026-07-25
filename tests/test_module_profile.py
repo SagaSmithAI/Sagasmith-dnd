@@ -429,6 +429,31 @@ def test_named_house_subsection_is_a_physical_scene_location() -> None:
     )
 
 
+def test_ocr_split_house_subsection_remains_a_physical_location() -> None:
+    content = (
+        "# Fireball\n"
+        "## NIM'S SECRET\n"
+        "The investigation continues.\n"
+        "### H OUSE OF I NSPIRED HANDS\n"
+        "If the characters visit the temple, a mechanical bird flies toward them.\n"
+    )
+
+    scene = next(
+        item
+        for item in MarkdownModuleParser(profile=DndModuleProfile()).parse(content)[0].scenes
+        if item.title == "NIM'S SECRET"
+    )
+
+    assert scene.metadata["spatial"]["locations"][0] == {
+        "key": "h-ouse-of-i-nspired-hands",
+        "title": "H OUSE OF I NSPIRED HANDS",
+        "kind": "room",
+        "line": 4,
+        "dimensions_ft": None,
+        "confidence": "explicit_heading",
+    }
+
+
 def test_npc_visit_and_invitation_populates_scene_atlas_as_an_interaction() -> None:
     content = (
         "# Trollskull Alley\n"

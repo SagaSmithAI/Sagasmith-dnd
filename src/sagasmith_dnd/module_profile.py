@@ -139,6 +139,22 @@ def _is_reference_chapter(title: str) -> bool:
     )
 
 
+def _contains_location_title_signal(folded_title: str) -> bool:
+    if any(signal in folded_title for signal in _LOCATION_TITLE_SIGNALS):
+        return True
+    # Display-font extraction often splits an initial or interior capital
+    # (``H OUSE``, ``T EMPLE``). Accept whitespace inside a single known
+    # location word without compacting across ordinary word boundaries.
+    return any(
+        re.search(
+            r"\b" + r"\s*".join(re.escape(char) for char in signal) + r"\b",
+            folded_title,
+        )
+        for signal in _LOCATION_TITLE_SIGNALS
+        if re.fullmatch(r"[a-z]{4,}", signal)
+    )
+
+
 def _location_heading_kind(title: str, body: str = "") -> str | None:
     text = title.strip()
     folded = text.casefold()
@@ -153,7 +169,7 @@ def _location_heading_kind(title: str, body: str = "") -> str | None:
         _ROOM.match(text)
         or (
             1 <= len(text.split()) <= 10
-            and any(signal in folded for signal in _LOCATION_TITLE_SIGNALS)
+            and _contains_location_title_signal(folded)
         )
         or (
             folded not in _NON_LOCATION_HEADINGS
@@ -579,7 +595,7 @@ def _spatial_manifest(
 
 class DndModuleProfile(GenericModuleProfile):
     name = "dnd5e"
-    version = "20"
+    version = "21"
 
     def document_metadata(self, content: str) -> dict[str, object]:
         """Parse and validate the optional generated-module runtime manifest."""
