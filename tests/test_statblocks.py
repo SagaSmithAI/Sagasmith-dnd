@@ -303,7 +303,24 @@ def test_bandit_captain_preserves_exact_overrides_and_multiattack_composition() 
     assert options["ranged"] == [
         {"weapon_id": "dagger", "attack_mode": "ranged", "count": 2}
     ]
-    assert parsed.warnings == ("Parry: descriptive reaction is not automatically settled",)
+    parry = next(
+        item
+        for item in parsed.sheet["content"]["activities"]
+        if item["name"] == "Parry"
+    )
+    assert parry["activation"] == {
+        "type": "reaction",
+        "cost": 1,
+        "trigger": "hit by a melee attack",
+    }
+    assert parry["choices"]["reaction_defense"] == {
+        "kind": "armor_class_bonus",
+        "bonus": 2,
+        "attack_modes": ["melee"],
+        "requires_visible_attacker": False,
+        "requires_wielded_melee_weapon": False,
+    }
+    assert parsed.warnings == ()
 
 
 def test_generic_multiattack_uses_only_unambiguous_compatible_weapon() -> None:
@@ -341,10 +358,34 @@ def test_generic_multiattack_requires_one_compatible_weapon() -> None:
     )
 
     assert derive_character_sheet(parsed.sheet)["multiattack_options"] == []
-    assert parsed.warnings == (
-        "Parry: descriptive reaction is not automatically settled",
-        "Multiattack: Multiattack composition requires a DM ruling",
+    assert parsed.warnings == ("Multiattack: Multiattack composition requires a DM ruling",)
+
+
+def test_source_parry_preserves_visibility_and_wielded_weapon_requirements() -> None:
+    parsed = parse_2014_statblock(
+        BANDIT_CAPTAIN.replace(
+            "The captain adds 2 to its AC against one melee attack that would hit it.",
+            (
+                "The captain adds 2 to its AC against one melee attack that would hit it. "
+                "To do so, the captain must see the attacker and be wielding a melee weapon."
+            ),
+        ),
+        source_key="module-review:nimblewright",
     )
+
+    parry = next(
+        item
+        for item in parsed.sheet["content"]["activities"]
+        if item["name"] == "Parry"
+    )
+    assert parry["choices"]["reaction_defense"] == {
+        "kind": "armor_class_bonus",
+        "bonus": 2,
+        "attack_modes": ["melee"],
+        "requires_visible_attacker": True,
+        "requires_wielded_melee_weapon": True,
+    }
+    assert parsed.warnings == ()
 
 
 def test_statblock_explicit_heavy_armor_preserves_non_ac_mechanics_with_override() -> None:

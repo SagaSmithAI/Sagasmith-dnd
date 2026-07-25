@@ -593,6 +593,43 @@ def _regeneration_source_trait(description: str) -> dict[str, Any] | None:
     }
 
 
+def _parry_reaction_defense(
+    entry_name: str,
+    description: str,
+) -> dict[str, Any] | None:
+    """Structure the standard post-hit Parry reaction without broad inference."""
+
+    if entry_name.strip().casefold() != "parry":
+        return None
+    bonus_match = re.search(
+        r"(?i)\badds?\s+(\d+)\s+to\s+(?:its|his|her|their)\s+AC\s+against\s+"
+        r"one\s+melee\s+attack\s+that\s+would\s+hit\s+(?:it|him|her|them)\b",
+        description,
+    )
+    if bonus_match is None:
+        return None
+    bonus = int(bonus_match.group(1))
+    if bonus <= 0:
+        return None
+    return {
+        "kind": "armor_class_bonus",
+        "bonus": bonus,
+        "attack_modes": ["melee"],
+        "requires_visible_attacker": bool(
+            re.search(
+                r"(?i)\bmust\s+see\s+the\s+attacker\b",
+                description,
+            )
+        ),
+        "requires_wielded_melee_weapon": bool(
+            re.search(
+                r"(?i)\b(?:be\s+)?wielding\s+a\s+melee\s+weapon\b",
+                description,
+            )
+        ),
+    }
+
+
 def parse_2014_statblock(
     markdown: str,
     *,
@@ -821,8 +858,16 @@ def parse_2014_statblock(
         if source_trait is not None:
             entry["activation"]["trigger"] = "start of its turn"
             entry["choices"] = {"source_trait": source_trait}
+        reaction_defense = (
+            _parry_reaction_defense(entry_name, description)
+            if activation == "reaction"
+            else None
+        )
+        if reaction_defense is not None:
+            entry["activation"]["trigger"] = "hit by a melee attack"
+            entry["choices"] = {"reaction_defense": reaction_defense}
         sheet["content"]["activities" if activation != "passive" else "features"].append(entry)
-        if source_trait is None:
+        if source_trait is None and reaction_defense is None:
             warnings.append(
                 f"{entry_name}: Multiattack composition requires a DM ruling"
                 if entry_name in unresolved_multiattacks
