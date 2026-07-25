@@ -164,6 +164,7 @@ def consume_magic_item_spell_cast(
         )
         automatic_effect = "shield"
         mechanic_ids.append(CORE_SHIELD_ITEM_BOUNDARY_ID)
+    ended_invisibility_effect_ids = _end_spell_cast_broken_invisibility(value)
     duration = dict(card.get("definition", {}).get("duration") or {})
     concentration = bool(duration.get("concentration"))
     if concentration:
@@ -201,6 +202,7 @@ def consume_magic_item_spell_cast(
         "last_charge_expended": last_charge_expended,
         "last_charge_rule": last_charge_rule,
         "concentration_started": concentration,
+        "ended_invisibility_effect_ids": ended_invisibility_effect_ids,
         "ruling_required": [] if automatic_effect else ["targets_and_effect"],
         "status": "committed",
         "rule_receipts": [
@@ -435,6 +437,29 @@ def _apply_concentration_effect(
         }
     )
     return effect_id
+
+
+def _end_spell_cast_broken_invisibility(sheet: dict[str, Any]) -> list[str]:
+    """End only the exact Invisibility spell when its target casts a spell."""
+
+    ended: list[str] = []
+    for effect in sheet.get("effects", []):
+        spell_id = str(effect.get("source_spell_id") or "").strip().casefold()
+        if (
+            effect.get("active")
+            and spell_id
+            and spell_id.rsplit(".", 1)[-1] == "invisibility"
+        ):
+            effect["active"] = False
+            effect["ended_reason"] = "actor_cast_spell"
+            ended.append(str(effect.get("id") or ""))
+    if ended:
+        sheet["conditions"] = [
+            condition
+            for condition in sheet.get("conditions", [])
+            if str(condition).casefold() != "invisible"
+        ]
+    return ended
 
 
 def magic_missile_dart_count(cast_level: int) -> int:
@@ -776,6 +801,7 @@ def consume_spell_cast(
                 pact_magic["value"] = int(pact_magic["value"]) - 1
                 level = pact_level
                 paid = {"economy": "pact_magic", "level": level, "ritual": False}
+    ended_invisibility_effect_ids = _end_spell_cast_broken_invisibility(value)
     duration = dict(spell.get("definition", {}).get("duration") or {})
     concentration = bool(duration.get("concentration"))
     if concentration:
@@ -801,6 +827,7 @@ def consume_spell_cast(
         "cast_level": level,
         "payment": paid,
         "concentration_started": concentration,
+        "ended_invisibility_effect_ids": ended_invisibility_effect_ids,
         "ruling_required": [
             *(["source_components"] if source_components_unknown else []),
             *(["verbal_component"] if components.get("verbal") else []),

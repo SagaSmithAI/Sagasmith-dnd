@@ -54,6 +54,120 @@ def test_spell_slot_and_concentration_are_settled_from_card_data() -> None:
     assert result["concentration_started"] is True
 
 
+def test_casting_a_spell_ends_only_the_exact_invisibility_spell() -> None:
+    sheet = default_character_sheet()
+    sheet["spellcasting"]["spell_slots"] = {
+        "1": {
+            "label": "1st",
+            "value": 1,
+            "max": 1,
+            "recovers_on": "long_rest",
+            "source_key": "wizard",
+        }
+    }
+    invisibility = _spell(
+        "dnd5e.content.srd2014.spell.invisibility",
+        level=2,
+        concentration=True,
+    )
+    sheet["content"]["spells"] = [
+        _spell("magic-missile", level=1),
+        invisibility,
+    ]
+    sheet["conditions"] = ["invisible"]
+    sheet["effects"] = [
+        {
+            "id": "invisibility-effect",
+            "name": "Concentrating: Invisibility",
+            "kind": "concentration",
+            "source": "spell.cast",
+            "source_spell_id": "dnd5e.content.srd2014.spell.invisibility",
+            "active": True,
+            "concentration": True,
+            "duration": {"period": "hour", "remaining": 1},
+            "changes": [],
+        }
+    ]
+
+    result = consume_spell_cast(
+        validate_character_sheet(sheet),
+        spell_id="magic-missile",
+    )
+
+    assert result["ended_invisibility_effect_ids"] == ["invisibility-effect"]
+    assert "invisible" not in result["sheet"]["conditions"]
+    effect = result["sheet"]["effects"][0]
+    assert effect["active"] is False
+    assert effect["ended_reason"] == "actor_cast_spell"
+
+
+def test_magic_item_spell_cast_also_ends_invisibility() -> None:
+    sheet = default_character_sheet()
+    item_spell = _spell("module-spell", level=1)
+    item_spell.update(
+        pack_id="dnd5e.module",
+        pack_version="1.0.0",
+        rule_refs=["module-chunk:item-spell"],
+    )
+    sheet["inventory"]["items"] = [
+        {
+            "id": "spell-wand",
+            "name": "Spell Wand",
+            "kind": "magic_item",
+            "equipped": True,
+            "equipped_slot": "main_hand",
+            "charges": {
+                "label": "Charges",
+                "value": 2,
+                "max": 2,
+                "recovers_on": "dawn",
+                "source_key": "module-chunk:item-spell",
+            },
+            "mechanics": {
+                "spellcasting": {
+                    "requires_attunement": False,
+                    "requires_class_spell_list": False,
+                    "components_required": False,
+                    "spells": [
+                        {
+                            "artifact_id": "module-spell",
+                            "charge_cost": 1,
+                            "casting_time": "1 action",
+                            "card": item_spell,
+                        }
+                    ],
+                }
+            },
+        }
+    ]
+    sheet["inventory"]["equipment_slots"]["main_hand"] = "spell-wand"
+    sheet["content"]["spells"] = [_spell("invisibility", level=2, concentration=True)]
+    sheet["conditions"] = ["invisible"]
+    sheet["effects"] = [
+        {
+            "id": "invisibility-effect",
+            "name": "Concentrating: Invisibility",
+            "kind": "concentration",
+            "source": "spell.cast",
+            "source_spell_id": "invisibility",
+            "active": True,
+            "concentration": True,
+            "duration": {"period": "hour", "remaining": 1},
+            "changes": [],
+        }
+    ]
+
+    result = consume_magic_item_spell_cast(
+        validate_character_sheet(sheet),
+        source_item_id="spell-wand",
+        spell_id="module-spell",
+    )
+
+    assert result["ended_invisibility_effect_ids"] == ["invisibility-effect"]
+    assert "invisible" not in result["sheet"]["conditions"]
+    assert result["sheet"]["effects"][0]["ended_reason"] == "actor_cast_spell"
+
+
 def test_shield_reaction_pays_slot_and_expires_at_turn_start() -> None:
     sheet = default_character_sheet()
     sheet["combat"]["ac"]["override"] = 13
