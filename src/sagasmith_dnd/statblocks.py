@@ -847,6 +847,86 @@ def _variant_attack_description(item: dict[str, Any], source_ref: str) -> str:
     )
 
 
+def effective_statblock_rating(
+    challenge_rating: str,
+    experience_points: int | None,
+    variant: dict[str, Any] | None,
+) -> tuple[str, int | None]:
+    """Return a source-cited encounter rating override for a statblock variant."""
+
+    if variant is None:
+        return challenge_rating, experience_points
+    has_challenge = "challenge_rating" in variant
+    has_experience = "experience_points" in variant
+    if has_challenge != has_experience:
+        raise StatblockImportError(
+            "challenge_rating and experience_points must be overridden together"
+        )
+    if not has_challenge:
+        return challenge_rating, experience_points
+    overridden_challenge = str(variant["challenge_rating"] or "").strip()
+    challenge_xp = {
+        "0": 10,
+        "1/8": 25,
+        "1/4": 50,
+        "1/2": 100,
+        **dict(
+            zip(
+                (str(value) for value in range(1, 31)),
+                (
+                    200,
+                    450,
+                    700,
+                    1100,
+                    1800,
+                    2300,
+                    2900,
+                    3900,
+                    5000,
+                    5900,
+                    7200,
+                    8400,
+                    10000,
+                    11500,
+                    13000,
+                    15000,
+                    18000,
+                    20000,
+                    22000,
+                    25000,
+                    33000,
+                    41000,
+                    50000,
+                    62000,
+                    75000,
+                    90000,
+                    105000,
+                    120000,
+                    135000,
+                    155000,
+                ),
+                strict=True,
+            )
+        ),
+    }
+    if overridden_challenge not in challenge_xp:
+        raise StatblockImportError(
+            "challenge_rating must be a D&D 5e challenge from 0 through 30"
+        )
+    overridden_experience = variant["experience_points"]
+    if (
+        not isinstance(overridden_experience, int)
+        or isinstance(overridden_experience, bool)
+        or overridden_experience < 0
+    ):
+        raise StatblockImportError("experience_points must be a non-negative integer")
+    if overridden_experience != challenge_xp[overridden_challenge]:
+        raise StatblockImportError(
+            "experience_points must match the D&D 5e challenge XP table"
+        )
+    return overridden_challenge, overridden_experience
+
+
 def apply_statblock_variant(
     sheet: dict[str, Any],
     variant: dict[str, Any],
@@ -864,6 +944,8 @@ def apply_statblock_variant(
     allowed = {
         "source_ref",
         "source_refs",
+        "challenge_rating",
+        "experience_points",
         "creature_type",
         "current_hit_points",
         "maximum_hit_points",
@@ -897,6 +979,7 @@ def apply_statblock_variant(
     if len(source_refs) != len(set(source_refs)):
         raise StatblockImportError("statblock variant source refs must be unique")
     source_ref = ", ".join(source_refs)
+    effective_statblock_rating("", None, variant)
 
     result = deepcopy(sheet)
     if "creature_type" in variant:
@@ -1108,6 +1191,7 @@ def apply_statblock_variant(
             "damage_formula",
             "attack_bonus_override",
             "damage_bonus_override",
+            "remove_on_hit_effect",
         }
         patch_unknown = set(raw_patch) - patch_allowed
         if patch_unknown:
@@ -1143,6 +1227,13 @@ def apply_statblock_variant(
                 if not isinstance(value, int) or isinstance(value, bool):
                     raise StatblockImportError(f"action override {field} must be an integer")
                 mechanics[field] = value
+        if "remove_on_hit_effect" in raw_patch:
+            remove_on_hit_effect = raw_patch["remove_on_hit_effect"]
+            if remove_on_hit_effect is not True:
+                raise StatblockImportError(
+                    "action override remove_on_hit_effect must be true"
+                )
+            mechanics["on_hit_effect"] = ""
         item["description"] = _variant_attack_description(item, source_ref)
 
     remaining_ids = [str(item.get("id") or "") for item in items]
@@ -1213,5 +1304,6 @@ __all__ = [
     "ParsedStatblock",
     "StatblockImportError",
     "apply_statblock_variant",
+    "effective_statblock_rating",
     "parse_2014_statblock",
 ]

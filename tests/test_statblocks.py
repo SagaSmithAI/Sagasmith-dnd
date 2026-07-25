@@ -4,6 +4,7 @@ from sagasmith_dnd.character_schema import derive_character_sheet
 from sagasmith_dnd.statblocks import (
     StatblockImportError,
     apply_statblock_variant,
+    effective_statblock_rating,
     parse_2014_statblock,
 )
 
@@ -623,6 +624,74 @@ def test_source_bound_variant_can_remove_confiscated_gear_and_dependent_activiti
     assert sheet["content"]["activities"] == []
 
 
+def test_source_bound_variant_can_remove_weapon_riders_and_override_encounter_rating() -> None:
+    parsed = parse_2014_statblock(
+        """# Assassin
+
+*Medium humanoid (any race), any non-good alignment*
+
+**Armor Class** 15 (studded leather)
+**Hit Points** 78 (12d8 + 24)
+**Speed** 30 ft.
+
+| STR | DEX | CON | INT | WIS | CHA |
+|---|---|---|---|---|---|
+| 11 (+0) | 16 (+3) | 14 (+2) | 13 (+1) | 11 (+0) | 10 (+0) |
+
+**Senses** passive Perception 14
+**Languages** Thieves' cant plus any two languages
+**Challenge** 8 (3,900 XP)
+
+## Actions
+
+***Multiattack***. The assassin makes two shortsword attacks.
+
+***Shortsword***. *Melee Weapon Attack:* +7 to hit, reach 5 ft., one target.
+*Hit:* 6 (1d6 + 3) piercing damage, and the target must make a DC 15 Constitution
+saving throw, taking 24 (7d6) poison damage on a failed save, or half as much
+damage on a successful one.
+
+***Light Crossbow***. *Ranged Weapon Attack:* +7 to hit, range 80/320 ft., one target.
+*Hit:* 7 (1d8 + 3) piercing damage, and the target must make a DC 15 Constitution
+saving throw, taking 24 (7d6) poison damage on a failed save, or half as much
+damage on a successful one.
+""",
+        source_key="srd-assassin",
+    )
+    variant = {
+        "source_ref": "module-chunk:gralhund-g15",
+        "maximum_hit_points": 50,
+        "challenge_rating": "3",
+        "experience_points": 700,
+        "action_overrides": {
+            "shortsword": {"remove_on_hit_effect": True},
+            "light-crossbow": {"remove_on_hit_effect": True},
+        },
+    }
+
+    sheet = apply_statblock_variant(parsed.sheet, variant)
+    attacks = {
+        attack["item_id"]: attack
+        for attack in derive_character_sheet(sheet)["inventory"]["weapon_attacks"]
+    }
+
+    assert sheet["combat"]["hp"] == {"value": 50, "max": 50, "temp": 0}
+    assert effective_statblock_rating(
+        parsed.challenge_rating,
+        parsed.experience_points,
+        variant,
+    ) == ("3", 700)
+    assert attacks["shortsword"]["damage_expression"] == "1d6 + 3"
+    assert attacks["shortsword"]["on_hit_effect"] == ""
+    assert attacks["light-crossbow"]["damage_expression"] == "1d8 + 3"
+    assert attacks["light-crossbow"]["on_hit_effect"] == ""
+    assert all(
+        "DC 15" not in item["description"] and "poison" not in item["description"]
+        for item in sheet["inventory"]["items"]
+        if item["kind"] == "weapon"
+    )
+
+
 def test_statblock_variant_rejects_unbound_or_broad_sheet_patches() -> None:
     parsed = parse_2014_statblock(COMMONER, source_key="srd-commoner")
 
@@ -642,6 +711,28 @@ def test_statblock_variant_rejects_unbound_or_broad_sheet_patches() -> None:
         apply_statblock_variant(
             parsed.sheet,
             {"source_ref": "module-scene:d12", "creature_type": ""},
+        )
+    with pytest.raises(StatblockImportError, match="overridden together"):
+        apply_statblock_variant(
+            parsed.sheet,
+            {"source_ref": "module-scene:d12", "challenge_rating": "3"},
+        )
+    with pytest.raises(StatblockImportError, match="challenge XP table"):
+        apply_statblock_variant(
+            parsed.sheet,
+            {
+                "source_ref": "module-scene:d12",
+                "challenge_rating": "3",
+                "experience_points": 701,
+            },
+        )
+    with pytest.raises(StatblockImportError, match="must be true"):
+        apply_statblock_variant(
+            parsed.sheet,
+            {
+                "source_ref": "module-scene:d12",
+                "action_overrides": {"club": {"remove_on_hit_effect": False}},
+            },
         )
 
 
