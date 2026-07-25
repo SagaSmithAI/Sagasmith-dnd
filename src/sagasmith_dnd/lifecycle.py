@@ -6,7 +6,10 @@ from copy import deepcopy
 from dataclasses import asdict
 from typing import Any
 
-from sagasmith_dnd.combat_engine import CombatEngineError
+from sagasmith_dnd.combat_engine import (
+    CombatEngineError,
+    clear_ended_invisibility_spell_condition,
+)
 from sagasmith_dnd.engine import roll
 from sagasmith_dnd.rule_engine import ResolutionContext, apply_rule_event, core_receipts
 
@@ -17,6 +20,36 @@ REST_SCHEDULE_FIELDS = {
     "strenuous_activity_minutes",
 }
 REST_SCHEDULE_OPTIONAL_FIELDS = {"trance_minutes"}
+
+
+def _remove_conditions_from_expired_effects(
+    sheet: dict[str, Any], expired_condition_additions: set[str]
+) -> None:
+    """Keep condition cleanup identical for every effect-duration clock."""
+    active_condition_additions: set[str] = set()
+    for effect in sheet.get("effects", []):
+        if not effect.get("active") or effect.get("kind") != "timed_conditions":
+            continue
+        for change in effect.get("changes", []):
+            if change.get("path") != "conditions" or change.get("mode") != "add":
+                continue
+            raw = change.get("value")
+            values = raw if isinstance(raw, list) else [raw]
+            active_condition_additions.update(
+                str(item).strip().casefold() for item in values if str(item).strip()
+            )
+    removable_conditions = expired_condition_additions - active_condition_additions
+    if not any(
+        effect.get("active") and effect.get("kind") == "turn_undead"
+        for effect in sheet.get("effects", [])
+    ):
+        removable_conditions.add("turned")
+    if removable_conditions:
+        sheet["conditions"] = [
+            condition
+            for condition in sheet.get("conditions", [])
+            if str(condition).casefold() not in removable_conditions
+        ]
 
 
 def allows_trance_rest(sheet: dict[str, Any]) -> bool:
@@ -191,40 +224,85 @@ def advance_effect_durations(
             duration["remaining"] = remaining - amount
             effect["duration"] = duration
             advanced.append(str(effect.get("id")))
-    active_condition_additions: set[str] = set()
-    for effect in value.get("effects", []):
-        if not effect.get("active") or effect.get("kind") != "timed_conditions":
-            continue
-        for change in effect.get("changes", []):
-            if change.get("path") != "conditions" or change.get("mode") != "add":
-                continue
-            raw = change.get("value")
-            values = raw if isinstance(raw, list) else [raw]
-            active_condition_additions.update(
-                str(item).strip().casefold()
-                for item in values
-                if str(item).strip()
-            )
-    removable_conditions = expired_condition_additions - active_condition_additions
-    if removable_conditions:
-        value["conditions"] = [
-            condition
-            for condition in value.get("conditions", [])
-            if str(condition).casefold() not in removable_conditions
-        ]
-    if not any(
-        effect.get("active") and effect.get("kind") == "turn_undead"
-        for effect in value.get("effects", [])
-    ):
-        value["conditions"] = [
-            condition
-            for condition in value.get("conditions", [])
-            if str(condition).casefold() != "turned"
-        ]
+    _remove_conditions_from_expired_effects(value, expired_condition_additions)
+    clear_ended_invisibility_spell_condition(value, ended_effect_ids=expired)
     return {
         "sheet": value,
         "period": normalized,
         "amount": amount,
+        "advanced": advanced,
+        "expired": expired,
+    }
+
+
+def advance_elapsed_effect_durations(
+    sheet: dict[str, Any], *, elapsed_minutes: int
+) -> dict[str, Any]:
+    """Advance every real-time actor effect by one elapsed-time interval.
+
+    Hour- and day-based effects retain a sub-unit minute remainder so separate
+    clock advances such as 30 + 30 minutes expire a one-hour effect exactly
+    once. Turn, round, encounter, and rest-bound durations are not elapsed-time
+    effects and remain untouched.
+    """
+    if (
+        isinstance(elapsed_minutes, bool)
+        or not isinstance(elapsed_minutes, int)
+        or elapsed_minutes < 1
+    ):
+        raise CombatEngineError("elapsed effect duration minutes must be positive")
+    value = deepcopy(sheet)
+    advanced: list[str] = []
+    expired: list[str] = []
+    expired_condition_additions: set[str] = set()
+    unit_minutes = {"minute": 1, "hour": 60, "day": 1440}
+    for effect in value.get("effects", []):
+        if not effect.get("active"):
+            continue
+        duration = dict(effect.get("duration") or {})
+        period = str(duration.get("period") or "")
+        unit = unit_minutes.get(period)
+        if unit is None:
+            continue
+        previous_remainder = int(duration.get("elapsed_minutes_remainder", 0) or 0)
+        elapsed_units, remainder = divmod(previous_remainder + elapsed_minutes, unit)
+        if elapsed_units == 0:
+            if remainder != previous_remainder:
+                duration["elapsed_minutes_remainder"] = remainder
+                effect["duration"] = duration
+                advanced.append(str(effect.get("id")))
+            continue
+        remaining = int(duration.get("remaining", 0) or 0)
+        if remaining <= elapsed_units:
+            effect["active"] = False
+            effect["ended_reason"] = "duration_expired"
+            duration.pop("elapsed_minutes_remainder", None)
+            effect["duration"] = duration
+            expired.append(str(effect.get("id")))
+            if effect.get("kind") == "timed_conditions":
+                for change in effect.get("changes", []):
+                    if change.get("path") != "conditions" or change.get("mode") != "add":
+                        continue
+                    raw = change.get("value")
+                    values = raw if isinstance(raw, list) else [raw]
+                    expired_condition_additions.update(
+                        str(item).strip().casefold()
+                        for item in values
+                        if str(item).strip()
+                    )
+            continue
+        duration["remaining"] = remaining - elapsed_units
+        if remainder:
+            duration["elapsed_minutes_remainder"] = remainder
+        else:
+            duration.pop("elapsed_minutes_remainder", None)
+        effect["duration"] = duration
+        advanced.append(str(effect.get("id")))
+    _remove_conditions_from_expired_effects(value, expired_condition_additions)
+    clear_ended_invisibility_spell_condition(value, ended_effect_ids=expired)
+    return {
+        "sheet": value,
+        "elapsed_minutes": elapsed_minutes,
         "advanced": advanced,
         "expired": expired,
     }
@@ -259,6 +337,58 @@ def advance_world_effect_durations(
         "state": value,
         "period": normalized,
         "amount": amount,
+        "advanced": advanced,
+        "expired": expired,
+    }
+
+
+def advance_elapsed_world_effect_durations(
+    state: dict[str, Any], *, elapsed_minutes: int
+) -> dict[str, Any]:
+    """Advance every real-time campaign-space effect by elapsed minutes."""
+    if (
+        isinstance(elapsed_minutes, bool)
+        or not isinstance(elapsed_minutes, int)
+        or elapsed_minutes < 1
+    ):
+        raise CombatEngineError("elapsed world effect duration minutes must be positive")
+    value = deepcopy(state)
+    advanced: list[str] = []
+    expired: list[str] = []
+    unit_minutes = {"minute": 1, "hour": 60, "day": 1440}
+    for effect in value.get("world_effects", []):
+        if not effect.get("active"):
+            continue
+        duration = dict(effect.get("duration") or {})
+        unit = unit_minutes.get(str(duration.get("period") or ""))
+        if unit is None:
+            continue
+        previous_remainder = int(duration.get("elapsed_minutes_remainder", 0) or 0)
+        elapsed_units, remainder = divmod(previous_remainder + elapsed_minutes, unit)
+        if elapsed_units == 0:
+            if remainder != previous_remainder:
+                duration["elapsed_minutes_remainder"] = remainder
+                effect["duration"] = duration
+                advanced.append(str(effect.get("id")))
+            continue
+        remaining = int(duration.get("remaining", 0) or 0)
+        if remaining <= elapsed_units:
+            effect["active"] = False
+            effect["ended_reason"] = "duration_expired"
+            duration.pop("elapsed_minutes_remainder", None)
+            effect["duration"] = duration
+            expired.append(str(effect.get("id")))
+            continue
+        duration["remaining"] = remaining - elapsed_units
+        if remainder:
+            duration["elapsed_minutes_remainder"] = remainder
+        else:
+            duration.pop("elapsed_minutes_remainder", None)
+        effect["duration"] = duration
+        advanced.append(str(effect.get("id")))
+    return {
+        "state": value,
+        "elapsed_minutes": elapsed_minutes,
         "advanced": advanced,
         "expired": expired,
     }
@@ -450,7 +580,9 @@ def apply_rest(
         hp["temp"] = 0
         combat["death_saves"] = {"successes": 0, "failures": 0}
         value["conditions"] = [
-            item for item in value.get("conditions", []) if item not in {"unconscious", "stable"}
+            item
+            for item in value.get("conditions", [])
+            if str(item).casefold() not in {"unconscious", "stable"}
         ]
         exhaustion = int(combat.get("exhaustion", 0) or 0)
         if edition == "2024" or food_and_drink:

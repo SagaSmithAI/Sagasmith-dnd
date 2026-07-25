@@ -1229,7 +1229,11 @@ def _normalize_effect(value: Any, field: str) -> dict[str, Any]:
     }
     _reject_unknown(effect, field, allowed)
     duration = _object(effect.get("duration") or {}, f"{field}.duration")
-    _reject_unknown(duration, f"{field}.duration", {"period", "remaining"})
+    _reject_unknown(
+        duration,
+        f"{field}.duration",
+        {"period", "remaining", "elapsed_minutes_remainder"},
+    )
     period = _text(duration.get("period"), f"{field}.duration.period", default="manual")
     if period not in EFFECT_PERIODS:
         raise ValueError(f"{field}.duration.period is invalid")
@@ -1249,6 +1253,28 @@ def _normalize_effect(value: Any, field: str) -> dict[str, Any]:
                 "value": item.get("value"),
             }
         )
+    normalized_duration = {
+        "period": period,
+        "remaining": _integer(
+            duration.get("remaining"), f"{field}.duration.remaining", minimum=0
+        ),
+    }
+    elapsed_minutes_remainder = _integer(
+        duration.get("elapsed_minutes_remainder"),
+        f"{field}.duration.elapsed_minutes_remainder",
+        minimum=0,
+    )
+    if elapsed_minutes_remainder:
+        if period not in {"hour", "day"}:
+            raise ValueError(
+                f"{field}.duration.elapsed_minutes_remainder requires an hour or day period"
+            )
+        unit_minutes = 60 if period == "hour" else 1440
+        if elapsed_minutes_remainder >= unit_minutes:
+            raise ValueError(
+                f"{field}.duration.elapsed_minutes_remainder must be below {unit_minutes}"
+            )
+        normalized_duration["elapsed_minutes_remainder"] = elapsed_minutes_remainder
     normalized = {
         "id": _text(effect.get("id"), f"{field}.id", default=_uuid(), maximum=100),
         "name": _text(effect.get("name"), f"{field}.name", maximum=300),
@@ -1259,12 +1285,7 @@ def _normalize_effect(value: Any, field: str) -> dict[str, Any]:
         ),
         "active": _boolean(effect.get("active"), f"{field}.active", default=True),
         "concentration": _boolean(effect.get("concentration"), f"{field}.concentration"),
-        "duration": {
-            "period": period,
-            "remaining": _integer(
-                duration.get("remaining"), f"{field}.duration.remaining", minimum=0
-            ),
-        },
+        "duration": normalized_duration,
         "changes": changes,
         "description": _text(effect.get("description"), f"{field}.description", maximum=1200),
     }
@@ -2376,7 +2397,11 @@ def validate_world_effect(value: Any, *, field: str = "world_effect") -> dict[st
         },
     )
     duration = _object(effect.get("duration") or {}, f"{field}.duration")
-    _reject_unknown(duration, f"{field}.duration", {"period", "remaining"})
+    _reject_unknown(
+        duration,
+        f"{field}.duration",
+        {"period", "remaining", "elapsed_minutes_remainder"},
+    )
     period = _text(duration.get("period"), f"{field}.duration.period", default="manual")
     if period not in {"manual", "round", "encounter", "minute", "hour", "day"}:
         raise ValueError(f"{field}.duration.period is invalid")
@@ -2388,6 +2413,28 @@ def validate_world_effect(value: Any, *, field: str = "world_effect") -> dict[st
     target_id = _text(target.get("id"), f"{field}.target.id", maximum=300)
     if target_kind != "campaign" and not target_id:
         raise ValueError(f"{field}.target.id is required for {target_kind} effects")
+    normalized_duration = {
+        "period": period,
+        "remaining": _integer(
+            duration.get("remaining"), f"{field}.duration.remaining", minimum=0
+        ),
+    }
+    elapsed_minutes_remainder = _integer(
+        duration.get("elapsed_minutes_remainder"),
+        f"{field}.duration.elapsed_minutes_remainder",
+        minimum=0,
+    )
+    if elapsed_minutes_remainder:
+        if period not in {"hour", "day"}:
+            raise ValueError(
+                f"{field}.duration.elapsed_minutes_remainder requires an hour or day period"
+            )
+        unit_minutes = 60 if period == "hour" else 1440
+        if elapsed_minutes_remainder >= unit_minutes:
+            raise ValueError(
+                f"{field}.duration.elapsed_minutes_remainder must be below {unit_minutes}"
+            )
+        normalized_duration["elapsed_minutes_remainder"] = elapsed_minutes_remainder
     normalized = {
         "id": _text(effect.get("id"), f"{field}.id", default=_uuid(), maximum=100),
         "name": _text(effect.get("name"), f"{field}.name", maximum=300),
@@ -2406,12 +2453,7 @@ def validate_world_effect(value: Any, *, field: str = "world_effect") -> dict[st
         },
         "active": _boolean(effect.get("active"), f"{field}.active", default=True),
         "visibility": _text(effect.get("visibility"), f"{field}.visibility", default="party"),
-        "duration": {
-            "period": period,
-            "remaining": _integer(
-                duration.get("remaining"), f"{field}.duration.remaining", minimum=0
-            ),
-        },
+        "duration": normalized_duration,
         "description": _text(effect.get("description"), f"{field}.description", maximum=1200),
         "created_at_elapsed_minutes": _integer(
             effect.get("created_at_elapsed_minutes"),

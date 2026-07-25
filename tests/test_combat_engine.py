@@ -24,6 +24,7 @@ from sagasmith_dnd.combat_engine import (
     available_attack_defenses,
     available_reactions,
     current_combatant,
+    end_concentration_for_incapacitating_conditions,
     end_turn,
     pay_activity_activation,
     pay_attack_action,
@@ -1352,6 +1353,39 @@ def test_zero_hp_ends_concentration_with_a_schema_valid_audit_reason() -> None:
     assert validate_character_sheet(damaged["sheet"])["effects"][0] == effect
 
 
+def test_zero_hp_ends_invisibility_concentration_and_clears_condition() -> None:
+    actor = _actor("target", hp=10)
+    actor["sheet"]["conditions"] = ["invisible"]
+    actor["sheet"]["content"]["spells"] = [
+        {
+            "id": "dnd5e.content.srd2014.spell.invisibility",
+            "name": "Invisibility",
+            "level": 2,
+        }
+    ]
+    actor["sheet"]["effects"] = [
+        {
+            "id": "invisibility",
+            "name": "Invisibility",
+            "kind": "concentration",
+            "source_spell_id": "dnd5e.content.srd2014.spell.invisibility",
+            "active": True,
+            "concentration": True,
+            "duration": {"period": "hour", "remaining": 1},
+            "changes": [],
+        }
+    ]
+
+    damaged = apply_damage_to_sheet(
+        validate_character_sheet(actor["sheet"]),
+        amount=10,
+        damage_type="fire",
+    )
+
+    assert damaged["ended_effect_ids"] == ["invisibility"]
+    assert "invisible" not in damaged["sheet"]["conditions"]
+
+
 def test_failed_concentration_save_records_why_the_effect_ended() -> None:
     actor = _actor("target", hp=10)
     actor["sheet"]["effects"] = [
@@ -1374,6 +1408,61 @@ def test_failed_concentration_save_records_why_the_effect_ended() -> None:
     assert resolved["effects"][0]["active"] is False
     assert resolved["effects"][0]["ended_reason"] == "failed_concentration_save"
     validate_character_sheet(resolved)
+
+
+def test_failed_concentration_save_clears_invisibility_condition() -> None:
+    actor = _actor("target", hp=10)
+    actor["sheet"]["conditions"] = ["invisible"]
+    actor["sheet"]["content"]["spells"] = [
+        {"id": "invisibility", "name": "Invisibility", "level": 2}
+    ]
+    actor["sheet"]["effects"] = [
+        {
+            "id": "invisibility",
+            "name": "Invisibility",
+            "kind": "concentration",
+            "source_spell_id": "invisibility",
+            "active": True,
+            "concentration": True,
+            "duration": {"period": "hour", "remaining": 1},
+            "changes": [],
+        }
+    ]
+
+    resolved = apply_concentration_result(
+        validate_character_sheet(actor["sheet"]),
+        effect_ids=["invisibility"],
+        success=False,
+    )
+
+    assert "invisible" not in resolved["conditions"]
+    assert resolved["effects"][0]["ended_reason"] == "failed_concentration_save"
+
+
+@pytest.mark.parametrize(
+    "condition",
+    ["incapacitated", "paralyzed", "petrified", "stunned", "unconscious"],
+)
+def test_incapacitating_conditions_end_concentration(condition: str) -> None:
+    actor = _actor("target", hp=10)
+    actor["sheet"]["conditions"] = [condition]
+    actor["sheet"]["effects"] = [
+        {
+            "id": "bless",
+            "name": "Bless",
+            "kind": "concentration",
+            "active": True,
+            "concentration": True,
+            "duration": {"period": "minute", "remaining": 1},
+            "changes": [],
+        }
+    ]
+
+    ended = end_concentration_for_incapacitating_conditions(actor["sheet"])
+
+    assert ended == ["bless"]
+    assert actor["sheet"]["effects"][0]["active"] is False
+    assert actor["sheet"]["effects"][0]["ended_reason"] == "incapacitated"
 
 
 def test_same_type_simultaneous_parts_round_resistance_only_once() -> None:

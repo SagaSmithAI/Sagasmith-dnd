@@ -6,6 +6,8 @@ from sagasmith_dnd.character_schema import default_character_sheet
 from sagasmith_dnd.combat_engine import CombatEngineError
 from sagasmith_dnd.lifecycle import (
     advance_effect_durations,
+    advance_elapsed_effect_durations,
+    advance_elapsed_world_effect_durations,
     advance_world_effect_durations,
     apply_rest,
     initialize_source_state,
@@ -280,6 +282,116 @@ def test_expiring_timed_conditions_preserves_condition_from_an_active_effect() -
     assert result["sheet"]["effects"][1]["duration"]["remaining"] == 1
 
 
+def test_elapsed_minutes_accumulate_for_hour_actor_effects() -> None:
+    sheet = default_character_sheet()
+    sheet["conditions"] = ["poisoned", "paralyzed", "prone"]
+    sheet["effects"] = [
+        {
+            "id": "giant-spider-poison",
+            "name": "Giant Spider Poison",
+            "kind": "timed_conditions",
+            "active": True,
+            "duration": {"period": "hour", "remaining": 1},
+            "changes": [
+                {
+                    "path": "conditions",
+                    "mode": "add",
+                    "value": ["poisoned", "paralyzed"],
+                }
+            ],
+        }
+    ]
+
+    first = advance_elapsed_effect_durations(sheet, elapsed_minutes=30)
+    assert first["expired"] == []
+    assert first["sheet"]["effects"][0]["duration"] == {
+        "period": "hour",
+        "remaining": 1,
+        "elapsed_minutes_remainder": 30,
+    }
+
+    second = advance_elapsed_effect_durations(first["sheet"], elapsed_minutes=30)
+    assert second["expired"] == ["giant-spider-poison"]
+    assert second["sheet"]["conditions"] == ["prone"]
+    assert second["sheet"]["effects"][0]["active"] is False
+
+
+def test_elapsed_minutes_clear_invisibility_when_spell_expires() -> None:
+    sheet = default_character_sheet()
+    sheet["conditions"] = ["invisible", "prone"]
+    sheet["effects"] = [
+        {
+            "id": "invisibility",
+            "name": "Invisibility",
+            "kind": "concentration",
+            "source_spell_id": "dnd5e.content.srd2014.spell.invisibility",
+            "active": True,
+            "concentration": True,
+            "duration": {"period": "hour", "remaining": 1},
+            "changes": [],
+        }
+    ]
+
+    result = advance_elapsed_effect_durations(sheet, elapsed_minutes=60)
+
+    assert result["expired"] == ["invisibility"]
+    assert result["sheet"]["conditions"] == ["prone"]
+    assert result["sheet"]["effects"][0]["ended_reason"] == "duration_expired"
+
+
+def test_elapsed_minutes_clear_turned_when_turn_undead_expires() -> None:
+    sheet = default_character_sheet()
+    sheet["conditions"] = ["turned", "prone"]
+    sheet["effects"] = [
+        {
+            "id": "turn-undead",
+            "name": "Turn Undead",
+            "kind": "turn_undead",
+            "active": True,
+            "duration": {"period": "minute", "remaining": 1},
+        }
+    ]
+
+    result = advance_elapsed_effect_durations(sheet, elapsed_minutes=1)
+
+    assert result["expired"] == ["turn-undead"]
+    assert result["sheet"]["conditions"] == ["prone"]
+
+
+def test_elapsed_minutes_advance_minute_hour_and_day_world_effects() -> None:
+    state = {
+        "world_effects": [
+            {
+                "id": "minutes",
+                "active": True,
+                "duration": {"period": "minute", "remaining": 90},
+            },
+            {
+                "id": "hours",
+                "active": True,
+                "duration": {"period": "hour", "remaining": 2},
+            },
+            {
+                "id": "days",
+                "active": True,
+                "duration": {"period": "day", "remaining": 1},
+            },
+        ]
+    }
+
+    first = advance_elapsed_world_effect_durations(state, elapsed_minutes=60)
+    assert first["state"]["world_effects"][0]["duration"]["remaining"] == 30
+    assert first["state"]["world_effects"][1]["duration"]["remaining"] == 1
+    assert first["state"]["world_effects"][2]["duration"] == {
+        "period": "day",
+        "remaining": 1,
+        "elapsed_minutes_remainder": 60,
+    }
+
+    second = advance_elapsed_world_effect_durations(first["state"], elapsed_minutes=1380)
+    assert set(second["expired"]) == {"minutes", "hours", "days"}
+
+
 def test_long_rest_also_recovers_short_rest_resources() -> None:
     sheet = default_character_sheet()
     sheet["resources"] = {
@@ -296,6 +408,17 @@ def test_long_rest_also_recovers_short_rest_resources() -> None:
 
     assert result["sheet"]["resources"]["channel_divinity"]["value"] == 1
     assert result["recovered"]["channel_divinity"] == 1
+
+
+def test_long_rest_clears_stable_and_unconscious_case_insensitively() -> None:
+    sheet = default_character_sheet()
+    sheet["combat"]["hp"] = {"value": 1, "max": 10, "temp": 0}
+    sheet["conditions"] = ["Stable", "UNCONSCIOUS", "prone"]
+
+    result = apply_rest(sheet, rest_type="long_rest")
+
+    assert result["sheet"]["combat"]["hp"]["value"] == 10
+    assert result["sheet"]["conditions"] == ["prone"]
 
 
 @pytest.mark.parametrize("rest_type", ["short_rest", "long_rest"])

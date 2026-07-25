@@ -36,6 +36,78 @@ class CombatEngineError(ValueError):
     """Base error for a rejected or incomplete combat operation."""
 
 
+def clear_ended_invisibility_spell_condition(
+    sheet: dict[str, Any], *, ended_effect_ids: Iterable[str]
+) -> bool:
+    """Remove Invisible after the exact Invisibility spell effect has ended.
+
+    The current v2 actor model stores a self-targeted spell's condition and its
+    concentration effect on the same sheet. Keep the condition while another
+    active Invisibility spell effect still owns it.
+    """
+    ids = {str(item) for item in ended_effect_ids if str(item)}
+    if not ids:
+        return False
+    ended_invisibility = any(
+        str(effect.get("id") or "") in ids
+        and str(effect.get("source_spell_id") or "")
+        .strip()
+        .casefold()
+        .rsplit(".", 1)[-1]
+        == "invisibility"
+        for effect in sheet.get("effects", [])
+    )
+    if not ended_invisibility:
+        return False
+    if any(
+        effect.get("active")
+        and str(effect.get("source_spell_id") or "")
+        .strip()
+        .casefold()
+        .rsplit(".", 1)[-1]
+        == "invisibility"
+        for effect in sheet.get("effects", [])
+    ):
+        return False
+    before = list(sheet.get("conditions", []))
+    sheet["conditions"] = [
+        condition
+        for condition in before
+        if str(condition).strip().casefold() != "invisible"
+    ]
+    return sheet["conditions"] != before
+
+
+def end_concentration_for_incapacitating_conditions(
+    sheet: dict[str, Any], *, ended_reason: str = "incapacitated"
+) -> list[str]:
+    """End concentration when the actor is Incapacitated, directly or indirectly."""
+    conditions = {
+        str(condition).strip().casefold()
+        for condition in sheet.get("conditions", [])
+    }
+    if not conditions & {
+        "dead",
+        "incapacitated",
+        "paralyzed",
+        "petrified",
+        "stunned",
+        "unconscious",
+    }:
+        return []
+    ended: list[str] = []
+    for effect in sheet.get("effects", []):
+        if not effect.get("active") or not bool(effect.get("concentration")):
+            continue
+        effect["active"] = False
+        effect["ended_reason"] = ended_reason
+        effect_id = str(effect.get("id") or "")
+        if effect_id:
+            ended.append(effect_id)
+    clear_ended_invisibility_spell_condition(sheet, ended_effect_ids=ended)
+    return ended
+
+
 class NeedsRulingError(CombatEngineError):
     """Raised when the engine cannot safely infer a narrative prerequisite."""
 
@@ -1729,13 +1801,14 @@ def _apply_adjusted_damage(
         conditions.discard("unconscious")
     value["conditions"] = sorted(conditions)
     if hp["value"] == 0 and ("unconscious" in conditions or "dead" in conditions):
-        for effect in value.get("effects", []):
-            if effect.get("active") and bool(effect.get("concentration")):
-                effect["active"] = False
-                effect["ended_reason"] = "unconscious"
-                effect_id = str(effect.get("id") or "")
-                if effect_id and effect_id not in ended_effect_ids:
-                    ended_effect_ids.append(effect_id)
+        ended_effect_ids.extend(
+            effect_id
+            for effect_id in end_concentration_for_incapacitating_conditions(
+                value,
+                ended_reason="unconscious",
+            )
+            if effect_id not in ended_effect_ids
+        )
     concentration_effects = [
         effect.get("id")
         for effect in value.get("effects", [])
@@ -1960,11 +2033,16 @@ def apply_concentration_result(
     """Keep concentration on a successful save and deactivate named effects on failure."""
     value = deepcopy(sheet)
     ids = {str(item) for item in effect_ids}
+    ended_effect_ids: list[str] = []
     if not success:
         for effect in value.get("effects", []):
             if effect.get("id") in ids:
                 effect["active"] = False
                 effect["ended_reason"] = "failed_concentration_save"
+                ended_effect_ids.append(str(effect.get("id") or ""))
+        clear_ended_invisibility_spell_condition(
+            value, ended_effect_ids=ended_effect_ids
+        )
     return value
 
 
