@@ -358,6 +358,8 @@ def test_chapter_preamble_preserves_explicit_tavern_encounter_location() -> None
         "Chapter introduction.\n"
         "### TAVERN BRAWL\n"
         "A fight breaks out in the Yawning Portal taproom.\n"
+        "### jumped outside the shop by rough-looking men in black\n"
+        "Read-aloud continuation.\n"
         "## FINDING FLOON\n"
         "The investigation begins.\n"
     )
@@ -367,7 +369,12 @@ def test_chapter_preamble_preserves_explicit_tavern_encounter_location() -> None
     preamble = scenes[0]
     assert preamble.metadata["scene_type"] == "overview"
     assert preamble.metadata["subsections"] == [
-        {"title": "TAVERN BRAWL", "line": 3, "type": "room"}
+        {"title": "TAVERN BRAWL", "line": 3, "type": "room"},
+        {
+            "title": "jumped outside the shop by rough-looking men in black",
+            "line": 5,
+            "type": "section",
+        },
     ]
     assert preamble.metadata["spatial"]["locations"] == [
         {

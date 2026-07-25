@@ -111,6 +111,8 @@ def _is_reference_chapter(title: str) -> bool:
 def _looks_like_location_heading(title: str) -> bool:
     text = title.strip()
     folded = text.casefold()
+    if not _looks_like_scene_heading(text):
+        return False
     return bool(
         _ROOM.match(text)
         or (
@@ -509,7 +511,7 @@ def _spatial_manifest(
 
 class DndModuleProfile(GenericModuleProfile):
     name = "dnd5e"
-    version = "13"
+    version = "14"
 
     def document_metadata(self, content: str) -> dict[str, object]:
         """Parse and validate the optional generated-module runtime manifest."""
