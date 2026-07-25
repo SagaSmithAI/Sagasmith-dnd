@@ -425,6 +425,8 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
             actions.extend(["influence", "study", "utilize"])
         else:
             actions.extend(["improvise", "use_object"])
+        if conditions & {"grappled", "restrained"}:
+            actions.append("escape")
     if budget.get("bonus_action", 0) > 0:
         actions.append("bonus_action")
     if budget.get("attack_budget", 0) > 0:

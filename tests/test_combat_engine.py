@@ -454,6 +454,29 @@ def test_turn_undead_applies_and_enforces_turned() -> None:
     assert damaged["ended_effect_ids"] == [resolved["targets"][0]["effect_id"]]
 
 
+def test_restrained_actor_can_spend_its_action_to_escape() -> None:
+    first = _actor("first")
+    second = _actor("second")
+    first["initiative"] = 20
+    second["initiative"] = 10
+    encounter = end_turn(
+        start_encounter([first, second], ruleset="2014"),
+        actor_id_value="first",
+    )
+    acting = current_combatant(encounter)
+    assert acting is not None
+    acting["conditions"].append("restrained")
+
+    assert "escape" in available_actions(encounter, "second")
+    escaped = resolve_common_action(
+        encounter,
+        actor_id_value="second",
+        action="escape",
+        payload={"effect_id": "web"},
+    )
+    assert current_combatant(escaped)["turn_budget"]["main_action"] == 0
+
+
 def test_halfling_lucky_rerolls_only_one_natural_one_and_keeps_replacement() -> None:
     result = roll_d20(
         advantage=True,
