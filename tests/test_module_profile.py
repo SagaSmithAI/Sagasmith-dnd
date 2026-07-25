@@ -343,6 +343,40 @@ def test_named_action_section_populates_scene_atlas_without_claiming_it_is_a_roo
     ]
 
 
+def test_npc_visit_and_invitation_populates_scene_atlas_as_an_interaction() -> None:
+    content = (
+        "# Trollskull Alley\n"
+        "## FACTION MISSIONS\n"
+        "The factions contact promising adventurers.\n"
+        "### SAVRA BELABRANTA\n"
+        "Savra visits the characters' residence and invites them to the Halls "
+        "of Justice, where they can be sworn into the order.\n"
+        "### LEVEL ADVANCEMENT\n"
+        "The characters should advance after engaging in faction missions.\n"
+    )
+
+    scene = next(
+        item
+        for item in MarkdownModuleParser(profile=DndModuleProfile()).parse(content)[0].scenes
+        if item.title == "FACTION MISSIONS"
+    )
+
+    assert scene.metadata["subsections"] == [
+        {"title": "SAVRA BELABRANTA", "line": 4, "type": "scene"},
+        {"title": "LEVEL ADVANCEMENT", "line": 6, "type": "section"},
+    ]
+    assert scene.metadata["spatial"]["locations"] == [
+        {
+            "key": "savra-belabranta",
+            "title": "SAVRA BELABRANTA",
+            "kind": "scene",
+            "line": 4,
+            "dimensions_ft": None,
+            "confidence": "explicit_heading",
+        }
+    ]
+
+
 def test_town_businesses_at_subsection_level_populate_scene_atlas() -> None:
     content = (
         "# Part 2: Phandalin\n"

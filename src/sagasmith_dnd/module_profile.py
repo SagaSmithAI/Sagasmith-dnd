@@ -91,6 +91,8 @@ _ACTION_SCENE_BODY_SIGNAL = re.compile(
     r"a\s+successful\s+dc\s+\d+\b[^.\n]{0,120}\bcheck\b"
     r"|(?:the\s+)?characters\s+(?:can|must|need\s+to|try\s+to)\b"
     r"|allows\s+(?:the\s+)?characters\s+to\b"
+    r"|visits?\s+the\s+characters['’]\s+(?:residence|home)\b"
+    r"[^.\n]{0,120}\binvites?\s+them\b"
     r")",
     re.IGNORECASE,
 )
@@ -564,7 +566,7 @@ def _spatial_manifest(
 
 class DndModuleProfile(GenericModuleProfile):
     name = "dnd5e"
-    version = "17"
+    version = "18"
 
     def document_metadata(self, content: str) -> dict[str, object]:
         """Parse and validate the optional generated-module runtime manifest."""
