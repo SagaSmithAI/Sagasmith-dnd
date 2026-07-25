@@ -670,9 +670,10 @@ damage on a successful one.
     }
 
     sheet = apply_statblock_variant(parsed.sheet, variant)
+    derived = derive_character_sheet(sheet)
     attacks = {
         attack["item_id"]: attack
-        for attack in derive_character_sheet(sheet)["inventory"]["weapon_attacks"]
+        for attack in derived["inventory"]["weapon_attacks"]
     }
 
     assert sheet["combat"]["hp"] == {"value": 50, "max": 50, "temp": 0}
@@ -685,6 +686,19 @@ damage on a successful one.
     assert attacks["shortsword"]["on_hit_effect"] == ""
     assert attacks["light-crossbow"]["damage_expression"] == "1d8 + 3"
     assert attacks["light-crossbow"]["on_hit_effect"] == ""
+    assert derived["multiattack_options"] == [
+        {
+            "id": "melee",
+            "attacks": [
+                {
+                    "weapon_id": "shortsword",
+                    "attack_mode": "melee",
+                    "count": 2,
+                }
+            ],
+        }
+    ]
+    assert all("Multiattack composition" not in warning for warning in parsed.warnings)
     assert all(
         "DC 15" not in item["description"] and "poison" not in item["description"]
         for item in sheet["inventory"]["items"]

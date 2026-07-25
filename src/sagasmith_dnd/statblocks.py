@@ -415,6 +415,28 @@ def _parse_multiattack(description: str, items: list[dict[str, Any]]) -> list[di
                 return []
             attacks.append({"weapon_id": weapon_id, "attack_mode": attack_mode, "count": count})
         if not attacks:
+            for match in re.finditer(
+                r"(?i)(one|two|three|four|five|six|\d+)\s+"
+                r"([a-z][a-z '\-]+?)\s+attacks?"
+                r"(?=\s+and\s+|\s*,\s*|\.|$)",
+                group,
+            ):
+                count = _count(match.group(1))
+                weapon_id = _weapon_id(match.group(2), weapons)
+                if count is None or weapon_id is None:
+                    break
+                weapon = next(item for item in items if item["id"] == weapon_id)
+                weapon_mode = str(
+                    dict(weapon.get("mechanics") or {}).get("attack_type") or "melee"
+                )
+                attacks.append(
+                    {
+                        "weapon_id": weapon_id,
+                        "attack_mode": weapon_mode,
+                        "count": count,
+                    }
+                )
+        if not attacks:
             generic = re.search(
                 r"(?i)\b(?:makes?|can make)\s+"
                 r"(one|two|three|four|five|six|\d+)\s+"
