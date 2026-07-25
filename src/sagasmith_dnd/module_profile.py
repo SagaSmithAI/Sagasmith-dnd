@@ -49,6 +49,7 @@ _LOCATION_TITLE_SIGNALS = (
     "gate",
     "hall",
     "hideout",
+    "house",
     "inn",
     "keep",
     "kitchen",
@@ -68,6 +69,8 @@ _LOCATION_TITLE_SIGNALS = (
     "temple",
     "tower",
     "vault",
+    "villa",
+    "estate",
     "coster",
     "exchange",
     "farm",
@@ -576,7 +579,7 @@ def _spatial_manifest(
 
 class DndModuleProfile(GenericModuleProfile):
     name = "dnd5e"
-    version = "19"
+    version = "20"
 
     def document_metadata(self, content: str) -> dict[str, object]:
         """Parse and validate the optional generated-module runtime manifest."""

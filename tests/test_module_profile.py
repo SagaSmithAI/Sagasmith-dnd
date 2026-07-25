@@ -403,6 +403,32 @@ def test_repeated_interaction_headings_receive_stable_unique_location_keys() -> 
     ]
 
 
+def test_named_house_subsection_is_a_physical_scene_location() -> None:
+    content = (
+        "# Fireball\n"
+        "## NIM'S SECRET\n"
+        "The investigation continues.\n"
+        "### HOUSE OF INSPIRED HANDS\n"
+        "If the characters visit the temple, a mechanical bird flies toward them.\n"
+        "### INSIDE THE TEMPLE\n"
+        "The temple is open during daylight hours.\n"
+    )
+
+    scene = next(
+        item
+        for item in MarkdownModuleParser(profile=DndModuleProfile()).parse(content)[0].scenes
+        if item.title == "NIM'S SECRET"
+    )
+
+    assert [item["key"] for item in scene.metadata["spatial"]["locations"]] == [
+        "house-of-inspired-hands",
+        "inside-the-temple",
+    ]
+    assert all(
+        item["kind"] == "room" for item in scene.metadata["spatial"]["locations"]
+    )
+
+
 def test_npc_visit_and_invitation_populates_scene_atlas_as_an_interaction() -> None:
     content = (
         "# Trollskull Alley\n"
