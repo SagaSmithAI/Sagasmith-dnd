@@ -221,6 +221,93 @@ def test_module_statblock_keeps_effect_only_hit_clause_inside_its_attack() -> No
     ]
 
 
+def test_module_statblock_marks_named_actor_spellcasting_trait() -> None:
+    base = ["Appendix B: Monsters", "MONSTER DESCRIPTIONS", "NEZZNAR"]
+    chunks = [
+        {
+            "id": "nezznar-core",
+            "scene_id": "monster-scene",
+            "heading_path": base,
+            "content": (
+                "Medium humanoid (elf), neutral evil Armor Class 11 "
+            "Hit Points 27 (6dS) Speed 30 ft."
+            ),
+            "page_start": 59,
+            "page_end": 59,
+        }
+    ]
+    values = {
+        "STR": "9 (-1)",
+        "DEX": "13 (+1)",
+        "CON": "10 (+0)",
+        "INT": "16 (+3)",
+        "WIS": "14 (+2)",
+        "CHA": (
+            "13 (+1) Saving Throws Int +5, Wis +4 Skills Arcana +5, Perception +4 "
+            "Senses darkvision 120 ft., passive Perception 14 Languages Elvish, "
+            "Undercommon Challenge 2 (450 XP) Special Equipment. Nezznar has a "
+            "spider staff. Fey Ancestry. Nezznar has advantage on saving throws "
+            "against being charmed. Spellcasting. Nezznar is a 4th-level spellcaster "
+            "that uses Intelligence as his spellcasting ability (spell save DC 13; "
+            "+5 to hit with spell attacks). Nezznar has the following spells prepared "
+            "from the wizard's spell list: Cantrips (at will): mage hand, ray offrost, "
+            "shocking grasp 1st Level (4 slots): mage armor, magic missile, shield "
+            "- 2nd Level (3 slots): invisihility, suggestion"
+        ),
+    }
+    chunks.extend(
+        {
+            "id": f"nezznar-{ability.casefold()}",
+            "scene_id": "monster-scene",
+            "heading_path": [*base, ability],
+            "content": content,
+            "page_start": 59,
+            "page_end": 59,
+        }
+        for ability, content in values.items()
+    )
+    chunks.append(
+        {
+            "id": "nezznar-actions",
+            "scene_id": "monster-scene",
+            "heading_path": [*base, "ACTIONS"],
+            "content": (
+                "Spider Staff. Melee Weapon Attack: +1 to hit, reach 5 ft., one target. "
+                "Hit: 2 (1d6 - 1) bludgeoning damage plus 3 (1d6) poison damage. "
+                "Drow are a subterranean race that worships Lolth, the Demon Queen of "
+                "Spiders. Drow society is strictly matriarchal."
+            ),
+            "page_start": 59,
+            "page_end": 59,
+        }
+    )
+
+    candidate = module_statblock_review_candidates(chunks)[0]
+    parsed = parse_2014_statblock(
+        candidate["normalized_content"],
+        source_key="module-candidate:nezznar",
+    )
+
+    assert candidate["execution_state"] == "review_ready", candidate.get("review_error")
+    assert "***Spellcasting***. Nezznar is a 4th-level spellcaster" in candidate[
+        "normalized_content"
+    ]
+    assert "***Demon Queen of Spiders***" not in candidate["normalized_content"]
+    assert "**Hit Points** 27 (6d8)" in candidate["normalized_content"]
+    assert parsed.spellcasting is not None
+    assert parsed.spellcasting["slots"] == {"1": 4, "2": 3}
+    assert [spell["name"] for spell in parsed.spellcasting["spells"]] == [
+        "mage hand",
+        "ray of frost",
+        "shocking grasp",
+        "mage armor",
+        "magic missile",
+        "shield",
+        "invisibility",
+        "suggestion",
+    ]
+
+
 def test_module_statblock_repairs_bounded_spellcasting_ocr() -> None:
     base = ["Appendix B: Monsters", "MONSTER DESCRIPTIONS", "EVILMAGE"]
     chunks = [

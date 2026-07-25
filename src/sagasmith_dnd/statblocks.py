@@ -495,7 +495,10 @@ def _parse_spellcasting(description: str) -> dict[str, Any] | None:
     slots: dict[str, int] = {}
     for index, header in enumerate(headers):
         end = headers[index + 1].start() if index + 1 < len(headers) else len(description)
-        names = [item.strip() for item in description[header.end() : end].split(",")]
+        names = [
+            re.sub(r"(?:\s*[-*]\s*)+$", "", item.strip()).lstrip("-* ")
+            for item in description[header.end() : end].split(",")
+        ]
         names = [item for item in names if item]
         level = int(header.group(2) or 0)
         if level:

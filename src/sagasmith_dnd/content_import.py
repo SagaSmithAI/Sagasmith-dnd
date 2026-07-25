@@ -73,9 +73,10 @@ _CREATURE_CORE_RE = re.compile(
     r"\s+Speed\s+(?P<speed>.+?)\s*$"
 )
 _ENTRY_START_RE = re.compile(
-    r"(?<![\w*])(?!(?:The|A|An|This|That|These|Those|Each)\b)"
-    r"(?P<name>[A-Z][A-Za-z0-9'’() /-]{1,60})\.\s+"
-    r"(?=(?:Melee|Ranged|The|When|If|While|At|Once|As|A\s|An\s|This|Each|On|Until)\b)"
+    r"(?P<prefix>^|(?<=\.)\s+)"
+    r"(?P<name>[A-Z][A-Za-z0-9'’/-]*(?:\s+(?:[A-Z][A-Za-z0-9'’/-]*|"
+    r"and|or|of|the|a|an))*(?:\s+\([^.\n]{1,60}\))?)\.\s+"
+    r"(?=[A-Z*])"
 )
 
 
@@ -434,6 +435,17 @@ def _normalize_statblock_ocr(content: str) -> str:
         content,
     )
     normalized = re.sub(
+        r"(?i)(?<![A-Za-z0-9])(\d+)dS(?![A-Za-z0-9])",
+        r"\1d8",
+        normalized,
+    )
+    for pattern, replacement in (
+        (r"(?i)\bray\s+offrost\b", "ray of frost"),
+        (r"(?i)\binvisihility\b", "invisibility"),
+        (r"(?i)\bfaeriefire\b", "faerie fire"),
+    ):
+        normalized = re.sub(pattern, replacement, normalized)
+    normalized = re.sub(
         r"(?i)\b(\d+)(st|nd|rd|th)[\u00b7\u2022]\s*level\b",
         r"\1\2-level",
         normalized,
@@ -471,7 +483,10 @@ def _split_statblock_details(content: str) -> tuple[dict[str, str], str]:
 
 def _mark_statblock_entries(content: str) -> str:
     return _ENTRY_START_RE.sub(
-        lambda match: f"***{match.group('name').strip()}***. ", content
+        lambda match: (
+            f"{match.group('prefix')}***{match.group('name').strip()}***. "
+        ),
+        content,
     )
 
 
