@@ -154,6 +154,25 @@ def _integer(
     return value
 
 
+def _number(
+    value: Any,
+    field: str,
+    *,
+    default: float = 0,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> int | float:
+    if value is None:
+        value = default
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{field} must be a number")
+    if minimum is not None and value < minimum:
+        raise ValueError(f"{field} must be at least {minimum}")
+    if maximum is not None and value > maximum:
+        raise ValueError(f"{field} must be at most {maximum}")
+    return value
+
+
 def _boolean(value: Any, field: str, *, default: bool = False) -> bool:
     if value is None:
         return default
@@ -907,7 +926,7 @@ def _normalize_item(value: Any, field: str, *, generate_id: bool = True) -> dict
             default=1,
             minimum=0 if kind == "ammunition" else 1,
         ),
-        "weight_oz": _integer(item.get("weight_oz"), f"{field}.weight_oz", minimum=0),
+        "weight_oz": _number(item.get("weight_oz"), f"{field}.weight_oz", minimum=0),
         "price_cp": _integer(item.get("price_cp"), f"{field}.price_cp", minimum=0),
         "description": _text(item.get("description"), f"{field}.description", maximum=1200),
         "source_key": _text(item.get("source_key"), f"{field}.source_key", maximum=300),

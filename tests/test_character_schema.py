@@ -174,6 +174,33 @@ def test_inventory_wallet_effect_and_memory_contracts() -> None:
     ]
 
 
+def test_inventory_weight_supports_rule_book_fractional_ounce_units() -> None:
+    sheet = validate_character_sheet(
+        {
+            "inventory": {
+                "items": [
+                    {
+                        "id": "arrows",
+                        "name": "Arrows",
+                        "kind": "ammunition",
+                        "quantity": 20,
+                        "weight_oz": 0.8,
+                    },
+                    {
+                        "id": "crossbow-bolts",
+                        "name": "Crossbow bolts",
+                        "kind": "ammunition",
+                        "quantity": 20,
+                        "weight_oz": 1.2,
+                    },
+                ]
+            }
+        }
+    )
+
+    assert derive_character_sheet(sheet)["inventory"]["total_weight_oz"] == 40
+
+
 def test_spellbook_inventory_preserves_structured_copy_sources() -> None:
     sheet, item_id = add_inventory_item(
         validate_character_sheet({}),
