@@ -308,6 +308,41 @@ def test_proper_named_destination_uses_authored_arrival_prose_as_location_eviden
     ]
 
 
+def test_named_action_section_populates_scene_atlas_without_claiming_it_is_a_room() -> None:
+    content = (
+        "# A Friend in Need\n"
+        "## FINDING FLOON\n"
+        "The investigation begins.\n"
+        "### TRACKING FLOON\n"
+        "At this point, the characters know that Floon was kidnapped. "
+        "A successful DC 15 Intelligence (Investigation) check or 5 gp in bribes "
+        "allows the characters to trace the kidnappers to a sewer cover.\n"
+        "### DEVELOPMENTS\n"
+        "The City Watch arrives after the characters finish.\n"
+    )
+
+    scene = next(
+        item
+        for item in MarkdownModuleParser(profile=DndModuleProfile()).parse(content)[0].scenes
+        if item.title == "FINDING FLOON"
+    )
+
+    assert scene.metadata["subsections"] == [
+        {"title": "TRACKING FLOON", "line": 4, "type": "scene"},
+        {"title": "DEVELOPMENTS", "line": 6, "type": "section"},
+    ]
+    assert scene.metadata["spatial"]["locations"] == [
+        {
+            "key": "tracking-floon",
+            "title": "TRACKING FLOON",
+            "kind": "scene",
+            "line": 4,
+            "dimensions_ft": None,
+            "confidence": "explicit_heading",
+        }
+    ]
+
+
 def test_town_businesses_at_subsection_level_populate_scene_atlas() -> None:
     content = (
         "# Part 2: Phandalin\n"

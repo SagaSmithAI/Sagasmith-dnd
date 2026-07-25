@@ -86,6 +86,14 @@ _LOCATION_BODY_SIGNAL = re.compile(
     r"(?:approach|arrive(?:\s+at)?|enter|reach|visit)\b",
     re.IGNORECASE,
 )
+_ACTION_SCENE_BODY_SIGNAL = re.compile(
+    r"\b(?:"
+    r"a\s+successful\s+dc\s+\d+\b[^.\n]{0,120}\bcheck\b"
+    r"|(?:the\s+)?characters\s+(?:can|must|need\s+to|try\s+to)\b"
+    r"|allows\s+(?:the\s+)?characters\s+to\b"
+    r")",
+    re.IGNORECASE,
+)
 _NON_LOCATION_HEADINGS = {
     "adventure conclusion",
     "aftermath",
@@ -125,7 +133,7 @@ def _is_reference_chapter(title: str) -> bool:
     )
 
 
-def _looks_like_location_heading(title: str, body: str = "") -> bool:
+def _location_heading_kind(title: str, body: str = "") -> str | None:
     text = title.strip()
     folded = text.casefold()
     normalized_body = re.sub(
@@ -134,8 +142,8 @@ def _looks_like_location_heading(title: str, body: str = "") -> bool:
         body,
     )
     if not _looks_like_scene_heading(text):
-        return False
-    return bool(
+        return None
+    physical_location = bool(
         _ROOM.match(text)
         or (
             1 <= len(text.split()) <= 10
@@ -149,6 +157,21 @@ def _looks_like_location_heading(title: str, body: str = "") -> bool:
             and bool(_LOCATION_BODY_SIGNAL.search(normalized_body))
         )
     )
+    if physical_location:
+        return "room"
+    if (
+        folded not in _NON_LOCATION_HEADINGS
+        and 1 <= len(text.split()) <= 6
+        and any(char.isalpha() for char in text)
+        and text.upper() == text
+        and bool(_ACTION_SCENE_BODY_SIGNAL.search(normalized_body))
+    ):
+        return "scene"
+    return None
+
+
+def _looks_like_location_heading(title: str, body: str = "") -> bool:
+    return _location_heading_kind(title, body) is not None
 
 
 def _looks_like_scene_heading(title: str) -> bool:
@@ -481,7 +504,8 @@ def _spatial_manifest(
     locations: list[dict[str, object]] = []
     scene_title_tokens = set(re.findall(r"[a-z0-9]+", title.casefold()))
     for ordinal, item in enumerate(subsections):
-        if item.get("type") != "room":
+        location_kind = str(item.get("type") or "")
+        if location_kind not in {"room", "scene"}:
             continue
         label = str(item["title"])
         label_tokens = set(re.findall(r"[a-z0-9]+", label.casefold()))
@@ -495,7 +519,7 @@ def _spatial_manifest(
             {
                 "key": _location_key(label, ordinal),
                 "title": label,
-                "kind": "room",
+                "kind": location_kind,
                 "line": item.get("line"),
                 "dimensions_ft": item.get("dimensions_ft"),
                 "confidence": "explicit_heading",
@@ -540,7 +564,7 @@ def _spatial_manifest(
 
 class DndModuleProfile(GenericModuleProfile):
     name = "dnd5e"
-    version = "16"
+    version = "17"
 
     def document_metadata(self, content: str) -> dict[str, object]:
         """Parse and validate the optional generated-module runtime manifest."""
@@ -746,16 +770,21 @@ class DndModuleProfile(GenericModuleProfile):
                 end,
             )
             section_body = content[heading.end() : next_boundary]
+            location_kind = (
+                _location_heading_kind(title, section_body)
+                if location_level is not None and level >= location_level
+                else None
+            )
             if (
                 location_level is not None
                 and level >= location_level
-                and _looks_like_location_heading(title, section_body)
+                and location_kind is not None
             ):
                 dimensions = _DIMENSIONS.search(section_body)
                 item = {
                     "title": title,
                     "line": _line_number(content, heading.start()),
-                    "type": "room",
+                    "type": location_kind,
                 }
                 if dimensions:
                     item["dimensions_ft"] = {
