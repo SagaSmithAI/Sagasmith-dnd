@@ -477,6 +477,45 @@ def test_restrained_actor_can_spend_its_action_to_escape() -> None:
     assert current_combatant(escaped)["turn_budget"]["main_action"] == 0
 
 
+def test_attack_ends_the_specific_invisibility_spell_concentration() -> None:
+    attacker = _actor("invisible-attacker")
+    attacker["sheet"]["conditions"] = ["invisible"]
+    attacker["sheet"]["effects"] = [
+        {
+            "id": "invisibility-effect",
+            "name": "Concentrating: Invisibility",
+            "kind": "concentration",
+            "source": "spell.cast",
+            "source_spell_id": "dnd5e.content.srd2014.spell.invisibility",
+            "active": True,
+            "concentration": True,
+            "duration": {"period": "hour", "remaining": 1},
+            "changes": [],
+            "description": "",
+        }
+    ]
+    target = _actor("target")
+    plan = preflight_attack(
+        attacker,
+        target,
+        action={"weapon_id": "unarmed-strike", "attack_mode": "melee"},
+    )
+    attack = roll_attack_action(plan=plan, rng=_SequenceRng(10, 10))
+
+    updated_attacker, _updated_target, result = resolve_attack_damage(
+        attacker,
+        target,
+        plan=plan,
+        attack=attack,
+    )
+
+    assert result["ended_invisibility_effect_ids"] == ["invisibility-effect"]
+    assert "invisible" not in updated_attacker["sheet"]["conditions"]
+    effect = updated_attacker["sheet"]["effects"][0]
+    assert effect["active"] is False
+    assert effect["ended_reason"] == "actor_attacked"
+
+
 def test_halfling_lucky_rerolls_only_one_natural_one_and_keeps_replacement() -> None:
     result = roll_d20(
         advantage=True,

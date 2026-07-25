@@ -1266,6 +1266,13 @@ def resolve_attack_damage(
     if was_hidden:
         updated_attacker["hidden"] = False
         result["reveals_attacker"] = True
+    updated_attacker_sheet = actor_sheet(updated_attacker)
+    ended_invisibility_effect_ids = _end_attack_broken_invisibility(
+        updated_attacker_sheet
+    )
+    if ended_invisibility_effect_ids:
+        updated_attacker["sheet"] = updated_attacker_sheet
+        result["ended_invisibility_effect_ids"] = ended_invisibility_effect_ids
     resolution_boundaries: list[str] = []
     if was_hidden:
         resolution_boundaries.append("dnd5e.core.attack.hidden_reveal")
@@ -1305,6 +1312,29 @@ def resolve_attack_damage(
     result["rule_receipts"] = extension_receipts
     result["ruleset_fingerprint"] = rules.fingerprint if rules else ""
     return updated_attacker, updated_target, result
+
+
+def _end_attack_broken_invisibility(sheet: dict[str, Any]) -> list[str]:
+    """End the 2014 Invisibility spell after its target makes an attack."""
+
+    ended: list[str] = []
+    for effect in sheet.get("effects", []):
+        spell_id = str(effect.get("source_spell_id") or "")
+        if (
+            effect.get("active")
+            and effect.get("concentration")
+            and spell_id.rsplit(".", 1)[-1] == "invisibility"
+        ):
+            effect["active"] = False
+            effect["ended_reason"] = "actor_attacked"
+            ended.append(str(effect.get("id") or ""))
+    if ended:
+        sheet["conditions"] = [
+            condition
+            for condition in sheet.get("conditions", [])
+            if str(condition).casefold() != "invisible"
+        ]
+    return ended
 
 
 def resolve_attack_action(
