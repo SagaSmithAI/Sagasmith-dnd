@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-CORE_RULE_PACK_VERSION = "1.35.0"
+CORE_RULE_PACK_VERSION = "1.36.0"
 
 
 @dataclass(frozen=True)
@@ -128,6 +128,16 @@ BOUNDARIES = (
             "tests/test_statblocks.py",
         ),
         "bundled:srd2014/04_Equipment/Armor.md",
+    ),
+    CoreBoundary(
+        "dnd5e.core.check.jack_of_all_trades",
+        ("2014",),
+        "combat_engine.resolve_actor_check|start_encounter",
+        (
+            "tests/test_combat_engine.py::test_2014_jack_of_all_trades_applies_only_to_unproficient_ability_checks",
+            "tests/test_combat_engine.py::test_2014_jack_of_all_trades_applies_to_initiative",
+        ),
+        "bundled:srd2014/02_Classes/Bard.md",
     ),
     CoreBoundary(
         "dnd5e.core.weapon.reach",

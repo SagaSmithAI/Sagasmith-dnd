@@ -54,6 +54,7 @@ from sagasmith_dnd.combat_engine import (
 )
 from sagasmith_dnd.engine import resolve_check, roll_d20
 from sagasmith_dnd.lifecycle import apply_rest
+from sagasmith_dnd.rule_engine import resolution_context
 from sagasmith_dnd.spatial import compile_battle_map
 
 
@@ -129,6 +130,105 @@ def test_ordinary_checks_do_not_use_attack_natural_rules() -> None:
     )
     assert result["natural"] == 20
     assert result["success"] is False
+
+
+def test_2014_jack_of_all_trades_applies_only_to_unproficient_ability_checks() -> None:
+    bard = _actor("bard")
+    bard["sheet"]["progression"] = {
+        "level": 2,
+        "classes": [{"name": "Bard", "level": 2, "hit_die": 8}],
+    }
+    bard["sheet"]["abilities"]["charisma"]["score"] = 16
+    bard["sheet"]["abilities"]["dexterity"]["score"] = 14
+    bard["sheet"]["skills"]["deception"]["proficiency"] = "proficient"
+    bard["sheet"]["content"]["features"] = [
+        {
+            "id": "dnd5e.content.srd2014.feature.bard-jack-of-all-trades",
+            "name": "Jack of All Trades",
+            "source_key": "Bard",
+        }
+    ]
+    bard["derived"] = derive_character_sheet(bard["sheet"])
+    rules = resolution_context(
+        {"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []}
+    )
+
+    untrained = resolve_actor_check(
+        bard,
+        kind="check",
+        ability="intimidation",
+        dc=14,
+        rules=rules,
+        rng=_SequenceRng(10),
+    )
+    assert untrained["ability_modifier"] == 3
+    assert untrained["proficiency_bonus"] == 0
+    assert untrained["bonus"] == 1
+    assert untrained["total"] == 14
+    assert [
+        receipt["mechanic_id"] for receipt in untrained["rule_receipts"]
+    ] == ["dnd5e.core.check.jack_of_all_trades"]
+
+    trained = resolve_actor_check(
+        bard,
+        kind="check",
+        ability="deception",
+        dc=15,
+        rules=rules,
+        rng=_SequenceRng(10),
+    )
+    assert trained["ability_modifier"] == 3
+    assert trained["proficiency_bonus"] == 2
+    assert trained["bonus"] == 0
+    assert trained["total"] == 15
+    assert trained["rule_receipts"] == []
+
+    saving_throw = resolve_actor_check(
+        bard,
+        kind="save",
+        ability="wisdom",
+        dc=11,
+        rules=rules,
+        rng=_SequenceRng(10),
+    )
+    assert saving_throw["bonus"] == 0
+    assert saving_throw["total"] == 10
+    assert saving_throw["rule_receipts"] == []
+
+    bard["sheet"]["edition"] = "2024"
+    bard["derived"] = derive_character_sheet(bard["sheet"])
+    revised_check = resolve_actor_check(
+        bard,
+        kind="check",
+        ability="intimidation",
+        dc=14,
+        rng=_SequenceRng(10),
+    )
+    assert revised_check["bonus"] == 0
+    assert revised_check["total"] == 13
+
+
+def test_2014_jack_of_all_trades_applies_to_initiative() -> None:
+    bard = _actor("bard")
+    bard["sheet"]["progression"] = {
+        "level": 2,
+        "classes": [{"name": "Bard", "level": 2, "hit_die": 8}],
+    }
+    bard["sheet"]["abilities"]["dexterity"]["score"] = 14
+    bard["sheet"]["content"]["features"] = [
+        {
+            "id": "dnd5e.content.srd2014.feature.bard-jack-of-all-trades",
+            "name": "Jack of All Trades",
+            "source_key": "Bard",
+        }
+    ]
+    bard["derived"] = derive_character_sheet(bard["sheet"])
+
+    encounter = start_encounter([bard], ruleset="2014", rng=_SequenceRng(10))
+
+    assert encounter["combatants"][0]["initiative_bonus"] == 3
+    assert encounter["combatants"][0]["initiative"] == 13
+    assert encounter["rule_boundary_ids"] == ["dnd5e.core.check.jack_of_all_trades"]
 
 
 def test_attack_preflight_rejects_exhausted_linked_ammunition() -> None:

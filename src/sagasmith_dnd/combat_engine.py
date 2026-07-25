@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Iterable
 from uuid import uuid4
 
+from sagasmith_dnd.character_schema import SKILL_ABILITIES
 from sagasmith_dnd.engine import (
     resolve_attack,
     resolve_check,
@@ -254,6 +255,27 @@ def actor_derived(actor: dict[str, Any]) -> dict[str, Any]:
     return deepcopy(dict(actor.get("derived") or {}))
 
 
+_SRD2014_JACK_OF_ALL_TRADES_ID = (
+    "dnd5e.content.srd2014.feature.bard-jack-of-all-trades"
+)
+_JACK_OF_ALL_TRADES_BOUNDARY_ID = "dnd5e.core.check.jack_of_all_trades"
+
+
+def _jack_of_all_trades_bonus(sheet: dict[str, Any]) -> int:
+    if str(sheet.get("edition") or "") != "2014":
+        return 0
+    has_feature = any(
+        isinstance(feature, dict)
+        and str(feature.get("id") or "") == _SRD2014_JACK_OF_ALL_TRADES_ID
+        for feature in dict(sheet.get("content") or {}).get("features", [])
+    )
+    if not has_feature:
+        return 0
+    level = int(dict(sheet.get("progression") or {}).get("level", 1) or 1)
+    proficiency_bonus = 2 + (level - 1) // 4
+    return proficiency_bonus // 2
+
+
 def start_encounter(
     participants: list[dict[str, Any]],
     *,
@@ -289,10 +311,17 @@ def start_encounter(
         )
 
     combatants: list[dict[str, Any]] = []
+    rule_boundary_ids: set[str] = set()
     for index, actor, identifier, derived, sheet, conditions, exhaustion in (
         validated_participants
     ):
         initiative_bonus = int(derived.get("initiative", 0))
+        participant_boundary_ids: list[str] = []
+        jack_of_all_trades_bonus = _jack_of_all_trades_bonus(sheet)
+        if jack_of_all_trades_bonus:
+            initiative_bonus += jack_of_all_trades_bonus
+            rule_boundary_ids.add(_JACK_OF_ALL_TRADES_BOUNDARY_ID)
+            participant_boundary_ids.append(_JACK_OF_ALL_TRADES_BOUNDARY_ID)
         if normalized_ruleset == "2024":
             initiative_bonus -= 2 * exhaustion
         speed = int(derived.get("speed", {}).get("walk", 30) or 30)
@@ -349,6 +378,7 @@ def start_encounter(
                 "death_saves": bool(actor.get("death_saves", actor.get("character_type") == "pc")),
                 "zero_hp_recovery": bool(actor.get("zero_hp_recovery", False)),
                 "exhaustion": exhaustion,
+                "rule_boundary_ids": participant_boundary_ids,
             }
         )
         if combatants[-1]["surprised"] and normalized_ruleset == "2014":
@@ -392,7 +422,8 @@ def start_encounter(
         "readied": [],
         "effects": [],
         "log": [],
-}
+        "rule_boundary_ids": sorted(rule_boundary_ids),
+    }
 
 
 def queue_combatant(
@@ -421,11 +452,18 @@ def queue_combatant(
     if due_round <= current_round:
         raise CombatEngineError("a queued combatant must join in a future round")
 
-    generated = start_encounter(
+    generated_encounter = start_encounter(
         [actor],
         ruleset=value.get("ruleset"),
         rng=rng,
-    )["combatants"][0]
+    )
+    generated = generated_encounter["combatants"][0]
+    value["rule_boundary_ids"] = sorted(
+        {
+            *list(value.get("rule_boundary_ids") or []),
+            *list(generated_encounter.get("rule_boundary_ids") or []),
+        }
+    )
     same_initiative = [
         item
         for item in [
@@ -3566,6 +3604,20 @@ def resolve_actor_check(
         elif modifier["op"] == "disadvantage.add":
             disadvantage = True
     normalized_ability = str(ability).strip().casefold().replace(" ", "_")
+    level = int(sheet.get("progression", {}).get("level", 1) or 1)
+    skill = dict(sheet.get("skills", {}).get(normalized_ability) or {})
+    skill_proficiency = str(skill.get("proficiency") or "none")
+    jack_of_all_trades_bonus = 0
+    if (
+        kind in {"ability", "check"}
+        and _jack_of_all_trades_bonus(sheet)
+        and (
+            (normalized_ability in SKILL_ABILITIES and skill_proficiency == "none")
+            or (normalized_ability not in SKILL_ABILITIES and not proficient)
+        )
+    ):
+        jack_of_all_trades_bonus = _jack_of_all_trades_bonus(sheet)
+        roll_bonus += jack_of_all_trades_bonus
     armor_stealth_disadvantage = (
         kind in {"ability", "check"}
         and normalized_ability == "stealth"
@@ -3582,6 +3634,8 @@ def resolve_actor_check(
         boundary_ids.append("dnd5e.core.save.restrained_dexterity")
     if armor_stealth_disadvantage:
         boundary_ids.append("dnd5e.core.check.armor_stealth_disadvantage")
+    if jack_of_all_trades_bonus:
+        boundary_ids.append(_JACK_OF_ALL_TRADES_BOUNDARY_ID)
 
     def with_rule_receipts(result: dict[str, Any]) -> dict[str, Any]:
         result["rule_receipts"] = [
@@ -3619,13 +3673,23 @@ def resolve_actor_check(
     ):
         disadvantage = True
     derived_skills = dict(derived.get("skills") or {})
-    if kind in {"ability", "check"} and ability in derived_skills:
+    if kind in {"ability", "check"} and normalized_ability in derived_skills:
+        score_ability = SKILL_ABILITIES[normalized_ability]
+        entry = dict(sheet.get("abilities", {}).get(score_ability) or {})
+        score = int(entry.get("score", 10))
+        proficiency_bonus = 2 + (level - 1) // 4
+        skill_bonus = int(skill.get("bonus", 0) or 0) + roll_bonus
+        skill_is_proficient = skill_proficiency in {"proficient", "expertise"}
+        if skill_proficiency == "half":
+            skill_bonus += proficiency_bonus // 2
+        elif skill_proficiency == "expertise":
+            skill_bonus += proficiency_bonus
         return with_rule_receipts(resolve_check(
             dc=dc,
-            ability_score=10,
-            proficient=False,
-            level=int(sheet.get("progression", {}).get("level", 1) or 1),
-            bonus=int(derived_skills[ability]) + roll_bonus,
+            ability_score=score,
+            proficient=skill_is_proficient,
+            level=level,
+            bonus=skill_bonus,
             advantage=advantage,
             disadvantage=disadvantage,
             kind="ability",
@@ -3634,7 +3698,6 @@ def resolve_actor_check(
         ))
     entry = abilities.get(ability) or abilities.get(_long_ability_name(ability)) or {}
     score = int(entry.get("score", 10) if isinstance(entry, dict) else entry)
-    level = int(sheet.get("progression", {}).get("level", 1) or 1)
     if kind == "save" and isinstance(entry, dict):
         proficient = bool(entry.get("save_proficient", False))
         bonus = int(entry.get("bonus", 0) or 0) + roll_bonus
