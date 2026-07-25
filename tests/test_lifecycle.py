@@ -221,6 +221,65 @@ def test_effect_duration_and_long_rest_recovery_are_card_local() -> None:
     assert result["recovered"]["feature"] == 2
 
 
+def test_expiring_timed_conditions_removes_only_conditions_owned_by_the_effect() -> None:
+    sheet = default_character_sheet()
+    sheet["conditions"] = ["poisoned", "paralyzed", "prone"]
+    sheet["effects"] = [
+        {
+            "id": "giant-spider-poison",
+            "name": "Giant Spider Poison",
+            "kind": "timed_conditions",
+            "active": True,
+            "duration": {"period": "hour", "remaining": 1},
+            "changes": [
+                {
+                    "path": "conditions",
+                    "mode": "add",
+                    "value": ["poisoned", "paralyzed"],
+                }
+            ],
+        }
+    ]
+
+    result = advance_effect_durations(sheet, period="hour")
+
+    assert result["expired"] == ["giant-spider-poison"]
+    assert result["sheet"]["conditions"] == ["prone"]
+    assert result["sheet"]["effects"][0]["ended_reason"] == "duration_expired"
+
+
+def test_expiring_timed_conditions_preserves_condition_from_an_active_effect() -> None:
+    sheet = default_character_sheet()
+    sheet["conditions"] = ["poisoned"]
+    sheet["effects"] = [
+        {
+            "id": "expiring-poison",
+            "name": "Expiring Poison",
+            "kind": "timed_conditions",
+            "active": True,
+            "duration": {"period": "hour", "remaining": 1},
+            "changes": [
+                {"path": "conditions", "mode": "add", "value": "poisoned"}
+            ],
+        },
+        {
+            "id": "ongoing-poison",
+            "name": "Ongoing Poison",
+            "kind": "timed_conditions",
+            "active": True,
+            "duration": {"period": "hour", "remaining": 2},
+            "changes": [
+                {"path": "conditions", "mode": "add", "value": "poisoned"}
+            ],
+        },
+    ]
+
+    result = advance_effect_durations(sheet, period="hour")
+
+    assert result["sheet"]["conditions"] == ["poisoned"]
+    assert result["sheet"]["effects"][1]["duration"]["remaining"] == 1
+
+
 def test_long_rest_also_recovers_short_rest_resources() -> None:
     sheet = default_character_sheet()
     sheet["resources"] = {

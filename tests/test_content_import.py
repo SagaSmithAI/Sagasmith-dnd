@@ -204,7 +204,10 @@ def test_module_statblock_keeps_effect_only_hit_clause_inside_its_attack() -> No
                 "Ranged Weapon Attack: +5 to hit, range 30 ft./60 ft., one creature. "
                 "Hit: The target is restrained by webbing. As an action, the restrained "
                 "target can make a DC 12 Strength check, bursting the webbing on a "
-                "success. The webbing can also be attacked and destroyed (AC 10; hp 5)."
+                "success. The webbing can also be attacked and destroyed (AC 10; hp 5; "
+                "vulnerable to fire damage; immune to bludgeoning, poison, and psychic "
+                "damage). Usually found underground, the lair of "
+                "a giant spider is often festooned with webs holding helpless victims."
             ),
             "page_start": 58,
             "page_end": 58,
@@ -216,6 +219,19 @@ def test_module_statblock_keeps_effect_only_hit_clause_inside_its_attack() -> No
     assert candidate["execution_state"] == "review_ready", candidate.get("review_error")
     assert "Hit: The target is restrained by webbing." in candidate["normalized_content"]
     assert "***The target is restrained by webbing***" not in candidate["normalized_content"]
+    assert "Usually found underground" not in candidate["normalized_content"]
+    parsed = parse_2014_statblock(
+        candidate["normalized_content"],
+        source_key="module-review:giant-spider",
+    )
+    web = next(
+        item
+        for item in parsed.sheet["inventory"]["items"]
+        if item["id"] == "web-recharge-5-6"
+    )
+    assert web["mechanics"]["on_hit_effect"].endswith(
+        "immune to bludgeoning, poison, and psychic damage)."
+    )
     assert candidate["validation"]["warnings"] == [
         "Web (Recharge 5-6): on-hit effect requires DM settlement"
     ]

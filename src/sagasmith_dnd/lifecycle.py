@@ -164,6 +164,7 @@ def advance_effect_durations(
     value = deepcopy(sheet)
     advanced: list[str] = []
     expired: list[str] = []
+    expired_condition_additions: set[str] = set()
     for effect in value.get("effects", []):
         if not effect.get("active"):
             continue
@@ -175,10 +176,42 @@ def advance_effect_durations(
             effect["active"] = False
             effect["ended_reason"] = "duration_expired"
             expired.append(str(effect.get("id")))
+            if effect.get("kind") == "timed_conditions":
+                for change in effect.get("changes", []):
+                    if change.get("path") != "conditions" or change.get("mode") != "add":
+                        continue
+                    raw = change.get("value")
+                    values = raw if isinstance(raw, list) else [raw]
+                    expired_condition_additions.update(
+                        str(item).strip().casefold()
+                        for item in values
+                        if str(item).strip()
+                    )
         else:
             duration["remaining"] = remaining - amount
             effect["duration"] = duration
             advanced.append(str(effect.get("id")))
+    active_condition_additions: set[str] = set()
+    for effect in value.get("effects", []):
+        if not effect.get("active") or effect.get("kind") != "timed_conditions":
+            continue
+        for change in effect.get("changes", []):
+            if change.get("path") != "conditions" or change.get("mode") != "add":
+                continue
+            raw = change.get("value")
+            values = raw if isinstance(raw, list) else [raw]
+            active_condition_additions.update(
+                str(item).strip().casefold()
+                for item in values
+                if str(item).strip()
+            )
+    removable_conditions = expired_condition_additions - active_condition_additions
+    if removable_conditions:
+        value["conditions"] = [
+            condition
+            for condition in value.get("conditions", [])
+            if str(condition).casefold() not in removable_conditions
+        ]
     if not any(
         effect.get("active") and effect.get("kind") == "turn_undead"
         for effect in value.get("effects", [])

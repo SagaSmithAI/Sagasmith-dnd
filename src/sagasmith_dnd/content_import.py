@@ -420,14 +420,13 @@ def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
 
 
 def _trim_trailing_statblock_lore(content: str) -> str:
-    """Exclude an adjacent ancestry paragraph from the final attack entry.
+    """Exclude adjacent creature lore from the final attack entry.
 
     Module appendices sometimes place general creature lore immediately after
-    the last statblock action without a heading boundary.  Only trim the
-    conservative shape where a completed damage sentence is followed directly
-    by a capitalized ancestry noun, optional parenthetical alias, a copula, and
-    an article.  Mechanical continuations such as "The target is restrained"
-    therefore remain part of the action.
+    the last statblock action without a heading boundary.  Trim only a
+    conservative completed mechanical clause followed by recognizable ancestry
+    or habitat prose.  Mechanical continuations such as "The target is
+    restrained" therefore remain part of the action.
     """
 
     boundary = re.search(
@@ -436,9 +435,19 @@ def _trim_trailing_statblock_lore(content: str) -> str:
         r"\s+(?:are|is)\s+(?:a|an|the)\b)",
         content,
     )
-    if boundary is None or re.search(r"(?i)\bHit:\s*", content[: boundary.start()]) is None:
-        return content
-    return content[: boundary.start() + len("damage.")].rstrip()
+    if boundary is not None and re.search(
+        r"(?i)\bHit:\s*", content[: boundary.start()]
+    ) is not None:
+        return content[: boundary.start() + len("damage.")].rstrip()
+    habitat_boundary = re.search(
+        r"(?is)\bdamage\)\.\s+(?=Usually found\b)",
+        content,
+    )
+    if habitat_boundary is not None and re.search(
+        r"(?i)\bHit:\s*", content[: habitat_boundary.start()]
+    ) is not None:
+        return content[: habitat_boundary.start() + len("damage).")].rstrip()
+    return content
 
 
 def _normalize_statblock_ocr(content: str) -> str:
