@@ -74,6 +74,37 @@ one target. *Hit:* 5 (1d4 + 2) piercing damage.
 ***Parry***. The captain adds 2 to its AC against one melee attack that would hit it.
 """
 
+GIANT_SPIDER = """### Giant Spider
+
+*Large beast, unaligned*
+
+**Armor Class** 14 (natural armor)
+
+**Hit Points** 26 (4d10 + 4)
+
+**Speed** 30 ft., climb 30 ft.
+
+| STR | DEX | CON | INT | WIS | CHA |
+|:---:|:---:|:---:|:---:|:---:|:---:|
+| 14 (+2) | 16 (+3) | 12 (+1) | 2 (-4) | 11 (+0) | 4 (-3) |
+
+**Senses** blindsight 10 ft., darkvision 60 ft., passive Perception 10
+
+**Languages** —
+
+**Challenge** 1 (200 XP)
+
+###### Actions
+
+***Bite***. *Melee Weapon Attack:* +5 to hit, reach 5 ft., one creature.
+*Hit:* 7 (1d8 + 3) piercing damage.
+
+***Web (Recharge 5-6)***. *Ranged Weapon Attack:* +5 to hit, range 30/60 ft.,
+one creature. *Hit:* The target is restrained by webbing. As an action, the
+restrained target can make a DC 12 Strength check, bursting the webbing on a
+success.
+"""
+
 
 def test_commoner_statblock_becomes_an_exact_executable_actor_sheet() -> None:
     parsed = parse_2014_statblock(
@@ -98,6 +129,21 @@ def test_commoner_statblock_becomes_an_exact_executable_actor_sheet() -> None:
     assert club["attack_bonus"] == 2
     assert club["damage_expression"] == "1d4"
     assert club["reach_ft"] == 5
+
+
+def test_effect_only_weapon_attack_preserves_web_ruling_without_fake_damage() -> None:
+    parsed = parse_2014_statblock(GIANT_SPIDER, source_key="module-review:giant-spider")
+    attacks = {
+        attack["item_id"]: attack
+        for attack in derive_character_sheet(parsed.sheet)["inventory"]["weapon_attacks"]
+    }
+
+    web = attacks["web-recharge-5-6"]
+    assert web["attack_bonus"] == 5
+    assert web["damage_expression"] == ""
+    assert web["damage_type"] == ""
+    assert web["on_hit_effect"].startswith("The target is restrained by webbing")
+    assert parsed.warnings == ("Web (Recharge 5-6): on-hit effect requires DM settlement",)
 
 
 def test_multiple_statblock_actions_can_share_one_normalized_line() -> None:

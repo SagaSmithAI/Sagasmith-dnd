@@ -271,34 +271,46 @@ def _parse_weapon(
         r"([a-z]+)\s+damage",
         description,
     )
-    if not hit:
-        raise StatblockImportError(f"weapon action {name!r} has no supported Hit dice expression")
-    expression = hit.group(1).replace(" ", "")
-    damage = re.fullmatch(r"(\d+d\d+)(?:([+\-]\d+))?", expression)
-    if not damage:
-        raise StatblockImportError(f"weapon action {name!r} has an invalid damage expression")
     additional_damage: list[dict[str, Any]] = []
-    last_damage_end = hit.end()
-    for extra in re.finditer(
-        r"(?i)\bplus\s+\d+\s*\((\d+d\d+(?:\s*[+\-]\s*\d+)?)\)\s*"
-        r"([a-z]+)\s+damage",
-        description[hit.end() :],
-    ):
-        extra_expression = extra.group(1).replace(" ", "")
-        parsed_extra = re.fullmatch(r"(\d+d\d+)(?:([+\-]\d+))?", extra_expression)
-        if not parsed_extra:
-            raise StatblockImportError(
-                f"weapon action {name!r} has an invalid additional damage expression"
+    if hit:
+        expression = hit.group(1).replace(" ", "")
+        damage = re.fullmatch(r"(\d+d\d+)(?:([+\-]\d+))?", expression)
+        if not damage:
+            raise StatblockImportError(f"weapon action {name!r} has an invalid damage expression")
+        last_damage_end = hit.end()
+        for extra in re.finditer(
+            r"(?i)\bplus\s+\d+\s*\((\d+d\d+(?:\s*[+\-]\s*\d+)?)\)\s*"
+            r"([a-z]+)\s+damage",
+            description[hit.end() :],
+        ):
+            extra_expression = extra.group(1).replace(" ", "")
+            parsed_extra = re.fullmatch(r"(\d+d\d+)(?:([+\-]\d+))?", extra_expression)
+            if not parsed_extra:
+                raise StatblockImportError(
+                    f"weapon action {name!r} has an invalid additional damage expression"
+                )
+            additional_damage.append(
+                {
+                    "damage_formula": parsed_extra.group(1),
+                    "damage_bonus": int(parsed_extra.group(2) or 0),
+                    "damage_type": extra.group(2).casefold(),
+                }
             )
-        additional_damage.append(
-            {
-                "damage_formula": parsed_extra.group(1),
-                "damage_bonus": int(parsed_extra.group(2) or 0),
-                "damage_type": extra.group(2).casefold(),
-            }
-        )
-        last_damage_end = hit.end() + extra.end()
-    on_hit_effect = description[last_damage_end:].strip().lstrip(". ,;").strip()
+            last_damage_end = hit.end() + extra.end()
+        on_hit_effect = description[last_damage_end:].strip().lstrip(". ,;").strip()
+        damage_formula = damage.group(1)
+        damage_type = hit.group(2).casefold()
+        damage_bonus = int(damage.group(2) or 0)
+    else:
+        effect_hit = re.search(r"(?is)\*?Hit:\*?\s*(\S.+)$", description)
+        if not effect_hit:
+            raise StatblockImportError(
+                f"weapon action {name!r} has neither supported Hit damage nor an effect"
+            )
+        damage_formula = ""
+        damage_type = ""
+        damage_bonus = 0
+        on_hit_effect = effect_hit.group(1).strip()
     trailing_prose = ""
     normalized_actor_name = actor_name.strip()
     if normalized_actor_name and re.match(
@@ -324,14 +336,14 @@ def _parse_weapon(
             if mode == "ranged"
             else "strength"
         ),
-        "damage_formula": damage.group(1),
-        "damage_type": hit.group(2).casefold(),
+        "damage_formula": damage_formula,
+        "damage_type": damage_type,
         "additional_damage": additional_damage,
         "on_hit_effect": on_hit_effect,
         "properties": properties,
         "proficient": False,
         "attack_bonus_override": _signed(attack.group(3).replace("−", "-")),
-        "damage_bonus_override": int(damage.group(2) or 0),
+        "damage_bonus_override": damage_bonus,
         "reach_ft": int(reach.group(1)) if reach else 5,
         "always_available": True,
     }

@@ -624,6 +624,40 @@ def test_attack_settles_each_source_bound_damage_type_and_surfaces_on_hit_ruling
     }
 
 
+def test_effect_only_attack_surfaces_ruling_without_applying_fake_damage() -> None:
+    attacker = _actor("attacker")
+    target = _actor("target", hp=30, ac=1)
+    attacker["derived"]["inventory"]["weapon_attacks"] = [
+        {
+            "item_id": "web",
+            "attack_type": "ranged",
+            "range_ft": {"normal": 30, "long": 60},
+            "properties": [],
+            "attack_bonus": 99,
+            "damage_expression": "",
+            "damage_type": "",
+            "additional_damage": [],
+            "on_hit_effect": "The target is restrained by webbing.",
+        }
+    ]
+    plan = preflight_attack(attacker, target, action={"weapon_id": "web"})
+
+    _, updated_target, result = resolve_attack_action(
+        attacker,
+        target,
+        plan=plan,
+        rng=_SequenceRng(19),
+    )
+
+    assert result["hit"] is True
+    assert result["damage"] is None
+    assert updated_target["sheet"]["combat"]["hp"]["value"] == 30
+    assert result["on_hit_ruling"] == {
+        "required": True,
+        "effect": "The target is restrained by webbing.",
+    }
+
+
 def test_structured_parry_opens_after_hit_and_before_damage() -> None:
     attacker = _actor("attacker")
     attacker["derived"]["inventory"]["weapon_attacks"] = [

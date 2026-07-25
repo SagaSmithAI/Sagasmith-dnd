@@ -1253,6 +1253,11 @@ def resolve_attack_damage(
                 "required": True,
                 "effect": str(plan["on_hit_effect"]),
             }
+    elif attack["hit"] and plan.get("on_hit_effect"):
+        result["on_hit_ruling"] = {
+            "required": True,
+            "effect": str(plan["on_hit_effect"]),
+        }
     elif plan.get("sneak_attack"):
         result["sneak_attack"] = {**dict(plan["sneak_attack"]), "used": False}
     was_hidden = bool(plan.get("attacker_was_hidden", updated_attacker.get("hidden")))
