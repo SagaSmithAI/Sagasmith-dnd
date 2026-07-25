@@ -283,6 +283,29 @@ def test_uncoded_location_heading_can_be_a_room_outside_reference_chapter() -> N
     ]
 
 
+def test_proper_named_destination_uses_authored_arrival_prose_as_location_evidence() -> None:
+    content = (
+        "# A Friend in Need\n"
+        "## FINDING FLOON\n"
+        "The investigation begins.\n"
+        "### THE SKEWERED DRAGON\n"
+        "The Skewered Dragon faces an alley in the Dock Ward. "
+        "When the characters approach it, read the following.\n"
+        "### DEVELOPMENTS\n"
+        "When the characters approach the end of the investigation, guards arrive.\n"
+    )
+
+    scene = next(
+        item
+        for item in MarkdownModuleParser(profile=DndModuleProfile()).parse(content)[0].scenes
+        if item.title == "FINDING FLOON"
+    )
+
+    assert [item["title"] for item in scene.metadata["spatial"]["locations"]] == [
+        "THE SKEWERED DRAGON"
+    ]
+
+
 def test_town_businesses_at_subsection_level_populate_scene_atlas() -> None:
     content = (
         "# Part 2: Phandalin\n"

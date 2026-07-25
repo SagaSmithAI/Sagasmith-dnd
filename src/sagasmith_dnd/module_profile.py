@@ -81,6 +81,22 @@ _LOCATION_TITLE_SIGNALS = (
     "通道",
 )
 _CJK_RANGES = (("一", "鿿"), ("㐀", "䶿"), ("豈", "﫿"))
+_LOCATION_BODY_SIGNAL = re.compile(
+    r"\b(?:when|as)\s+(?:the\s+)?characters\s+"
+    r"(?:approach|arrive(?:\s+at)?|enter|reach|visit)\b",
+    re.IGNORECASE,
+)
+_NON_LOCATION_HEADINGS = {
+    "adventure conclusion",
+    "aftermath",
+    "developments",
+    "finding floon",
+    "getting involved",
+    "hanging back",
+    "level advancement",
+    "roleplaying",
+    "treasure",
+}
 _DIMENSIONS = re.compile(
     r"(?P<width>\d{1,3})\s*(?:(?:-?foot|feet|ft\.?|\u5c3a)\s*)?"
     r"(?:by|x|\u00d7|\u4e58)\s*"
@@ -108,7 +124,7 @@ def _is_reference_chapter(title: str) -> bool:
     )
 
 
-def _looks_like_location_heading(title: str) -> bool:
+def _looks_like_location_heading(title: str, body: str = "") -> bool:
     text = title.strip()
     folded = text.casefold()
     if not _looks_like_scene_heading(text):
@@ -118,6 +134,13 @@ def _looks_like_location_heading(title: str) -> bool:
         or (
             1 <= len(text.split()) <= 10
             and any(signal in folded for signal in _LOCATION_TITLE_SIGNALS)
+        )
+        or (
+            folded not in _NON_LOCATION_HEADINGS
+            and 1 <= len(text.split()) <= 6
+            and any(char.isalpha() for char in text)
+            and text.upper() == text
+            and bool(_LOCATION_BODY_SIGNAL.search(body))
         )
     )
 
@@ -511,7 +534,7 @@ def _spatial_manifest(
 
 class DndModuleProfile(GenericModuleProfile):
     name = "dnd5e"
-    version = "14"
+    version = "15"
 
     def document_metadata(self, content: str) -> dict[str, object]:
         """Parse and validate the optional generated-module runtime manifest."""
@@ -707,21 +730,22 @@ class DndModuleProfile(GenericModuleProfile):
             item: dict[str, object] | None = None
             title = heading.group(2).strip()
             location_level = sub_level if sub_level is not None else room_level
+            next_boundary = next(
+                (
+                    candidate.start()
+                    for candidate in headings
+                    if heading.start() < candidate.start() < end
+                    and len(candidate.group(1)) <= level
+                ),
+                end,
+            )
+            section_body = content[heading.end() : next_boundary]
             if (
                 location_level is not None
                 and level >= location_level
-                and _looks_like_location_heading(title)
+                and _looks_like_location_heading(title, section_body)
             ):
-                next_boundary = next(
-                    (
-                        candidate.start()
-                        for candidate in headings
-                        if heading.start() < candidate.start() < end
-                        and len(candidate.group(1)) <= level
-                    ),
-                    end,
-                )
-                dimensions = _DIMENSIONS.search(content[heading.end() : next_boundary])
+                dimensions = _DIMENSIONS.search(section_body)
                 item = {
                     "title": title,
                     "line": _line_number(content, heading.start()),
