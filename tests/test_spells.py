@@ -814,6 +814,49 @@ def test_2024_ranger_long_rest_replaces_only_one_spell() -> None:
         replace_prepared_spells(sheet, spell_ids=["a", "b", "c"], event="long_rest")
 
 
+def test_preparation_rejects_illegal_event_and_class_timing() -> None:
+    sheet = default_character_sheet()
+    sheet["edition"] = "2014"
+    sheet["progression"] = {
+        "level": 3,
+        "classes": [{"name": "Cleric", "level": 3, "hit_die": 8}],
+    }
+    sheet["abilities"]["wisdom"]["score"] = 16
+    sheet["spellcasting"]["preparation"] = {
+        "mode": "prepared",
+        "max_prepared": 6,
+        "changes_on": "long_rest",
+        "selected_spell_ids": ["bless"],
+    }
+    bless = _spell("bless", level=1)
+    aid = _spell("aid", level=2)
+    for spell in (bless, aid):
+        spell["grant"] = {"source_type": "class", "source_key": "cleric"}
+    sheet["content"]["spells"] = [bless, aid]
+    sheet = validate_character_sheet(sheet)
+
+    with pytest.raises(ValueError, match="only when finishing a long rest"):
+        replace_prepared_spells(
+            sheet,
+            spell_ids=["bless", "aid"],
+            event="level_up",
+        )
+    with pytest.raises(ValueError, match="setup, long_rest, or level_up"):
+        replace_prepared_spells(
+            sheet,
+            spell_ids=["bless", "aid"],
+            event="scene_change",
+        )
+
+    changed = replace_prepared_spells(
+        sheet,
+        spell_ids=["bless", "aid"],
+        event="long_rest",
+    )
+    assert changed["added"] == ["aid"]
+    assert changed["preparation_minutes"] == 3
+
+
 def test_2014_ranger_uses_spells_known_instead_of_preparation() -> None:
     sheet = default_character_sheet()
     sheet["edition"] = "2014"

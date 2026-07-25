@@ -950,8 +950,12 @@ def validate_inventory(value: Any) -> dict[str, Any]:
     attuned_items = [item for item in items if item["attunement"] == "attuned"]
     if len(attuned_items) > 3:
         raise ValueError("a character cannot be attuned to more than three magic items")
+    # source_key records provenance and can legitimately differ between two
+    # copies acquired from different adventure chunks.  The 2014 attunement
+    # restriction is about copies of the same item, so the item name is the
+    # stable identity unless a legacy nameless record needs the source fallback.
     attuned_identities = [
-        str(item.get("source_key") or item.get("name") or "").strip().casefold()
+        str(item.get("name") or item.get("source_key") or "").strip().casefold()
         for item in attuned_items
     ]
     if len(attuned_identities) != len(set(attuned_identities)):
@@ -2972,9 +2976,9 @@ def attune_inventory_item(sheet: dict[str, Any], item_id: str) -> dict[str, Any]
     ]
     if len(attuned) >= 3:
         raise ValueError("a character cannot be attuned to more than three magic items")
-    identity = str(item.get("source_key") or item.get("name") or "").strip().casefold()
+    identity = str(item.get("name") or item.get("source_key") or "").strip().casefold()
     if any(
-        str(entry.get("source_key") or entry.get("name") or "").strip().casefold()
+        str(entry.get("name") or entry.get("source_key") or "").strip().casefold()
         == identity
         for entry in attuned
     ):

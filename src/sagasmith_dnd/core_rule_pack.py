@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-CORE_RULE_PACK_VERSION = "1.34.0"
+CORE_RULE_PACK_VERSION = "1.35.0"
 
 
 @dataclass(frozen=True)
@@ -418,7 +418,7 @@ BOUNDARIES = (
         ("2014", "2024"),
         "spells.replace_prepared_spells",
         (
-            "tests/test_spells.py::test_2024_ranger_replaces_one_prepared_spell_on_long_rest",
+            "tests/test_spells.py::test_2024_ranger_long_rest_replaces_only_one_spell",
             "tests/test_spells.py::test_preparation_rejects_illegal_event_and_class_timing",
         ),
         "bundled:srd/preparing-spells",

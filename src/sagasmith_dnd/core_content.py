@@ -14,7 +14,7 @@ from sagasmith_dnd.spell_resolution import (
 )
 
 PACK_ID = "dnd5e.content.srd2014"
-PACK_VERSION = "1.11.0"
+PACK_VERSION = "1.12.0"
 
 _SUBCLASS_LEVELS = {
     "barbarian": 3,
@@ -208,7 +208,7 @@ def _subclass_features(folder: Path) -> list[dict[str, Any]]:
         class_name = _heading_or_stem(text, path)
         subclass_floor = _SUBCLASS_LEVELS.get(class_name.casefold(), 1)
         for subclass_name, subclass_body in _subclass_sections(text):
-            for title, body in _h4_sections(subclass_body):
+            for title, body in _subclass_feature_sections(subclass_body):
                 # Some source-authored subclass sections (for example, oath
                 # tenets and spell tables) do not repeat the level in prose.
                 # A missing prose match must never unlock a subclass feature
@@ -477,6 +477,14 @@ def _h3_sections_before_first_h2(text: str) -> Iterable[tuple[str, str]]:
 
 def _h4_sections(text: str) -> Iterable[tuple[str, str]]:
     matches = list(re.finditer(r"^####\s+(.+?)\s*$", text, re.MULTILINE))
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        yield match.group(1).strip(), text[match.end() : end].strip()
+
+
+def _subclass_feature_sections(text: str) -> Iterable[tuple[str, str]]:
+    """Read subclass features despite the SRD Oath heading-depth typo."""
+    matches = list(re.finditer(r"^#{4,5}\s+(.+?)\s*$", text, re.MULTILINE))
     for index, match in enumerate(matches):
         end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
         yield match.group(1).strip(), text[match.end() : end].strip()

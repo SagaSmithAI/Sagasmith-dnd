@@ -9,7 +9,7 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     manifest, artifacts = build_srd2014_content(workspace / "SagaSmith-dnd-skills")
     counts = Counter(item["kind"] for item in artifacts)
 
-    assert manifest["version"] == PACK_VERSION == "1.11.0"
+    assert manifest["version"] == PACK_VERSION == "1.12.0"
     assert counts["spell"] == 319
     assert counts["species"] == 13
     assert counts["class"] == 12
@@ -90,6 +90,13 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
         {"name": "protection from evil and good", "minimum_level": 3},
         {"name": "sanctuary", "minimum_level": 3},
     ]
+    purity = next(
+        item
+        for item in artifacts
+        if item["id"] == "dnd5e.content.srd2014.feature.oath-of-devotion-purity-of-spirit"
+    )
+    assert purity["card"]["minimum_level"] == 15
+    assert purity["card"]["subclass_name"] == "Oath of Devotion"
 
     life_bonus_proficiency = next(
         item

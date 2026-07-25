@@ -52,7 +52,14 @@ def test_rule_extension_settles_whitelisted_operation_with_receipt() -> None:
             "id": "test-action",
             "name": "Test",
             "activation": {"type": "action", "cost": 1, "trigger": ""},
-            "uses": {"label": "", "value": 0, "max": 0, "recovers_on": "none", "source_key": ""},
+            "uses": {
+                "label": "",
+                "value": 0,
+                "max": 0,
+                "unlimited": True,
+                "recovers_on": "none",
+                "source_key": "",
+            },
         }
     ]
     rules = resolution_context(

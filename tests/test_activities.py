@@ -74,3 +74,18 @@ def test_activity_distinguishes_zero_capacity_from_unlimited_uses() -> None:
     result = consume_activity(sheet, activity_id="archdruid-wild-shape")
     assert result["payment"] is None
     assert result["sheet"]["content"]["features"][1]["uses"]["unlimited"] is True
+
+
+def test_zero_capacity_without_an_explicit_unlimited_flag_fails_closed() -> None:
+    sheet = default_character_sheet()
+    sheet["content"]["features"] = [
+        {
+            "id": "legacy-empty-resource",
+            "name": "Legacy Empty Resource",
+            "uses": {"value": 0, "max": 0},
+            "activation": {"type": "action", "cost": 1},
+        }
+    ]
+
+    with pytest.raises(ActivityError, match="exhausted"):
+        consume_activity(sheet, activity_id="legacy-empty-resource")

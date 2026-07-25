@@ -52,7 +52,9 @@ def consume_activity(
             payment = {"kind": "resource", "key": resource_key, "amount": 1}
     else:
         uses = dict(activity.get("uses") or {})
-        if uses and not bool(uses.get("unlimited", int(uses.get("max", 0) or 0) == 0)):
+        # Zero capacity is not the same thing as unlimited capacity.  Only a
+        # source-authored explicit flag may make a structured counter free.
+        if uses and not bool(uses.get("unlimited", False)):
             if int(uses.get("value", 0) or 0) < 1:
                 raise ActivityError("activity uses are exhausted")
             uses["value"] = int(uses["value"]) - 1

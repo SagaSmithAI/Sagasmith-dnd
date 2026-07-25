@@ -535,6 +535,30 @@ def test_attunement_enforces_capacity_copies_transfer_and_death() -> None:
     with pytest.raises(ValueError, match="more than one copy"):
         attune_inventory_item(duplicate_sheet, "ring-copy-2")
 
+    separate_sources, _ = add_inventory_item(
+        validate_character_sheet({}),
+        {
+            "id": "separate-source-1",
+            "name": "Ring of Protection",
+            "kind": "magic_item",
+            "source_key": "module:first-treasure",
+            "attunement": "required",
+        },
+    )
+    separate_sources, _ = add_inventory_item(
+        separate_sources,
+        {
+            "id": "separate-source-2",
+            "name": "Ring of Protection",
+            "kind": "magic_item",
+            "source_key": "module:second-treasure",
+            "attunement": "required",
+        },
+    )
+    separate_sources = attune_inventory_item(separate_sources, "separate-source-1")
+    with pytest.raises(ValueError, match="more than one copy"):
+        attune_inventory_item(separate_sources, "separate-source-2")
+
     with pytest.raises(ValueError, match="cannot be transferred"):
         receive_inventory_item(
             validate_character_sheet({}),

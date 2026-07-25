@@ -961,6 +961,11 @@ def replace_prepared_spells(
     if not classes:
         raise CombatEngineError("prepared spell rules require at least one recorded class")
     edition = _edition(value)
+    if edition == "2014" and normalized_event == "level_up":
+        raise CombatEngineError(
+            "2014 prepared spell lists change only when finishing a long rest; "
+            "wizard level-up spells are added to the spellbook instead"
+        )
 
     def source_for(spell: dict[str, Any]) -> str:
         raw = str(spell.get("grant", {}).get("source_key") or "")
@@ -1023,7 +1028,7 @@ def replace_prepared_spells(
             maximum_replacements = _long_rest_replacements(edition, source)
             if maximum_replacements == 0:
                 raise CombatEngineError(f"{source} cannot change prepared spells on a long rest")
-            if len(old) != len(new):
+            if edition == "2024" and len(old) != len(new):
                 raise CombatEngineError(
                     "a long-rest change replaces spells; additions belong to setup or level up"
                 )
@@ -1050,6 +1055,12 @@ def replace_prepared_spells(
                     f"{source} can replace only {maximum_replacements} spell per level gained"
                 )
 
+    preparation_minutes = 0
+    if edition == "2014" and normalized_event == "long_rest" and changed_sources:
+        preparation_minutes = sum(
+            int(spells[spell_id].get("level", 0) or 0) for spell_id in selected
+        )
+
     preparation["selected_spell_ids"] = selected
     if source_limits and len(source_limits) == len(classes):
         preparation["max_prepared"] = sum(source_limits.values())
@@ -1064,6 +1075,7 @@ def replace_prepared_spells(
         "added": sorted(set(selected) - set(old_ids)),
         "removed": sorted(set(old_ids) - set(selected)),
         "limits": source_limits,
+        "preparation_minutes": preparation_minutes,
     }
 
 
