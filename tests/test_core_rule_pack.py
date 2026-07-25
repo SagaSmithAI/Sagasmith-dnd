@@ -46,6 +46,9 @@ REQUIRED_BOUNDARIES = {
 
 EDITION_BOUNDARIES = {
     "2014": {
+        "dnd5e.core.rest.natural_recovery",
+        "dnd5e.core.rest.song_of_rest",
+        "dnd5e.core.rest.sorcerous_restoration",
         "dnd5e.core.spell.pact_magic",
         "dnd5e.core.progression.hp_hit_dice",
         "dnd5e.core.progression.spellcasting",

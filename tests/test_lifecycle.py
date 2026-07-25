@@ -1,3 +1,5 @@
+from copy import deepcopy
+
 import pytest
 
 from sagasmith_dnd.character_schema import default_character_sheet
@@ -13,6 +15,7 @@ from sagasmith_dnd.lifecycle import (
     roll_rest_hit_dice,
     stand_outside_combat,
 )
+from sagasmith_dnd.rule_engine import resolution_context
 
 
 def test_rest_completion_enforces_duration_and_daily_limit() -> None:
@@ -374,6 +377,126 @@ def test_short_rest_engine_rolls_hit_die_and_2024_long_rest_recovers_all() -> No
     assert long_rest["sheet"]["combat"]["hit_dice"]["d8"]["value"] == 3
 
 
+def test_song_of_rest_applies_once_per_eligible_creature() -> None:
+    target = default_character_sheet()
+    target["edition"] = "2014"
+    target["abilities"]["constitution"]["score"] = 14
+    target["combat"]["hp"] = {"value": 2, "max": 20, "temp": 0}
+    target["combat"]["hit_dice"] = {
+        "d8": {
+            "label": "d8",
+            "value": 2,
+            "max": 2,
+            "recovers_on": "long_rest",
+            "source_key": "Cleric",
+        }
+    }
+    bard = default_character_sheet()
+    bard["edition"] = "2014"
+    bard["combat"]["hp"] = {"value": 10, "max": 10, "temp": 0}
+    bard["progression"] = {
+        "level": 9,
+        "classes": [{"name": "Bard", "level": 9, "hit_die": 8}],
+    }
+    bard["content"]["features"] = [
+        {
+            "id": "dnd5e.content.srd2014.feature.bard-song-of-rest",
+            "name": "Song of Rest",
+            "source_key": "Bard",
+            "rule_refs": ["bundled:srd2014/02_Classes/Bard.md"],
+        }
+    ]
+
+    rested = apply_rest(
+        target,
+        rest_type="short_rest",
+        hit_dice_spends=[{"key": "d8", "count": 2}],
+        song_of_rest_source_sheet=bard,
+        rules=resolution_context({"edition": "2014"}),
+        rng=_SequenceRng(4, 5, 6),
+    )
+
+    assert rested["hit_die_healing"] == 13
+    assert rested["hit_die_applied_healing"] == 13
+    assert rested["song_of_rest"]["die"] == "1d8"
+    assert rested["song_of_rest"]["roll"]["total"] == 6
+    assert rested["song_of_rest"]["rolled_healing"] == 6
+    assert rested["song_of_rest"]["applied_healing"] == 5
+    assert rested["sheet"]["combat"]["hp"]["value"] == 20
+    assert {
+        receipt["mechanic_id"] for receipt in rested["rule_receipts"]
+    } >= {"dnd5e.core.rest.hit_dice", "dnd5e.core.rest.song_of_rest"}
+
+    no_hit_die = apply_rest(
+        target,
+        rest_type="short_rest",
+        song_of_rest_source_sheet=bard,
+        rng=_SequenceRng(),
+    )
+    assert no_hit_die["song_of_rest"] is None
+    assert no_hit_die["sheet"]["combat"]["hp"]["value"] == 2
+    full_target = deepcopy(target)
+    full_target["combat"]["hp"]["value"] = full_target["combat"]["hp"]["max"]
+    no_recovery = apply_rest(
+        full_target,
+        rest_type="short_rest",
+        hit_dice_spends=[{"key": "d8", "count": 1}],
+        song_of_rest_source_sheet=bard,
+        rng=_SequenceRng(4),
+    )
+    assert no_recovery["hit_die_applied_healing"] == 0
+    assert no_recovery["song_of_rest"] is None
+
+
+def test_song_of_rest_rejects_unqualified_or_unconscious_sources() -> None:
+    target = default_character_sheet()
+    target["edition"] = "2014"
+    target["combat"]["hp"] = {"value": 2, "max": 10, "temp": 0}
+    target["combat"]["hit_dice"] = {
+        "d8": {"label": "d8", "value": 1, "max": 1, "recovers_on": "long_rest"}
+    }
+    bard = default_character_sheet()
+    bard["edition"] = "2014"
+    bard["combat"]["hp"] = {"value": 8, "max": 8, "temp": 0}
+    bard["progression"] = {
+        "level": 2,
+        "classes": [{"name": "Bard", "level": 2, "hit_die": 8}],
+    }
+
+    with pytest.raises(CombatEngineError, match="source-bound Bard"):
+        apply_rest(
+            target,
+            rest_type="short_rest",
+            hit_dice_spends=[{"key": "d8", "count": 1}],
+            song_of_rest_source_sheet=bard,
+            rng=_SequenceRng(),
+        )
+
+    bard["content"]["features"] = [
+        {
+            "id": "dnd5e.content.srd2014.feature.bard-song-of-rest",
+            "name": "Song of Rest",
+            "source_key": "Bard",
+            "rule_refs": ["bundled:srd2014/02_Classes/Bard.md"],
+        }
+    ]
+    bard["conditions"] = ["unconscious"]
+    with pytest.raises(CombatEngineError, match="conscious living bard"):
+        apply_rest(
+            target,
+            rest_type="short_rest",
+            hit_dice_spends=[{"key": "d8", "count": 1}],
+            song_of_rest_source_sheet=bard,
+            rng=_SequenceRng(),
+        )
+    with pytest.raises(CombatEngineError, match="only when finishing a short rest"):
+        apply_rest(
+            target,
+            rest_type="long_rest",
+            song_of_rest_source_sheet=bard,
+        )
+
+
 def test_rest_rejects_irrelevant_recovery_inputs_before_rng() -> None:
     sheet = default_character_sheet()
     sheet["combat"]["hp"] = {"value": 5, "max": 10, "temp": 0}
@@ -476,6 +599,144 @@ def test_arcane_recovery_is_a_once_per_day_short_rest_choice() -> None:
             arcane_recovery={"1": 1},
             world_day=1,
         )
+
+
+def test_natural_recovery_is_once_per_long_rest() -> None:
+    sheet = default_character_sheet()
+    sheet["edition"] = "2014"
+    sheet["progression"] = {
+        "level": 4,
+        "classes": [
+            {
+                "name": "Druid",
+                "level": 4,
+                "subclass": "Circle of the Land",
+                "hit_die": 8,
+            }
+        ],
+    }
+    sheet["combat"]["hp"] = {"value": 20, "max": 24, "temp": 0}
+    sheet["spellcasting"]["spell_slots"] = {
+        "1": {
+            "label": "Level 1 spell slots",
+            "value": 1,
+            "max": 4,
+            "recovers_on": "long_rest",
+            "source_key": "Druid",
+            "slot_level": 1,
+        },
+        "2": {
+            "label": "Level 2 spell slots",
+            "value": 0,
+            "max": 3,
+            "recovers_on": "long_rest",
+            "source_key": "Druid",
+            "slot_level": 2,
+        },
+    }
+    sheet["content"]["features"] = [
+        {
+            "id": (
+                "dnd5e.content.srd2014.feature."
+                "circle-of-the-land-natural-recovery"
+            ),
+            "name": "Natural Recovery",
+            "source_key": "Circle of the Land",
+            "rule_refs": ["bundled:srd2014/02_Classes/Druid.md"],
+        }
+    ]
+
+    recovered = apply_rest(
+        sheet,
+        rest_type="short_rest",
+        natural_recovery={"2": 1},
+        rest_activity_minutes={"meditation": 60},
+        rules=resolution_context({"edition": "2014"}),
+    )
+
+    assert recovered["natural_recovery"] == {
+        "allowance": 2,
+        "used_levels": 2,
+        "recovered": {"2": 1},
+        "druid_level": 4,
+    }
+    assert recovered["sheet"]["spellcasting"]["spell_slots"]["2"]["value"] == 1
+    feature_uses = recovered["sheet"]["content"]["features"][0]["uses"]
+    assert feature_uses == {
+        "label": "Natural Recovery",
+        "value": 0,
+        "max": 1,
+        "recovers_on": "long_rest",
+        "source_key": "Circle of the Land",
+        "slot_level": 0,
+    }
+    with pytest.raises(CombatEngineError, match="already been used"):
+        apply_rest(
+            recovered["sheet"],
+            rest_type="short_rest",
+            natural_recovery={"1": 1},
+            rest_activity_minutes={"meditation": 60},
+        )
+    with pytest.raises(CombatEngineError, match="declared meditation"):
+        apply_rest(
+            sheet,
+            rest_type="short_rest",
+            natural_recovery={"1": 1},
+        )
+
+    long_rested = apply_rest(recovered["sheet"], rest_type="long_rest")
+    assert long_rested["sheet"]["content"]["features"][0]["uses"]["value"] == 1
+    long_rested["sheet"]["spellcasting"]["spell_slots"]["1"]["value"] = 0
+    second = apply_rest(
+        long_rested["sheet"],
+        rest_type="short_rest",
+        natural_recovery={"1": 1},
+        rest_activity_minutes={"meditation": 60},
+    )
+    assert second["sheet"]["spellcasting"]["spell_slots"]["1"]["value"] == 1
+
+
+def test_sorcerous_restoration_recovers_four_points() -> None:
+    sheet = default_character_sheet()
+    sheet["edition"] = "2014"
+    sheet["progression"] = {
+        "level": 20,
+        "classes": [{"name": "Sorcerer", "level": 20, "hit_die": 6}],
+    }
+    sheet["combat"]["hp"] = {"value": 100, "max": 100, "temp": 0}
+    sheet["resources"]["sorcery_points"] = {
+        "label": "Sorcery Points",
+        "value": 3,
+        "max": 20,
+        "recovers_on": "long_rest",
+        "source_key": "Sorcerer",
+    }
+    sheet["content"]["features"] = [
+        {
+            "id": "dnd5e.content.srd2014.feature.sorcerer-sorcerous-restoration",
+            "name": "Sorcerous Restoration",
+            "source_key": "Sorcerer",
+            "rule_refs": ["bundled:srd2014/02_Classes/Sorcerer.md"],
+        }
+    ]
+
+    rested = apply_rest(
+        sheet,
+        rest_type="short_rest",
+        rules=resolution_context({"edition": "2014"}),
+    )
+
+    assert rested["sorcerous_restoration"] == {
+        "sorcerer_level": 20,
+        "before": 3,
+        "recovered": 4,
+        "after": 7,
+        "maximum": 20,
+    }
+    assert rested["sheet"]["resources"]["sorcery_points"]["value"] == 7
+    assert "dnd5e.core.rest.sorcerous_restoration" in {
+        receipt["mechanic_id"] for receipt in rested["rule_receipts"]
+    }
 
 
 def test_stable_creature_recovers_one_hp_after_rolled_hours() -> None:

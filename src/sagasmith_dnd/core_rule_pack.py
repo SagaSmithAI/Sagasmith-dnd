@@ -379,6 +379,27 @@ BOUNDARIES = (
         "bundled:srd2014/02_Classes/Wizard.md",
     ),
     CoreBoundary(
+        "dnd5e.core.rest.song_of_rest",
+        ("2014",),
+        "lifecycle.validate_song_of_rest_source|apply_rest",
+        ("tests/test_lifecycle.py::test_song_of_rest_applies_once_per_eligible_creature",),
+        "bundled:srd2014/02_Classes/Bard.md",
+    ),
+    CoreBoundary(
+        "dnd5e.core.rest.natural_recovery",
+        ("2014",),
+        "lifecycle.validate_natural_recovery_choice|apply_natural_recovery_choice",
+        ("tests/test_lifecycle.py::test_natural_recovery_is_once_per_long_rest",),
+        "bundled:srd2014/02_Classes/Druid.md",
+    ),
+    CoreBoundary(
+        "dnd5e.core.rest.sorcerous_restoration",
+        ("2014",),
+        "lifecycle.apply_sorcerous_restoration",
+        ("tests/test_lifecycle.py::test_sorcerous_restoration_recovers_four_points",),
+        "bundled:srd2014/02_Classes/Sorcerer.md",
+    ),
+    CoreBoundary(
         "dnd5e.core.rest.exhaustion",
         ("2014", "2024"),
         "lifecycle.apply_rest",
