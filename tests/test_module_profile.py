@@ -343,6 +343,43 @@ def test_named_action_section_populates_scene_atlas_without_claiming_it_is_a_roo
     ]
 
 
+def test_visual_fragment_does_not_hide_interaction_from_scene_atlas() -> None:
+    content = (
+        "# Fireball\n"
+        "## AFTER THE BLAST\n"
+        "The City Watch arrives at the crime scene.\n"
+        "### THE WATCH ARRIVES\n"
+        "Barnibus questions the characters.\n"
+        "## jump lo conclusions. They both prefer to have ironclad\n"
+        "evidence before making any arrests. Characters who seem truthful and "
+        "honest can press Barnibus for further information by making a DC 15 "
+        "Charisma (Persuasion) check.\n"
+        "### EYEWITNESSES\n"
+        "Several witnesses are eager to talk.\n"
+    )
+
+    scene = next(
+        item
+        for item in MarkdownModuleParser(profile=DndModuleProfile()).parse(content)[0].scenes
+        if item.title == "AFTER THE BLAST"
+    )
+
+    assert scene.metadata["subsections"] == [
+        {"title": "THE WATCH ARRIVES", "line": 4, "type": "scene"},
+        {"title": "EYEWITNESSES", "line": 8, "type": "section"},
+    ]
+    assert scene.metadata["spatial"]["locations"] == [
+        {
+            "key": "the-watch-arrives",
+            "title": "THE WATCH ARRIVES",
+            "kind": "scene",
+            "line": 4,
+            "dimensions_ft": None,
+            "confidence": "explicit_heading",
+        }
+    ]
+
+
 def test_npc_visit_and_invitation_populates_scene_atlas_as_an_interaction() -> None:
     content = (
         "# Trollskull Alley\n"

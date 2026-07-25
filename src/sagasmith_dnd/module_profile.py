@@ -89,7 +89,8 @@ _LOCATION_BODY_SIGNAL = re.compile(
 _ACTION_SCENE_BODY_SIGNAL = re.compile(
     r"\b(?:"
     r"a\s+successful\s+dc\s+\d+\b[^.\n]{0,120}\bcheck\b"
-    r"|(?:the\s+)?characters\s+(?:can|must|need\s+to|try\s+to)\b"
+    r"|(?:the\s+)?characters\b[^.\n]{0,120}"
+    r"\b(?:can|must|need\s+to|try\s+to)\b"
     r"|allows\s+(?:the\s+)?characters\s+to\b"
     r"|visits?\s+the\s+characters['’]\s+(?:residence|home)\b"
     r"[^.\n]{0,120}\binvites?\s+them\b"
@@ -566,7 +567,7 @@ def _spatial_manifest(
 
 class DndModuleProfile(GenericModuleProfile):
     name = "dnd5e"
-    version = "18"
+    version = "19"
 
     def document_metadata(self, content: str) -> dict[str, object]:
         """Parse and validate the optional generated-module runtime manifest."""
@@ -768,6 +769,7 @@ class DndModuleProfile(GenericModuleProfile):
                     for candidate in headings
                     if heading.start() < candidate.start() < end
                     and len(candidate.group(1)) <= level
+                    and _looks_like_scene_heading(candidate.group(2).strip())
                 ),
                 end,
             )
