@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from sagasmith_dnd.character_schema import default_character_sheet, validate_character_sheet
+from sagasmith_dnd.combat_engine import structured_critical_followup
 
 
 class StatblockImportError(ValueError):
@@ -524,6 +525,42 @@ def _spell_action_name(value: str) -> str:
     return re.sub(r"\s*\([^)]*\)\s*$", "", value).strip().casefold()
 
 
+def _regeneration_source_trait(description: str) -> dict[str, Any] | None:
+    amount_match = re.search(
+        r"(?i)\bregains\s+(\d+)\s+hit points at the start of "
+        r"(?:its|his|her|their)\s+turn\b",
+        description,
+    )
+    suppression_match = re.search(
+        r"(?i)\btakes\s+([a-z]+(?:\s+or\s+[a-z]+)+)\s+damage,\s+"
+        r"this trait doesn't function at the start of "
+        r"(?:(?:its|his|her|their)|the\s+[a-z][a-z '\-]*'s)\s+next turn\b",
+        description,
+    )
+    zero_hp_match = re.search(
+        r"(?i)\bdies only if (?:it|he|she|they) starts? "
+        r"(?:its|his|her|their)\s+turn with 0 hit points and "
+        r"doesn't regenerate\b",
+        description,
+    )
+    if not amount_match or not suppression_match or not zero_hp_match:
+        return None
+    damage_types = [
+        item.strip().casefold()
+        for item in re.split(r"\s+or\s+", suppression_match.group(1))
+        if item.strip()
+    ]
+    if not damage_types or len(damage_types) != len(set(damage_types)):
+        return None
+    return {
+        "kind": "regeneration",
+        "trigger": "turn_start",
+        "amount": int(amount_match.group(1)),
+        "suppressed_by_damage_types": damage_types,
+        "dies_at_zero_when_suppressed": True,
+    }
+
+
 def parse_2014_statblock(
     markdown: str,
     *,
@@ -706,7 +743,10 @@ def parse_2014_statblock(
             }
         )
     for weapon in weapons:
-        if str(dict(weapon.get("mechanics") or {}).get("on_hit_effect") or "").strip():
+        on_hit_effect = str(
+            dict(weapon.get("mechanics") or {}).get("on_hit_effect") or ""
+        ).strip()
+        if on_hit_effect and structured_critical_followup(on_hit_effect) is None:
             warnings.append(f"{weapon['name']}: on-hit effect requires DM settlement")
     for entry_name, description in multiattacks:
         options = _parse_multiattack(description, weapons)
@@ -733,21 +773,29 @@ def parse_2014_statblock(
             if "action" in section
             else "passive"
         )
-        sheet["content"]["activities" if activation != "passive" else "features"].append(
-            {
-                "id": f"{_slug(entry_name)}-{activation}",
-                "name": entry_name,
-                "source_key": source_key,
-                "description": description,
-                "activation": {"type": activation, "cost": 1 if activation != "passive" else 0},
-                "rule_refs": refs,
-            }
+        entry = {
+            "id": f"{_slug(entry_name)}-{activation}",
+            "name": entry_name,
+            "source_key": source_key,
+            "description": description,
+            "activation": {"type": activation, "cost": 1 if activation != "passive" else 0},
+            "rule_refs": refs,
+        }
+        source_trait = (
+            _regeneration_source_trait(description)
+            if activation == "passive" and entry_name.strip().casefold() == "regeneration"
+            else None
         )
-        warnings.append(
-            f"{entry_name}: Multiattack composition requires a DM ruling"
-            if entry_name in unresolved_multiattacks
-            else f"{entry_name}: descriptive {activation} is not automatically settled"
-        )
+        if source_trait is not None:
+            entry["activation"]["trigger"] = "start of its turn"
+            entry["choices"] = {"source_trait": source_trait}
+        sheet["content"]["activities" if activation != "passive" else "features"].append(entry)
+        if source_trait is None:
+            warnings.append(
+                f"{entry_name}: Multiattack composition requires a DM ruling"
+                if entry_name in unresolved_multiattacks
+                else f"{entry_name}: descriptive {activation} is not automatically settled"
+            )
 
     validated = validate_character_sheet(sheet)
     summary = f"{identity_text}; CR {challenge or 'unrecorded'}"

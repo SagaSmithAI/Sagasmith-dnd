@@ -19,11 +19,13 @@ from sagasmith_dnd.combat_engine import (
     apply_damage_parts_to_sheet,
     apply_damage_to_sheet,
     apply_healing_to_sheet,
+    apply_hit_point_loss_to_sheet,
     arm_readied_spell,
     available_actions,
     available_attack_defenses,
     available_reactions,
     current_combatant,
+    detach_attachment,
     end_concentration_for_incapacitating_conditions,
     end_turn,
     pay_activity_activation,
@@ -43,9 +45,11 @@ from sagasmith_dnd.combat_engine import (
     resolve_turn_undead_to_sheets,
     roll_attack_action,
     settle_core_activity_effect,
+    settle_start_turn_regeneration,
     spend_movement,
     stabilize_sheet,
     start_encounter,
+    structured_critical_followup,
     trigger_readied_spell,
 )
 from sagasmith_dnd.engine import resolve_check, roll_d20
@@ -2313,3 +2317,215 @@ def test_incapacitated_actor_cannot_pay_reaction_activity() -> None:
     encounter = start_encounter([first, second])
     with pytest.raises(ValueError, match="cannot activate content"):
         pay_activity_activation(encounter, actor_id_value="second", activation_type="reaction")
+
+
+def test_hit_point_loss_bypasses_temporary_hp_and_damage_traits() -> None:
+    actor = _actor("target", hp=8)
+    actor["sheet"]["combat"]["hp"]["temp"] = 7
+    actor["sheet"]["traits"]["resistances"] = ["piercing"]
+
+    result = apply_hit_point_loss_to_sheet(actor["sheet"], amount=5)
+
+    assert result["after_hp"] == 3
+    assert result["bypassed_temp_hp"] == 7
+    assert result["sheet"]["combat"]["hp"]["temp"] == 7
+
+
+def test_regenerating_zero_hp_creature_is_buffered_until_its_turn() -> None:
+    actor = _actor("troll", hp=12)
+
+    dropped = apply_hit_point_loss_to_sheet(
+        actor["sheet"],
+        amount=12,
+        death_saves=False,
+        zero_hp_recovery=True,
+    )
+
+    assert dropped["after_hp"] == 0
+    assert "unconscious" in dropped["sheet"]["conditions"]
+    assert "dead" not in dropped["sheet"]["conditions"]
+
+    regenerated = settle_start_turn_regeneration(
+        dropped["sheet"],
+        amount=10,
+        suppressed=False,
+    )
+
+    assert regenerated["after_hp"] == 10
+    assert regenerated["died"] is False
+    assert "unconscious" not in regenerated["sheet"]["conditions"]
+    assert "prone" in regenerated["sheet"]["conditions"]
+
+
+def test_suppressed_regeneration_kills_a_creature_that_starts_at_zero_hp() -> None:
+    actor = _actor("troll", hp=12)
+    dropped = apply_hit_point_loss_to_sheet(
+        actor["sheet"],
+        amount=12,
+        death_saves=False,
+        zero_hp_recovery=True,
+    )
+
+    result = settle_start_turn_regeneration(
+        dropped["sheet"],
+        amount=10,
+        suppressed=True,
+    )
+
+    assert result["after_hp"] == 0
+    assert result["died"] is True
+    assert "dead" in result["sheet"]["conditions"]
+    assert "unconscious" not in result["sheet"]["conditions"]
+
+
+def test_attachment_blocks_attacks_and_can_be_removed_by_the_target_action() -> None:
+    target = _actor("target")
+    target.update(initiative=20, position={"x": 0, "y": 0})
+    stirge = _actor("stirge")
+    stirge.update(initiative=10, position={"x": 0, "y": 0})
+    encounter = start_encounter([target, stirge])
+    encounter["ongoing_effects"] = [
+        {
+            "id": "attachment-1",
+            "kind": "attachment",
+            "source_actor_id": "stirge",
+            "target_id": "target",
+            "self_detach_movement_ft": 5,
+            "active": True,
+        }
+    ]
+
+    detached = detach_attachment(
+        encounter,
+        actor_id_value="target",
+        effect_id="attachment-1",
+    )
+
+    target_combatant = detached["combatants"][0]
+    assert target_combatant["turn_budget"]["main_action"] == 0
+    assert detached["ongoing_effects"][0]["active"] is False
+    assert detached["ongoing_effects"][0]["ended_reason"] == "detached_by_action"
+
+    stirge_turn = end_turn(encounter, actor_id_value="target")
+    assert "attack" not in available_actions(stirge_turn, "stirge")
+    assert "detach_attachment" in available_actions(stirge_turn, "stirge")
+
+
+def test_common_use_object_action_preserves_the_reviewed_source_payload() -> None:
+    encounter = start_encounter([_actor("hero")])
+    payload = {
+        "source_finisher_id": "source-zero-hp-finisher:troll",
+        "stage": "douse",
+        "source_excerpt": "douse the troll with lamp oil",
+    }
+
+    used = resolve_common_action(
+        encounter,
+        actor_id_value="hero",
+        action="use_object",
+        target_id="troll",
+        payload=payload,
+    )
+
+    assert used["log"][-1] == {
+        "type": "common_action",
+        "action": "use_object",
+        "actor_id": "hero",
+        "target_id": "troll",
+        "payload": payload,
+    }
+
+
+def test_grimvault_fixed_critical_followup_is_conditional_and_simultaneous() -> None:
+    effect = (
+        "If the target is an object, the hit instead deals 16 slashing damage. "
+        "If the target is a creature and Durnan rolls a 20 on the d20 for the "
+        "attack roll, the target takes an extra 14 slashing damage, and Durnan "
+        "rolls another d20. On a roll of 20, he lops off one of the target's "
+        "limbs, or some other part of its body if it is limbless."
+    )
+    parsed = structured_critical_followup(effect)
+
+    assert parsed == {
+        "kind": "critical_followup",
+        "trigger_natural": 20,
+        "extra_damage": 14,
+        "damage_type": "slashing",
+        "followup_expression": "1d20",
+        "anatomical_loss_natural": 20,
+        "source_excerpt": effect,
+    }
+
+    attacker = _actor("durnan")
+    target = _actor("troll")
+    target["sheet"]["combat"]["hp"] = {"value": 84, "max": 84, "temp": 0}
+    target["sheet"]["traits"]["resistances"] = ["slashing"]
+    plan = {
+        "damage_expression": "2d6 + 4",
+        "damage_type": "slashing",
+        "additional_damage": [],
+        "critical_followup": parsed,
+        "target_uses_death_saves": False,
+        "ruleset": "2014",
+    }
+    _, updated_target, result = resolve_attack_damage(
+        attacker,
+        target,
+        plan=plan,
+        attack={
+            "natural": 20,
+            "total": 28,
+            "armor_class": 15,
+            "hit": True,
+            "critical": True,
+            "fumble": False,
+        },
+        rng=_SequenceRng(3, 4, 3, 4, 20),
+    )
+
+    # The doubled 2d6 (14), +4, and fixed +14 rider are one slashing
+    # instance: floor((14 + 4 + 14) / 2) = 16 after resistance.
+    assert updated_target["sheet"]["combat"]["hp"]["value"] == 68
+    assert result["damage"]["input_amount"] == 32
+    assert result["damage"]["applied_amount"] == 16
+    assert result["critical_followup"]["triggered"] is True
+    assert result["critical_followup"]["followup_roll"]["total"] == 20
+    assert result["critical_followup"]["anatomical_loss_triggered"] is True
+    assert result["critical_followup"]["requires_dm_ruling"] is True
+
+
+def test_grimvault_followup_does_not_trigger_on_an_ordinary_hit() -> None:
+    effect = (
+        "If the target is a creature and Durnan rolls a 20 on the d20 for the "
+        "attack roll, the target takes an extra 14 slashing damage, and Durnan "
+        "rolls another d20. On a roll of 20, he lops off one of the target's "
+        "limbs, or some other part of its body if it is limbless."
+    )
+    plan = {
+        "damage_expression": "2d6 + 4",
+        "damage_type": "slashing",
+        "additional_damage": [],
+        "critical_followup": structured_critical_followup(effect),
+        "target_uses_death_saves": False,
+        "ruleset": "2014",
+    }
+
+    _, _, result = resolve_attack_damage(
+        _actor("durnan"),
+        _actor("troll"),
+        plan=plan,
+        attack={
+            "natural": 19,
+            "total": 27,
+            "armor_class": 15,
+            "hit": True,
+            "critical": False,
+            "fumble": False,
+        },
+        rng=_SequenceRng(3, 4),
+    )
+
+    assert result["critical_followup"]["triggered"] is False
+    assert result["critical_followup"]["followup_roll"] is None
+    assert result["critical_followup"]["requires_dm_ruling"] is False
+    assert "on_hit_ruling" not in result

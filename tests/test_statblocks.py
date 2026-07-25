@@ -34,6 +34,38 @@ COMMONER = """### Commoner
 """
 
 
+TROLL = """## Troll
+
+*Large giant, chaotic evil*
+
+**Armor Class** 15 (natural armor)
+
+**Hit Points** 84 (8d10+40)
+
+**Speed** 30 ft.
+
+| STR | DEX | CON | INT | WIS | CHA |
+|:---:|:---:|:---:|:---:|:---:|:---:|
+| 18 (+4) | 13 (+1) | 20 (+5) | 7 (-2) | 9 (-1) | 7 (-2) |
+
+**Senses** darkvision 60 ft., passive Perception 12
+
+**Languages** Giant
+
+**Challenge** 5 (1,800 XP)
+
+***Regeneration***. The troll regains 10 hit points at the start of its turn.
+If the troll takes acid or fire damage, this trait doesn't function at the
+start of the troll's next turn. The troll dies only if it starts its turn with
+0 hit points and doesn't regenerate.
+
+###### Actions
+
+***Claw***. *Melee Weapon Attack:* +7 to hit, reach 5 ft., one target.
+*Hit:* 11 (2d6+4) slashing damage.
+"""
+
+
 BANDIT_CAPTAIN = """### Bandit Captain
 
 *Medium humanoid (any race), any non-lawful alignment*
@@ -129,6 +161,26 @@ def test_commoner_statblock_becomes_an_exact_executable_actor_sheet() -> None:
     assert club["attack_bonus"] == 2
     assert club["damage_expression"] == "1d4"
     assert club["reach_ft"] == 5
+
+
+def test_regeneration_statblock_trait_is_structured_without_a_descriptive_warning() -> None:
+    parsed = parse_2014_statblock(TROLL, source_key="srd-troll")
+
+    regeneration = next(
+        item
+        for item in parsed.sheet["content"]["features"]
+        if item["name"] == "Regeneration"
+    )
+
+    assert regeneration["activation"]["trigger"] == "start of its turn"
+    assert regeneration["choices"]["source_trait"] == {
+        "kind": "regeneration",
+        "trigger": "turn_start",
+        "amount": 10,
+        "suppressed_by_damage_types": ["acid", "fire"],
+        "dies_at_zero_when_suppressed": True,
+    }
+    assert parsed.warnings == ()
 
 
 def test_effect_only_weapon_attack_preserves_web_ruling_without_fake_damage() -> None:

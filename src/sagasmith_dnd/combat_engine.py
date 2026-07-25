@@ -8,6 +8,7 @@ return new values plus an auditable result.
 
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from typing import Any, Iterable
@@ -114,6 +115,35 @@ class NeedsRulingError(CombatEngineError):
     def __init__(self, message: str, *, missing: Iterable[str] = ()) -> None:
         super().__init__(message)
         self.missing = tuple(missing)
+
+
+def structured_critical_followup(effect: str) -> dict[str, Any] | None:
+    """Parse a complete fixed-damage Sword of Sharpness statblock rider.
+
+    Reviewed NPC statblocks replace the magic item's 4d6 rider with its
+    average (14). The rider applies only when the attack die itself is a 20,
+    followed by a separate d20 that can cause anatomical loss.
+    """
+
+    text = " ".join(str(effect or "").split())
+    match = re.search(
+        r"(?i)\bif the target is a creature and [^.!?]+ rolls a 20 on the d20 "
+        r"for the attack roll, the target takes an extra (\d+) ([a-z]+) damage, "
+        r"and [^.!?]+ rolls another d20\. on a roll of 20, [^.!?]+ lops off one "
+        r"of the target's limbs, or some other part of its body if it is limbless\.",
+        text,
+    )
+    if match is None:
+        return None
+    return {
+        "kind": "critical_followup",
+        "trigger_natural": 20,
+        "extra_damage": int(match.group(1)),
+        "damage_type": match.group(2).casefold(),
+        "followup_expression": "1d20",
+        "anatomical_loss_natural": 20,
+        "source_excerpt": text,
+    }
 
 
 @dataclass(frozen=True)
@@ -317,6 +347,7 @@ def start_encounter(
                 "can_share_space": bool(actor.get("can_share_space", False)),
                 "surprised": bool(actor.get("surprised", False)),
                 "death_saves": bool(actor.get("death_saves", actor.get("character_type") == "pc")),
+                "zero_hp_recovery": bool(actor.get("zero_hp_recovery", False)),
                 "exhaustion": exhaustion,
             }
         )
@@ -461,6 +492,21 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
         return []
     if "incapacitated" in conditions:
         return ["move"] if "grappled" not in conditions and "restrained" not in conditions else []
+    active_attachments = [
+        item
+        for item in encounter.get("ongoing_effects", [])
+        if isinstance(item, dict)
+        and item.get("active", True)
+        and item.get("kind") == "attachment"
+    ]
+    actor_attachment = next(
+        (
+            item
+            for item in active_attachments
+            if str(item.get("source_actor_id") or "") == actor_id_value
+        ),
+        None,
+    )
     if "turned" in conditions:
         actions = (
             ["move"]
@@ -493,6 +539,8 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
                 "stabilize",
             ]
         )
+        if active_attachments:
+            actions.append("detach_attachment")
         if _normalize_ruleset(encounter.get("ruleset")) == "2024":
             actions.extend(["influence", "study", "utilize"])
         else:
@@ -503,7 +551,94 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
         actions.append("bonus_action")
     if budget.get("attack_budget", 0) > 0:
         actions.append("attack")
-    return actions
+    if actor_attachment is not None:
+        actions = [item for item in actions if item != "attack"]
+        if int(budget.get("movement", 0) or 0) >= int(
+            actor_attachment.get("self_detach_movement_ft", 0) or 0
+        ):
+            actions.append("detach_attachment")
+    return list(dict.fromkeys(actions))
+
+
+def detach_attachment(
+    encounter: dict[str, Any],
+    *,
+    actor_id_value: str,
+    effect_id: str,
+) -> dict[str, Any]:
+    """Detach one source-recorded attachment with its exact action payment."""
+
+    value = deepcopy(encounter)
+    current = current_combatant(value)
+    if current is None or str(current.get("actor_id") or "") != actor_id_value:
+        raise CombatEngineError("it is not this actor's turn")
+    effect = next(
+        (
+            item
+            for item in value.get("ongoing_effects", [])
+            if isinstance(item, dict)
+            and str(item.get("id") or "") == str(effect_id)
+            and item.get("active", True)
+            and item.get("kind") == "attachment"
+        ),
+        None,
+    )
+    if effect is None:
+        raise CombatEngineError("attachment effect is not active")
+    source_actor_id = str(effect.get("source_actor_id") or "")
+    target_id = str(effect.get("target_id") or "")
+    budget = dict(current.get("turn_budget") or {})
+    if actor_id_value == source_actor_id:
+        movement_cost = int(effect.get("self_detach_movement_ft", 0) or 0)
+        if movement_cost <= 0 or int(budget.get("movement", 0) or 0) < movement_cost:
+            raise CombatEngineError(
+                "attaching creature lacks the recorded movement to detach"
+            )
+        budget["movement"] = int(budget["movement"]) - movement_cost
+        payment = {"kind": "movement", "amount_ft": movement_cost}
+    else:
+        payment_key = (
+            "extra_action" if int(budget.get("extra_action", 0) or 0) > 0 else "main_action"
+        )
+        if int(budget.get(payment_key, 0) or 0) <= 0:
+            raise CombatEngineError("detaching another creature requires an action")
+        if actor_id_value != target_id:
+            detacher_position = _position(current.get("position"))
+            target = next(
+                (
+                    item
+                    for item in value.get("combatants", [])
+                    if str(item.get("actor_id") or "") == target_id
+                ),
+                None,
+            )
+            target_position = _position((target or {}).get("position"))
+            if (
+                detacher_position is None
+                or target_position is None
+                or _grid_distance(detacher_position, target_position) > 5
+            ):
+                raise CombatEngineError(
+                    "detaching creature must be the target or within 5 feet of it"
+                )
+        budget[payment_key] = int(budget[payment_key]) - 1
+        payment = {"kind": payment_key, "amount": 1}
+    current["turn_budget"] = budget
+    effect["active"] = False
+    effect["ended_reason"] = "detached_by_action"
+    effect["detached_by_actor_id"] = actor_id_value
+    value["log"] = [
+        *list(value.get("log") or []),
+        {
+            "type": "attachment_detached",
+            "effect_id": str(effect_id),
+            "actor_id": actor_id_value,
+            "source_actor_id": source_actor_id,
+            "target_id": target_id,
+            "payment": payment,
+        },
+    ][-100:]
+    return value
 
 
 def pay_attack_action(
@@ -636,6 +771,9 @@ def preflight_attack(
                 attacker["conditions"] = deepcopy(combatant.get("conditions") or [])
                 attacker["hidden"] = bool(combatant.get("hidden", False))
                 attacker["death_saves"] = bool(combatant.get("death_saves", True))
+                attacker["zero_hp_recovery"] = bool(
+                    combatant.get("zero_hp_recovery", False)
+                )
                 attacker["visible_to_actor_ids"] = deepcopy(combatant.get("visible_to_actor_ids"))
             elif combatant.get("actor_id") == actor_id(target):
                 target["position"] = deepcopy(combatant.get("position"))
@@ -643,6 +781,9 @@ def preflight_attack(
                 target["conditions"] = deepcopy(combatant.get("conditions") or [])
                 target["hidden"] = bool(combatant.get("hidden", False))
                 target["death_saves"] = bool(combatant.get("death_saves", True))
+                target["zero_hp_recovery"] = bool(
+                    combatant.get("zero_hp_recovery", False)
+                )
                 target["visible_to_actor_ids"] = deepcopy(combatant.get("visible_to_actor_ids"))
     attacker_unresolved = actor_derived(attacker).get("unresolved_rules") or []
     if attacker_unresolved:
@@ -733,6 +874,9 @@ def preflight_attack(
     damage_type = str(weapon.get("damage_type") or "")
     additional_damage = deepcopy(list(weapon.get("additional_damage") or []))
     on_hit_effect = str(weapon.get("on_hit_effect") or "").strip()
+    critical_followup = structured_critical_followup(on_hit_effect)
+    if critical_followup is not None:
+        on_hit_effect = ""
     range_result = _attack_range(attacker, target, weapon, attack_mode=attack_mode)
     if range_result["disadvantage"]:
         context["disadvantage"] = True
@@ -944,6 +1088,7 @@ def preflight_attack(
         "damage_type": damage_type,
         "additional_damage": additional_damage,
         "on_hit_effect": on_hit_effect,
+        "critical_followup": critical_followup,
         "advantage": bool(context.get("advantage", False)),
         "disadvantage": bool(context.get("disadvantage", False)),
         "advantage_sources": list(context.get("advantage_sources") or []),
@@ -956,7 +1101,9 @@ def preflight_attack(
         "close_combat_threat_ids": close_combat_threat_ids,
         "automatic_critical_on_hit": automatic_critical,
         "ruleset": ruleset,
-        "target_uses_death_saves": bool(target.get("death_saves", True)),
+        "target_uses_death_saves": bool(
+            target.get("death_saves", True) or target.get("zero_hp_recovery", False)
+        ),
         "knock_out": bool(action.get("knock_out", False)),
         "melee_attack": attack_mode == "melee",
         "attacker_was_hidden": bool(attacker.get("hidden", False)),
@@ -1255,6 +1402,13 @@ def resolve_attack_damage(
         damage=None,
     )
     expression = str(plan.get("damage_expression") or "")
+    critical_followup = dict(plan.get("critical_followup") or {})
+    critical_followup_triggered = bool(
+        attack.get("hit")
+        and critical_followup
+        and int(attack.get("natural", 0) or 0)
+        == int(critical_followup.get("trigger_natural", 20) or 20)
+    )
     if attack["hit"] and expression:
         damage_expression = _critical_expression(expression) if attack["critical"] else expression
         damage_roll = roll(damage_expression, rng=rng)
@@ -1277,7 +1431,16 @@ def resolve_attack_damage(
                 "damage_type": str(plan.get("damage_type") or ""),
             }
         ]
-        for extra in list(plan.get("additional_damage") or []):
+        additional_damage = deepcopy(list(plan.get("additional_damage") or []))
+        if critical_followup_triggered:
+            additional_damage.append(
+                {
+                    "damage_expression": str(critical_followup["extra_damage"]),
+                    "damage_type": str(critical_followup["damage_type"]),
+                    "source": "critical_followup",
+                }
+            )
+        for extra in additional_damage:
             extra_expression = str(extra.get("damage_expression") or "")
             if not extra_expression:
                 continue
@@ -1349,6 +1512,26 @@ def resolve_attack_damage(
         }
     elif plan.get("sneak_attack"):
         result["sneak_attack"] = {**dict(plan["sneak_attack"]), "used": False}
+    if critical_followup:
+        followup_roll = None
+        anatomical_loss_triggered = False
+        if critical_followup_triggered:
+            rolled_followup = roll(
+                str(critical_followup["followup_expression"]),
+                rng=rng,
+            )
+            followup_roll = asdict(rolled_followup)
+            anatomical_loss_triggered = (
+                int(rolled_followup.total)
+                == int(critical_followup["anatomical_loss_natural"])
+            )
+        result["critical_followup"] = {
+            **critical_followup,
+            "triggered": critical_followup_triggered,
+            "followup_roll": followup_roll,
+            "anatomical_loss_triggered": anatomical_loss_triggered,
+            "requires_dm_ruling": anatomical_loss_triggered,
+        }
     was_hidden = bool(plan.get("attacker_was_hidden", updated_attacker.get("hidden")))
     if was_hidden:
         updated_attacker["hidden"] = False
@@ -1726,6 +1909,106 @@ def apply_damage_to_sheet(
         knock_out=knock_out,
         melee=melee,
     )
+
+
+def apply_hit_point_loss_to_sheet(
+    sheet: dict[str, Any],
+    *,
+    amount: int,
+    death_saves: bool = True,
+    zero_hp_recovery: bool = False,
+) -> dict[str, Any]:
+    """Apply source-authored hit-point loss without treating it as damage.
+
+    Effects such as a stirge's Blood Drain say that the target loses hit
+    points.  That wording bypasses temporary hit points and damage
+    resistance, does not trigger concentration or massive-damage rules, and
+    still applies the normal zero-hit-point state unless a recorded trait can
+    recover the creature from 0 hit points.
+    """
+
+    requested = int(amount)
+    if requested <= 0:
+        raise CombatEngineError("hit-point loss amount must be positive")
+    value = deepcopy(sheet)
+    combat = value.setdefault("combat", {})
+    hp = dict(combat.setdefault("hp", {"value": 0, "max": 0, "temp": 0}))
+    before_hp = int(hp.get("value", 0) or 0)
+    hp["value"] = max(0, before_hp - requested)
+    combat["hp"] = hp
+    conditions = _condition_set(value.get("conditions"))
+    became_zero = before_hp > 0 and hp["value"] == 0
+    if became_zero:
+        conditions.update({"prone", "unconscious"})
+        if not death_saves and not zero_hp_recovery:
+            conditions.discard("unconscious")
+            conditions.add("dead")
+    value["conditions"] = sorted(conditions)
+    ended_effect_ids: list[str] = []
+    if became_zero and conditions & {"unconscious", "dead"}:
+        ended_effect_ids = end_concentration_for_incapacitating_conditions(
+            value,
+            ended_reason="unconscious",
+        )
+    return {
+        "sheet": value,
+        "requested_amount": requested,
+        "before_hp": before_hp,
+        "after_hp": hp["value"],
+        "hit_point_loss": before_hp - hp["value"],
+        "bypassed_temp_hp": int(hp.get("temp", 0) or 0),
+        "ended_effect_ids": ended_effect_ids,
+    }
+
+
+def settle_start_turn_regeneration(
+    sheet: dict[str, Any],
+    *,
+    amount: int,
+    suppressed: bool,
+) -> dict[str, Any]:
+    """Settle a source-recorded regeneration trait at the start of a turn."""
+
+    regeneration = int(amount)
+    if regeneration <= 0:
+        raise CombatEngineError("regeneration amount must be positive")
+    value = deepcopy(sheet)
+    hp = dict(value.setdefault("combat", {}).setdefault("hp", {}))
+    before_hp = int(hp.get("value", 0) or 0)
+    conditions = _condition_set(value.get("conditions"))
+    if "dead" in conditions:
+        return {
+            "sheet": value,
+            "before_hp": before_hp,
+            "after_hp": before_hp,
+            "amount": 0,
+            "suppressed": bool(suppressed),
+            "died": True,
+        }
+    if suppressed:
+        died = before_hp == 0
+        if died:
+            conditions.discard("unconscious")
+            conditions.discard("stable")
+            conditions.add("dead")
+            value["conditions"] = sorted(conditions)
+        return {
+            "sheet": value,
+            "before_hp": before_hp,
+            "after_hp": before_hp,
+            "amount": 0,
+            "suppressed": True,
+            "died": died,
+        }
+    healed = apply_healing_to_sheet(value, amount=regeneration)
+    return {
+        "sheet": healed["sheet"],
+        "before_hp": before_hp,
+        "after_hp": healed["after_hp"],
+        "amount": healed["amount"],
+        "suppressed": False,
+        "died": False,
+    }
 
 
 def _apply_adjusted_damage(
@@ -2450,6 +2733,7 @@ def resolve_common_action(
             "action": action,
             "actor_id": actor_id_value,
             "target_id": target_id,
+            "payload": deepcopy(payload or {}),
         },
     ][-100:]
     return value
