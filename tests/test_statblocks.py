@@ -176,6 +176,28 @@ def test_flat_damage_weapon_is_executable_without_inventing_damage_dice() -> Non
     assert parsed.warnings == ()
 
 
+def test_mixed_weapon_and_special_action_multiattack_stays_a_dm_boundary() -> None:
+    parsed = parse_2014_statblock(
+        COMMONER.replace(
+            "***Club***. *Melee Weapon Attack:* +2 to hit, reach 5 ft., one target.",
+            (
+                "***Multiattack***. The commoner makes one attack with its club "
+                "and uses Devour Intellect.\n\n"
+                "***Club***. *Melee Weapon Attack:* +2 to hit, reach 5 ft., one target."
+            ),
+        ),
+        source_key="reviewed-mixed-multiattack",
+    )
+    derived = derive_character_sheet(parsed.sheet)
+
+    assert derived["multiattack_options"] == []
+    assert any(
+        activity["name"] == "Multiattack"
+        for activity in parsed.sheet["content"]["activities"]
+    )
+    assert "Multiattack: Multiattack composition requires a DM ruling" in parsed.warnings
+
+
 def test_regeneration_statblock_trait_is_structured_without_a_descriptive_warning() -> None:
     parsed = parse_2014_statblock(TROLL, source_key="srd-troll")
 

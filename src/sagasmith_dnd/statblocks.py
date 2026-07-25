@@ -449,6 +449,13 @@ def _parse_multiattack(description: str, items: list[dict[str, Any]]) -> list[di
                     }
                 )
         if attacks:
+            if sum(int(item["count"]) for item in attacks) < 2:
+                # A source Multiattack can combine one weapon attack with a
+                # special action (for example, Claws plus Devour Intellect).
+                # Until every constituent action is structured, exposing the
+                # lone weapon as executable Multiattack would misrepresent the
+                # authored action and is rejected by the combat engine anyway.
+                return []
             options.append({"id": attack_mode, "attacks": attacks})
     ids: dict[str, int] = {}
     for option in options:
