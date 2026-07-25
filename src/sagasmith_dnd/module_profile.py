@@ -505,6 +505,7 @@ def _spatial_manifest(
             "connections": [],
         }
     locations: list[dict[str, object]] = []
+    location_key_counts: dict[str, int] = {}
     scene_title_tokens = set(re.findall(r"[a-z0-9]+", title.casefold()))
     for ordinal, item in enumerate(subsections):
         location_kind = str(item.get("type") or "")
@@ -518,9 +519,17 @@ def _spatial_manifest(
             and label_tokens <= scene_title_tokens
         ):
             continue
+        base_key = _location_key(label, ordinal)
+        location_key_counts[base_key] = location_key_counts.get(base_key, 0) + 1
+        occurrence = location_key_counts[base_key]
+        location_key = (
+            base_key
+            if occurrence == 1
+            else f"{base_key[: max(1, 71 - len(str(occurrence)))]}-{occurrence}"
+        )
         locations.append(
             {
-                "key": _location_key(label, ordinal),
+                "key": location_key,
                 "title": label,
                 "kind": location_kind,
                 "line": item.get("line"),

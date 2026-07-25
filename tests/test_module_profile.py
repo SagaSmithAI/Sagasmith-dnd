@@ -380,6 +380,29 @@ def test_visual_fragment_does_not_hide_interaction_from_scene_atlas() -> None:
     ]
 
 
+def test_repeated_interaction_headings_receive_stable_unique_location_keys() -> None:
+    content = (
+        "# Rooftop Chase\n"
+        "## ROOFTOP CHASE\n"
+        "The chase begins.\n"
+        "### CHASE COMPLICATION\n"
+        "The characters must make a DC 12 Dexterity check to cross the roof.\n"
+        "### CHASE COMPLICATION\n"
+        "The characters must make a DC 10 Strength check to clear the gap.\n"
+    )
+
+    scene = next(
+        item
+        for item in MarkdownModuleParser(profile=DndModuleProfile()).parse(content)[0].scenes
+        if item.title == "ROOFTOP CHASE"
+    )
+
+    assert [item["key"] for item in scene.metadata["spatial"]["locations"]] == [
+        "chase-complication",
+        "chase-complication-2",
+    ]
+
+
 def test_npc_visit_and_invitation_populates_scene_atlas_as_an_interaction() -> None:
     content = (
         "# Trollskull Alley\n"
