@@ -53,6 +53,7 @@ from sagasmith_dnd.combat_engine import (
     trigger_readied_spell,
 )
 from sagasmith_dnd.engine import resolve_check, roll_d20
+from sagasmith_dnd.lifecycle import apply_rest
 from sagasmith_dnd.spatial import compile_battle_map
 
 
@@ -1594,6 +1595,84 @@ def test_massive_damage_uses_excess_over_zero_hp() -> None:
     actor = _actor("target", hp=10)
     result = apply_damage_to_sheet(actor["sheet"], amount=20, damage_type="cold")
     assert "dead" in result["sheet"]["conditions"]
+
+
+def test_relentless_endurance_drops_to_one_unless_damage_kills_outright() -> None:
+    actor = _actor("target", hp=10)
+    actor["sheet"]["content"]["features"].append(
+        {
+            "id": "relentless-endurance",
+            "name": "Relentless Endurance",
+            "source_key": "module-chunk:test",
+            "description": (
+                "When reduced to 0 hit points, he drops to 1 hit point instead "
+                "(but can't do this again until he finishes a long rest)."
+            ),
+            "activation": {
+                "type": "passive",
+                "cost": 0,
+                "trigger": "reduced to 0 hit points",
+            },
+            "uses": {
+                "label": "uses",
+                "value": 1,
+                "max": 1,
+                "recovers_on": "long_rest",
+            },
+            "choices": {
+                "source_trait": {
+                    "kind": "relentless_endurance",
+                    "trigger": "reduced_to_zero",
+                    "drop_to_hit_points": 1,
+                    "requires_not_killed_outright": True,
+                    "automatic": True,
+                }
+            },
+            "rule_refs": ["module-chunk:test"],
+        }
+    )
+
+    endured = apply_damage_to_sheet(
+        actor["sheet"],
+        amount=10,
+        damage_type="cold",
+        death_saves=False,
+    )
+    killed = apply_damage_to_sheet(
+        actor["sheet"],
+        amount=20,
+        damage_type="cold",
+        death_saves=False,
+    )
+    spent = apply_damage_to_sheet(
+        endured["sheet"],
+        amount=1,
+        damage_type="cold",
+        death_saves=False,
+    )
+    recovered = apply_rest(endured["sheet"], rest_type="long_rest")
+
+    assert endured["after_hp"] == 1
+    assert endured["relentless_endurance_triggered"] is True
+    assert endured["relentless_endurance_use"] == {
+        "feature_id": "relentless-endurance",
+        "before_uses": 1,
+        "after_uses": 0,
+        "recovers_on": "long_rest",
+    }
+    assert endured["sheet"]["conditions"] == []
+    assert killed["after_hp"] == 0
+    assert killed["relentless_endurance_triggered"] is False
+    assert "dead" in killed["sheet"]["conditions"]
+    assert spent["after_hp"] == 0
+    assert spent["relentless_endurance_triggered"] is False
+    assert "dead" in spent["sheet"]["conditions"]
+    recovered_feature = next(
+        item
+        for item in recovered["sheet"]["content"]["features"]
+        if item["id"] == "relentless-endurance"
+    )
+    assert recovered_feature["uses"]["value"] == 1
 
 
 def test_stunned_and_unconscious_cannot_move() -> None:

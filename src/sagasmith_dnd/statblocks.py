@@ -861,7 +861,10 @@ def apply_statblock_variant(
         "current_hit_points",
         "maximum_hit_points",
         "armor_class",
+        "alignment",
+        "darkvision_ft",
         "languages",
+        "relentless_endurance",
         "remove_actions",
         "remove_items",
         "remove_activities",
@@ -927,6 +930,26 @@ def apply_statblock_variant(
             raise StatblockImportError("armor_class must be an integer between 0 and 99")
         result["combat"]["ac"] = {"base": armor_class, "override": armor_class}
 
+    if "alignment" in variant:
+        alignment = str(variant["alignment"] or "").strip()
+        if not alignment or len(alignment) > 100:
+            raise StatblockImportError(
+                "alignment must be a non-empty string of at most 100 characters"
+            )
+        result["traits"]["alignment"] = alignment
+
+    if "darkvision_ft" in variant:
+        darkvision_ft = variant["darkvision_ft"]
+        if (
+            not isinstance(darkvision_ft, int)
+            or isinstance(darkvision_ft, bool)
+            or not 0 <= darkvision_ft <= 1000
+        ):
+            raise StatblockImportError(
+                "darkvision_ft must be an integer between 0 and 1000"
+            )
+        result["traits"]["senses"]["darkvision"] = darkvision_ft
+
     if "languages" in variant:
         languages = variant["languages"]
         if not isinstance(languages, list):
@@ -938,6 +961,83 @@ def apply_statblock_variant(
         ):
             raise StatblockImportError("languages must contain unique non-empty strings")
         result["traits"]["languages"] = normalized_languages
+
+    if "relentless_endurance" in variant:
+        raw_feature = variant["relentless_endurance"]
+        if not isinstance(raw_feature, dict):
+            raise StatblockImportError("relentless_endurance must be an object")
+        unknown_feature_fields = set(raw_feature) - {
+            "feature_id",
+            "source_excerpt",
+        }
+        if unknown_feature_fields:
+            raise StatblockImportError(
+                "unsupported relentless_endurance fields: "
+                f"{sorted(unknown_feature_fields)}"
+            )
+        feature_id = str(raw_feature.get("feature_id") or "").strip()
+        source_excerpt = str(raw_feature.get("source_excerpt") or "").strip()
+        if not feature_id or _slug(feature_id) != feature_id:
+            raise StatblockImportError(
+                "relentless_endurance feature_id must be a lowercase slug"
+            )
+        normalized_excerpt = " ".join(source_excerpt.split())
+        mechanically_complete = (
+            re.search(
+                r"(?i)\bwhen reduced to 0 hit points?\b",
+                normalized_excerpt,
+            )
+            is not None
+            and re.search(
+                r"(?i)\bdrops? to 1 hit point instead\b",
+                normalized_excerpt,
+            )
+            is not None
+            and re.search(
+                r"(?i)\bcan(?:no|'?t) do this again until "
+                r"(?:he|she|it|they) finishes? a long rest\b",
+                normalized_excerpt,
+            )
+            is not None
+        )
+        if not mechanically_complete:
+            raise StatblockImportError(
+                "relentless_endurance source_excerpt is not mechanically complete"
+            )
+        features = result["content"]["features"]
+        if any(str(item.get("id") or "") == feature_id for item in features):
+            raise StatblockImportError(
+                "relentless_endurance feature_id duplicates an existing feature"
+            )
+        features.append(
+            {
+                "id": feature_id,
+                "name": "Relentless Endurance",
+                "source_key": source_ref,
+                "description": source_excerpt,
+                "activation": {
+                    "type": "passive",
+                    "cost": 0,
+                    "trigger": "reduced to 0 hit points",
+                },
+                "uses": {
+                    "label": "uses",
+                    "value": 1,
+                    "max": 1,
+                    "recovers_on": "long_rest",
+                },
+                "choices": {
+                    "source_trait": {
+                        "kind": "relentless_endurance",
+                        "trigger": "reduced_to_zero",
+                        "drop_to_hit_points": 1,
+                        "requires_not_killed_outright": True,
+                        "automatic": True,
+                    }
+                },
+                "rule_refs": list(source_refs),
+            }
+        )
 
     items = list(result["inventory"]["items"])
     remove_actions = variant.get("remove_actions", [])

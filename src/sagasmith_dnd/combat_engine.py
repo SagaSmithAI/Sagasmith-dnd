@@ -785,6 +785,9 @@ def preflight_attack(
                     combatant.get("zero_hp_recovery", False)
                 )
                 target["visible_to_actor_ids"] = deepcopy(combatant.get("visible_to_actor_ids"))
+    relentless_endurance_feature = _automatic_relentless_endurance_feature(
+        actor_sheet(target)
+    )
     attacker_unresolved = actor_derived(attacker).get("unresolved_rules") or []
     if attacker_unresolved:
         raise NeedsRulingError("attacker has unresolved rules", missing=attacker_unresolved)
@@ -1102,7 +1105,13 @@ def preflight_attack(
         "automatic_critical_on_hit": automatic_critical,
         "ruleset": ruleset,
         "target_uses_death_saves": bool(
-            target.get("death_saves", True) or target.get("zero_hp_recovery", False)
+            target.get("death_saves", True)
+            or target.get("zero_hp_recovery", False)
+        ),
+        "target_relentless_endurance_feature_id": (
+            str(relentless_endurance_feature["id"])
+            if relentless_endurance_feature is not None
+            else None
         ),
         "knock_out": bool(action.get("knock_out", False)),
         "melee_attack": attack_mode == "melee",
@@ -1880,6 +1889,47 @@ def _consume_multiattack_entry(
     return [item for item in remaining if int(item.get("count", 0) or 0) > 0]
 
 
+def _automatic_relentless_endurance_feature(
+    sheet: dict[str, Any],
+) -> dict[str, Any] | None:
+    matches: list[dict[str, Any]] = []
+    for feature in dict(sheet.get("content") or {}).get("features", []):
+        if not isinstance(feature, dict):
+            continue
+        source_trait = dict(dict(feature.get("choices") or {}).get("source_trait") or {})
+        if (
+            source_trait.get("kind") == "relentless_endurance"
+            and source_trait.get("automatic") is True
+        ):
+            matches.append(feature)
+    if len(matches) > 1:
+        raise CombatEngineError(
+            "actor card has more than one automatic Relentless Endurance feature"
+        )
+    if not matches:
+        return None
+    feature = matches[0]
+    source_trait = dict(dict(feature.get("choices") or {}).get("source_trait") or {})
+    uses = feature.get("uses")
+    valid = (
+        bool(str(feature.get("id") or "").strip())
+        and source_trait.get("trigger") == "reduced_to_zero"
+        and source_trait.get("drop_to_hit_points") == 1
+        and source_trait.get("requires_not_killed_outright") is True
+        and isinstance(uses, dict)
+        and uses.get("max") == 1
+        and uses.get("recovers_on") == "long_rest"
+        and isinstance(uses.get("value"), int)
+        and not isinstance(uses.get("value"), bool)
+        and 0 <= int(uses["value"]) <= 1
+    )
+    if not valid:
+        raise CombatEngineError(
+            "automatic Relentless Endurance feature state is malformed"
+        )
+    return feature if int(uses["value"]) > 0 else None
+
+
 def apply_damage_to_sheet(
     sheet: dict[str, Any],
     *,
@@ -2049,11 +2099,29 @@ def _apply_adjusted_damage(
     max_hp = int(hp.get("max", before_hp) or before_hp)
     massive_excess = max(0, hp_damage - before_hp)
     became_zero = hp["value"] == 0 and before_hp > 0
+    if knock_out and not melee:
+        raise CombatEngineError("only a melee attack can knock a creature out")
+    relentless_endurance_feature = _automatic_relentless_endurance_feature(value)
     normalized_ruleset = _normalize_ruleset(ruleset or value.get("edition"))
-    if became_zero:
+    relentless_endurance_triggered = bool(
+        became_zero
+        and relentless_endurance_feature is not None
+        and massive_excess < max_hp
+    )
+    relentless_endurance_use: dict[str, Any] | None = None
+    if relentless_endurance_triggered:
+        hp["value"] = 1
+        uses = relentless_endurance_feature["uses"]
+        before_uses = int(uses["value"])
+        uses["value"] = before_uses - 1
+        relentless_endurance_use = {
+            "feature_id": str(relentless_endurance_feature["id"]),
+            "before_uses": before_uses,
+            "after_uses": int(uses["value"]),
+            "recovers_on": "long_rest",
+        }
+    elif became_zero:
         conditions.update({"prone", "unconscious"})
-        if knock_out and not melee:
-            raise CombatEngineError("only a melee attack can knock a creature out")
         if knock_out and melee:
             if normalized_ruleset == "2024":
                 hp["value"] = 1
@@ -2123,6 +2191,8 @@ def _apply_adjusted_damage(
         "concentration": concentration,
         "ended_effect_ids": ended_effect_ids,
         "massive_damage": massive_excess >= max_hp,
+        "relentless_endurance_triggered": relentless_endurance_triggered,
+        "relentless_endurance_use": relentless_endurance_use,
     }
 
 
@@ -2201,6 +2271,10 @@ def apply_damage_parts_to_sheet(
         "concentration": applied["concentration"],
         "ended_effect_ids": applied["ended_effect_ids"],
         "massive_damage": applied["massive_damage"],
+        "relentless_endurance_triggered": applied[
+            "relentless_endurance_triggered"
+        ],
+        "relentless_endurance_use": applied["relentless_endurance_use"],
     }
 
 

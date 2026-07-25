@@ -519,7 +519,16 @@ def test_source_bound_variant_can_apply_common_module_instance_changes() -> None
             "creature_type": "undead",
             "current_hit_points": 1,
             "armor_class": 12,
+            "alignment": "chaotic evil",
+            "darkvision_ft": 60,
             "languages": ["Common", "Elvish"],
+            "relentless_endurance": {
+                "feature_id": "relentless-endurance",
+                "source_excerpt": (
+                    "When reduced to 0 hit points, he drops to 1 hit point instead "
+                    "(but can't do this again until he finishes a long rest)."
+                ),
+            },
             "action_overrides": {
                 "club": {
                     "id": "gauntlet-slam",
@@ -534,7 +543,30 @@ def test_source_bound_variant_can_apply_common_module_instance_changes() -> None
     assert sheet["combat"]["hp"] == {"value": 1, "max": 4, "temp": 0}
     assert sheet["progression"]["species"] == "undead"
     assert derived["armor_class"] == 12
+    assert sheet["traits"]["alignment"] == "chaotic evil"
+    assert sheet["traits"]["senses"]["darkvision"] == 60
     assert sheet["traits"]["languages"] == ["Common", "Elvish"]
+    feature = next(
+        item
+        for item in sheet["content"]["features"]
+        if item["id"] == "relentless-endurance"
+    )
+    assert {
+        key: feature["uses"][key]
+        for key in ("label", "value", "max", "recovers_on")
+    } == {
+        "label": "uses",
+        "value": 1,
+        "max": 1,
+        "recovers_on": "long_rest",
+    }
+    assert feature["choices"]["source_trait"] == {
+        "kind": "relentless_endurance",
+        "trigger": "reduced_to_zero",
+        "drop_to_hit_points": 1,
+        "requires_not_killed_outright": True,
+        "automatic": True,
+    }
     assert derived["inventory"]["weapon_attacks"][0]["item_id"] == "gauntlet-slam"
     assert derived["inventory"]["weapon_attacks"][0]["damage_type"] == "force"
     attack = sheet["inventory"]["items"][0]
