@@ -247,7 +247,10 @@ def test_module_statblock_marks_named_actor_spellcasting_trait() -> None:
             "Senses darkvision 120 ft., passive Perception 14 Languages Elvish, "
             "Undercommon Challenge 2 (450 XP) Special Equipment. Nezznar has a "
             "spider staff. Fey Ancestry. Nezznar has advantage on saving throws "
-            "against being charmed. Spellcasting. Nezznar is a 4th-level spellcaster "
+            "against being charmed. Innate Spellcasting. Nezznar can innately cast "
+            "the following spells, requiring no material components:\n"
+            "- At will: dancing lights\n- 1/day each: darkness, faerie fire (save DC 12)\n"
+            "Spellcasting. Nezznar is a 4th-level spellcaster "
             "that uses Intelligence as his spellcasting ability (spell save DC 13; "
             "+5 to hit with spell attacks). Nezznar has the following spells prepared "
             "from the wizard's spell list: Cantrips (at will): mage hand, ray offrost, "
@@ -293,6 +296,7 @@ def test_module_statblock_marks_named_actor_spellcasting_trait() -> None:
         "normalized_content"
     ]
     assert "***Demon Queen of Spiders***" not in candidate["normalized_content"]
+    assert "Drow are a subterranean race" not in candidate["normalized_content"]
     assert "**Hit Points** 27 (6d8)" in candidate["normalized_content"]
     assert parsed.spellcasting is not None
     assert parsed.spellcasting["slots"] == {"1": 4, "2": 3}
@@ -306,6 +310,17 @@ def test_module_statblock_marks_named_actor_spellcasting_trait() -> None:
         "invisibility",
         "suggestion",
     ]
+    spider_staff = parsed.sheet["inventory"]["items"][0]
+    assert spider_staff["name"] == "Spider Staff"
+    assert spider_staff["mechanics"]["additional_damage"] == [
+        {
+            "damage_formula": "1d6",
+            "damage_bonus": 0,
+            "damage_type": "poison",
+        }
+    ]
+    assert spider_staff["mechanics"]["on_hit_effect"] == ""
+    assert not any(warning.startswith("Spider Staff:") for warning in parsed.warnings)
 
 
 def test_module_statblock_repairs_bounded_spellcasting_ocr() -> None:

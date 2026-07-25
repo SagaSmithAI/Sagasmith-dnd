@@ -73,7 +73,7 @@ _CREATURE_CORE_RE = re.compile(
     r"\s+Speed\s+(?P<speed>.+?)\s*$"
 )
 _ENTRY_START_RE = re.compile(
-    r"(?P<prefix>^|(?<=\.)\s+)"
+    r"(?P<prefix>^|(?<=\.)[ \t]+|\n+)"
     r"(?P<name>[A-Z][A-Za-z0-9'’/-]*(?:\s+(?:[A-Z][A-Za-z0-9'’/-]*|"
     r"and|or|of|the|a|an))*(?:\s+\([^.\n]{1,60}\))?)\.\s+"
     r"(?=[A-Z*])"
@@ -406,7 +406,7 @@ def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
             ("", "## Traits", "", _mark_statblock_entries(_normalize_statblock_ocr(traits)))
         )
     for section, parts in section_parts.items():
-        content = " ".join(parts).strip()
+        content = _trim_trailing_statblock_lore(" ".join(parts).strip())
         if content:
             rendered.extend(
                 (
@@ -417,6 +417,28 @@ def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
                 )
             )
     return "\n".join(rendered).strip() + "\n"
+
+
+def _trim_trailing_statblock_lore(content: str) -> str:
+    """Exclude an adjacent ancestry paragraph from the final attack entry.
+
+    Module appendices sometimes place general creature lore immediately after
+    the last statblock action without a heading boundary.  Only trim the
+    conservative shape where a completed damage sentence is followed directly
+    by a capitalized ancestry noun, optional parenthetical alias, a copula, and
+    an article.  Mechanical continuations such as "The target is restrained"
+    therefore remain part of the action.
+    """
+
+    boundary = re.search(
+        r"(?is)\bdamage\.\s+"
+        r"(?=[A-Z][A-Za-z'’/-]*(?:\s+\([^.\n]{1,80}\))?"
+        r"\s+(?:are|is)\s+(?:a|an|the)\b)",
+        content,
+    )
+    if boundary is None or re.search(r"(?i)\bHit:\s*", content[: boundary.start()]) is None:
+        return content
+    return content[: boundary.start() + len("damage.")].rstrip()
 
 
 def _normalize_statblock_ocr(content: str) -> str:
