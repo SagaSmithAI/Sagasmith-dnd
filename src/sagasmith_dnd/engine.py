@@ -217,6 +217,8 @@ def resolve_death_save(
         outcome = "stable"
     elif outcome == "pending" and next_failures >= 3:
         outcome = "dead"
+    next_successes = min(3, next_successes)
+    next_failures = min(3, next_failures)
     return {
         **die,
         "bonus": int(bonus),
