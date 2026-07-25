@@ -350,3 +350,32 @@ def test_chapter_preamble_does_not_create_a_spatial_room() -> None:
     assert scenes[0].metadata["scene_type"] == "overview"
     assert scenes[0].metadata["spatial"]["locations"] == []
     assert scenes[1].metadata["spatial"]["locations"][0]["kind"] == "scene"
+
+
+def test_chapter_preamble_preserves_explicit_tavern_encounter_location() -> None:
+    content = (
+        "# A Friend in Need\n"
+        "Chapter introduction.\n"
+        "### TAVERN BRAWL\n"
+        "A fight breaks out in the Yawning Portal taproom.\n"
+        "## FINDING FLOON\n"
+        "The investigation begins.\n"
+    )
+
+    scenes = MarkdownModuleParser(profile=DndModuleProfile()).parse(content)[0].scenes
+
+    preamble = scenes[0]
+    assert preamble.metadata["scene_type"] == "overview"
+    assert preamble.metadata["subsections"] == [
+        {"title": "TAVERN BRAWL", "line": 3, "type": "room"}
+    ]
+    assert preamble.metadata["spatial"]["locations"] == [
+        {
+            "key": "tavern-brawl",
+            "title": "TAVERN BRAWL",
+            "kind": "room",
+            "line": 3,
+            "dimensions_ft": None,
+            "confidence": "explicit_heading",
+        }
+    ]

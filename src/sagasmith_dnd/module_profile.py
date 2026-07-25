@@ -62,6 +62,7 @@ _LOCATION_TITLE_SIGNALS = (
     "shrine",
     "shop",
     "store",
+    "tavern",
     "tap house",
     "taphouse",
     "temple",
@@ -439,7 +440,7 @@ def _spatial_manifest(
     allow_fallback: bool = True,
 ) -> dict[str, object]:
     """Emit conservative scene-space evidence; it is not an inferred battle map."""
-    if reference or not allow_fallback:
+    if reference:
         return {
             "schema_version": 1,
             "grid": {"kind": "square", "cell_ft": 5},
@@ -469,6 +470,13 @@ def _spatial_manifest(
                 "confidence": "explicit_heading",
             }
         )
+    if not locations and not allow_fallback:
+        return {
+            "schema_version": 1,
+            "grid": {"kind": "square", "cell_ft": 5},
+            "locations": [],
+            "connections": [],
+        }
     if not locations:
         dimensions = _DIMENSIONS.search(text)
         location_heading = bool(_ROOM.match(title.strip()))
@@ -501,7 +509,7 @@ def _spatial_manifest(
 
 class DndModuleProfile(GenericModuleProfile):
     name = "dnd5e"
-    version = "12"
+    version = "13"
 
     def document_metadata(self, content: str) -> dict[str, object]:
         """Parse and validate the optional generated-module runtime manifest."""
@@ -584,6 +592,14 @@ class DndModuleProfile(GenericModuleProfile):
         first_start = scene_headings[0].start()
         if chapter_content[:first_start].strip():
             preamble = chapter_content[:first_start]
+            preamble_subsections = self._subsections(
+                headings,
+                0,
+                first_start,
+                sub_level,
+                room_level,
+                chapter_content,
+            )
             boundaries.append(
                 SceneBoundary(
                     _preamble_title(preamble),
@@ -592,14 +608,7 @@ class DndModuleProfile(GenericModuleProfile):
                     {
                         "scene_type": "reference" if reference_chapter else "overview",
                         "scene_level": scene_level,
-                        "subsections": self._subsections(
-                            headings,
-                            0,
-                            first_start,
-                            sub_level,
-                            room_level,
-                            chapter_content,
-                        ),
+                        "subsections": preamble_subsections,
                         "headings": [],
                         "tags": (
                             ["reference"]
@@ -610,7 +619,7 @@ class DndModuleProfile(GenericModuleProfile):
                         "spatial": _spatial_manifest(
                             _preamble_title(preamble),
                             preamble,
-                            [],
+                            preamble_subsections,
                             reference=reference_chapter,
                             allow_fallback=False,
                         ),
