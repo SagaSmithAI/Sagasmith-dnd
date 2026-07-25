@@ -73,7 +73,8 @@ _CREATURE_CORE_RE = re.compile(
     r"\s+Speed\s+(?P<speed>.+?)\s*$"
 )
 _ENTRY_START_RE = re.compile(
-    r"(?<![\w*])(?P<name>[A-Z][A-Za-z0-9'’() /-]{1,60})\.\s+"
+    r"(?<![\w*])(?!(?:The|A|An|This|That|These|Those|Each)\b)"
+    r"(?P<name>[A-Z][A-Za-z0-9'’() /-]{1,60})\.\s+"
     r"(?=(?:Melee|Ranged|The|When|If|While|At|Once|As|A\s|An\s|This|Each|On|Until)\b)"
 )
 

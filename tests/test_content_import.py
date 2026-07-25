@@ -156,6 +156,71 @@ def test_module_statblock_chunks_become_review_ready_without_guessing_ocr() -> N
     assert "Hit: 5 (1d10) piercing damage" in candidate["normalized_content"]
 
 
+def test_module_statblock_keeps_effect_only_hit_clause_inside_its_attack() -> None:
+    base = ["Appendix B: Monsters", "MONSTER DESCRIPTIONS", "GIANT SPIDER"]
+    chunks = [
+        {
+            "id": "spider-core",
+            "scene_id": "monster-scene",
+            "heading_path": base,
+            "content": (
+                "Large beast, unaligned Armor Class 14 (natural armor) "
+                "Hit Points 26 (4d10 + 4) Speed 30 ft., climb 30 ft."
+            ),
+            "page_start": 58,
+            "page_end": 58,
+        }
+    ]
+    values = {
+        "STR": "14 (+2)",
+        "DEX": "16 (+3)",
+        "CON": "12 (+1)",
+        "INT": "2 (-4)",
+        "WIS": "11 (+0)",
+        "CHA": (
+            "4 (-3) Skills Stealth +7 Senses blindsight 10 ft., darkvision 60 ft., "
+            "passive Perception 10 Languages — Challenge 1 (200 XP)"
+        ),
+    }
+    chunks.extend(
+        {
+            "id": f"spider-{ability.casefold()}",
+            "scene_id": "monster-scene",
+            "heading_path": [*base, ability],
+            "content": content,
+            "page_start": 58,
+            "page_end": 58,
+        }
+        for ability, content in values.items()
+    )
+    chunks.append(
+        {
+            "id": "spider-actions",
+            "scene_id": "monster-scene",
+            "heading_path": [*base, "ACTIONS"],
+            "content": (
+                "Bite. Melee Weapon Attack: +5 to hit, reach 5 ft., one creature. "
+                "Hit: 7 (1d8 + 3) piercing damage. Web (Recharge 5-6). "
+                "Ranged Weapon Attack: +5 to hit, range 30 ft./60 ft., one creature. "
+                "Hit: The target is restrained by webbing. As an action, the restrained "
+                "target can make a DC 12 Strength check, bursting the webbing on a "
+                "success. The webbing can also be attacked and destroyed (AC 10; hp 5)."
+            ),
+            "page_start": 58,
+            "page_end": 58,
+        }
+    )
+
+    candidate = module_statblock_review_candidates(chunks)[0]
+
+    assert candidate["execution_state"] == "review_ready", candidate.get("review_error")
+    assert "Hit: The target is restrained by webbing." in candidate["normalized_content"]
+    assert "***The target is restrained by webbing***" not in candidate["normalized_content"]
+    assert candidate["validation"]["warnings"] == [
+        "Web (Recharge 5-6): on-hit effect requires DM settlement"
+    ]
+
+
 def test_module_statblock_repairs_bounded_spellcasting_ocr() -> None:
     base = ["Appendix B: Monsters", "MONSTER DESCRIPTIONS", "EVILMAGE"]
     chunks = [
