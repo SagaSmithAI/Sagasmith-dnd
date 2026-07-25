@@ -24,6 +24,11 @@ CHECK_KINDS = {
     "memory_fact",
 }
 CHECK_OPERATORS = {"equals", "not_equals", "in", "at_least", "at_most", "truthy"}
+PARTY_SIZE_STATUSES = {
+    "source_confirmed",
+    "dm_review_required",
+    "dm_review_completed",
+}
 
 
 def new_playthrough_manifest(
@@ -36,6 +41,8 @@ def new_playthrough_manifest(
     selected_party_size: int | None,
     source_refs: list[dict[str, Any]],
     review_blocks: list[dict[str, Any]] | None = None,
+    party_size_status: str | None = None,
+    party_size_review: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create the complete empty shape used before party construction."""
 
@@ -62,9 +69,18 @@ def new_playthrough_manifest(
                 "branch_decisions": [],
             },
             "party": {
+                "party_size_status": (
+                    party_size_status
+                    or (
+                        "source_confirmed"
+                        if recommended_party_maximum is not None
+                        else "dm_review_required"
+                    )
+                ),
                 "recommended_minimum": recommended_party_minimum,
                 "recommended_maximum": recommended_party_maximum,
                 "selected_size": selected_party_size,
+                "party_size_review": dict(party_size_review or {}),
                 "use_pregenerated_first": True,
                 "members": [],
                 "replacements": [],
@@ -319,9 +335,11 @@ def _validate_party(value: Any) -> dict[str, Any]:
         party,
         "party",
         {
+            "party_size_status",
             "recommended_minimum",
             "recommended_maximum",
             "selected_size",
+            "party_size_review",
             "use_pregenerated_first",
             "members",
             "replacements",
@@ -330,10 +348,36 @@ def _validate_party(value: Any) -> dict[str, Any]:
     minimum = _optional_integer(party.get("recommended_minimum"), "recommended_minimum", 1)
     maximum = _optional_integer(party.get("recommended_maximum"), "recommended_maximum", 1)
     selected = _optional_integer(party.get("selected_size"), "selected_size", 1)
+    status = _choice(
+        party.get("party_size_status")
+        or ("source_confirmed" if maximum is not None else "dm_review_required"),
+        "party_size_status",
+        PARTY_SIZE_STATUSES,
+    )
+    review = _json_object(party.get("party_size_review") or {}, "party_size_review")
     if minimum is not None and maximum is not None and maximum < minimum:
         raise ValueError("party recommended maximum must not be below its minimum")
     if selected is not None and maximum is not None and selected != maximum:
         raise ValueError("party.selected_size must use the source-recommended maximum")
+    if status == "source_confirmed":
+        if maximum is None or selected is None:
+            raise ValueError(
+                "source-confirmed party size requires a maximum and selected size"
+            )
+    elif status == "dm_review_required":
+        if selected is not None:
+            raise ValueError("unresolved party-size DM review cannot select a party size")
+    else:
+        if minimum is None or maximum is None or selected is None or not review:
+            raise ValueError(
+                "completed party-size DM review requires bounds, selected size, "
+                "and review evidence"
+            )
+        if review.get("represented_as_module_recommendation") is not False:
+            raise ValueError(
+                "completed party-size DM review must not be represented as a "
+                "module recommendation"
+            )
     members = [
         _validate_party_member(item, index)
         for index, item in enumerate(_list(party.get("members")))
@@ -344,9 +388,11 @@ def _validate_party(value: Any) -> dict[str, Any]:
         for index, item in enumerate(_list(party.get("replacements")))
     ]
     return {
+        "party_size_status": status,
         "recommended_minimum": minimum,
         "recommended_maximum": maximum,
         "selected_size": selected,
+        "party_size_review": review,
         "use_pregenerated_first": _boolean(
             party.get("use_pregenerated_first"), "use_pregenerated_first"
         ),

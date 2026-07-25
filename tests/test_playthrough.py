@@ -31,6 +31,8 @@ def _manifest():
 def test_manifest_records_every_required_resume_section() -> None:
     manifest = _manifest()
     assert manifest["party"]["selected_size"] == 6
+    assert manifest["party"]["party_size_status"] == "source_confirmed"
+    assert manifest["party"]["party_size_review"] == {}
     assert manifest["party"]["use_pregenerated_first"] is True
     assert manifest["current"]["scene_id"] == ""
     assert set(manifest) >= {
@@ -47,6 +49,57 @@ def test_manifest_records_every_required_resume_section() -> None:
     }
     state = validate_party_state({"playthrough_manifest": manifest})
     assert state["playthrough_manifest"] == manifest
+
+
+def test_manifest_preserves_completed_party_size_dm_review_without_faking_source() -> None:
+    manifest = new_playthrough_manifest(
+        run_id="waterdeep-1",
+        campaign_line_id="waterdeep-dragon-heist",
+        module_ids=["module-1"],
+        recommended_party_minimum=4,
+        recommended_party_maximum=4,
+        selected_party_size=4,
+        source_refs=[SOURCE_REF],
+        party_size_status="dm_review_completed",
+        party_size_review={
+            "module_party_size_status": "not_stated",
+            "reviewed_pages": [6, 13, 15],
+            "rules_source_sha256": "c" * 64,
+            "represented_as_module_recommendation": False,
+        },
+    )
+
+    assert manifest["party"]["party_size_status"] == "dm_review_completed"
+    assert manifest["party"]["selected_size"] == 4
+    assert (
+        manifest["party"]["party_size_review"][
+            "represented_as_module_recommendation"
+        ]
+        is False
+    )
+
+    invalid = deepcopy(manifest)
+    invalid["party"]["party_size_review"]["represented_as_module_recommendation"] = True
+    with pytest.raises(ValueError, match="must not be represented"):
+        validate_party_state({"playthrough_manifest": invalid})
+
+
+def test_manifest_keeps_unresolved_party_size_dm_review_blocked() -> None:
+    manifest = new_playthrough_manifest(
+        run_id="review-1",
+        campaign_line_id="unknown-size",
+        module_ids=["module-1"],
+        recommended_party_minimum=None,
+        recommended_party_maximum=None,
+        selected_party_size=None,
+        source_refs=[SOURCE_REF],
+        review_blocks=[{"kind": "recommended_party_size"}],
+    )
+    assert manifest["party"]["party_size_status"] == "dm_review_required"
+
+    manifest["party"]["selected_size"] = 4
+    with pytest.raises(ValueError, match="cannot select"):
+        validate_party_state({"playthrough_manifest": manifest})
 
 
 def test_manifest_rejects_default_four_and_cross_actor_replacement_knowledge() -> None:

@@ -135,6 +135,16 @@ def _looks_like_scene_heading(title: str) -> bool:
         text,
     ):
         return False
+    if re.match(
+        r"^(?:[I1l|]\s+){1,3}(?:CHAPTER|ENCOUNTER)\b",
+        text,
+        re.IGNORECASE,
+    ):
+        # Flow-chart connectors are commonly extracted as headings such as
+        # ``1 l ENCOUNTER 3,``. They are diagram labels, not scene boundaries,
+        # and otherwise collapse the surrounding authored encounter headings
+        # into one oversized scene.
+        return False
     if re.match(r"^(?:Ch(?:apter)?|App(?:endix)?)\b", text, re.IGNORECASE):
         return False
     if re.match(r"^[A-Z]\s+(?:CHAPTER|ENCOUNTER)\b", text, re.IGNORECASE):
@@ -147,6 +157,18 @@ def _looks_like_scene_heading(title: str) -> bool:
     if coded and len(words) >= 10:
         return False
     return True
+
+
+def _is_diagram_overview(title: str) -> bool:
+    """Recognize authored flow-chart/index sections that are not spatial scenes."""
+
+    compact = re.sub(r"[^a-z0-9]+", "", title.casefold())
+    return compact in {
+        "adventureflowchart",
+        "encounterchainsbyseason",
+    }
+
+
 _EXPLICIT_ROUTE_PATTERNS = (
     re.compile(
         r"(?:通向|通往|连接到|连接至|直达)\s*(?:了|着)?\s*"
@@ -479,7 +501,7 @@ def _spatial_manifest(
 
 class DndModuleProfile(GenericModuleProfile):
     name = "dnd5e"
-    version = "11"
+    version = "12"
 
     def document_metadata(self, content: str) -> dict[str, object]:
         """Parse and validate the optional generated-module runtime manifest."""
@@ -604,6 +626,7 @@ class DndModuleProfile(GenericModuleProfile):
                 else len(chapter_content)
             )
             title = heading.group(2).strip()
+            diagram_overview = _is_diagram_overview(title)
             subsections = self._subsections(
                 headings,
                 heading.start(),
@@ -627,7 +650,13 @@ class DndModuleProfile(GenericModuleProfile):
                     heading.start(),
                     end,
                     {
-                        "scene_type": "reference" if reference_chapter else "section",
+                        "scene_type": (
+                            "reference"
+                            if reference_chapter
+                            else "overview"
+                            if diagram_overview
+                            else "section"
+                        ),
                         "scene_level": scene_level,
                         "subsections": subsections,
                         "headings": [str(item["title"]) for item in subsections],
@@ -637,7 +666,7 @@ class DndModuleProfile(GenericModuleProfile):
                             title,
                             chapter_content[heading.start() : end],
                             subsections,
-                            reference=reference_chapter,
+                            reference=reference_chapter or diagram_overview,
                         ),
                         "line_count": max(
                             1,

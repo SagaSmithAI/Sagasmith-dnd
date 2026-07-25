@@ -117,6 +117,55 @@ def test_dnd_scene_parser_promotes_h3_when_it_dominates_h2() -> None:
     assert all(scene.metadata["scene_level"] == 3 for scene in scenes)
 
 
+def test_flowchart_connector_does_not_swallow_authored_h4_encounters() -> None:
+    content = (
+        "# Ch. 4: Dragon Season\n"
+        "Chapter overview.\n"
+        "### 1 l ENCOUNTER 3,\n"
+        "A flow-chart extraction fragment.\n"
+        "#### ENCOUNTER 1: ALLEY\n"
+        "The chase begins.\n"
+        "#### ENCOUNTER 2: MISTSHORE\n"
+        "The trail reaches the docks.\n"
+        "#### ENCOUNTER 3: STREET CHASE\n"
+        "The pursuit continues.\n"
+    )
+
+    scenes = MarkdownModuleParser(profile=DndModuleProfile()).parse(content)[0].scenes
+
+    assert "1 l ENCOUNTER 3," not in [scene.title for scene in scenes]
+    assert [scene.title for scene in scenes[1:]] == [
+        "ENCOUNTER 1: ALLEY",
+        "ENCOUNTER 2: MISTSHORE",
+        "ENCOUNTER 3: STREET CHASE",
+    ]
+    assert all(scene.metadata["scene_level"] == 4 for scene in scenes)
+
+
+def test_encounter_chain_flowchart_is_overview_not_spatial_atlas_evidence() -> None:
+    content = (
+        "# Ch. 4: Dragon Season\n"
+        "#### ENCOUNT ER CHAINS BY S EASON\n"
+        "##### CELLAR COMPLEX\n"
+        "A diagram arrow points onward.\n"
+        "##### OLD TOWER\n"
+        "Another diagram label.\n"
+        "##### CELLAR COMPLEX\n"
+        "The same label appears on another seasonal route.\n"
+        "##### OLD TOWER\n"
+        "The same destination appears again.\n"
+        "#### ENCOUNTER 1: ALLEY\n"
+        "The authored encounter begins here.\n"
+    )
+
+    scenes = MarkdownModuleParser(profile=DndModuleProfile()).parse(content)[0].scenes
+    diagram = next(scene for scene in scenes if "CHAINS BY S EASON" in scene.title)
+
+    assert diagram.metadata["scene_type"] == "overview"
+    assert diagram.metadata["spatial"]["locations"] == []
+    assert diagram.metadata["spatial"]["connections"] == []
+
+
 def test_room_dimensions_are_bound_to_their_own_heading_content() -> None:
     content = (
         "# Keep\n## Cellars\n"
