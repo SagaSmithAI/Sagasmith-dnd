@@ -776,6 +776,7 @@ def preflight_attack(
         context["disadvantage"] = True
         context.setdefault("disadvantage_sources", []).append("target_dodging")
     helped_by = None
+    next_attack_advantage_effect_id = None
     if encounter is not None:
         target_position = _position(target.get("position"))
         for helper in encounter.get("combatants", []):
@@ -793,6 +794,19 @@ def preflight_attack(
                 context["advantage"] = True
                 context.setdefault("advantage_sources", []).append("help")
                 helped_by = str(helper.get("actor_id"))
+                break
+        for effect in encounter.get("ongoing_effects", []):
+            if (
+                isinstance(effect, dict)
+                and effect.get("active", True)
+                and effect.get("kind") == "next_attack_advantage"
+                and str(effect.get("target_id") or "") == actor_id(target)
+            ):
+                next_attack_advantage_effect_id = str(effect.get("id") or "")
+                context["advantage"] = True
+                context.setdefault("advantage_sources", []).append(
+                    next_attack_advantage_effect_id
+                )
                 break
     automatic_critical = bool(
         distance is not None
@@ -876,6 +890,7 @@ def preflight_attack(
         "attacker_was_hidden": bool(attacker.get("hidden", False)),
         "target_can_see_attacker": target_can_see_attacker,
         "helped_by": helped_by,
+        "next_attack_advantage_effect_id": next_attack_advantage_effect_id,
         "sneak_attack": sneak_attack,
         "halfling_lucky": _has_halfling_lucky(actor_sheet(attacker)),
         "rule_receipts": [

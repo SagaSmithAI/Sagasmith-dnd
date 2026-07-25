@@ -1152,6 +1152,52 @@ def test_help_grants_and_then_consumes_attack_advantage() -> None:
     assert "help" in plan["advantage_sources"]
 
 
+def test_next_attack_advantage_uses_active_target_effect() -> None:
+    attacker = _actor("attacker")
+    target = _actor("target")
+    attacker["derived"]["inventory"]["weapon_attacks"] = [
+        {
+            "item_id": "sword",
+            "attack_bonus": 5,
+            "damage_expression": "1",
+            "damage_type": "slashing",
+        }
+    ]
+    attacker.update(
+        initiative=20,
+        tie_breaker=0,
+        position={"x": 0, "y": 0},
+        disposition="friendly",
+    )
+    target.update(
+        initiative=10,
+        tie_breaker=0,
+        position={"x": 1, "y": 0},
+        disposition="hostile",
+    )
+    encounter = start_encounter([attacker, target])
+    encounter["ongoing_effects"] = [
+        {
+            "id": "guiding-bolt-mark",
+            "kind": "next_attack_advantage",
+            "source_actor_id": "cleric",
+            "target_id": "target",
+            "active": True,
+        }
+    ]
+
+    plan = preflight_attack(
+        attacker,
+        target,
+        action={"weapon_id": "sword"},
+        encounter=encounter,
+    )
+
+    assert plan["advantage"] is True
+    assert plan["next_attack_advantage_effect_id"] == "guiding-bolt-mark"
+    assert "guiding-bolt-mark" in plan["advantage_sources"]
+
+
 def test_sneak_attack_requires_card_feature_and_records_critical_bonus_damage() -> None:
     rogue = _rogue()
     ally = _actor("ally")
