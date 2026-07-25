@@ -268,16 +268,19 @@ def _parse_weapon(
         return None
     mode = attack.group(1).casefold()
     hit = re.search(
-        r"(?i)\*?Hit:\*?\s*\d+\s*\((\d+d\d+(?:\s*[+\-]\s*\d+)?)\)\s*"
+        r"(?i)\*?Hit:\*?\s*(\d+)"
+        r"(?:\s*\((\d+d\d+(?:\s*[+\-]\s*\d+)?)\))?\s*"
         r"([a-z]+)\s+damage",
         description,
     )
     additional_damage: list[dict[str, Any]] = []
     if hit:
-        expression = hit.group(1).replace(" ", "")
+        expression = (hit.group(2) or hit.group(1)).replace(" ", "")
         damage = re.fullmatch(r"(\d+d\d+)(?:([+\-]\d+))?", expression)
-        if not damage:
-            raise StatblockImportError(f"weapon action {name!r} has an invalid damage expression")
+        if hit.group(2) and not damage:
+            raise StatblockImportError(
+                f"weapon action {name!r} has an invalid damage expression"
+            )
         last_damage_end = hit.end()
         for extra in re.finditer(
             r"(?i)\bplus\s+\d+\s*\((\d+d\d+(?:\s*[+\-]\s*\d+)?)\)\s*"
@@ -299,9 +302,9 @@ def _parse_weapon(
             )
             last_damage_end = hit.end() + extra.end()
         on_hit_effect = description[last_damage_end:].strip().lstrip(". ,;").strip()
-        damage_formula = damage.group(1)
-        damage_type = hit.group(2).casefold()
-        damage_bonus = int(damage.group(2) or 0)
+        damage_formula = damage.group(1) if damage else expression
+        damage_type = hit.group(3).casefold()
+        damage_bonus = int(damage.group(2) or 0) if damage else 0
     else:
         effect_hit = re.search(r"(?is)\*?Hit:\*?\s*(\S.+)$", description)
         if not effect_hit:
