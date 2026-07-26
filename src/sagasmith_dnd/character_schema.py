@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import re
 import uuid
 import warnings
 from typing import Any
@@ -2685,6 +2686,14 @@ def _derive_armor_class(
                 and change["mode"] == "add"
             ):
                 continue
+            if (
+                re.fullmatch(r"abilities\.[a-z_]+\.score", change["path"])
+                and change["mode"] == "override"
+                and not isinstance(change["value"], bool)
+                and isinstance(change["value"], int)
+                and 0 <= change["value"] <= 30
+            ):
+                continue
             if change["path"] in {
                 "combat.ac.unarmored_base",
                 "combat.ac.unarmored_formula",
@@ -2847,14 +2856,46 @@ def effective_hit_point_maximum(sheet: dict[str, Any]) -> int:
     return maximum
 
 
+def effective_ability_scores(sheet: dict[str, Any]) -> dict[str, int]:
+    """Return ability scores after narrow, source-owned override effects."""
+
+    value = validate_character_sheet(sheet)
+    scores = {
+        ability: int(entry["score"])
+        for ability, entry in value["abilities"].items()
+    }
+    for effect in value["effects"]:
+        if not effect["active"]:
+            continue
+        for change in effect["changes"]:
+            match = re.fullmatch(r"abilities\.([a-z_]+)\.score", change["path"])
+            if match is None:
+                continue
+            ability = match.group(1)
+            score = change["value"]
+            if (
+                ability not in scores
+                or change["mode"] != "override"
+                or isinstance(score, bool)
+                or not isinstance(score, int)
+                or not 0 <= score <= 30
+            ):
+                raise ValueError("active ability-score override effect is malformed")
+            scores[ability] = score
+    return scores
+
+
 def derive_character_sheet(
     sheet: dict[str, Any], *, rules: ResolutionContext | None = None
 ) -> dict[str, Any]:
     value = validate_character_sheet(sheet)
     level = value["progression"]["level"]
     proficiency = 2 + (level - 1) // 4
+    active_effects = [effect for effect in value["effects"] if effect["active"]]
+    ability_scores = effective_ability_scores(value)
     ability_modifiers = {
-        ability: (entry["score"] - 10) // 2 for ability, entry in value["abilities"].items()
+        ability: (score - 10) // 2
+        for ability, score in ability_scores.items()
     }
     saves = {
         ability: ability_modifiers[ability]
@@ -2878,7 +2919,6 @@ def derive_character_sheet(
     spell_ability = value["spellcasting"]["ability"]
     spell_attack_bonus_override = value["spellcasting"]["attack_bonus_override"]
     spell_save_dc_override = value["spellcasting"]["save_dc_override"]
-    active_effects = [effect for effect in value["effects"] if effect["active"]]
     armor_class, armor_class_breakdown, unresolved_effects = _derive_armor_class(
         value, ability_modifiers, active_effects
     )
@@ -2899,7 +2939,7 @@ def derive_character_sheet(
         "huge": 4,
         "gargantuan": 8,
     }.get(value["traits"]["size"].lower(), 1)
-    strength = value["abilities"]["strength"]["score"]
+    strength = ability_scores["strength"]
     maximum_weight = strength * 240 * size_multiplier
     encumbrance = inventory["encumbrance"]
     encumbrance_summary = {
@@ -2931,6 +2971,7 @@ def derive_character_sheet(
     effective_hp_max = effective_hit_point_maximum(value)
     derived = {
         "proficiency_bonus": proficiency,
+        "ability_scores": ability_scores,
         "ability_modifiers": ability_modifiers,
         "saving_throws": saves,
         "skills": skills,

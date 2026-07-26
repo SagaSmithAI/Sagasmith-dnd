@@ -593,6 +593,47 @@ def _regeneration_source_trait(description: str) -> dict[str, Any] | None:
     }
 
 
+def _pack_tactics_source_trait(description: str) -> dict[str, Any] | None:
+    normalized = " ".join(description.split())
+    match = re.fullmatch(
+        r"The (?P<subject>[A-Za-z][A-Za-z '\-]*) has advantage on an attack "
+        r"roll against a creature if at least one of the "
+        r"(?P=subject)'s allies is within (?P<distance>\d+) feet of the creature "
+        r"and the ally isn't incapacitated\.",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    return {
+        "kind": "pack_tactics",
+        "trigger": "attack_roll",
+        "ally_within_target_ft": int(match.group("distance")),
+        "requires_ally_not_incapacitated": True,
+        "grants": "advantage",
+        "automatic": True,
+    }
+
+
+def _sunlight_sensitivity_source_trait(description: str) -> dict[str, Any] | None:
+    normalized = " ".join(description.split())
+    if not re.fullmatch(
+        r"While in sunlight, the [A-Za-z][A-Za-z '\-]* has disadvantage on "
+        r"attack rolls, as well as on Wisdom \(Perception\) checks that rely "
+        r"on sight\.",
+        normalized,
+        flags=re.IGNORECASE,
+    ):
+        return None
+    return {
+        "kind": "sunlight_sensitivity",
+        "trigger": "attack_roll_or_sight_perception",
+        "environment_fact": "direct_sunlight",
+        "grants": "disadvantage",
+        "automatic": True,
+    }
+
+
 def _parry_reaction_defense(
     entry_name: str,
     description: str,
@@ -783,6 +824,150 @@ def _structure_gazer_eye_rays(
         warning
         for warning in warnings
         if not any(warning.startswith(f"{name}:") for name in structured_names)
+    ]
+
+
+def source_save_effect_spec(
+    sheet: dict[str, Any],
+    activity_id: str,
+) -> dict[str, Any] | None:
+    """Return a reviewed, deterministic source saving-throw action contract."""
+
+    activity = next(
+        (
+            item
+            for item in dict(sheet.get("content") or {}).get("activities", [])
+            if str(item.get("id") or "") == activity_id
+        ),
+        None,
+    )
+    if activity is None:
+        return None
+    recorded = dict(
+        dict(activity.get("choices") or {}).get("source_save_effect") or {}
+    )
+    if not recorded:
+        return None
+    if recorded.get("kind") != "intellect_devourer_devour_intellect_2014":
+        raise StatblockImportError("unsupported source saving-throw action contract")
+    return deepcopy(recorded)
+
+
+def _structure_intellect_devourer_actions(
+    sheet: dict[str, Any],
+    warnings: list[str],
+) -> None:
+    """Structure the 2014 Devour Intellect action and its mixed Multiattack."""
+
+    activities = list(sheet["content"]["activities"])
+    devour = next(
+        (
+            item
+            for item in activities
+            if str(item.get("name") or "").strip().casefold() == "devour intellect"
+        ),
+        None,
+    )
+    multiattack = next(
+        (
+            item
+            for item in activities
+            if str(item.get("name") or "").strip().casefold() == "multiattack"
+        ),
+        None,
+    )
+    claws = next(
+        (
+            item
+            for item in sheet["inventory"]["items"]
+            if str(item.get("name") or "").strip().casefold() == "claws"
+            and item.get("kind") == "weapon"
+        ),
+        None,
+    )
+    if devour is None:
+        return
+    description = " ".join(str(devour.get("description") or "").split())
+    match = re.fullmatch(
+        r"The intellect devourer targets one creature it can see within "
+        r"(?P<range>\d+) feet of it that has a brain\. The target must succeed "
+        r"on a DC (?P<dc>\d+) Intelligence saving throw against this magic or "
+        r"take \d+ \((?P<damage>\d+d\d+)\) psychic damage\. Also on a failure, "
+        r"roll (?P<secondary>\d+d\d+): If the total equals or exceeds the target's "
+        r"Intelligence score, that score is reduced to 0\. The target is stunned "
+        r"until it regains at least one point of Intelligence\.",
+        description,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return
+    devour["choices"] = {
+        **dict(devour.get("choices") or {}),
+        "source_save_effect": {
+            "kind": "intellect_devourer_devour_intellect_2014",
+            "range_ft": int(match.group("range")),
+            "target_count": 1,
+            "target_requirement": "has_brain",
+            "save": {
+                "ability": "intelligence",
+                "dc": int(match.group("dc")),
+            },
+            "failure": {
+                "damage_expression": match.group("damage").lower(),
+                "damage_type": "psychic",
+                "secondary_roll": match.group("secondary").lower(),
+                "secondary_threshold": "target_intelligence_score",
+                "ability_override": {
+                    "ability": "intelligence",
+                    "score": 0,
+                },
+                "condition": "stunned",
+                "ends_when": "target_intelligence_score_at_least_1",
+            },
+            "source_excerpt": description,
+        },
+    }
+    warnings[:] = [
+        warning
+        for warning in warnings
+        if warning != "Devour Intellect: descriptive action is not automatically settled"
+    ]
+    if multiattack is None or claws is None:
+        return
+    multiattack_description = " ".join(
+        str(multiattack.get("description") or "").split()
+    )
+    if not re.fullmatch(
+        r"The intellect devourer makes one attack with its claws and uses "
+        r"Devour Intellect\.",
+        multiattack_description,
+        flags=re.IGNORECASE,
+    ):
+        return
+    multiattack["choices"] = {
+        "multiattack_options": [
+            {
+                "id": "claws-and-devour-intellect",
+                "attacks": [
+                    {
+                        "weapon_id": str(claws["id"]),
+                        "attack_mode": "melee",
+                        "count": 1,
+                    }
+                ],
+                "activities": [
+                    {
+                        "activity_id": str(devour["id"]),
+                        "count": 1,
+                    }
+                ],
+            }
+        ]
+    }
+    warnings[:] = [
+        warning
+        for warning in warnings
+        if warning != "Multiattack: Multiattack composition requires a DM ruling"
     ]
 
 
@@ -1006,13 +1191,21 @@ def parse_2014_statblock(
             "activation": {"type": activation, "cost": 1 if activation != "passive" else 0},
             "rule_refs": refs,
         }
-        source_trait = (
-            _regeneration_source_trait(description)
-            if activation == "passive" and entry_name.strip().casefold() == "regeneration"
-            else None
-        )
+        source_trait = None
+        if activation == "passive":
+            normalized_name = entry_name.strip().casefold()
+            if normalized_name == "regeneration":
+                source_trait = _regeneration_source_trait(description)
+            elif normalized_name == "pack tactics":
+                source_trait = _pack_tactics_source_trait(description)
+            elif normalized_name == "sunlight sensitivity":
+                source_trait = _sunlight_sensitivity_source_trait(description)
         if source_trait is not None:
-            entry["activation"]["trigger"] = "start of its turn"
+            entry["activation"]["trigger"] = {
+                "regeneration": "start of its turn",
+                "pack_tactics": "attack roll",
+                "sunlight_sensitivity": "attack roll or sight-based Perception check",
+            }[str(source_trait["kind"])]
             entry["choices"] = {"source_trait": source_trait}
         reaction_defense = (
             _parry_reaction_defense(entry_name, description)
@@ -1030,6 +1223,7 @@ def parse_2014_statblock(
                 else f"{entry_name}: descriptive {activation} is not automatically settled"
             )
 
+    _structure_intellect_devourer_actions(sheet, warnings)
     _structure_gazer_eye_rays(sheet, warnings)
     validated = validate_character_sheet(sheet)
     summary = f"{identity_text}; CR {challenge or 'unrecorded'}"
