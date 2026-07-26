@@ -524,6 +524,11 @@ def advance_chase_turn(
                 combat["exhaustion"] = min(
                     6, int(combat.get("exhaustion", 0) or 0) + 1
                 )
+                if int(combat["exhaustion"]) >= 6 and "dead" not in {
+                    str(condition).strip().casefold()
+                    for condition in sheet.get("conditions", [])
+                }:
+                    sheet.setdefault("conditions", []).append("dead")
                 if int(combat["exhaustion"]) >= 4:
                     hp = dict(combat.get("hp") or {})
                     hp["value"] = min(
@@ -581,7 +586,10 @@ def advance_chase_turn(
                         )
                     change["value"] = int(change.get("value", 0) or 0) + 1
                 exhaustion_gained = 1
-                if int(combat["exhaustion"]) >= 5:
+                if int(combat["exhaustion"]) >= 6:
+                    participant["active"] = False
+                    participant["dropped_reason"] = "exhaustion_death"
+                elif int(combat["exhaustion"]) >= 5:
                     participant["active"] = False
                     participant["dropped_reason"] = "exhaustion_speed_zero"
     elif normalized_action == "drop_out":

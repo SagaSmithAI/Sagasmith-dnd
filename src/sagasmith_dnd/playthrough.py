@@ -417,6 +417,7 @@ def _validate_party_member(value: Any, index: int) -> dict[str, Any]:
             "xp",
             "hit_points",
             "resources",
+            "wallet",
             "equipment",
             "knowledge_scope_actor_id",
         },
@@ -440,6 +441,9 @@ def _validate_party_member(value: Any, index: int) -> dict[str, Any]:
         "xp": _integer(item.get("xp"), f"{field}.xp", minimum=0),
         "hit_points": _json_object(item.get("hit_points"), f"{field}.hit_points"),
         "resources": _json_object(item.get("resources"), f"{field}.resources"),
+        # Schema v1 manifests created before wallet projection remain readable;
+        # the next public runtime sync fills the authoritative denominations.
+        "wallet": _json_object(item.get("wallet") or {}, f"{field}.wallet"),
         "equipment": _unique_strings(item.get("equipment"), f"{field}.equipment"),
         "knowledge_scope_actor_id": knowledge_actor,
     }

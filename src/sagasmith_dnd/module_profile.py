@@ -7,9 +7,15 @@ import re
 
 from sagasmith_core.modules import GenericModuleProfile, SceneBoundary
 
+_ROOM_CODE_PATTERN = (
+    r"(?:(?=[A-Z]{1,3}\s*[0-9IlO]{1,3}[A-Za-z]?\s*[.．。:：-])"
+    r"(?=[^.．。:：-]*\d)"
+    r"[A-Z]{1,3}\s*[0-9IlO]{1,3}[A-Za-z]?"
+    r"|[A-Z]{1,3}\s*[Il][0-9IlO]{0,2}"
+    r"|\d{1,3}\s*[A-Za-z]?)"
+)
 _ROOM = re.compile(
-    r"^(?:(?:[A-Z]{1,3}\s*[0-9IlO]{1,3})|(?:\d{1,3}\s*[A-Za-z]?))"
-    r"\s*[.．。:：-]\s*\S",
+    rf"^{_ROOM_CODE_PATTERN}\s*[.．。:：-]\s*(?=[^\W_])\S",
     re.IGNORECASE,
 )
 _STAT_SIGNALS = (
@@ -101,6 +107,10 @@ _ACTION_SCENE_BODY_SIGNAL = re.compile(
     r")",
     re.IGNORECASE,
 )
+_ACTION_SCENE_TITLE_SIGNALS = (
+    "chase",
+    "pursuit",
+)
 _NON_LOCATION_HEADINGS = {
     "adventure conclusion",
     "aftermath",
@@ -120,13 +130,12 @@ _DIMENSIONS = re.compile(
     re.IGNORECASE,
 )
 _ROOM_CODE = re.compile(
-    r"^(?P<code>(?:[A-Z]{1,3}\s*[0-9IlO]{1,3})|(?:\d{1,3}\s*[A-Za-z]?))"
+    rf"^(?P<code>{_ROOM_CODE_PATTERN})"
     r"\s*[.．。:：-]",
     re.IGNORECASE,
 )
 _ROOM_HEADING = re.compile(
-    r"^#{1,6}\s+(?P<code>(?:[A-Z]{1,3}\s*[0-9IlO]{1,3})|"
-    r"(?:\d{1,3}\s*[A-Za-z]?))"
+    rf"^#{{1,6}}\s+(?P<code>{_ROOM_CODE_PATTERN})"
     r"\s*[.．。:：-]",
     re.IGNORECASE | re.MULTILINE,
 )
@@ -153,6 +162,17 @@ def _contains_location_title_signal(folded_title: str) -> bool:
         )
         for signal in _LOCATION_TITLE_SIGNALS
         if re.fullmatch(r"[a-z]{4,}", signal)
+    )
+
+
+def _contains_action_scene_title_signal(folded_title: str) -> bool:
+    """Recognize authored action headings despite display-font OCR spacing."""
+    return any(
+        re.search(
+            r"\b" + r"\s*".join(re.escape(char) for char in signal) + r"\b",
+            folded_title,
+        )
+        for signal in _ACTION_SCENE_TITLE_SIGNALS
     )
 
 
@@ -187,7 +207,10 @@ def _location_heading_kind(title: str, body: str = "") -> str | None:
         and 1 <= len(text.split()) <= 6
         and any(char.isalpha() for char in text)
         and text.upper() == text
-        and bool(_ACTION_SCENE_BODY_SIGNAL.search(normalized_body))
+        and (
+            _contains_action_scene_title_signal(folded)
+            or bool(_ACTION_SCENE_BODY_SIGNAL.search(normalized_body))
+        )
     ):
         return "scene"
     return None
@@ -527,12 +550,34 @@ def _spatial_manifest(
     locations: list[dict[str, object]] = []
     location_key_counts: dict[str, int] = {}
     scene_title_tokens = set(re.findall(r"[a-z0-9]+", title.casefold()))
+    if _ROOM.match(title.strip()):
+        dimensions = _DIMENSIONS.search(text)
+        scene_key = _location_key(title, 0)
+        location_key_counts[scene_key] = 1
+        locations.append(
+            {
+                "key": scene_key,
+                "title": title,
+                "kind": "room",
+                "dimensions_ft": (
+                    {
+                        "width": int(dimensions.group("width")),
+                        "height": int(dimensions.group("height")),
+                    }
+                    if dimensions
+                    else None
+                ),
+                "confidence": "explicit_heading",
+            }
+        )
     for ordinal, item in enumerate(subsections):
         location_kind = str(item.get("type") or "")
         if location_kind not in {"room", "scene"}:
             continue
         label = str(item["title"])
         label_tokens = set(re.findall(r"[a-z0-9]+", label.casefold()))
+        if label_tokens == scene_title_tokens:
+            continue
         if (
             not _ROOM.match(label)
             and len(label_tokens) == 1
@@ -596,7 +641,7 @@ def _spatial_manifest(
 
 class DndModuleProfile(GenericModuleProfile):
     name = "dnd5e"
-    version = "22"
+    version = "26"
 
     def document_metadata(self, content: str) -> dict[str, object]:
         """Parse and validate the optional generated-module runtime manifest."""

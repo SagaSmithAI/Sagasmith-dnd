@@ -343,6 +343,37 @@ def test_named_action_section_populates_scene_atlas_without_claiming_it_is_a_roo
     ]
 
 
+def test_ocr_split_chase_variants_remain_distinct_scene_atlas_locations() -> None:
+    content = (
+        "# Dragon Season\n"
+        "## STREET CHASE\n"
+        "Use the urban chase rules.\n"
+        "### STREET CHA SE: S PRING\n"
+        "A kenku is 60 feet away from the characters at the start of the chase.\n"
+        "### NEXT E NCOUNTER\n"
+        "Proceed with encounter 7, Old Tower.\n"
+        "### STREET CHA SE: SUMMER\n"
+        "A doppelganger flees through crowded streets.\n"
+        "### STREET CHASE: WIN TER\n"
+        "A spy leads the characters through snowy streets.\n"
+    )
+
+    scene = next(
+        item
+        for item in MarkdownModuleParser(profile=DndModuleProfile()).parse(content)[0].scenes
+        if item.title == "STREET CHASE"
+    )
+
+    assert [
+        (item["key"], item["title"], item["kind"])
+        for item in scene.metadata["spatial"]["locations"]
+    ] == [
+        ("street-cha-se-s-pring", "STREET CHA SE: S PRING", "scene"),
+        ("street-cha-se-summer", "STREET CHA SE: SUMMER", "scene"),
+        ("street-chase-win-ter", "STREET CHASE: WIN TER", "scene"),
+    ]
+
+
 def test_visual_fragment_does_not_hide_interaction_from_scene_atlas() -> None:
     content = (
         "# Fireball\n"
@@ -474,6 +505,13 @@ def test_named_windmill_season_populates_scene_atlas_as_a_location() -> None:
 
     assert scene.metadata["spatial"]["locations"] == [
         {
+            "key": "w8-back-room",
+            "title": "W8. BACK ROOM",
+            "kind": "room",
+            "dimensions_ft": None,
+            "confidence": "explicit_heading",
+        },
+        {
             "key": "converted-windmill-spring",
             "title": "CONVERTED WINDMILL: SPRING",
             "kind": "room",
@@ -575,6 +613,71 @@ def test_coded_scene_fallback_is_typed_as_room_even_with_ocr_digit() -> None:
     assert scene.title == "Ql. Central Hub"
     assert scene.metadata["spatial"]["locations"][0]["kind"] == "room"
     assert scene.metadata["spatial"]["locations"][0]["confidence"] == "explicit_heading"
+
+
+def test_coded_scene_keeps_root_room_when_it_has_spatial_subsections() -> None:
+    content = (
+        "# Dragon Season\n"
+        "## V9. MAIN VAULT\n"
+        "A dragon guards the main vault.\n"
+        "### LEAVING THE VAULT\n"
+        "Enemies wait outside.\n"
+        "### FACTION REINFORCEMENTS\n"
+        "Allies can arrive here.\n"
+    )
+
+    scene = MarkdownModuleParser(profile=DndModuleProfile()).parse(content)[0].scenes[1]
+
+    assert [item["title"] for item in scene.metadata["spatial"]["locations"]] == [
+        "V9. MAIN VAULT",
+        "LEAVING THE VAULT",
+    ]
+    assert scene.metadata["spatial"]["locations"][0] == {
+        "key": "v9-main-vault",
+        "title": "V9. MAIN VAULT",
+        "kind": "room",
+        "dimensions_ft": None,
+        "confidence": "explicit_heading",
+    }
+
+
+def test_ocr_room_codes_split_scenes_without_treating_words_as_codes() -> None:
+    content = (
+        "# Chapter 5\n"
+        "#### XlO. NOSKA'S QUARTERS\n"
+        "A rust monster waits in a cage.\n"
+        "#### Xll. AHMAERGO'S COLLECTION\n"
+        "A stuffed minotaur stands here.\n"
+        "#### Xl3. THORVIN'S WORKSHOP\n"
+        "Thorvin is building a contraption.\n"
+        "#### Xl7. PROMENADE\n"
+        "Pillars carved with eyes follow the hall.\n"
+        "#### Xl9. XANATHAR'S SANCTUM\n"
+        "A fishbowl dominates the room.\n"
+        "#### FOO. Ordinary Section\n"
+        "This alphabetic abbreviation is not a numbered room.\n"
+        "#### BOW1. (The fish keeper uses the pallet as a bed.)\n"
+        "This OCR sentence fragment is not a numbered room.\n"
+    )
+
+    scenes = MarkdownModuleParser(profile=DndModuleProfile()).parse(content)[0].scenes
+
+    room_scenes = [scene for scene in scenes if scene.title.startswith("Xl")]
+    assert [scene.title for scene in room_scenes] == [
+        "XlO. NOSKA'S QUARTERS",
+        "Xll. AHMAERGO'S COLLECTION",
+        "Xl3. THORVIN'S WORKSHOP",
+        "Xl7. PROMENADE",
+        "Xl9. XANATHAR'S SANCTUM",
+    ]
+    assert all(
+        scene.metadata["spatial"]["locations"][0]["kind"] == "room"
+        for scene in room_scenes
+    )
+    ordinary = next(scene for scene in scenes if scene.title == "FOO. Ordinary Section")
+    assert ordinary.metadata["spatial"]["locations"][0]["kind"] != "room"
+    fragment = next(scene for scene in scenes if scene.title.startswith("BOW1."))
+    assert fragment.metadata["spatial"]["locations"][0]["kind"] != "room"
 
 
 def test_chapter_preamble_does_not_create_a_spatial_room() -> None:

@@ -14,7 +14,12 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Iterable
 from uuid import uuid4
 
-from sagasmith_dnd.character_schema import SKILL_ABILITIES, effective_hit_point_maximum
+from sagasmith_dnd.character_schema import (
+    SKILL_ABILITIES,
+    effective_ability_scores,
+    effective_hit_point_maximum,
+    validate_character_sheet,
+)
 from sagasmith_dnd.engine import (
     resolve_attack,
     resolve_check,
@@ -578,6 +583,8 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
     current = current_combatant(encounter)
     if current is None or current.get("actor_id") != actor_id_value:
         return []
+    if combatant.get("inside_host"):
+        return []
     if combatant.get("surprised") and _normalize_ruleset(encounter.get("ruleset")) == "2014":
         return []
     if conditions & {"dead", "unconscious", "stunned", "paralyzed", "petrified"}:
@@ -761,7 +768,7 @@ def pay_attack_action(
                 and multiattack_option_id != active_multiattack.get("option_id")
             ):
                 raise CombatEngineError("multiattack option cannot change during the action")
-            remaining = _consume_multiattack_entry(
+            remaining = _consume_multiattack_attack_entry(
                 active_multiattack.get("remaining"), weapon_id, attack_mode
             )
             if remaining:
@@ -797,10 +804,10 @@ def pay_attack_action(
             option = _select_multiattack_option(
                 multiattack_options, multiattack_option_id
             )
-            remaining = _consume_multiattack_entry(
-                option["attacks"], weapon_id, attack_mode
+            remaining = _consume_multiattack_attack_entry(
+                option["entries"], weapon_id, attack_mode
             )
-            total = sum(int(item["count"]) for item in option["attacks"])
+            total = sum(int(item["count"]) for item in option["entries"])
             budget["attack_budget"] = total - 1
             if remaining:
                 flags["multiattack"] = {
@@ -831,6 +838,57 @@ def pay_attack_action(
     else:
         combatant.pop("turn_flags", None)
     return value, payment
+
+
+def pay_multiattack_activity(
+    encounter: dict[str, Any],
+    actor_id_value: str,
+    *,
+    activity_id: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Pay a structured activity that remains inside an active Multiattack."""
+
+    value = deepcopy(encounter)
+    current = current_combatant(value)
+    if current is None or current.get("actor_id") != actor_id_value:
+        raise CombatEngineError("it is not this actor's turn")
+    combatant = next(
+        item
+        for item in value.get("combatants", [])
+        if item.get("actor_id") == actor_id_value
+    )
+    budget = dict(combatant.get("turn_budget") or {})
+    flags = dict(combatant.get("turn_flags") or {})
+    active_multiattack = dict(flags.get("multiattack") or {})
+    if (
+        not active_multiattack
+        or int(budget.get("attack_budget", 0) or 0) < 1
+    ):
+        raise CombatEngineError(
+            "source activity is not available as a Multiattack follow-up"
+        )
+    remaining = _consume_multiattack_activity_entry(
+        active_multiattack.get("remaining"),
+        activity_id,
+    )
+    budget["attack_budget"] = int(budget["attack_budget"]) - 1
+    if remaining:
+        flags["multiattack"] = {
+            **active_multiattack,
+            "remaining": remaining,
+        }
+    else:
+        flags.pop("multiattack", None)
+    combatant["turn_budget"] = budget
+    if flags:
+        combatant["turn_flags"] = flags
+    else:
+        combatant.pop("turn_flags", None)
+    return value, {
+        "kind": "multiattack_activity_followup",
+        "activity_id": activity_id,
+        "option_id": active_multiattack.get("option_id"),
+    }
 
 
 def preflight_attack(
@@ -877,6 +935,25 @@ def preflight_attack(
                     combatant.get("zero_hp_recovery", False)
                 )
                 target["visible_to_actor_ids"] = deepcopy(combatant.get("visible_to_actor_ids"))
+                target["inside_host"] = deepcopy(combatant.get("inside_host"))
+    if target.get("inside_host"):
+        raise CombatEngineError("target has total cover inside its host")
+    attack_source_traits = {
+        str(source_trait.get("kind") or ""): {
+            "feature": feature,
+            "trait": source_trait,
+        }
+        for feature in actor_sheet(attacker).get("content", {}).get("features", [])
+        if isinstance(feature, dict)
+        and isinstance(
+            source_trait := dict(
+                dict(feature.get("choices") or {}).get("source_trait") or {}
+            ),
+            dict,
+        )
+        and str(source_trait.get("kind") or "")
+        in {"pack_tactics", "sunlight_sensitivity"}
+    }
     relentless_endurance_feature = _automatic_relentless_endurance_feature(
         actor_sheet(target)
     )
@@ -1033,6 +1110,38 @@ def preflight_attack(
     if not attacker_can_see_target:
         context["disadvantage"] = True
         context.setdefault("disadvantage_sources", []).append("target_unseen")
+    sunlight_trait = dict(
+        dict(attack_source_traits.get("sunlight_sensitivity") or {}).get(
+            "trait"
+        )
+        or {}
+    )
+    sunlight_fact = context.get("direct_sunlight")
+    if sunlight_trait:
+        if (
+            sunlight_trait
+            != {
+                "kind": "sunlight_sensitivity",
+                "trigger": "attack_roll_or_sight_perception",
+                "environment_fact": "direct_sunlight",
+                "grants": "disadvantage",
+                "automatic": True,
+            }
+        ):
+            raise NeedsRulingError(
+                "Sunlight Sensitivity has an unsupported source contract",
+                missing=("sunlight_sensitivity",),
+            )
+        if not isinstance(sunlight_fact, bool):
+            raise NeedsRulingError(
+                "direct sunlight is required to settle Sunlight Sensitivity",
+                missing=("direct_sunlight",),
+            )
+        if sunlight_fact:
+            context["disadvantage"] = True
+            context.setdefault("disadvantage_sources", []).append(
+                "sunlight_sensitivity"
+            )
     if attacker_conditions & {"blinded", "poisoned", "prone", "restrained"}:
         context["disadvantage"] = True
         context.setdefault("disadvantage_sources", []).extend(
@@ -1159,6 +1268,71 @@ def preflight_attack(
                 context.setdefault("advantage_sources", []).append("help")
                 helped_by = str(helper.get("actor_id"))
                 break
+        pack_tactics_trait = dict(
+            dict(attack_source_traits.get("pack_tactics") or {}).get("trait")
+            or {}
+        )
+        if pack_tactics_trait:
+            if (
+                pack_tactics_trait
+                != {
+                    "kind": "pack_tactics",
+                    "trigger": "attack_roll",
+                    "ally_within_target_ft": 5,
+                    "requires_ally_not_incapacitated": True,
+                    "grants": "advantage",
+                    "automatic": True,
+                }
+            ):
+                raise NeedsRulingError(
+                    "Pack Tactics has an unsupported source contract",
+                    missing=("pack_tactics",),
+                )
+            attacker_state = next(
+                (
+                    item
+                    for item in encounter.get("combatants", [])
+                    if str(item.get("actor_id") or "") == actor_id(attacker)
+                ),
+                None,
+            )
+            pack_tactics_ally = next(
+                (
+                    candidate
+                    for candidate in encounter.get("combatants", [])
+                    if str(candidate.get("actor_id") or "")
+                    not in {actor_id(attacker), actor_id(target)}
+                    and attacker_state is not None
+                    and not _are_hostile(candidate, attacker_state)
+                    and _are_hostile(candidate, target)
+                    and target_position is not None
+                    and (candidate_position := _position(candidate.get("position")))
+                    is not None
+                    and _grid_distance(candidate_position, target_position) <= 5
+                    and not _condition_set(candidate.get("conditions"))
+                    & {
+                        "dead",
+                        "unconscious",
+                        "stunned",
+                        "incapacitated",
+                        "paralyzed",
+                        "petrified",
+                    }
+                ),
+                None,
+            )
+            if pack_tactics_ally is not None:
+                context["advantage"] = True
+                context.setdefault("advantage_sources", []).append(
+                    "pack_tactics"
+                )
+                pack_tactics_ally_id = str(
+                    pack_tactics_ally.get("actor_id") or ""
+                )
+            else:
+                pack_tactics_ally_id = None
+        else:
+            pack_tactics_ally_id = None
         for effect in encounter.get("ongoing_effects", []):
             if (
                 isinstance(effect, dict)
@@ -1172,6 +1346,13 @@ def preflight_attack(
                     next_attack_advantage_effect_id
                 )
                 break
+    elif "pack_tactics" in attack_source_traits:
+        raise NeedsRulingError(
+            "encounter positions are required to settle Pack Tactics",
+            missing=("pack_tactics_positions",),
+        )
+    else:
+        pack_tactics_ally_id = None
     automatic_critical = bool(
         distance is not None
         and int(distance) <= 5
@@ -1220,6 +1401,10 @@ def preflight_attack(
         core_boundary_ids.append("dnd5e.core.attack.cover")
     if helped_by:
         core_boundary_ids.append("dnd5e.core.attack.help")
+    if sunlight_trait:
+        core_boundary_ids.append("dnd5e.core.attack.sunlight_sensitivity")
+    if "pack_tactics" in attack_source_traits:
+        core_boundary_ids.append("dnd5e.core.attack.pack_tactics")
     return {
         "status": "ready",
         "kind": "attack",
@@ -1263,6 +1448,7 @@ def preflight_attack(
         "attacker_was_hidden": bool(attacker.get("hidden", False)),
         "target_can_see_attacker": target_can_see_attacker,
         "helped_by": helped_by,
+        "pack_tactics_ally_id": pack_tactics_ally_id,
         "next_attack_advantage_effect_id": next_attack_advantage_effect_id,
         "sneak_attack": sneak_attack,
         "halfling_lucky": _has_halfling_lucky(actor_sheet(attacker)),
@@ -1952,9 +2138,17 @@ def _validated_multiattack_options(attacker: dict[str, Any]) -> list[dict[str, A
                 raise CombatEngineError("Multiattack option ids must be nonempty and unique")
             seen_ids.add(option_id)
             raw_attacks = raw_option.get("attacks")
-            if not isinstance(raw_attacks, list) or not raw_attacks:
-                raise CombatEngineError("Multiattack option must list its attacks")
+            raw_activities = raw_option.get("activities", [])
+            if not isinstance(raw_attacks, list) or not isinstance(
+                raw_activities, list
+            ):
+                raise CombatEngineError(
+                    "Multiattack option attacks and activities must be lists"
+                )
+            if not raw_attacks and not raw_activities:
+                raise CombatEngineError("Multiattack option must list its components")
             attacks: list[dict[str, Any]] = []
+            entries: list[dict[str, Any]] = []
             total = 0
             for raw_attack in raw_attacks:
                 if not isinstance(raw_attack, dict):
@@ -1979,13 +2173,52 @@ def _validated_multiattack_options(attacker: dict[str, Any]) -> list[dict[str, A
                         )
                 if count < 1:
                     raise CombatEngineError("Multiattack attack count must be positive")
-                attacks.append(
-                    {
-                        "weapon_id": weapon_id,
-                        "attack_mode": attack_mode,
-                        "count": count,
-                    }
-                )
+                attack = {
+                    "weapon_id": weapon_id,
+                    "attack_mode": attack_mode,
+                    "count": count,
+                }
+                attacks.append(attack)
+                entries.append(attack)
+                total += count
+            activities: list[dict[str, Any]] = []
+            actor_activities = {
+                str(item.get("id") or ""): item
+                for item in sheet.get("content", {}).get("activities", [])
+            }
+            for raw_activity in raw_activities:
+                if not isinstance(raw_activity, dict):
+                    raise CombatEngineError(
+                        "Multiattack activity entry must be an object"
+                    )
+                activity_id = str(raw_activity.get("activity_id") or "")
+                count = int(raw_activity.get("count", 0) or 0)
+                component_activity = actor_activities.get(activity_id)
+                if (
+                    component_activity is None
+                    or str(component_activity.get("name") or "").casefold()
+                    == "multiattack"
+                ):
+                    raise CombatEngineError(
+                        "Multiattack references an invalid component activity"
+                    )
+                if (
+                    str(
+                        dict(component_activity.get("activation") or {}).get(
+                            "type"
+                        )
+                        or ""
+                    )
+                    != "action"
+                    or count < 1
+                ):
+                    raise CombatEngineError(
+                        "Multiattack component activity must be an action with "
+                        "a positive count"
+                    )
+                component = {"activity_id": activity_id, "count": count}
+                activities.append(component)
+                entries.append(component)
                 total += count
             if total < 2 or total > 10:
                 raise CombatEngineError("Multiattack option must contain 2 to 10 attacks")
@@ -1994,6 +2227,8 @@ def _validated_multiattack_options(attacker: dict[str, Any]) -> list[dict[str, A
                     "activity_id": str(activity.get("id") or "multiattack"),
                     "id": option_id,
                     "attacks": attacks,
+                    "activities": activities,
+                    "entries": entries,
                 }
             )
     return result
@@ -2012,7 +2247,7 @@ def _select_multiattack_option(
     return options[0]
 
 
-def _consume_multiattack_entry(
+def _consume_multiattack_attack_entry(
     entries: Any, weapon_id: str, attack_mode: str
 ) -> list[dict[str, Any]]:
     if not isinstance(entries, list):
@@ -2032,6 +2267,33 @@ def _consume_multiattack_entry(
         raise CombatEngineError("attack is not allowed by the remaining Multiattack sequence")
     match["count"] = int(match["count"]) - 1
     return [item for item in remaining if int(item.get("count", 0) or 0) > 0]
+
+
+def _consume_multiattack_activity_entry(
+    entries: Any,
+    activity_id: str,
+) -> list[dict[str, Any]]:
+    if not isinstance(entries, list):
+        raise CombatEngineError("active Multiattack state is malformed")
+    remaining = deepcopy(entries)
+    match = next(
+        (
+            item
+            for item in remaining
+            if item.get("activity_id") == activity_id
+            and int(item.get("count", 0) or 0) > 0
+        ),
+        None,
+    )
+    if match is None:
+        raise CombatEngineError(
+            "activity is not allowed by the remaining Multiattack sequence"
+        )
+    match["count"] = int(match["count"]) - 1
+    return [
+        item for item in remaining
+        if int(item.get("count", 0) or 0) > 0
+    ]
 
 
 def _automatic_relentless_endurance_feature(
@@ -2893,13 +3155,13 @@ def force_move_directly_away(
             "directly-away movement is ambiguous for overlapping tokens",
             missing=("forced_movement_direction",),
         )
-    if delta_x and delta_y and abs(delta_x) != abs(delta_y):
-        raise NeedsRulingError(
-            "directly-away movement is ambiguous on this square-grid bearing",
-            missing=("forced_movement_grid_path",),
-        )
-    step_x = 0 if delta_x == 0 else 1 if delta_x > 0 else -1
-    step_y = 0 if delta_y == 0 else 1 if delta_y > 0 else -1
+    grid_span = max(abs(delta_x), abs(delta_y))
+
+    def _grid_ray_offset(component: float, step: int) -> int:
+        """Round a continuous outward ray to the nearest standard grid cell."""
+        scaled = (component * step) / grid_span
+        return int(scaled + 0.5) if scaled >= 0 else int(scaled - 0.5)
+
     battle_map = dict(value.get("battle_map") or {})
     occupied = {
         _position(item.get("position"))
@@ -2912,10 +3174,10 @@ def force_move_directly_away(
     moved_cells = 0
     from sagasmith_dnd.spatial import BattleMapError, validate_position
 
-    for _ in range(distance // 5):
+    for step in range(1, (distance // 5) + 1):
         candidate = (
-            destination[0] + step_x,
-            destination[1] + step_y,
+            target_position[0] + _grid_ray_offset(delta_x, step),
+            target_position[1] + _grid_ray_offset(delta_y, step),
         )
         candidate_dict = {"x": int(candidate[0]), "y": int(candidate[1])}
         if candidate in occupied:
@@ -2994,6 +3256,8 @@ def resolve_common_action(
     )
     if combatant is None:
         raise CombatEngineError("actor is not a combatant")
+    if combatant.get("inside_host"):
+        raise CombatEngineError("actor cannot act separately while inside its host")
     out_of_turn_reaction = action == "cast" and payment == "reaction"
     if not out_of_turn_reaction and (current is None or current.get("actor_id") != actor_id_value):
         raise CombatEngineError("it is not this actor's turn")
@@ -3896,6 +4160,7 @@ def resolve_actor_check(
         result["ruleset_fingerprint"] = rules.fingerprint if rules else ""
         return result
     abilities = dict(sheet.get("abilities") or {})
+    ability_scores = effective_ability_scores(sheet)
     if kind not in {"ability", "check", "save", "death_save", "attack"}:
         raise CombatEngineError("unsupported check kind")
     if kind == "save" and _long_ability_name(ability) in {"strength", "dexterity"}:
@@ -3927,7 +4192,7 @@ def resolve_actor_check(
     if kind in {"ability", "check"} and normalized_ability in derived_skills:
         score_ability = SKILL_ABILITIES[normalized_ability]
         entry = dict(sheet.get("abilities", {}).get(score_ability) or {})
-        score = int(entry.get("score", 10))
+        score = int(ability_scores.get(score_ability, entry.get("score", 10)))
         proficiency_bonus = 2 + (level - 1) // 4
         skill_bonus = int(skill.get("bonus", 0) or 0) + roll_bonus
         skill_is_proficient = skill_proficiency in {"proficient", "expertise"}
@@ -3948,7 +4213,13 @@ def resolve_actor_check(
             rng=rng,
         ))
     entry = abilities.get(ability) or abilities.get(_long_ability_name(ability)) or {}
-    score = int(entry.get("score", 10) if isinstance(entry, dict) else entry)
+    long_ability = _long_ability_name(ability)
+    score = int(
+        ability_scores.get(
+            long_ability,
+            entry.get("score", 10) if isinstance(entry, dict) else entry,
+        )
+    )
     if kind == "save" and isinstance(entry, dict):
         proficient = bool(entry.get("save_proficient", False))
         bonus = int(entry.get("bonus", 0) or 0) + roll_bonus
@@ -4192,6 +4463,283 @@ def resolve_random_save_effects(
             str(effects[index].get("id") or "") for index in selected_indexes
         ],
         "targets": results,
+    }
+
+
+def resolve_source_save_effect(
+    source_actor: dict[str, Any],
+    target_actor: dict[str, Any],
+    *,
+    spec: dict[str, Any],
+    death_saves: bool = True,
+    rules: ResolutionContext | None = None,
+    rng: Any = None,
+) -> dict[str, Any]:
+    """Resolve one reviewed deterministic saving-throw action."""
+
+    if spec.get("kind") != "intellect_devourer_devour_intellect_2014":
+        raise CombatEngineError("unsupported source saving-throw action contract")
+    source_id = actor_id(source_actor)
+    target_id = actor_id(target_actor)
+    if source_id == target_id:
+        raise CombatEngineError("source saving-throw action cannot target its source")
+    save_spec = dict(spec.get("save") or {})
+    failure = dict(spec.get("failure") or {})
+    ability_override = dict(failure.get("ability_override") or {})
+    if (
+        spec.get("target_count") != 1
+        or spec.get("target_requirement") != "has_brain"
+        or str(save_spec.get("ability") or "") != "intelligence"
+        or int(save_spec.get("dc", 0) or 0) != 12
+        or str(failure.get("damage_expression") or "") != "2d10"
+        or str(failure.get("damage_type") or "") != "psychic"
+        or str(failure.get("secondary_roll") or "") != "3d6"
+        or failure.get("secondary_threshold") != "target_intelligence_score"
+        or ability_override != {"ability": "intelligence", "score": 0}
+        or failure.get("condition") != "stunned"
+        or failure.get("ends_when")
+        != "target_intelligence_score_at_least_1"
+    ):
+        raise CombatEngineError("source saving-throw action contract is malformed")
+    target_sheet = actor_sheet(target_actor)
+    intelligence_before = effective_ability_scores(target_sheet)["intelligence"]
+    save = resolve_actor_check(
+        target_actor,
+        kind="save",
+        ability="intelligence",
+        dc=12,
+        rules=rules,
+        rng=rng,
+    )
+    result: dict[str, Any] = {
+        "kind": "source_save_effect",
+        "contract": str(spec["kind"]),
+        "source_actor_id": source_id,
+        "target_id": target_id,
+        "source_excerpt": str(spec.get("source_excerpt") or ""),
+        "save": save,
+        "success": bool(save["success"]),
+        "intelligence_before": intelligence_before,
+    }
+    if save["success"]:
+        return {
+            "sheet": target_sheet,
+            "result": {
+                **result,
+                "outcome": "saved",
+                "ability_reduced": False,
+            },
+        }
+    damage_die = roll("2d10", rng=rng)
+    damage = apply_damage_parts_to_sheet(
+        target_sheet,
+        [{"amount": damage_die.total, "damage_type": "psychic"}],
+        source=f"{source_id}:devour-intellect",
+        ruleset=str(target_sheet.get("edition") or "2014"),
+        death_saves=death_saves,
+    )
+    updated = damage["sheet"]
+    secondary = roll("3d6", rng=rng)
+    ability_reduced = secondary.total >= intelligence_before
+    effect_instance_id = ""
+    ended_effect_ids: list[str] = []
+    if ability_reduced and intelligence_before > 0:
+        existing_count = sum(
+            1
+            for item in updated.get("effects", [])
+            if str(item.get("name") or "").strip().casefold()
+            == "devour intellect"
+        )
+        effect_instance_id = (
+            f"devour-intellect-{source_id}-{target_id}-{existing_count + 1}"
+        )
+        updated.setdefault("effects", []).append(
+            {
+                "id": effect_instance_id,
+                "name": "Devour Intellect",
+                "kind": "timed_conditions",
+                "source": source_id,
+                "active": True,
+                "concentration": False,
+                "duration": {"period": "manual", "remaining": 0},
+                "changes": [
+                    {
+                        "path": "abilities.intelligence.score",
+                        "mode": "override",
+                        "value": 0,
+                    },
+                    {
+                        "path": "conditions",
+                        "mode": "add",
+                        "value": "stunned",
+                    },
+                ],
+                "description": str(spec.get("source_excerpt") or ""),
+            }
+        )
+        updated["conditions"] = sorted(
+            _condition_set(updated.get("conditions")) | {"stunned"}
+        )
+        ended_effect_ids = end_concentration_for_incapacitating_conditions(
+            updated,
+            ended_reason="stunned",
+        )
+    return {
+        "sheet": validate_character_sheet(updated),
+        "result": {
+            **result,
+            "outcome": "failed",
+            "damage_roll": {
+                "expression": damage_die.expression,
+                "rolls": list(damage_die.rolls),
+                "total": damage_die.total,
+            },
+            "damage": {
+                key: value
+                for key, value in damage.items()
+                if key != "sheet"
+            },
+            "secondary_roll": {
+                "expression": secondary.expression,
+                "rolls": list(secondary.rolls),
+                "total": secondary.total,
+                "threshold": intelligence_before,
+            },
+            "ability_reduced": ability_reduced,
+            "intelligence_after": 0 if ability_reduced else intelligence_before,
+            "condition": "stunned" if ability_reduced else "",
+            "effect_instance_id": effect_instance_id,
+            "ended_effect_ids": ended_effect_ids,
+        },
+    }
+
+
+def resolve_source_contest_effect(
+    source_actor: dict[str, Any],
+    target_actor: dict[str, Any],
+    *,
+    spec: dict[str, Any],
+    rules: ResolutionContext | None = None,
+    rng: Any = None,
+) -> dict[str, Any]:
+    """Resolve the reviewed 2014 Body Thief Intelligence contest."""
+
+    if spec.get("kind") != "intellect_devourer_body_thief_2014":
+        raise CombatEngineError("unsupported source ability-contest action contract")
+    contest = dict(spec.get("contest") or {})
+    success_spec = dict(spec.get("success") or {})
+    if (
+        spec.get("target_count") != 1
+        or spec.get("target_requirements") != ["incapacitated", "humanoid"]
+        or contest
+        != {
+            "source_ability": "intelligence",
+            "target_ability": "intelligence",
+            "ties": "no_winner",
+        }
+        or success_spec.get("brain_consumed") is not True
+        or success_spec.get("source_inside_host") is not True
+        or success_spec.get("source_total_cover") is not True
+        or success_spec.get("source_retains")
+        != [
+            "intelligence",
+            "wisdom",
+            "charisma",
+            "deep_speech",
+            "telepathy",
+            "traits",
+        ]
+        or success_spec.get("source_adopts") != "target_statistics_otherwise"
+        or success_spec.get("knowledge_transfer") != "all_target_knowledge"
+        or success_spec.get("host_zero_hp") != "source_must_leave"
+    ):
+        raise CombatEngineError("source ability-contest action contract is malformed")
+    source_id = actor_id(source_actor)
+    target_id = actor_id(target_actor)
+    if source_id == target_id:
+        raise CombatEngineError("source ability-contest action cannot target its source")
+    source_check = resolve_actor_check(
+        source_actor,
+        kind="ability",
+        ability="intelligence",
+        dc=0,
+        rules=rules,
+        rng=rng,
+    )
+    target_check = resolve_actor_check(
+        target_actor,
+        kind="ability",
+        ability="intelligence",
+        dc=0,
+        rules=rules,
+        rng=rng,
+    )
+    won = int(source_check["total"]) > int(target_check["total"])
+    result = {
+        "kind": "source_contest_effect",
+        "contract": str(spec["kind"]),
+        "source_actor_id": source_id,
+        "target_id": target_id,
+        "source_excerpt": str(spec.get("source_excerpt") or ""),
+        "source_check": source_check,
+        "target_check": target_check,
+        "tie": int(source_check["total"]) == int(target_check["total"]),
+        "success": won,
+        "outcome": "body_taken" if won else "contest_not_won",
+        "knowledge_transfer": (
+            "all_target_knowledge" if won else "none"
+        ),
+    }
+    target_sheet = actor_sheet(target_actor)
+    if not won:
+        return {"sheet": target_sheet, "result": result}
+    source_scores = effective_ability_scores(actor_sheet(source_actor))
+    updated = deepcopy(target_sheet)
+    for effect in updated.get("effects", []):
+        if (
+            effect.get("active")
+            and str(effect.get("name") or "").strip().casefold()
+            == "devour intellect"
+        ):
+            effect["active"] = False
+            effect["ended_reason"] = "body_thief_takeover"
+    updated["conditions"] = sorted(
+        _condition_set(updated.get("conditions")) - {"stunned", "incapacitated"}
+    )
+    effect_id = f"body-thief-{source_id}-{target_id}"
+    updated.setdefault("effects", []).append(
+        {
+            "id": effect_id,
+            "name": "Body Thief Host",
+            "kind": "timed_conditions",
+            "source": source_id,
+            "active": True,
+            "concentration": False,
+            "duration": {"period": "manual", "remaining": 0},
+            "changes": [
+                {
+                    "path": f"abilities.{ability}.score",
+                    "mode": "override",
+                    "value": source_scores[ability],
+                }
+                for ability in ("intelligence", "wisdom", "charisma")
+            ],
+            "description": str(spec.get("source_excerpt") or ""),
+        }
+    )
+    validated = validate_character_sheet(updated)
+    return {
+        "sheet": validated,
+        "result": {
+            **result,
+            "effect_instance_id": effect_id,
+            "source_mental_ability_scores": {
+                ability: source_scores[ability]
+                for ability in ("intelligence", "wisdom", "charisma")
+            },
+            "source_total_cover": True,
+            "brain_consumed": True,
+        },
     }
 
 

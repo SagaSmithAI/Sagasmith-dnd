@@ -8,6 +8,7 @@ from sagasmith_dnd.character_schema import (
     default_character_sheet,
     derive_character_sheet,
     equip_inventory_item,
+    remove_effect,
     validate_character_sheet,
 )
 from sagasmith_dnd.combat_engine import (
@@ -31,6 +32,7 @@ from sagasmith_dnd.combat_engine import (
     force_move_directly_away,
     pay_activity_activation,
     pay_attack_action,
+    pay_multiattack_activity,
     preflight_attack,
     preflight_spell_attack,
     queue_combatant,
@@ -44,6 +46,8 @@ from sagasmith_dnd.combat_engine import (
     resolve_random_save_effects,
     resolve_readied_spell_window,
     resolve_second_wind_to_sheet,
+    resolve_source_contest_effect,
+    resolve_source_save_effect,
     resolve_turn_undead_to_sheets,
     roll_attack_action,
     settle_core_activity_effect,
@@ -265,6 +269,38 @@ def test_telekinetic_ray_moves_up_to_the_last_legal_cell_without_reactions() -> 
     assert moved["destination"] == {"x": 5, "y": 1}
     assert moved["encounter"]["pending"] == []
     assert moved["encounter"]["log"][-1]["opportunity_reactions"] is False
+
+
+def test_telekinetic_ray_projects_noncardinal_bearings_onto_the_square_grid() -> None:
+    source = _actor("gazer")
+    source.update(
+        initiative=20,
+        position={"x": 2, "y": 2},
+        disposition="hostile",
+    )
+    target = _actor("target")
+    target.update(
+        initiative=10,
+        position={"x": 1, "y": 4},
+        disposition="friendly",
+    )
+    encounter = start_encounter([source, target])
+    encounter["battle_map"] = compile_battle_map(
+        {"scene_id": "gazer-rays", "spatial": {}},
+        {"width_cells": 4, "height_cells": 7},
+    )
+
+    moved = force_move_directly_away(
+        encounter,
+        source_actor_id="gazer",
+        target_actor_id="target",
+        distance_ft=30,
+    )
+
+    # The continuous (-1, 2) outward ray crosses (0, 5), then (0, 6);
+    # the following cell is outside the map, so "up to 30 feet" stops there.
+    assert moved["moved_distance_ft"] == 10
+    assert moved["destination"] == {"x": 0, "y": 6}
 
 
 def test_frightened_creature_cannot_willingly_move_closer_to_visible_source() -> None:
@@ -1288,6 +1324,294 @@ def test_bandit_captain_multiattack_preserves_recorded_weapon_composition() -> N
     assert ordinary["combatants"][0]["turn_budget"]["attack_budget"] == 0
 
 
+def test_mixed_multiattack_pays_one_weapon_and_one_source_activity() -> None:
+    attacker = _actor("intellect-devourer", hp=21)
+    attacker["sheet"]["inventory"]["items"] = [
+        {
+            "id": "claws",
+            "name": "Claws",
+            "kind": "weapon",
+            "equipped": True,
+            "equipped_slot": "main_hand",
+            "mechanics": {
+                "attack_type": "melee",
+                "attack_ability": "dexterity",
+                "damage_formula": "2d4",
+                "damage_type": "slashing",
+                "properties": [],
+            },
+        }
+    ]
+    attacker["sheet"]["inventory"]["equipment_slots"]["main_hand"] = "claws"
+    attacker["sheet"]["content"]["activities"] = [
+        {
+            "id": "multiattack-activity",
+            "name": "Multiattack",
+            "activation": {"type": "action"},
+            "choices": {
+                "multiattack_options": [
+                    {
+                        "id": "claws-and-devour",
+                        "attacks": [
+                            {
+                                "weapon_id": "claws",
+                                "attack_mode": "melee",
+                                "count": 1,
+                            }
+                        ],
+                        "activities": [
+                            {
+                                "activity_id": "devour-intellect-action",
+                                "count": 1,
+                            }
+                        ],
+                    }
+                ]
+            },
+        },
+        {
+            "id": "devour-intellect-action",
+            "name": "Devour Intellect",
+            "activation": {"type": "action"},
+        },
+    ]
+    attacker["derived"] = derive_character_sheet(attacker["sheet"])
+    target = _actor("target")
+    attacker.update(initiative=20, tie_breaker=0)
+    target.update(initiative=10, tie_breaker=0)
+    encounter = start_encounter([attacker, target])
+
+    encounter, attack_payment = pay_attack_action(
+        encounter,
+        attacker,
+        weapon_id="claws",
+        attack_mode="melee",
+        multiattack_option_id="claws-and-devour",
+    )
+    encounter, activity_payment = pay_multiattack_activity(
+        encounter,
+        attacker["id"],
+        activity_id="devour-intellect-action",
+    )
+
+    assert attack_payment["attack_count"] == 2
+    assert activity_payment == {
+        "kind": "multiattack_activity_followup",
+        "activity_id": "devour-intellect-action",
+        "option_id": "claws-and-devour",
+    }
+    current = encounter["combatants"][encounter["turn_index"]]
+    assert current["turn_budget"]["main_action"] == 0
+    assert current["turn_budget"]["attack_budget"] == 0
+    assert "multiattack" not in current.get("turn_flags", {})
+
+
+def test_devour_intellect_resolves_damage_score_reduction_and_stun() -> None:
+    source = _actor("intellect-devourer", hp=21)
+    target = _actor("target", hp=30)
+    target["sheet"]["abilities"]["intelligence"]["score"] = 10
+    target["derived"] = derive_character_sheet(target["sheet"])
+    spec = {
+        "kind": "intellect_devourer_devour_intellect_2014",
+        "range_ft": 10,
+        "target_count": 1,
+        "target_requirement": "has_brain",
+        "save": {"ability": "intelligence", "dc": 12},
+        "failure": {
+            "damage_expression": "2d10",
+            "damage_type": "psychic",
+            "secondary_roll": "3d6",
+            "secondary_threshold": "target_intelligence_score",
+            "ability_override": {"ability": "intelligence", "score": 0},
+            "condition": "stunned",
+            "ends_when": "target_intelligence_score_at_least_1",
+        },
+        "source_excerpt": "Exact Devour Intellect source text.",
+    }
+
+    settled = resolve_source_save_effect(
+        source,
+        target,
+        spec=spec,
+        rng=_SequenceRng(1, 5, 6, 4, 4, 4),
+    )
+    sheet = settled["sheet"]
+    result = settled["result"]
+
+    assert result["save"]["success"] is False
+    assert result["damage_roll"]["total"] == 11
+    assert result["secondary_roll"]["total"] == 12
+    assert result["ability_reduced"] is True
+    assert sheet["combat"]["hp"]["value"] == 19
+    assert "stunned" in sheet["conditions"]
+    assert derive_character_sheet(sheet)["ability_scores"]["intelligence"] == 0
+    assert derive_character_sheet(sheet)["ability_modifiers"]["intelligence"] == -5
+
+    restored = remove_effect(sheet, result["effect_instance_id"])
+    assert "stunned" not in restored["conditions"]
+    assert derive_character_sheet(restored)["ability_scores"]["intelligence"] == 10
+
+
+def test_body_thief_wins_contest_and_adopts_body_with_source_mental_scores() -> None:
+    source = _actor("intellect-devourer", hp=21)
+    source["sheet"]["abilities"]["intelligence"]["score"] = 12
+    source["sheet"]["abilities"]["wisdom"]["score"] = 11
+    source["sheet"]["abilities"]["charisma"]["score"] = 10
+    source["derived"] = derive_character_sheet(source["sheet"])
+    target = _actor("target", hp=19, ac=16)
+    target["sheet"]["abilities"]["intelligence"]["score"] = 10
+    target["sheet"]["abilities"]["wisdom"]["score"] = 15
+    target["sheet"]["abilities"]["charisma"]["score"] = 8
+    target["sheet"]["conditions"] = ["stunned"]
+    target["sheet"]["effects"] = [
+        {
+            "id": "devour-intellect",
+            "name": "Devour Intellect",
+            "kind": "timed_conditions",
+            "source": source["id"],
+            "active": True,
+            "concentration": False,
+            "duration": {"period": "manual", "remaining": 0},
+            "changes": [
+                {
+                    "path": "abilities.intelligence.score",
+                    "mode": "override",
+                    "value": 0,
+                },
+                {"path": "conditions", "mode": "add", "value": "stunned"},
+            ],
+            "description": "Devour Intellect",
+        }
+    ]
+    target["derived"] = derive_character_sheet(target["sheet"])
+    spec = {
+        "kind": "intellect_devourer_body_thief_2014",
+        "range_ft": 5,
+        "target_count": 1,
+        "target_requirements": ["incapacitated", "humanoid"],
+        "contest": {
+            "source_ability": "intelligence",
+            "target_ability": "intelligence",
+            "ties": "no_winner",
+        },
+        "success": {
+            "brain_consumed": True,
+            "source_inside_host": True,
+            "source_total_cover": True,
+            "source_retains": [
+                "intelligence",
+                "wisdom",
+                "charisma",
+                "deep_speech",
+                "telepathy",
+                "traits",
+            ],
+            "source_adopts": "target_statistics_otherwise",
+            "knowledge_transfer": "all_target_knowledge",
+            "host_zero_hp": "source_must_leave",
+        },
+        "source_excerpt": "Exact Body Thief source text.",
+    }
+
+    settled = resolve_source_contest_effect(
+        source,
+        target,
+        spec=spec,
+        rng=_SequenceRng(15, 4),
+    )
+    sheet = settled["sheet"]
+    result = settled["result"]
+
+    assert result["success"] is True
+    assert result["source_check"]["total"] == 16
+    assert result["target_check"]["total"] == -1
+    assert result["brain_consumed"] is True
+    assert "stunned" not in sheet["conditions"]
+    assert sheet["combat"]["hp"]["value"] == 19
+    assert derive_character_sheet(sheet)["armor_class"] == 16
+    assert derive_character_sheet(sheet)["ability_scores"] == {
+        "strength": 16,
+        "dexterity": 10,
+        "constitution": 10,
+        "intelligence": 12,
+        "wisdom": 11,
+        "charisma": 10,
+    }
+    assert sheet["effects"][0]["active"] is False
+    assert sheet["effects"][0]["ended_reason"] == "body_thief_takeover"
+
+
+def test_body_thief_tie_has_no_winner_and_does_not_change_target() -> None:
+    source = _actor("intellect-devourer")
+    target = _actor("target")
+    spec = {
+        "kind": "intellect_devourer_body_thief_2014",
+        "range_ft": 5,
+        "target_count": 1,
+        "target_requirements": ["incapacitated", "humanoid"],
+        "contest": {
+            "source_ability": "intelligence",
+            "target_ability": "intelligence",
+            "ties": "no_winner",
+        },
+        "success": {
+            "brain_consumed": True,
+            "source_inside_host": True,
+            "source_total_cover": True,
+            "source_retains": [
+                "intelligence",
+                "wisdom",
+                "charisma",
+                "deep_speech",
+                "telepathy",
+                "traits",
+            ],
+            "source_adopts": "target_statistics_otherwise",
+            "knowledge_transfer": "all_target_knowledge",
+            "host_zero_hp": "source_must_leave",
+        },
+        "source_excerpt": "Exact Body Thief source text.",
+    }
+    source["sheet"]["abilities"]["intelligence"]["score"] = 12
+    source["derived"] = derive_character_sheet(source["sheet"])
+    target["sheet"]["abilities"]["intelligence"]["score"] = 10
+    target["derived"] = derive_character_sheet(target["sheet"])
+
+    settled = resolve_source_contest_effect(
+        source,
+        target,
+        spec=spec,
+        rng=_SequenceRng(9, 10),
+    )
+
+    assert settled["result"]["tie"] is True
+    assert settled["result"]["success"] is False
+    assert settled["result"]["outcome"] == "contest_not_won"
+    assert settled["sheet"] == target["sheet"]
+
+
+def test_attack_cannot_target_intellect_devourer_inside_host() -> None:
+    attacker = _actor("attacker")
+    target = _actor("intellect-devourer")
+    attacker.update(initiative=20, tie_breaker=0)
+    target.update(initiative=10, tie_breaker=0)
+    encounter = start_encounter([attacker, target])
+    target_combatant = next(
+        item
+        for item in encounter["combatants"]
+        if item["actor_id"] == target["id"]
+    )
+    target_combatant["inside_host"] = {"host_actor_id": "host"}
+
+    with pytest.raises(CombatEngineError, match="total cover inside its host"):
+        preflight_attack(
+            attacker,
+            target,
+            action={"weapon_id": "unarmed-strike"},
+            encounter=encounter,
+        )
+
+
 def test_unstructured_multiattack_does_not_block_an_ordinary_weapon_attack() -> None:
     attacker = _actor("attacker")
     attacker["sheet"]["content"]["activities"] = [
@@ -2076,6 +2400,142 @@ def test_unseen_attacker_and_target_apply_opposed_attack_modifiers() -> None:
     assert plan["disadvantage"] is True
     assert "attacker_unseen" in plan["advantage_sources"]
     assert "target_unseen" in plan["disadvantage_sources"]
+
+
+def _kobold_attack_trait_actor(identifier: str) -> dict:
+    actor = _actor(identifier)
+    actor["sheet"]["content"]["features"] = [
+        {
+            "id": "pack-tactics-passive",
+            "name": "Pack Tactics",
+            "activation": {"type": "passive"},
+            "choices": {
+                "source_trait": {
+                    "kind": "pack_tactics",
+                    "trigger": "attack_roll",
+                    "ally_within_target_ft": 5,
+                    "requires_ally_not_incapacitated": True,
+                    "grants": "advantage",
+                    "automatic": True,
+                }
+            },
+        },
+        {
+            "id": "sunlight-sensitivity-passive",
+            "name": "Sunlight Sensitivity",
+            "activation": {"type": "passive"},
+            "choices": {
+                "source_trait": {
+                    "kind": "sunlight_sensitivity",
+                    "trigger": "attack_roll_or_sight_perception",
+                    "environment_fact": "direct_sunlight",
+                    "grants": "disadvantage",
+                    "automatic": True,
+                }
+            },
+        },
+    ]
+    actor["derived"] = derive_character_sheet(actor["sheet"])
+    return actor
+
+
+def test_pack_tactics_uses_a_conscious_adjacent_ally() -> None:
+    kobold = _kobold_attack_trait_actor("kobold")
+    kobold.update(
+        initiative=20,
+        position={"x": 0, "y": 0},
+        disposition="hostile",
+    )
+    ally = _actor("ally")
+    ally.update(
+        initiative=10,
+        position={"x": 2, "y": 0},
+        disposition="hostile",
+    )
+    target = _actor("target")
+    target.update(
+        initiative=5,
+        position={"x": 1, "y": 0},
+        disposition="friendly",
+    )
+    encounter = start_encounter([kobold, ally, target])
+    rules = resolution_context(
+        {"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []}
+    )
+
+    plan = preflight_attack(
+        kobold,
+        target,
+        action={"context": {"direct_sunlight": False}},
+        encounter=encounter,
+        rules=rules,
+    )
+    assert plan["advantage"] is True
+    assert plan["pack_tactics_ally_id"] == "ally"
+    assert "pack_tactics" in plan["advantage_sources"]
+    assert any(
+        item["mechanic_id"] == "dnd5e.core.attack.pack_tactics"
+        for item in plan["rule_receipts"]
+    )
+
+    ally_state = next(
+        item
+        for item in encounter["combatants"]
+        if item["actor_id"] == "ally"
+    )
+    ally_state["conditions"] = ["stunned"]
+    without_ally = preflight_attack(
+        kobold,
+        target,
+        action={"context": {"direct_sunlight": False}},
+        encounter=encounter,
+        rules=rules,
+    )
+    assert without_ally["advantage"] is False
+    assert without_ally["pack_tactics_ally_id"] is None
+
+
+def test_sunlight_sensitivity_requires_and_uses_the_environment_fact() -> None:
+    kobold = _kobold_attack_trait_actor("kobold")
+    kobold.update(
+        initiative=20,
+        position={"x": 0, "y": 0},
+        disposition="hostile",
+    )
+    target = _actor("target")
+    target.update(
+        initiative=10,
+        position={"x": 1, "y": 0},
+        disposition="friendly",
+    )
+    encounter = start_encounter([kobold, target])
+    rules = resolution_context(
+        {"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []}
+    )
+
+    with pytest.raises(NeedsRulingError, match="direct sunlight"):
+        preflight_attack(
+            kobold,
+            target,
+            action={},
+            encounter=encounter,
+            rules=rules,
+        )
+
+    plan = preflight_attack(
+        kobold,
+        target,
+        action={"context": {"direct_sunlight": True}},
+        encounter=encounter,
+        rules=rules,
+    )
+    assert plan["disadvantage"] is True
+    assert "sunlight_sensitivity" in plan["disadvantage_sources"]
+    assert any(
+        item["mechanic_id"]
+        == "dnd5e.core.attack.sunlight_sensitivity"
+        for item in plan["rule_receipts"]
+    )
 
 
 def test_2024_invisible_actor_has_initiative_advantage() -> None:

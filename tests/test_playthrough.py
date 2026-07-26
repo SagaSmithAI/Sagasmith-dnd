@@ -120,6 +120,7 @@ def test_manifest_rejects_default_four_and_cross_actor_replacement_knowledge() -
             "xp": 300,
             "hit_points": {"current": 10, "maximum": 10},
             "resources": {},
+            "wallet": {"gp": 25},
             "equipment": [],
             "knowledge_scope_actor_id": "dead-predecessor",
         }
@@ -176,6 +177,7 @@ def test_manifest_cannot_leave_lobby_before_quality_gate_passes() -> None:
         "xp": 0,
         "hit_points": {"current": 8, "maximum": 8},
         "resources": {},
+        "wallet": {"gp": 10},
         "equipment": [],
         "knowledge_scope_actor_id": "",
     }
@@ -185,7 +187,15 @@ def test_manifest_cannot_leave_lobby_before_quality_gate_passes() -> None:
         current["actor_id"] = f"actor-{index}"
         current["knowledge_scope_actor_id"] = current["actor_id"]
         manifest["party"]["members"].append(current)
-    validate_party_state({"playthrough_manifest": manifest})
+    validated = validate_party_state({"playthrough_manifest": manifest})
+    assert validated["playthrough_manifest"]["party"]["members"][0]["wallet"] == {
+        "gp": 10
+    }
+    legacy = deepcopy(manifest)
+    for legacy_member in legacy["party"]["members"]:
+        legacy_member.pop("wallet")
+    validated_legacy = validate_party_state({"playthrough_manifest": legacy})
+    assert validated_legacy["playthrough_manifest"]["party"]["members"][0]["wallet"] == {}
 
     manifest["status"] = "in_progress"
     with pytest.raises(ValueError, match="current scene"):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import re
 import uuid
 import warnings
 from typing import Any
@@ -2685,6 +2686,14 @@ def _derive_armor_class(
                 and change["mode"] == "add"
             ):
                 continue
+            if (
+                re.fullmatch(r"abilities\.[a-z_]+\.score", change["path"])
+                and change["mode"] == "override"
+                and not isinstance(change["value"], bool)
+                and isinstance(change["value"], int)
+                and 0 <= change["value"] <= 30
+            ):
+                continue
             if change["path"] in {
                 "combat.ac.unarmored_base",
                 "combat.ac.unarmored_formula",
@@ -2847,14 +2856,46 @@ def effective_hit_point_maximum(sheet: dict[str, Any]) -> int:
     return maximum
 
 
+def effective_ability_scores(sheet: dict[str, Any]) -> dict[str, int]:
+    """Return ability scores after narrow, source-owned override effects."""
+
+    value = validate_character_sheet(sheet)
+    scores = {
+        ability: int(entry["score"])
+        for ability, entry in value["abilities"].items()
+    }
+    for effect in value["effects"]:
+        if not effect["active"]:
+            continue
+        for change in effect["changes"]:
+            match = re.fullmatch(r"abilities\.([a-z_]+)\.score", change["path"])
+            if match is None:
+                continue
+            ability = match.group(1)
+            score = change["value"]
+            if (
+                ability not in scores
+                or change["mode"] != "override"
+                or isinstance(score, bool)
+                or not isinstance(score, int)
+                or not 0 <= score <= 30
+            ):
+                raise ValueError("active ability-score override effect is malformed")
+            scores[ability] = score
+    return scores
+
+
 def derive_character_sheet(
     sheet: dict[str, Any], *, rules: ResolutionContext | None = None
 ) -> dict[str, Any]:
     value = validate_character_sheet(sheet)
     level = value["progression"]["level"]
     proficiency = 2 + (level - 1) // 4
+    active_effects = [effect for effect in value["effects"] if effect["active"]]
+    ability_scores = effective_ability_scores(value)
     ability_modifiers = {
-        ability: (entry["score"] - 10) // 2 for ability, entry in value["abilities"].items()
+        ability: (score - 10) // 2
+        for ability, score in ability_scores.items()
     }
     saves = {
         ability: ability_modifiers[ability]
@@ -2878,7 +2919,6 @@ def derive_character_sheet(
     spell_ability = value["spellcasting"]["ability"]
     spell_attack_bonus_override = value["spellcasting"]["attack_bonus_override"]
     spell_save_dc_override = value["spellcasting"]["save_dc_override"]
-    active_effects = [effect for effect in value["effects"] if effect["active"]]
     armor_class, armor_class_breakdown, unresolved_effects = _derive_armor_class(
         value, ability_modifiers, active_effects
     )
@@ -2899,7 +2939,7 @@ def derive_character_sheet(
         "huge": 4,
         "gargantuan": 8,
     }.get(value["traits"]["size"].lower(), 1)
-    strength = value["abilities"]["strength"]["score"]
+    strength = ability_scores["strength"]
     maximum_weight = strength * 240 * size_multiplier
     encumbrance = inventory["encumbrance"]
     encumbrance_summary = {
@@ -2931,6 +2971,7 @@ def derive_character_sheet(
     effective_hp_max = effective_hit_point_maximum(value)
     derived = {
         "proficiency_bonus": proficiency,
+        "ability_scores": ability_scores,
         "ability_modifiers": ability_modifiers,
         "saving_throws": saves,
         "skills": skills,
@@ -3195,6 +3236,28 @@ def add_effect(sheet: dict[str, Any], effect: dict[str, Any]) -> tuple[dict[str,
     if any(current["id"] == entry["id"] for current in value["effects"]):
         raise ValueError("effect id already exists")
     value["effects"].append(entry)
+    if entry["active"] and entry["kind"] == "timed_conditions":
+        added_conditions: set[str] = set()
+        for change in entry["changes"]:
+            if change["path"] != "conditions" or change["mode"] != "add":
+                continue
+            raw = change["value"]
+            values = raw if isinstance(raw, list) else [raw]
+            added_conditions.update(
+                str(item).strip().casefold()
+                for item in values
+                if str(item).strip()
+            )
+        if added_conditions:
+            existing = {
+                str(condition).strip().casefold()
+                for condition in value["conditions"]
+            }
+            value["conditions"].extend(
+                condition
+                for condition in sorted(added_conditions)
+                if condition not in existing
+            )
     return validate_character_sheet(value), entry["id"]
 
 
@@ -3204,7 +3267,57 @@ def remove_effect(sheet: dict[str, Any], effect_id: str) -> dict[str, Any]:
     effect = next((entry for entry in effects if entry["id"] == effect_id), None)
     if effect is None:
         raise LookupError(effect_id)
+    removed_condition_additions: set[str] = set()
+    if effect.get("kind") == "timed_conditions":
+        for change in effect.get("changes", []):
+            if change.get("path") != "conditions" or change.get("mode") != "add":
+                continue
+            raw = change.get("value")
+            values = raw if isinstance(raw, list) else [raw]
+            removed_condition_additions.update(
+                str(item).strip().casefold()
+                for item in values
+                if str(item).strip()
+            )
     effects.remove(effect)
+    active_condition_additions: set[str] = set()
+    for current in effects:
+        if not current.get("active") or current.get("kind") != "timed_conditions":
+            continue
+        for change in current.get("changes", []):
+            if change.get("path") != "conditions" or change.get("mode") != "add":
+                continue
+            raw = change.get("value")
+            values = raw if isinstance(raw, list) else [raw]
+            active_condition_additions.update(
+                str(item).strip().casefold()
+                for item in values
+                if str(item).strip()
+            )
+    removable_conditions = removed_condition_additions - active_condition_additions
+    if effect.get("kind") == "turn_undead" and not any(
+        current.get("active") and current.get("kind") == "turn_undead"
+        for current in effects
+    ):
+        removable_conditions.add("turned")
+    removed_spell_id = (
+        str(effect.get("source_spell_id") or "").strip().casefold().rsplit(".", 1)[-1]
+    )
+    if removed_spell_id == "invisibility" and not any(
+        current.get("active")
+        and str(current.get("source_spell_id") or "")
+        .strip()
+        .casefold()
+        .rsplit(".", 1)[-1]
+        == "invisibility"
+        for current in effects
+    ):
+        removable_conditions.add("invisible")
+    value["conditions"] = [
+        condition
+        for condition in value.get("conditions", [])
+        if str(condition).casefold() not in removable_conditions
+    ]
     return validate_character_sheet(value)
 
 
@@ -3242,6 +3355,29 @@ def set_resource_value(sheet: dict[str, Any], key: str, value: int) -> dict[str,
     resource["value"] = _integer(value, "resource value", minimum=0)
     if resource["value"] > resource["max"]:
         raise ValueError("resource value cannot exceed max")
+    return validate_character_sheet(result)
+
+
+def set_exhaustion_level(sheet: dict[str, Any], value: int) -> dict[str, Any]:
+    """Set the rules-visible exhaustion level through the validated sheet contract."""
+    result = validate_character_sheet(sheet)
+    level = _integer(
+        value,
+        "exhaustion level",
+        minimum=0,
+        maximum=6,
+    )
+    result["combat"]["exhaustion"] = level
+    hit_points = result["combat"]["hp"]
+    hit_points["value"] = min(
+        int(hit_points["value"]),
+        effective_hit_point_maximum(result),
+    )
+    if level >= 6 and "dead" not in {
+        str(condition).strip().casefold()
+        for condition in result["conditions"]
+    }:
+        result["conditions"].append("dead")
     return validate_character_sheet(result)
 
 

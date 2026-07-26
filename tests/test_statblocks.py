@@ -7,6 +7,8 @@ from sagasmith_dnd.statblocks import (
     effective_statblock_rating,
     gazer_eye_ray_spec,
     parse_2014_statblock,
+    source_contest_effect_spec,
+    source_save_effect_spec,
 )
 
 COMMONER = """### Commoner
@@ -65,6 +67,42 @@ start of the troll's next turn. The troll dies only if it starts its turn with
 
 ***Claw***. *Melee Weapon Attack:* +7 to hit, reach 5 ft., one target.
 *Hit:* 11 (2d6+4) slashing damage.
+"""
+
+KOBOLD = """# Kobold
+
+*Small humanoid (kobold), lawful evil*
+
+**Armor Class** 12
+
+**Hit Points** 5 (2d6 - 2)
+
+**Speed** 30 ft.
+
+| STR | DEX | CON | INT | WIS | CHA |
+|:---:|:---:|:---:|:---:|:---:|:---:|
+| 7 (-2) | 15 (+2) | 9 (-1) | 8 (-1) | 7 (-2) | 8 (-1) |
+
+**Senses** darkvision 60 ft., passive Perception 8
+
+**Languages** Common, Draconic
+
+**Challenge** 1/8 (25 XP)
+
+***Sunlight Sensitivity***. While in sunlight, the kobold has disadvantage on
+attack rolls, as well as on Wisdom (Perception) checks that rely on sight.
+
+***Pack Tactics***. The kobold has advantage on an attack roll against a creature
+if at least one of the kobold's allies is within 5 feet of the creature and the
+ally isn't incapacitated.
+
+###### Actions
+
+***Dagger***. *Melee Weapon Attack:* +4 to hit, reach 5 ft., one target.
+*Hit:* 4 (1d4 + 2) piercing damage.
+
+***Sling***. *Ranged Weapon Attack:* +4 to hit, range 30/120 ft., one target.
+*Hit:* 4 (1d4 + 2) bludgeoning damage.
 """
 
 
@@ -188,6 +226,63 @@ the gazer.
 """
 
 
+INTELLECT_DEVOURER = """### Intellect Devourer
+
+*Tiny aberration, lawful evil*
+
+**Armor Class** 12
+
+**Hit Points** 21 (6d4 + 6)
+
+**Speed** 40 ft.
+
+| STR | DEX | CON | INT | WIS | CHA |
+|:---:|:---:|:---:|:---:|:---:|:---:|
+| 6 (-2) | 14 (+2) | 13 (+1) | 12 (+1) | 11 (+0) | 10 (+0) |
+
+**Skills** Perception +2, Stealth +4
+
+**Senses** blindsight 60 ft. (blind beyond this radius), passive Perception 12
+
+**Languages** understands Deep Speech but can't speak, telepathy 60 ft.
+
+**Challenge** 2 (450 XP)
+
+###### Actions
+
+***Multiattack***. The intellect devourer makes one attack with its claws and uses
+Devour Intellect.
+
+***Claws***. *Melee Weapon Attack:* +4 to hit, reach 5 ft., one target.
+*Hit:* 7 (2d4 + 2) slashing damage.
+
+***Devour Intellect***. The intellect devourer targets one creature it can see
+within 10 feet of it that has a brain. The target must succeed on a DC 12
+Intelligence saving throw against this magic or take 11 (2d10) psychic damage.
+Also on a failure, roll 3d6: If the total equals or exceeds the target's
+Intelligence score, that score is reduced to 0. The target is stunned until it
+regains at least one point of Intelligence.
+
+***Body Thief***. The intellect devourer initiates an Intelligence contest with an
+incapacitated humanoid within 5 feet of it. If it wins the contest, the intellect
+devourer magically consumes the target's brain, teleports into the target's skull,
+and takes control of the target's body. While inside a creature, the intellect
+devourer has total cover against attacks and other effects originating outside its
+host. The intellect devourer retains its Intelligence, Wisdom, and Charisma scores,
+as well as its understanding of Deep Speech, its telepathy, and its traits. It
+otherwise adopts the target's statistics. It knows everything the creature knew,
+including spells and languages.
+
+If the host body drops to 0 hit points, the intellect devourer must leave it. A
+*protection from evil and good* spell cast on the body drives the intellect devourer
+out. The intellect devourer is also forced out if the target regains its devoured
+brain by means of a *wish*. By spending 5 feet of its movement, the intellect
+devourer can voluntarily leave the body, teleporting to the nearest unoccupied
+space within 5 feet of it. The body then dies, unless its brain is restored within
+1 round.
+"""
+
+
 def test_commoner_statblock_becomes_an_exact_executable_actor_sheet() -> None:
     parsed = parse_2014_statblock(
         COMMONER,
@@ -274,6 +369,85 @@ def test_gazer_eye_rays_are_structured_from_the_exact_source_action() -> None:
     assert parsed.warnings == ()
 
 
+def test_intellect_devourer_actions_are_structured_from_exact_source() -> None:
+    parsed = parse_2014_statblock(
+        INTELLECT_DEVOURER,
+        source_key="reviewed-intellect-devourer",
+        rule_refs=["monster-manual-page-191"],
+    )
+    derived = derive_character_sheet(parsed.sheet)
+    devour = next(
+        item
+        for item in parsed.sheet["content"]["activities"]
+        if item["name"] == "Devour Intellect"
+    )
+    body_thief = next(
+        item
+        for item in parsed.sheet["content"]["activities"]
+        if item["name"] == "Body Thief"
+    )
+
+    assert source_save_effect_spec(parsed.sheet, devour["id"]) == {
+        "kind": "intellect_devourer_devour_intellect_2014",
+        "range_ft": 10,
+        "target_count": 1,
+        "target_requirement": "has_brain",
+        "save": {"ability": "intelligence", "dc": 12},
+        "failure": {
+            "damage_expression": "2d10",
+            "damage_type": "psychic",
+            "secondary_roll": "3d6",
+            "secondary_threshold": "target_intelligence_score",
+            "ability_override": {"ability": "intelligence", "score": 0},
+            "condition": "stunned",
+            "ends_when": "target_intelligence_score_at_least_1",
+        },
+        "source_excerpt": " ".join(devour["description"].split()),
+    }
+    assert derived["multiattack_options"] == [
+        {
+            "id": "claws-and-devour-intellect",
+            "attacks": [
+                {"weapon_id": "claws", "attack_mode": "melee", "count": 1}
+            ],
+            "activities": [
+                {"activity_id": "devour-intellect-action", "count": 1}
+            ],
+        }
+    ]
+    assert source_contest_effect_spec(parsed.sheet, body_thief["id"]) == {
+        "kind": "intellect_devourer_body_thief_2014",
+        "range_ft": 5,
+        "target_count": 1,
+        "target_requirements": ["incapacitated", "humanoid"],
+        "contest": {
+            "source_ability": "intelligence",
+            "target_ability": "intelligence",
+            "ties": "no_winner",
+        },
+        "success": {
+            "brain_consumed": True,
+            "source_inside_host": True,
+            "source_total_cover": True,
+            "source_retains": [
+                "intelligence",
+                "wisdom",
+                "charisma",
+                "deep_speech",
+                "telepathy",
+                "traits",
+            ],
+            "source_adopts": "target_statistics_otherwise",
+            "knowledge_transfer": "all_target_knowledge",
+            "host_zero_hp": "source_must_leave",
+        },
+        "source_excerpt": " ".join(body_thief["description"].split()),
+    }
+    assert parsed.warnings == (
+        "Body Thief: protection, wish, and voluntary exit require DM settlement",
+    )
+
+
 def test_mixed_weapon_and_special_action_multiattack_stays_a_dm_boundary() -> None:
     parsed = parse_2014_statblock(
         COMMONER.replace(
@@ -312,6 +486,31 @@ def test_regeneration_statblock_trait_is_structured_without_a_descriptive_warnin
         "amount": 10,
         "suppressed_by_damage_types": ["acid", "fire"],
         "dies_at_zero_when_suppressed": True,
+    }
+    assert parsed.warnings == ()
+
+
+def test_kobold_attack_traits_are_structured() -> None:
+    parsed = parse_2014_statblock(KOBOLD, source_key="monster-manual-2014:p195")
+    features = {
+        item["name"]: item
+        for item in parsed.sheet["content"]["features"]
+    }
+
+    assert features["Pack Tactics"]["choices"]["source_trait"] == {
+        "kind": "pack_tactics",
+        "trigger": "attack_roll",
+        "ally_within_target_ft": 5,
+        "requires_ally_not_incapacitated": True,
+        "grants": "advantage",
+        "automatic": True,
+    }
+    assert features["Sunlight Sensitivity"]["choices"]["source_trait"] == {
+        "kind": "sunlight_sensitivity",
+        "trigger": "attack_roll_or_sight_perception",
+        "environment_fact": "direct_sunlight",
+        "grants": "disadvantage",
+        "automatic": True,
     }
     assert parsed.warnings == ()
 
