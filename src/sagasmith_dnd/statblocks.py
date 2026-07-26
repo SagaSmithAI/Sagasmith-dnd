@@ -317,9 +317,14 @@ def _parse_weapon(
         on_hit_effect = effect_hit.group(1).strip()
     trailing_prose = ""
     normalized_actor_name = actor_name.strip()
+    unformatted_on_hit_effect = re.sub(
+        r"^[\s*_`~]+",
+        "",
+        on_hit_effect,
+    )
     if normalized_actor_name and re.match(
         rf"(?i)^{re.escape(normalized_actor_name)}s?\b",
-        on_hit_effect,
+        unformatted_on_hit_effect,
     ):
         trailing_prose = on_hit_effect
         on_hit_effect = ""

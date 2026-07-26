@@ -308,6 +308,24 @@ def test_commoner_statblock_becomes_an_exact_executable_actor_sheet() -> None:
     assert club["reach_ft"] == 5
 
 
+def test_markdown_emphasized_monster_lore_after_last_action_is_not_an_on_hit_effect() -> None:
+    parsed = parse_2014_statblock(
+        COMMONER
+        + """
+
+**Commoners** include peasants, serfs, slaves, servants, pilgrims, merchants,
+artisans, and hermits.
+""",
+        source_key="srd-commoner-with-lore",
+    )
+    club = derive_character_sheet(parsed.sheet)["inventory"]["weapon_attacks"][0]
+
+    assert club["on_hit_effect"] == ""
+    assert parsed.warnings == (
+        "Club: trailing creature prose excluded from action settlement",
+    )
+
+
 def test_flat_damage_weapon_is_executable_without_inventing_damage_dice() -> None:
     parsed = parse_2014_statblock(
         COMMONER.replace("*Hit:* 2 (1d4) bludgeoning damage.", "*Hit:* 1 piercing damage."),
