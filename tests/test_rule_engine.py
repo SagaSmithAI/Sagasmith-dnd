@@ -5,11 +5,16 @@ from pathlib import Path
 import pytest
 
 from sagasmith_dnd.activities import consume_activity
-from sagasmith_dnd.character_schema import default_character_sheet, validate_character_sheet
+from sagasmith_dnd.character_schema import (
+    default_character_sheet,
+    derive_character_sheet,
+    validate_character_sheet,
+)
 from sagasmith_dnd.rule_engine import (
     ALLOWED_EVENTS,
     ALLOWED_OPS,
     RuleCompilationError,
+    RuleEventRulingRequiredError,
     apply_rule_event,
     resolution_context,
     run_mechanic_tests,
@@ -219,6 +224,78 @@ def test_rule_event_defaults_rulings_to_agent_adjudication() -> None:
                 ]
             )
         )
+
+
+def test_character_rule_pauses_preserve_agent_and_external_ownership() -> None:
+    agent_rules = resolution_context(
+        _effective(
+            [
+                {
+                    "id": "dnd5e.xgte.test.character-ruling",
+                    "event": "character.validate",
+                    "operations": [{"op": "ruling.require", "id": "form-fits"}],
+                    "citations": [{"source": "local:xgte", "section": "Forms"}],
+                }
+            ]
+        )
+    )
+
+    with pytest.raises(RuleEventRulingRequiredError) as raised:
+        validate_character_sheet(default_character_sheet(), rules=agent_rules)
+
+    assert raised.value.event == "character.validate"
+    assert raised.value.missing == ("dnd5e.xgte.test.character-ruling",)
+    assert raised.value.ruling_kind == "agent_dm_adjudication"
+    assert raised.value.requirements[0]["default_resolver"] == "agent"
+
+    choice_rules = resolution_context(
+        _effective(
+            [
+                {
+                    "id": "dnd5e.xgte.test.character-choice",
+                    "event": "character.validate",
+                    "operations": [{"op": "choice.require", "id": "choose-form"}],
+                    "citations": [{"source": "local:xgte", "section": "Forms"}],
+                }
+            ]
+        )
+    )
+    with pytest.raises(RuleEventRulingRequiredError) as choice:
+        validate_character_sheet(default_character_sheet(), rules=choice_rules)
+    assert choice.value.ruling_kind == "player_owned_choice"
+
+
+def test_derived_rule_pauses_publish_structured_agent_requirements() -> None:
+    rules = resolution_context(
+        _effective(
+            [
+                {
+                    "id": "dnd5e.xgte.test.derive-ruling",
+                    "event": "character.derive",
+                    "operations": [
+                        {
+                            "op": "ruling.require",
+                            "id": "environmental-ac",
+                            "ruling_kind": "environmental_consequence",
+                        }
+                    ],
+                    "citations": [{"source": "local:xgte", "section": "Weather"}],
+                }
+            ]
+        )
+    )
+
+    derived = derive_character_sheet(default_character_sheet(), rules=rules)
+
+    assert derived["unresolved_rules"] == ["dnd5e.xgte.test.derive-ruling"]
+    assert derived["ruling_requirements"] == [
+        {
+            "mechanic_id": "dnd5e.xgte.test.derive-ruling",
+            "reason": "environmental-ac",
+            "default_resolver": "agent",
+            "ruling_kind": "environmental_consequence",
+        }
+    ]
 
 
 def test_v2_cards_keep_pack_and_mechanic_references() -> None:

@@ -44,7 +44,7 @@ Agents should normally connect through [SagaSmith-dnd-mcp](https://github.com/Sa
 
 The engine automates mechanics only when rules inputs are settled: attack bonus, AC, dice expression, damage type, save DC, resources, and current state. It must not invent intent, targets, line of sight, cover, hidden state, missing distances, optional-rule selection, precedence, homebrew, NPC decisions, or narrative consequences.
 
-The MCP layer represents uncertainty through preflight results, choice windows, and ruling-required responses. An agent or human GM supplies the missing judgment before the engine commits deterministic effects.
+The MCP layer represents uncertainty through preflight results, choice windows, and ruling-required responses. The active SagaSmith Agent acts as GM and supplies ordinary scene, module, spell, and narrative judgments by default before the engine commits deterministic effects. Only player-owned choices, owner approvals, permission changes, and missing or conflicting source evidence require external input.
 
 ## Install and CLI
 

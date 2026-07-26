@@ -6,7 +6,7 @@ from copy import deepcopy
 from typing import Any
 from uuid import uuid4
 
-from sagasmith_dnd.combat_engine import CombatEngineError
+from sagasmith_dnd.combat_engine import CombatEngineError, NeedsRulingError
 from sagasmith_dnd.rule_engine import ResolutionContext, apply_rule_event, core_receipts
 
 _SPELL_POINT_COSTS = {1: 2, 2: 3, 3: 5, 4: 6, 5: 7, 6: 9, 7: 10, 8: 11, 9: 13}
@@ -746,16 +746,20 @@ def consume_spell_cast(
         custom_definition.get("component_details") == "not_repeated_in_statblock"
     )
     if source_components_unknown and ruling.get("source_components_confirmed") is not True:
-        raise CombatEngineError(
+        raise NeedsRulingError(
             "a source-bound spell whose components were not repeated in the statblock "
-            "needs source_components_confirmed from Agent-as-DM adjudication"
+            "needs source_components_confirmed from reviewed source evidence",
+            missing=("source_components",),
+            ruling_kind="missing_or_conflicting_source_review",
         )
     if (
         int(components.get("material_cost_cp", 0) or 0) > 0 or components.get("consumed")
     ) and ruling.get("material_confirmed") is not True:
-        raise CombatEngineError(
+        raise NeedsRulingError(
             "a costly or consumed material component needs material_confirmed "
-            "from Agent-as-DM adjudication"
+            "from Agent-as-DM adjudication",
+            missing=("material_component",),
+            ruling_kind="source_or_scene_fact",
         )
     paid: dict[str, Any] = {"economy": "none", "level": level, "ritual": ritual}
     free_at_will = bool(at_will_available and level == base_level)

@@ -32,6 +32,7 @@ from sagasmith_dnd.rule_engine import (
     apply_rule_event,
     context_with_facts,
     core_receipts,
+    rule_event_ruling_kind,
 )
 from sagasmith_dnd.spell_resolution import (
     SPELL_RESOLUTION_MECHANIC_ID,
@@ -128,28 +129,6 @@ class NeedsRulingError(CombatEngineError):
         super().__init__(message)
         self.missing = tuple(missing)
         self.ruling_kind = str(ruling_kind or "agent_dm_adjudication")
-
-
-def _rule_event_ruling_kind(status: str, pending: Iterable[dict[str, Any]]) -> str:
-    """Preserve an extension boundary's owner instead of treating every pause as DM fiat."""
-
-    if status == "pending_choice":
-        return "player_owned_choice"
-    kinds = {
-        str(item.get("ruling_kind") or "agent_dm_adjudication")
-        for item in pending
-        if isinstance(item, dict)
-    }
-    external_kinds = {
-        "player_owned_choice",
-        "owner_approval",
-        "permission_escalation",
-        "missing_or_conflicting_source_review",
-    }
-    external = sorted(kinds & external_kinds)
-    if external:
-        return external[0]
-    return "agent_dm_adjudication"
 
 
 def structured_critical_followup(effect: str) -> dict[str, Any] | None:
@@ -1415,7 +1394,7 @@ def preflight_attack(
         raise NeedsRulingError(
             "an active rule pack requires an attack choice or ruling",
             missing=[item["mechanic_id"] for item in extension.pending],
-            ruling_kind=_rule_event_ruling_kind(extension.status, extension.pending),
+            ruling_kind=rule_event_ruling_kind(extension.status, extension.pending),
         )
     for modifier in extension.modifiers:
         opcode = modifier["op"]
@@ -4191,7 +4170,7 @@ def resolve_actor_check(
         raise NeedsRulingError(
             "an active rule pack requires a check choice or ruling",
             missing=[item["mechanic_id"] for item in extension.pending],
-            ruling_kind=_rule_event_ruling_kind(extension.status, extension.pending),
+            ruling_kind=rule_event_ruling_kind(extension.status, extension.pending),
         )
     for modifier in extension.modifiers:
         if modifier["op"] == "modifier.add" and modifier.get("target") == "check_bonus":

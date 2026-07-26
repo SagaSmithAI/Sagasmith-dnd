@@ -9,7 +9,12 @@ import warnings
 from typing import Any
 
 from sagasmith_dnd.ability_generation import normalize_ability_generation
-from sagasmith_dnd.rule_engine import ResolutionContext, apply_rule_event, core_receipts
+from sagasmith_dnd.rule_engine import (
+    ResolutionContext,
+    RuleEventRulingRequiredError,
+    apply_rule_event,
+    core_receipts,
+)
 from sagasmith_dnd.spell_resolution import normalize_spell_resolution
 
 ABILITY_NAMES = (
@@ -2331,7 +2336,12 @@ def validate_character_sheet(
     }
     extension = apply_rule_event(normalized, "character.validate", rules)
     if extension.status != "committed":
-        raise ValueError("active rule pack requires a character validation ruling")
+        raise RuleEventRulingRequiredError(
+            "active rule pack requires a character validation ruling",
+            event="character.validate",
+            status=extension.status,
+            pending=extension.pending,
+        )
     return normalized
 
 
@@ -3101,6 +3111,7 @@ def derive_character_sheet(
             {"id": effect["id"], "name": effect["name"]} for effect in active_effects
         ],
         "unresolved_rules": sorted(unresolved_effects),
+        "ruling_requirements": [],
     }
     extension = apply_rule_event(value, "character.derive", rules)
     if extension.status != "committed":
@@ -3110,6 +3121,19 @@ def derive_character_sheet(
                 *(item["mechanic_id"] for item in extension.pending),
             }
         )
+        derived["ruling_requirements"] = [
+            {
+                "mechanic_id": str(item.get("mechanic_id") or ""),
+                "reason": str(item.get("id") or "declarative rule adjudication"),
+                "default_resolver": str(
+                    item.get("default_resolver") or "agent"
+                ),
+                "ruling_kind": str(
+                    item.get("ruling_kind") or "agent_dm_adjudication"
+                ),
+            }
+            for item in extension.pending
+        ]
     for modifier in extension.modifiers:
         if modifier["op"] != "modifier.add":
             continue

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, Iterable
 
 from sagasmith_dnd.core_rule_pack import BuiltinCoreRulePack, get_core_rule_pack
 
@@ -83,6 +83,50 @@ RULING_KINDS = AGENT_RULING_KINDS | EXTERNAL_RULING_KINDS
 
 class RuleCompilationError(ValueError):
     pass
+
+
+class RuleEventRulingRequiredError(ValueError):
+    """Preserve a declarative rule pause for the public adjudication boundary."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        event: str,
+        status: str,
+        pending: Iterable[dict[str, Any]],
+    ) -> None:
+        requirements = tuple(deepcopy(item) for item in pending)
+        super().__init__(message)
+        self.event = str(event)
+        self.status = str(status)
+        self.requirements = requirements
+        self.missing = tuple(
+            str(item.get("mechanic_id") or item.get("id") or "")
+            for item in requirements
+            if str(item.get("mechanic_id") or item.get("id") or "")
+        )
+        self.ruling_kind = rule_event_ruling_kind(status, requirements)
+
+
+def rule_event_ruling_kind(
+    status: str,
+    pending: Iterable[dict[str, Any]],
+) -> str:
+    """Return the owner-preserving ruling kind for one declarative pause."""
+
+    if status == "pending_choice":
+        return "player_owned_choice"
+    kinds = {
+        str(item.get("ruling_kind") or "agent_dm_adjudication")
+        for item in pending
+        if isinstance(item, dict)
+    }
+    external = sorted(kinds & EXTERNAL_RULING_KINDS)
+    if external:
+        return external[0]
+    agent = sorted(kinds & AGENT_RULING_KINDS)
+    return agent[0] if agent else "agent_dm_adjudication"
 
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")

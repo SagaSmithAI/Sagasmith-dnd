@@ -5,6 +5,7 @@ from sagasmith_dnd.character_schema import (
     derive_character_sheet,
     validate_character_sheet,
 )
+from sagasmith_dnd.combat_engine import NeedsRulingError
 from sagasmith_dnd.lifecycle import advance_effect_durations
 from sagasmith_dnd.spells import (
     CORE_MAGE_ARMOR_SPELL_ID,
@@ -661,8 +662,10 @@ def test_costly_material_component_requires_dm_confirmation() -> None:
     }
     sheet["content"]["spells"] = [chromatic_orb]
     sheet = validate_character_sheet(sheet)
-    with pytest.raises(ValueError, match="material_confirmed"):
+    with pytest.raises(NeedsRulingError, match="material_confirmed") as raised:
         consume_spell_cast(sheet, spell_id="chromatic-orb")
+    assert raised.value.ruling_kind == "source_or_scene_fact"
+    assert raised.value.missing == ("material_component",)
     result = consume_spell_cast(
         sheet, spell_id="chromatic-orb", component_ruling={"material_confirmed": True}
     )
@@ -688,8 +691,10 @@ def test_source_bound_spell_with_unknown_components_requires_confirmation_before
     sheet["content"]["spells"] = [spell]
     sheet = validate_character_sheet(sheet)
 
-    with pytest.raises(ValueError, match="source_components_confirmed"):
+    with pytest.raises(NeedsRulingError, match="source_components_confirmed") as raised:
         consume_spell_cast(sheet, spell_id="source-ray")
+    assert raised.value.ruling_kind == "missing_or_conflicting_source_review"
+    assert raised.value.missing == ("source_components",)
 
     assert sheet["spellcasting"]["spell_slots"]["1"]["value"] == 1
     result = consume_spell_cast(
