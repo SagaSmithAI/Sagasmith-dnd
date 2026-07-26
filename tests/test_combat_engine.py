@@ -1785,10 +1785,20 @@ def test_encounter_validates_every_participant_before_rolling_initiative() -> No
 
 
 def test_initiative_ties_require_explicit_tie_breakers() -> None:
-    with pytest.raises(NeedsRulingError, match="tie_breaker"):
+    with pytest.raises(NeedsRulingError, match="tie_breaker") as npc_tie:
         start_encounter(
             [{**_actor("a"), "initiative": 10}, {**_actor("b"), "initiative": 10}]
         )
+    assert npc_tie.value.ruling_kind == "agent_dm_adjudication"
+
+    with pytest.raises(NeedsRulingError, match="tie_breaker") as pc_tie:
+        start_encounter(
+            [
+                {**_actor("pc-a"), "character_type": "pc", "initiative": 10},
+                {**_actor("pc-b"), "character_type": "pc", "initiative": 10},
+            ]
+        )
+    assert pc_tie.value.ruling_kind == "player_owned_choice"
 
 
 def test_half_cover_uses_the_rules_ac_bonus() -> None:
@@ -2590,6 +2600,41 @@ def test_sunlight_sensitivity_requires_and_uses_the_environment_fact() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("operation", "expected_kind"),
+    [
+        ({"op": "ruling.require", "id": "weather"}, "agent_dm_adjudication"),
+        ({"op": "choice.require", "id": "maneuver"}, "player_owned_choice"),
+    ],
+)
+def test_attack_extension_preserves_pending_owner(
+    operation: dict[str, str],
+    expected_kind: str,
+) -> None:
+    attacker = _actor("attacker")
+    target = _actor("target")
+    rules = resolution_context(
+        {
+            "edition": "2014",
+            "fingerprint": "",
+            "lock": [],
+            "mechanics": [
+                {
+                    "id": "dnd5e.extension.attack.pending",
+                    "event": "attack.preflight",
+                    "operations": [operation],
+                    "citations": [{"source": "local:extension"}],
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(NeedsRulingError) as raised:
+        preflight_attack(attacker, target, action={}, rules=rules)
+
+    assert raised.value.ruling_kind == expected_kind
+
+
 def test_2024_invisible_actor_has_initiative_advantage() -> None:
     invisible = _actor("invisible")
     invisible["sheet"]["conditions"] = ["invisible"]
@@ -2969,8 +3014,9 @@ def test_queued_combatant_requires_explicit_tie_breaker_for_initiative_tie() -> 
         ]
     )
 
-    with pytest.raises(NeedsRulingError, match="tie_breaker"):
+    with pytest.raises(NeedsRulingError, match="tie_breaker") as raised:
         queue_combatant(encounter, {**_actor("ally"), "initiative": 10})
+    assert raised.value.ruling_kind == "agent_dm_adjudication"
 
 
 def test_generic_ready_rejects_spell_payload_that_would_bypass_resources() -> None:

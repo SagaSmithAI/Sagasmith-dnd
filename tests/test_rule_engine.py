@@ -148,6 +148,15 @@ def test_pending_choice_is_atomic_and_unsafe_opcode_is_rejected() -> None:
     result = apply_rule_event(sheet, "rest.before", rules)
     assert result.status == "pending_choice"
     assert result.sheet == sheet
+    assert result.pending == (
+        {
+            "mechanic_id": "dnd5e.xgte.test.choice",
+            "op": "choice.require",
+            "id": "choose-recovery",
+            "default_resolver": "external_input",
+            "ruling_kind": "player_owned_choice",
+        },
+    )
 
     with pytest.raises(RuleCompilationError, match="unsupported mechanic operation"):
         resolution_context(
@@ -158,6 +167,54 @@ def test_pending_choice_is_atomic_and_unsafe_opcode_is_rejected() -> None:
                         "event": "rest.after",
                         "operations": [{"op": "python.eval", "code": "pass"}],
                         "citations": [{"source": "local:xgte", "section": "Unsafe"}],
+                    }
+                ]
+            )
+        )
+
+
+def test_rule_event_defaults_rulings_to_agent_adjudication() -> None:
+    rules = resolution_context(
+        _effective(
+            [
+                {
+                    "id": "dnd5e.xgte.test.ruling",
+                    "event": "rest.before",
+                    "operations": [{"op": "ruling.require", "id": "weather"}],
+                    "citations": [{"source": "local:xgte", "section": "Weather"}],
+                }
+            ]
+        )
+    )
+
+    result = apply_rule_event({}, "rest.before", rules)
+
+    assert result.status == "pending_ruling"
+    assert result.pending == (
+        {
+            "mechanic_id": "dnd5e.xgte.test.ruling",
+            "op": "ruling.require",
+            "id": "weather",
+            "default_resolver": "agent",
+            "ruling_kind": "agent_dm_adjudication",
+        },
+    )
+
+    with pytest.raises(RuleCompilationError, match="invalid ruling_kind"):
+        resolution_context(
+            _effective(
+                [
+                    {
+                        "id": "dnd5e.xgte.test.invalid-ruling",
+                        "event": "rest.before",
+                        "operations": [
+                            {
+                                "op": "ruling.require",
+                                "id": "weather",
+                                "ruling_kind": "ask_someone",
+                            }
+                        ],
+                        "citations": [{"source": "local:xgte"}],
                     }
                 ]
             )

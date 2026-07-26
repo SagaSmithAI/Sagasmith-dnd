@@ -59,6 +59,26 @@ READ_ONLY_OPS = {
     "ruling.require",
 }
 ATOMIC_AFTER_EVENTS = {"attack.after", "turn.end", "duration.advance"}
+EXTERNAL_RULING_KINDS = frozenset(
+    {
+        "player_owned_choice",
+        "owner_approval",
+        "permission_escalation",
+        "missing_or_conflicting_source_review",
+    }
+)
+AGENT_RULING_KINDS = frozenset(
+    {
+        "agent_dm_adjudication",
+        "source_or_scene_fact",
+        "descriptive_activity",
+        "generic_spell_effect",
+        "ready_release_effect",
+        "environmental_consequence",
+        "module_specific_procedure",
+    }
+)
+RULING_KINDS = AGENT_RULING_KINDS | EXTERNAL_RULING_KINDS
 
 
 class RuleCompilationError(ValueError):
@@ -356,7 +376,25 @@ def apply_rule_event(
         for operation in mechanic.operations:
             opcode = operation["op"]
             if opcode in {"choice.require", "ruling.require"}:
-                pending.append({"mechanic_id": mechanic.id, **deepcopy(operation)})
+                pending_operation = {"mechanic_id": mechanic.id, **deepcopy(operation)}
+                if opcode == "choice.require":
+                    pending_operation.update(
+                        default_resolver="external_input",
+                        ruling_kind="player_owned_choice",
+                    )
+                else:
+                    ruling_kind = str(
+                        operation.get("ruling_kind") or "agent_dm_adjudication"
+                    )
+                    pending_operation.update(
+                        default_resolver=(
+                            "external_input"
+                            if ruling_kind in EXTERNAL_RULING_KINDS
+                            else "agent"
+                        ),
+                        ruling_kind=ruling_kind,
+                    )
+                pending.append(pending_operation)
                 continue
             if opcode in {"modifier.add", "advantage.add", "disadvantage.add"}:
                 modifiers.append({"mechanic_id": mechanic.id, **deepcopy(operation)})
@@ -427,6 +465,27 @@ def _validate_operation(operation: dict[str, Any]) -> None:
         operation.get("id") or ""
     ):
         raise RuleCompilationError(f"{opcode} requires id")
+    if opcode in {"choice.require", "ruling.require"}:
+        declared_kind = str(operation.get("ruling_kind") or "")
+        if declared_kind and declared_kind not in RULING_KINDS:
+            raise RuleCompilationError(f"{opcode} has an invalid ruling_kind")
+        if opcode == "choice.require" and declared_kind not in {
+            "",
+            "player_owned_choice",
+        }:
+            raise RuleCompilationError(
+                "choice.require ruling_kind must be player_owned_choice"
+            )
+        declared_resolver = str(operation.get("default_resolver") or "")
+        expected_resolver = (
+            "external_input"
+            if opcode == "choice.require" or declared_kind in EXTERNAL_RULING_KINDS
+            else "agent"
+        )
+        if declared_resolver and declared_resolver != expected_resolver:
+            raise RuleCompilationError(
+                f"{opcode} default_resolver must be {expected_resolver}"
+            )
 
 
 def _object_sequence(value: Any, field: str) -> tuple[dict[str, Any], ...]:

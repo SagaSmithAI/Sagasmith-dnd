@@ -118,9 +118,38 @@ def end_concentration_for_incapacitating_conditions(
 class NeedsRulingError(CombatEngineError):
     """Raised when the engine cannot safely infer a narrative prerequisite."""
 
-    def __init__(self, message: str, *, missing: Iterable[str] = ()) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        missing: Iterable[str] = (),
+        ruling_kind: str = "agent_dm_adjudication",
+    ) -> None:
         super().__init__(message)
         self.missing = tuple(missing)
+        self.ruling_kind = str(ruling_kind or "agent_dm_adjudication")
+
+
+def _rule_event_ruling_kind(status: str, pending: Iterable[dict[str, Any]]) -> str:
+    """Preserve an extension boundary's owner instead of treating every pause as DM fiat."""
+
+    if status == "pending_choice":
+        return "player_owned_choice"
+    kinds = {
+        str(item.get("ruling_kind") or "agent_dm_adjudication")
+        for item in pending
+        if isinstance(item, dict)
+    }
+    external_kinds = {
+        "player_owned_choice",
+        "owner_approval",
+        "permission_escalation",
+        "missing_or_conflicting_source_review",
+    }
+    external = sorted(kinds & external_kinds)
+    if external:
+        return external[0]
+    return "agent_dm_adjudication"
 
 
 def structured_critical_followup(effect: str) -> dict[str, Any] | None:
@@ -409,6 +438,7 @@ def start_encounter(
                 "actor_id": identifier,
                 "token_id": actor.get("token_id"),
                 "name": actor.get("name", identifier),
+                "character_type": str(actor.get("character_type") or ""),
                 "initiative": initiative,
                 "initiative_roll": die,
                 "initiative_bonus": initiative_bonus,
@@ -451,14 +481,28 @@ def start_encounter(
     ties: dict[int, list[dict[str, Any]]] = {}
     for combatant in combatants:
         ties.setdefault(int(combatant["initiative"]), []).append(combatant)
-    if any(
-        len(items) > 1
-        and all(item["_initiative_supplied"] for item in items)
-        and not all(item["_tie_breaker_supplied"] for item in items)
+    unresolved_ties = [
+        items
         for items in ties.values()
-    ):
+        if (
+            len(items) > 1
+            and all(item["_initiative_supplied"] for item in items)
+            and not all(item["_tie_breaker_supplied"] for item in items)
+        )
+    ]
+    if unresolved_ties:
+        ruling_kind = (
+            "player_owned_choice"
+            if any(
+                all(item.get("character_type") == "pc" for item in items)
+                for items in unresolved_ties
+            )
+            else "agent_dm_adjudication"
+        )
         raise NeedsRulingError(
-            "initiative ties need explicit tie_breaker choices", missing=("tie_breaker",)
+            "initiative ties need explicit tie_breaker choices",
+            missing=("tie_breaker",),
+            ruling_kind=ruling_kind,
         )
     for combatant in combatants:
         combatant.pop("_tie_breaker_supplied", None)
@@ -532,9 +576,16 @@ def queue_combatant(
         if int(item.get("initiative", 0) or 0) == int(generated["initiative"])
     ]
     if same_initiative and "tie_breaker" not in actor:
+        ruling_kind = (
+            "player_owned_choice"
+            if actor.get("character_type") == "pc"
+            and all(item.get("character_type") == "pc" for item in same_initiative)
+            else "agent_dm_adjudication"
+        )
         raise NeedsRulingError(
             "joining initiative ties need an explicit tie_breaker choice",
             missing=("tie_breaker",),
+            ruling_kind=ruling_kind,
         )
     if "tie_breaker" not in actor:
         generated["tie_breaker"] = max(
@@ -1205,6 +1256,7 @@ def preflight_attack(
         raise NeedsRulingError(
             "condition source is required to determine this attack's legality",
             missing=sorted(set(unresolved_condition_sources)),
+            ruling_kind="missing_or_conflicting_source_review",
         )
     if target_conditions & {
         "blinded",
@@ -1363,6 +1415,7 @@ def preflight_attack(
         raise NeedsRulingError(
             "an active rule pack requires an attack choice or ruling",
             missing=[item["mechanic_id"] for item in extension.pending],
+            ruling_kind=_rule_event_ruling_kind(extension.status, extension.pending),
         )
     for modifier in extension.modifiers:
         opcode = modifier["op"]
@@ -2879,7 +2932,9 @@ def spend_movement(
         raise CombatEngineError("actor cannot move under its current conditions")
     if "grappled" in conditions:
         raise NeedsRulingError(
-            "grapple source is needed to determine movement", missing=("grapple_source",)
+            "grapple source is needed to determine movement",
+            missing=("grapple_source",),
+            ruling_kind="missing_or_conflicting_source_review",
         )
     if "prone" in conditions and not crawl:
         raise CombatEngineError("a prone actor must crawl or stand before moving")
@@ -3004,6 +3059,7 @@ def spend_movement(
             raise NeedsRulingError(
                 "frightened movement requires the fear source",
                 missing=("frightened_source",),
+                ruling_kind="missing_or_conflicting_source_review",
             )
         for fear_source_id in fear_source_ids:
             fear_source = next(
@@ -4135,6 +4191,7 @@ def resolve_actor_check(
         raise NeedsRulingError(
             "an active rule pack requires a check choice or ruling",
             missing=[item["mechanic_id"] for item in extension.pending],
+            ruling_kind=_rule_event_ruling_kind(extension.status, extension.pending),
         )
     for modifier in extension.modifiers:
         if modifier["op"] == "modifier.add" and modifier.get("target") == "check_bonus":
