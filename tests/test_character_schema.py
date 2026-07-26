@@ -14,6 +14,7 @@ from sagasmith_dnd.character_schema import (
     equip_inventory_item,
     legacy_memory_candidates,
     receive_inventory_item,
+    remove_effect,
     remove_inventory_item,
     set_spell_prepared,
     validate_character_notes,
@@ -173,6 +174,31 @@ def test_inventory_wallet_effect_and_memory_contracts() -> None:
             },
         }
     ]
+
+
+def test_removing_an_effect_cleans_only_conditions_no_longer_owned() -> None:
+    sheet = default_character_sheet()
+    sheet["conditions"] = ["frightened", "prone"]
+    fear = {
+        "name": "Fear Ray",
+        "kind": "timed_conditions",
+        "source": "gazer-a",
+        "duration": {"period": "source_turn_start", "remaining": 1},
+        "changes": [
+            {"path": "conditions", "mode": "add", "value": "frightened"}
+        ],
+    }
+    sheet, first_id = add_effect(sheet, {"id": "fear-a", **fear})
+    sheet, second_id = add_effect(
+        sheet,
+        {"id": "fear-b", **fear, "source": "gazer-b"},
+    )
+
+    one_removed = remove_effect(sheet, first_id)
+    assert one_removed["conditions"] == ["frightened", "prone"]
+
+    both_removed = remove_effect(one_removed, second_id)
+    assert both_removed["conditions"] == ["prone"]
 
 
 def test_inventory_weight_supports_rule_book_fractional_ounce_units() -> None:

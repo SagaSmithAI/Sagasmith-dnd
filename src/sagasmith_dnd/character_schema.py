@@ -3204,7 +3204,57 @@ def remove_effect(sheet: dict[str, Any], effect_id: str) -> dict[str, Any]:
     effect = next((entry for entry in effects if entry["id"] == effect_id), None)
     if effect is None:
         raise LookupError(effect_id)
+    removed_condition_additions: set[str] = set()
+    if effect.get("kind") == "timed_conditions":
+        for change in effect.get("changes", []):
+            if change.get("path") != "conditions" or change.get("mode") != "add":
+                continue
+            raw = change.get("value")
+            values = raw if isinstance(raw, list) else [raw]
+            removed_condition_additions.update(
+                str(item).strip().casefold()
+                for item in values
+                if str(item).strip()
+            )
     effects.remove(effect)
+    active_condition_additions: set[str] = set()
+    for current in effects:
+        if not current.get("active") or current.get("kind") != "timed_conditions":
+            continue
+        for change in current.get("changes", []):
+            if change.get("path") != "conditions" or change.get("mode") != "add":
+                continue
+            raw = change.get("value")
+            values = raw if isinstance(raw, list) else [raw]
+            active_condition_additions.update(
+                str(item).strip().casefold()
+                for item in values
+                if str(item).strip()
+            )
+    removable_conditions = removed_condition_additions - active_condition_additions
+    if effect.get("kind") == "turn_undead" and not any(
+        current.get("active") and current.get("kind") == "turn_undead"
+        for current in effects
+    ):
+        removable_conditions.add("turned")
+    removed_spell_id = (
+        str(effect.get("source_spell_id") or "").strip().casefold().rsplit(".", 1)[-1]
+    )
+    if removed_spell_id == "invisibility" and not any(
+        current.get("active")
+        and str(current.get("source_spell_id") or "")
+        .strip()
+        .casefold()
+        .rsplit(".", 1)[-1]
+        == "invisibility"
+        for current in effects
+    ):
+        removable_conditions.add("invisible")
+    value["conditions"] = [
+        condition
+        for condition in value.get("conditions", [])
+        if str(condition).casefold() not in removable_conditions
+    ]
     return validate_character_sheet(value)
 
 
