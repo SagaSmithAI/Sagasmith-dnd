@@ -1014,12 +1014,17 @@ def apply_statblock_variant(
         "challenge_rating",
         "experience_points",
         "creature_type",
+        "size",
+        "walking_speed_ft",
         "current_hit_points",
         "maximum_hit_points",
         "armor_class",
         "alignment",
         "darkvision_ft",
         "languages",
+        "spell_replacements",
+        "expend_all_spell_slots",
+        "add_features",
         "relentless_endurance",
         "remove_actions",
         "remove_items",
@@ -1056,6 +1061,24 @@ def apply_statblock_variant(
                 "creature_type must be a non-empty string of at most 100 characters"
             )
         result["progression"]["species"] = creature_type
+
+    if "size" in variant:
+        size = str(variant["size"] or "").strip().casefold()
+        if size not in {"tiny", "small", "medium", "large", "huge", "gargantuan"}:
+            raise StatblockImportError("size must be a supported D&D creature size")
+        result["traits"]["size"] = size
+
+    if "walking_speed_ft" in variant:
+        walking_speed = variant["walking_speed_ft"]
+        if (
+            not isinstance(walking_speed, int)
+            or isinstance(walking_speed, bool)
+            or not 0 <= walking_speed <= 1000
+        ):
+            raise StatblockImportError(
+                "walking_speed_ft must be an integer between 0 and 1000"
+            )
+        result["combat"]["speed"]["walk"] = walking_speed
 
     hp = result["combat"]["hp"]
     if "maximum_hit_points" in variant:
@@ -1118,6 +1141,153 @@ def apply_statblock_variant(
         ):
             raise StatblockImportError("languages must contain unique non-empty strings")
         result["traits"]["languages"] = normalized_languages
+
+    if "spell_replacements" in variant:
+        replacements = variant["spell_replacements"]
+        if not isinstance(replacements, list) or not replacements:
+            raise StatblockImportError("spell_replacements must be a non-empty list")
+        normalized_replacements: list[tuple[str, str]] = []
+        for index, raw in enumerate(replacements):
+            if not isinstance(raw, dict):
+                raise StatblockImportError(
+                    f"spell_replacements[{index}] must be an object"
+                )
+            unknown_replacement_fields = set(raw) - {
+                "remove_spell_id",
+                "add_spell_id",
+            }
+            if unknown_replacement_fields:
+                raise StatblockImportError(
+                    "unsupported spell replacement fields: "
+                    f"{sorted(unknown_replacement_fields)}"
+                )
+            remove_spell_id = str(raw.get("remove_spell_id") or "").strip()
+            add_spell_id = str(raw.get("add_spell_id") or "").strip()
+            if not remove_spell_id or not add_spell_id:
+                raise StatblockImportError(
+                    f"spell_replacements[{index}] requires remove_spell_id and add_spell_id"
+                )
+            if remove_spell_id == add_spell_id:
+                raise StatblockImportError(
+                    f"spell_replacements[{index}] must replace two different spells"
+                )
+            normalized_replacements.append((remove_spell_id, add_spell_id))
+        remove_ids = [item[0] for item in normalized_replacements]
+        add_ids = [item[1] for item in normalized_replacements]
+        if len(remove_ids) != len(set(remove_ids)) or len(add_ids) != len(set(add_ids)):
+            raise StatblockImportError(
+                "spell_replacements must use unique removed and added spell ids"
+            )
+        if set(remove_ids) & set(add_ids):
+            raise StatblockImportError(
+                "spell_replacements cannot chain removed and added spell ids"
+            )
+
+        spells = list(result["content"]["spells"])
+        spells_by_id = {
+            str(item.get("id") or ""): item
+            for item in spells
+            if str(item.get("id") or "")
+        }
+        preparation = result["spellcasting"]["preparation"]
+        selected_ids = list(preparation.get("selected_spell_ids") or [])
+        for remove_spell_id, add_spell_id in normalized_replacements:
+            removed_spell = spells_by_id.get(remove_spell_id)
+            added_spell = spells_by_id.get(add_spell_id)
+            if removed_spell is None:
+                raise StatblockImportError(
+                    f"spell replacement source is not on the statblock: {remove_spell_id}"
+                )
+            if added_spell is None:
+                raise StatblockImportError(
+                    f"spell replacement target is not hydrated: {add_spell_id}"
+                )
+            if remove_spell_id not in selected_ids:
+                raise StatblockImportError(
+                    f"spell replacement source is not prepared: {remove_spell_id}"
+                )
+            if add_spell_id in selected_ids:
+                raise StatblockImportError(
+                    f"spell replacement target is already prepared: {add_spell_id}"
+                )
+            if int(removed_spell.get("level", 0) or 0) != int(
+                added_spell.get("level", 0) or 0
+            ):
+                raise StatblockImportError(
+                    "spell replacements must preserve the printed spell level"
+                )
+            selected_ids[selected_ids.index(remove_spell_id)] = add_spell_id
+            access = added_spell.setdefault("access", {})
+            access.update(
+                {
+                    "known": True,
+                    "prepared": True,
+                    "always_prepared": True,
+                    "in_spellbook": False,
+                }
+            )
+        result["content"]["spells"] = [
+            spell for spell in spells if str(spell.get("id") or "") not in set(remove_ids)
+        ]
+        preparation["selected_spell_ids"] = selected_ids
+
+    if "expend_all_spell_slots" in variant:
+        if variant["expend_all_spell_slots"] is not True:
+            raise StatblockImportError("expend_all_spell_slots must be true")
+        slots = result["spellcasting"]["spell_slots"]
+        if not slots:
+            raise StatblockImportError(
+                "expend_all_spell_slots requires a statblock with spell slots"
+            )
+        for slot in slots.values():
+            slot["value"] = 0
+
+    if "add_features" in variant:
+        features = variant["add_features"]
+        if not isinstance(features, list) or not features:
+            raise StatblockImportError("add_features must be a non-empty list")
+        existing_feature_ids = {
+            str(item.get("id") or "") for item in result["content"]["features"]
+        }
+        added_feature_ids: set[str] = set()
+        for index, raw in enumerate(features):
+            if not isinstance(raw, dict):
+                raise StatblockImportError(f"add_features[{index}] must be an object")
+            unknown_feature_fields = set(raw) - {"id", "name", "description"}
+            if unknown_feature_fields:
+                raise StatblockImportError(
+                    f"unsupported add_features fields: {sorted(unknown_feature_fields)}"
+                )
+            feature_id = str(raw.get("id") or "").strip()
+            name = str(raw.get("name") or "").strip()
+            description = str(raw.get("description") or "").strip()
+            if not feature_id or _slug(feature_id) != feature_id:
+                raise StatblockImportError(
+                    f"add_features[{index}].id must be a lowercase slug"
+                )
+            if not name or not description:
+                raise StatblockImportError(
+                    f"add_features[{index}] requires name and description"
+                )
+            if len(name) > 200 or len(description) > 4000:
+                raise StatblockImportError(
+                    f"add_features[{index}] exceeds the supported text length"
+                )
+            if feature_id in existing_feature_ids or feature_id in added_feature_ids:
+                raise StatblockImportError(
+                    f"add_features contains duplicate feature id: {feature_id}"
+                )
+            result["content"]["features"].append(
+                {
+                    "id": feature_id,
+                    "name": name,
+                    "source_key": f"variant:{source_ref}",
+                    "description": description,
+                    "activation": {"type": "passive", "cost": 0},
+                    "rule_refs": list(source_refs),
+                }
+            )
+            added_feature_ids.add(feature_id)
 
     if "relentless_endurance" in variant:
         raw_feature = variant["relentless_endurance"]

@@ -1,6 +1,6 @@
 import pytest
 
-from sagasmith_dnd.character_schema import derive_character_sheet
+from sagasmith_dnd.character_schema import derive_character_sheet, validate_character_sheet
 from sagasmith_dnd.statblocks import (
     StatblockImportError,
     apply_statblock_variant,
@@ -638,6 +638,121 @@ def test_source_bound_variant_can_apply_common_module_instance_changes() -> None
     assert "1d4 bludgeoning damage" not in attack["description"]
     assert "1d4 force damage" in attack["description"]
     assert "Variant source: module-scene:d12" in attack["description"]
+
+
+def test_source_bound_variant_can_apply_a_complete_spellcaster_instance() -> None:
+    parsed = parse_2014_statblock(COMMONER, source_key="srd-spellcaster")
+    sheet = parsed.sheet
+    sheet["spellcasting"]["ability"] = "intelligence"
+    sheet["spellcasting"]["spell_slots"] = {
+        "3": {
+            "label": "Level 3 spell slots",
+            "value": 3,
+            "max": 3,
+            "recovers_on": "long_rest",
+            "source_key": "srd-spellcaster",
+            "slot_level": 3,
+        },
+        "4": {
+            "label": "Level 4 spell slots",
+            "value": 3,
+            "max": 3,
+            "recovers_on": "long_rest",
+            "source_key": "srd-spellcaster",
+            "slot_level": 4,
+        },
+    }
+    sheet["content"]["spells"] = [
+        {
+            "id": spell_id,
+            "source_key": "srd-spellcaster",
+            "name": name,
+            "level": level,
+            "access": {
+                "known": True,
+                "prepared": prepared,
+                "always_prepared": prepared,
+                "in_spellbook": False,
+                "ritual_available": False,
+                "at_will": False,
+            },
+        }
+        for spell_id, name, level, prepared in (
+            ("counterspell", "Counterspell", 3, True),
+            ("greater-invisibility", "Greater Invisibility", 4, True),
+            ("animate-dead", "Animate Dead", 3, False),
+            ("blight", "Blight", 4, False),
+        )
+    ]
+    sheet["spellcasting"]["preparation"] = {
+        "mode": "known",
+        "max_prepared": 2,
+        "changes_on": "manual",
+        "selected_spell_ids": ["counterspell", "greater-invisibility"],
+    }
+
+    result = apply_statblock_variant(
+        validate_character_sheet(sheet),
+        {
+            "source_ref": "module-chunk:losser",
+            "size": "small",
+            "walking_speed_ft": 25,
+            "maximum_hit_points": 31,
+            "current_hit_points": 31,
+            "alignment": "chaotic evil",
+            "languages": ["Common", "Halfling"],
+            "spell_replacements": [
+                {
+                    "remove_spell_id": "counterspell",
+                    "add_spell_id": "animate-dead",
+                },
+                {
+                    "remove_spell_id": "greater-invisibility",
+                    "add_spell_id": "blight",
+                },
+            ],
+            "expend_all_spell_slots": True,
+            "add_features": [
+                {
+                    "id": "halfling-nimbleness",
+                    "name": "Halfling Nimbleness",
+                    "description": (
+                        "The actor can move through the space of a Medium or "
+                        "larger creature."
+                    ),
+                },
+                {
+                    "id": "brave",
+                    "name": "Brave",
+                    "description": (
+                        "The actor has advantage on saving throws against being "
+                        "frightened."
+                    ),
+                },
+            ],
+        },
+    )
+    derived = derive_character_sheet(result)
+
+    assert result["traits"]["size"] == "small"
+    assert result["combat"]["speed"]["walk"] == 25
+    assert result["combat"]["hp"] == {"value": 31, "max": 31, "temp": 0}
+    assert result["traits"]["alignment"] == "chaotic evil"
+    assert result["traits"]["languages"] == ["Common", "Halfling"]
+    assert set(derived["spellcasting"]["prepared_spell_ids"]) == {
+        "animate-dead",
+        "blight",
+    }
+    assert all(
+        slot["value"] == 0
+        for slot in result["spellcasting"]["spell_slots"].values()
+    )
+    assert {
+        item["id"] for item in result["content"]["features"]
+    } >= {"halfling-nimbleness", "brave"}
+    assert {
+        item["id"] for item in result["content"]["spells"]
+    } == {"animate-dead", "blight"}
 
 
 def test_source_bound_variant_can_remove_confiscated_gear_and_dependent_activities() -> None:
