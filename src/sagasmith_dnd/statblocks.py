@@ -923,6 +923,7 @@ def _structure_intellect_devourer_actions(
         body_description = " ".join(
             str(body_thief.get("description") or "").split()
         )
+        body_match_text = body_description.replace("*", "")
         body_match = re.fullmatch(
             r"The intellect devourer initiates an Intelligence contest with an "
             r"incapacitated humanoid within (?P<range>\d+) feet of it\. If it "
@@ -942,7 +943,7 @@ def _structure_intellect_devourer_actions(
             r"the intellect devourer can voluntarily leave the body, teleporting to "
             r"the nearest unoccupied space within 5 feet of it\. The body then dies, "
             r"unless its brain is restored within 1 round\.",
-            body_description,
+            body_match_text,
             flags=re.IGNORECASE,
         )
         if body_match is not None:

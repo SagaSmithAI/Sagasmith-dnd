@@ -274,9 +274,9 @@ otherwise adopts the target's statistics. It knows everything the creature knew,
 including spells and languages.
 
 If the host body drops to 0 hit points, the intellect devourer must leave it. A
-protection from evil and good spell cast on the body drives the intellect devourer
+*protection from evil and good* spell cast on the body drives the intellect devourer
 out. The intellect devourer is also forced out if the target regains its devoured
-brain by means of a wish. By spending 5 feet of its movement, the intellect
+brain by means of a *wish*. By spending 5 feet of its movement, the intellect
 devourer can voluntarily leave the body, teleporting to the nearest unoccupied
 space within 5 feet of it. The body then dies, unless its brain is restored within
 1 round.
