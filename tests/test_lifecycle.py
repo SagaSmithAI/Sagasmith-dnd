@@ -504,6 +504,21 @@ def test_long_rest_also_recovers_short_rest_resources() -> None:
     assert result["recovered"]["channel_divinity"] == 1
 
 
+def test_2014_long_rest_does_not_heal_above_exhaustion_reduced_maximum() -> None:
+    sheet = default_character_sheet()
+    sheet["edition"] = "2014"
+    sheet["combat"]["hp"] = {"value": 1, "max": 37, "temp": 0}
+    sheet["combat"]["exhaustion"] = 4
+
+    without_supplies = apply_rest(sheet, rest_type="long_rest")
+    with_supplies = apply_rest(sheet, rest_type="long_rest", food_and_drink=True)
+
+    assert without_supplies["sheet"]["combat"]["exhaustion"] == 4
+    assert without_supplies["sheet"]["combat"]["hp"]["value"] == 18
+    assert with_supplies["sheet"]["combat"]["exhaustion"] == 3
+    assert with_supplies["sheet"]["combat"]["hp"]["value"] == 37
+
+
 def test_long_rest_clears_stable_and_unconscious_case_insensitively() -> None:
     sheet = default_character_sheet()
     sheet["combat"]["hp"] = {"value": 1, "max": 10, "temp": 0}

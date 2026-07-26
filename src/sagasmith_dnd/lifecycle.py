@@ -710,6 +710,11 @@ def apply_rest(
         exhaustion = int(combat.get("exhaustion", 0) or 0)
         if edition == "2024" or food_and_drink:
             combat["exhaustion"] = max(0, exhaustion - 1)
+        if edition == "2014" and int(combat["exhaustion"]) >= 4:
+            hp["value"] = min(
+                int(hp["value"]),
+                max(1, int(hp.get("max", 0) or 0) // 2),
+            )
     else:
         hit_dice = combat.get("hit_dice", {})
         hit_die_resolution = roll_rest_hit_dice(value, hit_dice_spends, rng=rng)

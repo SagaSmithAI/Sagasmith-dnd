@@ -3368,6 +3368,11 @@ def set_exhaustion_level(sheet: dict[str, Any], value: int) -> dict[str, Any]:
         maximum=6,
     )
     result["combat"]["exhaustion"] = level
+    hit_points = result["combat"]["hp"]
+    hit_points["value"] = min(
+        int(hit_points["value"]),
+        effective_hit_point_maximum(result),
+    )
     if level >= 6 and "dead" not in {
         str(condition).strip().casefold()
         for condition in result["conditions"]

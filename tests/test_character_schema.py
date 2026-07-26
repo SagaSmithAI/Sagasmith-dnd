@@ -204,9 +204,13 @@ def test_removing_an_effect_cleans_only_conditions_no_longer_owned() -> None:
 
 
 def test_exhaustion_level_setter_enforces_the_character_sheet_range() -> None:
-    sheet = set_exhaustion_level(default_character_sheet(), 3)
+    base = default_character_sheet()
+    base["combat"]["hp"] = {"value": 37, "max": 37, "temp": 0}
+    sheet = set_exhaustion_level(base, 3)
 
     assert sheet["combat"]["exhaustion"] == 3
+    level_four = set_exhaustion_level(sheet, 4)
+    assert level_four["combat"]["hp"] == {"value": 18, "max": 37, "temp": 0}
     dead = set_exhaustion_level(sheet, 6)
     assert dead["conditions"] == ["dead"]
     with pytest.raises(ValueError, match="at most 6"):
