@@ -2893,13 +2893,13 @@ def force_move_directly_away(
             "directly-away movement is ambiguous for overlapping tokens",
             missing=("forced_movement_direction",),
         )
-    if delta_x and delta_y and abs(delta_x) != abs(delta_y):
-        raise NeedsRulingError(
-            "directly-away movement is ambiguous on this square-grid bearing",
-            missing=("forced_movement_grid_path",),
-        )
-    step_x = 0 if delta_x == 0 else 1 if delta_x > 0 else -1
-    step_y = 0 if delta_y == 0 else 1 if delta_y > 0 else -1
+    grid_span = max(abs(delta_x), abs(delta_y))
+
+    def _grid_ray_offset(component: float, step: int) -> int:
+        """Round a continuous outward ray to the nearest standard grid cell."""
+        scaled = (component * step) / grid_span
+        return int(scaled + 0.5) if scaled >= 0 else int(scaled - 0.5)
+
     battle_map = dict(value.get("battle_map") or {})
     occupied = {
         _position(item.get("position"))
@@ -2912,10 +2912,10 @@ def force_move_directly_away(
     moved_cells = 0
     from sagasmith_dnd.spatial import BattleMapError, validate_position
 
-    for _ in range(distance // 5):
+    for step in range(1, (distance // 5) + 1):
         candidate = (
-            destination[0] + step_x,
-            destination[1] + step_y,
+            target_position[0] + _grid_ray_offset(delta_x, step),
+            target_position[1] + _grid_ray_offset(delta_y, step),
         )
         candidate_dict = {"x": int(candidate[0]), "y": int(candidate[1])}
         if candidate in occupied:

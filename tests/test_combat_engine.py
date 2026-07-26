@@ -267,6 +267,38 @@ def test_telekinetic_ray_moves_up_to_the_last_legal_cell_without_reactions() -> 
     assert moved["encounter"]["log"][-1]["opportunity_reactions"] is False
 
 
+def test_telekinetic_ray_projects_noncardinal_bearings_onto_the_square_grid() -> None:
+    source = _actor("gazer")
+    source.update(
+        initiative=20,
+        position={"x": 2, "y": 2},
+        disposition="hostile",
+    )
+    target = _actor("target")
+    target.update(
+        initiative=10,
+        position={"x": 1, "y": 4},
+        disposition="friendly",
+    )
+    encounter = start_encounter([source, target])
+    encounter["battle_map"] = compile_battle_map(
+        {"scene_id": "gazer-rays", "spatial": {}},
+        {"width_cells": 4, "height_cells": 7},
+    )
+
+    moved = force_move_directly_away(
+        encounter,
+        source_actor_id="gazer",
+        target_actor_id="target",
+        distance_ft=30,
+    )
+
+    # The continuous (-1, 2) outward ray crosses (0, 5), then (0, 6);
+    # the following cell is outside the map, so "up to 30 feet" stops there.
+    assert moved["moved_distance_ft"] == 10
+    assert moved["destination"] == {"x": 0, "y": 6}
+
+
 def test_frightened_creature_cannot_willingly_move_closer_to_visible_source() -> None:
     target = _actor("target")
     target["sheet"]["conditions"] = ["frightened"]
