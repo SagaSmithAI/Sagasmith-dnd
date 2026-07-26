@@ -550,12 +550,34 @@ def _spatial_manifest(
     locations: list[dict[str, object]] = []
     location_key_counts: dict[str, int] = {}
     scene_title_tokens = set(re.findall(r"[a-z0-9]+", title.casefold()))
+    if _ROOM.match(title.strip()):
+        dimensions = _DIMENSIONS.search(text)
+        scene_key = _location_key(title, 0)
+        location_key_counts[scene_key] = 1
+        locations.append(
+            {
+                "key": scene_key,
+                "title": title,
+                "kind": "room",
+                "dimensions_ft": (
+                    {
+                        "width": int(dimensions.group("width")),
+                        "height": int(dimensions.group("height")),
+                    }
+                    if dimensions
+                    else None
+                ),
+                "confidence": "explicit_heading",
+            }
+        )
     for ordinal, item in enumerate(subsections):
         location_kind = str(item.get("type") or "")
         if location_kind not in {"room", "scene"}:
             continue
         label = str(item["title"])
         label_tokens = set(re.findall(r"[a-z0-9]+", label.casefold()))
+        if label_tokens == scene_title_tokens:
+            continue
         if (
             not _ROOM.match(label)
             and len(label_tokens) == 1
@@ -619,7 +641,7 @@ def _spatial_manifest(
 
 class DndModuleProfile(GenericModuleProfile):
     name = "dnd5e"
-    version = "25"
+    version = "26"
 
     def document_metadata(self, content: str) -> dict[str, object]:
         """Parse and validate the optional generated-module runtime manifest."""

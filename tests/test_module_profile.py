@@ -505,6 +505,13 @@ def test_named_windmill_season_populates_scene_atlas_as_a_location() -> None:
 
     assert scene.metadata["spatial"]["locations"] == [
         {
+            "key": "w8-back-room",
+            "title": "W8. BACK ROOM",
+            "kind": "room",
+            "dimensions_ft": None,
+            "confidence": "explicit_heading",
+        },
+        {
             "key": "converted-windmill-spring",
             "title": "CONVERTED WINDMILL: SPRING",
             "kind": "room",
@@ -606,6 +613,32 @@ def test_coded_scene_fallback_is_typed_as_room_even_with_ocr_digit() -> None:
     assert scene.title == "Ql. Central Hub"
     assert scene.metadata["spatial"]["locations"][0]["kind"] == "room"
     assert scene.metadata["spatial"]["locations"][0]["confidence"] == "explicit_heading"
+
+
+def test_coded_scene_keeps_root_room_when_it_has_spatial_subsections() -> None:
+    content = (
+        "# Dragon Season\n"
+        "## V9. MAIN VAULT\n"
+        "A dragon guards the main vault.\n"
+        "### LEAVING THE VAULT\n"
+        "Enemies wait outside.\n"
+        "### FACTION REINFORCEMENTS\n"
+        "Allies can arrive here.\n"
+    )
+
+    scene = MarkdownModuleParser(profile=DndModuleProfile()).parse(content)[0].scenes[1]
+
+    assert [item["title"] for item in scene.metadata["spatial"]["locations"]] == [
+        "V9. MAIN VAULT",
+        "LEAVING THE VAULT",
+    ]
+    assert scene.metadata["spatial"]["locations"][0] == {
+        "key": "v9-main-vault",
+        "title": "V9. MAIN VAULT",
+        "kind": "room",
+        "dimensions_ft": None,
+        "confidence": "explicit_heading",
+    }
 
 
 def test_ocr_room_codes_split_scenes_without_treating_words_as_codes() -> None:
