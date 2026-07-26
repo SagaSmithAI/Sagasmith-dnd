@@ -101,6 +101,10 @@ _ACTION_SCENE_BODY_SIGNAL = re.compile(
     r")",
     re.IGNORECASE,
 )
+_ACTION_SCENE_TITLE_SIGNALS = (
+    "chase",
+    "pursuit",
+)
 _NON_LOCATION_HEADINGS = {
     "adventure conclusion",
     "aftermath",
@@ -156,6 +160,17 @@ def _contains_location_title_signal(folded_title: str) -> bool:
     )
 
 
+def _contains_action_scene_title_signal(folded_title: str) -> bool:
+    """Recognize authored action headings despite display-font OCR spacing."""
+    return any(
+        re.search(
+            r"\b" + r"\s*".join(re.escape(char) for char in signal) + r"\b",
+            folded_title,
+        )
+        for signal in _ACTION_SCENE_TITLE_SIGNALS
+    )
+
+
 def _location_heading_kind(title: str, body: str = "") -> str | None:
     text = title.strip()
     folded = text.casefold()
@@ -187,7 +202,10 @@ def _location_heading_kind(title: str, body: str = "") -> str | None:
         and 1 <= len(text.split()) <= 6
         and any(char.isalpha() for char in text)
         and text.upper() == text
-        and bool(_ACTION_SCENE_BODY_SIGNAL.search(normalized_body))
+        and (
+            _contains_action_scene_title_signal(folded)
+            or bool(_ACTION_SCENE_BODY_SIGNAL.search(normalized_body))
+        )
     ):
         return "scene"
     return None
@@ -596,7 +614,7 @@ def _spatial_manifest(
 
 class DndModuleProfile(GenericModuleProfile):
     name = "dnd5e"
-    version = "22"
+    version = "23"
 
     def document_metadata(self, content: str) -> dict[str, object]:
         """Parse and validate the optional generated-module runtime manifest."""

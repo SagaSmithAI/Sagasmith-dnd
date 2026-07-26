@@ -343,6 +343,37 @@ def test_named_action_section_populates_scene_atlas_without_claiming_it_is_a_roo
     ]
 
 
+def test_ocr_split_chase_variants_remain_distinct_scene_atlas_locations() -> None:
+    content = (
+        "# Dragon Season\n"
+        "## STREET CHASE\n"
+        "Use the urban chase rules.\n"
+        "### STREET CHA SE: S PRING\n"
+        "A kenku is 60 feet away from the characters at the start of the chase.\n"
+        "### NEXT E NCOUNTER\n"
+        "Proceed with encounter 7, Old Tower.\n"
+        "### STREET CHA SE: SUMMER\n"
+        "A doppelganger flees through crowded streets.\n"
+        "### STREET CHASE: WIN TER\n"
+        "A spy leads the characters through snowy streets.\n"
+    )
+
+    scene = next(
+        item
+        for item in MarkdownModuleParser(profile=DndModuleProfile()).parse(content)[0].scenes
+        if item.title == "STREET CHASE"
+    )
+
+    assert [
+        (item["key"], item["title"], item["kind"])
+        for item in scene.metadata["spatial"]["locations"]
+    ] == [
+        ("street-cha-se-s-pring", "STREET CHA SE: S PRING", "scene"),
+        ("street-cha-se-summer", "STREET CHA SE: SUMMER", "scene"),
+        ("street-chase-win-ter", "STREET CHASE: WIN TER", "scene"),
+    ]
+
+
 def test_visual_fragment_does_not_hide_interaction_from_scene_atlas() -> None:
     content = (
         "# Fireball\n"
