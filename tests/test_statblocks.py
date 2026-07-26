@@ -482,11 +482,48 @@ def test_mixed_weapon_and_special_action_multiattack_stays_a_dm_boundary() -> No
     derived = derive_character_sheet(parsed.sheet)
 
     assert derived["multiattack_options"] == []
-    assert any(
-        activity["name"] == "Multiattack"
+    multiattack = next(
+        activity
         for activity in parsed.sheet["content"]["activities"]
+        if activity["name"] == "Multiattack"
     )
+    assert multiattack["choices"]["manual_ruling"] == {
+        "kind": "descriptive_activity",
+        "source_excerpt": (
+            "The commoner makes one attack with its club and uses Devour Intellect."
+        ),
+    }
     assert "Multiattack: Multiattack composition requires a DM ruling" in parsed.warnings
+
+
+def test_descriptive_statblock_action_is_marked_for_agent_ruling() -> None:
+    source_excerpt = (
+        "The commoner exhales lightning in a 30-foot line that is 5 feet wide. "
+        "Each creature in that line must make a DC 12 Dexterity saving throw."
+    )
+    parsed = parse_2014_statblock(
+        COMMONER.replace(
+            "***Club***. *Melee Weapon Attack:* +2 to hit, reach 5 ft., one target.",
+            (
+                f"***Lightning Breath (Recharge 5-6)***. {source_excerpt}\n\n"
+                "***Club***. *Melee Weapon Attack:* +2 to hit, reach 5 ft., one target."
+            ),
+        ),
+        source_key="module-review:descriptive-breath",
+    )
+    activity = next(
+        item
+        for item in parsed.sheet["content"]["activities"]
+        if item["name"] == "Lightning Breath (Recharge 5-6)"
+    )
+
+    assert activity["choices"]["manual_ruling"] == {
+        "kind": "descriptive_activity",
+        "source_excerpt": source_excerpt,
+    }
+    assert parsed.warnings == (
+        "Lightning Breath (Recharge 5-6): descriptive action is not automatically settled",
+    )
 
 
 def test_regeneration_statblock_trait_is_structured_without_a_descriptive_warning() -> None:

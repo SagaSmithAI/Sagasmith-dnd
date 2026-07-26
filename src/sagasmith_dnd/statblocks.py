@@ -955,8 +955,10 @@ def _structure_intellect_devourer_actions(
             flags=re.IGNORECASE,
         )
         if body_match is not None:
+            choices = dict(body_thief.get("choices") or {})
+            choices.pop("manual_ruling", None)
             body_thief["choices"] = {
-                **dict(body_thief.get("choices") or {}),
+                **choices,
                 "source_contest_effect": {
                     "kind": "intellect_devourer_body_thief_2014",
                     "range_ft": int(body_match.group("range")),
@@ -1011,8 +1013,10 @@ def _structure_intellect_devourer_actions(
     )
     if match is None:
         return
+    choices = dict(devour.get("choices") or {})
+    choices.pop("manual_ruling", None)
     devour["choices"] = {
-        **dict(devour.get("choices") or {}),
+        **choices,
         "source_save_effect": {
             "kind": "intellect_devourer_devour_intellect_2014",
             "range_ft": int(match.group("range")),
@@ -1325,6 +1329,17 @@ def parse_2014_statblock(
         if reaction_defense is not None:
             entry["activation"]["trigger"] = "hit by a melee attack"
             entry["choices"] = {"reaction_defense": reaction_defense}
+        if (
+            activation != "passive"
+            and source_trait is None
+            and reaction_defense is None
+        ):
+            entry["choices"] = {
+                "manual_ruling": {
+                    "kind": "descriptive_activity",
+                    "source_excerpt": description,
+                }
+            }
         sheet["content"]["activities" if activation != "passive" else "features"].append(entry)
         if source_trait is None and reaction_defense is None:
             warnings.append(
