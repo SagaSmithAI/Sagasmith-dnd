@@ -117,13 +117,39 @@ def test_extra_dash_uses_constitution_check_and_exhaustion() -> None:
         pursuer,
         actor_id_value="pursuer",
         action="dash",
-        rng=_SequenceRng(1, 20),
+        rng=_SequenceRng(1, 20, 20),
     )
 
     assert result["turn"]["dash_check"]["success"] is False
     assert result["turn"]["exhaustion_gained"] == 1
     assert result["sheet"]["combat"]["exhaustion"] == 1
     assert result["chase"]["participants"][0]["chase_exhaustion"] == 1
+
+
+def test_chase_exhaustion_level_six_marks_the_actor_dead() -> None:
+    pursuer = _actor("pursuer", initiative=20, constitution=10)
+    pursuer["sheet"]["combat"]["exhaustion"] = 5
+    pursuer["derived"] = derive_character_sheet(pursuer["sheet"])
+    quarry = _actor("quarry", initiative=10)
+    chase = start_chase(
+        [pursuer, quarry],
+        quarry_ids=["quarry"],
+        initial_distance_ft=100,
+    )
+    chase["participants"][0]["dash_count"] = chase["participants"][0]["free_dash_limit"]
+
+    result = advance_chase_turn(
+        chase,
+        pursuer,
+        actor_id_value="pursuer",
+        action="dash",
+        rng=_SequenceRng(1, 20, 20),
+    )
+
+    assert result["sheet"]["combat"]["exhaustion"] == 6
+    assert "dead" in result["sheet"]["conditions"]
+    assert result["chase"]["participants"][0]["active"] is False
+    assert result["chase"]["participants"][0]["dropped_reason"] == "exhaustion_death"
 
 
 def test_starting_exhaustion_halves_chase_speed_only_once() -> None:

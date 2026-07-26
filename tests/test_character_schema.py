@@ -16,6 +16,7 @@ from sagasmith_dnd.character_schema import (
     receive_inventory_item,
     remove_effect,
     remove_inventory_item,
+    set_exhaustion_level,
     set_spell_prepared,
     validate_character_notes,
     validate_character_sheet,
@@ -178,7 +179,7 @@ def test_inventory_wallet_effect_and_memory_contracts() -> None:
 
 def test_removing_an_effect_cleans_only_conditions_no_longer_owned() -> None:
     sheet = default_character_sheet()
-    sheet["conditions"] = ["frightened", "prone"]
+    sheet["conditions"] = ["prone"]
     fear = {
         "name": "Fear Ray",
         "kind": "timed_conditions",
@@ -193,12 +194,23 @@ def test_removing_an_effect_cleans_only_conditions_no_longer_owned() -> None:
         sheet,
         {"id": "fear-b", **fear, "source": "gazer-b"},
     )
+    assert sheet["conditions"] == ["prone", "frightened"]
 
     one_removed = remove_effect(sheet, first_id)
-    assert one_removed["conditions"] == ["frightened", "prone"]
+    assert one_removed["conditions"] == ["prone", "frightened"]
 
     both_removed = remove_effect(one_removed, second_id)
     assert both_removed["conditions"] == ["prone"]
+
+
+def test_exhaustion_level_setter_enforces_the_character_sheet_range() -> None:
+    sheet = set_exhaustion_level(default_character_sheet(), 3)
+
+    assert sheet["combat"]["exhaustion"] == 3
+    dead = set_exhaustion_level(sheet, 6)
+    assert dead["conditions"] == ["dead"]
+    with pytest.raises(ValueError, match="at most 6"):
+        set_exhaustion_level(sheet, 7)
 
 
 def test_inventory_weight_supports_rule_book_fractional_ounce_units() -> None:

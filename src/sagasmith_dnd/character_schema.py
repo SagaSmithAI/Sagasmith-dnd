@@ -3236,6 +3236,28 @@ def add_effect(sheet: dict[str, Any], effect: dict[str, Any]) -> tuple[dict[str,
     if any(current["id"] == entry["id"] for current in value["effects"]):
         raise ValueError("effect id already exists")
     value["effects"].append(entry)
+    if entry["active"] and entry["kind"] == "timed_conditions":
+        added_conditions: set[str] = set()
+        for change in entry["changes"]:
+            if change["path"] != "conditions" or change["mode"] != "add":
+                continue
+            raw = change["value"]
+            values = raw if isinstance(raw, list) else [raw]
+            added_conditions.update(
+                str(item).strip().casefold()
+                for item in values
+                if str(item).strip()
+            )
+        if added_conditions:
+            existing = {
+                str(condition).strip().casefold()
+                for condition in value["conditions"]
+            }
+            value["conditions"].extend(
+                condition
+                for condition in sorted(added_conditions)
+                if condition not in existing
+            )
     return validate_character_sheet(value), entry["id"]
 
 
@@ -3333,6 +3355,24 @@ def set_resource_value(sheet: dict[str, Any], key: str, value: int) -> dict[str,
     resource["value"] = _integer(value, "resource value", minimum=0)
     if resource["value"] > resource["max"]:
         raise ValueError("resource value cannot exceed max")
+    return validate_character_sheet(result)
+
+
+def set_exhaustion_level(sheet: dict[str, Any], value: int) -> dict[str, Any]:
+    """Set the rules-visible exhaustion level through the validated sheet contract."""
+    result = validate_character_sheet(sheet)
+    level = _integer(
+        value,
+        "exhaustion level",
+        minimum=0,
+        maximum=6,
+    )
+    result["combat"]["exhaustion"] = level
+    if level >= 6 and "dead" not in {
+        str(condition).strip().casefold()
+        for condition in result["conditions"]
+    }:
+        result["conditions"].append("dead")
     return validate_character_sheet(result)
 
 
