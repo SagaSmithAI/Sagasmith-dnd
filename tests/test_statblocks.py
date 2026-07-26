@@ -5,6 +5,7 @@ from sagasmith_dnd.statblocks import (
     StatblockImportError,
     apply_statblock_variant,
     effective_statblock_rating,
+    gazer_eye_ray_spec,
     parse_2014_statblock,
 )
 
@@ -139,6 +140,54 @@ success.
 """
 
 
+GAZER = """### Gazer
+
+*Tiny aberration, neutral evil*
+
+**Armor Class** 13
+
+**Hit Points** 13 (3d4 + 6)
+
+**Speed** 0 ft., fly 30 ft. (hover)
+
+| STR | DEX | CON | INT | WIS | CHA |
+|:---:|:---:|:---:|:---:|:---:|:---:|
+| 3 (-4) | 17 (+3) | 14 (+2) | 3 (-4) | 10 (+0) | 7 (-2) |
+
+**Saving Throws** Wis +2
+
+**Skills** Perception +4, Stealth +5
+
+**Senses** darkvision 60 ft., passive Perception 14
+
+**Languages** —
+
+**Challenge** 1/2 (100 XP)
+
+###### Actions
+
+***Bite***. *Melee Weapon Attack:* +5 to hit, reach 5 ft., one target.
+*Hit:* 1 piercing damage.
+
+***Eye Rays***. The gazer shoots two of the following magical eye rays at random
+(reroll duplicates), choosing one or two targets it can see within 60 feet of it:
+
+***Dazing Ray***. The targeted creature must succeed on a DC 12 Wisdom saving throw
+or be charmed until the start of the gazer's next turn. While the target is charmed
+in this way, its speed is halved, and it has disadvantage on attack rolls.
+
+***Fear Ray***. The targeted creature must succeed on a DC 12 Wisdom saving throw or
+be frightened until the start of the gazer's next turn.
+
+***Frost Ray***. The targeted creature must succeed on a DC 12 Dexterity saving throw
+or take 10 (3d6) cold damage.
+
+***Telekinetic Ray***. If the target is a creature that is Medium or smaller, it must
+succeed on a DC 12 Strength saving throw or be moved up to 30 feet directly away from
+the gazer.
+"""
+
+
 def test_commoner_statblock_becomes_an_exact_executable_actor_sheet() -> None:
     parsed = parse_2014_statblock(
         COMMONER,
@@ -174,6 +223,54 @@ def test_flat_damage_weapon_is_executable_without_inventing_damage_dice() -> Non
     assert attack["damage_expression"] == "1"
     assert attack["damage_type"] == "piercing"
     assert attack["on_hit_effect"] == ""
+    assert parsed.warnings == ()
+
+
+def test_gazer_eye_rays_are_structured_from_the_exact_source_action() -> None:
+    parsed = parse_2014_statblock(
+        GAZER,
+        source_key="module-review:waterdeep-gazer",
+        rule_refs=["waterdeep-page-204"],
+    )
+    activities = parsed.sheet["content"]["activities"]
+    eye_rays = next(item for item in activities if item["name"] == "Eye Rays")
+    spec = gazer_eye_ray_spec(parsed.sheet, eye_rays["id"])
+
+    assert spec is not None
+    assert spec["draw_count"] == 2
+    assert spec["reroll_duplicates"] is True
+    assert spec["range_ft"] == 60
+    assert spec["target_count"] == {"minimum": 1, "maximum": 2}
+    assert [effect["id"] for effect in spec["effects"]] == [
+        "dazing-ray",
+        "fear-ray",
+        "frost-ray",
+        "telekinetic-ray",
+    ]
+    assert spec["effects"][0]["failure"] == {
+        "kind": "timed_condition",
+        "condition": "charmed",
+        "duration": {"period": "source_turn_start", "remaining": 1},
+        "speed_multiplier": 0.5,
+        "attack_disadvantage": True,
+    }
+    assert spec["effects"][2]["failure"] == {
+        "kind": "damage",
+        "expression": "3d6",
+        "damage_type": "cold",
+    }
+    assert spec["effects"][3]["failure"] == {
+        "kind": "forced_movement",
+        "maximum_size": "medium",
+        "distance_ft": 30,
+        "direction": "directly_away",
+    }
+    assert not {
+        "Dazing Ray",
+        "Fear Ray",
+        "Frost Ray",
+        "Telekinetic Ray",
+    } & {item["name"] for item in activities}
     assert parsed.warnings == ()
 
 

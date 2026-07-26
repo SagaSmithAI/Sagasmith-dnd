@@ -28,6 +28,7 @@ from sagasmith_dnd.combat_engine import (
     detach_attachment,
     end_concentration_for_incapacitating_conditions,
     end_turn,
+    force_move_directly_away,
     pay_activity_activation,
     pay_attack_action,
     preflight_attack,
@@ -40,12 +41,14 @@ from sagasmith_dnd.combat_engine import (
     resolve_common_action,
     resolve_death_save_to_sheet,
     resolve_preserve_life_to_sheets,
+    resolve_random_save_effects,
     resolve_readied_spell_window,
     resolve_second_wind_to_sheet,
     resolve_turn_undead_to_sheets,
     roll_attack_action,
     settle_core_activity_effect,
     settle_start_turn_regeneration,
+    source_speed_multiplier,
     spend_movement,
     stabilize_sheet,
     start_encounter,
@@ -81,6 +84,71 @@ def _actor(identifier: str, *, hp: int = 12, ac: int = 10) -> dict:
     }
 
 
+def _gazer_eye_ray_spec() -> dict:
+    return {
+        "kind": "gazer_eye_rays_2014",
+        "draw_count": 2,
+        "reroll_duplicates": True,
+        "range_ft": 60,
+        "target_count": {"minimum": 1, "maximum": 2},
+        "effects": [
+            {
+                "id": "dazing-ray",
+                "source_activity_id": "dazing-ray-action",
+                "save": {"ability": "wisdom", "dc": 12},
+                "failure": {
+                    "kind": "timed_condition",
+                    "condition": "charmed",
+                    "duration": {
+                        "period": "source_turn_start",
+                        "remaining": 1,
+                    },
+                    "speed_multiplier": 0.5,
+                    "attack_disadvantage": True,
+                },
+                "source_excerpt": "Dazing Ray source text",
+            },
+            {
+                "id": "fear-ray",
+                "source_activity_id": "fear-ray-action",
+                "save": {"ability": "wisdom", "dc": 12},
+                "failure": {
+                    "kind": "timed_condition",
+                    "condition": "frightened",
+                    "duration": {
+                        "period": "source_turn_start",
+                        "remaining": 1,
+                    },
+                },
+                "source_excerpt": "Fear Ray source text",
+            },
+            {
+                "id": "frost-ray",
+                "source_activity_id": "frost-ray-action",
+                "save": {"ability": "dexterity", "dc": 12},
+                "failure": {
+                    "kind": "damage",
+                    "expression": "3d6",
+                    "damage_type": "cold",
+                },
+                "source_excerpt": "Frost Ray source text",
+            },
+            {
+                "id": "telekinetic-ray",
+                "source_activity_id": "telekinetic-ray-action",
+                "save": {"ability": "strength", "dc": 12},
+                "failure": {
+                    "kind": "forced_movement",
+                    "maximum_size": "medium",
+                    "distance_ft": 30,
+                    "direction": "directly_away",
+                },
+                "source_excerpt": "Telekinetic Ray source text",
+            },
+        ],
+    }
+
+
 def _rogue(identifier: str = "rogue") -> dict:
     actor = _actor(identifier, hp=30)
     actor["sheet"]["progression"] = {
@@ -106,6 +174,136 @@ def _rogue(identifier: str = "rogue") -> dict:
         }
     ]
     return actor
+
+
+def test_gazer_eye_rays_reroll_duplicates_and_resolve_each_save() -> None:
+    gazer = _actor("gazer")
+    first = _actor("first", hp=20)
+    second = _actor("second", hp=20)
+
+    result = resolve_random_save_effects(
+        gazer,
+        [first, second],
+        spec=_gazer_eye_ray_spec(),
+        rng=_SequenceRng(1, 1, 3, 5, 5, 2, 3, 4),
+    )
+
+    assert result["selected_effect_ids"] == ["dazing-ray", "frost-ray"]
+    assert [item["duplicate"] for item in result["selection_rolls"]] == [
+        False,
+        True,
+        False,
+    ]
+    assert result["targets"][0]["target_id"] == "first"
+    assert result["targets"][0]["outcome"] == "condition"
+    assert result["sheets"]["first"]["conditions"] == ["charmed"]
+    assert source_speed_multiplier(result["sheets"]["first"]) == 0.5
+    assert result["targets"][1]["target_id"] == "second"
+    assert result["targets"][1]["damage_roll"]["total"] == 9
+    assert result["sheets"]["second"]["combat"]["hp"]["value"] == 11
+
+
+def test_dazing_ray_source_makes_attacks_disadvantaged_and_protects_charmer() -> None:
+    gazer = _actor("gazer")
+    dazed = _actor("dazed")
+    other = _actor("other")
+    dazed["sheet"]["conditions"] = ["charmed"]
+    dazed["sheet"]["effects"] = [
+        {
+            "id": "dazing",
+            "name": "Dazing Ray",
+            "kind": "timed_conditions",
+            "source": "gazer",
+            "active": True,
+            "duration": {"period": "source_turn_start", "remaining": 1},
+            "changes": [
+                {"path": "conditions", "mode": "add", "value": "charmed"}
+            ],
+        }
+    ]
+    dazed["derived"] = derive_character_sheet(dazed["sheet"])
+
+    with pytest.raises(CombatEngineError, match="cannot attack its charmer"):
+        preflight_attack(dazed, gazer, action={"weapon_id": "unarmed-strike"})
+    plan = preflight_attack(
+        dazed,
+        other,
+        action={"weapon_id": "unarmed-strike"},
+    )
+
+    assert plan["disadvantage"] is True
+    assert "dazing_ray" in plan["disadvantage_sources"]
+
+
+def test_telekinetic_ray_moves_up_to_the_last_legal_cell_without_reactions() -> None:
+    source = _actor("gazer")
+    source.update(
+        initiative=20,
+        position={"x": 1, "y": 1},
+        disposition="hostile",
+    )
+    target = _actor("target")
+    target.update(
+        initiative=10,
+        position={"x": 2, "y": 1},
+        disposition="friendly",
+    )
+    encounter = start_encounter([source, target])
+    encounter["battle_map"] = compile_battle_map(
+        {"scene_id": "gazer-rays", "spatial": {}},
+        {"width_cells": 6, "height_cells": 4},
+    )
+
+    moved = force_move_directly_away(
+        encounter,
+        source_actor_id="gazer",
+        target_actor_id="target",
+        distance_ft=30,
+    )
+
+    assert moved["moved_distance_ft"] == 15
+    assert moved["destination"] == {"x": 5, "y": 1}
+    assert moved["encounter"]["pending"] == []
+    assert moved["encounter"]["log"][-1]["opportunity_reactions"] is False
+
+
+def test_frightened_creature_cannot_willingly_move_closer_to_visible_source() -> None:
+    target = _actor("target")
+    target["sheet"]["conditions"] = ["frightened"]
+    target["sheet"]["effects"] = [
+        {
+            "id": "fear",
+            "name": "Fear Ray",
+            "kind": "timed_conditions",
+            "source": "gazer",
+            "active": True,
+            "duration": {"period": "source_turn_start", "remaining": 1},
+            "changes": [
+                {"path": "conditions", "mode": "add", "value": "frightened"}
+            ],
+        }
+    ]
+    target["derived"] = derive_character_sheet(target["sheet"])
+    target.update(initiative=20, position={"x": 2, "y": 1})
+    source = _actor("gazer")
+    source.update(initiative=10, position={"x": 0, "y": 1})
+    encounter = start_encounter([target, source])
+
+    with pytest.raises(CombatEngineError, match="cannot willingly move closer"):
+        spend_movement(
+            encounter,
+            "target",
+            5,
+            destination={"x": 1, "y": 1},
+        )
+    moved = spend_movement(
+        encounter,
+        "target",
+        5,
+        destination={"x": 3, "y": 1},
+    )
+
+    assert current_combatant(moved)["position"] == {"x": 3, "y": 1}
 
 
 def _lightfoot(identifier: str = "lightfoot") -> dict:

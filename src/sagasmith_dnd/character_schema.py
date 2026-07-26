@@ -97,6 +97,7 @@ ATTACK_ABILITIES = {"strength", "dexterity", "spell", "none"}
 RECOVERY_PERIODS = {"none", "turn", "short_rest", "long_rest", "dawn", "manual"}
 EFFECT_PERIODS = {
     "manual",
+    "source_turn_start",
     "turn_start",
     "turn_end",
     "round",
@@ -2673,6 +2674,12 @@ def _derive_armor_class(
     unresolved_effects: set[str] = set()
     for effect in active_effects:
         for change in effect["changes"]:
+            if (
+                effect["kind"] == "timed_conditions"
+                and change["path"] == "conditions"
+                and change["mode"] == "add"
+            ):
+                continue
             if change["path"] in {
                 "combat.ac.unarmored_base",
                 "combat.ac.unarmored_formula",

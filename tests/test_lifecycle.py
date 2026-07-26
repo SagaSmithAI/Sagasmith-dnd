@@ -8,6 +8,7 @@ from sagasmith_dnd.lifecycle import (
     advance_effect_durations,
     advance_elapsed_effect_durations,
     advance_elapsed_world_effect_durations,
+    advance_source_turn_effect_durations,
     advance_world_effect_durations,
     apply_rest,
     initialize_source_state,
@@ -280,6 +281,43 @@ def test_expiring_timed_conditions_preserves_condition_from_an_active_effect() -
 
     assert result["sheet"]["conditions"] == ["poisoned"]
     assert result["sheet"]["effects"][1]["duration"]["remaining"] == 1
+
+
+def test_source_turn_start_expires_only_effects_owned_by_that_source() -> None:
+    sheet = default_character_sheet()
+    sheet["conditions"] = ["charmed", "frightened", "prone"]
+    sheet["effects"] = [
+        {
+            "id": "dazing-gazer-a",
+            "name": "Dazing Ray",
+            "kind": "timed_conditions",
+            "source": "gazer-a",
+            "active": True,
+            "duration": {"period": "source_turn_start", "remaining": 1},
+            "changes": [
+                {"path": "conditions", "mode": "add", "value": "charmed"}
+            ],
+        },
+        {
+            "id": "fear-gazer-b",
+            "name": "Fear Ray",
+            "kind": "timed_conditions",
+            "source": "gazer-b",
+            "active": True,
+            "duration": {"period": "source_turn_start", "remaining": 1},
+            "changes": [
+                {"path": "conditions", "mode": "add", "value": "frightened"}
+            ],
+        },
+    ]
+
+    result = advance_source_turn_effect_durations(
+        sheet, source_actor_id="gazer-a"
+    )
+
+    assert result["expired"] == ["dazing-gazer-a"]
+    assert result["sheet"]["conditions"] == ["frightened", "prone"]
+    assert result["sheet"]["effects"][1]["active"] is True
 
 
 def test_elapsed_minutes_accumulate_for_hour_actor_effects() -> None:

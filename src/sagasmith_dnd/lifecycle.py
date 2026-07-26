@@ -235,6 +235,58 @@ def advance_effect_durations(
     }
 
 
+def advance_source_turn_effect_durations(
+    sheet: dict[str, Any], *, source_actor_id: str
+) -> dict[str, Any]:
+    """Expire effects timed to the start of one named source actor's turn."""
+    source_id = str(source_actor_id).strip()
+    if not source_id:
+        raise CombatEngineError("source_actor_id is required")
+    value = deepcopy(sheet)
+    advanced: list[str] = []
+    expired: list[str] = []
+    expired_condition_additions: set[str] = set()
+    for effect in value.get("effects", []):
+        if not effect.get("active"):
+            continue
+        duration = dict(effect.get("duration") or {})
+        if (
+            duration.get("period") != "source_turn_start"
+            or str(effect.get("source") or "") != source_id
+        ):
+            continue
+        remaining = int(duration.get("remaining", 0) or 0)
+        if remaining <= 1:
+            effect["active"] = False
+            effect["ended_reason"] = "duration_expired"
+            expired.append(str(effect.get("id")))
+            if effect.get("kind") == "timed_conditions":
+                for change in effect.get("changes", []):
+                    if change.get("path") != "conditions" or change.get("mode") != "add":
+                        continue
+                    raw = change.get("value")
+                    values = raw if isinstance(raw, list) else [raw]
+                    expired_condition_additions.update(
+                        str(item).strip().casefold()
+                        for item in values
+                        if str(item).strip()
+                    )
+        else:
+            duration["remaining"] = remaining - 1
+            effect["duration"] = duration
+            advanced.append(str(effect.get("id")))
+    _remove_conditions_from_expired_effects(value, expired_condition_additions)
+    clear_ended_invisibility_spell_condition(value, ended_effect_ids=expired)
+    return {
+        "sheet": value,
+        "source_actor_id": source_id,
+        "period": "source_turn_start",
+        "amount": 1,
+        "advanced": advanced,
+        "expired": expired,
+    }
+
+
 def advance_elapsed_effect_durations(
     sheet: dict[str, Any], *, elapsed_minutes: int
 ) -> dict[str, Any]:

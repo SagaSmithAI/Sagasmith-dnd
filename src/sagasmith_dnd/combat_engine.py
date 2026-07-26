@@ -255,6 +255,56 @@ def actor_derived(actor: dict[str, Any]) -> dict[str, Any]:
     return deepcopy(dict(actor.get("derived") or {}))
 
 
+def active_condition_source_effects(
+    sheet: dict[str, Any], condition: str
+) -> list[dict[str, Any]]:
+    """Return active timed effects that explicitly own one condition."""
+    normalized = str(condition).strip().casefold()
+    matches: list[dict[str, Any]] = []
+    for effect in sheet.get("effects", []):
+        if not effect.get("active") or effect.get("kind") != "timed_conditions":
+            continue
+        for change in effect.get("changes", []):
+            if change.get("path") != "conditions" or change.get("mode") != "add":
+                continue
+            raw = change.get("value")
+            values = raw if isinstance(raw, list) else [raw]
+            if normalized in {
+                str(item).strip().casefold() for item in values if str(item).strip()
+            }:
+                matches.append(deepcopy(effect))
+                break
+    return matches
+
+
+def timed_condition_sources(sheet: dict[str, Any]) -> dict[str, list[str]]:
+    """Index active condition-owning effects by condition and source actor."""
+    result: dict[str, list[str]] = {}
+    for condition in sheet.get("conditions", []):
+        normalized = str(condition).strip().casefold()
+        sources = sorted(
+            {
+                str(effect.get("source") or "")
+                for effect in active_condition_source_effects(sheet, normalized)
+                if str(effect.get("source") or "")
+            }
+        )
+        if sources:
+            result[normalized] = sources
+    return result
+
+
+def source_speed_multiplier(sheet: dict[str, Any]) -> float:
+    """Return the narrow speed multiplier recorded by active source effects."""
+    multiplier = 1.0
+    for effect in sheet.get("effects", []):
+        if not effect.get("active") or effect.get("kind") != "timed_conditions":
+            continue
+        if str(effect.get("name") or "").strip().casefold() == "dazing ray":
+            multiplier = min(multiplier, 0.5)
+    return multiplier
+
+
 _SRD2014_JACK_OF_ALL_TRADES_ID = (
     "dnd5e.content.srd2014.feature.bard-jack-of-all-trades"
 )
@@ -331,6 +381,7 @@ def start_encounter(
             speed = 0
         elif exhaustion >= 2:
             speed //= 2
+        speed = int(speed * source_speed_multiplier(sheet))
         supplied = actor.get("initiative")
         die = None
         if supplied is None:
@@ -368,6 +419,7 @@ def start_encounter(
                     "attack_budget": 0,
                 },
                 "conditions": list(sheet.get("conditions") or []),
+                "condition_sources": timed_condition_sources(sheet),
                 "position": deepcopy(actor.get("position")),
                 "hidden": bool(actor.get("hidden", False)),
                 "visible_to_actor_ids": deepcopy(actor.get("visible_to_actor_ids")),
@@ -984,11 +1036,64 @@ def preflight_attack(
         context.setdefault("disadvantage_sources", []).extend(
             sorted(attacker_conditions & {"blinded", "poisoned", "prone", "restrained"})
         )
-    unresolved_condition_sources = attacker_conditions & {"charmed", "frightened"}
+    unresolved_condition_sources: list[str] = []
+    if "charmed" in attacker_conditions:
+        charmed_effects = active_condition_source_effects(
+            actor_sheet(attacker), "charmed"
+        )
+        if not charmed_effects:
+            unresolved_condition_sources.append("charmed")
+        else:
+            charm_sources = {
+                str(effect.get("source") or "")
+                for effect in charmed_effects
+                if str(effect.get("source") or "")
+            }
+            if not charm_sources or any(
+                not str(effect.get("source") or "") for effect in charmed_effects
+            ):
+                unresolved_condition_sources.append("charmed")
+            elif actor_id(target) in charm_sources:
+                raise CombatEngineError("a charmed creature cannot attack its charmer")
+            if any(
+                str(effect.get("name") or "").strip().casefold() == "dazing ray"
+                for effect in charmed_effects
+            ):
+                context["disadvantage"] = True
+                context.setdefault("disadvantage_sources", []).append("dazing_ray")
+    if "frightened" in attacker_conditions:
+        frightened_effects = active_condition_source_effects(
+            actor_sheet(attacker), "frightened"
+        )
+        fear_sources = {
+            str(effect.get("source") or "")
+            for effect in frightened_effects
+            if str(effect.get("source") or "")
+        }
+        if not fear_sources:
+            unresolved_condition_sources.append("frightened")
+        elif encounter is not None:
+            encounter_actor_ids = {
+                str(combatant.get("actor_id") or "")
+                for combatant in encounter.get("combatants", [])
+            }
+            if fear_sources - encounter_actor_ids:
+                unresolved_condition_sources.append("frightened")
+            visible_sources = [
+                combatant
+                for combatant in encounter.get("combatants", [])
+                if str(combatant.get("actor_id") or "") in fear_sources
+                and _can_see(attacker, combatant)
+            ]
+            if visible_sources:
+                context["disadvantage"] = True
+                context.setdefault("disadvantage_sources", []).append("frightened")
+        else:
+            unresolved_condition_sources.append("frightened")
     if unresolved_condition_sources:
         raise NeedsRulingError(
             "condition source is required to determine this attack's legality",
-            missing=sorted(unresolved_condition_sources),
+            missing=sorted(set(unresolved_condition_sources)),
         )
     if target_conditions & {
         "blinded",
@@ -2606,6 +2711,48 @@ def spend_movement(
             raise CombatEngineError(
                 "a turned creature cannot willingly move within 30 feet of the turning source"
             )
+    if (
+        movement_mode == "voluntary"
+        and "frightened" in conditions
+        and origin is not None
+        and target_position is not None
+    ):
+        fear_source_ids = list(
+            dict(combatant.get("condition_sources") or {}).get("frightened") or []
+        )
+        if not fear_source_ids:
+            raise NeedsRulingError(
+                "frightened movement requires the fear source",
+                missing=("frightened_source",),
+            )
+        for fear_source_id in fear_source_ids:
+            fear_source = next(
+                (
+                    item
+                    for item in value.get("combatants", [])
+                    if str(item.get("actor_id") or "") == str(fear_source_id)
+                ),
+                None,
+            )
+            if fear_source is None:
+                raise NeedsRulingError(
+                    "frightened movement source is not in the encounter",
+                    missing=("frightened_source_combatant",),
+                )
+            if not _can_see(combatant, fear_source):
+                continue
+            fear_source_position = _position(fear_source.get("position"))
+            if fear_source_position is None:
+                raise NeedsRulingError(
+                    "frightened movement requires the visible source position",
+                    missing=("frightened_source_position",),
+                )
+            if _grid_distance(target_position, fear_source_position) < _grid_distance(
+                origin, fear_source_position
+            ):
+                raise CombatEngineError(
+                    "a frightened creature cannot willingly move closer to its visible fear source"
+                )
     budget["movement"] = available - movement_cost
     combatant["turn_budget"] = budget
     if destination is not None:
@@ -2698,6 +2845,108 @@ def stand_up(encounter: dict[str, Any], actor_id_value: str) -> dict[str, Any]:
         item for item in combatant.get("conditions", []) if str(item).casefold() != "prone"
     ]
     return value
+
+
+def force_move_directly_away(
+    encounter: dict[str, Any],
+    *,
+    source_actor_id: str,
+    target_actor_id: str,
+    distance_ft: int,
+) -> dict[str, Any]:
+    """Move a creature the farthest legal grid distance directly from a source."""
+    value = deepcopy(encounter)
+    distance = int(distance_ft)
+    if distance < 0 or distance % 5:
+        raise CombatEngineError("forced movement distance must be five-foot increments")
+    source = next(
+        (
+            item
+            for item in value.get("combatants", [])
+            if str(item.get("actor_id") or "") == str(source_actor_id)
+        ),
+        None,
+    )
+    target = next(
+        (
+            item
+            for item in value.get("combatants", [])
+            if str(item.get("actor_id") or "") == str(target_actor_id)
+        ),
+        None,
+    )
+    if source is None or target is None:
+        raise CombatEngineError("forced movement source and target must be combatants")
+    source_position = _position(source.get("position"))
+    target_position = _position(target.get("position"))
+    if source_position is None or target_position is None:
+        raise NeedsRulingError(
+            "directly-away movement requires recorded source and target positions",
+            missing=("forced_movement_positions",),
+        )
+    delta_x = target_position[0] - source_position[0]
+    delta_y = target_position[1] - source_position[1]
+    if delta_x == 0 and delta_y == 0:
+        raise NeedsRulingError(
+            "directly-away movement is ambiguous for overlapping tokens",
+            missing=("forced_movement_direction",),
+        )
+    if delta_x and delta_y and abs(delta_x) != abs(delta_y):
+        raise NeedsRulingError(
+            "directly-away movement is ambiguous on this square-grid bearing",
+            missing=("forced_movement_grid_path",),
+        )
+    step_x = 0 if delta_x == 0 else 1 if delta_x > 0 else -1
+    step_y = 0 if delta_y == 0 else 1 if delta_y > 0 else -1
+    battle_map = dict(value.get("battle_map") or {})
+    occupied = {
+        _position(item.get("position"))
+        for item in value.get("combatants", [])
+        if str(item.get("actor_id") or "") != str(target_actor_id)
+        and "dead" not in _condition_set(item.get("conditions"))
+        and _position(item.get("position")) is not None
+    }
+    destination = target_position
+    moved_cells = 0
+    from sagasmith_dnd.spatial import BattleMapError, validate_position
+
+    for _ in range(distance // 5):
+        candidate = (
+            destination[0] + step_x,
+            destination[1] + step_y,
+        )
+        candidate_dict = {"x": int(candidate[0]), "y": int(candidate[1])}
+        if candidate in occupied:
+            break
+        if battle_map:
+            try:
+                validate_position(battle_map, candidate_dict)
+            except BattleMapError:
+                break
+        destination = candidate
+        moved_cells += 1
+    target["position"] = {"x": int(destination[0]), "y": int(destination[1])}
+    moved_distance = moved_cells * 5
+    value["log"] = [
+        *list(value.get("log") or []),
+        {
+            "type": "forced_movement",
+            "source_actor_id": str(source_actor_id),
+            "target_actor_id": str(target_actor_id),
+            "requested_distance_ft": distance,
+            "moved_distance_ft": moved_distance,
+            "direction": "directly_away",
+            "opportunity_reactions": False,
+        },
+    ][-100:]
+    return {
+        "encounter": value,
+        "source_actor_id": str(source_actor_id),
+        "target_actor_id": str(target_actor_id),
+        "requested_distance_ft": distance,
+        "moved_distance_ft": moved_distance,
+        "destination": deepcopy(target["position"]),
+    }
 
 
 def resolve_common_action(
@@ -3737,6 +3986,211 @@ def resolve_actor_check(
         reroll_ones=_has_halfling_lucky(sheet),
         rng=rng,
     ))
+
+
+def resolve_random_save_effects(
+    source_actor: dict[str, Any],
+    target_actors: list[dict[str, Any]],
+    *,
+    spec: dict[str, Any],
+    death_saves_by_target: dict[str, bool] | None = None,
+    rules: ResolutionContext | None = None,
+    rng: Any = None,
+) -> dict[str, Any]:
+    """Resolve a reviewed random set of saving-throw effects without DM inference."""
+    if spec.get("kind") != "gazer_eye_rays_2014":
+        raise CombatEngineError("unsupported random saving-throw effect contract")
+    effects = list(spec.get("effects") or [])
+    draw_count = int(spec.get("draw_count", 0) or 0)
+    if draw_count < 1 or draw_count > len(effects):
+        raise CombatEngineError("random effect draw count is invalid")
+    target_bounds = dict(spec.get("target_count") or {})
+    minimum_targets = int(target_bounds.get("minimum", 1) or 1)
+    maximum_targets = int(target_bounds.get("maximum", 1) or 1)
+    if not minimum_targets <= len(target_actors) <= maximum_targets:
+        raise CombatEngineError(
+            f"random effect requires {minimum_targets} to {maximum_targets} targets"
+        )
+    target_ids = [actor_id(actor) for actor in target_actors]
+    if len(target_ids) != len(set(target_ids)):
+        raise CombatEngineError("random effect targets must be unique")
+    source_id = actor_id(source_actor)
+    selected_indexes: list[int] = []
+    selection_rolls: list[dict[str, Any]] = []
+    while len(selected_indexes) < draw_count:
+        die = roll(f"1d{len(effects)}", rng=rng)
+        index = die.total - 1
+        duplicate = index in selected_indexes
+        selection_rolls.append(
+            {
+                "expression": die.expression,
+                "rolls": list(die.rolls),
+                "total": die.total,
+                "duplicate": duplicate,
+            }
+        )
+        if duplicate and spec.get("reroll_duplicates"):
+            continue
+        if duplicate:
+            raise CombatEngineError("random effect contract selected a duplicate")
+        selected_indexes.append(index)
+
+    updated = {
+        actor_id(actor): actor_sheet(actor)
+        for actor in target_actors
+    }
+    target_by_id = {actor_id(actor): actor for actor in target_actors}
+    death_save_flags = dict(death_saves_by_target or {})
+    results: list[dict[str, Any]] = []
+    size_ranks = {
+        "tiny": 0,
+        "small": 1,
+        "medium": 2,
+        "large": 3,
+        "huge": 4,
+        "gargantuan": 5,
+    }
+    for draw_number, effect_index in enumerate(selected_indexes, start=1):
+        effect = deepcopy(effects[effect_index])
+        target_id = target_ids[(draw_number - 1) % len(target_ids)]
+        target_actor = deepcopy(target_by_id[target_id])
+        target_actor["sheet"] = deepcopy(updated[target_id])
+        failure = dict(effect.get("failure") or {})
+        result: dict[str, Any] = {
+            "draw": draw_number,
+            "effect_id": str(effect.get("id") or ""),
+            "target_id": target_id,
+            "source_activity_id": str(effect.get("source_activity_id") or ""),
+            "source_excerpt": str(effect.get("source_excerpt") or ""),
+        }
+        if failure.get("kind") == "forced_movement":
+            target_size = str(
+                dict(actor_sheet(target_actor).get("traits") or {}).get("size") or ""
+            ).casefold()
+            maximum_size = str(failure.get("maximum_size") or "").casefold()
+            if (
+                target_size not in size_ranks
+                or maximum_size not in size_ranks
+            ):
+                raise CombatEngineError(
+                    "forced-movement size eligibility is not recorded"
+                )
+            if size_ranks[target_size] > size_ranks[maximum_size]:
+                result.update(
+                    {
+                        "eligible": False,
+                        "save": None,
+                        "success": None,
+                        "outcome": "size_ineligible",
+                    }
+                )
+                results.append(result)
+                continue
+        save_spec = dict(effect.get("save") or {})
+        save = resolve_actor_check(
+            target_actor,
+            kind="save",
+            ability=str(save_spec.get("ability") or ""),
+            dc=int(save_spec.get("dc", 0) or 0),
+            rules=rules,
+            rng=rng,
+        )
+        result.update({"eligible": True, "save": save, "success": save["success"]})
+        if save["success"]:
+            result["outcome"] = "saved"
+            results.append(result)
+            continue
+        if failure.get("kind") == "damage":
+            damage_die = roll(str(failure.get("expression") or ""), rng=rng)
+            damage = apply_damage_parts_to_sheet(
+                updated[target_id],
+                [
+                    {
+                        "amount": damage_die.total,
+                        "damage_type": str(failure.get("damage_type") or ""),
+                    }
+                ],
+                source=f"{source_id}:{effect.get('id')}",
+                ruleset=str(actor_sheet(target_actor).get("edition") or "2014"),
+                death_saves=bool(death_save_flags.get(target_id, True)),
+            )
+            updated[target_id] = damage["sheet"]
+            result.update(
+                {
+                    "outcome": "damage",
+                    "damage_roll": {
+                        "expression": damage_die.expression,
+                        "rolls": list(damage_die.rolls),
+                        "total": damage_die.total,
+                    },
+                    "damage": {key: value for key, value in damage.items() if key != "sheet"},
+                }
+            )
+        elif failure.get("kind") == "timed_condition":
+            sheet = deepcopy(updated[target_id])
+            condition = str(failure.get("condition") or "").strip().casefold()
+            if not condition:
+                raise CombatEngineError("timed condition is missing its condition")
+            existing_count = sum(
+                1
+                for item in sheet.get("effects", [])
+                if str(item.get("name") or "").strip().casefold()
+                == str(effect.get("id") or "").replace("-", " ")
+            )
+            effect_name = str(effect.get("id") or "").replace("-", " ").title()
+            effect_id = (
+                f"{effect.get('id')}-{source_id}-{target_id}-{existing_count + 1}"
+            )
+            sheet.setdefault("effects", []).append(
+                {
+                    "id": effect_id,
+                    "name": effect_name,
+                    "kind": "timed_conditions",
+                    "source": source_id,
+                    "active": True,
+                    "concentration": False,
+                    "duration": deepcopy(failure.get("duration") or {}),
+                    "changes": [
+                        {"path": "conditions", "mode": "add", "value": condition}
+                    ],
+                    "description": str(effect.get("source_excerpt") or ""),
+                }
+            )
+            sheet["conditions"] = sorted(
+                _condition_set(sheet.get("conditions")) | {condition}
+            )
+            updated[target_id] = sheet
+            result.update(
+                {
+                    "outcome": "condition",
+                    "condition": condition,
+                    "effect_instance_id": effect_id,
+                }
+            )
+        elif failure.get("kind") == "forced_movement":
+            result.update(
+                {
+                    "outcome": "forced_movement_pending",
+                    "forced_movement": {
+                        "source_actor_id": source_id,
+                        "target_actor_id": target_id,
+                        "distance_ft": int(failure.get("distance_ft", 0) or 0),
+                        "direction": str(failure.get("direction") or ""),
+                    },
+                }
+            )
+        else:
+            raise CombatEngineError("random effect failure contract is unsupported")
+        results.append(result)
+    return {
+        "sheets": updated,
+        "source_actor_id": source_id,
+        "selection_rolls": selection_rolls,
+        "selected_effect_ids": [
+            str(effects[index].get("id") or "") for index in selected_indexes
+        ],
+        "targets": results,
+    }
 
 
 def end_turn(encounter: dict[str, Any], *, actor_id_value: str | None = None) -> dict[str, Any]:

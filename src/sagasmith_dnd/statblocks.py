@@ -630,6 +630,162 @@ def _parry_reaction_defense(
     }
 
 
+def gazer_eye_ray_spec(
+    sheet: dict[str, Any],
+    activity_id: str = "eye-rays-action",
+) -> dict[str, Any] | None:
+    """Recover the exact 2014 Gazer random-ray action from source-bound cards."""
+
+    activities = {
+        str(item.get("id") or ""): item
+        for item in dict(sheet.get("content") or {}).get("activities", [])
+        if isinstance(item, dict)
+    }
+    parent = activities.get(activity_id)
+    if parent is None or str(parent.get("name") or "").strip().casefold() != "eye rays":
+        return None
+    recorded = dict(dict(parent.get("choices") or {}).get("random_save_effects") or {})
+    if recorded:
+        return deepcopy(recorded)
+    parent_description = " ".join(str(parent.get("description") or "").split())
+    parent_match = re.search(
+        r"(?i)\bshoots\s+(one|two|three|four|\d+)\s+of\s+the\s+following\s+"
+        r"magical\s+eye\s+rays\s+at\s+random\s+\(reroll\s+duplicates\),\s+"
+        r"choosing\s+one\s+or\s+two\s+targets\s+it\s+can\s+see\s+within\s+"
+        r"(\d+)\s+feet\b",
+        parent_description,
+    )
+    if parent_match is None:
+        return None
+    draw_count = _count(parent_match.group(1))
+    if draw_count is None or draw_count < 1:
+        return None
+    by_name = {
+        str(item.get("name") or "").strip().casefold(): item
+        for item in activities.values()
+    }
+    required_names = ("dazing ray", "fear ray", "frost ray", "telekinetic ray")
+    if any(name not in by_name for name in required_names):
+        return None
+
+    descriptions = {
+        name: " ".join(str(by_name[name].get("description") or "").split())
+        for name in required_names
+    }
+    dazing = re.search(
+        r"(?i)\bDC\s+(\d+)\s+Wisdom\s+saving\s+throw\s+or\s+be\s+charmed\s+"
+        r"until\s+the\s+start\s+of\s+the\s+gazer's\s+next\s+turn\.\s+While\s+"
+        r"the\s+target\s+is\s+charmed\s+in\s+this\s+way,\s+its\s+speed\s+is\s+"
+        r"halved,\s+and\s+it\s+has\s+disadvantage\s+on\s+attack\s+rolls\b",
+        descriptions["dazing ray"],
+    )
+    fear = re.search(
+        r"(?i)\bDC\s+(\d+)\s+Wisdom\s+saving\s+throw\s+or\s+be\s+frightened\s+"
+        r"until\s+the\s+start\s+of\s+the\s+gazer's\s+next\s+turn\b",
+        descriptions["fear ray"],
+    )
+    frost = re.search(
+        r"(?i)\bDC\s+(\d+)\s+Dexterity\s+saving\s+throw\s+or\s+take\s+"
+        r"\d+\s+\((\d+d\d+(?:\s*[+\-]\s*\d+)?)\)\s+([a-z]+)\s+damage\b",
+        descriptions["frost ray"],
+    )
+    telekinetic = re.search(
+        r"(?i)\btarget\s+is\s+a\s+creature\s+that\s+is\s+(Tiny|Small|Medium)\s+"
+        r"or\s+smaller,\s+it\s+must\s+succeed\s+on\s+a\s+DC\s+(\d+)\s+Strength\s+"
+        r"saving\s+throw\s+or\s+be\s+moved\s+up\s+to\s+(\d+)\s+feet\s+directly\s+"
+        r"away\s+from\s+the\s+gazer\b",
+        descriptions["telekinetic ray"],
+    )
+    if any(match is None for match in (dazing, fear, frost, telekinetic)):
+        return None
+    assert dazing is not None
+    assert fear is not None
+    assert frost is not None
+    assert telekinetic is not None
+    effects = [
+        {
+            "id": "dazing-ray",
+            "source_activity_id": str(by_name["dazing ray"]["id"]),
+            "save": {"ability": "wisdom", "dc": int(dazing.group(1))},
+            "failure": {
+                "kind": "timed_condition",
+                "condition": "charmed",
+                "duration": {"period": "source_turn_start", "remaining": 1},
+                "speed_multiplier": 0.5,
+                "attack_disadvantage": True,
+            },
+            "source_excerpt": descriptions["dazing ray"],
+        },
+        {
+            "id": "fear-ray",
+            "source_activity_id": str(by_name["fear ray"]["id"]),
+            "save": {"ability": "wisdom", "dc": int(fear.group(1))},
+            "failure": {
+                "kind": "timed_condition",
+                "condition": "frightened",
+                "duration": {"period": "source_turn_start", "remaining": 1},
+            },
+            "source_excerpt": descriptions["fear ray"],
+        },
+        {
+            "id": "frost-ray",
+            "source_activity_id": str(by_name["frost ray"]["id"]),
+            "save": {"ability": "dexterity", "dc": int(frost.group(1))},
+            "failure": {
+                "kind": "damage",
+                "expression": frost.group(2).replace(" ", ""),
+                "damage_type": frost.group(3).casefold(),
+            },
+            "source_excerpt": descriptions["frost ray"],
+        },
+        {
+            "id": "telekinetic-ray",
+            "source_activity_id": str(by_name["telekinetic ray"]["id"]),
+            "save": {"ability": "strength", "dc": int(telekinetic.group(2))},
+            "failure": {
+                "kind": "forced_movement",
+                "maximum_size": telekinetic.group(1).casefold(),
+                "distance_ft": int(telekinetic.group(3)),
+                "direction": "directly_away",
+            },
+            "source_excerpt": descriptions["telekinetic ray"],
+        },
+    ]
+    return {
+        "kind": "gazer_eye_rays_2014",
+        "draw_count": draw_count,
+        "reroll_duplicates": True,
+        "range_ft": int(parent_match.group(2)),
+        "target_count": {"minimum": 1, "maximum": 2},
+        "effects": effects,
+        "source_excerpt": parent_description,
+    }
+
+
+def _structure_gazer_eye_rays(
+    sheet: dict[str, Any],
+    warnings: list[str],
+) -> None:
+    spec = gazer_eye_ray_spec(sheet)
+    if spec is None:
+        return
+    activities = list(sheet["content"]["activities"])
+    parent = next(item for item in activities if item.get("id") == "eye-rays-action")
+    parent["choices"] = {"random_save_effects": spec}
+    component_ids = {
+        str(item["source_activity_id"]) for item in spec["effects"]
+    }
+    sheet["content"]["activities"] = [
+        item for item in activities if str(item.get("id") or "") not in component_ids
+    ]
+    structured_names = {"Eye Rays", "Dazing Ray", "Fear Ray", "Frost Ray", "Telekinetic Ray"}
+    warnings[:] = [
+        warning
+        for warning in warnings
+        if not any(warning.startswith(f"{name}:") for name in structured_names)
+    ]
+
+
 def parse_2014_statblock(
     markdown: str,
     *,
@@ -874,6 +1030,7 @@ def parse_2014_statblock(
                 else f"{entry_name}: descriptive {activation} is not automatically settled"
             )
 
+    _structure_gazer_eye_rays(sheet, warnings)
     validated = validate_character_sheet(sheet)
     summary = f"{identity_text}; CR {challenge or 'unrecorded'}"
     return ParsedStatblock(
