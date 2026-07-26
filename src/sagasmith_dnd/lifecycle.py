@@ -20,6 +20,9 @@ REST_SCHEDULE_FIELDS = {
     "strenuous_activity_minutes",
 }
 REST_SCHEDULE_OPTIONAL_FIELDS = {"trance_minutes"}
+COMBAT_BOUND_EFFECT_PERIODS = frozenset(
+    {"source_turn_start", "turn_start", "turn_end", "round", "encounter"}
+)
 
 
 def _remove_conditions_from_expired_effects(
@@ -283,6 +286,41 @@ def advance_source_turn_effect_durations(
         "period": "source_turn_start",
         "amount": 1,
         "advanced": advanced,
+        "expired": expired,
+    }
+
+
+def expire_combat_bound_effects(sheet: dict[str, Any]) -> dict[str, Any]:
+    """End effects whose duration clock cannot continue after combat closes."""
+    value = deepcopy(sheet)
+    expired: list[str] = []
+    expired_condition_additions: set[str] = set()
+    for effect in value.get("effects", []):
+        if not effect.get("active"):
+            continue
+        duration = dict(effect.get("duration") or {})
+        if duration.get("period") not in COMBAT_BOUND_EFFECT_PERIODS:
+            continue
+        effect["active"] = False
+        effect["ended_reason"] = "combat_ended"
+        expired.append(str(effect.get("id")))
+        if effect.get("kind") != "timed_conditions":
+            continue
+        for change in effect.get("changes", []):
+            if change.get("path") != "conditions" or change.get("mode") != "add":
+                continue
+            raw = change.get("value")
+            values = raw if isinstance(raw, list) else [raw]
+            expired_condition_additions.update(
+                str(item).strip().casefold()
+                for item in values
+                if str(item).strip()
+            )
+    _remove_conditions_from_expired_effects(value, expired_condition_additions)
+    clear_ended_invisibility_spell_condition(value, ended_effect_ids=expired)
+    return {
+        "sheet": value,
+        "periods": sorted(COMBAT_BOUND_EFFECT_PERIODS),
         "expired": expired,
     }
 

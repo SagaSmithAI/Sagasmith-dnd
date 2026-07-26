@@ -11,6 +11,7 @@ from sagasmith_dnd.lifecycle import (
     advance_source_turn_effect_durations,
     advance_world_effect_durations,
     apply_rest,
+    expire_combat_bound_effects,
     initialize_source_state,
     knock_prone_outside_combat,
     record_rest_completion,
@@ -318,6 +319,61 @@ def test_source_turn_start_expires_only_effects_owned_by_that_source() -> None:
     assert result["expired"] == ["dazing-gazer-a"]
     assert result["sheet"]["conditions"] == ["frightened", "prone"]
     assert result["sheet"]["effects"][1]["active"] is True
+
+
+def test_combat_end_expires_every_combat_clock_but_preserves_elapsed_effects() -> None:
+    sheet = default_character_sheet()
+    sheet["conditions"] = ["frightened", "poisoned"]
+    sheet["effects"] = [
+        {
+            "id": "fear-ray",
+            "name": "Fear Ray",
+            "kind": "timed_conditions",
+            "source": "gazer",
+            "active": True,
+            "duration": {"period": "source_turn_start", "remaining": 1},
+            "changes": [
+                {"path": "conditions", "mode": "add", "value": "frightened"}
+            ],
+        },
+        {
+            "id": "shield",
+            "name": "Shield",
+            "kind": "spell_shield",
+            "active": True,
+            "duration": {"period": "turn_start", "remaining": 1},
+            "changes": [],
+        },
+        {
+            "id": "encounter-bonus",
+            "name": "Encounter Bonus",
+            "kind": "custom",
+            "active": True,
+            "duration": {"period": "encounter", "remaining": 3},
+            "changes": [],
+        },
+        {
+            "id": "long-poison",
+            "name": "Long Poison",
+            "kind": "timed_conditions",
+            "active": True,
+            "duration": {"period": "hour", "remaining": 1},
+            "changes": [
+                {"path": "conditions", "mode": "add", "value": "poisoned"}
+            ],
+        },
+    ]
+
+    result = expire_combat_bound_effects(sheet)
+
+    assert result["expired"] == ["fear-ray", "shield", "encounter-bonus"]
+    assert result["sheet"]["conditions"] == ["poisoned"]
+    by_id = {effect["id"]: effect for effect in result["sheet"]["effects"]}
+    assert all(
+        by_id[effect_id]["ended_reason"] == "combat_ended"
+        for effect_id in result["expired"]
+    )
+    assert by_id["long-poison"]["active"] is True
 
 
 def test_elapsed_minutes_accumulate_for_hour_actor_effects() -> None:
