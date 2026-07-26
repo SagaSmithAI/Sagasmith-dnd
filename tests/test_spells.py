@@ -667,6 +667,12 @@ def test_costly_material_component_requires_dm_confirmation() -> None:
         sheet, spell_id="chromatic-orb", component_ruling={"material_confirmed": True}
     )
     assert "material_component" in result["ruling_required"]
+    assert {
+        item["default_resolver"] for item in result["ruling_requirements"]
+    } == {"agent"}
+    assert {
+        item["ruling_kind"] for item in result["ruling_requirements"]
+    } == {"generic_spell_effect"}
 
 
 def test_source_bound_spell_with_unknown_components_requires_confirmation_before_payment() -> None:
@@ -693,6 +699,15 @@ def test_source_bound_spell_with_unknown_components_requires_confirmation_before
     )
     assert result["sheet"]["spellcasting"]["spell_slots"]["1"]["value"] == 0
     assert "source_components" in result["ruling_required"]
+    assert next(
+        item
+        for item in result["ruling_requirements"]
+        if item["kind"] == "source_components"
+    ) == {
+        "kind": "source_components",
+        "default_resolver": "agent",
+        "ruling_kind": "generic_spell_effect",
+    }
 
 
 def test_readied_spell_pays_now_and_replaces_existing_concentration() -> None:

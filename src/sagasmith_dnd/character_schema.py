@@ -1057,6 +1057,66 @@ def validate_inventory(value: Any) -> dict[str, Any]:
     }
 
 
+def _normalize_ruling_requirements(value: Any, field: str) -> list[dict[str, Any]]:
+    requirements = _array(value, field)
+    if len(requirements) > 32:
+        raise ValueError(f"{field} cannot contain more than 32 entries")
+    normalized: list[dict[str, Any]] = []
+    for index, raw in enumerate(requirements):
+        entry_field = f"{field}[{index}]"
+        entry = _object(raw, entry_field)
+        _reject_unknown(
+            entry,
+            entry_field,
+            {
+                "kind",
+                "reason",
+                "source_excerpt",
+                "default_resolver",
+                "ruling_kind",
+                "policy_ref",
+                "requires_external_input_only_for",
+            },
+        )
+        resolver = _text(
+            entry.get("default_resolver"),
+            f"{entry_field}.default_resolver",
+        )
+        if resolver not in {"agent", "external_input"}:
+            raise ValueError(f"{entry_field}.default_resolver is invalid")
+        normalized.append(
+            {
+                "kind": _text(entry.get("kind"), f"{entry_field}.kind", maximum=200),
+                "reason": _text(
+                    entry.get("reason"),
+                    f"{entry_field}.reason",
+                    maximum=1000,
+                ),
+                "source_excerpt": _text(
+                    entry.get("source_excerpt"),
+                    f"{entry_field}.source_excerpt",
+                    maximum=4000,
+                ),
+                "default_resolver": resolver,
+                "ruling_kind": _text(
+                    entry.get("ruling_kind"),
+                    f"{entry_field}.ruling_kind",
+                    maximum=200,
+                ),
+                "policy_ref": _text(
+                    entry.get("policy_ref"),
+                    f"{entry_field}.policy_ref",
+                    maximum=300,
+                ),
+                "requires_external_input_only_for": _string_list(
+                    entry.get("requires_external_input_only_for") or [],
+                    f"{entry_field}.requires_external_input_only_for",
+                ),
+            }
+        )
+    return normalized
+
+
 def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
     spell = _object(value, field)
     allowed = {
@@ -1075,6 +1135,7 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
         "rule_refs",
         "mechanic_refs",
         "resolution",
+        "ruling_requirements",
     }
     _reject_unknown(spell, field, allowed)
     grant = _object(spell.get("grant") or {}, f"{field}.grant")
@@ -1229,6 +1290,16 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
             normalize_spell_resolution(spell["resolution"], f"{field}.resolution")
             if spell.get("resolution") is not None
             else None
+        ),
+        **(
+            {
+                "ruling_requirements": _normalize_ruling_requirements(
+                    spell.get("ruling_requirements") or [],
+                    f"{field}.ruling_requirements",
+                )
+            }
+            if "ruling_requirements" in spell
+            else {}
         ),
     }
 

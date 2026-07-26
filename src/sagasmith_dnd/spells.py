@@ -24,6 +24,20 @@ CORE_MAGIC_MISSILE_MECHANIC_ID = "dnd5e.core.spell.magic_missile"
 CORE_MAGIC_MISSILE_BOUNDARY_ID = "dnd5e.core.spell.magic_missile_darts"
 CORE_MAGIC_MISSILE_SPELL_ID = "dnd5e.content.srd2014.spell.magic-missile"
 
+
+def _agent_ruling_requirements(kinds: list[str]) -> list[dict[str, str]]:
+    """Make post-payment spell boundaries self-describing to every caller."""
+
+    return [
+        {
+            "kind": kind,
+            "default_resolver": "agent",
+            "ruling_kind": "generic_spell_effect",
+        }
+        for kind in kinds
+    ]
+
+
 _PREPARED_2024 = {
     "bard": (4, 5, 6, 7, 9, 10, 11, 12, 14, 15, 16, 16, 17, 17, 18, 18, 19, 20, 21, 22),
     "cleric": (4, 5, 6, 7, 9, 10, 11, 12, 14, 15, 16, 16, 17, 17, 18, 18, 19, 20, 21, 22),
@@ -185,6 +199,7 @@ def consume_magic_item_spell_cast(
             "rule_receipts": [*before.receipts, *after.receipts],
             "pending": list(after.pending),
         }
+    ruling_required = [] if automatic_effect else ["targets_and_effect"]
     return {
         "sheet": after.sheet,
         "spell_id": spell_id,
@@ -203,7 +218,8 @@ def consume_magic_item_spell_cast(
         "last_charge_rule": last_charge_rule,
         "concentration_started": concentration,
         "ended_invisibility_effect_ids": ended_invisibility_effect_ids,
-        "ruling_required": [] if automatic_effect else ["targets_and_effect"],
+        "ruling_required": ruling_required,
+        "ruling_requirements": _agent_ruling_requirements(ruling_required),
         "status": "committed",
         "rule_receipts": [
             *core_receipts(rules, mechanic_ids, "spell.magic_item.cast"),
@@ -732,13 +748,14 @@ def consume_spell_cast(
     if source_components_unknown and ruling.get("source_components_confirmed") is not True:
         raise CombatEngineError(
             "a source-bound spell whose components were not repeated in the statblock "
-            "needs source_components_confirmed DM ruling"
+            "needs source_components_confirmed from Agent-as-DM adjudication"
         )
     if (
         int(components.get("material_cost_cp", 0) or 0) > 0 or components.get("consumed")
     ) and ruling.get("material_confirmed") is not True:
         raise CombatEngineError(
-            "a costly or consumed material component needs material_confirmed DM ruling"
+            "a costly or consumed material component needs material_confirmed "
+            "from Agent-as-DM adjudication"
         )
     paid: dict[str, Any] = {"economy": "none", "level": level, "ritual": ritual}
     free_at_will = bool(at_will_available and level == base_level)
@@ -821,6 +838,13 @@ def consume_spell_cast(
             "rule_receipts": [*before.receipts, *after.receipts],
             "pending": list(after.pending),
         }
+    ruling_required = [
+        *(["source_components"] if source_components_unknown else []),
+        *(["verbal_component"] if components.get("verbal") else []),
+        *(["somatic_component"] if components.get("somatic") else []),
+        *(["material_component"] if components.get("material") else []),
+        "targets_and_effect",
+    ]
     return {
         "sheet": after.sheet,
         "spell_id": spell_id,
@@ -828,13 +852,8 @@ def consume_spell_cast(
         "payment": paid,
         "concentration_started": concentration,
         "ended_invisibility_effect_ids": ended_invisibility_effect_ids,
-        "ruling_required": [
-            *(["source_components"] if source_components_unknown else []),
-            *(["verbal_component"] if components.get("verbal") else []),
-            *(["somatic_component"] if components.get("somatic") else []),
-            *(["material_component"] if components.get("material") else []),
-            "targets_and_effect",
-        ],
+        "ruling_required": ruling_required,
+        "ruling_requirements": _agent_ruling_requirements(ruling_required),
         "status": "committed",
         "rule_receipts": [
             *core_receipts(

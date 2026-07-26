@@ -489,6 +489,7 @@ def test_mixed_weapon_and_special_action_multiattack_stays_a_dm_boundary() -> No
     )
     assert multiattack["choices"]["manual_ruling"] == {
         "kind": "descriptive_activity",
+        "default_resolver": "agent",
         "source_excerpt": (
             "The commoner makes one attack with its club and uses Devour Intellect."
         ),
@@ -519,6 +520,7 @@ def test_descriptive_statblock_action_is_marked_for_agent_ruling() -> None:
 
     assert activity["choices"]["manual_ruling"] == {
         "kind": "descriptive_activity",
+        "default_resolver": "agent",
         "source_excerpt": source_excerpt,
     }
     assert parsed.warnings == (

@@ -1844,11 +1844,15 @@ def resolve_attack_damage(
             result["on_hit_ruling"] = {
                 "required": True,
                 "effect": str(plan["on_hit_effect"]),
+                "default_resolver": "agent",
+                "ruling_kind": "source_or_scene_fact",
             }
     elif attack["hit"] and plan.get("on_hit_effect"):
         result["on_hit_ruling"] = {
             "required": True,
             "effect": str(plan["on_hit_effect"]),
+            "default_resolver": "agent",
+            "ruling_kind": "source_or_scene_fact",
         }
     elif plan.get("sneak_attack"):
         result["sneak_attack"] = {**dict(plan["sneak_attack"]), "used": False}
@@ -1871,6 +1875,18 @@ def resolve_attack_damage(
             "followup_roll": followup_roll,
             "anatomical_loss_triggered": anatomical_loss_triggered,
             "requires_dm_ruling": anatomical_loss_triggered,
+            "ruling_requirement": (
+                {
+                    "default_resolver": "agent",
+                    "ruling_kind": "source_or_scene_fact",
+                    "reason": (
+                        "Determine from the target and scene facts whether the "
+                        "triggered anatomical loss can apply."
+                    ),
+                }
+                if anatomical_loss_triggered
+                else None
+            ),
         }
     was_hidden = bool(plan.get("attacker_was_hidden", updated_attacker.get("hidden")))
     if was_hidden:
@@ -3440,7 +3456,7 @@ def trigger_readied_spell(
 def trigger_readied_action(
     encounter: dict[str, Any], *, readied_id: str, event: str
 ) -> dict[str, Any]:
-    """Open the reaction choice for a non-spell Ready action after DM confirmation."""
+    """Open the reaction choice after Agent-as-DM confirms the trigger."""
     value = deepcopy(encounter)
     event_text = str(event).strip()
     readied = next(
@@ -3476,7 +3492,7 @@ def trigger_readied_action(
 def resolve_readied_action_window(
     encounter: dict[str, Any], *, actor_id_value: str, choice_id: str, release: bool
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Spend a reaction for a generic readied action; its effect remains a DM ruling."""
+    """Spend a reaction; the generic effect returns to Agent-as-DM adjudication."""
     value = deepcopy(encounter)
     window = next((item for item in value.get("pending", []) if item.get("id") == choice_id), None)
     if (
@@ -3662,6 +3678,15 @@ def settle_core_activity_effect(
             "action": selected,
             "requires_ruling": selected == "hide",
         }
+        if selected == "hide":
+            effect["ruling_requirement"] = {
+                "default_resolver": "agent",
+                "ruling_kind": "source_or_scene_fact",
+                "reason": (
+                    "Determine from the current cover, visibility, and observer facts "
+                    "whether hiding is possible and resolve the Stealth boundary."
+                ),
+            }
         value["log"] = [
             *list(value.get("log") or []),
             {"type": "cunning_action", "actor_id": actor_id_value, "effect": effect},

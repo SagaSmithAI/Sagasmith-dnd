@@ -20,8 +20,8 @@ def consume_activity(
     A card can point at a shared ``sheet.resources`` entry through
     ``resource_key``.  Otherwise its own ``uses`` counter is authoritative.
     A card with neither is unlimited.  The caller records targets, choices,
-    checks, damage, and any DM ruling separately so this helper never invents
-    an outcome from prose.
+    checks, damage, and any Agent-as-DM ruling separately so this helper never
+    invents an outcome from prose.
     """
     before = apply_rule_event(sheet, "activity.before", rules)
     if before.status != "committed":
@@ -77,6 +77,20 @@ def consume_activity(
             "rule_receipts": [*before.receipts, *after.receipts],
             "pending": list(after.pending),
         }
+    choices = deepcopy(activity.get("choices") or {})
+    manual_ruling = dict(choices.get("manual_ruling") or {})
+    requires_ruling = bool(choices)
+    ruling_requirement = (
+        {
+            "default_resolver": "agent",
+            "ruling_kind": str(
+                manual_ruling.get("kind") or "agent_dm_adjudication"
+            ),
+            "source_excerpt": str(manual_ruling.get("source_excerpt") or ""),
+        }
+        if requires_ruling
+        else None
+    )
     return {
         "sheet": after.sheet,
         "activity_id": activity_id,
@@ -84,8 +98,9 @@ def consume_activity(
         "name": activity.get("name", activity_id),
         "activation": activation,
         "payment": payment,
-        "choices": deepcopy(activity.get("choices") or {}),
-        "requires_ruling": bool(activity.get("choices")),
+        "choices": choices,
+        "requires_ruling": requires_ruling,
+        "ruling_requirement": ruling_requirement,
         "status": "committed",
         "rule_receipts": [
             *core_receipts(rules, ["dnd5e.core.activity.resource_accounting"], "activity.consume"),

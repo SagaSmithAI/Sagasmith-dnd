@@ -1597,7 +1597,14 @@ def _feat_prerequisites(body: str) -> list[dict[str, Any]]:
                 "minimum": int(ability.group(2)),
             }
         ]
-    return [{"kind": "dm_review", "text": line.group(1).strip()}]
+    return [
+        {
+            "kind": "dm_review",
+            "text": line.group(1).strip(),
+            "default_resolver": "agent",
+            "ruling_kind": "source_or_scene_fact",
+        }
+    ]
 
 
 def _plain_label(text: str, label: str) -> str:

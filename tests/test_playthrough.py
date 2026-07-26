@@ -96,6 +96,10 @@ def test_manifest_keeps_unresolved_party_size_dm_review_blocked() -> None:
         review_blocks=[{"kind": "recommended_party_size"}],
     )
     assert manifest["party"]["party_size_status"] == "dm_review_required"
+    assert manifest["party"]["party_size_review"] == {
+        "default_resolver": "agent",
+        "ruling_kind": "source_or_scene_fact",
+    }
 
     manifest["party"]["selected_size"] = 4
     with pytest.raises(ValueError, match="cannot select"):

@@ -1071,6 +1071,8 @@ def test_attack_settles_each_source_bound_damage_type_and_surfaces_on_hit_ruling
     assert result["on_hit_ruling"] == {
         "required": True,
         "effect": "The target has disadvantage on specified saving throws.",
+        "default_resolver": "agent",
+        "ruling_kind": "source_or_scene_fact",
     }
 
 
@@ -1105,6 +1107,8 @@ def test_effect_only_attack_surfaces_ruling_without_applying_fake_damage() -> No
     assert result["on_hit_ruling"] == {
         "required": True,
         "effect": "The target is restrained by webbing.",
+        "default_resolver": "agent",
+        "ruling_kind": "source_or_scene_fact",
     }
 
 
@@ -2876,6 +2880,14 @@ def test_cunning_action_settles_dash_and_disengage_but_not_hide_outcome() -> Non
         declaration={"action": "hide", "cover": "larger ally"},
     )
     assert effect["requires_ruling"] is True
+    assert effect["ruling_requirement"] == {
+        "default_resolver": "agent",
+        "ruling_kind": "source_or_scene_fact",
+        "reason": (
+            "Determine from the current cover, visibility, and observer facts whether "
+            "hiding is possible and resolve the Stealth boundary."
+        ),
+    }
     assert hiding["combatants"][0]["hidden"] is False
     assert hiding["combatants"][0]["turn_flags"]["hide_declared"] == {
         "source_activity_id": "dnd5e.content.srd2014.feature.rogue-cunning-action",
@@ -3394,6 +3406,14 @@ def test_grimvault_fixed_critical_followup_is_conditional_and_simultaneous() -> 
     assert result["critical_followup"]["followup_roll"]["total"] == 20
     assert result["critical_followup"]["anatomical_loss_triggered"] is True
     assert result["critical_followup"]["requires_dm_ruling"] is True
+    assert result["critical_followup"]["ruling_requirement"] == {
+        "default_resolver": "agent",
+        "ruling_kind": "source_or_scene_fact",
+        "reason": (
+            "Determine from the target and scene facts whether the triggered "
+            "anatomical loss can apply."
+        ),
+    }
 
 
 def test_grimvault_followup_does_not_trigger_on_an_ordinary_hit() -> None:
@@ -3430,4 +3450,5 @@ def test_grimvault_followup_does_not_trigger_on_an_ordinary_hit() -> None:
     assert result["critical_followup"]["triggered"] is False
     assert result["critical_followup"]["followup_roll"] is None
     assert result["critical_followup"]["requires_dm_ruling"] is False
+    assert result["critical_followup"]["ruling_requirement"] is None
     assert "on_hit_ruling" not in result

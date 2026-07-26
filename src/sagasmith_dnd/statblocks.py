@@ -1337,6 +1337,7 @@ def parse_2014_statblock(
             entry["choices"] = {
                 "manual_ruling": {
                     "kind": "descriptive_activity",
+                    "default_resolver": "agent",
                     "source_excerpt": description,
                 }
             }

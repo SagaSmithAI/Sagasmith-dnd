@@ -1,7 +1,24 @@
 from collections import Counter
 from pathlib import Path
 
-from sagasmith_dnd.core_content import PACK_VERSION, build_srd2014_content
+from sagasmith_dnd.core_content import (
+    PACK_VERSION,
+    _feat_prerequisites,
+    build_srd2014_content,
+)
+
+
+def test_non_numeric_feat_prerequisite_defaults_to_agent_review() -> None:
+    assert _feat_prerequisites(
+        "*Prerequisite: Spellcasting or Pact Magic feature*"
+    ) == [
+        {
+            "kind": "dm_review",
+            "text": "Spellcasting or Pact Magic feature",
+            "default_resolver": "agent",
+            "ruling_kind": "source_or_scene_fact",
+        }
+    ]
 
 
 def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:

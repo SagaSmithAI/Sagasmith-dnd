@@ -46,6 +46,15 @@ def new_playthrough_manifest(
 ) -> dict[str, Any]:
     """Create the complete empty shape used before party construction."""
 
+    resolved_party_size_status = party_size_status or (
+        "source_confirmed"
+        if recommended_party_maximum is not None
+        else "dm_review_required"
+    )
+    resolved_party_size_review = dict(party_size_review or {})
+    if resolved_party_size_status in {"dm_review_required", "dm_review_completed"}:
+        resolved_party_size_review.setdefault("default_resolver", "agent")
+        resolved_party_size_review.setdefault("ruling_kind", "source_or_scene_fact")
     return validate_playthrough_manifest(
         {
             "schema_version": SCHEMA_VERSION,
@@ -69,18 +78,11 @@ def new_playthrough_manifest(
                 "branch_decisions": [],
             },
             "party": {
-                "party_size_status": (
-                    party_size_status
-                    or (
-                        "source_confirmed"
-                        if recommended_party_maximum is not None
-                        else "dm_review_required"
-                    )
-                ),
+                "party_size_status": resolved_party_size_status,
                 "recommended_minimum": recommended_party_minimum,
                 "recommended_maximum": recommended_party_maximum,
                 "selected_size": selected_party_size,
-                "party_size_review": dict(party_size_review or {}),
+                "party_size_review": resolved_party_size_review,
                 "use_pregenerated_first": True,
                 "members": [],
                 "replacements": [],
@@ -355,6 +357,9 @@ def _validate_party(value: Any) -> dict[str, Any]:
         PARTY_SIZE_STATUSES,
     )
     review = _json_object(party.get("party_size_review") or {}, "party_size_review")
+    if status in {"dm_review_required", "dm_review_completed"}:
+        review.setdefault("default_resolver", "agent")
+        review.setdefault("ruling_kind", "source_or_scene_fact")
     if minimum is not None and maximum is not None and maximum < minimum:
         raise ValueError("party recommended maximum must not be below its minimum")
     if selected is not None and maximum is not None and selected != maximum:
@@ -366,16 +371,18 @@ def _validate_party(value: Any) -> dict[str, Any]:
             )
     elif status == "dm_review_required":
         if selected is not None:
-            raise ValueError("unresolved party-size DM review cannot select a party size")
+            raise ValueError(
+                "unresolved party-size Agent-as-DM review cannot select a party size"
+            )
     else:
         if minimum is None or maximum is None or selected is None or not review:
             raise ValueError(
-                "completed party-size DM review requires bounds, selected size, "
+                "completed party-size Agent-as-DM review requires bounds, selected size, "
                 "and review evidence"
             )
         if review.get("represented_as_module_recommendation") is not False:
             raise ValueError(
-                "completed party-size DM review must not be represented as a "
+                "completed party-size Agent-as-DM review must not be represented as a "
                 "module recommendation"
             )
     members = [

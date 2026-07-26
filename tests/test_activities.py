@@ -32,6 +32,11 @@ def test_activity_consumes_its_shared_resource_without_inventing_an_effect() -> 
     result = consume_activity(sheet, activity_id="second-wind")
     assert result["sheet"]["resources"]["second_wind"]["value"] == 0
     assert result["requires_ruling"] is True
+    assert result["ruling_requirement"] == {
+        "default_resolver": "agent",
+        "ruling_kind": "agent_dm_adjudication",
+        "source_excerpt": "",
+    }
     assert result["payment"] == {"kind": "resource", "key": "second_wind", "amount": 1}
 
 
