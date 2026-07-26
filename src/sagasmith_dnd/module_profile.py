@@ -7,9 +7,15 @@ import re
 
 from sagasmith_core.modules import GenericModuleProfile, SceneBoundary
 
+_ROOM_CODE_PATTERN = (
+    r"(?:(?=[A-Z]{1,3}\s*[0-9IlO]{1,3}[A-Za-z]?\s*[.．。:：-])"
+    r"(?=[^.．。:：-]*\d)"
+    r"[A-Z]{1,3}\s*[0-9IlO]{1,3}[A-Za-z]?"
+    r"|[A-Z]{1,3}\s*[Il][0-9IlO]{0,2}"
+    r"|\d{1,3}\s*[A-Za-z]?)"
+)
 _ROOM = re.compile(
-    r"^(?:(?:[A-Z]{1,3}\s*[0-9IlO]{1,3})|(?:\d{1,3}\s*[A-Za-z]?))"
-    r"\s*[.．。:：-]\s*\S",
+    rf"^{_ROOM_CODE_PATTERN}\s*[.．。:：-]\s*(?=[^\W_])\S",
     re.IGNORECASE,
 )
 _STAT_SIGNALS = (
@@ -124,13 +130,12 @@ _DIMENSIONS = re.compile(
     re.IGNORECASE,
 )
 _ROOM_CODE = re.compile(
-    r"^(?P<code>(?:[A-Z]{1,3}\s*[0-9IlO]{1,3})|(?:\d{1,3}\s*[A-Za-z]?))"
+    rf"^(?P<code>{_ROOM_CODE_PATTERN})"
     r"\s*[.．。:：-]",
     re.IGNORECASE,
 )
 _ROOM_HEADING = re.compile(
-    r"^#{1,6}\s+(?P<code>(?:[A-Z]{1,3}\s*[0-9IlO]{1,3})|"
-    r"(?:\d{1,3}\s*[A-Za-z]?))"
+    rf"^#{{1,6}}\s+(?P<code>{_ROOM_CODE_PATTERN})"
     r"\s*[.．。:：-]",
     re.IGNORECASE | re.MULTILINE,
 )
@@ -614,7 +619,7 @@ def _spatial_manifest(
 
 class DndModuleProfile(GenericModuleProfile):
     name = "dnd5e"
-    version = "23"
+    version = "25"
 
     def document_metadata(self, content: str) -> dict[str, object]:
         """Parse and validate the optional generated-module runtime manifest."""

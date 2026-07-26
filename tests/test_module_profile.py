@@ -608,6 +608,45 @@ def test_coded_scene_fallback_is_typed_as_room_even_with_ocr_digit() -> None:
     assert scene.metadata["spatial"]["locations"][0]["confidence"] == "explicit_heading"
 
 
+def test_ocr_room_codes_split_scenes_without_treating_words_as_codes() -> None:
+    content = (
+        "# Chapter 5\n"
+        "#### XlO. NOSKA'S QUARTERS\n"
+        "A rust monster waits in a cage.\n"
+        "#### Xll. AHMAERGO'S COLLECTION\n"
+        "A stuffed minotaur stands here.\n"
+        "#### Xl3. THORVIN'S WORKSHOP\n"
+        "Thorvin is building a contraption.\n"
+        "#### Xl7. PROMENADE\n"
+        "Pillars carved with eyes follow the hall.\n"
+        "#### Xl9. XANATHAR'S SANCTUM\n"
+        "A fishbowl dominates the room.\n"
+        "#### FOO. Ordinary Section\n"
+        "This alphabetic abbreviation is not a numbered room.\n"
+        "#### BOW1. (The fish keeper uses the pallet as a bed.)\n"
+        "This OCR sentence fragment is not a numbered room.\n"
+    )
+
+    scenes = MarkdownModuleParser(profile=DndModuleProfile()).parse(content)[0].scenes
+
+    room_scenes = [scene for scene in scenes if scene.title.startswith("Xl")]
+    assert [scene.title for scene in room_scenes] == [
+        "XlO. NOSKA'S QUARTERS",
+        "Xll. AHMAERGO'S COLLECTION",
+        "Xl3. THORVIN'S WORKSHOP",
+        "Xl7. PROMENADE",
+        "Xl9. XANATHAR'S SANCTUM",
+    ]
+    assert all(
+        scene.metadata["spatial"]["locations"][0]["kind"] == "room"
+        for scene in room_scenes
+    )
+    ordinary = next(scene for scene in scenes if scene.title == "FOO. Ordinary Section")
+    assert ordinary.metadata["spatial"]["locations"][0]["kind"] != "room"
+    fragment = next(scene for scene in scenes if scene.title.startswith("BOW1."))
+    assert fragment.metadata["spatial"]["locations"][0]["kind"] != "room"
+
+
 def test_chapter_preamble_does_not_create_a_spatial_room() -> None:
     content = "# Tomb of the Nine Gods\nOverview.\n## Rotten Halls\nDescription.\n"
 
