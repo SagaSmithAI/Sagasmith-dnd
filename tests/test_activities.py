@@ -1,7 +1,10 @@
 import pytest
 
 from sagasmith_dnd.activities import ActivityError, consume_activity
-from sagasmith_dnd.character_schema import default_character_sheet
+from sagasmith_dnd.character_schema import (
+    default_character_sheet,
+    validate_character_sheet,
+)
 
 
 def test_activity_consumes_its_shared_resource_without_inventing_an_effect() -> None:
@@ -89,3 +92,22 @@ def test_zero_capacity_without_an_explicit_unlimited_flag_fails_closed() -> None
 
     with pytest.raises(ActivityError, match="exhausted"):
         consume_activity(sheet, activity_id="legacy-empty-resource")
+
+
+def test_omitted_uses_remains_unlimited_after_card_validation() -> None:
+    sheet = default_character_sheet()
+    sheet["content"]["activities"] = [
+        {
+            "id": "source-action",
+            "name": "Source Action",
+            "source_key": "module-page",
+            "activation": {"type": "action", "cost": 1},
+        }
+    ]
+
+    validated = validate_character_sheet(sheet)
+    result = consume_activity(validated, activity_id="source-action")
+
+    assert validated["content"]["activities"][0]["uses"]["unlimited"] is True
+    assert result["status"] == "committed"
+    assert result["payment"] is None

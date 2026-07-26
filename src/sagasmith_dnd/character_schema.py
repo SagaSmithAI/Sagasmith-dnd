@@ -1898,7 +1898,12 @@ def validate_character_sheet(
                         maximum=2000,
                     ),
                     "uses": _normalize_resource(
-                        entry.get("uses") or {}, f"sheet.content.{name}[{index}].uses"
+                        (
+                            entry.get("uses") or {}
+                            if "uses" in entry
+                            else {"unlimited": True}
+                        ),
+                        f"sheet.content.{name}[{index}].uses",
                     ),
                     "resource_key": _text(
                         entry.get("resource_key"),

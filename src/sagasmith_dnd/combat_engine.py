@@ -381,7 +381,8 @@ def start_encounter(
             speed = 0
         elif exhaustion >= 2:
             speed //= 2
-        speed = int(speed * source_speed_multiplier(sheet))
+        speed_multiplier = source_speed_multiplier(sheet)
+        current_movement = int(speed * speed_multiplier)
         supplied = actor.get("initiative")
         die = None
         if supplied is None:
@@ -413,13 +414,14 @@ def start_encounter(
                     "main_action": 1,
                     "bonus_action": 1,
                     "reaction": 1,
-                    "movement": speed,
+                    "movement": current_movement,
                     "speed": speed,
                     "object_interaction": 1,
                     "attack_budget": 0,
                 },
                 "conditions": list(sheet.get("conditions") or []),
                 "condition_sources": timed_condition_sources(sheet),
+                "speed_multiplier": speed_multiplier,
                 "position": deepcopy(actor.get("position")),
                 "hidden": bool(actor.get("hidden", False)),
                 "visible_to_actor_ids": deepcopy(actor.get("visible_to_actor_ids")),
@@ -4318,7 +4320,10 @@ def end_turn(encounter: dict[str, Any], *, actor_id_value: str | None = None) ->
             main_action=1,
             bonus_action=1,
             reaction=1,
-            movement=int(budget.get("speed", 30) or 30),
+            movement=int(
+                int(budget.get("speed", 30) or 30)
+                * float(next_actor.get("speed_multiplier", 1.0) or 1.0)
+            ),
             object_interaction=1,
             attack_budget=0,
             extra_action=0,

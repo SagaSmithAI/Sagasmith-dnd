@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-CORE_RULE_PACK_VERSION = "1.36.0"
+CORE_RULE_PACK_VERSION = "1.37.0"
 
 
 @dataclass(frozen=True)
@@ -54,6 +54,22 @@ BOUNDARIES = (
         "combat_engine.resolve_turn_undead_to_sheets|spend_movement|available_actions",
         ("tests/test_combat_engine.py::test_turn_undead_applies_and_enforces_turned",),
         "bundled:srd2014/02_Classes/Cleric.md#channel-divinity-turn-undead",
+    ),
+    CoreBoundary(
+        "dnd5e.core.activity.random_save_effects",
+        ("2014",),
+        (
+            "statblocks.gazer_eye_ray_spec|"
+            "combat_engine.resolve_random_save_effects|force_move_directly_away"
+        ),
+        (
+            "tests/test_statblocks.py::"
+            "test_gazer_eye_rays_are_structured_from_the_exact_source_action",
+            "tests/test_combat_engine.py::"
+            "test_gazer_eye_rays_reroll_duplicates_and_resolve_each_save",
+            "SagaSmith-dnd-mcp/tests/test_gazer_eye_rays_mcp.py",
+        ),
+        "module-source:Waterdeep-Dragon-Heist/page-204/gazer-eye-rays",
     ),
     CoreBoundary(
         "dnd5e.core.activity.action_surge",
