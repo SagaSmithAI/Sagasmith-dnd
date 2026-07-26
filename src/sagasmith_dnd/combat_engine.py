@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Iterable
 from uuid import uuid4
 
-from sagasmith_dnd.character_schema import SKILL_ABILITIES
+from sagasmith_dnd.character_schema import SKILL_ABILITIES, effective_hit_point_maximum
 from sagasmith_dnd.engine import (
     resolve_attack,
     resolve_check,
@@ -2241,7 +2241,7 @@ def _apply_adjusted_damage(
                 ended_effect_ids.append(str(effect.get("id") or ""))
         if ended_effect_ids:
             conditions.discard("turned")
-    max_hp = int(hp.get("max", before_hp) or before_hp)
+    max_hp = effective_hit_point_maximum(value)
     massive_excess = max(0, hp_damage - before_hp)
     became_zero = hp["value"] == 0 and before_hp > 0
     if knock_out and not melee:
@@ -3611,7 +3611,7 @@ def apply_healing_to_sheet(
                 else []
             ),
         }
-    maximum = int(hp.get("max", before) or before)
+    maximum = effective_hit_point_maximum(value)
     effective_amount = max(0, requested_amount + bonus)
     hp["value"] = min(maximum, before + effective_amount)
     value["combat"]["hp"] = hp

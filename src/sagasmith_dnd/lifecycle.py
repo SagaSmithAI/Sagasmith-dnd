@@ -555,6 +555,38 @@ def validate_rest_activity_minutes(
     return normalized
 
 
+def recover_chase_exhaustion(sheet: dict[str, Any]) -> dict[str, Any]:
+    """Remove every exhaustion level explicitly recorded as chase fatigue."""
+    value = deepcopy(sheet)
+    recovered = 0
+    for effect in value.get("effects", []):
+        if not effect.get("active") or effect.get("kind") != "chase_exhaustion":
+            continue
+        changes = [
+            item
+            for item in effect.get("changes", [])
+            if item.get("path") == "combat.exhaustion"
+            and item.get("mode") == "chase_levels"
+        ]
+        if len(changes) != 1:
+            raise CombatEngineError("active chase exhaustion effect is malformed")
+        levels = changes[0].get("value")
+        if isinstance(levels, bool) or not isinstance(levels, int) or levels <= 0:
+            raise CombatEngineError("active chase exhaustion level count is invalid")
+        recovered += levels
+        effect["active"] = False
+        effect["ended_reason"] = "short_or_long_rest"
+    combat = value.setdefault("combat", {})
+    before = int(combat.get("exhaustion", 0) or 0)
+    combat["exhaustion"] = max(0, before - recovered)
+    return {
+        "sheet": value,
+        "before": before,
+        "recovered": recovered,
+        "after": int(combat["exhaustion"]),
+    }
+
+
 def apply_rest(
     sheet: dict[str, Any],
     *,
@@ -610,7 +642,8 @@ def apply_rest(
             "rule_receipts": list(before_rules.receipts),
             "pending": list(before_rules.pending),
         }
-    value = before_rules.sheet
+    chase_recovery = recover_chase_exhaustion(before_rules.sheet)
+    value = chase_recovery["sheet"]
     combat = value.setdefault("combat", {})
     hp = dict(combat.get("hp") or {})
     if int(hp.get("value", 0) or 0) <= 0 or "dead" in {
@@ -810,6 +843,9 @@ def apply_rest(
         "rest_type": rest_type,
         "recovered": recovered,
         "unmet_recovery_requirements": unmet_recovery_requirements,
+        "chase_exhaustion_recovery": {
+            key: item for key, item in chase_recovery.items() if key != "sheet"
+        },
         "hit_die_healing": hit_die_healing,
         "hit_die_applied_healing": hit_die_applied_healing,
         "hit_dice_rolls": hit_dice_rolls,

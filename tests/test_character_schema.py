@@ -9,6 +9,7 @@ from sagasmith_dnd.character_schema import (
     adjust_wallet,
     attune_inventory_item,
     consume_weapon_ammunition,
+    default_character_sheet,
     derive_character_sheet,
     equip_inventory_item,
     legacy_memory_candidates,
@@ -1030,3 +1031,19 @@ def test_content_selection_provenance_is_normalized_and_unique() -> None:
                 }
             }
         )
+
+
+def test_2014_exhaustion_halves_effective_hit_point_maximum() -> None:
+    sheet = default_character_sheet()
+    sheet["edition"] = "2014"
+    sheet["combat"]["hp"] = {"value": 37, "max": 37, "temp": 0}
+    sheet["combat"]["exhaustion"] = 4
+
+    derived = derive_character_sheet(sheet)
+
+    assert derived["hit_points"] == {
+        "value": 18,
+        "max": 18,
+        "temp": 0,
+        "base_max": 37,
+    }

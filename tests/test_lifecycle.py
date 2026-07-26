@@ -1057,3 +1057,37 @@ def test_outside_combat_stand_rejects_unconscious_or_nonprone_creature() -> None
     sheet["conditions"] = []
     with pytest.raises(CombatEngineError, match="Prone condition"):
         stand_outside_combat(sheet)
+
+
+def test_short_rest_removes_all_and_only_chase_exhaustion() -> None:
+    sheet = default_character_sheet()
+    sheet["edition"] = "2014"
+    sheet["combat"]["exhaustion"] = 3
+    sheet["effects"] = [
+        {
+            "id": "chase-fatigue",
+            "name": "Chase Exhaustion",
+            "kind": "chase_exhaustion",
+            "source": "DMG 2014 chapter 8 chase dashing",
+            "active": True,
+            "duration": {"period": "manual", "remaining": 0},
+            "changes": [
+                {
+                    "path": "combat.exhaustion",
+                    "mode": "chase_levels",
+                    "value": 2,
+                }
+            ],
+        }
+    ]
+
+    result = apply_rest(sheet, rest_type="short_rest")
+
+    assert result["sheet"]["combat"]["exhaustion"] == 1
+    assert result["chase_exhaustion_recovery"] == {
+        "before": 3,
+        "recovered": 2,
+        "after": 1,
+    }
+    assert result["sheet"]["effects"][0]["active"] is False
+    assert result["sheet"]["effects"][0]["ended_reason"] == "short_or_long_rest"

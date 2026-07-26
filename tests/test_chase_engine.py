@@ -1,0 +1,150 @@
+from sagasmith_dnd.character_schema import default_character_sheet, derive_character_sheet
+from sagasmith_dnd.chase_engine import (
+    advance_chase_turn,
+    current_chase_participant,
+    start_chase,
+)
+
+
+class _SequenceRng:
+    def __init__(self, *values: int) -> None:
+        self.values = list(values)
+
+    def randint(self, minimum: int, maximum: int) -> int:
+        value = self.values.pop(0)
+        assert minimum <= value <= maximum
+        return value
+
+
+def _actor(
+    identifier: str,
+    *,
+    initiative: int,
+    speed: int = 30,
+    constitution: int = 10,
+) -> dict:
+    sheet = default_character_sheet()
+    sheet["combat"]["hp"] = {"value": 20, "max": 20, "temp": 0}
+    sheet["combat"]["speed"]["walk"] = speed
+    sheet["abilities"]["constitution"]["score"] = constitution
+    return {
+        "id": identifier,
+        "name": identifier,
+        "sheet": sheet,
+        "derived": derive_character_sheet(sheet),
+        "initiative": initiative,
+        "tie_breaker": 0,
+    }
+
+
+def test_module_close_transition_ends_chase() -> None:
+    pursuer = _actor("pursuer", initiative=20)
+    quarry = _actor("quarry", initiative=10)
+    chase = start_chase(
+        [pursuer, quarry],
+        quarry_ids=["quarry"],
+        initial_distance_ft=60,
+        close_transition={
+            "distance_ft": 0,
+            "status": "destination_reached",
+            "summary": "The quarry ducks into the old tower.",
+        },
+    )
+
+    assert chase["mode"] == "theater_of_the_mind"
+    assert current_chase_participant(chase)["actor_id"] == "pursuer"
+    assert "battle_map" not in chase
+
+    result = advance_chase_turn(
+        chase,
+        pursuer,
+        actor_id_value="pursuer",
+        action="dash",
+        rng=_SequenceRng(20),
+    )
+
+    assert result["turn"]["moved_ft"] == 60
+    assert result["chase"]["active"] is False
+    assert result["chase"]["outcome"]["status"] == "destination_reached"
+
+
+def test_urban_complication_affects_next_participant() -> None:
+    pursuer = _actor("pursuer", initiative=20)
+    quarry = _actor("quarry", initiative=10)
+    chase = start_chase(
+        [pursuer, quarry],
+        quarry_ids=["quarry"],
+        initial_distance_ft=100,
+    )
+    first = advance_chase_turn(
+        chase,
+        pursuer,
+        actor_id_value="pursuer",
+        action="dash",
+        rng=_SequenceRng(1),
+    )
+
+    assert first["chase"]["pending_complication"]["number"] == 1
+    assert first["chase"]["pending_complication"]["source_actor_id"] == "pursuer"
+
+    second = advance_chase_turn(
+        first["chase"],
+        quarry,
+        actor_id_value="quarry",
+        action="dash",
+        complication_choice="acrobatics",
+        rng=_SequenceRng(2, 20),
+    )
+
+    assert second["turn"]["complication"]["affected_actor_id"] == "quarry"
+    assert second["turn"]["complication"]["check"]["success"] is False
+    assert second["turn"]["movement_penalty_ft"] == 10
+    assert second["turn"]["moved_ft"] == 50
+
+
+def test_extra_dash_uses_constitution_check_and_exhaustion() -> None:
+    pursuer = _actor("pursuer", initiative=20, constitution=10)
+    quarry = _actor("quarry", initiative=10)
+    chase = start_chase(
+        [pursuer, quarry],
+        quarry_ids=["quarry"],
+        initial_distance_ft=100,
+    )
+    chase["participants"][0]["dash_count"] = chase["participants"][0]["free_dash_limit"]
+
+    result = advance_chase_turn(
+        chase,
+        pursuer,
+        actor_id_value="pursuer",
+        action="dash",
+        rng=_SequenceRng(1, 20),
+    )
+
+    assert result["turn"]["dash_check"]["success"] is False
+    assert result["turn"]["exhaustion_gained"] == 1
+    assert result["sheet"]["combat"]["exhaustion"] == 1
+    assert result["chase"]["participants"][0]["chase_exhaustion"] == 1
+
+
+def test_starting_exhaustion_halves_chase_speed_only_once() -> None:
+    pursuer = _actor("pursuer", initiative=20)
+    pursuer["sheet"]["combat"]["exhaustion"] = 2
+    pursuer["derived"] = derive_character_sheet(pursuer["sheet"])
+    quarry = _actor("quarry", initiative=10)
+    chase = start_chase(
+        [pursuer, quarry],
+        quarry_ids=["quarry"],
+        initial_distance_ft=100,
+    )
+
+    result = advance_chase_turn(
+        chase,
+        pursuer,
+        actor_id_value="pursuer",
+        action="dash",
+        rng=_SequenceRng(20),
+    )
+
+    assert chase["participants"][0]["speed_ft"] == 30
+    assert result["turn"]["speed_ft"] == 15
+    assert result["turn"]["moved_ft"] == 30

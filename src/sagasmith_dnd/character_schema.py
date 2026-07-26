@@ -2836,6 +2836,17 @@ def _weapon_attacks(
     return attacks
 
 
+def effective_hit_point_maximum(sheet: dict[str, Any]) -> int:
+    """Return the rules-effective maximum without overwriting the recorded base maximum."""
+    combat = dict(sheet.get("combat") or {})
+    hit_points = dict(combat.get("hp") or {})
+    maximum = int(hit_points.get("max", 0) or 0)
+    exhaustion = int(combat.get("exhaustion", 0) or 0)
+    if str(sheet.get("edition") or "2014") == "2014" and exhaustion >= 4:
+        return max(1, maximum // 2)
+    return maximum
+
+
 def derive_character_sheet(
     sheet: dict[str, Any], *, rules: ResolutionContext | None = None
 ) -> dict[str, Any]:
@@ -2917,6 +2928,7 @@ def derive_character_sheet(
         options = dict(activity.get("choices") or {}).get("multiattack_options")
         if isinstance(options, list):
             multiattack_options.extend(copy.deepcopy(options))
+    effective_hp_max = effective_hit_point_maximum(value)
     derived = {
         "proficiency_bonus": proficiency,
         "ability_modifiers": ability_modifiers,
@@ -2932,7 +2944,12 @@ def derive_character_sheet(
         + value["combat"]["initiative"]["bonus"],
         "attacks_per_action": value["combat"]["attacks_per_action"],
         "multiattack_options": multiattack_options,
-        "hit_points": dict(value["combat"]["hp"]),
+        "hit_points": {
+            **dict(value["combat"]["hp"]),
+            "value": min(int(value["combat"]["hp"]["value"]), effective_hp_max),
+            "max": effective_hp_max,
+            "base_max": int(value["combat"]["hp"]["max"]),
+        },
         "hit_point_progression": {
             "gains": list(value["combat"]["hp_progression"]),
             "recorded_gain_total": sum(gain["value"] for gain in value["combat"]["hp_progression"]),

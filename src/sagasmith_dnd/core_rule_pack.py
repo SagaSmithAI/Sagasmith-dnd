@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-CORE_RULE_PACK_VERSION = "1.37.0"
+CORE_RULE_PACK_VERSION = "1.38.0"
 
 
 @dataclass(frozen=True)
@@ -41,6 +41,34 @@ class BuiltinCoreRulePack:
 
 
 BOUNDARIES = (
+    CoreBoundary(
+        "dnd5e.core.chase.sequence",
+        ("2014",),
+        "chase_engine.start_chase|current_chase_participant|advance_chase_turn",
+        ("tests/test_chase_engine.py",),
+        "rulebook:dmg2014/chapter-8/chases#beginning-a-chase",
+    ),
+    CoreBoundary(
+        "dnd5e.core.chase.dashing",
+        ("2014",),
+        "chase_engine.advance_chase_turn",
+        ("tests/test_chase_engine.py::test_extra_dash_uses_constitution_check_and_exhaustion",),
+        "rulebook:dmg2014/chapter-8/chases#dashing",
+    ),
+    CoreBoundary(
+        "dnd5e.core.chase.urban_complications",
+        ("2014",),
+        "chase_engine.advance_chase_turn",
+        ("tests/test_chase_engine.py::test_urban_complication_affects_next_participant",),
+        "rulebook:dmg2014/chapter-8/chases#urban-chase-complications",
+    ),
+    CoreBoundary(
+        "dnd5e.core.chase.ending",
+        ("2014",),
+        "chase_engine.advance_chase_turn|end_chase",
+        ("tests/test_chase_engine.py::test_module_close_transition_ends_chase",),
+        "rulebook:dmg2014/chapter-8/chases#ending-a-chase",
+    ),
     CoreBoundary(
         "dnd5e.core.activity.resource_accounting",
         ("2014", "2024"),
@@ -428,8 +456,11 @@ BOUNDARIES = (
     CoreBoundary(
         "dnd5e.core.rest.exhaustion",
         ("2014", "2024"),
-        "lifecycle.apply_rest",
-        ("tests/test_lifecycle.py",),
+        "lifecycle.apply_rest|character_schema.effective_hit_point_maximum",
+        (
+            "tests/test_lifecycle.py",
+            "tests/test_character_schema.py::test_2014_exhaustion_halves_effective_hit_point_maximum",
+        ),
         "bundled:srd/exhaustion",
     ),
     CoreBoundary(
