@@ -15,6 +15,9 @@ class StatblockImportError(ValueError):
     """Raised when required statblock facts cannot be recovered from the source text."""
 
 
+OCR_STATBLOCK_RECOVERY_VERSION = 1
+
+
 @dataclass(frozen=True)
 class ParsedStatblock:
     name: str
@@ -1995,10 +1998,380 @@ def apply_statblock_variant(
     return validate_character_sheet(result)
 
 
+_OCR_IDENTITY_RE = re.compile(
+    r"(?i)^(Tiny|Small|Medium|Large|Huge|Gargantuan)\s+([^,]+),\s*(.+)$"
+)
+_OCR_FIELD_LABELS = (
+    "Armor Class",
+    "Hit Points",
+    "Speed",
+    "Saving Throws",
+    "Skills",
+    "Damage Vulnerabilities",
+    "Damage Resistances",
+    "Damage Immunities",
+    "Condition Immunities",
+    "Senses",
+    "Languages",
+    "Challenge",
+)
+_OCR_ENTRY_RE = re.compile(
+    r"^([A-Z][A-Za-z0-9 '/()\-–—]{1,80})\.\s*(.*)$"
+)
+
+
+def _ocr_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.casefold())
+
+
+def _strip_ocr_label(text: str, label: str) -> str:
+    return re.sub(rf"(?i)^{re.escape(label)}\s+", "", text)
+
+
+def _repair_layout_ocr_text(text: str) -> str:
+    """Repair only mechanically bounded OCR substitutions before statblock parsing."""
+
+    normalized = re.sub(
+        r"(?i)(?<![A-Za-z0-9])[lI]d(?=\d)",
+        "1d",
+        text,
+    )
+    return re.sub(
+        r"(?i)(\bhalf\s+as\s+much\s+)darmage(?=\s+on\b)",
+        r"\1damage",
+        normalized,
+    )
+
+
+def _ocr_block(raw: dict[str, Any], index: int) -> dict[str, Any]:
+    bbox = raw.get("bbox")
+    if (
+        not isinstance(bbox, list)
+        or len(bbox) != 4
+        or any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in bbox)
+    ):
+        raise StatblockImportError(f"OCR block {index} has an invalid bbox")
+    text = _repair_layout_ocr_text(str(raw.get("text") or "").strip())
+    if not text:
+        raise StatblockImportError(f"OCR block {index} has no text")
+    x0, y0, x1, y1 = (float(value) for value in bbox)
+    if x1 <= x0 or y1 <= y0:
+        raise StatblockImportError(f"OCR block {index} has an invalid bbox")
+    confidence = raw.get("confidence", 0.0)
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+        raise StatblockImportError(f"OCR block {index} has invalid confidence")
+    return {
+        "index": index,
+        "text": text,
+        "confidence": float(confidence),
+        "x0": x0,
+        "y0": y0,
+        "x1": x1,
+        "y1": y1,
+        "cx": (x0 + x1) / 2,
+    }
+
+
+def _ocr_column_split(
+    blocks: list[dict[str, Any]],
+    *,
+    width: float,
+) -> float | None:
+    candidates = [
+        width * fraction / 100
+        for fraction in range(30, 71)
+    ]
+    ranked: list[tuple[int, float, float]] = []
+    content_top = min(block["y0"] for block in blocks)
+    content_bottom = max(block["y1"] for block in blocks)
+    content_span = max(1.0, content_bottom - content_top)
+    for split in candidates:
+        crossing = sum(
+            1
+            for block in blocks
+            if block["x0"] < split < block["x1"]
+        )
+        left = sum(1 for block in blocks if block["cx"] < split)
+        right = len(blocks) - left
+        left_blocks = [block for block in blocks if block["cx"] < split]
+        right_blocks = [block for block in blocks if block["cx"] >= split]
+        left_span = (
+            max(block["y1"] for block in left_blocks)
+            - min(block["y0"] for block in left_blocks)
+            if left_blocks
+            else 0.0
+        )
+        right_span = (
+            max(block["y1"] for block in right_blocks)
+            - min(block["y0"] for block in right_blocks)
+            if right_blocks
+            else 0.0
+        )
+        if (
+            left >= 5
+            and right >= 5
+            and left_span >= content_span * 0.4
+            and right_span >= content_span * 0.4
+        ):
+            ranked.append((crossing, abs(split - width / 2), split))
+    if not ranked:
+        return None
+    crossing, _distance, split = min(ranked)
+    if crossing > max(2, len(blocks) // 20):
+        return None
+    return split
+
+
+def _ocr_peer_heading(
+    block: dict[str, Any],
+    following: dict[str, Any] | None,
+) -> bool:
+    text = block["text"]
+    return bool(
+        following is not None
+        and text == text.upper()
+        and 3 <= len(text) <= 80
+        and _OCR_IDENTITY_RE.fullmatch(following["text"])
+        and 0 <= following["y0"] - block["y1"] <= 50
+    )
+
+
+def recover_2014_statblock_from_ocr(
+    layout: dict[str, Any],
+    *,
+    name: str,
+    minimum_confidence: float = 0.8,
+) -> dict[str, Any]:
+    """Recover one statblock from layout OCR without requiring an image-capable model."""
+
+    if not isinstance(layout, dict):
+        raise StatblockImportError("OCR layout must be an object")
+    width = layout.get("width")
+    height = layout.get("height")
+    if (
+        isinstance(width, bool)
+        or not isinstance(width, (int, float))
+        or width <= 0
+        or isinstance(height, bool)
+        or not isinstance(height, (int, float))
+        or height <= 0
+    ):
+        raise StatblockImportError("OCR layout requires positive width and height")
+    raw_blocks = layout.get("blocks")
+    if not isinstance(raw_blocks, list) or not raw_blocks:
+        raise StatblockImportError("OCR layout has no text blocks")
+    blocks = [_ocr_block(raw, index) for index, raw in enumerate(raw_blocks)]
+    target_key = _ocr_key(name)
+    headings = [block for block in blocks if _ocr_key(block["text"]) == target_key]
+    if len(headings) != 1:
+        raise StatblockImportError(
+            f"OCR recovery requires exactly one heading matching {name!r}"
+        )
+    heading = headings[0]
+    split = _ocr_column_split(blocks, width=float(width))
+    if split is None:
+        column_blocks = list(blocks)
+        column_bounds = [0.0, float(width)]
+    elif heading["cx"] < split:
+        column_blocks = [block for block in blocks if block["cx"] < split]
+        column_bounds = [0.0, split]
+    else:
+        column_blocks = [block for block in blocks if block["cx"] >= split]
+        column_bounds = [split, float(width)]
+    ordered = sorted(column_blocks, key=lambda block: (block["y0"], block["x0"]))
+    heading_index = next(
+        index for index, block in enumerate(ordered) if block["index"] == heading["index"]
+    )
+    end = len(ordered)
+    for index in range(heading_index + 1, len(ordered)):
+        following = ordered[index + 1] if index + 1 < len(ordered) else None
+        if _ocr_peer_heading(ordered[index], following):
+            end = index
+            break
+    scoped = ordered[heading_index:end]
+    identity = next(
+        (block for block in scoped[1:] if _OCR_IDENTITY_RE.fullmatch(block["text"])),
+        None,
+    )
+    if identity is None:
+        raise StatblockImportError("OCR statblock has no unambiguous size/type line")
+
+    core_fields: dict[str, dict[str, Any]] = {}
+    for label in _OCR_FIELD_LABELS[:3]:
+        core_fields[label] = next(
+            (
+                block
+                for block in scoped
+                if re.match(rf"(?i)^{re.escape(label)}\s+\S", block["text"])
+            ),
+            None,
+        )
+        if core_fields[label] is None:
+            raise StatblockImportError(f"OCR statblock is missing {label}")
+
+    ability_labels: dict[str, dict[str, Any]] = {}
+    for ability in ("STR", "DEX", "CON", "INT", "WIS", "CHA"):
+        matches = [block for block in scoped if block["text"].upper() == ability]
+        if len(matches) != 1:
+            raise StatblockImportError(f"OCR statblock requires one {ability} label")
+        ability_labels[ability] = matches[0]
+    ability_values: dict[str, dict[str, Any]] = {}
+    for ability, label_block in ability_labels.items():
+        candidates = [
+            block
+            for block in scoped
+            if label_block["y0"] <= block["y0"] <= label_block["y1"] + 60
+            and abs(block["cx"] - label_block["cx"]) <= 45
+            and re.fullmatch(r"\d+\s*\([+\-]\s*\d+\)", block["text"])
+        ]
+        if len(candidates) != 1:
+            raise StatblockImportError(f"OCR statblock requires one {ability} score")
+        ability_values[ability] = candidates[0]
+    challenge = next(
+        (
+            block
+            for block in scoped
+            if re.match(r"(?i)^Challenge\s+\S", block["text"])
+        ),
+        None,
+    )
+    if challenge is None:
+        raise StatblockImportError("OCR statblock is missing Challenge")
+    detail_fields: dict[str, dict[str, Any]] = {}
+    for label in _OCR_FIELD_LABELS[3:-1]:
+        matches = [
+            block
+            for block in scoped
+            if re.match(rf"(?i)^{re.escape(label)}\s+\S", block["text"])
+        ]
+        if len(matches) > 1:
+            raise StatblockImportError(f"OCR statblock has ambiguous {label} fields")
+        if matches:
+            detail_fields[label] = matches[0]
+
+    critical = [
+        heading,
+        identity,
+        *core_fields.values(),
+        *ability_labels.values(),
+        *ability_values.values(),
+        *detail_fields.values(),
+        challenge,
+    ]
+    low_confidence = [
+        {"text": block["text"], "confidence": block["confidence"]}
+        for block in critical
+        if block["confidence"] < minimum_confidence
+    ]
+    if low_confidence:
+        raise StatblockImportError(
+            "OCR statblock has low-confidence identity or core combat fields"
+        )
+
+    skipped = {
+        heading["index"],
+        identity["index"],
+        *(block["index"] for block in core_fields.values()),
+        *(block["index"] for block in ability_labels.values()),
+        *(block["index"] for block in ability_values.values()),
+    }
+    detail_start = max(block["y1"] for block in ability_values.values())
+    details: list[str] = []
+    for block in scoped:
+        if block["index"] in skipped or block["y0"] < detail_start:
+            continue
+        text = block["text"]
+        if text.upper() in {"ACTIONS", "REACTIONS", "LEGENDARY ACTIONS"}:
+            details.append(f"## {text.title()}")
+            continue
+        field = next(
+            (
+                label
+                for label in _OCR_FIELD_LABELS[3:]
+                if re.match(rf"(?i)^{re.escape(label)}\s+\S", text)
+            ),
+            None,
+        )
+        if field is not None:
+            details.append(f"**{field}** {_strip_ocr_label(text, field)}")
+            continue
+        entry = _OCR_ENTRY_RE.match(text)
+        if entry:
+            details.append(f"***{entry.group(1)}.*** {entry.group(2)}".rstrip())
+        else:
+            details.append(text)
+
+    scores = [
+        re.sub(r"^(\d+)\s*\(", r"\1 (", ability_values[ability]["text"])
+        for ability in ("STR", "DEX", "CON", "INT", "WIS", "CHA")
+    ]
+    content = "\n\n".join(
+        [
+            f"# {name}",
+            f"*{identity['text']}*",
+            *[
+                f"**{label}** {_strip_ocr_label(core_fields[label]['text'], label)}"
+                for label in ("Armor Class", "Hit Points", "Speed")
+            ],
+            "| STR | DEX | CON | INT | WIS | CHA |",
+            "|---:|---:|---:|---:|---:|---:|",
+            "| " + " | ".join(scores) + " |",
+            *details,
+        ]
+    )
+    parsed = parse_2014_statblock(
+        content,
+        source_key="ocr-layout-recovery",
+        name=name,
+    )
+    critical_facts = {
+        "identity": identity["text"],
+        "armor_class": _strip_ocr_label(
+            core_fields["Armor Class"]["text"], "Armor Class"
+        ),
+        "hit_points": _strip_ocr_label(
+            core_fields["Hit Points"]["text"], "Hit Points"
+        ),
+        "speed": _strip_ocr_label(core_fields["Speed"]["text"], "Speed"),
+        "abilities": {
+            ability.casefold(): ability_values[ability]["text"]
+            for ability in ("STR", "DEX", "CON", "INT", "WIS", "CHA")
+        },
+        "fields": {
+            label: _strip_ocr_label(block["text"], label)
+            for label, block in detail_fields.items()
+        },
+        "challenge": _strip_ocr_label(challenge["text"], "Challenge"),
+    }
+    return {
+        "normalized_content": content,
+        "critical_facts": critical_facts,
+        "validation": {
+            "name": parsed.name,
+            "challenge_rating": parsed.challenge_rating,
+            "experience_points": parsed.experience_points,
+            "warnings": list(parsed.warnings),
+        },
+        "evidence": {
+            "recovery_version": OCR_STATBLOCK_RECOVERY_VERSION,
+            "page_number": layout.get("page_number"),
+            "heading": heading["text"],
+            "heading_confidence": heading["confidence"],
+            "minimum_core_confidence": min(block["confidence"] for block in critical),
+            "block_count": len(scoped),
+            "column_split": split,
+            "column_bounds": column_bounds,
+            "text_only": True,
+        },
+    }
+
+
 __all__ = [
     "ParsedStatblock",
+    "OCR_STATBLOCK_RECOVERY_VERSION",
     "StatblockImportError",
     "apply_statblock_variant",
     "effective_statblock_rating",
     "parse_2014_statblock",
+    "recover_2014_statblock_from_ocr",
 ]

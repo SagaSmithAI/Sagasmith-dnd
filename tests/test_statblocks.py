@@ -7,6 +7,7 @@ from sagasmith_dnd.statblocks import (
     effective_statblock_rating,
     gazer_eye_ray_spec,
     parse_2014_statblock,
+    recover_2014_statblock_from_ocr,
     source_contest_effect_spec,
     source_save_effect_spec,
 )
@@ -1260,3 +1261,139 @@ def test_unresolved_multiattack_produces_one_specific_warning() -> None:
     assert parsed.warnings == (
         "Multiattack: Multiattack composition requires a DM ruling",
     )
+
+
+def test_layout_ocr_recovers_one_statblock_without_image_reasoning() -> None:
+    def block(text: str, x0: int, y0: int, x1: int, y1: int) -> dict[str, object]:
+        return {
+            "text": text,
+            "confidence": 0.99,
+            "bbox": [x0, y0, x1, y1],
+        }
+
+    layout = {
+        "page_number": 92,
+        "width": 1000,
+        "height": 1500,
+        "blocks": [
+            block("YOUNG BLUE DRAGON", 590, 110, 880, 145),
+            block("Large dragon, lawful evil", 590, 145, 790, 170),
+            block("Armor Class 18 (natural armor)", 590, 185, 830, 210),
+            block("Hit Points 152 (16d10 + 64)", 590, 210, 810, 235),
+            block("Speed 40 ft., burrow 20 ft., fly 80 ft.", 590, 235, 860, 260),
+            block("ADULT BLUE DRAGON", 80, 180, 390, 215),
+            block("Huge dragon, lawful evil", 80, 215, 270, 240),
+            block("Armor Class 19 (natural armor)", 80, 255, 320, 280),
+            block("Hit Points 225 (18d12 + 108)", 80, 280, 310, 305),
+            block("Speed 40 ft., burrow 30 ft., fly 80 ft.", 80, 305, 360, 330),
+            *[
+                block(label, 90 + index * 75, 345, 135 + index * 75, 370)
+                for index, label in enumerate(("STR", "DEX", "CON", "INT", "WIS", "CHA"))
+            ],
+            *[
+                block(value, 85 + index * 75, 370, 145 + index * 75, 395)
+                for index, value in enumerate(
+                    (
+                        "25 (+7)",
+                        "10 (+0)",
+                        "23 (+6)",
+                        "16 (+3)",
+                        "15 (+2)",
+                        "19 (+4)",
+                    )
+                )
+            ],
+            block("Saving Throws Dex +5, Con +11, Wis +7, Cha +9", 80, 410, 440, 435),
+            block("Skills Perception +12, Stealth +5", 80, 435, 330, 460),
+            block("Damage Immunities lightning", 80, 460, 310, 485),
+            block(
+                "Senses blindsight 60 ft., darkvision 120 ft., passive Perception 22",
+                80,
+                485,
+                500,
+                510,
+            ),
+            block("Languages Common, Draconic", 80, 510, 320, 535),
+            block("Challenge 16 (15,000 XP)", 80, 535, 300, 560),
+            block(
+                "Legendary Resistance (3/Day). If the dragon fails a saving throw,",
+                80,
+                575,
+                510,
+                600,
+            ),
+            block("it can choose to succeed instead.", 80, 600, 330, 625),
+            block("ACTIONS", 80, 645, 190, 675),
+            block(
+                "Bite. Melee Weapon Attack: +12 to hit, reach 10 ft., one target.",
+                80,
+                690,
+                520,
+                715,
+            ),
+            block(
+                "Hit: 18 (2d10 + 7) piercing damage plus 5 (1d10) lightning damage.",
+                80,
+                715,
+                540,
+                740,
+            ),
+            block(
+                "Breath. The target takes 12 (2d10) damage, or half as much darmage on",
+                80,
+                745,
+                540,
+                770,
+            ),
+            block("a successful save.", 80, 770, 260, 795),
+            block("BLUE DRAGON WYRMLING", 590, 900, 900, 935),
+            block("Medium dragon, lawful evil", 590, 935, 810, 960),
+        ],
+    }
+
+    recovered = recover_2014_statblock_from_ocr(
+        layout,
+        name="Adult Blue Dragon",
+    )
+
+    assert recovered["validation"]["name"] == "Adult Blue Dragon"
+    assert recovered["validation"]["challenge_rating"] == "16"
+    assert recovered["validation"]["experience_points"] == 15_000
+    assert recovered["evidence"]["text_only"] is True
+    assert recovered["critical_facts"] == {
+        "identity": "Huge dragon, lawful evil",
+        "armor_class": "19 (natural armor)",
+        "hit_points": "225 (18d12 + 108)",
+        "speed": "40 ft., burrow 30 ft., fly 80 ft.",
+        "abilities": {
+            "str": "25 (+7)",
+            "dex": "10 (+0)",
+            "con": "23 (+6)",
+            "int": "16 (+3)",
+            "wis": "15 (+2)",
+            "cha": "19 (+4)",
+        },
+        "fields": {
+            "Saving Throws": "Dex +5, Con +11, Wis +7, Cha +9",
+            "Skills": "Perception +12, Stealth +5",
+            "Damage Immunities": "lightning",
+            "Senses": (
+                "blindsight 60 ft., darkvision 120 ft., passive Perception 22"
+            ),
+            "Languages": "Common, Draconic",
+        },
+        "challenge": "16 (15,000 XP)",
+    }
+    assert "**Armor Class** 19 (natural armor)" in recovered["normalized_content"]
+    assert "| 25 (+7) | 10 (+0) | 23 (+6)" in recovered["normalized_content"]
+    assert "half as much damage on" in recovered["normalized_content"]
+    assert "darmage" not in recovered["normalized_content"]
+
+    next(
+        item for item in layout["blocks"] if item["text"].startswith("Challenge ")
+    )["confidence"] = 0.5
+    with pytest.raises(
+        StatblockImportError,
+        match="low-confidence identity or core combat fields",
+    ):
+        recover_2014_statblock_from_ocr(layout, name="Adult Blue Dragon")
