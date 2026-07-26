@@ -533,6 +533,34 @@ def test_kobold_attack_traits_are_structured() -> None:
     assert parsed.warnings == ()
 
 
+def test_statblock_entries_accept_period_inside_emphasis() -> None:
+    markdown = (
+        KOBOLD.replace(
+            "***Sunlight Sensitivity***.",
+            "***Sunlight Sensitivity.***",
+        )
+        .replace("***Pack Tactics***.", "***Pack Tactics.***")
+        .replace("***Dagger***.", "***Dagger.***")
+        .replace("***Sling***.", "***Sling.***")
+    )
+
+    parsed = parse_2014_statblock(
+        markdown,
+        source_key="monster-manual-2014:p195-visual-review",
+    )
+
+    assert {
+        item["name"]
+        for item in parsed.sheet["inventory"]["items"]
+        if item["kind"] == "weapon"
+    } == {"Dagger", "Sling"}
+    assert {
+        item["name"]
+        for item in parsed.sheet["content"]["features"]
+    } >= {"Sunlight Sensitivity", "Pack Tactics"}
+    assert parsed.warnings == ()
+
+
 def test_effect_only_weapon_attack_preserves_web_ruling_without_fake_damage() -> None:
     parsed = parse_2014_statblock(GIANT_SPIDER, source_key="module-review:giant-spider")
     attacks = {

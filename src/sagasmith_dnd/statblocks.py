@@ -230,7 +230,7 @@ def _parse_senses(value: str, sheet: dict[str, Any], ability_scores: dict[str, i
 def _entry_blocks(markdown: str) -> list[tuple[str, str, str]]:
     markers = list(
         re.finditer(
-            r"(?<!\*)\*\*\*(.+?)\*\*\*\.\s*",
+            r"(?<!\*)\*\*\*(.+?)(?:\.\*\*\*|\*\*\*\.)\s*",
             markdown,
         )
     )
