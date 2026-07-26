@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-CORE_RULE_PACK_VERSION = "1.40.0"
+CORE_RULE_PACK_VERSION = "1.41.0"
 
 
 @dataclass(frozen=True)
@@ -112,6 +112,24 @@ BOUNDARIES = (
             "tests/test_combat_engine.py::"
             "test_devour_intellect_resolves_damage_score_reduction_and_stun",
             "SagaSmith-dnd-mcp/tests/test_intellect_devourer_mcp.py",
+        ),
+        "rulebook:mm2014/page-191/intellect-devourer",
+    ),
+    CoreBoundary(
+        "dnd5e.core.activity.source_contest_effect",
+        ("2014",),
+        (
+            "statblocks.source_contest_effect_spec|"
+            "combat_engine.resolve_source_contest_effect|"
+            "core.state.ActorKnowledgeTransfer"
+        ),
+        (
+            "tests/test_statblocks.py::"
+            "test_intellect_devourer_actions_are_structured_from_exact_source",
+            "tests/test_combat_engine.py::"
+            "test_body_thief_wins_contest_and_adopts_body_with_source_mental_scores",
+            "SagaSmith-dnd-mcp/tests/test_intellect_devourer_mcp.py::"
+            "test_public_body_thief_takes_host_and_atomically_copies_knowledge",
         ),
         "rulebook:mm2014/page-191/intellect-devourer",
     ),

@@ -583,6 +583,8 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
     current = current_combatant(encounter)
     if current is None or current.get("actor_id") != actor_id_value:
         return []
+    if combatant.get("inside_host"):
+        return []
     if combatant.get("surprised") and _normalize_ruleset(encounter.get("ruleset")) == "2014":
         return []
     if conditions & {"dead", "unconscious", "stunned", "paralyzed", "petrified"}:
@@ -933,6 +935,9 @@ def preflight_attack(
                     combatant.get("zero_hp_recovery", False)
                 )
                 target["visible_to_actor_ids"] = deepcopy(combatant.get("visible_to_actor_ids"))
+                target["inside_host"] = deepcopy(combatant.get("inside_host"))
+    if target.get("inside_host"):
+        raise CombatEngineError("target has total cover inside its host")
     attack_source_traits = {
         str(source_trait.get("kind") or ""): {
             "feature": feature,
@@ -3251,6 +3256,8 @@ def resolve_common_action(
     )
     if combatant is None:
         raise CombatEngineError("actor is not a combatant")
+    if combatant.get("inside_host"):
+        raise CombatEngineError("actor cannot act separately while inside its host")
     out_of_turn_reaction = action == "cast" and payment == "reaction"
     if not out_of_turn_reaction and (current is None or current.get("actor_id") != actor_id_value):
         raise CombatEngineError("it is not this actor's turn")
@@ -4603,6 +4610,135 @@ def resolve_source_save_effect(
             "condition": "stunned" if ability_reduced else "",
             "effect_instance_id": effect_instance_id,
             "ended_effect_ids": ended_effect_ids,
+        },
+    }
+
+
+def resolve_source_contest_effect(
+    source_actor: dict[str, Any],
+    target_actor: dict[str, Any],
+    *,
+    spec: dict[str, Any],
+    rules: ResolutionContext | None = None,
+    rng: Any = None,
+) -> dict[str, Any]:
+    """Resolve the reviewed 2014 Body Thief Intelligence contest."""
+
+    if spec.get("kind") != "intellect_devourer_body_thief_2014":
+        raise CombatEngineError("unsupported source ability-contest action contract")
+    contest = dict(spec.get("contest") or {})
+    success_spec = dict(spec.get("success") or {})
+    if (
+        spec.get("target_count") != 1
+        or spec.get("target_requirements") != ["incapacitated", "humanoid"]
+        or contest
+        != {
+            "source_ability": "intelligence",
+            "target_ability": "intelligence",
+            "ties": "no_winner",
+        }
+        or success_spec.get("brain_consumed") is not True
+        or success_spec.get("source_inside_host") is not True
+        or success_spec.get("source_total_cover") is not True
+        or success_spec.get("source_retains")
+        != [
+            "intelligence",
+            "wisdom",
+            "charisma",
+            "deep_speech",
+            "telepathy",
+            "traits",
+        ]
+        or success_spec.get("source_adopts") != "target_statistics_otherwise"
+        or success_spec.get("knowledge_transfer") != "all_target_knowledge"
+        or success_spec.get("host_zero_hp") != "source_must_leave"
+    ):
+        raise CombatEngineError("source ability-contest action contract is malformed")
+    source_id = actor_id(source_actor)
+    target_id = actor_id(target_actor)
+    if source_id == target_id:
+        raise CombatEngineError("source ability-contest action cannot target its source")
+    source_check = resolve_actor_check(
+        source_actor,
+        kind="ability",
+        ability="intelligence",
+        dc=0,
+        rules=rules,
+        rng=rng,
+    )
+    target_check = resolve_actor_check(
+        target_actor,
+        kind="ability",
+        ability="intelligence",
+        dc=0,
+        rules=rules,
+        rng=rng,
+    )
+    won = int(source_check["total"]) > int(target_check["total"])
+    result = {
+        "kind": "source_contest_effect",
+        "contract": str(spec["kind"]),
+        "source_actor_id": source_id,
+        "target_id": target_id,
+        "source_excerpt": str(spec.get("source_excerpt") or ""),
+        "source_check": source_check,
+        "target_check": target_check,
+        "tie": int(source_check["total"]) == int(target_check["total"]),
+        "success": won,
+        "outcome": "body_taken" if won else "contest_not_won",
+        "knowledge_transfer": (
+            "all_target_knowledge" if won else "none"
+        ),
+    }
+    target_sheet = actor_sheet(target_actor)
+    if not won:
+        return {"sheet": target_sheet, "result": result}
+    source_scores = effective_ability_scores(actor_sheet(source_actor))
+    updated = deepcopy(target_sheet)
+    for effect in updated.get("effects", []):
+        if (
+            effect.get("active")
+            and str(effect.get("name") or "").strip().casefold()
+            == "devour intellect"
+        ):
+            effect["active"] = False
+            effect["ended_reason"] = "body_thief_takeover"
+    updated["conditions"] = sorted(
+        _condition_set(updated.get("conditions")) - {"stunned", "incapacitated"}
+    )
+    effect_id = f"body-thief-{source_id}-{target_id}"
+    updated.setdefault("effects", []).append(
+        {
+            "id": effect_id,
+            "name": "Body Thief Host",
+            "kind": "timed_conditions",
+            "source": source_id,
+            "active": True,
+            "concentration": False,
+            "duration": {"period": "manual", "remaining": 0},
+            "changes": [
+                {
+                    "path": f"abilities.{ability}.score",
+                    "mode": "override",
+                    "value": source_scores[ability],
+                }
+                for ability in ("intelligence", "wisdom", "charisma")
+            ],
+            "description": str(spec.get("source_excerpt") or ""),
+        }
+    )
+    validated = validate_character_sheet(updated)
+    return {
+        "sheet": validated,
+        "result": {
+            **result,
+            "effect_instance_id": effect_id,
+            "source_mental_ability_scores": {
+                ability: source_scores[ability]
+                for ability in ("intelligence", "wisdom", "charisma")
+            },
+            "source_total_cover": True,
+            "brain_consumed": True,
         },
     }
 

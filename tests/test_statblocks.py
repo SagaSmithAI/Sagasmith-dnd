@@ -7,6 +7,7 @@ from sagasmith_dnd.statblocks import (
     effective_statblock_rating,
     gazer_eye_ray_spec,
     parse_2014_statblock,
+    source_contest_effect_spec,
     source_save_effect_spec,
 )
 
@@ -263,8 +264,22 @@ Intelligence score, that score is reduced to 0. The target is stunned until it
 regains at least one point of Intelligence.
 
 ***Body Thief***. The intellect devourer initiates an Intelligence contest with an
-incapacitated humanoid within 5 feet of it. If it wins the contest, it takes
-control of the target's body.
+incapacitated humanoid within 5 feet of it. If it wins the contest, the intellect
+devourer magically consumes the target's brain, teleports into the target's skull,
+and takes control of the target's body. While inside a creature, the intellect
+devourer has total cover against attacks and other effects originating outside its
+host. The intellect devourer retains its Intelligence, Wisdom, and Charisma scores,
+as well as its understanding of Deep Speech, its telepathy, and its traits. It
+otherwise adopts the target's statistics. It knows everything the creature knew,
+including spells and languages.
+
+If the host body drops to 0 hit points, the intellect devourer must leave it. A
+protection from evil and good spell cast on the body drives the intellect devourer
+out. The intellect devourer is also forced out if the target regains its devoured
+brain by means of a wish. By spending 5 feet of its movement, the intellect
+devourer can voluntarily leave the body, teleporting to the nearest unoccupied
+space within 5 feet of it. The body then dies, unless its brain is restored within
+1 round.
 """
 
 
@@ -366,6 +381,11 @@ def test_intellect_devourer_actions_are_structured_from_exact_source() -> None:
         for item in parsed.sheet["content"]["activities"]
         if item["name"] == "Devour Intellect"
     )
+    body_thief = next(
+        item
+        for item in parsed.sheet["content"]["activities"]
+        if item["name"] == "Body Thief"
+    )
 
     assert source_save_effect_spec(parsed.sheet, devour["id"]) == {
         "kind": "intellect_devourer_devour_intellect_2014",
@@ -395,8 +415,36 @@ def test_intellect_devourer_actions_are_structured_from_exact_source() -> None:
             ],
         }
     ]
+    assert source_contest_effect_spec(parsed.sheet, body_thief["id"]) == {
+        "kind": "intellect_devourer_body_thief_2014",
+        "range_ft": 5,
+        "target_count": 1,
+        "target_requirements": ["incapacitated", "humanoid"],
+        "contest": {
+            "source_ability": "intelligence",
+            "target_ability": "intelligence",
+            "ties": "no_winner",
+        },
+        "success": {
+            "brain_consumed": True,
+            "source_inside_host": True,
+            "source_total_cover": True,
+            "source_retains": [
+                "intelligence",
+                "wisdom",
+                "charisma",
+                "deep_speech",
+                "telepathy",
+                "traits",
+            ],
+            "source_adopts": "target_statistics_otherwise",
+            "knowledge_transfer": "all_target_knowledge",
+            "host_zero_hp": "source_must_leave",
+        },
+        "source_excerpt": " ".join(body_thief["description"].split()),
+    }
     assert parsed.warnings == (
-        "Body Thief: descriptive action is not automatically settled",
+        "Body Thief: protection, wish, and voluntary exit require DM settlement",
     )
 
 

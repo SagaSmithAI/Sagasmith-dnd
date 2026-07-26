@@ -853,11 +853,37 @@ def source_save_effect_spec(
     return deepcopy(recorded)
 
 
+def source_contest_effect_spec(
+    sheet: dict[str, Any],
+    activity_id: str,
+) -> dict[str, Any] | None:
+    """Return a reviewed, deterministic source ability-contest action contract."""
+
+    activity = next(
+        (
+            item
+            for item in dict(sheet.get("content") or {}).get("activities", [])
+            if str(item.get("id") or "") == activity_id
+        ),
+        None,
+    )
+    if activity is None:
+        return None
+    recorded = dict(
+        dict(activity.get("choices") or {}).get("source_contest_effect") or {}
+    )
+    if not recorded:
+        return None
+    if recorded.get("kind") != "intellect_devourer_body_thief_2014":
+        raise StatblockImportError("unsupported source ability-contest action contract")
+    return deepcopy(recorded)
+
+
 def _structure_intellect_devourer_actions(
     sheet: dict[str, Any],
     warnings: list[str],
 ) -> None:
-    """Structure the 2014 Devour Intellect action and its mixed Multiattack."""
+    """Structure the 2014 Intellect Devourer actions and mixed Multiattack."""
 
     activities = list(sheet["content"]["activities"])
     devour = next(
@@ -885,6 +911,81 @@ def _structure_intellect_devourer_actions(
         ),
         None,
     )
+    body_thief = next(
+        (
+            item
+            for item in activities
+            if str(item.get("name") or "").strip().casefold() == "body thief"
+        ),
+        None,
+    )
+    if body_thief is not None:
+        body_description = " ".join(
+            str(body_thief.get("description") or "").split()
+        )
+        body_match = re.fullmatch(
+            r"The intellect devourer initiates an Intelligence contest with an "
+            r"incapacitated humanoid within (?P<range>\d+) feet of it\. If it "
+            r"wins the contest, the intellect devourer magically consumes the "
+            r"target's brain, teleports into the target's skull, and takes control "
+            r"of the target's body\. While inside a creature, the intellect "
+            r"devourer has total cover against attacks and other effects originating "
+            r"outside its host\. The intellect devourer retains its Intelligence, "
+            r"Wisdom, and Charisma scores, as well as its understanding of Deep "
+            r"Speech, its telepathy, and its traits\. It otherwise adopts the "
+            r"target's statistics\. It knows everything the creature knew, including "
+            r"spells and languages\. If the host body drops to 0 hit points, the "
+            r"intellect devourer must leave it\. A protection from evil and good "
+            r"spell cast on the body drives the intellect devourer out\. The "
+            r"intellect devourer is also forced out if the target regains its "
+            r"devoured brain by means of a wish\. By spending 5 feet of its movement, "
+            r"the intellect devourer can voluntarily leave the body, teleporting to "
+            r"the nearest unoccupied space within 5 feet of it\. The body then dies, "
+            r"unless its brain is restored within 1 round\.",
+            body_description,
+            flags=re.IGNORECASE,
+        )
+        if body_match is not None:
+            body_thief["choices"] = {
+                **dict(body_thief.get("choices") or {}),
+                "source_contest_effect": {
+                    "kind": "intellect_devourer_body_thief_2014",
+                    "range_ft": int(body_match.group("range")),
+                    "target_count": 1,
+                    "target_requirements": ["incapacitated", "humanoid"],
+                    "contest": {
+                        "source_ability": "intelligence",
+                        "target_ability": "intelligence",
+                        "ties": "no_winner",
+                    },
+                    "success": {
+                        "brain_consumed": True,
+                        "source_inside_host": True,
+                        "source_total_cover": True,
+                        "source_retains": [
+                            "intelligence",
+                            "wisdom",
+                            "charisma",
+                            "deep_speech",
+                            "telepathy",
+                            "traits",
+                        ],
+                        "source_adopts": "target_statistics_otherwise",
+                        "knowledge_transfer": "all_target_knowledge",
+                        "host_zero_hp": "source_must_leave",
+                    },
+                    "source_excerpt": body_description,
+                },
+            }
+            warnings[:] = [
+                warning
+                for warning in warnings
+                if warning
+                != "Body Thief: descriptive action is not automatically settled"
+            ]
+            warnings.append(
+                "Body Thief: protection, wish, and voluntary exit require DM settlement"
+            )
     if devour is None:
         return
     description = " ".join(str(devour.get("description") or "").split())

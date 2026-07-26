@@ -46,6 +46,7 @@ from sagasmith_dnd.combat_engine import (
     resolve_random_save_effects,
     resolve_readied_spell_window,
     resolve_second_wind_to_sheet,
+    resolve_source_contest_effect,
     resolve_source_save_effect,
     resolve_turn_undead_to_sheets,
     roll_attack_action,
@@ -1449,6 +1450,166 @@ def test_devour_intellect_resolves_damage_score_reduction_and_stun() -> None:
     restored = remove_effect(sheet, result["effect_instance_id"])
     assert "stunned" not in restored["conditions"]
     assert derive_character_sheet(restored)["ability_scores"]["intelligence"] == 10
+
+
+def test_body_thief_wins_contest_and_adopts_body_with_source_mental_scores() -> None:
+    source = _actor("intellect-devourer", hp=21)
+    source["sheet"]["abilities"]["intelligence"]["score"] = 12
+    source["sheet"]["abilities"]["wisdom"]["score"] = 11
+    source["sheet"]["abilities"]["charisma"]["score"] = 10
+    source["derived"] = derive_character_sheet(source["sheet"])
+    target = _actor("target", hp=19, ac=16)
+    target["sheet"]["abilities"]["intelligence"]["score"] = 10
+    target["sheet"]["abilities"]["wisdom"]["score"] = 15
+    target["sheet"]["abilities"]["charisma"]["score"] = 8
+    target["sheet"]["conditions"] = ["stunned"]
+    target["sheet"]["effects"] = [
+        {
+            "id": "devour-intellect",
+            "name": "Devour Intellect",
+            "kind": "timed_conditions",
+            "source": source["id"],
+            "active": True,
+            "concentration": False,
+            "duration": {"period": "manual", "remaining": 0},
+            "changes": [
+                {
+                    "path": "abilities.intelligence.score",
+                    "mode": "override",
+                    "value": 0,
+                },
+                {"path": "conditions", "mode": "add", "value": "stunned"},
+            ],
+            "description": "Devour Intellect",
+        }
+    ]
+    target["derived"] = derive_character_sheet(target["sheet"])
+    spec = {
+        "kind": "intellect_devourer_body_thief_2014",
+        "range_ft": 5,
+        "target_count": 1,
+        "target_requirements": ["incapacitated", "humanoid"],
+        "contest": {
+            "source_ability": "intelligence",
+            "target_ability": "intelligence",
+            "ties": "no_winner",
+        },
+        "success": {
+            "brain_consumed": True,
+            "source_inside_host": True,
+            "source_total_cover": True,
+            "source_retains": [
+                "intelligence",
+                "wisdom",
+                "charisma",
+                "deep_speech",
+                "telepathy",
+                "traits",
+            ],
+            "source_adopts": "target_statistics_otherwise",
+            "knowledge_transfer": "all_target_knowledge",
+            "host_zero_hp": "source_must_leave",
+        },
+        "source_excerpt": "Exact Body Thief source text.",
+    }
+
+    settled = resolve_source_contest_effect(
+        source,
+        target,
+        spec=spec,
+        rng=_SequenceRng(15, 4),
+    )
+    sheet = settled["sheet"]
+    result = settled["result"]
+
+    assert result["success"] is True
+    assert result["source_check"]["total"] == 16
+    assert result["target_check"]["total"] == -1
+    assert result["brain_consumed"] is True
+    assert "stunned" not in sheet["conditions"]
+    assert sheet["combat"]["hp"]["value"] == 19
+    assert derive_character_sheet(sheet)["armor_class"] == 16
+    assert derive_character_sheet(sheet)["ability_scores"] == {
+        "strength": 16,
+        "dexterity": 10,
+        "constitution": 10,
+        "intelligence": 12,
+        "wisdom": 11,
+        "charisma": 10,
+    }
+    assert sheet["effects"][0]["active"] is False
+    assert sheet["effects"][0]["ended_reason"] == "body_thief_takeover"
+
+
+def test_body_thief_tie_has_no_winner_and_does_not_change_target() -> None:
+    source = _actor("intellect-devourer")
+    target = _actor("target")
+    spec = {
+        "kind": "intellect_devourer_body_thief_2014",
+        "range_ft": 5,
+        "target_count": 1,
+        "target_requirements": ["incapacitated", "humanoid"],
+        "contest": {
+            "source_ability": "intelligence",
+            "target_ability": "intelligence",
+            "ties": "no_winner",
+        },
+        "success": {
+            "brain_consumed": True,
+            "source_inside_host": True,
+            "source_total_cover": True,
+            "source_retains": [
+                "intelligence",
+                "wisdom",
+                "charisma",
+                "deep_speech",
+                "telepathy",
+                "traits",
+            ],
+            "source_adopts": "target_statistics_otherwise",
+            "knowledge_transfer": "all_target_knowledge",
+            "host_zero_hp": "source_must_leave",
+        },
+        "source_excerpt": "Exact Body Thief source text.",
+    }
+    source["sheet"]["abilities"]["intelligence"]["score"] = 12
+    source["derived"] = derive_character_sheet(source["sheet"])
+    target["sheet"]["abilities"]["intelligence"]["score"] = 10
+    target["derived"] = derive_character_sheet(target["sheet"])
+
+    settled = resolve_source_contest_effect(
+        source,
+        target,
+        spec=spec,
+        rng=_SequenceRng(9, 10),
+    )
+
+    assert settled["result"]["tie"] is True
+    assert settled["result"]["success"] is False
+    assert settled["result"]["outcome"] == "contest_not_won"
+    assert settled["sheet"] == target["sheet"]
+
+
+def test_attack_cannot_target_intellect_devourer_inside_host() -> None:
+    attacker = _actor("attacker")
+    target = _actor("intellect-devourer")
+    attacker.update(initiative=20, tie_breaker=0)
+    target.update(initiative=10, tie_breaker=0)
+    encounter = start_encounter([attacker, target])
+    target_combatant = next(
+        item
+        for item in encounter["combatants"]
+        if item["actor_id"] == target["id"]
+    )
+    target_combatant["inside_host"] = {"host_actor_id": "host"}
+
+    with pytest.raises(CombatEngineError, match="total cover inside its host"):
+        preflight_attack(
+            attacker,
+            target,
+            action={"weapon_id": "unarmed-strike"},
+            encounter=encounter,
+        )
 
 
 def test_unstructured_multiattack_does_not_block_an_ordinary_weapon_attack() -> None:
