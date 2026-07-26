@@ -454,6 +454,36 @@ def test_ocr_split_house_subsection_remains_a_physical_location() -> None:
     }
 
 
+def test_named_windmill_season_populates_scene_atlas_as_a_location() -> None:
+    content = (
+        "# Dragon Season\n"
+        "## W8. BACK ROOM\n"
+        "The roof has collapsed.\n"
+        "### CONVERTED WINDMILL: SPRING\n"
+        "The key leads the characters to an old windmill where two commoners "
+        "are hiding in an upper-floor apartment.\n"
+        "### NEXT ENCOUNTER\n"
+        "Proceed to the cellar complex.\n"
+    )
+
+    scene = next(
+        item
+        for item in MarkdownModuleParser(profile=DndModuleProfile()).parse(content)[0].scenes
+        if item.title == "W8. BACK ROOM"
+    )
+
+    assert scene.metadata["spatial"]["locations"] == [
+        {
+            "key": "converted-windmill-spring",
+            "title": "CONVERTED WINDMILL: SPRING",
+            "kind": "room",
+            "line": 4,
+            "dimensions_ft": None,
+            "confidence": "explicit_heading",
+        }
+    ]
+
+
 def test_npc_visit_and_invitation_populates_scene_atlas_as_an_interaction() -> None:
     content = (
         "# Trollskull Alley\n"

@@ -70,6 +70,7 @@ _LOCATION_TITLE_SIGNALS = (
     "tower",
     "vault",
     "villa",
+    "windmill",
     "estate",
     "coster",
     "exchange",
