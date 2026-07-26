@@ -4261,6 +4261,114 @@ def resolve_actor_check(
     ))
 
 
+def resolve_actor_contest(
+    source_actor: dict[str, Any],
+    target_actor: dict[str, Any],
+    *,
+    source_ability: str,
+    target_ability: str,
+    source_proficient: bool = False,
+    target_proficient: bool = False,
+    source_bonus: int = 0,
+    target_bonus: int = 0,
+    source_advantage: bool = False,
+    source_disadvantage: bool = False,
+    target_advantage: bool = False,
+    target_disadvantage: bool = False,
+    source_rules: ResolutionContext | None = None,
+    target_rules: ResolutionContext | None = None,
+    rng: Any = None,
+) -> dict[str, Any]:
+    """Resolve a 2014 ability contest without inventing a fixed DC.
+
+    Both participants roll the ability or skill appropriate to their effort.
+    The higher total wins; on a tie the situation remains unchanged.
+    """
+    source_id = actor_id(source_actor)
+    target_id = actor_id(target_actor)
+    if source_id == target_id:
+        raise CombatEngineError("an ability contest requires two different actors")
+    if source_advantage and source_disadvantage:
+        raise CombatEngineError(
+            "contest source cannot have advantage and disadvantage together"
+        )
+    if target_advantage and target_disadvantage:
+        raise CombatEngineError(
+            "contest target cannot have advantage and disadvantage together"
+        )
+
+    def contest_check(
+        actor: dict[str, Any],
+        *,
+        ability: str,
+        proficient: bool,
+        bonus: int,
+        advantage: bool,
+        disadvantage: bool,
+        rules: ResolutionContext | None,
+    ) -> dict[str, Any]:
+        result = resolve_actor_check(
+            actor,
+            kind="ability",
+            ability=ability,
+            dc=0,
+            proficient=proficient,
+            bonus=bonus,
+            advantage=advantage,
+            disadvantage=disadvantage,
+            rules=rules,
+            rng=rng,
+        )
+        # A contest compares totals rather than treating either roll as a
+        # success against a synthetic DC.
+        result.pop("dc", None)
+        result.pop("success", None)
+        return result
+
+    source_check = contest_check(
+        source_actor,
+        ability=source_ability,
+        proficient=source_proficient,
+        bonus=source_bonus,
+        advantage=source_advantage,
+        disadvantage=source_disadvantage,
+        rules=source_rules,
+    )
+    target_check = contest_check(
+        target_actor,
+        ability=target_ability,
+        proficient=target_proficient,
+        bonus=target_bonus,
+        advantage=target_advantage,
+        disadvantage=target_disadvantage,
+        rules=target_rules,
+    )
+    source_total = int(source_check["total"])
+    target_total = int(target_check["total"])
+    tie = source_total == target_total
+    winner_actor_id = (
+        "" if tie else source_id if source_total > target_total else target_id
+    )
+    return {
+        "kind": "ability_contest",
+        "source_actor_id": source_id,
+        "target_actor_id": target_id,
+        "source_ability": str(source_ability),
+        "target_ability": str(target_ability),
+        "source_check": source_check,
+        "target_check": target_check,
+        "tie": tie,
+        "winner_actor_id": winner_actor_id,
+        "outcome": (
+            "tie_no_change"
+            if tie
+            else "source_wins"
+            if winner_actor_id == source_id
+            else "target_wins"
+        ),
+    }
+
+
 def resolve_random_save_effects(
     source_actor: dict[str, Any],
     target_actors: list[dict[str, Any]],

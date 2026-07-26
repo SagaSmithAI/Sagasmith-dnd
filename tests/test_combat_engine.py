@@ -37,6 +37,7 @@ from sagasmith_dnd.combat_engine import (
     preflight_spell_attack,
     queue_combatant,
     resolve_actor_check,
+    resolve_actor_contest,
     resolve_attack_action,
     resolve_attack_damage,
     resolve_choice_window,
@@ -440,6 +441,53 @@ def test_2014_jack_of_all_trades_applies_only_to_unproficient_ability_checks() -
     )
     assert revised_check["bonus"] == 0
     assert revised_check["total"] == 13
+
+
+def test_2014_ability_contest_compares_totals_and_uses_no_synthetic_dc() -> None:
+    deceiver = _actor("deceiver")
+    deceiver["sheet"]["abilities"]["charisma"]["score"] = 16
+    deceiver["sheet"]["skills"]["deception"]["proficiency"] = "proficient"
+    deceiver["derived"] = derive_character_sheet(deceiver["sheet"])
+    observer = _actor("observer")
+    observer["sheet"]["abilities"]["wisdom"]["score"] = 14
+    observer["sheet"]["skills"]["insight"]["proficiency"] = "proficient"
+    observer["derived"] = derive_character_sheet(observer["sheet"])
+
+    result = resolve_actor_contest(
+        deceiver,
+        observer,
+        source_ability="deception",
+        target_ability="insight",
+        target_advantage=True,
+        rng=_SequenceRng(12, 4, 16),
+    )
+
+    assert result["kind"] == "ability_contest"
+    assert result["source_check"]["rolls"] == [12]
+    assert result["source_check"]["total"] == 17
+    assert result["target_check"]["rolls"] == [4, 16]
+    assert result["target_check"]["total"] == 20
+    assert "dc" not in result["source_check"]
+    assert "success" not in result["target_check"]
+    assert result["winner_actor_id"] == "observer"
+    assert result["outcome"] == "target_wins"
+
+
+def test_2014_ability_contest_tie_leaves_situation_unchanged() -> None:
+    source = _actor("source")
+    target = _actor("target")
+
+    result = resolve_actor_contest(
+        source,
+        target,
+        source_ability="strength",
+        target_ability="strength",
+        rng=_SequenceRng(10, 10),
+    )
+
+    assert result["tie"] is True
+    assert result["winner_actor_id"] == ""
+    assert result["outcome"] == "tie_no_change"
 
 
 def test_2014_jack_of_all_trades_applies_to_initiative() -> None:
