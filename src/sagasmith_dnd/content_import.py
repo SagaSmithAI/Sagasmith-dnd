@@ -313,6 +313,82 @@ def module_statblock_review_candidates(
     return candidates
 
 
+def normalize_2014_statblock_candidate(
+    name: str,
+    chunks: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Recover one named 2014 statblock from deterministic text-layout chunks.
+
+    PDF layout extraction can place a section heading before the final ability
+    column, or attach all headings to the preceding creature. Select the
+    requested creature by its own core heading and stop at the next creature
+    core so recovery never borrows facts from an adjacent statblock.
+    """
+
+    target = name.strip()
+    if not target:
+        raise ValueError("statblock candidate name must not be empty")
+    indexed = list(enumerate(chunks))
+    ordered = [
+        chunk
+        for _index, chunk in sorted(
+            indexed,
+            key=lambda item: (
+                item[1].get("ordinal")
+                if isinstance(item[1].get("ordinal"), int)
+                else item[0]
+            ),
+        )
+    ]
+    root_index = next(
+        (
+            index
+            for index, chunk in enumerate(ordered)
+            if _CREATURE_CORE_RE.match(str(chunk.get("content") or "").strip())
+            is not None
+            and next(
+                (
+                    str(value).strip().casefold()
+                    for value in reversed(chunk.get("heading_path") or [])
+                    if str(value).strip()
+                ),
+                "",
+            )
+            == target.casefold()
+        ),
+        None,
+    )
+    if root_index is None:
+        raise StatblockImportError(
+            f"statblock source chunks contain no creature core headed {target!r}"
+        )
+    end_index = next(
+        (
+            index
+            for index in range(root_index + 1, len(ordered))
+            if _CREATURE_CORE_RE.match(
+                str(ordered[index].get("content") or "").strip()
+            )
+            is not None
+        ),
+        len(ordered),
+    )
+    scoped = ordered[root_index:end_index]
+    normalized = _normalize_module_statblock(target, scoped)
+    source_chunk_ids = list(
+        dict.fromkeys(
+            str(chunk.get("id") or "").strip()
+            for chunk in scoped
+            if str(chunk.get("id") or "").strip()
+        )
+    )
+    return {
+        "name": target,
+        "normalized_content": normalized,
+        "source_chunk_ids": source_chunk_ids,
+    }
+
+
 def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
     if not chunks:
         raise StatblockImportError("statblock candidate has no source chunks")
@@ -342,6 +418,7 @@ def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
         "REACTIONS": [],
         "LEGENDARY ACTIONS": [],
     }
+    active_section: str | None = None
     expanded_chunks = [chunk for chunk in chunks if chunk is not root]
     heading_matches = list(re.finditer(r"(?m)^#{2,6}\s+(.+?)\s*$", root_text))
     for index, match in enumerate(heading_matches):
@@ -360,6 +437,8 @@ def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
         path = [str(item).strip() for item in chunk.get("heading_path") or []]
         title = path[-1].upper()
         content = str(chunk.get("content") or "").strip()
+        if title in section_parts:
+            active_section = title
         if title in _ABILITY_LABELS:
             score = re.match(r"^\s*(\d+)\s*\(([+\-−]?\d+)\)(?P<tail>.*)$", content, re.S)
             if score is None:
@@ -367,7 +446,10 @@ def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
             ability_values[title] = f"{score.group(1)} ({score.group(2).replace('−', '-')})"
             tail = score.group("tail").strip()
             if tail:
-                detail_parts.append(tail)
+                if active_section is None:
+                    detail_parts.append(tail)
+                else:
+                    section_parts[active_section].append(tail)
             continue
         upper_path = {item.upper() for item in path}
         section = next((value for value in section_parts if value in upper_path), None)
@@ -439,6 +521,15 @@ def _trim_trailing_statblock_lore(content: str) -> str:
         r"(?i)\bHit:\s*", content[: boundary.start()]
     ) is not None:
         return content[: boundary.start() + len("damage.")].rstrip()
+    inclusion_boundary = re.search(
+        r"(?is)\bdamage\.\s+(?=[A-Z][A-Za-z'鈥?-]+s?\s+include\s+"
+        r"(?:members|creatures|people|warriors|servants)\b)",
+        content,
+    )
+    if inclusion_boundary is not None and re.search(
+        r"(?i)\bHit:\s*", content[: inclusion_boundary.start()]
+    ) is not None:
+        return content[: inclusion_boundary.start() + len("damage.")].rstrip()
     habitat_boundary = re.search(
         r"(?is)\bdamage\)\.\s+(?=Usually found\b)",
         content,
@@ -468,6 +559,11 @@ def _normalize_statblock_ocr(content: str) -> str:
     normalized = re.sub(
         r"(?i)(?<![A-Za-z0-9])(\d+)dS(?![A-Za-z0-9])",
         r"\1d8",
+        normalized,
+    )
+    normalized = re.sub(
+        r"(?i)\brange\s+(\d+)\s*f\s*(\d+)\s*ft\.",
+        r"range \1/\2 ft.",
         normalized,
     )
     for pattern, replacement in (

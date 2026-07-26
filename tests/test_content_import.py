@@ -4,9 +4,10 @@ from sagasmith_dnd.content_import import (
     compiled_artifacts_from_candidates,
     extract_content_candidates,
     module_statblock_review_candidates,
+    normalize_2014_statblock_candidate,
     validate_selection_ready_artifacts,
 )
-from sagasmith_dnd.statblocks import parse_2014_statblock
+from sagasmith_dnd.statblocks import StatblockImportError, parse_2014_statblock
 
 
 def test_extracts_review_required_catalog_candidates() -> None:
@@ -235,6 +236,118 @@ def test_module_statblock_keeps_effect_only_hit_clause_inside_its_attack() -> No
     assert candidate["validation"]["warnings"] == [
         "Web (Recharge 5-6): on-hit effect requires DM settlement"
     ]
+
+
+def test_text_layout_recovery_scopes_split_guard_without_images() -> None:
+    base = ["Appendix B: Nonplayer Characters", "CULT FANATIC"]
+    chunks = [
+        {
+            "id": "gladiator-reaction",
+            "ordinal": 3839,
+            "heading_path": [*base, "REACTIONS"],
+            "content": "Parry. The gladiator adds 3 to its AC.",
+        },
+        {
+            "id": "guard-core",
+            "ordinal": 3840,
+            "heading_path": [*base, "GUARD"],
+            "content": (
+                "Medium humanoid (any race), any alignment Armor Class 16 "
+                "(chain shirt, shield) Hit Points 11 (2d8 + 2) Speed 30ft."
+            ),
+        },
+        {
+            "id": "guard-str",
+            "ordinal": 3841,
+            "heading_path": [*base, "STR"],
+            "content": "13 (+1)",
+        },
+        {
+            "id": "guard-dex",
+            "ordinal": 3842,
+            "heading_path": [*base, "DEX"],
+            "content": "12 (+1) Skills Perception +2",
+        },
+        {
+            "id": "guard-con",
+            "ordinal": 3843,
+            "heading_path": [*base, "CON"],
+            "content": "12 (+1) Senses passive Perception 12",
+        },
+        {
+            "id": "guard-int",
+            "ordinal": 3844,
+            "heading_path": [*base, "INT"],
+            "content": "10 (+0)",
+        },
+        {
+            "id": "guard-wis",
+            "ordinal": 3845,
+            "heading_path": [*base, "WIS"],
+            "content": (
+                "11 (+0) Languages any one language (usually Common) "
+                "Challenge 1/8 (25 XP)"
+            ),
+        },
+        {
+            "id": "guard-actions",
+            "ordinal": 3846,
+            "heading_path": [*base, "ACTIONS"],
+            "content": "",
+        },
+        {
+            "id": "guard-cha",
+            "ordinal": 3847,
+            "heading_path": [*base, "CHA"],
+            "content": (
+                "10 (+0) Spear. Melee or Ranged Weapon Attack: +3 to hit, "
+                "reach 5 ft. or range 20f60 ft., one target. Hit: 4 "
+                "(1d6 + 1) piercing damage. Guards include members of a city "
+                "watch, sentries in a citadel or fortified town."
+            ),
+        },
+        {
+            "id": "knight-core",
+            "ordinal": 3848,
+            "heading_path": [*base, "KNIGHT"],
+            "content": (
+                "Medium humanoid (any race), any alignment Armor Class 18 "
+                "(plate) Hit Points 52 (8d8 + 16) Speed 30ft."
+            ),
+        },
+    ]
+
+    candidate = normalize_2014_statblock_candidate("Guard", chunks)
+    parsed = parse_2014_statblock(
+        candidate["normalized_content"],
+        source_key="rule-source:monster-manual",
+        rule_refs=candidate["source_chunk_ids"],
+        name="Mill Ruse Guard",
+    )
+
+    assert candidate["source_chunk_ids"] == [
+        "guard-core",
+        "guard-str",
+        "guard-dex",
+        "guard-con",
+        "guard-int",
+        "guard-wis",
+        "guard-actions",
+        "guard-cha",
+    ]
+    assert parsed.name == "Mill Ruse Guard"
+    assert parsed.challenge_rating == "1/8"
+    assert parsed.experience_points == 25
+    assert "range 20/60 ft." in candidate["normalized_content"]
+    assert "Guards include members" not in candidate["normalized_content"]
+    assert "knight" not in candidate["normalized_content"].casefold()
+    spear = next(item for item in parsed.sheet["inventory"]["items"] if item["name"] == "Spear")
+    assert spear["mechanics"]["attack_bonus_override"] == 3
+    assert spear["mechanics"]["thrown_normal_range_ft"] == 20
+    assert spear["mechanics"]["thrown_long_range_ft"] == 60
+    assert parsed.warnings == ()
+    with pytest.raises(StatblockImportError, match="CULT FANATIC"):
+        normalize_2014_statblock_candidate("CULT FANATIC", chunks)
 
 
 def test_module_statblock_marks_named_actor_spellcasting_trait() -> None:
