@@ -2545,6 +2545,7 @@ def validate_world_effect(value: Any, *, field: str = "world_effect") -> dict[st
             "visibility",
             "duration",
             "description",
+            "created_at_elapsed_ticks",
             "created_at_elapsed_minutes",
             "metadata",
             "ended_reason",
@@ -2589,6 +2590,21 @@ def validate_world_effect(value: Any, *, field: str = "world_effect") -> dict[st
                 f"{field}.duration.elapsed_minutes_remainder must be below {unit_minutes}"
             )
         normalized_duration["elapsed_minutes_remainder"] = elapsed_minutes_remainder
+    created_at_elapsed_minutes = _integer(
+        effect.get("created_at_elapsed_minutes"),
+        f"{field}.created_at_elapsed_minutes",
+        minimum=0,
+    )
+    created_at_elapsed_ticks = _integer(
+        effect.get("created_at_elapsed_ticks"),
+        f"{field}.created_at_elapsed_ticks",
+        default=created_at_elapsed_minutes * 10,
+        minimum=0,
+    )
+    if created_at_elapsed_minutes != created_at_elapsed_ticks // 10:
+        raise ValueError(
+            f"{field}.created_at_elapsed_minutes must match created_at_elapsed_ticks"
+        )
     normalized = {
         "id": _text(effect.get("id"), f"{field}.id", default=_uuid(), maximum=100),
         "name": _text(effect.get("name"), f"{field}.name", maximum=300),
@@ -2609,11 +2625,8 @@ def validate_world_effect(value: Any, *, field: str = "world_effect") -> dict[st
         "visibility": _text(effect.get("visibility"), f"{field}.visibility", default="party"),
         "duration": normalized_duration,
         "description": _text(effect.get("description"), f"{field}.description", maximum=1200),
-        "created_at_elapsed_minutes": _integer(
-            effect.get("created_at_elapsed_minutes"),
-            f"{field}.created_at_elapsed_minutes",
-            minimum=0,
-        ),
+        "created_at_elapsed_ticks": created_at_elapsed_ticks,
+        "created_at_elapsed_minutes": created_at_elapsed_minutes,
         "metadata": _object(effect.get("metadata") or {}, f"{field}.metadata"),
     }
     if normalized["visibility"] not in {"public", "party", "dm"}:
