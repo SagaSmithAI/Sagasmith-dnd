@@ -416,6 +416,73 @@ def test_text_layout_recovery_ignores_ocr_noise_inside_creature_heading() -> Non
     assert not any(warning.startswith("Greataxe:") for warning in parsed.warnings)
 
 
+def test_text_layout_recovery_repairs_generic_action_bracket_and_range_ocr() -> None:
+    base = ["Appendix A: Miscellaneous Creatures", "GIANT SPIDER"]
+    chunks = [
+        {
+            "id": "spider-core",
+            "ordinal": 1,
+            "heading_path": base,
+            "content": (
+                "Large beast, unaligned Armor Class 14 (natural armor) "
+                "Hit Points 26 (4d10 + 4) Speed 30 ft., climb 30 ft."
+            ),
+        },
+        *[
+            {
+                "id": f"spider-{ability.casefold()}",
+                "ordinal": index + 2,
+                "heading_path": [*base, ability],
+                "content": value,
+            }
+            for index, (ability, value) in enumerate(
+                {
+                    "STR": "14 (+2)",
+                    "DEX": "16 (+3) Skills Stealth +7",
+                    "CON": "12 (+1)",
+                    "INT": "2 (-4)",
+                    "WIS": "11 (+0)",
+                    "CHA": (
+                        "4 (-3) Senses blindsight 10 ft., darkvision 60 ft., "
+                        "passive Perception 10 Languages Challenge 1 (200 XP)"
+                    ),
+                }.items()
+            )
+        ],
+        {
+            "id": "spider-actions",
+            "ordinal": 8,
+            "heading_path": [*base, "ACTIONS"],
+            "content": (
+                "Bite. Melee Weapon Attack: +5 to hit, reach 5 ft., one creature. "
+                "Hit: 7 (1d8 + 3) piercing damage. "
+                "Web (Recharge 5-6}. Ranged Weapon Attack: +5 to hit, "
+                "range 30f60 ft., one creature. Hit: The target is restrained "
+                "by webbing."
+            ),
+        },
+    ]
+
+    candidate = normalize_2014_statblock_candidate("Giant Spider", chunks)
+    parsed = parse_2014_statblock(
+        candidate["normalized_content"],
+        source_key="rule-source:monster-manual",
+    )
+
+    attacks = {
+        item["name"]: item["mechanics"]
+        for item in parsed.sheet["inventory"]["items"]
+        if item["kind"] == "weapon"
+    }
+    assert set(attacks) == {"Bite", "Web (Recharge 5-6)"}
+    assert attacks["Web (Recharge 5-6)"]["normal_range_ft"] == 30
+    assert attacks["Web (Recharge 5-6)"]["long_range_ft"] == 60
+    assert any(
+        warning.startswith("Web (Recharge 5-6):")
+        for warning in parsed.warnings
+    )
+
+
 def test_module_statblock_recovers_flattened_actions_and_ranged_distance() -> None:
     base = ["Appendix D", "LANGDEDROSA CYANWRATH"]
     chunks = [

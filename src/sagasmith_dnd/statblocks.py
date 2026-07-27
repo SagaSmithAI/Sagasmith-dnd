@@ -1263,6 +1263,11 @@ def parse_2014_statblock(
     descriptive: list[tuple[str, str, str]] = []
     unresolved_multiattacks: set[str] = set()
     warnings: list[str] = []
+    attack_marker_pattern = re.compile(
+        r"(?i)\b(?:Melee|Ranged|Melee or Ranged)\s+"
+        r"(?:Weapon|Spell)\s+Attack:\*?"
+    )
+    structured_spell_attack_markers = 0
     for section, entry_name, description in entries:
         if entry_name.casefold() == "spellcasting" and spellcasting is not None:
             continue
@@ -1273,6 +1278,9 @@ def parse_2014_statblock(
         if spell_spec is not None:
             spell_spec["action_name"] = entry_name
             spell_spec["action_description"] = description
+            structured_spell_attack_markers += len(
+                attack_marker_pattern.findall(description)
+            )
             continue
         weapon = _parse_weapon(
             entry_name,
@@ -1287,6 +1295,11 @@ def parse_2014_statblock(
             weapons.append(weapon)
         else:
             descriptive.append((section, entry_name, description))
+    source_attack_markers = len(attack_marker_pattern.findall(markdown))
+    if source_attack_markers != len(weapons) + structured_spell_attack_markers:
+        raise StatblockImportError(
+            "statblock contains unparsed weapon action markers"
+        )
     if not weapons:
         raise StatblockImportError("statblock has no supported weapon action")
     ids = [item["id"] for item in weapons]

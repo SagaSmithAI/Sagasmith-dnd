@@ -645,6 +645,13 @@ def _normalize_statblock_ocr(content: str) -> str:
         normalized,
     )
     normalized = re.sub(
+        r"(?i)(\([^){}\n]{1,60})\}\."
+        r"(?=\s+(?:Melee|Ranged|Melee or Ranged)\s+"
+        r"(?:Weapon|Spell)\s+Attack:)",
+        r"\1).",
+        normalized,
+    )
+    normalized = re.sub(
         r"\b([A-Z])\s+([a-z][A-Za-z'-]+)"
         r"(?=\.\s+(?i:Melee|Ranged|Melee or Ranged)\s+"
         r"(?i:Weapon|Spell)\s+Attack:)",

@@ -180,6 +180,22 @@ success.
 """
 
 
+def test_statblock_rejects_silently_unparsed_weapon_action_marker() -> None:
+    malformed = GIANT_SPIDER.replace(
+        "***Web (Recharge 5-6)***.",
+        "Web (Recharge 5-6}.",
+    )
+
+    with pytest.raises(
+        StatblockImportError,
+        match="unparsed weapon action markers",
+    ):
+        parse_2014_statblock(
+            malformed,
+            source_key="rule-source:malformed-giant-spider",
+        )
+
+
 GAZER = """### Gazer
 
 *Tiny aberration, neutral evil*
