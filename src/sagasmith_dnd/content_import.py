@@ -80,6 +80,12 @@ _ENTRY_START_RE = re.compile(
 )
 
 
+def _canonical_source_heading(value: str) -> str:
+    """Ignore layout-OCR spacing and punctuation inside a source heading."""
+
+    return "".join(character for character in value.casefold() if character.isalnum())
+
+
 def extract_content_candidates(
     chunks: list[dict[str, Any]],
     *,
@@ -323,23 +329,25 @@ def normalize_2014_statblock_candidate(
     target = name.strip()
     if not target:
         raise ValueError("statblock candidate name must not be empty")
+    canonical_target = _canonical_source_heading(target)
     matches: list[tuple[list[dict[str, Any]], int]] = []
     for ordered in _ordered_chunks_by_scene(chunks):
-        matches.extend(
-            (ordered, index)
-            for index, chunk in enumerate(ordered)
-            if _CREATURE_CORE_RE.match(str(chunk.get("content") or "").strip())
-            is not None
-            and next(
+        for index, chunk in enumerate(ordered):
+            if (
+                _CREATURE_CORE_RE.match(str(chunk.get("content") or "").strip())
+                is None
+            ):
+                continue
+            heading = next(
                 (
-                    str(value).strip().casefold()
+                    str(value).strip()
                     for value in reversed(chunk.get("heading_path") or [])
                     if str(value).strip()
                 ),
                 "",
             )
-            == target.casefold()
-        )
+            if _canonical_source_heading(heading) == canonical_target:
+                matches.append((ordered, index))
     if not matches:
         raise StatblockImportError(
             f"statblock source chunks contain no creature core headed {target!r}"

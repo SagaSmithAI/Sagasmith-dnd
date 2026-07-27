@@ -350,6 +350,61 @@ def test_text_layout_recovery_scopes_split_guard_without_images() -> None:
         normalize_2014_statblock_candidate("CULT FANATIC", chunks)
 
 
+def test_text_layout_recovery_ignores_ocr_noise_inside_creature_heading() -> None:
+    base = ["Appendix B: Nonplayer Characters", "CUSTOMIZING NPCS"]
+    chunks = [
+        {
+            "id": "berserker-core",
+            "ordinal": 1,
+            "heading_path": [*base, "BER,SERKER"],
+            "content": (
+                "Medium humanoid (any race), any chaotic alignment Armor Class 13 "
+                "(hide armor) Hit Points 67 (9d8 + 27) Speed 30 ft."
+            ),
+        },
+        *[
+            {
+                "id": f"berserker-{ability.casefold()}",
+                "ordinal": index + 2,
+                "heading_path": [*base, ability],
+                "content": value,
+            }
+            for index, (ability, value) in enumerate(
+                {
+                    "STR": "16 (+3)",
+                    "DEX": "12 (+1)",
+                    "CON": "17 (+3)",
+                    "INT": "9 (-1)",
+                    "WIS": (
+                        "11 (+0) Languages any one language (usually Common) "
+                        "Challenge 2 (450 XP)"
+                    ),
+                    "CHA": (
+                        "9 (-1) Reckless. At the start of its turn, the berserker "
+                        "can gain advantage on all melee weapon attack rolls during "
+                        "that turn."
+                    ),
+                }.items()
+            )
+        ],
+        {
+            "id": "berserker-actions",
+            "ordinal": 8,
+            "heading_path": [*base, "ACTIONS"],
+            "content": (
+                "Greataxe. Melee Weapon Attack: +5 to hit, reach 5 ft., one target. "
+                "Hit: 9 (1d12 + 3) slashing damage."
+            ),
+        },
+    ]
+
+    candidate = normalize_2014_statblock_candidate("Berserker", chunks)
+
+    assert candidate["name"] == "Berserker"
+    assert candidate["source_chunk_ids"][0] == "berserker-core"
+    assert candidate["normalized_content"].startswith("# Berserker\n")
+
+
 def test_module_statblock_marks_named_actor_spellcasting_trait() -> None:
     base = ["Appendix B: Monsters", "MONSTER DESCRIPTIONS", "NEZZNAR"]
     chunks = [
