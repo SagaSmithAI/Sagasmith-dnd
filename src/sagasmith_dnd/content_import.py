@@ -214,72 +214,67 @@ def module_statblock_review_candidates(
     visible with a manual-review error. They are never silently repaired.
     """
     del source_title
-    indexed_chunks = list(enumerate(chunks))
-    ordered = [
-        chunk
-        for _index, chunk in sorted(
-            indexed_chunks,
-            key=lambda item: (
-                item[1].get("ordinal")
-                if isinstance(item[1].get("ordinal"), int)
-                else item[0]
-            ),
-        )
-    ]
-    roots: list[int] = []
-    for index, chunk in enumerate(ordered):
-        content = str(chunk.get("content") or "").strip()
-        path = [str(item).strip() for item in chunk.get("heading_path") or [] if str(item).strip()]
-        if not path or _CREATURE_CORE_RE.match(content) is None:
-            continue
-        roots.append(index)
     candidates: list[dict[str, Any]] = []
     scoped_by_candidate: dict[str, list[dict[str, Any]]] = {}
-    for root_index, start in enumerate(roots):
-        end = roots[root_index + 1] if root_index + 1 < len(roots) else len(ordered)
-        root = ordered[start]
-        path = [str(item).strip() for item in root.get("heading_path") or [] if str(item).strip()]
-        key = tuple(item.casefold() for item in path)
-        scene_id = str(root.get("scene_id") or "")
-        scoped = [
-            chunk
-            for chunk in ordered[start:end]
-            if str(chunk.get("scene_id") or "") == scene_id
-        ]
-        identity = "\x1f".join(("statblock", *key))
-        candidate_id = "candidate:" + hashlib.sha256(
-            identity.encode("utf-8")
-        ).hexdigest()[:20]
-        scoped_by_candidate[candidate_id] = scoped
-        candidates.append(
-            {
-                "id": candidate_id,
-                "kind": "statblock",
-                "name": path[-1],
-                "source_chunk_ids": list(
-                    dict.fromkeys(
-                        str(chunk.get("id") or "")
-                        for chunk in scoped
-                        if str(chunk.get("id") or "")
-                    )
-                ),
-                "source_heading_path": path,
-                "page_start": _minimum_page_values(
-                    chunk.get("page_start") for chunk in scoped
-                ),
-                "page_end": _maximum_page_values(chunk.get("page_end") for chunk in scoped),
-                "extraction_confidence": "high",
-                "extraction_signals": [
-                    "armor class",
-                    "hit points",
-                    "speed",
-                    "six ability headings",
-                ],
-                "review_status": "pending",
-                "application_state": "review_only",
-                "execution_state": "not_compiled",
-            }
-        )
+    for ordered in _ordered_chunks_by_scene(chunks):
+        roots: list[int] = []
+        for index, chunk in enumerate(ordered):
+            content = str(chunk.get("content") or "").strip()
+            path = [
+                str(item).strip()
+                for item in chunk.get("heading_path") or []
+                if str(item).strip()
+            ]
+            if not path or _CREATURE_CORE_RE.match(content) is None:
+                continue
+            roots.append(index)
+        for root_index, start in enumerate(roots):
+            end = roots[root_index + 1] if root_index + 1 < len(roots) else len(ordered)
+            root = ordered[start]
+            path = [
+                str(item).strip()
+                for item in root.get("heading_path") or []
+                if str(item).strip()
+            ]
+            key = tuple(item.casefold() for item in path)
+            scene_id = str(root.get("scene_id") or "")
+            scoped = ordered[start:end]
+            identity = "\x1f".join(("statblock", scene_id, *key))
+            candidate_id = "candidate:" + hashlib.sha256(
+                identity.encode("utf-8")
+            ).hexdigest()[:20]
+            scoped_by_candidate[candidate_id] = scoped
+            candidates.append(
+                {
+                    "id": candidate_id,
+                    "kind": "statblock",
+                    "name": path[-1],
+                    "source_chunk_ids": list(
+                        dict.fromkeys(
+                            str(chunk.get("id") or "")
+                            for chunk in scoped
+                            if str(chunk.get("id") or "")
+                        )
+                    ),
+                    "source_heading_path": path,
+                    "page_start": _minimum_page_values(
+                        chunk.get("page_start") for chunk in scoped
+                    ),
+                    "page_end": _maximum_page_values(
+                        chunk.get("page_end") for chunk in scoped
+                    ),
+                    "extraction_confidence": "high",
+                    "extraction_signals": [
+                        "armor class",
+                        "hit points",
+                        "speed",
+                        "six ability headings",
+                    ],
+                    "review_status": "pending",
+                    "application_state": "review_only",
+                    "execution_state": "not_compiled",
+                }
+            )
     for candidate in candidates:
         scoped = scoped_by_candidate[str(candidate["id"])]
         candidate["source_scene_ids"] = list(
@@ -328,21 +323,10 @@ def normalize_2014_statblock_candidate(
     target = name.strip()
     if not target:
         raise ValueError("statblock candidate name must not be empty")
-    indexed = list(enumerate(chunks))
-    ordered = [
-        chunk
-        for _index, chunk in sorted(
-            indexed,
-            key=lambda item: (
-                item[1].get("ordinal")
-                if isinstance(item[1].get("ordinal"), int)
-                else item[0]
-            ),
-        )
-    ]
-    root_index = next(
-        (
-            index
+    matches: list[tuple[list[dict[str, Any]], int]] = []
+    for ordered in _ordered_chunks_by_scene(chunks):
+        matches.extend(
+            (ordered, index)
             for index, chunk in enumerate(ordered)
             if _CREATURE_CORE_RE.match(str(chunk.get("content") or "").strip())
             is not None
@@ -355,13 +339,16 @@ def normalize_2014_statblock_candidate(
                 "",
             )
             == target.casefold()
-        ),
-        None,
-    )
-    if root_index is None:
+        )
+    if not matches:
         raise StatblockImportError(
             f"statblock source chunks contain no creature core headed {target!r}"
         )
+    if len(matches) > 1:
+        raise StatblockImportError(
+            f"statblock source chunks contain multiple creature cores headed {target!r}"
+        )
+    ordered, root_index = matches[0]
     end_index = next(
         (
             index
@@ -387,6 +374,31 @@ def normalize_2014_statblock_candidate(
         "normalized_content": normalized,
         "source_chunk_ids": source_chunk_ids,
     }
+
+
+def _ordered_chunks_by_scene(
+    chunks: list[dict[str, Any]],
+) -> list[list[dict[str, Any]]]:
+    """Keep scene-local ordinals from interleaving unrelated statblocks."""
+
+    grouped: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+    for index, chunk in enumerate(chunks):
+        grouped.setdefault(str(chunk.get("scene_id") or ""), []).append((index, chunk))
+    return [
+        [
+            chunk
+            for _index, chunk in sorted(
+                indexed,
+                key=lambda item: (
+                    item[1].get("ordinal")
+                    if isinstance(item[1].get("ordinal"), int)
+                    else item[0],
+                    item[0],
+                ),
+            )
+        ]
+        for indexed in grouped.values()
+    ]
 
 
 def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
@@ -436,9 +448,35 @@ def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
     for chunk in expanded_chunks:
         path = [str(item).strip() for item in chunk.get("heading_path") or []]
         title = path[-1].upper()
+        compact_title = re.sub(r"[^A-Z]", "", title)
+        canonical_section = {
+            "ACTIONS": "ACTIONS",
+            "REACTIONS": "REACTIONS",
+            "LEGENDARYACTIONS": "LEGENDARY ACTIONS",
+        }.get(compact_title)
         content = str(chunk.get("content") or "").strip()
-        if title in section_parts:
-            active_section = title
+        if canonical_section is not None:
+            active_section = canonical_section
+        if compact_title == "".join(_ABILITY_LABELS):
+            cursor = 0
+            for ability in _ABILITY_LABELS:
+                score = re.match(
+                    r"^\s*(\d+)\s*\(([+\-−]\d+)\)",
+                    content[cursor:],
+                )
+                if score is None:
+                    raise StatblockImportError(
+                        "statblock combined ability score row is ambiguous"
+                    )
+                ability_values[ability] = f"{score.group(1)} ({score.group(2)})"
+                cursor += score.end()
+            tail = content[cursor:].strip()
+            if tail:
+                if active_section is None:
+                    detail_parts.append(tail)
+                else:
+                    section_parts[active_section].append(tail)
+            continue
         if title in _ABILITY_LABELS:
             score = re.match(r"^\s*(\d+)\s*\(([+\-−]?\d+)\)(?P<tail>.*)$", content, re.S)
             if score is None:
@@ -451,10 +489,17 @@ def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
                 else:
                     section_parts[active_section].append(tail)
             continue
-        upper_path = {item.upper() for item in path}
-        section = next((value for value in section_parts if value in upper_path), None)
+        path_sections = {
+            {
+                "ACTIONS": "ACTIONS",
+                "REACTIONS": "REACTIONS",
+                "LEGENDARYACTIONS": "LEGENDARY ACTIONS",
+            }.get(re.sub(r"[^A-Z]", "", item.upper()))
+            for item in path
+        }
+        section = next((value for value in section_parts if value in path_sections), None)
         if section is not None:
-            if title != section and content:
+            if canonical_section != section and content:
                 section_parts[section].append(f"{path[-1]}. {content}")
             elif content:
                 section_parts[section].append(content)
@@ -564,6 +609,16 @@ def _normalize_statblock_ocr(content: str) -> str:
     normalized = re.sub(
         r"(?i)\brange\s+(\d+)\s*f\s*(\d+)\s*ft\.",
         r"range \1/\2 ft.",
+        normalized,
+    )
+    normalized = re.sub(
+        r"(?i)\bM\s+elee(?=\s+Weapon\s+Attack\b)",
+        "Melee",
+        normalized,
+    )
+    normalized = re.sub(
+        r"(?i)\bR\s+anged(?=\s+Weapon\s+Attack\b)",
+        "Ranged",
         normalized,
     )
     for pattern, replacement in (

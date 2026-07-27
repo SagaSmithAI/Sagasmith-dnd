@@ -590,6 +590,119 @@ def test_module_statblock_candidate_keeps_ambiguous_ocr_blocked() -> None:
     assert "Armor Class or Hit Points is invalid" in candidate["review_error"]
 
 
+def test_module_statblock_candidates_keep_scene_local_ordinals_together() -> None:
+    dragon_path = ["Appendix B: Monsters", "dragonclaw"]
+    other_path = ["Appendix B: Monsters", "Other Guard"]
+    chunks = [
+        {
+            "id": "a-dragon-core",
+            "scene_id": "dragon-scene",
+            "ordinal": 0,
+            "heading_path": dragon_path,
+            "content": (
+                "Medium humanoid (human), neutral evil Armor Class 14 "
+                "(leather armor) Hit Points 16 (3d8 + 3) Speed 30 ft."
+            ),
+            "page_start": 90,
+            "page_end": 90,
+        },
+        {
+            "id": "z-other-core",
+            "scene_id": "other-scene",
+            "ordinal": 0,
+            "heading_path": other_path,
+            "content": (
+                "Medium humanoid (human), neutral Armor Class 12 "
+                "Hit Points 11 (2d8 + 2) Speed 30 ft."
+            ),
+            "page_start": 12,
+            "page_end": 12,
+        },
+    ]
+    other_values = {
+        "STR": "10 (+0)",
+        "DEX": "10 (+0)",
+        "CON": "12 (+1)",
+        "INT": "10 (+0)",
+        "WIS": "10 (+0)",
+        "CHA": "10 (+0) Challenge 1/4 (50 XP)",
+    }
+    chunks.append(
+        {
+            "id": "dragon-abilities",
+            "scene_id": "dragon-scene",
+            "ordinal": 1,
+            "heading_path": [*dragon_path, "STR DEX CO N INT WIS CHA"],
+            "content": (
+                "9 (-1) 16 (+3) 13 (+1) 11 (+0) 10 (+0) 12 (+1) "
+                "Saving Throws Wis +2 Skills Deception +3, Stealth +5 "
+                "Senses passive Perception 10 Languages Common, Draconic "
+                "Challenge 1 (200 XP) Pack Tactics. The dragonclaw has advantage "
+                "on an attack roll when an ally is within 5 feet of the target."
+            ),
+            "page_start": 90,
+            "page_end": 90,
+        }
+    )
+    for ordinal, ability in enumerate(
+        ("STR", "DEX", "CON", "INT", "WIS", "CHA"),
+        start=1,
+    ):
+        chunks.append(
+            {
+                "id": f"other-{ability.casefold()}",
+                "scene_id": "other-scene",
+                "ordinal": ordinal,
+                "heading_path": [*other_path, ability],
+                "content": other_values[ability],
+                "page_start": 12,
+                "page_end": 12,
+            }
+        )
+    chunks.extend(
+        (
+            {
+                "id": "dragon-actions",
+                "scene_id": "dragon-scene",
+                "ordinal": 7,
+                "heading_path": [*dragon_path, "A c t i o n s"],
+                "content": (
+                    "Multiattack. The dragonclaw attacks twice with its scimitar. "
+                    "Scimitar. M elee Weapon Attack: +5 to hit, reach 5 ft., one "
+                    "target. Hit: 6 (1d6 + 3) slashing damage."
+                ),
+                "page_start": 90,
+                "page_end": 90,
+            },
+            {
+                "id": "other-actions",
+                "scene_id": "other-scene",
+                "ordinal": 7,
+                "heading_path": [*other_path, "ACTIONS"],
+                "content": (
+                    "Club. Melee Weapon Attack: +2 to hit, reach 5 ft., one target. "
+                    "Hit: 2 (1d4) bludgeoning damage."
+                ),
+                "page_start": 12,
+                "page_end": 12,
+            },
+        )
+    )
+
+    candidates = module_statblock_review_candidates(chunks)
+    dragon = next(item for item in candidates if item["name"] == "dragonclaw")
+
+    assert dragon["execution_state"] == "review_ready", dragon.get("review_error")
+    assert dragon["source_scene_ids"] == ["dragon-scene"]
+    assert dragon["source_chunk_ids"] == [
+        "a-dragon-core",
+        "dragon-abilities",
+        "dragon-actions",
+    ]
+    assert dragon["validation"]["challenge_rating"] == "1"
+    assert "Other Guard" not in dragon["normalized_content"]
+
+
 def test_class_features_are_not_misclassified_as_feats() -> None:
     candidates = extract_content_candidates(
         [
