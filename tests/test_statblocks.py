@@ -934,6 +934,80 @@ def test_agent_review_can_confirm_parser_recognized_multiattack() -> None:
     assert filled["fill"]["multiattack_options"][0]["default_resolver"] == "agent"
 
 
+def test_agent_review_can_keep_custom_multiattack_as_agent_ruling() -> None:
+    parsed = parse_2014_statblock(
+        BANDIT_CAPTAIN,
+        source_key="module-review:agent-ruled-captain",
+    )
+    multiattack = next(
+        item
+        for item in parsed.sheet["content"]["activities"]
+        if item["name"] == "Multiattack"
+    )
+
+    filled = apply_reviewed_statblock_fill(
+        parsed.sheet,
+        {
+            "multiattack_options": [
+                {
+                    "activity_id": multiattack["id"],
+                    "source_excerpt": multiattack["description"],
+                    "reason": (
+                        "The source mixes a module procedure that the structured "
+                        "weapon-only executor cannot represent."
+                    ),
+                    "resolution": "agent_ruling",
+                }
+            ]
+        },
+    )
+
+    assert derive_character_sheet(filled["sheet"])["multiattack_options"] == []
+    retained = next(
+        item
+        for item in filled["sheet"]["content"]["activities"]
+        if item["id"] == multiattack["id"]
+    )
+    assert retained["choices"]["manual_ruling"] == {
+        "kind": "descriptive_activity",
+        "default_resolver": "agent",
+        "source_excerpt": multiattack["description"],
+    }
+    assert filled["resolved_warnings"] == []
+    assert filled["added_warnings"] == [
+        "Multiattack: Multiattack composition requires a DM ruling"
+    ]
+    assert filled["fill"]["multiattack_options"][0]["resolution"] == "agent_ruling"
+
+
+def test_agent_ruling_multiattack_rejects_structured_options() -> None:
+    parsed = parse_2014_statblock(
+        BANDIT_CAPTAIN,
+        source_key="module-review:invalid-agent-ruling-captain",
+    )
+    multiattack = next(
+        item
+        for item in parsed.sheet["content"]["activities"]
+        if item["name"] == "Multiattack"
+    )
+
+    with pytest.raises(StatblockImportError, match="must not contain options"):
+        apply_reviewed_statblock_fill(
+            parsed.sheet,
+            {
+                "multiattack_options": [
+                    {
+                        "activity_id": multiattack["id"],
+                        "source_excerpt": multiattack["description"],
+                        "reason": "Retain as an Agent ruling.",
+                        "resolution": "agent_ruling",
+                        "options": multiattack["choices"]["multiattack_options"],
+                    }
+                ]
+            },
+        )
+
+
 def test_source_parry_preserves_visibility_and_wielded_weapon_requirements() -> None:
     parsed = parse_2014_statblock(
         BANDIT_CAPTAIN.replace(

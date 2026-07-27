@@ -2063,9 +2063,10 @@ def apply_reviewed_statblock_fill(
     """Apply an Agent-reviewed semantic fill to unresolved module statblock prose.
 
     This is deliberately narrower than a generic character-sheet patch. The parser
-    still owns ordinary source transcription, while the Agent may confirm or turn a
-    Multiattack sentence into canonical weapon/count choices after reviewing the exact
-    source excerpt. Other descriptive activities remain explicit DM-ruling boundaries.
+    still owns ordinary source transcription, while the Agent must either turn a
+    Multiattack sentence into canonical weapon/count choices or explicitly retain it
+    as an Agent-ruling boundary after reviewing the exact source excerpt. Other
+    descriptive activities remain explicit DM-ruling boundaries.
     """
 
     if not isinstance(fill, dict):
@@ -2102,6 +2103,7 @@ def apply_reviewed_statblock_fill(
             "source_excerpt",
             "reason",
             "options",
+            "resolution",
             "default_resolver",
             "ruling_kind",
         }
@@ -2163,6 +2165,34 @@ def apply_reviewed_statblock_fill(
             raise StatblockImportError(
                 "reviewed multiattack reason must contain 1 to 500 characters"
             )
+        resolution = str(declaration.get("resolution") or "structured").strip()
+        if resolution not in {"structured", "agent_ruling"}:
+            raise StatblockImportError(
+                "reviewed multiattack resolution must be structured or agent_ruling"
+            )
+        if resolution == "agent_ruling":
+            if "options" in declaration:
+                raise StatblockImportError(
+                    "reviewed agent_ruling multiattack must not contain options"
+                )
+            activity["choices"] = {
+                "manual_ruling": {
+                    "kind": "descriptive_activity",
+                    "default_resolver": "agent",
+                    "source_excerpt": source_excerpt,
+                }
+            }
+            normalized_declarations.append(
+                {
+                    "activity_id": activity_id,
+                    "source_excerpt": source_excerpt,
+                    "reason": reason,
+                    "resolution": "agent_ruling",
+                    "default_resolver": "agent",
+                    "ruling_kind": "module_specific_procedure",
+                }
+            )
+            continue
         raw_options = declaration.get("options")
         if not isinstance(raw_options, list) or not raw_options:
             raise StatblockImportError(
@@ -2251,6 +2281,7 @@ def apply_reviewed_statblock_fill(
                 "activity_id": activity_id,
                 "source_excerpt": source_excerpt,
                 "reason": reason,
+                "resolution": "structured",
                 "options": options,
                 "default_resolver": "agent",
                 "ruling_kind": "module_specific_procedure",
@@ -2261,6 +2292,13 @@ def apply_reviewed_statblock_fill(
         "sheet": validate_character_sheet(result),
         "fill": {"multiattack_options": normalized_declarations},
         "resolved_warnings": resolved_warnings,
+        "added_warnings": [
+            f"{activity['name']}: Multiattack composition requires a DM ruling"
+            for declaration in normalized_declarations
+            if declaration["resolution"] == "agent_ruling"
+            for activity in activities
+            if str(activity.get("id") or "") == declaration["activity_id"]
+        ],
     }
 
 
