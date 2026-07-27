@@ -2056,6 +2056,214 @@ def apply_statblock_variant(
     return validate_character_sheet(result)
 
 
+def apply_reviewed_statblock_fill(
+    sheet: dict[str, Any],
+    fill: dict[str, Any],
+) -> dict[str, Any]:
+    """Apply an Agent-reviewed semantic fill to unresolved module statblock prose.
+
+    This is deliberately narrower than a generic character-sheet patch. The parser
+    still owns ordinary source transcription, while the Agent may confirm or turn a
+    Multiattack sentence into canonical weapon/count choices after reviewing the exact
+    source excerpt. Other descriptive activities remain explicit DM-ruling boundaries.
+    """
+
+    if not isinstance(fill, dict):
+        raise StatblockImportError("reviewed statblock fill must be an object")
+    unknown = set(fill) - {"multiattack_options"}
+    if unknown:
+        raise StatblockImportError(
+            f"unsupported reviewed statblock fill fields: {sorted(unknown)}"
+        )
+    declarations = fill.get("multiattack_options", [])
+    if not isinstance(declarations, list):
+        raise StatblockImportError("reviewed multiattack_options must be a list")
+    if not declarations:
+        raise StatblockImportError(
+            "reviewed statblock fill must contain at least one multiattack declaration"
+        )
+
+    result = deepcopy(sheet)
+    activities = list(result["content"]["activities"])
+    weapons = {
+        str(item.get("id") or ""): item
+        for item in result["inventory"]["items"]
+        if str(item.get("kind") or "") == "weapon"
+    }
+    normalized_declarations: list[dict[str, Any]] = []
+    resolved_warnings: list[str] = []
+    used_activity_ids: set[str] = set()
+
+    for declaration in declarations:
+        if not isinstance(declaration, dict):
+            raise StatblockImportError("each reviewed multiattack fill must be an object")
+        declaration_unknown = set(declaration) - {
+            "activity_id",
+            "source_excerpt",
+            "reason",
+            "options",
+            "default_resolver",
+            "ruling_kind",
+        }
+        if declaration_unknown:
+            raise StatblockImportError(
+                "unsupported reviewed multiattack fill fields: "
+                f"{sorted(declaration_unknown)}"
+            )
+        if declaration.get("default_resolver", "agent") != "agent":
+            raise StatblockImportError(
+                "reviewed multiattack default_resolver must be agent"
+            )
+        if (
+            declaration.get("ruling_kind", "module_specific_procedure")
+            != "module_specific_procedure"
+        ):
+            raise StatblockImportError(
+                "reviewed multiattack ruling_kind must be module_specific_procedure"
+            )
+        activity_id = str(declaration.get("activity_id") or "").strip()
+        if not activity_id or activity_id in used_activity_ids:
+            raise StatblockImportError(
+                "reviewed multiattack activity_id must be non-empty and unique"
+            )
+        used_activity_ids.add(activity_id)
+        matches = [
+            activity
+            for activity in activities
+            if str(activity.get("id") or "") == activity_id
+        ]
+        if len(matches) != 1:
+            raise StatblockImportError(
+                "reviewed multiattack activity_id must identify exactly one activity"
+            )
+        activity = matches[0]
+        choices = dict(activity.get("choices") or {})
+        manual_ruling = dict(choices.get("manual_ruling") or {})
+        parsed_options = choices.get("multiattack_options")
+        if (
+            str(activity.get("name") or "").casefold() != "multiattack"
+            or (
+                manual_ruling.get("kind") != "descriptive_activity"
+                and not isinstance(parsed_options, list)
+            )
+        ):
+            raise StatblockImportError(
+                "reviewed multiattack fill may target only a parsed Multiattack activity"
+            )
+        source_excerpt = " ".join(
+            str(declaration.get("source_excerpt") or "").split()
+        )
+        source_description = " ".join(str(activity.get("description") or "").split())
+        if not source_excerpt or source_excerpt != source_description:
+            raise StatblockImportError(
+                "reviewed multiattack source_excerpt must exactly match the source activity"
+            )
+        reason = " ".join(str(declaration.get("reason") or "").split())
+        if not reason or len(reason) > 500:
+            raise StatblockImportError(
+                "reviewed multiattack reason must contain 1 to 500 characters"
+            )
+        raw_options = declaration.get("options")
+        if not isinstance(raw_options, list) or not raw_options:
+            raise StatblockImportError(
+                "reviewed multiattack options must be a non-empty list"
+            )
+        option_ids: set[str] = set()
+        options: list[dict[str, Any]] = []
+        for raw_option in raw_options:
+            if not isinstance(raw_option, dict) or set(raw_option) - {"id", "attacks"}:
+                raise StatblockImportError(
+                    "each reviewed multiattack option accepts only id and attacks"
+                )
+            option_id = str(raw_option.get("id") or "").strip()
+            if not option_id or _slug(option_id) != option_id or option_id in option_ids:
+                raise StatblockImportError(
+                    "reviewed multiattack option ids must be unique lowercase slugs"
+                )
+            option_ids.add(option_id)
+            raw_attacks = raw_option.get("attacks")
+            if not isinstance(raw_attacks, list) or not raw_attacks:
+                raise StatblockImportError(
+                    "reviewed multiattack attacks must be a non-empty list"
+                )
+            attacks: list[dict[str, Any]] = []
+            total_attacks = 0
+            for raw_attack in raw_attacks:
+                if not isinstance(raw_attack, dict) or set(raw_attack) - {
+                    "weapon_id",
+                    "attack_mode",
+                    "count",
+                }:
+                    raise StatblockImportError(
+                        "each reviewed multiattack attack accepts only "
+                        "weapon_id, attack_mode, and count"
+                    )
+                weapon_id = str(raw_attack.get("weapon_id") or "").strip()
+                weapon = weapons.get(weapon_id)
+                if weapon is None:
+                    raise StatblockImportError(
+                        "reviewed multiattack weapon_id must identify a parsed weapon"
+                    )
+                attack_mode = str(raw_attack.get("attack_mode") or "").strip().casefold()
+                if attack_mode not in {"melee", "ranged"}:
+                    raise StatblockImportError(
+                        "reviewed multiattack attack_mode must be melee or ranged"
+                    )
+                mechanics = dict(weapon.get("mechanics") or {})
+                properties = {
+                    str(item).casefold() for item in mechanics.get("properties") or []
+                }
+                if attack_mode != str(mechanics.get("attack_type") or "melee") and not (
+                    attack_mode == "ranged" and "thrown" in properties
+                ):
+                    raise StatblockImportError(
+                        "reviewed multiattack attack_mode is incompatible with its weapon"
+                    )
+                count = raw_attack.get("count")
+                if (
+                    not isinstance(count, int)
+                    or isinstance(count, bool)
+                    or not 1 <= count <= 20
+                ):
+                    raise StatblockImportError(
+                        "reviewed multiattack count must be an integer from 1 through 20"
+                    )
+                total_attacks += count
+                attacks.append(
+                    {
+                        "weapon_id": weapon_id,
+                        "attack_mode": attack_mode,
+                        "count": count,
+                    }
+                )
+            if total_attacks > 20:
+                raise StatblockImportError(
+                    "reviewed multiattack option cannot contain more than 20 attacks"
+                )
+            options.append({"id": option_id, "attacks": attacks})
+        activity["choices"] = {"multiattack_options": options}
+        if manual_ruling.get("kind") == "descriptive_activity":
+            resolved_warnings.append(
+                f"{activity['name']}: Multiattack composition requires a DM ruling"
+            )
+        normalized_declarations.append(
+            {
+                "activity_id": activity_id,
+                "source_excerpt": source_excerpt,
+                "reason": reason,
+                "options": options,
+                "default_resolver": "agent",
+                "ruling_kind": "module_specific_procedure",
+            }
+        )
+
+    return {
+        "sheet": validate_character_sheet(result),
+        "fill": {"multiattack_options": normalized_declarations},
+        "resolved_warnings": resolved_warnings,
+    }
+
+
 _OCR_IDENTITY_RE = re.compile(
     r"(?i)^(Tiny|Small|Medium|Large|Huge|Gargantuan)\s+([^,]+),\s*(.+)$"
 )

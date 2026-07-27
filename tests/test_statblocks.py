@@ -3,6 +3,7 @@ import pytest
 from sagasmith_dnd.character_schema import derive_character_sheet, validate_character_sheet
 from sagasmith_dnd.statblocks import (
     StatblockImportError,
+    apply_reviewed_statblock_fill,
     apply_statblock_variant,
     effective_statblock_rating,
     gazer_eye_ray_spec,
@@ -773,6 +774,164 @@ def test_generic_multiattack_requires_one_compatible_weapon() -> None:
 
     assert derive_character_sheet(parsed.sheet)["multiattack_options"] == []
     assert parsed.warnings == ("Multiattack: Multiattack composition requires a DM ruling",)
+
+
+def test_agent_review_can_fill_unresolved_multiattack_without_new_text_heuristics() -> None:
+    source_excerpt = (
+        "In one coordinated assault, the captain slashes with its scimitar "
+        "and follows with its dagger."
+    )
+    parsed = parse_2014_statblock(
+        BANDIT_CAPTAIN.replace(
+            (
+                "The captain makes three melee attacks: two with its scimitar and one with its\n"
+                "dagger. Or the captain makes two ranged attacks with its daggers."
+            ),
+            source_excerpt,
+        ),
+        source_key="module-review:agent-filled-captain",
+    )
+
+    assert derive_character_sheet(parsed.sheet)["multiattack_options"] == []
+    filled = apply_reviewed_statblock_fill(
+        parsed.sheet,
+        {
+            "multiattack_options": [
+                {
+                    "activity_id": "multiattack-action",
+                    "source_excerpt": source_excerpt,
+                    "reason": (
+                        "The exact source describes one scimitar attack followed by "
+                        "one dagger attack."
+                    ),
+                    "options": [
+                        {
+                            "id": "coordinated-assault",
+                            "attacks": [
+                                {
+                                    "weapon_id": "scimitar",
+                                    "attack_mode": "melee",
+                                    "count": 1,
+                                },
+                                {
+                                    "weapon_id": "dagger",
+                                    "attack_mode": "melee",
+                                    "count": 1,
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ]
+        },
+    )
+
+    assert derive_character_sheet(filled["sheet"])["multiattack_options"] == [
+        {
+            "id": "coordinated-assault",
+            "attacks": [
+                {"weapon_id": "scimitar", "attack_mode": "melee", "count": 1},
+                {"weapon_id": "dagger", "attack_mode": "melee", "count": 1},
+            ],
+        }
+    ]
+    assert filled["resolved_warnings"] == [
+        "Multiattack: Multiattack composition requires a DM ruling"
+    ]
+    assert filled["fill"]["multiattack_options"][0]["default_resolver"] == "agent"
+    assert filled["fill"]["multiattack_options"][0]["ruling_kind"] == (
+        "module_specific_procedure"
+    )
+
+
+def test_agent_reviewed_multiattack_fill_requires_exact_source_and_parsed_weapons() -> None:
+    source_excerpt = (
+        "In one coordinated assault, the captain slashes with its scimitar "
+        "and follows with its dagger."
+    )
+    parsed = parse_2014_statblock(
+        BANDIT_CAPTAIN.replace(
+            (
+                "The captain makes three melee attacks: two with its scimitar and one with its\n"
+                "dagger. Or the captain makes two ranged attacks with its daggers."
+            ),
+            source_excerpt,
+        ),
+        source_key="module-review:agent-fill-validation",
+    )
+    fill = {
+        "multiattack_options": [
+            {
+                "activity_id": "multiattack-action",
+                "source_excerpt": "The captain makes two attacks.",
+                "reason": "Reviewed exact source.",
+                "options": [
+                    {
+                        "id": "coordinated-assault",
+                        "attacks": [
+                            {
+                                "weapon_id": "invented-claw",
+                                "attack_mode": "melee",
+                                "count": 2,
+                            }
+                        ],
+                    }
+                ],
+            }
+        ]
+    }
+
+    with pytest.raises(StatblockImportError, match="exactly match"):
+        apply_reviewed_statblock_fill(parsed.sheet, fill)
+
+    fill["multiattack_options"][0]["source_excerpt"] = source_excerpt
+    with pytest.raises(StatblockImportError, match="parsed weapon"):
+        apply_reviewed_statblock_fill(parsed.sheet, fill)
+
+
+def test_agent_reviewed_statblock_fill_rejects_an_empty_submission() -> None:
+    parsed = parse_2014_statblock(
+        BANDIT_CAPTAIN,
+        source_key="module-review:empty-agent-fill",
+    )
+
+    with pytest.raises(StatblockImportError, match="at least one"):
+        apply_reviewed_statblock_fill(parsed.sheet, {"multiattack_options": []})
+
+
+def test_agent_review_can_confirm_parser_recognized_multiattack() -> None:
+    parsed = parse_2014_statblock(
+        BANDIT_CAPTAIN,
+        source_key="module-review:agent-confirmed-captain",
+    )
+    multiattack = next(
+        item
+        for item in parsed.sheet["content"]["activities"]
+        if item["name"] == "Multiattack"
+    )
+
+    filled = apply_reviewed_statblock_fill(
+        parsed.sheet,
+        {
+            "multiattack_options": [
+                {
+                    "activity_id": multiattack["id"],
+                    "source_excerpt": multiattack["description"],
+                    "reason": (
+                        "The Agent checked the exact module text and confirmed both "
+                        "printed alternatives."
+                    ),
+                    "options": multiattack["choices"]["multiattack_options"],
+                }
+            ]
+        },
+    )
+
+    assert derive_character_sheet(filled["sheet"])["multiattack_options"] == (
+        derive_character_sheet(parsed.sheet)["multiattack_options"]
+    )
+    assert filled["resolved_warnings"] == []
+    assert filled["fill"]["multiattack_options"][0]["default_resolver"] == "agent"
 
 
 def test_source_parry_preserves_visibility_and_wielded_weapon_requirements() -> None:
