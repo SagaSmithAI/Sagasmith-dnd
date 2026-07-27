@@ -393,16 +393,104 @@ def test_text_layout_recovery_ignores_ocr_noise_inside_creature_heading() -> Non
             "heading_path": [*base, "ACTIONS"],
             "content": (
                 "Greataxe. Melee Weapon Attack: +5 to hit, reach 5 ft., one target. "
-                "Hit: 9 (1d12 + 3) slashing damage."
+                "Hit: 9 (1d12 + 3) slashing damage. Ha iling from uncivilized "
+                "lands, unpredictable berserkers seek conflict wherever they can."
             ),
         },
     ]
 
     candidate = normalize_2014_statblock_candidate("Berserker", chunks)
+    parsed = parse_2014_statblock(
+        candidate["normalized_content"],
+        source_key="rule-source:monster-manual",
+    )
 
     assert candidate["name"] == "Berserker"
     assert candidate["source_chunk_ids"][0] == "berserker-core"
     assert candidate["normalized_content"].startswith("# Berserker\n")
+    assert "Ha iling from" not in candidate["normalized_content"]
+    greataxe = next(
+        item for item in parsed.sheet["inventory"]["items"] if item["name"] == "Greataxe"
+    )
+    assert greataxe["mechanics"]["on_hit_effect"] == ""
+    assert not any(warning.startswith("Greataxe:") for warning in parsed.warnings)
+
+
+def test_module_statblock_recovers_flattened_actions_and_ranged_distance() -> None:
+    base = ["Appendix D", "LANGDEDROSA CYANWRATH"]
+    chunks = [
+        {
+            "id": "cyanwrath-core",
+            "scene_id": "statblock-scene",
+            "heading_path": base,
+            "content": (
+                "Medium humanoid (half-dragon), lawful evil Armor Class 17 (splint) "
+                "Hit Points 57 (6d12 + 18) Speed 30 ft."
+            ),
+        }
+    ]
+    values = {
+        "STR": "19 (+4)",
+        "DEX": "13 (+1)",
+        "CON": "16 (+3)",
+        "INT": "10 (+0)",
+        "WIS": "14 (+2)",
+        "CHA": (
+            "12 (+1) Saving Throws Str +6, Con +5 Skills Athletics +6, "
+            "Intimidation +3, Perception +4 Damage Resistances lightning "
+            "Senses blindsight 10 ft., darkvision 60 ft., passive Perception 14 "
+            "Languages Common, Draconic Challenge 4 (1,100 XP) "
+            "Action Surge (Recharges when Langdedrosa Finishes a Short or Long Rest). "
+            "On his turn, Langdedrosa can take one additional action. "
+            "Improved Critical. Langdedrosa's weapon attacks score a critical hit "
+            "on a roll of 19 or 20. A ctions ____________________________________ "
+            "Multiattack. Langdedrosa attacks twice, either with his greatsword or spear. "
+            "G reatsword. Melee Weapon Attack: +6 to hit, reach 5 ft., one target. "
+            "Hit: 11 (2d6 + 4) slashing damage. "
+            "Spear. Melee or Ranged Weapon Attack: +6 to hit, reach 5 ft. or "
+            "ranged 20 ft./60 ft., one target. Hit: 7 (1d6 + 4) piercing damage. "
+            "Lightning Breath (Recharge 5-6). Langdedrosa breathes lightning in a "
+            "30-foot line that is 5 feet wide. Each creature in the line must make "
+            "a DC 13 Dexterity saving throw, taking 22 (4d10) lightning damage on "
+            "a failed save, or half as much damage on a successful one."
+        ),
+    }
+    chunks.extend(
+        {
+            "id": f"cyanwrath-{ability.casefold()}",
+            "scene_id": "statblock-scene",
+            "heading_path": [*base, ability],
+            "content": content,
+        }
+        for ability, content in values.items()
+    )
+
+    candidate = module_statblock_review_candidates(chunks)[0]
+    parsed = parse_2014_statblock(
+        candidate["normalized_content"],
+        source_key="module-candidate:cyanwrath",
+    )
+
+    assert candidate["execution_state"] == "review_ready", candidate.get("review_error")
+    assert "## Actions" in candidate["normalized_content"]
+    assert "***Greatsword***." in candidate["normalized_content"]
+    assert "range 20/60 ft." in candidate["normalized_content"]
+    weapons = {
+        item["name"]: item
+        for item in parsed.sheet["inventory"]["items"]
+        if item["kind"] == "weapon"
+    }
+    assert set(weapons) == {"Greatsword", "Spear"}
+    assert weapons["Spear"]["mechanics"]["thrown_normal_range_ft"] == 20
+    assert weapons["Spear"]["mechanics"]["thrown_long_range_ft"] == 60
+    multiattack = next(
+        item for item in parsed.sheet["content"]["activities"] if item["name"] == "Multiattack"
+    )
+    assert multiattack["choices"]["manual_ruling"]["default_resolver"] == "agent"
+    action_names = {item["name"] for item in parsed.sheet["content"]["activities"]}
+    feature_names = {item["name"] for item in parsed.sheet["content"]["features"]}
+    assert "Lightning Breath (Recharge 5-6)" in action_names
+    assert "Improved Critical" in feature_names
 
 
 def test_module_statblock_marks_named_actor_spellcasting_trait() -> None:

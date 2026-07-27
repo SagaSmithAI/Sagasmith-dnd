@@ -520,6 +520,18 @@ def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
         )
 
     fields, traits = _split_statblock_details(" ".join(detail_parts))
+    # Some two-column PDFs flatten the decorated Actions divider into the
+    # final trait column.  Recover only the distinctive OCR form so ordinary
+    # prose that happens to mention actions cannot move between sections.
+    actions_boundary = re.search(
+        r"(?i)(?<![A-Za-z])A\s+ctions\s+_{4,}\s*",
+        traits,
+    )
+    if actions_boundary is not None:
+        action_tail = traits[actions_boundary.end() :].strip()
+        traits = traits[: actions_boundary.start()].strip()
+        if action_tail:
+            section_parts["ACTIONS"].insert(0, action_tail)
     rendered = [
         f"# {name}",
         "",
@@ -591,6 +603,14 @@ def _trim_trailing_statblock_lore(content: str) -> str:
         r"(?i)\bHit:\s*", content[: habitat_boundary.start()]
     ) is not None:
         return content[: habitat_boundary.start() + len("damage).")].rstrip()
+    origin_boundary = re.search(
+        r"(?is)\bdamage\.\s+(?=Ha\s+iling\s+from\s+uncivilized\s+lands\b)",
+        content,
+    )
+    if origin_boundary is not None and re.search(
+        r"(?i)\bHit:\s*", content[: origin_boundary.start()]
+    ) is not None:
+        return content[: origin_boundary.start() + len("damage.")].rstrip()
     return content
 
 
@@ -617,6 +637,18 @@ def _normalize_statblock_ocr(content: str) -> str:
     normalized = re.sub(
         r"(?i)\brange\s+(\d+)\s*f\s*(\d+)\s*ft\.",
         r"range \1/\2 ft.",
+        normalized,
+    )
+    normalized = re.sub(
+        r"(?i)\branged\s+(\d+)\s*ft\.?\s*/\s*(\d+)\s*ft\.",
+        r"range \1/\2 ft.",
+        normalized,
+    )
+    normalized = re.sub(
+        r"\b([A-Z])\s+([a-z][A-Za-z'-]+)"
+        r"(?=\.\s+(?i:Melee|Ranged|Melee or Ranged)\s+"
+        r"(?i:Weapon|Spell)\s+Attack:)",
+        lambda match: f"{match.group(1)}{match.group(2)}",
         normalized,
     )
     normalized = re.sub(
