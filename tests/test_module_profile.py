@@ -207,6 +207,42 @@ def test_deep_numbered_adventure_areas_populate_scene_atlas() -> None:
     )
 
 
+def test_scene_atlas_recovers_numbered_room_lines_missing_markdown_markers() -> None:
+    content = (
+        "# Episode 3\n## Dragon Hatchery\n"
+        "##### 1. C ave E n tr a n ce\nTwo guards stand inside.\n"
+        "2. C o n c e a l e d Passa g e\nA passage is hidden in shadow.\n"
+        "3. F u n g u s G a r d e n\nThe stairs lead to a fungus garden.\n"
+        "##### 4. St ir g e L a ir\nTen stirges roost here.\n"
+        "10A. B l a c k D r a g o n E ggs\nThree eggs stand below.\n"
+        "10B. K o bo ld s i n H id in g\nFour kobolds wait here.\n"
+    )
+    scene = next(
+        item
+        for item in MarkdownModuleParser(profile=DndModuleProfile()).parse(content)[0].scenes
+        if item.title == "Dragon Hatchery"
+    )
+
+    locations = scene.metadata["spatial"]["locations"]
+    assert [item["title"] for item in locations] == [
+        "1. C ave E n tr a n ce",
+        "2. C o n c e a l e d Passa g e",
+        "3. F u n g u s G a r d e n",
+        "4. St ir g e L a ir",
+        "10A. B l a c k D r a g o n E ggs",
+        "10B. K o bo ld s i n H id in g",
+    ]
+    assert [item["confidence"] for item in locations] == [
+        "explicit_heading",
+        "explicit_text_heading",
+        "explicit_text_heading",
+        "explicit_heading",
+        "explicit_text_heading",
+        "explicit_text_heading",
+    ]
+    assert scene.metadata["spatial"]["connections"] == []
+
+
 def test_spatial_connections_require_explicit_route_language() -> None:
     content = (
         "# Dungeon\n## Locations\n"

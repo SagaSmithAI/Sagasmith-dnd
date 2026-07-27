@@ -135,8 +135,16 @@ _ROOM_CODE = re.compile(
     re.IGNORECASE,
 )
 _ROOM_HEADING = re.compile(
-    rf"^#{{1,6}}\s+(?P<code>{_ROOM_CODE_PATTERN})"
+    rf"^(?:#{{1,6}}\s+)?(?P<code>{_ROOM_CODE_PATTERN})"
     r"\s*[.．。:：-]",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+_ROOM_TITLE_LINE = re.compile(
+    rf"^(?P<marker>#{{1,6}}\s+)?"
+    rf"(?P<title>(?P<code>{_ROOM_CODE_PATTERN})"
+    r"\s*[.\uFF0E\u3002\uFF61\uFF1A:]\s*(?=[^\W_])\S[^\r\n]*)\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 
@@ -602,6 +610,64 @@ def _spatial_manifest(
                 "confidence": "explicit_heading",
             }
         )
+    # PDF-to-Markdown conversion can preserve an authored numbered room title
+    # as its own text line while dropping only the Markdown heading marker.
+    # Recover those exact labels without inferring room order or connectivity.
+    room_title_matches = list(_ROOM_TITLE_LINE.finditer(text))
+    existing_codes = {
+        matched.group("code").casefold()
+        for location in locations
+        if (matched := _ROOM_CODE.match(str(location.get("title") or "").strip()))
+    }
+    if existing_codes or len(room_title_matches) >= 2:
+        for match_index, matched_title in enumerate(room_title_matches):
+            code = matched_title.group("code").casefold()
+            if code in existing_codes:
+                continue
+            label = matched_title.group("title").strip()
+            section_end = (
+                room_title_matches[match_index + 1].start()
+                if match_index + 1 < len(room_title_matches)
+                else len(text)
+            )
+            section = text[matched_title.end() : section_end]
+            dimensions = _DIMENSIONS.search(section)
+            base_key = _location_key(label, len(locations))
+            location_key_counts[base_key] = location_key_counts.get(base_key, 0) + 1
+            occurrence = location_key_counts[base_key]
+            location_key = (
+                base_key
+                if occurrence == 1
+                else f"{base_key[: max(1, 71 - len(str(occurrence)))]}-{occurrence}"
+            )
+            locations.append(
+                {
+                    "key": location_key,
+                    "title": label,
+                    "kind": "room",
+                    "line": _line_number(text, matched_title.start()),
+                    "dimensions_ft": (
+                        {
+                            "width": int(dimensions.group("width")),
+                            "height": int(dimensions.group("height")),
+                        }
+                        if dimensions
+                        else None
+                    ),
+                    "confidence": (
+                        "explicit_heading"
+                        if matched_title.group("marker")
+                        else "explicit_text_heading"
+                    ),
+                }
+            )
+            existing_codes.add(code)
+    locations.sort(
+        key=lambda location: (
+            int(location.get("line") or 0),
+            str(location.get("key") or ""),
+        )
+    )
     if not locations and not allow_fallback:
         return {
             "schema_version": 1,
@@ -641,7 +707,7 @@ def _spatial_manifest(
 
 class DndModuleProfile(GenericModuleProfile):
     name = "dnd5e"
-    version = "26"
+    version = "27"
 
     def document_metadata(self, content: str) -> dict[str, object]:
         """Parse and validate the optional generated-module runtime manifest."""
