@@ -200,6 +200,18 @@ class CampaignRandomStream:
     def mark_persisted(self) -> None:
         self.persisted_position = self.position
 
+    def rewind_unpersisted(self, position: int | None = None) -> None:
+        """Discard only an uncommitted suffix of the current random stream."""
+
+        target = self.persisted_position if position is None else position
+        if isinstance(target, bool) or not isinstance(target, int):
+            raise ValueError("random stream rewind position must be an integer")
+        if target < self.persisted_position:
+            raise ValueError("random stream cannot rewind persisted draws")
+        if target > self.position:
+            raise ValueError("random stream cannot rewind beyond its current position")
+        self.position = target
+
 
 _ACTIVE_STREAM: ContextVar[CampaignRandomStream | None] = ContextVar(
     "sagasmith_dnd_active_random_stream",
@@ -228,4 +240,3 @@ def use_random_stream(stream: CampaignRandomStream) -> Iterator[CampaignRandomSt
         yield stream
     finally:
         _ACTIVE_STREAM.reset(token)
-

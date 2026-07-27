@@ -68,6 +68,26 @@ def test_restoring_a_position_replays_only_the_suffix() -> None:
     assert restored.position == original.position
 
 
+def test_rewind_discards_only_unpersisted_draws() -> None:
+    stream = _stream()
+    with use_random_stream(stream):
+        prefix = roll("1d20")
+        stream.mark_persisted()
+        checkpoint_position = stream.position
+        suffix = roll("2d6")
+
+        stream.rewind_unpersisted(checkpoint_position)
+        replayed_suffix = roll("2d6")
+
+    assert prefix.rolls
+    assert replayed_suffix == suffix
+    assert stream.position == checkpoint_position + 2
+    with pytest.raises(ValueError, match="persisted draws"):
+        stream.rewind_unpersisted(checkpoint_position - 1)
+    with pytest.raises(ValueError, match="beyond"):
+        stream.rewind_unpersisted(stream.position + 1)
+
+
 def test_campaign_state_rejects_tampered_random_stream_documents() -> None:
     valid = initial_random_stream("campaign-seed")
     validated = validate_party_state({"random_stream": valid})
