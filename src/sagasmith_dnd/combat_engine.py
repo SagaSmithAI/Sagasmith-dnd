@@ -1828,6 +1828,7 @@ def resolve_attack_damage(
                     "detail": extra_roll.detail,
                     "amount": max(0, extra_roll.total),
                     "damage_type": str(extra.get("damage_type") or ""),
+                    "source": str(extra.get("source") or ""),
                 }
             )
         if len(rolled_parts) == 1:

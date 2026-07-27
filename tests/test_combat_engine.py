@@ -1043,6 +1043,7 @@ def test_attack_settles_each_source_bound_damage_type_and_surfaces_on_hit_ruling
                 {
                     "damage_expression": "4d6",
                     "damage_type": "necrotic",
+                    "source": "monster-statblock",
                 }
             ],
             "on_hit_effect": "The target has disadvantage on specified saving throws.",
@@ -1067,6 +1068,7 @@ def test_attack_settles_each_source_bound_damage_type_and_surfaces_on_hit_ruling
         "bludgeoning",
         "necrotic",
     ]
+    assert result["damage"]["roll_parts"][1]["source"] == "monster-statblock"
     assert updated_target["sheet"]["combat"]["hp"]["value"] == 20
     assert result["on_hit_ruling"] == {
         "required": True,
