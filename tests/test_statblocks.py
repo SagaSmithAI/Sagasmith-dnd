@@ -1220,6 +1220,55 @@ turn undead.
     )
 
 
+def test_unstructured_statblock_passive_is_an_agent_ruling() -> None:
+    parsed = parse_2014_statblock(
+        """# Peryton
+
+*Medium monstrosity, chaotic evil*
+
+**Armor Class** 13 (natural armor)
+**Hit Points** 33 (6d8 + 6)
+**Speed** 20 ft., fly 60 ft.
+
+| STR | DEX | CON | INT | WIS | CHA |
+|---|---|---|---|---|---|---|
+| 16 (+3) | 12 (+1) | 13 (+1) | 9 (-1) | 12 (+1) | 10 (+0) |
+
+**Senses** passive Perception 15
+**Languages** understands Common and Elvish but can't speak
+**Challenge** 2 (450 XP)
+
+***Dive Attack.*** If the peryton is flying and dives at least 30 feet straight
+toward a target and then hits it with a melee weapon attack, the attack deals an
+extra 9 (2d8) damage to the target.
+
+## Actions
+
+***Gore.*** *Melee Weapon Attack:* +5 to hit, reach 5 ft., one target.
+*Hit:* 7 (1d8 + 3) piercing damage.
+""",
+        source_key="monster-manual-2014:p252",
+    )
+
+    feature = next(
+        item
+        for item in parsed.sheet["content"]["features"]
+        if item["id"] == "dive-attack-passive"
+    )
+    assert feature["choices"]["manual_ruling"] == {
+        "kind": "descriptive_passive",
+        "default_resolver": "agent",
+        "source_excerpt": (
+            "If the peryton is flying and dives at least 30 feet straight toward a "
+            "target and then hits it with a melee weapon attack, the attack deals "
+            "an extra 9 (2d8) damage to the target."
+        ),
+    }
+    assert parsed.warnings == (
+        "Dive Attack: descriptive passive is not automatically settled",
+    )
+
+
 def test_source_bound_variant_can_apply_common_module_instance_changes() -> None:
     parsed = parse_2014_statblock(COMMONER, source_key="srd-commoner")
 

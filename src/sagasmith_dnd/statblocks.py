@@ -1371,14 +1371,14 @@ def parse_2014_statblock(
         if reaction_defense is not None:
             entry["activation"]["trigger"] = "hit by a melee attack"
             entry["choices"] = {"reaction_defense": reaction_defense}
-        if (
-            activation != "passive"
-            and source_trait is None
-            and reaction_defense is None
-        ):
+        if source_trait is None and reaction_defense is None:
             entry["choices"] = {
                 "manual_ruling": {
-                    "kind": "descriptive_activity",
+                    "kind": (
+                        "descriptive_passive"
+                        if activation == "passive"
+                        else "descriptive_activity"
+                    ),
                     "default_resolver": "agent",
                     "source_excerpt": description,
                 }
