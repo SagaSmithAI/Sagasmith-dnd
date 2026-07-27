@@ -2483,11 +2483,79 @@ def validate_party_state(state: dict[str, Any]) -> dict[str, Any]:
     if len(world_effect_ids) != len(set(world_effect_ids)):
         raise ValueError("campaign.state.world_effects contains duplicate ids")
     value["world_effects"] = world_effects
+    if "world_time" in value:
+        value["world_time"] = validate_world_time(value["world_time"])
     if "random_stream" in value:
         value["random_stream"] = validate_random_stream_state(value["random_stream"])
     if "playthrough_manifest" in value:
         value["playthrough_manifest"] = validate_playthrough_manifest(value["playthrough_manifest"])
     return value
+
+
+def validate_world_time(value: Any) -> dict[str, Any]:
+    """Validate the canonical branch-local campaign clock."""
+
+    clock = _object(value, "campaign.state.world_time")
+    if not clock:
+        return {}
+    _reject_unknown(
+        clock,
+        "campaign.state.world_time",
+        {
+            "schema_version",
+            "day",
+            "hour",
+            "minute",
+            "elapsed_minutes",
+            "label",
+        },
+    )
+    schema_version = _integer(
+        clock.get("schema_version"),
+        "campaign.state.world_time.schema_version",
+        default=1,
+        minimum=1,
+        maximum=1,
+    )
+    day = _integer(
+        clock.get("day"),
+        "campaign.state.world_time.day",
+        minimum=1,
+    )
+    hour = _integer(
+        clock.get("hour"),
+        "campaign.state.world_time.hour",
+        minimum=0,
+        maximum=23,
+    )
+    minute = _integer(
+        clock.get("minute"),
+        "campaign.state.world_time.minute",
+        minimum=0,
+        maximum=59,
+    )
+    elapsed_minutes = _integer(
+        clock.get("elapsed_minutes"),
+        "campaign.state.world_time.elapsed_minutes",
+        minimum=0,
+    )
+    derived_elapsed = (day - 1) * 1440 + hour * 60 + minute
+    if elapsed_minutes != derived_elapsed:
+        raise ValueError(
+            "campaign.state.world_time.elapsed_minutes must match day/hour/minute"
+        )
+    return {
+        "schema_version": schema_version,
+        "day": day,
+        "hour": hour,
+        "minute": minute,
+        "elapsed_minutes": elapsed_minutes,
+        "label": _text(
+            clock.get("label"),
+            "campaign.state.world_time.label",
+            maximum=300,
+        ),
+    }
 
 
 def validate_world_effect(value: Any, *, field: str = "world_effect") -> dict[str, Any]:

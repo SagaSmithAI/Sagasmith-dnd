@@ -21,6 +21,7 @@ from sagasmith_dnd.character_schema import (
     validate_character_notes,
     validate_character_sheet,
     validate_party_state,
+    validate_world_time,
 )
 
 
@@ -59,6 +60,56 @@ def _caster_sheet() -> dict:
             ]
         },
     }
+
+
+def test_world_time_requires_one_canonical_elapsed_instant() -> None:
+    assert validate_world_time(
+        {
+            "day": 3,
+            "hour": 7,
+            "minute": 15,
+            "elapsed_minutes": 3315,
+            "label": "Morning",
+        }
+    ) == {
+        "schema_version": 1,
+        "day": 3,
+        "hour": 7,
+        "minute": 15,
+        "elapsed_minutes": 3315,
+        "label": "Morning",
+    }
+
+    with pytest.raises(ValueError, match="must match day/hour/minute"):
+        validate_party_state(
+            {
+                "world_time": {
+                    "day": 3,
+                    "hour": 7,
+                    "minute": 15,
+                    "elapsed_minutes": 3314,
+                }
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "world_time",
+    [
+        {"day": 1, "hour": 24, "minute": 0, "elapsed_minutes": 1440},
+        {"day": 0, "hour": 0, "minute": 0, "elapsed_minutes": 0},
+        {
+            "day": 1,
+            "hour": 0,
+            "minute": 0,
+            "elapsed_minutes": 0,
+            "timezone": "UTC",
+        },
+    ],
+)
+def test_world_time_rejects_invalid_or_noncanonical_fields(world_time: dict) -> None:
+    with pytest.raises(ValueError):
+        validate_party_state({"world_time": world_time})
 
 
 def test_v2_sheet_exposes_complete_derived_card_and_prepared_spells() -> None:
