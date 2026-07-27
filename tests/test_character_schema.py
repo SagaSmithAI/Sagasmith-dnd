@@ -72,11 +72,15 @@ def test_world_time_requires_one_canonical_elapsed_instant() -> None:
             "label": "Morning",
         }
     ) == {
-        "schema_version": 1,
+        "schema_version": 2,
+        "tick_seconds": 6,
+        "calendar_offset_ticks": 33150,
         "day": 3,
         "hour": 7,
         "minute": 15,
+        "second": 0,
         "elapsed_minutes": 3315,
+        "round_remainder": 0,
         "label": "Morning",
     }
 

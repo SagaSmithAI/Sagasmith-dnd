@@ -2463,10 +2463,26 @@ def validate_character_notes(
 
 
 def validate_party_state(state: dict[str, Any]) -> dict[str, Any]:
+    from sagasmith_dnd.game_time import (
+        game_time_from_ticks,
+        validate_game_time,
+        validate_world_time,
+    )
     from sagasmith_dnd.playthrough import validate_playthrough_manifest
     from sagasmith_dnd.random_stream import validate_random_stream_state
 
     value = copy.deepcopy(_object(state, "campaign.state"))
+    if "game_time" in value:
+        game_time = validate_game_time(value["game_time"])
+    else:
+        legacy_clock = _object(value.get("world_time") or {}, "campaign.state.world_time")
+        legacy_elapsed = legacy_clock.get("elapsed_minutes")
+        game_time = game_time_from_ticks(
+            int(legacy_elapsed) * 10
+            if isinstance(legacy_elapsed, int) and not isinstance(legacy_elapsed, bool)
+            else 0
+        )
+    value["game_time"] = game_time
     party = _object(value.get("party") or {}, "campaign.state.party")
     _reject_unknown(party, "campaign.state.party", {"inventory", "notes"})
     value["party"] = {
@@ -2484,7 +2500,10 @@ def validate_party_state(state: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("campaign.state.world_effects contains duplicate ids")
     value["world_effects"] = world_effects
     if "world_time" in value:
-        value["world_time"] = validate_world_time(value["world_time"])
+        value["world_time"] = validate_world_time(
+            value["world_time"],
+            game_time=game_time,
+        )
     if "random_stream" in value:
         value["random_stream"] = validate_random_stream_state(value["random_stream"])
     if "playthrough_manifest" in value:
@@ -2492,70 +2511,20 @@ def validate_party_state(state: dict[str, Any]) -> dict[str, Any]:
     return value
 
 
-def validate_world_time(value: Any) -> dict[str, Any]:
+def validate_world_time(value: Any, *, game_time: Any | None = None) -> dict[str, Any]:
     """Validate the canonical branch-local campaign clock."""
 
-    clock = _object(value, "campaign.state.world_time")
-    if not clock:
-        return {}
-    _reject_unknown(
-        clock,
-        "campaign.state.world_time",
-        {
-            "schema_version",
-            "day",
-            "hour",
-            "minute",
-            "elapsed_minutes",
-            "label",
-        },
+    from sagasmith_dnd.game_time import (
+        game_time_from_ticks,
     )
-    schema_version = _integer(
-        clock.get("schema_version"),
-        "campaign.state.world_time.schema_version",
-        default=1,
-        minimum=1,
-        maximum=1,
+    from sagasmith_dnd.game_time import (
+        validate_world_time as validate_calendar,
     )
-    day = _integer(
-        clock.get("day"),
-        "campaign.state.world_time.day",
-        minimum=1,
+
+    return validate_calendar(
+        value,
+        game_time=game_time if game_time is not None else game_time_from_ticks(),
     )
-    hour = _integer(
-        clock.get("hour"),
-        "campaign.state.world_time.hour",
-        minimum=0,
-        maximum=23,
-    )
-    minute = _integer(
-        clock.get("minute"),
-        "campaign.state.world_time.minute",
-        minimum=0,
-        maximum=59,
-    )
-    elapsed_minutes = _integer(
-        clock.get("elapsed_minutes"),
-        "campaign.state.world_time.elapsed_minutes",
-        minimum=0,
-    )
-    derived_elapsed = (day - 1) * 1440 + hour * 60 + minute
-    if elapsed_minutes != derived_elapsed:
-        raise ValueError(
-            "campaign.state.world_time.elapsed_minutes must match day/hour/minute"
-        )
-    return {
-        "schema_version": schema_version,
-        "day": day,
-        "hour": hour,
-        "minute": minute,
-        "elapsed_minutes": elapsed_minutes,
-        "label": _text(
-            clock.get("label"),
-            "campaign.state.world_time.label",
-            maximum=300,
-        ),
-    }
 
 
 def validate_world_effect(value: Any, *, field: str = "world_effect") -> dict[str, Any]:
