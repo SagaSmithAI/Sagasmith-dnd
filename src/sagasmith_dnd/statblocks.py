@@ -2466,12 +2466,43 @@ def recover_2014_statblock_from_ocr(
     blocks = [_ocr_block(raw, index) for index, raw in enumerate(raw_blocks)]
     target_key = _ocr_key(name)
     headings = [block for block in blocks if _ocr_key(block["text"]) == target_key]
-    if len(headings) != 1:
-        raise StatblockImportError(
-            f"OCR recovery requires exactly one heading matching {name!r}"
-        )
-    heading = headings[0]
     split = _ocr_column_split(blocks, width=float(width))
+    structural_headings: list[dict[str, Any]] = []
+    for candidate in headings:
+        if split is None:
+            candidate_column = list(blocks)
+        elif candidate["cx"] < split:
+            candidate_column = [block for block in blocks if block["cx"] < split]
+        else:
+            candidate_column = [block for block in blocks if block["cx"] >= split]
+        candidate_ordered = sorted(
+            candidate_column,
+            key=lambda block: (block["y0"], block["x0"]),
+        )
+        candidate_index = next(
+            index
+            for index, block in enumerate(candidate_ordered)
+            if block["index"] == candidate["index"]
+        )
+        following = (
+            candidate_ordered[candidate_index + 1]
+            if candidate_index + 1 < len(candidate_ordered)
+            else None
+        )
+        if (
+            following is not None
+            and -20 <= following["y0"] - candidate["y1"] <= 80
+            and _OCR_IDENTITY_RE.fullmatch(following["text"])
+        ):
+            structural_headings.append(candidate)
+    if len(headings) == 1:
+        heading = headings[0]
+    elif len(structural_headings) == 1:
+        heading = structural_headings[0]
+    else:
+        raise StatblockImportError(
+            f"OCR recovery requires one structurally unambiguous heading matching {name!r}"
+        )
     if split is None:
         column_blocks = list(blocks)
         column_bounds = [0.0, float(width)]
@@ -2660,6 +2691,8 @@ def recover_2014_statblock_from_ocr(
             "page_number": layout.get("page_number"),
             "heading": heading["text"],
             "heading_confidence": heading["confidence"],
+            "matching_heading_count": len(headings),
+            "structural_heading_count": len(structural_headings),
             "minimum_core_confidence": min(block["confidence"] for block in critical),
             "block_count": len(scoped),
             "column_split": split,

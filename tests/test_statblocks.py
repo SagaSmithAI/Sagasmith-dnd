@@ -1650,6 +1650,7 @@ def test_layout_ocr_recovers_one_statblock_without_image_reasoning() -> None:
                 770,
             ),
             block("a successful save.", 80, 770, 260, 795),
+            block("ADULT BLUE DRAGON", 590, 840, 900, 875),
             block("BLUE DRAGON WYRMLING", 590, 900, 900, 935),
             block("Medium dragon, lawful evil", 590, 935, 810, 960),
         ],
@@ -1664,6 +1665,8 @@ def test_layout_ocr_recovers_one_statblock_without_image_reasoning() -> None:
     assert recovered["validation"]["challenge_rating"] == "16"
     assert recovered["validation"]["experience_points"] == 15_000
     assert recovered["evidence"]["text_only"] is True
+    assert recovered["evidence"]["matching_heading_count"] == 2
+    assert recovered["evidence"]["structural_heading_count"] == 1
     assert recovered["critical_facts"] == {
         "identity": "Huge dragon, lawful evil",
         "armor_class": "19 (natural armor)",
