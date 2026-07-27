@@ -453,7 +453,7 @@ def _parse_multiattack(description: str, items: list[dict[str, Any]]) -> list[di
         attack_mode = "ranged" if "ranged attack" in group.casefold() else "melee"
         attacks: list[dict[str, Any]] = []
         for match in re.finditer(
-            r"(?i)(one|two|three|four|five|six|\d+)"
+            r"(?i)(one|once|two|twice|three|thrice|four|five|six|\d+)"
             r"(?:\s+(?:(?:melee|ranged)\s+)?attacks?)?\s+with\s+"
             r"(?:its|his|her|their)\s+"
             r"([a-z][a-z '\-]+?)(?=\s+and\s+|\s*,\s*|\.|$)",

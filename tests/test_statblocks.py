@@ -705,6 +705,38 @@ def test_bandit_captain_preserves_exact_overrides_and_multiattack_composition() 
     assert parsed.warnings == ()
 
 
+def test_multiattack_parses_once_with_each_weapon_composition() -> None:
+    parsed = parse_2014_statblock(
+        COMMONER.replace(
+            (
+                "***Club***. *Melee Weapon Attack:* +2 to hit, reach 5 ft., one target.\n"
+                "*Hit:* 2 (1d4) bludgeoning damage."
+            ),
+            (
+                "***Multiattack***. The drake attacks twice, once with its bite and "
+                "once with its tail.\n\n"
+                "***Bite***. *Melee Weapon Attack:* +5 to hit, reach 5 ft., one target. "
+                "*Hit:* 7 (1d8 + 3) piercing damage.\n\n"
+                "***Tail***. *Melee Weapon Attack:* +5 to hit, reach 5 ft., one target. "
+                "*Hit:* 6 (1d6 + 3) bludgeoning damage."
+            ),
+        ),
+        source_key="module-review:guard-drake",
+    )
+    derived = derive_character_sheet(parsed.sheet)
+
+    assert derived["multiattack_options"] == [
+        {
+            "id": "melee",
+            "attacks": [
+                {"weapon_id": "bite", "attack_mode": "melee", "count": 1},
+                {"weapon_id": "tail", "attack_mode": "melee", "count": 1},
+            ],
+        }
+    ]
+    assert parsed.warnings == ()
+
+
 def test_generic_multiattack_uses_only_unambiguous_compatible_weapon() -> None:
     parsed = parse_2014_statblock(
         COMMONER.replace(
