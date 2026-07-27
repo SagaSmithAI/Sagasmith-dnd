@@ -60,8 +60,11 @@ _SKILL_NAMES = {
 }
 _NUMBER_WORDS = {
     "one": 1,
+    "once": 1,
     "two": 2,
+    "twice": 2,
     "three": 3,
+    "thrice": 3,
     "four": 4,
     "five": 5,
     "six": 6,
@@ -407,6 +410,45 @@ def _parse_multiattack(description: str, items: list[dict[str, Any]]) -> list[di
     options: list[dict[str, Any]] = []
     for group in sentence_groups:
         if "attack" not in group.casefold():
+            continue
+        alternative = re.search(
+            r"(?i)\battacks?\s+"
+            r"(one|once|two|twice|three|thrice|four|five|six|\d+)\s*,?\s+"
+            r"either\s+with\s+(?:its|his|her|their)\s+"
+            r"([a-z][a-z '\-]+?)\s+or\s+"
+            r"(?:(?:its|his|her|their)\s+)?([a-z][a-z '\-]+?)\s*$",
+            group,
+        )
+        if alternative is not None:
+            count = _count(alternative.group(1))
+            alternatives = [
+                _weapon_id(alternative.group(2), weapons),
+                _weapon_id(alternative.group(3), weapons),
+            ]
+            if count is None or any(weapon_id is None for weapon_id in alternatives):
+                return []
+            for weapon_id in alternatives:
+                assert weapon_id is not None
+                weapon = next(item for item in items if item["id"] == weapon_id)
+                mechanics = dict(weapon.get("mechanics") or {})
+                modes = [str(mechanics.get("attack_type") or "melee")]
+                if "thrown" in {
+                    str(value).casefold() for value in mechanics.get("properties") or []
+                }:
+                    modes.append("ranged")
+                options.extend(
+                    {
+                        "id": mode,
+                        "attacks": [
+                            {
+                                "weapon_id": weapon_id,
+                                "attack_mode": mode,
+                                "count": count,
+                            }
+                        ],
+                    }
+                    for mode in modes
+                )
             continue
         attack_mode = "ranged" if "ranged attack" in group.casefold() else "melee"
         attacks: list[dict[str, Any]] = []

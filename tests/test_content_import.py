@@ -486,7 +486,18 @@ def test_module_statblock_recovers_flattened_actions_and_ranged_distance() -> No
     multiattack = next(
         item for item in parsed.sheet["content"]["activities"] if item["name"] == "Multiattack"
     )
-    assert multiattack["choices"]["manual_ruling"]["default_resolver"] == "agent"
+    options = {
+        option["id"]: option["attacks"]
+        for option in multiattack["choices"]["multiattack_options"]
+    }
+    assert options == {
+        "melee": [
+            {"weapon_id": "greatsword", "attack_mode": "melee", "count": 2}
+        ],
+        "melee-2": [{"weapon_id": "spear", "attack_mode": "melee", "count": 2}],
+        "ranged": [{"weapon_id": "spear", "attack_mode": "ranged", "count": 2}],
+    }
+    assert all("Multiattack composition" not in warning for warning in parsed.warnings)
     action_names = {item["name"] for item in parsed.sheet["content"]["activities"]}
     feature_names = {item["name"] for item in parsed.sheet["content"]["features"]}
     assert "Lightning Breath (Recharge 5-6)" in action_names
