@@ -2281,7 +2281,6 @@ def apply_reviewed_statblock_fill(
                 "activity_id": activity_id,
                 "source_excerpt": source_excerpt,
                 "reason": reason,
-                "resolution": "structured",
                 "options": options,
                 "default_resolver": "agent",
                 "ruling_kind": "module_specific_procedure",
@@ -2295,7 +2294,7 @@ def apply_reviewed_statblock_fill(
         "added_warnings": [
             f"{activity['name']}: Multiattack composition requires a DM ruling"
             for declaration in normalized_declarations
-            if declaration["resolution"] == "agent_ruling"
+            if declaration.get("resolution", "structured") == "agent_ruling"
             for activity in activities
             if str(activity.get("id") or "") == declaration["activity_id"]
         ],
