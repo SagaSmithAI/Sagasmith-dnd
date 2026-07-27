@@ -79,6 +79,36 @@ def test_v2_sheet_exposes_complete_derived_card_and_prepared_spells() -> None:
     assert set(derived["spellcasting"]["prepared_spell_ids"]) == {"cure-wounds", "bless"}
 
 
+def test_ruling_requirement_rejects_a_resolver_that_disagrees_with_its_kind() -> None:
+    sheet = _caster_sheet()
+    sheet["content"]["spells"][0]["ruling_requirements"] = [
+        {
+            "kind": "effect",
+            "reason": "Resolve the source-described spell effect.",
+            "source_excerpt": "The target is affected as described.",
+            "default_resolver": "external_input",
+            "ruling_kind": "generic_spell_effect",
+            "policy_ref": "server_capabilities.ruling_policy",
+            "requires_external_input_only_for": [
+                "player_owned_choice",
+                "owner_approval",
+                "permission_escalation",
+                "missing_or_conflicting_source_review",
+            ],
+        }
+    ]
+
+    with pytest.raises(ValueError, match="default_resolver must be agent"):
+        validate_character_sheet(sheet)
+
+    sheet["content"]["spells"][0]["ruling_requirements"][0].update(
+        default_resolver="agent",
+        ruling_kind="missing_or_conflicting_source_review",
+    )
+    with pytest.raises(ValueError, match="default_resolver must be external_input"):
+        validate_character_sheet(sheet)
+
+
 def test_class_prepared_spell_does_not_have_to_be_known() -> None:
     sheet = {
         "progression": {

@@ -106,6 +106,37 @@ def test_manifest_keeps_unresolved_party_size_dm_review_blocked() -> None:
         validate_party_state({"playthrough_manifest": manifest})
 
 
+def test_party_size_dm_review_cannot_be_relabelled_as_external_input() -> None:
+    manifest = new_playthrough_manifest(
+        run_id="review-ownership",
+        campaign_line_id="unknown-size",
+        module_ids=["module-1"],
+        recommended_party_minimum=None,
+        recommended_party_maximum=None,
+        selected_party_size=None,
+        source_refs=[SOURCE_REF],
+        party_size_review={
+            "default_resolver": "external_input",
+            "ruling_kind": "owner_approval",
+        },
+    )
+
+    assert manifest["party"]["party_size_review"] == {
+        "default_resolver": "agent",
+        "ruling_kind": "source_or_scene_fact",
+    }
+
+    manifest["party"]["party_size_review"].update(
+        default_resolver="external_input",
+        ruling_kind="missing_or_conflicting_source_review",
+    )
+    normalized = validate_party_state({"playthrough_manifest": manifest})
+    assert normalized["playthrough_manifest"]["party"]["party_size_review"] == {
+        "default_resolver": "agent",
+        "ruling_kind": "source_or_scene_fact",
+    }
+
+
 def test_manifest_rejects_default_four_and_cross_actor_replacement_knowledge() -> None:
     manifest = _manifest()
     manifest["party"]["selected_size"] = 4

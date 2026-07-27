@@ -53,8 +53,8 @@ def new_playthrough_manifest(
     )
     resolved_party_size_review = dict(party_size_review or {})
     if resolved_party_size_status in {"dm_review_required", "dm_review_completed"}:
-        resolved_party_size_review.setdefault("default_resolver", "agent")
-        resolved_party_size_review.setdefault("ruling_kind", "source_or_scene_fact")
+        resolved_party_size_review["default_resolver"] = "agent"
+        resolved_party_size_review["ruling_kind"] = "source_or_scene_fact"
     return validate_playthrough_manifest(
         {
             "schema_version": SCHEMA_VERSION,
@@ -358,8 +358,8 @@ def _validate_party(value: Any) -> dict[str, Any]:
     )
     review = _json_object(party.get("party_size_review") or {}, "party_size_review")
     if status in {"dm_review_required", "dm_review_completed"}:
-        review.setdefault("default_resolver", "agent")
-        review.setdefault("ruling_kind", "source_or_scene_fact")
+        review["default_resolver"] = "agent"
+        review["ruling_kind"] = "source_or_scene_fact"
     if minimum is not None and maximum is not None and maximum < minimum:
         raise ValueError("party recommended maximum must not be below its minimum")
     if selected is not None and maximum is not None and selected != maximum:

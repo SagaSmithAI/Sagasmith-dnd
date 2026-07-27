@@ -10,6 +10,7 @@ from typing import Any
 
 from sagasmith_dnd.ability_generation import normalize_ability_generation
 from sagasmith_dnd.rule_engine import (
+    EXTERNAL_RULING_KINDS,
     ResolutionContext,
     RuleEventRulingRequiredError,
     apply_rule_event,
@@ -1089,6 +1090,19 @@ def _normalize_ruling_requirements(value: Any, field: str) -> list[dict[str, Any
         )
         if resolver not in {"agent", "external_input"}:
             raise ValueError(f"{entry_field}.default_resolver is invalid")
+        ruling_kind = _text(
+            entry.get("ruling_kind"),
+            f"{entry_field}.ruling_kind",
+            maximum=200,
+        )
+        expected_resolver = (
+            "external_input" if ruling_kind in EXTERNAL_RULING_KINDS else "agent"
+        )
+        if resolver != expected_resolver:
+            raise ValueError(
+                f"{entry_field}.default_resolver must be {expected_resolver} "
+                f"for ruling_kind {ruling_kind}"
+            )
         normalized.append(
             {
                 "kind": _text(entry.get("kind"), f"{entry_field}.kind", maximum=200),
@@ -1103,11 +1117,7 @@ def _normalize_ruling_requirements(value: Any, field: str) -> list[dict[str, Any
                     maximum=4000,
                 ),
                 "default_resolver": resolver,
-                "ruling_kind": _text(
-                    entry.get("ruling_kind"),
-                    f"{entry_field}.ruling_kind",
-                    maximum=200,
-                ),
+                "ruling_kind": ruling_kind,
                 "policy_ref": _text(
                     entry.get("policy_ref"),
                     f"{entry_field}.policy_ref",
