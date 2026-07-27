@@ -76,4 +76,4 @@ Legacy dynamic demo routes remain temporarily in source but new navigation uses 
 
 ## Status and license
 
-Active Alpha. The UI, local principal-aware gateway, Scene Atlas, SSE refresh, and MCP-backed combat movement are ready for integrated local testing. Production identity issuance, TLS termination, and broader mutation workflows remain deployment work. MIT licensed.
+Active Alpha. The UI, local principal-aware gateway, Scene Atlas, SSE refresh, and MCP-backed combat movement are ready for integrated local testing. Production identity issuance, TLS termination, and broader mutation workflows remain deployment work. Licensed under Apache-2.0.
