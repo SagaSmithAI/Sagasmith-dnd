@@ -80,4 +80,4 @@ Tests cover rule packs, core content, preserved rule boundaries, character schem
 
 ## Content and license
 
-Code is MIT licensed. D&D 5e SRD-derived content follows the applicable CC-BY-4.0 terms; convenience translations retain upstream attribution. Non-SRD commercial content must be imported by an authorized user.
+Original code is licensed under Apache-2.0. D&D 5e SRD-derived content follows the applicable CC-BY-4.0 terms; convenience translations retain upstream attribution. Non-SRD commercial content must be imported by an authorized user.

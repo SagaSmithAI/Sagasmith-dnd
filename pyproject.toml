@@ -8,7 +8,8 @@ version = "0.2.0"
 description = "D&D 5e 2014/2024 runtime and portable JSON CLI for SagaSmith Core"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "SagaSmithAI" }]
 dependencies = ["sagasmith-core>=0.2.0,<0.3.0"]
 
