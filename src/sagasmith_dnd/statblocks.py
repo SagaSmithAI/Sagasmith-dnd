@@ -316,18 +316,24 @@ def _parse_weapon(
         damage_bonus = 0
         on_hit_effect = effect_hit.group(1).strip()
     trailing_prose = ""
+    trailing_warning = ""
     normalized_actor_name = actor_name.strip()
     unformatted_on_hit_effect = re.sub(
         r"^[\s*_`~]+",
         "",
         on_hit_effect,
     )
-    if normalized_actor_name and re.match(
+    if re.fullmatch(r"(?i)(?:page\s+)?\d{1,4}", unformatted_on_hit_effect):
+        trailing_prose = on_hit_effect
+        on_hit_effect = ""
+        trailing_warning = f"{name}: trailing page furniture excluded from action settlement"
+    elif normalized_actor_name and re.match(
         rf"(?i)^{re.escape(normalized_actor_name)}s?\b",
         unformatted_on_hit_effect,
     ):
         trailing_prose = on_hit_effect
         on_hit_effect = ""
+        trailing_warning = f"{name}: trailing creature prose excluded from action settlement"
     reach = re.search(r"(?i)reach\s+(\d+)\s*ft", description)
     ranges = re.search(
         r"(?i)range\s+(\d+)(?:\s*ft\.?)?(?:\s*/\s*(\d+))?\s*ft\.?",
@@ -371,9 +377,7 @@ def _parse_weapon(
         "mechanics": mechanics,
     }
     if trailing_prose:
-        result["_parser_warning"] = (
-            f"{name}: trailing creature prose excluded from action settlement"
-        )
+        result["_parser_warning"] = trailing_warning
     return result
 
 

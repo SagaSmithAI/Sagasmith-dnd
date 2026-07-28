@@ -357,6 +357,19 @@ def test_flat_damage_weapon_is_executable_without_inventing_damage_dice() -> Non
     assert parsed.warnings == ()
 
 
+def test_trailing_page_number_is_not_imported_as_an_on_hit_effect() -> None:
+    parsed = parse_2014_statblock(
+        TROLL + "\n291\n",
+        source_key="monster-manual-page-291",
+    )
+    claw = derive_character_sheet(parsed.sheet)["inventory"]["weapon_attacks"][0]
+
+    assert claw["on_hit_effect"] == ""
+    assert parsed.warnings == (
+        "Claw: trailing page furniture excluded from action settlement",
+    )
+
+
 def test_gazer_eye_rays_are_structured_from_the_exact_source_action() -> None:
     parsed = parse_2014_statblock(
         GAZER,
