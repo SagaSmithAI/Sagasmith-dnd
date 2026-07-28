@@ -23,7 +23,7 @@ from sagasmith_dnd.combat_engine import (
     start_encounter,
 )
 from sagasmith_dnd.conditions import apply_condition_change, condition_ids
-from sagasmith_dnd.editions import normalize_dnd_edition
+from sagasmith_dnd.editions import DEFAULT_CHARACTER_EDITION, normalize_dnd_edition
 from sagasmith_dnd.engine import roll, roll_d20
 from sagasmith_dnd.rule_engine import ResolutionContext
 
@@ -74,7 +74,7 @@ def start_chase(
     *,
     quarry_ids: list[str],
     initial_distance_ft: int,
-    ruleset: str = "2014",
+    ruleset: str = DEFAULT_CHARACTER_EDITION,
     scene_id: str | None = None,
     name: str = "Chase",
     close_transition: dict[str, Any] | None = None,

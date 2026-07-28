@@ -6,7 +6,7 @@ from copy import deepcopy
 from typing import Any
 
 from sagasmith_dnd.conditions import apply_condition_change, condition_ids
-from sagasmith_dnd.editions import normalize_dnd_edition
+from sagasmith_dnd.editions import DEFAULT_CHARACTER_EDITION, normalize_dnd_edition
 
 
 def effective_hit_point_maximum_value(
@@ -41,7 +41,7 @@ def apply_basic_healing_to_sheet(
         raise ValueError("ordinary healing cannot restore a dead actor")
     before = int(hp.get("value", 0) or 0)
     maximum = effective_hit_point_maximum_value(
-        edition=str(value.get("edition") or "2014"),
+        edition=str(value.get("edition") or DEFAULT_CHARACTER_EDITION),
         base_maximum=int(hp.get("max", 0) or 0),
         exhaustion=int(combat.get("exhaustion", 0) or 0),
     )

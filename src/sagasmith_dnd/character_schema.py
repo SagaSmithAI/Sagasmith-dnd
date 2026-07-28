@@ -14,7 +14,7 @@ from sagasmith_dnd.conditions import (
     condition_ids,
     reconcile_ended_effect_conditions,
 )
-from sagasmith_dnd.editions import normalize_dnd_edition
+from sagasmith_dnd.editions import DEFAULT_CHARACTER_EDITION, normalize_dnd_edition
 from sagasmith_dnd.game_time import TICKS_PER_DAY, TICKS_PER_HOUR, TICKS_PER_MINUTE
 from sagasmith_dnd.hit_points import effective_hit_point_maximum_value
 from sagasmith_dnd.rule_engine import (
@@ -220,7 +220,7 @@ def _default_inventory() -> dict[str, Any]:
 def default_character_sheet() -> dict[str, Any]:
     return {
         "schema_version": 2,
-        "edition": "2014",
+        "edition": DEFAULT_CHARACTER_EDITION,
         "identity": {
             "gender": "",
             "age": "",
@@ -721,7 +721,11 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
             },
         )
         edition = normalize_dnd_edition(
-            _text(mechanics.get("edition"), f"{field}.edition", default="2014")
+            _text(
+                mechanics.get("edition"),
+                f"{field}.edition",
+                default=DEFAULT_CHARACTER_EDITION,
+            )
         )
         spell_ids = _string_list(mechanics.get("spell_ids"), f"{field}.spell_ids")
         if len(spell_ids) != len(set(spell_ids)):
@@ -3064,7 +3068,7 @@ def effective_hit_point_maximum(sheet: dict[str, Any]) -> int:
     combat = dict(sheet.get("combat") or {})
     hit_points = dict(combat.get("hp") or {})
     return effective_hit_point_maximum_value(
-        edition=str(sheet.get("edition") or "2014"),
+        edition=str(sheet.get("edition") or DEFAULT_CHARACTER_EDITION),
         base_maximum=int(hit_points.get("max", 0) or 0),
         exhaustion=int(combat.get("exhaustion", 0) or 0),
     )

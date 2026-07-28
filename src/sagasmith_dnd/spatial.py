@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from copy import deepcopy
 from typing import Any
 from uuid import uuid4
+
+from sagasmith_core.integrity import json_sha256
 
 
 class BattleMapError(ValueError):
@@ -140,6 +140,4 @@ def _cell_key(x: int | float, y: int | float) -> str:
 
 def _checksum(value: dict[str, Any]) -> str:
     payload = {key: item for key, item in value.items() if key != "checksum"}
-    return hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
+    return json_sha256(payload)

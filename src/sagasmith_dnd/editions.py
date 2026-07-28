@@ -4,8 +4,16 @@ from __future__ import annotations
 
 from typing import Any
 
+SUPPORTED_DND_EDITIONS = ("2014", "2024")
+DEFAULT_CHARACTER_EDITION = "2014"
+DEFAULT_CAMPAIGN_EDITION = "2024"
 
-def normalize_dnd_edition(value: Any, *, default: str = "2014") -> str:
+
+def normalize_dnd_edition(
+    value: Any,
+    *,
+    default: str = DEFAULT_CHARACTER_EDITION,
+) -> str:
     """Return one canonical edition identifier or reject ambiguous input."""
 
     text = str(default if value is None or value == "" else value).strip().casefold()

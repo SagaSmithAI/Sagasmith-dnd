@@ -3,7 +3,7 @@ from copy import deepcopy
 import pytest
 
 from sagasmith_dnd.character_schema import validate_party_state
-from sagasmith_dnd.playthrough import new_playthrough_manifest
+from sagasmith_dnd.playthrough import new_playthrough_manifest, playthrough_source_bindings
 
 SOURCE_REF = {
     "purpose": "party_size",
@@ -66,6 +66,27 @@ def test_manifest_migrates_legacy_chunk_hash_name_to_canonical_source_ref() -> N
 
     assert manifest["source_refs"][0]["content_sha256"] == "b" * 64
     assert "chunk_content_sha256" not in manifest["source_refs"][0]
+
+
+def test_source_ref_uses_canonical_ordered_heading_paths() -> None:
+    source_ref = deepcopy(SOURCE_REF)
+    source_ref["heading_path"] = ["Temple", "Temple", "Crypt", "Temple"]
+
+    manifest = new_playthrough_manifest(
+        run_id="heading-path",
+        campaign_line_id="campaign-1",
+        module_ids=["module-1"],
+        recommended_party_minimum=1,
+        recommended_party_maximum=1,
+        selected_party_size=1,
+        source_refs=[source_ref],
+    )
+
+    assert manifest["source_refs"][0]["heading_path"] == [
+        "Temple",
+        "Crypt",
+        "Temple",
+    ]
 
 
 def test_manifest_preserves_completed_party_size_dm_review_without_faking_source() -> None:
@@ -201,6 +222,60 @@ def test_ending_conditions_require_exact_source_and_machine_checks() -> None:
     manifest["ending"]["conditions"][0]["all_of"] = []
     with pytest.raises(ValueError, match="at least one machine check"):
         validate_party_state({"playthrough_manifest": manifest})
+
+
+def test_source_binding_catalogue_covers_every_manifest_evidence_location() -> None:
+    manifest = _manifest()
+    manifest["traversal"]["excluded_scenes"] = [
+        {
+            "scene_id": "excluded",
+            "reason": "The other branch was not selected.",
+            "source_ref": {**SOURCE_REF, "purpose": "excluded"},
+        }
+    ]
+    manifest["quests"] = [
+        {
+            "id": "quest",
+            "title": "Main quest",
+            "status": "available",
+            "source_ref": {**SOURCE_REF, "purpose": "quest"},
+            "outcome": "",
+        }
+    ]
+    manifest["clues"] = [
+        {
+            "id": "clue",
+            "label": "A clue",
+            "status": "hidden",
+            "known_by_actor_ids": [],
+            "source_ref": {**SOURCE_REF, "purpose": "clue"},
+        }
+    ]
+    manifest["ending"]["conditions"] = [
+        {
+            "id": "ending",
+            "label": "The ending",
+            "source_ref": {**SOURCE_REF, "purpose": "ending"},
+            "all_of": [
+                {
+                    "kind": "manifest_value",
+                    "path": "world_state.victory",
+                    "actor_id": "",
+                    "fact_key": "",
+                    "operator": "truthy",
+                    "value": None,
+                }
+            ],
+        }
+    ]
+
+    assert [path for path, _source_ref in playthrough_source_bindings(manifest)] == [
+        "source_refs[0]",
+        "traversal.excluded_scenes[0].source_ref",
+        "quests[0].source_ref",
+        "clues[0].source_ref",
+        "ending.conditions[0].source_ref",
+    ]
 
 
 def test_manifest_completion_has_one_verified_ending_state() -> None:

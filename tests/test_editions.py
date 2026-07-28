@@ -1,12 +1,20 @@
 import pytest
 
 from sagasmith_dnd.combat_engine import CombatEngineError, _normalize_ruleset
-from sagasmith_dnd.editions import normalize_dnd_edition
+from sagasmith_dnd.editions import (
+    DEFAULT_CAMPAIGN_EDITION,
+    DEFAULT_CHARACTER_EDITION,
+    SUPPORTED_DND_EDITIONS,
+    normalize_dnd_edition,
+)
 from sagasmith_dnd.lifecycle import validate_song_of_rest_source
 from sagasmith_dnd.spells import _edition as normalize_spell_edition
 
 
 def test_edition_aliases_share_one_canonical_parser() -> None:
+    assert SUPPORTED_DND_EDITIONS == ("2014", "2024")
+    assert DEFAULT_CHARACTER_EDITION == "2014"
+    assert DEFAULT_CAMPAIGN_EDITION == "2024"
     assert normalize_dnd_edition("2014 rules") == "2014"
     assert normalize_dnd_edition("5.1") == "2014"
     assert normalize_dnd_edition("DND 5E 2024") == "2024"

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from dataclasses import dataclass
 from typing import Any
+
+from sagasmith_core.integrity import json_sha256
+
+from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
 CORE_RULE_PACK_VERSION = "1.41.0"
 
@@ -638,9 +640,13 @@ BOUNDARIES = (
 
 
 def get_core_rule_pack(edition: str | None) -> BuiltinCoreRulePack:
-    normalized = str(edition or "").strip()
-    if normalized not in {"2014", "2024"}:
-        raise ValueError(f"unsupported D&D core edition: {normalized or '<empty>'}")
+    raw = str(edition or "").strip()
+    try:
+        normalized = normalize_dnd_edition(edition, default="")
+    except ValueError as exc:
+        raise ValueError(f"unsupported D&D core edition: {raw or '<empty>'}") from exc
+    if normalized not in SUPPORTED_DND_EDITIONS:
+        raise ValueError(f"unsupported D&D core edition: {normalized}")
     boundaries = tuple(item for item in BOUNDARIES if normalized in item.editions)
     payload = {
         "id": f"dnd5e.core.{normalized}",
@@ -656,9 +662,7 @@ def get_core_rule_pack(edition: str | None) -> BuiltinCoreRulePack:
             for item in boundaries
         ],
     }
-    fingerprint = hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
+    fingerprint = json_sha256(payload)
     return BuiltinCoreRulePack(
         id=payload["id"],
         version=CORE_RULE_PACK_VERSION,

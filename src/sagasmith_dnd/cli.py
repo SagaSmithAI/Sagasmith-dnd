@@ -29,6 +29,7 @@ from sagasmith_core import (
     SnapshotService,
     StateMutationService,
 )
+from sagasmith_core.access import LOCAL_SYSTEM_PRINCIPAL_ID
 from sagasmith_core.documents import converter_for
 from sagasmith_core.modules import MarkdownModuleParser
 
@@ -57,6 +58,11 @@ from sagasmith_dnd.character_schema import (
     validate_character_notes_update,
     validate_character_sheet,
     validate_party_state,
+)
+from sagasmith_dnd.editions import (
+    DEFAULT_CAMPAIGN_EDITION,
+    DEFAULT_CHARACTER_EDITION,
+    SUPPORTED_DND_EDITIONS,
 )
 from sagasmith_dnd.engine import resolve_check, roll
 from sagasmith_dnd.module_profile import DndModuleProfile
@@ -109,7 +115,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--slug")
     parser.add_argument("--status")
     parser.add_argument("--description")
-    parser.add_argument("--edition", choices=("2014", "2024"))
+    parser.add_argument("--edition", choices=SUPPORTED_DND_EDITIONS)
     parser.add_argument("--locale")
     parser.add_argument("--publications", nargs="*")
     parser.add_argument("--options")
@@ -304,8 +310,8 @@ def _dispatch(args) -> Any:
     if args.group == "capabilities":
         return {
             "system_id": DND5E.id,
-            "editions": ["2014", "2024"],
-            "default_edition": "2024",
+            "editions": list(SUPPORTED_DND_EDITIONS),
+            "default_edition": DEFAULT_CAMPAIGN_EDITION,
             "commands": [
                 "campaign",
                 "character",
@@ -359,14 +365,14 @@ def _dispatch(args) -> Any:
 
         if args.group == "campaign":
             if args.action in {"create", "start"}:
-                edition = args.edition or "2024"
+                edition = args.edition or DEFAULT_CAMPAIGN_EDITION
                 locale = args.locale or "en"
                 publications = args.publications or []
                 options = _dict(args.options)
                 campaign = campaigns.create_owned(
                     system_id=DND5E.id,
                     name=_require(args.name, "name"),
-                    principal_id="system:local",
+                    principal_id=LOCAL_SYSTEM_PRINCIPAL_ID,
                     idempotency_key=str(uuid.uuid4()),
                     slug=args.slug,
                     description=args.description or "",
@@ -510,7 +516,7 @@ def _dispatch(args) -> Any:
                 }
             if args.action == "ability":
                 if args.subaction == "roll":
-                    return roll_ability_scores(args.edition or "2014")
+                    return roll_ability_scores(args.edition or DEFAULT_CHARACTER_EDITION)
                 if args.subaction == "apply":
                     before = characters.get(_require(args.id, "id"))
                     raw_rolls = _json_value(args.rolls) if args.rolls else None
@@ -989,7 +995,10 @@ def _dispatch(args) -> Any:
                 paths = sorted(path.rglob("*.md")) if path.is_dir() else [path]
                 results = []
                 canonical_sources = (
-                    rules.sources(system_id=DND5E.id, edition=args.edition or "2024")
+                    rules.sources(
+                        system_id=DND5E.id,
+                        edition=args.edition or DEFAULT_CAMPAIGN_EDITION,
+                    )
                     if (args.locale or "en") != "en"
                     else []
                 )
@@ -1013,7 +1022,7 @@ def _dispatch(args) -> Any:
                                 source_key=args.source_key or relative,
                                 title=args.title or item.stem,
                                 content=document.content,
-                                edition=args.edition or "2024",
+                                edition=args.edition or DEFAULT_CAMPAIGN_EDITION,
                                 locale=args.locale or "en",
                                 version=args.version or "",
                                 publication_id=args.publication or "",

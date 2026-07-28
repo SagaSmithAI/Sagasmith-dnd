@@ -14,6 +14,8 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Iterable
 from uuid import uuid4
 
+from sagasmith_core.access import LOCAL_SYSTEM_PRINCIPAL_ID
+
 from sagasmith_dnd.character_schema import (
     SKILL_ABILITIES,
     effective_ability_scores,
@@ -28,7 +30,7 @@ from sagasmith_dnd.conditions import (
     reconcile_condition_projection,
     reconcile_ended_effect_conditions,
 )
-from sagasmith_dnd.editions import normalize_dnd_edition
+from sagasmith_dnd.editions import DEFAULT_CHARACTER_EDITION, normalize_dnd_edition
 from sagasmith_dnd.engine import (
     resolve_attack,
     resolve_check,
@@ -155,7 +157,7 @@ class ActionIntent:
     activity_id: str | None = None
     payment: str | None = None
     branch_id: str | None = None
-    principal_id: str = "system:local"
+    principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID
     expected_revisions: dict[str, int] = field(default_factory=dict)
     idempotency_key: str | None = None
     payload: dict[str, Any] = field(default_factory=dict)
@@ -180,7 +182,7 @@ class ActionIntent:
             activity_id=value.get("activity_id"),
             payment=value.get("payment"),
             branch_id=value.get("branch_id"),
-            principal_id=str(value.get("principal_id") or "system:local"),
+            principal_id=str(value.get("principal_id") or LOCAL_SYSTEM_PRINCIPAL_ID),
             expected_revisions={
                 str(key): int(item)
                 for key, item in dict(value.get("expected_revisions") or {}).items()
@@ -314,7 +316,7 @@ def _jack_of_all_trades_bonus(sheet: dict[str, Any]) -> int:
 def start_encounter(
     participants: list[dict[str, Any]],
     *,
-    ruleset: str = "2014",
+    ruleset: str = DEFAULT_CHARACTER_EDITION,
     scene_id: str | None = None,
     name: str = "Combat",
     battle_map: dict[str, Any] | None = None,
@@ -1756,7 +1758,7 @@ def resolve_attack_damage(
                 damage_type=rolled_parts[0]["damage_type"],
                 source=actor_id(attacker),
                 critical=bool(attack["critical"]),
-                ruleset=str(plan.get("ruleset") or "2014"),
+                ruleset=str(plan.get("ruleset") or DEFAULT_CHARACTER_EDITION),
                 death_saves=bool(plan.get("target_uses_death_saves", True)),
                 knock_out=bool(plan.get("knock_out", False)),
                 melee=bool(plan.get("melee_attack", False)),
@@ -1767,7 +1769,7 @@ def resolve_attack_damage(
                 rolled_parts,
                 source=actor_id(attacker),
                 critical=bool(attack["critical"]),
-                ruleset=str(plan.get("ruleset") or "2014"),
+                ruleset=str(plan.get("ruleset") or DEFAULT_CHARACTER_EDITION),
                 death_saves=bool(plan.get("target_uses_death_saves", True)),
                 knock_out=bool(plan.get("knock_out", False)),
                 melee=bool(plan.get("melee_attack", False)),
@@ -4427,7 +4429,9 @@ def resolve_random_save_effects(
                     }
                 ],
                 source=f"{source_id}:{effect.get('id')}",
-                ruleset=str(actor_sheet(target_actor).get("edition") or "2014"),
+                ruleset=str(
+                    actor_sheet(target_actor).get("edition") or DEFAULT_CHARACTER_EDITION
+                ),
                 death_saves=bool(death_save_flags.get(target_id, True)),
             )
             updated[target_id] = damage["sheet"]
@@ -4568,7 +4572,7 @@ def resolve_source_save_effect(
         target_sheet,
         [{"amount": damage_die.total, "damage_type": "psychic"}],
         source=f"{source_id}:devour-intellect",
-        ruleset=str(target_sheet.get("edition") or "2014"),
+        ruleset=str(target_sheet.get("edition") or DEFAULT_CHARACTER_EDITION),
         death_saves=death_saves,
     )
     updated = damage["sheet"]

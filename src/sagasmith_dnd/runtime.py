@@ -6,6 +6,8 @@ import os
 
 from sagasmith_core import BgeEmbedder, Database, VectorStore, create_embedder
 
+from sagasmith_dnd.system import DND5E
+
 
 def database() -> Database:
     value = Database(os.environ.get("DND_DATABASE_URL"))
@@ -18,5 +20,5 @@ def dense_components() -> tuple[BgeEmbedder | None, VectorStore | None]:
         return None, None
     return (
         create_embedder(env_prefix="DND5E"),
-        VectorStore("dnd5e"),
+        VectorStore(DND5E.id),
     )

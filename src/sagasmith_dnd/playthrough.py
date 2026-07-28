@@ -5,6 +5,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from sagasmith_core.modules import canonical_heading_path
+
 SCHEMA_VERSION = 1
 PLAYTHROUGH_STATUSES = {
     "lobby",
@@ -243,13 +245,56 @@ def validate_source_ref(value: Any, *, field: str = "source_ref") -> dict[str, A
         "asset_sha256": asset_sha,
         "page_start": page_start,
         "page_end": page_end,
-        "heading_path": _unique_strings(ref.get("heading_path"), f"{field}.heading_path"),
+        "heading_path": list(
+            canonical_heading_path(
+                [
+                    _required_text(item, f"{field}.heading_path[]")
+                    for item in _list(ref.get("heading_path"))
+                ]
+            )
+        ),
         "content_sha256": chunk_sha,
         "module_id": _text(ref.get("module_id")),
         "scene_id": _text(ref.get("scene_id")),
         "chunk_id": _text(ref.get("chunk_id")),
         "excerpt": _text(ref.get("excerpt")),
     }
+
+
+def playthrough_source_bindings(
+    manifest: dict[str, Any],
+) -> list[tuple[str, dict[str, Any]]]:
+    """Return every schema-owned source reference with its stable manifest path.
+
+    Storage-aware runtimes use this single catalogue to resolve the references
+    against indexed module chunks.  Keeping the traversal beside the manifest
+    schema prevents top-level, quest, clue, excluded-scene, and ending evidence
+    from silently acquiring different validation rules.
+    """
+
+    value = validate_playthrough_manifest(manifest)
+    bindings = [
+        (f"source_refs[{index}]", source_ref)
+        for index, source_ref in enumerate(value["source_refs"])
+    ]
+    bindings.extend(
+        (f"traversal.excluded_scenes[{index}].source_ref", item["source_ref"])
+        for index, item in enumerate(value["traversal"]["excluded_scenes"])
+        if item["source_ref"] is not None
+    )
+    bindings.extend(
+        (f"quests[{index}].source_ref", item["source_ref"])
+        for index, item in enumerate(value["quests"])
+    )
+    bindings.extend(
+        (f"clues[{index}].source_ref", item["source_ref"])
+        for index, item in enumerate(value["clues"])
+    )
+    bindings.extend(
+        (f"ending.conditions[{index}].source_ref", item["source_ref"])
+        for index, item in enumerate(value["ending"]["conditions"])
+    )
+    return bindings
 
 
 def _validate_current(value: Any) -> dict[str, str]:
