@@ -716,6 +716,39 @@ def test_ocr_room_codes_split_scenes_without_treating_words_as_codes() -> None:
     assert fragment.metadata["spatial"]["locations"][0]["kind"] != "room"
 
 
+def test_spaced_numeric_room_code_uses_canonical_location_and_route_keys() -> None:
+    content = (
+        "# Castle in the Clouds\n"
+        "## SKYREACH CASTLE\n"
+        "The icy passages connect the castle.\n"
+        "##### 2 4 . I C E T U N N E L\n"
+        "This passage leads to area 25.\n"
+        "##### 2 5 . M A I N V A U L T\n"
+        "A white dragon guards the hoard.\n"
+    )
+
+    scene = next(
+        item
+        for item in MarkdownModuleParser(profile=DndModuleProfile()).parse(content)[0].scenes
+        if item.title == "SKYREACH CASTLE"
+    )
+
+    assert [item["key"] for item in scene.metadata["spatial"]["locations"]] == [
+        "24-i-c-e-t-u-n-n-e-l",
+        "25-m-a-i-n-v-a-u-l-t",
+    ]
+    assert scene.metadata["spatial"]["connections"] == [
+        {
+            "from": "24-i-c-e-t-u-n-n-e-l",
+            "to": "25-m-a-i-n-v-a-u-l-t",
+            "bidirectional": True,
+            "kind": "passage",
+            "confidence": "explicit_text",
+            "evidence": {"line": 4, "text": "leads to area 25"},
+        }
+    ]
+
+
 def test_chapter_preamble_does_not_create_a_spatial_room() -> None:
     content = "# Tomb of the Nine Gods\nOverview.\n## Rotten Halls\nDescription.\n"
 

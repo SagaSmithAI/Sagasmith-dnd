@@ -12,7 +12,12 @@ _ROOM_CODE_PATTERN = (
     r"(?=[^.．。:：-]*\d)"
     r"[A-Z]{1,3}\s*[0-9IlO]{1,3}[A-Za-z]?"
     r"|[A-Z]{1,3}\s*[Il][0-9IlO]{0,2}"
-    r"|\d{1,3}\s*[A-Za-z]?)"
+    r"|\d(?:\s*\d){0,2}\s*[A-Za-z]?)"
+)
+_ROOM_TARGET_PATTERN = (
+    r"(?:[A-Z]{1,3}\s*[0-9IlO]{1,3}[A-Za-z]?"
+    r"|[A-Z]{1,3}\s*[Il][0-9IlO]{0,2}"
+    r"|\d(?:\s*\d){0,2}\s*[A-Za-z]?)"
 )
 _ROOM = re.compile(
     rf"^{_ROOM_CODE_PATTERN}\s*[.．。:：-]\s*(?=[^\W_])\S",
@@ -281,13 +286,13 @@ def _is_diagram_overview(title: str) -> bool:
 _EXPLICIT_ROUTE_PATTERNS = (
     re.compile(
         r"(?:通向|通往|连接到|连接至|直达)\s*(?:了|着)?\s*"
-        r"(?:区域|区|房间)?\s*(?P<target>[A-Z]{1,3}\d+[A-Za-z]?)",
+        rf"(?:区域|区|房间)?\s*(?P<target>{_ROOM_TARGET_PATTERN})",
         re.IGNORECASE,
     ),
     re.compile(
         r"(?:leads?|connects?|opens?|descends?|ascends?)\s+"
-        r"(?:directly\s+)?(?:to|into)\s+(?:area|room\s+)?"
-        r"(?P<target>[A-Z]{1,3}\d+[A-Za-z]?)\b",
+        r"(?:directly\s+)?(?:to|into)\s+(?:(?:area|room)\s+)?"
+        rf"(?P<target>{_ROOM_TARGET_PATTERN})\b",
         re.IGNORECASE,
     ),
 )
@@ -479,9 +484,25 @@ def _scene_tags(title: str) -> list[str]:
     return ["exploration"]
 
 
+def _normalized_room_code(value: str) -> str:
+    compact = re.sub(r"\s+", "", value).casefold()
+    matched = re.fullmatch(
+        r"(?P<prefix>[a-z]{1,3}?)(?P<number>[0-9ilo]{1,3})(?P<suffix>[a-z]?)",
+        compact,
+    )
+    if matched is None:
+        return compact
+    number = matched.group("number").translate(str.maketrans({"i": "1", "l": "1", "o": "0"}))
+    return f"{matched.group('prefix')}{number}{matched.group('suffix')}"
+
+
 def _location_key(title: str, ordinal: int) -> str:
     """Produce a stable-enough key from parser evidence, never a display label."""
-    folded = re.sub(r"[^a-z0-9]+", "-", title.casefold()).strip("-")
+    source = title
+    matched = _ROOM_CODE.match(title.strip())
+    if matched is not None:
+        source = f"{_normalized_room_code(matched.group('code'))} {title.strip()[matched.end():]}"
+    folded = re.sub(r"[^a-z0-9]+", "-", source.casefold()).strip("-")
     return folded[:72] or f"location-{ordinal + 1}"
 
 
@@ -499,7 +520,9 @@ def _explicit_connections(
     for location in locations:
         matched = _ROOM_CODE.match(str(location.get("title") or "").strip())
         if matched:
-            key_by_code[matched.group("code").casefold()] = str(location["key"])
+            key_by_code[_normalized_room_code(matched.group("code"))] = str(
+                location["key"]
+            )
     if len(key_by_code) < 2:
         return []
 
@@ -507,7 +530,7 @@ def _explicit_connections(
     connections: list[dict[str, object]] = []
     seen: set[tuple[str, str]] = set()
     for index, heading in enumerate(headings):
-        source_code = heading.group("code").casefold()
+        source_code = _normalized_room_code(heading.group("code"))
         source_key = key_by_code.get(source_code)
         if source_key is None:
             continue
@@ -515,7 +538,9 @@ def _explicit_connections(
         section = text[heading.end() : end]
         for pattern in _EXPLICIT_ROUTE_PATTERNS:
             for route in pattern.finditer(section):
-                target_key = key_by_code.get(route.group("target").casefold())
+                target_key = key_by_code.get(
+                    _normalized_room_code(route.group("target"))
+                )
                 if target_key is None or target_key == source_key:
                     continue
                 edge = tuple(sorted((source_key, target_key)))
@@ -615,13 +640,13 @@ def _spatial_manifest(
     # Recover those exact labels without inferring room order or connectivity.
     room_title_matches = list(_ROOM_TITLE_LINE.finditer(text))
     existing_codes = {
-        matched.group("code").casefold()
+        _normalized_room_code(matched.group("code"))
         for location in locations
         if (matched := _ROOM_CODE.match(str(location.get("title") or "").strip()))
     }
     if existing_codes or len(room_title_matches) >= 2:
         for match_index, matched_title in enumerate(room_title_matches):
-            code = matched_title.group("code").casefold()
+            code = _normalized_room_code(matched_title.group("code"))
             if code in existing_codes:
                 continue
             label = matched_title.group("title").strip()
