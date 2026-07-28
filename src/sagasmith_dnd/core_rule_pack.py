@@ -262,6 +262,13 @@ BOUNDARIES = (
         "bundled:srd/weapon-properties",
     ),
     CoreBoundary(
+        "dnd5e.core.magic_ammunition.slaying",
+        ("2014",),
+        "combat_engine.preflight_attack",
+        ("tests/test_combat_engine.py::test_slaying_ammunition_opens_source_save_damage",),
+        "bundled:srd2014/09_Magic_Items/Magic_Items_Each/Arrow_of_Slaying.md",
+    ),
+    CoreBoundary(
         "dnd5e.core.attack.range",
         ("2014", "2024"),
         "combat_engine.preflight_attack|combat_engine._attack_range",
@@ -447,6 +454,13 @@ BOUNDARIES = (
         "spells.resolve_magic_item_last_charge",
         ("tests/test_spells.py::test_magic_item_charge_recovery_and_last_charge_check",),
         "bundled:srd/magic-items",
+    ),
+    CoreBoundary(
+        "dnd5e.core.magic_item.damage_resistance",
+        ("2014",),
+        "combat_engine._damage_defense_traits",
+        ("tests/test_combat_engine.py::test_attuned_magic_item_grants_damage_resistance",),
+        "bundled:srd2014/09_Magic_Items/Magic_Items_Each/Ring_of_Resistance.md",
     ),
     CoreBoundary(
         "dnd5e.core.spell.magic_missile_darts",

@@ -541,6 +541,142 @@ def test_attack_preflight_rejects_exhausted_linked_ammunition() -> None:
         preflight_attack(attacker, _actor("target"), action={"weapon_id": "longbow"})
 
 
+def test_slaying_ammunition_opens_source_save_damage() -> None:
+    source_excerpt = (
+        "If a creature belonging to the type, race, or group associated with an "
+        "arrow of slaying takes damage from the arrow, the creature must make a "
+        "DC 17 Constitution saving throw, taking an extra 6d10 piercing damage "
+        "on a failed save, or half as much extra damage on a successful one."
+    )
+    attacker = _actor("archer")
+    attacker["sheet"]["inventory"]["items"] = [
+        {"id": "arrows", "name": "Arrows", "kind": "ammunition", "quantity": 20},
+        {
+            "id": "dragon-slaying-arrows",
+            "name": "Arrows of dragon slaying",
+            "kind": "ammunition",
+            "quantity": 2,
+            "mechanics": {
+                "magic": True,
+                "rarity": "very_rare",
+                "slaying": {
+                    "target_groups": ["dragon"],
+                    "save_ability": "constitution",
+                    "save_dc": 17,
+                    "damage_formula": "6d10",
+                    "damage_type": "piercing",
+                    "half_on_success": True,
+                    "source_excerpt": source_excerpt,
+                    "rule_refs": ["srd2014.magic-items.arrow-of-slaying"],
+                },
+            },
+        },
+        {
+            "id": "longbow",
+            "name": "Longbow",
+            "kind": "weapon",
+            "equipped": True,
+            "equipped_slot": "main_hand",
+            "mechanics": {
+                "attack_type": "ranged",
+                "attack_ability": "dexterity",
+                "damage_formula": "1d8",
+                "damage_type": "piercing",
+                "properties": ["ammunition", "heavy", "two_handed"],
+                "normal_range_ft": 150,
+                "long_range_ft": 600,
+                "ammunition_item_id": "arrows",
+            },
+        },
+    ]
+    attacker["sheet"]["inventory"]["equipment_slots"]["main_hand"] = "longbow"
+    attacker["derived"] = derive_character_sheet(attacker["sheet"])
+    target = _actor("dragon")
+    target["sheet"]["progression"]["species"] = "Huge dragon"
+    target["derived"] = derive_character_sheet(target["sheet"])
+
+    plan = preflight_attack(
+        attacker,
+        target,
+        action={
+            "weapon_id": "longbow",
+            "ammunition_item_id": "dragon-slaying-arrows",
+        },
+        rules=resolution_context(
+            {"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []}
+        ),
+    )
+
+    assert plan["ammunition_item_id"] == "dragon-slaying-arrows"
+    assert plan["on_hit_effect"] == source_excerpt
+    assert plan["ammunition_slaying"]["matched_groups"] == ["dragon"]
+    assert "dnd5e.core.magic_ammunition.slaying" in {
+        receipt["mechanic_id"] for receipt in plan["rule_receipts"]
+    }
+
+
+def test_slaying_ammunition_does_not_trigger_for_an_unrelated_target() -> None:
+    attacker = _actor("archer")
+    attacker["sheet"]["inventory"]["items"] = [
+        {
+            "id": "dragon-slaying-arrow",
+            "name": "Arrow of dragon slaying",
+            "kind": "ammunition",
+            "quantity": 1,
+            "mechanics": {
+                "magic": True,
+                "slaying": {
+                    "target_groups": ["dragon"],
+                    "save_ability": "constitution",
+                    "save_dc": 17,
+                    "damage_formula": "6d10",
+                    "damage_type": "piercing",
+                    "half_on_success": True,
+                    "source_excerpt": (
+                        "The target must make a DC 17 Constitution saving throw, "
+                        "taking an extra 6d10 piercing damage on a failed save, or "
+                        "half as much extra damage on a successful one."
+                    ),
+                    "rule_refs": ["srd2014.magic-items.arrow-of-slaying"],
+                },
+            },
+        },
+        {
+            "id": "shortbow",
+            "name": "Shortbow",
+            "kind": "weapon",
+            "equipped": True,
+            "equipped_slot": "main_hand",
+            "mechanics": {
+                "attack_type": "ranged",
+                "attack_ability": "dexterity",
+                "damage_formula": "1d6",
+                "damage_type": "piercing",
+                "properties": ["ammunition", "two_handed"],
+                "normal_range_ft": 80,
+                "long_range_ft": 320,
+            },
+        },
+    ]
+    attacker["sheet"]["inventory"]["equipment_slots"]["main_hand"] = "shortbow"
+    attacker["derived"] = derive_character_sheet(attacker["sheet"])
+    target = _actor("giant")
+    target["sheet"]["progression"]["species"] = "Huge giant"
+    target["derived"] = derive_character_sheet(target["sheet"])
+
+    plan = preflight_attack(
+        attacker,
+        target,
+        action={
+            "weapon_id": "shortbow",
+            "ammunition_item_id": "dragon-slaying-arrow",
+        },
+    )
+
+    assert plan["ammunition_slaying"] is None
+    assert plan["on_hit_effect"] == ""
+
+
 def test_unarmed_strike_remains_available_with_an_unusable_equipped_weapon() -> None:
     attacker = _actor("archer")
     attacker["sheet"]["inventory"]["items"] = [
@@ -1026,6 +1162,35 @@ def test_damage_applies_resistance_and_vulnerability_in_order() -> None:
     assert result["applied_amount"] == 8
     assert result["after_hp"] == 12
     assert result["adjustment"] == "resistant_and_vulnerable"
+
+
+def test_attuned_magic_item_grants_damage_resistance() -> None:
+    actor = _actor("target", hp=20)
+    actor["sheet"]["inventory"]["items"] = [
+        {
+            "id": "ring-of-cold-resistance",
+            "name": "Ring of cold resistance",
+            "kind": "magic_item",
+            "equipped": True,
+            "equipped_slot": "ring_1",
+            "attunement": "attuned",
+            "mechanics": {
+                "grants": {"resistances": ["cold"]},
+            },
+        }
+    ]
+    actor["sheet"]["inventory"]["equipment_slots"]["ring_1"] = "ring-of-cold-resistance"
+
+    result = apply_damage_to_sheet(actor["sheet"], amount=9, damage_type="cold")
+
+    assert result["applied_amount"] == 4
+    assert result["adjustment"] == "resistant"
+    assert result["defense_sources"] == ["magic_item:ring-of-cold-resistance"]
+
+    actor["sheet"]["inventory"]["items"][0]["attunement"] = "required"
+    unattuned = apply_damage_to_sheet(actor["sheet"], amount=9, damage_type="cold")
+    assert unattuned["applied_amount"] == 9
+    assert unattuned["defense_sources"] == []
 
 
 def test_attack_preflight_and_resolution_keep_target_sheet_auditable() -> None:

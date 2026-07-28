@@ -30,6 +30,7 @@ from sagasmith_dnd.rule_engine import (
 from sagasmith_dnd.spell_resolution import normalize_spell_resolution
 from sagasmith_dnd.vocabulary import (
     ATTACK_MODES,
+    DAMAGE_TYPES,
     DENOMINATION_CP_VALUES,
     DENOMINATIONS,
     GAMEPLAY_VISIBILITY_SCOPES,
@@ -809,6 +810,32 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
             "magic_bonus": _integer(mechanics.get("magic_bonus"), f"{field}.magic_bonus"),
         }
     if kind == "magic_item":
+        if "grants" in mechanics:
+            grants = _object(mechanics["grants"], f"{field}.grants")
+            _reject_unknown(
+                grants,
+                f"{field}.grants",
+                {"resistances", "immunities", "vulnerabilities"},
+            )
+            normalized_grants: dict[str, list[str]] = {}
+            for defense in ("resistances", "immunities", "vulnerabilities"):
+                values = [
+                    value.strip().casefold()
+                    for value in _string_list(
+                        grants.get(defense),
+                        f"{field}.grants.{defense}",
+                    )
+                ]
+                if len(values) != len(set(values)):
+                    raise ValueError(f"{field}.grants.{defense} contains duplicates")
+                invalid = sorted(set(values) - DAMAGE_TYPES)
+                if invalid:
+                    raise ValueError(
+                        f"{field}.grants.{defense} contains invalid damage types: "
+                        + ", ".join(invalid)
+                    )
+                normalized_grants[defense] = values
+            mechanics["grants"] = normalized_grants
         if "ac_bonus" in mechanics:
             mechanics["ac_bonus"] = _integer(mechanics["ac_bonus"], f"{field}.ac_bonus")
         if "charge_rules" in mechanics:
@@ -869,6 +896,94 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
                 "last_charge_check_formula": last_charge_check_formula,
                 "destroy_on": destroy_on,
             }
+    if kind == "ammunition":
+        _reject_unknown(mechanics, field, {"magic", "rarity", "slaying"})
+        normalized_ammunition: dict[str, Any] = {}
+        if "magic" in mechanics:
+            normalized_ammunition["magic"] = _boolean(
+                mechanics["magic"], f"{field}.magic"
+            )
+        if "rarity" in mechanics:
+            normalized_ammunition["rarity"] = _text(
+                mechanics["rarity"], f"{field}.rarity", maximum=40
+            )
+        if "slaying" in mechanics:
+            slaying = _object(mechanics["slaying"], f"{field}.slaying")
+            _reject_unknown(
+                slaying,
+                f"{field}.slaying",
+                {
+                    "target_groups",
+                    "save_ability",
+                    "save_dc",
+                    "damage_formula",
+                    "damage_type",
+                    "half_on_success",
+                    "source_excerpt",
+                    "rule_refs",
+                },
+            )
+            target_groups = [
+                value.strip().casefold()
+                for value in _string_list(
+                    slaying.get("target_groups"),
+                    f"{field}.slaying.target_groups",
+                )
+            ]
+            save_ability = _text(
+                slaying.get("save_ability"),
+                f"{field}.slaying.save_ability",
+            ).casefold()
+            damage_formula = _text(
+                slaying.get("damage_formula"),
+                f"{field}.slaying.damage_formula",
+                maximum=40,
+            ).replace(" ", "")
+            damage_type = _text(
+                slaying.get("damage_type"),
+                f"{field}.slaying.damage_type",
+            ).casefold()
+            source_excerpt = _text(
+                slaying.get("source_excerpt"),
+                f"{field}.slaying.source_excerpt",
+                maximum=1200,
+            )
+            rule_refs = _string_list(
+                slaying.get("rule_refs"),
+                f"{field}.slaying.rule_refs",
+            )
+            if (
+                not target_groups
+                or len(target_groups) != len(set(target_groups))
+                or save_ability not in ABILITY_NAMES
+                or not re.fullmatch(r"\d+d\d+(?:[+-]\d+)?", damage_formula)
+                or damage_type not in DAMAGE_TYPES
+                or not source_excerpt
+                or not rule_refs
+            ):
+                raise ValueError(
+                    f"{field}.slaying requires unique targets, a valid save, "
+                    "damage, exact source excerpt, and rule refs"
+                )
+            normalized_ammunition["slaying"] = {
+                "target_groups": target_groups,
+                "save_ability": save_ability,
+                "save_dc": _integer(
+                    slaying.get("save_dc"),
+                    f"{field}.slaying.save_dc",
+                    minimum=1,
+                    maximum=40,
+                ),
+                "damage_formula": damage_formula,
+                "damage_type": damage_type,
+                "half_on_success": _boolean(
+                    slaying.get("half_on_success"),
+                    f"{field}.slaying.half_on_success",
+                ),
+                "source_excerpt": source_excerpt,
+                "rule_refs": rule_refs,
+            }
+        return normalized_ammunition
     return mechanics
 
 
@@ -3379,19 +3494,32 @@ def remove_inventory_item(
 
 
 def consume_weapon_ammunition(
-    sheet: dict[str, Any], weapon_id: str, quantity: int = 1
+    sheet: dict[str, Any],
+    weapon_id: str,
+    quantity: int = 1,
+    *,
+    ammunition_item_id: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Consume the ammunition linked by a weapon's structured mechanics."""
+    """Consume linked ammunition or one explicitly selected compatible stack."""
     value = validate_character_sheet(sheet)
     weapon = next((item for item in value["inventory"]["items"] if item["id"] == weapon_id), None)
     if weapon is None or weapon["kind"] != "weapon":
         raise ValueError("weapon_id must reference a weapon in inventory")
-    ammunition_item_id = weapon["mechanics"]["ammunition_item_id"]
-    if ammunition_item_id is None:
+    selected_ammunition_id = (
+        str(ammunition_item_id).strip()
+        if ammunition_item_id is not None
+        else weapon["mechanics"]["ammunition_item_id"]
+    )
+    if not selected_ammunition_id:
         raise ValueError("weapon has no linked ammunition")
+    if ammunition_item_id is not None and "ammunition" not in {
+        str(item).strip().casefold()
+        for item in weapon["mechanics"].get("properties", [])
+    }:
+        raise ValueError("weapon cannot use selected ammunition")
     count = _integer(quantity, "quantity", minimum=1)
     ammunition = next(
-        (item for item in value["inventory"]["items"] if item["id"] == ammunition_item_id),
+        (item for item in value["inventory"]["items"] if item["id"] == selected_ammunition_id),
         None,
     )
     if ammunition is None or ammunition["kind"] != "ammunition":
@@ -3400,7 +3528,7 @@ def consume_weapon_ammunition(
         raise ValueError("not enough weapon ammunition remains")
     ammunition["quantity"] = int(ammunition["quantity"]) - count
     return validate_character_sheet(value), {
-        "item_id": ammunition_item_id,
+        "item_id": selected_ammunition_id,
         "name": ammunition["name"],
         "quantity": count,
         "remaining": ammunition["quantity"],

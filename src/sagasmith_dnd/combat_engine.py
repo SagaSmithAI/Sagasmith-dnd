@@ -976,7 +976,8 @@ def preflight_attack(
             }
         else:
             raise CombatEngineError("weapon_id is required when actor has multiple attacks")
-    ammunition_item_id = weapon.get("ammunition_item_id")
+    ammunition_item_id = action.get("ammunition_item_id") or weapon.get("ammunition_item_id")
+    ammunition_slaying: dict[str, Any] | None = None
     if ammunition_item_id:
         ammunition = next(
             (
@@ -992,6 +993,26 @@ def preflight_attack(
             or int(ammunition.get("quantity", 0) or 0) < 1
         ):
             raise CombatEngineError("weapon has no linked ammunition remaining")
+        if action.get("ammunition_item_id") and "ammunition" not in {
+            str(item).strip().casefold() for item in weapon.get("properties", [])
+        }:
+            raise CombatEngineError("weapon cannot use selected ammunition")
+        slaying = dict(dict(ammunition.get("mechanics") or {}).get("slaying") or {})
+        target_species = str(
+            dict(actor_sheet(target).get("progression") or {}).get("species") or ""
+        ).casefold()
+        target_tokens = set(re.findall(r"[a-z0-9_]+", target_species))
+        matched_groups = [
+            group
+            for group in slaying.get("target_groups") or []
+            if str(group).casefold() in target_tokens
+        ]
+        if matched_groups:
+            ammunition_slaying = {
+                **deepcopy(slaying),
+                "matched_groups": matched_groups,
+                "ammunition_item_id": str(ammunition_item_id),
+            }
     attack_bonus = int(weapon.get("attack_bonus", 0))
     context = dict(action.get("context") or {})
     cover = dict(context.get("cover") or {})
@@ -1022,6 +1043,13 @@ def preflight_attack(
     damage_type = str(weapon.get("damage_type") or "")
     additional_damage = deepcopy(list(weapon.get("additional_damage") or []))
     on_hit_effect = str(weapon.get("on_hit_effect") or "").strip()
+    if ammunition_slaying is not None:
+        if on_hit_effect:
+            raise NeedsRulingError(
+                "weapon and selected ammunition both define on-hit effects",
+                missing=("multiple_on_hit_effects",),
+            )
+        on_hit_effect = str(ammunition_slaying["source_excerpt"])
     critical_followup = structured_critical_followup(on_hit_effect)
     if critical_followup is not None:
         on_hit_effect = ""
@@ -1338,6 +1366,8 @@ def preflight_attack(
         core_boundary_ids.append("dnd5e.core.attack.ranged_close_combat")
     if ammunition_item_id:
         core_boundary_ids.append("dnd5e.core.attack.ammunition")
+    if ammunition_slaying is not None:
+        core_boundary_ids.append("dnd5e.core.magic_ammunition.slaying")
     if cover_degree or cover.get("ac_bonus") is not None:
         core_boundary_ids.append("dnd5e.core.attack.cover")
     if helped_by:
@@ -1367,6 +1397,8 @@ def preflight_attack(
         "disadvantage_sources": list(context.get("disadvantage_sources") or []),
         "rulings": list(action.get("rulings") or []),
         "weapon_id": weapon.get("item_id"),
+        "ammunition_item_id": str(ammunition_item_id or ""),
+        "ammunition_slaying": ammunition_slaying,
         "attack_mode": attack_mode,
         "resource_cost": deepcopy(weapon.get("resource_cost") or {}),
         "range": range_result,
@@ -2265,10 +2297,10 @@ def apply_damage_to_sheet(
     melee: bool = False,
 ) -> dict[str, Any]:
     """Apply one typed damage part with temp HP and trait ordering."""
-    raw, adjusted, normalized, adjustment = _adjust_damage_amount(
+    raw, adjusted, normalized, adjustment, defense_sources = _adjust_damage_amount(
         sheet, amount=amount, damage_type=damage_type
     )
-    return _apply_adjusted_damage(
+    result = _apply_adjusted_damage(
         sheet,
         raw=raw,
         adjusted=adjusted,
@@ -2281,6 +2313,8 @@ def apply_damage_to_sheet(
         knock_out=knock_out,
         melee=melee,
     )
+    result["defense_sources"] = defense_sources
+    return result
 
 
 def apply_hit_point_loss_to_sheet(
@@ -2547,7 +2581,7 @@ def apply_damage_parts_to_sheet(
         grouped[damage_type] = grouped.get(damage_type, 0) + amount
     details: list[dict[str, Any]] = []
     for grouped_type, grouped_amount in grouped.items():
-        raw, adjusted, damage_type, adjustment = _adjust_damage_amount(
+        raw, adjusted, damage_type, adjustment, defense_sources = _adjust_damage_amount(
             sheet,
             amount=grouped_amount,
             damage_type=grouped_type,
@@ -2558,6 +2592,7 @@ def apply_damage_parts_to_sheet(
                 "applied_amount": adjusted,
                 "damage_type": damage_type,
                 "adjustment": adjustment,
+                "defense_sources": defense_sources,
             }
         )
     if not details:
@@ -2599,19 +2634,60 @@ def apply_damage_parts_to_sheet(
     }
 
 
+def _damage_defense_traits(
+    sheet: dict[str, Any],
+) -> tuple[dict[str, set[str]], dict[str, dict[str, list[str]]]]:
+    traits = dict(sheet.get("traits") or {})
+    defenses = {
+        key: _trait_set(traits.get(key))
+        for key in ("immunities", "resistances", "vulnerabilities")
+    }
+    sources: dict[str, dict[str, list[str]]] = {
+        key: {} for key in ("immunities", "resistances", "vulnerabilities")
+    }
+    for item in dict(sheet.get("inventory") or {}).get("items", []):
+        if (
+            not isinstance(item, dict)
+            or item.get("kind") != "magic_item"
+            or item.get("equipped") is not True
+        ):
+            continue
+        mechanics = dict(item.get("mechanics") or {})
+        # The canonical item attunement field already records both the
+        # requirement ("required") and active state ("attuned").  Do not add a
+        # second, potentially divergent requirement flag under mechanics.
+        if item.get("attunement") == "required":
+            continue
+        grants = dict(mechanics.get("grants") or {})
+        item_id = str(item.get("id") or "")
+        for defense in defenses:
+            values = _trait_set(grants.get(defense))
+            if not values:
+                continue
+            defenses[defense].update(values)
+            sources[defense][item_id] = sorted(values)
+    return defenses, sources
+
+
 def _adjust_damage_amount(
     sheet: dict[str, Any], *, amount: int, damage_type: str
-) -> tuple[int, int, str, str]:
+) -> tuple[int, int, str, str, list[str]]:
     raw = int(amount)
     if raw < 0:
         raise CombatEngineError("damage amount cannot be negative")
-    traits = dict(sheet.get("traits") or {})
     normalized = damage_type.strip().lower()
-    immunities = _trait_set(traits.get("immunities"))
-    resistances = _trait_set(traits.get("resistances"))
-    vulnerabilities = _trait_set(traits.get("vulnerabilities"))
+    defenses, item_sources = _damage_defense_traits(sheet)
+    immunities = defenses["immunities"]
+    resistances = defenses["resistances"]
+    vulnerabilities = defenses["vulnerabilities"]
+    active_sources = [
+        f"magic_item:{item_id}"
+        for defense in ("immunities", "resistances", "vulnerabilities")
+        for item_id, values in item_sources[defense].items()
+        if normalized in values
+    ]
     if normalized in immunities:
-        return raw, 0, normalized, "immune"
+        return raw, 0, normalized, "immune", active_sources
     adjusted = raw
     resistant = normalized in resistances or "petrified" in _condition_set(sheet.get("conditions"))
     if resistant:
@@ -2626,7 +2702,7 @@ def _adjust_damage_amount(
         adjustment = "vulnerable"
     else:
         adjustment = "normal"
-    return raw, adjusted, normalized, adjustment
+    return raw, adjusted, normalized, adjustment, active_sources
 
 
 def resolve_death_save_to_sheet(
