@@ -47,9 +47,7 @@ def new_playthrough_manifest(
     """Create the complete empty shape used before party construction."""
 
     resolved_party_size_status = party_size_status or (
-        "source_confirmed"
-        if recommended_party_maximum is not None
-        else "dm_review_required"
+        "source_confirmed" if recommended_party_maximum is not None else "dm_review_required"
     )
     resolved_party_size_review = dict(party_size_review or {})
     if resolved_party_size_status in {"dm_review_required", "dm_review_completed"}:
@@ -153,18 +151,15 @@ def validate_playthrough_manifest(value: Any) -> dict[str, Any]:
     quests = [
         _validate_quest(item, index) for index, item in enumerate(_list(manifest.get("quests")))
     ]
-    clues = [
-        _validate_clue(item, index) for index, item in enumerate(_list(manifest.get("clues")))
-    ]
+    clues = [_validate_clue(item, index) for index, item in enumerate(_list(manifest.get("clues")))]
     _require_unique(npcs, "actor_id", "npcs")
     _require_unique(quests, "id", "quests")
     _require_unique(clues, "id", "clues")
+    ending = _validate_ending(manifest.get("ending"))
     normalized = {
         "schema_version": SCHEMA_VERSION,
         "run_id": _required_text(manifest.get("run_id"), "run_id"),
-        "campaign_line_id": _required_text(
-            manifest.get("campaign_line_id"), "campaign_line_id"
-        ),
+        "campaign_line_id": _required_text(manifest.get("campaign_line_id"), "campaign_line_id"),
         "module_ids": module_ids,
         "status": status,
         "source_refs": [
@@ -180,7 +175,7 @@ def validate_playthrough_manifest(value: Any) -> dict[str, Any]:
         "world_state": _json_object(manifest.get("world_state"), "world_state"),
         "snapshot_dag": _validate_snapshot_dag(manifest.get("snapshot_dag")),
         "random_stream": _validate_random_projection(manifest.get("random_stream")),
-        "ending": _validate_ending(manifest.get("ending")),
+        "ending": ending,
         "review_blocks": [
             _json_object(item, f"review_blocks[{index}]")
             for index, item in enumerate(_list(manifest.get("review_blocks")))
@@ -198,6 +193,10 @@ def validate_playthrough_manifest(value: Any) -> dict[str, Any]:
             )
     if status in {"in_progress", "completed"} and not current["scene_id"]:
         raise ValueError("active playthrough requires a current scene")
+    if (status == "completed") != (ending["status"] == "completed"):
+        raise ValueError(
+            "playthrough status and ending.status must enter completed together"
+        )
     return normalized
 
 
@@ -213,6 +212,7 @@ def validate_source_ref(value: Any, *, field: str = "source_ref") -> dict[str, A
             "page_start",
             "page_end",
             "heading_path",
+            "content_sha256",
             "chunk_content_sha256",
             "module_id",
             "scene_id",
@@ -223,8 +223,17 @@ def validate_source_ref(value: Any, *, field: str = "source_ref") -> dict[str, A
     page_start = _integer(ref.get("page_start"), f"{field}.page_start", minimum=1)
     page_end = _integer(ref.get("page_end"), f"{field}.page_end", minimum=page_start)
     asset_sha = _required_text(ref.get("asset_sha256"), f"{field}.asset_sha256").casefold()
+    canonical_chunk_sha = ref.get("content_sha256")
+    legacy_chunk_sha = ref.get("chunk_content_sha256")
+    if (
+        canonical_chunk_sha is not None
+        and legacy_chunk_sha is not None
+        and str(canonical_chunk_sha).casefold() != str(legacy_chunk_sha).casefold()
+    ):
+        raise ValueError(f"{field} content SHA-256 aliases must match")
     chunk_sha = _required_text(
-        ref.get("chunk_content_sha256"), f"{field}.chunk_content_sha256"
+        canonical_chunk_sha if canonical_chunk_sha is not None else legacy_chunk_sha,
+        f"{field}.content_sha256",
     ).casefold()
     if not _is_sha256(asset_sha) or not _is_sha256(chunk_sha):
         raise ValueError(f"{field} SHA-256 fields must contain 64 lowercase hex characters")
@@ -235,7 +244,7 @@ def validate_source_ref(value: Any, *, field: str = "source_ref") -> dict[str, A
         "page_start": page_start,
         "page_end": page_end,
         "heading_path": _unique_strings(ref.get("heading_path"), f"{field}.heading_path"),
-        "chunk_content_sha256": chunk_sha,
+        "content_sha256": chunk_sha,
         "module_id": _text(ref.get("module_id")),
         "scene_id": _text(ref.get("scene_id")),
         "chunk_id": _text(ref.get("chunk_id")),
@@ -366,14 +375,10 @@ def _validate_party(value: Any) -> dict[str, Any]:
         raise ValueError("party.selected_size must use the source-recommended maximum")
     if status == "source_confirmed":
         if maximum is None or selected is None:
-            raise ValueError(
-                "source-confirmed party size requires a maximum and selected size"
-            )
+            raise ValueError("source-confirmed party size requires a maximum and selected size")
     elif status == "dm_review_required":
         if selected is not None:
-            raise ValueError(
-                "unresolved party-size Agent-as-DM review cannot select a party size"
-            )
+            raise ValueError("unresolved party-size Agent-as-DM review cannot select a party size")
     else:
         if minimum is None or maximum is None or selected is None or not review:
             raise ValueError(
@@ -430,9 +435,7 @@ def _validate_party_member(value: Any, index: int) -> dict[str, Any]:
         },
     )
     actor_id = _required_text(item.get("actor_id"), f"{field}.actor_id")
-    source = _choice(
-        item.get("source"), f"{field}.source", {"pregen", "generated", "replacement"}
-    )
+    source = _choice(item.get("source"), f"{field}.source", {"pregen", "generated", "replacement"})
     knowledge_actor = _required_text(
         item.get("knowledge_scope_actor_id"), f"{field}.knowledge_scope_actor_id"
     )
@@ -460,12 +463,8 @@ def _validate_replacement(value: Any, index: int) -> dict[str, str]:
     field = f"party.replacements[{index}]"
     item = _object(value, field)
     _only(item, field, {"predecessor_actor_id", "replacement_actor_id", "handoff_event_id"})
-    predecessor = _required_text(
-        item.get("predecessor_actor_id"), f"{field}.predecessor_actor_id"
-    )
-    replacement = _required_text(
-        item.get("replacement_actor_id"), f"{field}.replacement_actor_id"
-    )
+    predecessor = _required_text(item.get("predecessor_actor_id"), f"{field}.predecessor_actor_id")
+    replacement = _required_text(item.get("replacement_actor_id"), f"{field}.replacement_actor_id")
     if predecessor == replacement:
         raise ValueError(f"{field} predecessor and replacement must be different actors")
     return {
@@ -580,14 +579,25 @@ def _validate_ending(value: Any) -> dict[str, Any]:
     achieved = _text(ending.get("achieved_condition_id"))
     if achieved and achieved not in {item["id"] for item in conditions}:
         raise ValueError("ending.achieved_condition_id does not identify a declared condition")
+    status = _choice(ending.get("status"), "ending.status", ENDING_STATUSES)
+    verification = [
+        _json_object(item, f"ending.verification[{index}]")
+        for index, item in enumerate(_list(ending.get("verification")))
+    ]
+    if status == "completed":
+        if not achieved:
+            raise ValueError("completed ending requires achieved_condition_id")
+        if not verification:
+            raise ValueError("completed ending requires verification results")
+        if any(item.get("passed") is not True for item in verification):
+            raise ValueError("completed ending requires every verification result to pass")
+    elif achieved:
+        raise ValueError("non-completed ending cannot retain achieved_condition_id")
     return {
-        "status": _choice(ending.get("status"), "ending.status", ENDING_STATUSES),
+        "status": status,
         "conditions": conditions,
         "achieved_condition_id": achieved,
-        "verification": [
-            _json_object(item, f"ending.verification[{index}]")
-            for index, item in enumerate(_list(ending.get("verification")))
-        ],
+        "verification": verification,
     }
 
 

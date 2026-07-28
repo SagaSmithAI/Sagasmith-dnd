@@ -6,16 +6,10 @@ import re
 from copy import deepcopy
 from typing import Any
 
+from sagasmith_dnd.abilities import ABILITY_IDS
+
 SPELL_RESOLUTION_MECHANIC_ID = "dnd5e.core.spell.structured_resolution"
 
-_ABILITIES = {
-    "strength",
-    "dexterity",
-    "constitution",
-    "intelligence",
-    "wisdom",
-    "charisma",
-}
 _DICE = re.compile(r"(?i)^([1-9]\d*)d([1-9]\d*)$")
 
 
@@ -289,7 +283,7 @@ def normalize_spell_resolution(value: Any, field: str = "spell.resolution") -> d
             },
         )
         ability = _text(save.get("ability"), f"{field}.save.ability").casefold()
-        if ability not in _ABILITIES:
+        if ability not in ABILITY_IDS:
             raise ValueError(f"{field}.save.ability is invalid")
         success = _text(save.get("success"), f"{field}.save.success").casefold()
         if success not in {"half", "none"}:

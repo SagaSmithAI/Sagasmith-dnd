@@ -7,7 +7,15 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 from typing import Any, Iterable
 
+from sagasmith_dnd.conditions import (
+    apply_condition_change,
+    apply_effect_conditions,
+    condition_ids,
+    reconcile_ended_effect_conditions,
+)
 from sagasmith_dnd.core_rule_pack import BuiltinCoreRulePack, get_core_rule_pack
+from sagasmith_dnd.hit_points import apply_basic_healing_to_sheet
+from sagasmith_dnd.resources import mutate_bounded_resource
 
 ALLOWED_EVENTS = {
     "character.validate",
@@ -595,8 +603,9 @@ def _matches(
             if _read_path(sheet, str(predicate.get("path") or "")) != predicate.get("value"):
                 return False
         elif kind == "has_condition":
-            conditions = {str(item).casefold() for item in sheet.get("conditions", [])}
-            if str(predicate.get("id") or "").casefold() not in conditions:
+            conditions = condition_ids(sheet.get("conditions"))
+            expected = condition_ids([predicate.get("id")])
+            if not expected or expected.isdisjoint(conditions):
                 return False
         elif kind == "option_equals":
             pack_id = str(predicate.get("pack_id") or "")
@@ -616,51 +625,59 @@ def _apply_sheet_operation(sheet: dict[str, Any], operation: dict[str, Any]) -> 
         resource = sheet.setdefault("resources", {}).get(key)
         if not isinstance(resource, dict):
             raise RuleCompilationError(f"resource does not exist: {key}")
-        current = int(resource.get("value", 0) or 0)
-        maximum = int(resource.get("max", current) or current)
-        if opcode == "resource.spend":
-            if current < amount:
-                raise RuleCompilationError(f"resource is exhausted: {key}")
-            resource["value"] = current - amount
-        else:
-            resource["value"] = min(maximum, current + amount)
+        try:
+            mutate_bounded_resource(
+                resource,
+                amount=amount,
+                direction="spend" if opcode == "resource.spend" else "recover",
+            )
+        except ValueError as error:
+            raise RuleCompilationError(f"{error}: {key}") from error
     elif opcode == "hp.heal":
-        hp = sheet.setdefault("combat", {}).setdefault("hp", {})
-        hp["value"] = min(int(hp.get("max", 0) or 0), int(hp.get("value", 0) or 0) + amount)
+        healed = apply_basic_healing_to_sheet(sheet, amount=amount)["sheet"]
+        sheet.clear()
+        sheet.update(healed)
     elif opcode == "hp.temp.set":
         hp = sheet.setdefault("combat", {}).setdefault("hp", {})
         hp["temp"] = max(int(hp.get("temp", 0) or 0), int(operation.get("value", 0) or 0))
     elif opcode in {"condition.add", "condition.remove"}:
-        conditions = list(sheet.get("conditions", []))
-        condition_id = str(operation["id"])
-        if opcode == "condition.add" and condition_id not in conditions:
-            conditions.append(condition_id)
-        if opcode == "condition.remove":
-            conditions = [item for item in conditions if str(item) != condition_id]
-        sheet["conditions"] = conditions
+        apply_condition_change(
+            sheet,
+            condition_id=str(operation["id"]),
+            add=opcode == "condition.add",
+        )
     elif opcode == "effect.add":
         effect = deepcopy(operation.get("effect") or {})
         effect.setdefault("id", operation["id"])
+        effect.setdefault("active", True)
         if any(item.get("id") == effect["id"] for item in sheet.get("effects", [])):
             raise RuleCompilationError(f"effect already exists: {effect['id']}")
         sheet.setdefault("effects", []).append(effect)
+        apply_effect_conditions(sheet, effect)
     elif opcode == "effect.remove":
-        sheet["effects"] = [
-            item for item in sheet.get("effects", []) if item.get("id") != operation["id"]
-        ]
+        effects = sheet.get("effects", [])
+        effect = next(
+            (item for item in effects if item.get("id") == operation["id"]),
+            None,
+        )
+        if effect is None:
+            raise RuleCompilationError(f"effect does not exist: {operation['id']}")
+        effects.remove(effect)
+        reconcile_ended_effect_conditions(sheet, ended_effects=[effect])
     elif opcode.startswith("spell_slot."):
         slots = sheet.setdefault("spellcasting", {}).setdefault("spell_slots", {})
         key = str(operation["level"])
         resource = slots.get(key) or slots.get(f"spell{key}")
         if not isinstance(resource, dict):
             raise RuleCompilationError(f"spell slot does not exist: {key}")
-        current = int(resource.get("value", 0) or 0)
-        if opcode == "spell_slot.spend":
-            if current < amount:
-                raise RuleCompilationError(f"spell slot is exhausted: {key}")
-            resource["value"] = current - amount
-        else:
-            resource["value"] = min(int(resource.get("max", current) or current), current + amount)
+        try:
+            mutate_bounded_resource(
+                resource,
+                amount=amount,
+                direction="spend" if opcode == "spell_slot.spend" else "recover",
+            )
+        except ValueError as error:
+            raise RuleCompilationError(f"{error}: spell slot {key}") from error
 
 
 def _read_path(value: dict[str, Any], path: str) -> Any:

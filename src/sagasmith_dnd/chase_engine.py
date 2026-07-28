@@ -12,6 +12,7 @@ from copy import deepcopy
 from typing import Any
 from uuid import uuid4
 
+from sagasmith_dnd.character_schema import set_exhaustion_level
 from sagasmith_dnd.combat_engine import (
     CombatEngineError,
     actor_derived,
@@ -21,6 +22,8 @@ from sagasmith_dnd.combat_engine import (
     resolve_actor_check,
     start_encounter,
 )
+from sagasmith_dnd.conditions import apply_condition_change, condition_ids
+from sagasmith_dnd.editions import normalize_dnd_edition
 from sagasmith_dnd.engine import roll, roll_d20
 from sagasmith_dnd.rule_engine import ResolutionContext
 
@@ -33,7 +36,7 @@ CHASE_BOUNDARY_IDS = (
 
 
 def _conditions(sheet: dict[str, Any]) -> set[str]:
-    return {str(item).strip().casefold() for item in sheet.get("conditions", [])}
+    return condition_ids(sheet.get("conditions"))
 
 
 def _constitution_modifier(sheet: dict[str, Any]) -> int:
@@ -80,7 +83,11 @@ def start_chase(
     """Roll initiative and create a theater-of-the-mind chase state."""
     if not participants:
         raise CombatEngineError("chase requires participants")
-    if ruleset != "2014":
+    try:
+        normalized_ruleset = normalize_dnd_edition(ruleset)
+    except ValueError as exc:
+        raise CombatEngineError(str(exc)) from exc
+    if normalized_ruleset != "2014":
         raise CombatEngineError("the structured chase engine currently supports 2014 rules")
     identifiers = [actor_id(actor) for actor in participants]
     normalized_quarry_ids = [str(item) for item in quarry_ids]
@@ -99,9 +106,7 @@ def start_chase(
         allowed = {"distance_ft", "status", "summary"}
         unknown = set(transition) - allowed
         if unknown:
-            raise CombatEngineError(
-                f"unsupported close_transition fields: {sorted(unknown)}"
-            )
+            raise CombatEngineError(f"unsupported close_transition fields: {sorted(unknown)}")
         distance = int(transition.get("distance_ft", 0) or 0)
         if distance < 0:
             raise CombatEngineError("close_transition distance_ft cannot be negative")
@@ -113,7 +118,7 @@ def start_chase(
 
     encounter = start_encounter(
         participants,
-        ruleset=ruleset,
+        ruleset=normalized_ruleset,
         scene_id=scene_id,
         name=name,
         battle_map=None,
@@ -155,7 +160,7 @@ def start_chase(
         "active": True,
         "name": str(name or "Chase"),
         "scene_id": scene_id,
-        "ruleset": ruleset,
+        "ruleset": normalized_ruleset,
         "mode": "theater_of_the_mind",
         "round": 1,
         "turn_index": 0,
@@ -210,9 +215,7 @@ def _choose_check(
 ) -> dict[str, Any]:
     normalized = str(choice or "").strip().casefold().replace(" ", "_")
     if normalized not in allowed:
-        raise CombatEngineError(
-            "complication_choice must be one of: " + ", ".join(sorted(allowed))
-        )
+        raise CombatEngineError("complication_choice must be one of: " + ", ".join(sorted(allowed)))
     kind, ability = allowed[normalized]
     return _check(actor, dc=dc, kind=kind, ability=ability, rules=rules, rng=rng)
 
@@ -289,11 +292,9 @@ def _resolve_urban_complication(
         if not checked["success"]:
             result["movement_penalty_ft"] = movement_penalty
             if prone:
-                conditions = _conditions(sheet)
-                conditions.add("prone")
-                sheet["conditions"] = sorted(conditions)
+                apply_condition_change(sheet, condition_id="prone", add=True)
                 updated_actor["sheet"] = sheet
-                result["knocked_prone"] = True
+                result["knocked_prone"] = "prone" in _conditions(sheet)
 
     if number == 1:
         settle_check(15, {"acrobatics": ("ability", "acrobatics")}, movement_penalty=10)
@@ -428,9 +429,7 @@ def _distance_summary(chase: dict[str, Any]) -> dict[str, Any]:
         {
             "quarry_id": quarry["actor_id"],
             "pursuer_id": pursuer["actor_id"],
-            "distance_ft": max(
-                0, int(quarry["position_ft"]) - int(pursuer["position_ft"])
-            ),
+            "distance_ft": max(0, int(quarry["position_ft"]) - int(pursuer["position_ft"])),
         }
         for quarry in active_quarries
         for pursuer in active_pursuers
@@ -497,9 +496,12 @@ def advance_chase_turn(
     stand_cost = 0
     if "prone" in conditions:
         if stand_from_prone and speed > 0:
-            stand_cost = speed // 2
-            conditions.discard("prone")
-            sheet["conditions"] = sorted(conditions)
+            apply_condition_change(sheet, condition_id="prone", add=False)
+            conditions = _conditions(sheet)
+            if "prone" in conditions:
+                speed //= 2
+            else:
+                stand_cost = speed // 2
         else:
             speed //= 2
 
@@ -520,22 +522,14 @@ def advance_chase_turn(
                 rng=rng,
             )
             if not dash_check["success"]:
-                combat = sheet.setdefault("combat", {})
-                combat["exhaustion"] = min(
-                    6, int(combat.get("exhaustion", 0) or 0) + 1
+                sheet = set_exhaustion_level(
+                    sheet,
+                    min(
+                        6,
+                        int(dict(sheet.get("combat") or {}).get("exhaustion", 0) or 0) + 1,
+                    ),
                 )
-                if int(combat["exhaustion"]) >= 6 and "dead" not in {
-                    str(condition).strip().casefold()
-                    for condition in sheet.get("conditions", [])
-                }:
-                    sheet.setdefault("conditions", []).append("dead")
-                if int(combat["exhaustion"]) >= 4:
-                    hp = dict(combat.get("hp") or {})
-                    hp["value"] = min(
-                        int(hp.get("value", 0) or 0),
-                        max(1, int(hp.get("max", 0) or 0) // 2),
-                    )
-                    combat["hp"] = hp
+                combat = sheet["combat"]
                 participant["chase_exhaustion"] = (
                     int(participant.get("chase_exhaustion", 0) or 0) + 1
                 )
@@ -543,8 +537,7 @@ def advance_chase_turn(
                     (
                         effect
                         for effect in sheet.get("effects", [])
-                        if effect.get("active")
-                        and effect.get("kind") == "chase_exhaustion"
+                        if effect.get("active") and effect.get("kind") == "chase_exhaustion"
                     ),
                     None,
                 )
@@ -581,9 +574,7 @@ def advance_chase_turn(
                         None,
                     )
                     if change is None:
-                        raise CombatEngineError(
-                            "active chase exhaustion effect is malformed"
-                        )
+                        raise CombatEngineError("active chase exhaustion effect is malformed")
                     change["value"] = int(change.get("value", 0) or 0) + 1
                 exhaustion_gained = 1
                 if int(combat["exhaustion"]) >= 6:
@@ -597,9 +588,7 @@ def advance_chase_turn(
         participant["active"] = False
         participant["dropped_reason"] = "voluntary"
 
-    movement_penalty = int(
-        (complication_result or {}).get("movement_penalty_ft", 0) or 0
-    )
+    movement_penalty = int((complication_result or {}).get("movement_penalty_ft", 0) or 0)
     moved_ft = max(0, movement_ft - movement_penalty)
     participant["position_ft"] = int(participant.get("position_ft", 0) or 0) + moved_ft
     guard_attack = None
@@ -703,9 +692,7 @@ def advance_chase_turn(
                 )
                 continue
             if passive_ceiling <= 0:
-                raise CombatEngineError(
-                    "an unseen quarry requires pursuer_passive_perception_max"
-                )
+                raise CombatEngineError("an unseen quarry requires pursuer_passive_perception_max")
             quarry_actor = dict(quarry_actors or {}).get(quarry_id)
             if quarry_actor is None:
                 raise CombatEngineError(

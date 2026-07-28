@@ -7,6 +7,7 @@ import re
 from copy import deepcopy
 from typing import Any
 
+from sagasmith_dnd.abilities import ABILITY_LABELS
 from sagasmith_dnd.spell_resolution import (
     SPELL_RESOLUTION_MECHANIC_ID,
     normalize_spell_resolution,
@@ -54,7 +55,6 @@ _GENERIC_FEATURE_TITLES = {
     "quick build",
 }
 _PAGE_HEADER_RE = re.compile(r"(?i)^(?:chapter|part|appendix)\b")
-_ABILITY_LABELS = ("STR", "DEX", "CON", "INT", "WIS", "CHA")
 _STATBLOCK_FIELD_LABELS = (
     "Saving Throws",
     "Skills",
@@ -465,9 +465,9 @@ def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
         content = str(chunk.get("content") or "").strip()
         if canonical_section is not None:
             active_section = canonical_section
-        if compact_title == "".join(_ABILITY_LABELS):
+        if compact_title == "".join(ABILITY_LABELS):
             cursor = 0
-            for ability in _ABILITY_LABELS:
+            for ability in ABILITY_LABELS:
                 score = re.match(
                     r"^\s*(\d+)\s*\(([+\-−]\d+)\)",
                     content[cursor:],
@@ -485,7 +485,7 @@ def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
                 else:
                     section_parts[active_section].append(tail)
             continue
-        if title in _ABILITY_LABELS:
+        if title in ABILITY_LABELS:
             score = re.match(r"^\s*(\d+)\s*\(([+\-−]?\d+)\)(?P<tail>.*)$", content, re.S)
             if score is None:
                 raise StatblockImportError(f"statblock {title} score is ambiguous")
@@ -513,7 +513,7 @@ def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
                 section_parts[section].append(content)
         elif content:
             detail_parts.append(content)
-    missing_abilities = [label for label in _ABILITY_LABELS if label not in ability_values]
+    missing_abilities = [label for label in ABILITY_LABELS if label not in ability_values]
     if missing_abilities:
         raise StatblockImportError(
             "statblock candidate is missing ability scores: " + ", ".join(missing_abilities)
@@ -543,7 +543,7 @@ def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
         "",
         "| STR | DEX | CON | INT | WIS | CHA |",
         "|---:|---:|---:|---:|---:|---:|",
-        "| " + " | ".join(ability_values[label] for label in _ABILITY_LABELS) + " |",
+        "| " + " | ".join(ability_values[label] for label in ABILITY_LABELS) + " |",
     ]
     for label in _STATBLOCK_FIELD_LABELS:
         if fields.get(label):

@@ -588,12 +588,19 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
             "choices": {"outcome": "take one additional action on the current turn"},
         }
     if key == ("wizard", "arcane recovery"):
+        reset_on_long_rest = bool(
+            re.search(
+                r"(?:until|after)\s+you\s+finish\s+a\s+long\s+rest",
+                body,
+                re.IGNORECASE,
+            )
+        )
         return {
             "uses": {
                 "label": "Arcane Recovery",
                 "value": 1,
                 "max": 1,
-                "recovers_on": "manual",
+                "recovers_on": "long_rest" if reset_on_long_rest else "manual",
                 "source_key": "Wizard",
             }
         }

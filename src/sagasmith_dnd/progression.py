@@ -7,6 +7,7 @@ from dataclasses import asdict
 from typing import Any
 
 from sagasmith_dnd.combat_engine import CombatEngineError
+from sagasmith_dnd.editions import normalize_dnd_edition
 from sagasmith_dnd.engine import roll
 
 FULL_CASTER_SLOTS: dict[int, tuple[int, ...]] = {
@@ -304,7 +305,11 @@ def advance_single_class_level(
     are reported as follow-up choices by the MCP layer.
     """
     value = deepcopy(sheet)
-    if "2014" not in str(value.get("edition") or "2014"):
+    try:
+        edition = normalize_dnd_edition(value.get("edition"))
+    except ValueError as exc:
+        raise CombatEngineError(str(exc)) from exc
+    if edition != "2014":
         raise CombatEngineError("level advancement currently supports D&D 5e 2014 cards only")
     progression = value.setdefault("progression", {})
     classes = list(progression.get("classes") or [])

@@ -6,11 +6,23 @@ from copy import deepcopy
 from dataclasses import asdict
 from typing import Any
 
-from sagasmith_dnd.combat_engine import (
-    CombatEngineError,
-    clear_ended_invisibility_spell_condition,
+from sagasmith_dnd.character_schema import effective_hit_point_maximum, set_exhaustion_level
+from sagasmith_dnd.combat_engine import CombatEngineError
+from sagasmith_dnd.conditions import (
+    apply_condition_change,
+    condition_ids,
+    reconcile_condition_projection,
+    reconcile_ended_effect_conditions,
 )
+from sagasmith_dnd.editions import normalize_dnd_edition
 from sagasmith_dnd.engine import roll
+from sagasmith_dnd.game_time import (
+    TICKS_PER_DAY,
+    TICKS_PER_HOUR,
+    TICKS_PER_MINUTE,
+)
+from sagasmith_dnd.hit_points import apply_basic_healing_to_sheet
+from sagasmith_dnd.resources import mutate_bounded_resource
 from sagasmith_dnd.rule_engine import ResolutionContext, apply_rule_event, core_receipts
 
 REST_MINIMUM_MINUTES = {"short_rest": 60, "long_rest": 480}
@@ -25,34 +37,23 @@ COMBAT_BOUND_EFFECT_PERIODS = frozenset(
 )
 
 
-def _remove_conditions_from_expired_effects(
-    sheet: dict[str, Any], expired_condition_additions: set[str]
-) -> None:
-    """Keep condition cleanup identical for every effect-duration clock."""
-    active_condition_additions: set[str] = set()
-    for effect in sheet.get("effects", []):
-        if not effect.get("active") or effect.get("kind") != "timed_conditions":
-            continue
-        for change in effect.get("changes", []):
-            if change.get("path") != "conditions" or change.get("mode") != "add":
-                continue
-            raw = change.get("value")
-            values = raw if isinstance(raw, list) else [raw]
-            active_condition_additions.update(
-                str(item).strip().casefold() for item in values if str(item).strip()
-            )
-    removable_conditions = expired_condition_additions - active_condition_additions
-    if not any(
-        effect.get("active") and effect.get("kind") == "turn_undead"
-        for effect in sheet.get("effects", [])
-    ):
-        removable_conditions.add("turned")
-    if removable_conditions:
-        sheet["conditions"] = [
-            condition
-            for condition in sheet.get("conditions", [])
-            if str(condition).casefold() not in removable_conditions
-        ]
+def _sheet_edition(sheet: dict[str, Any]) -> str:
+    try:
+        return normalize_dnd_edition(sheet.get("edition"))
+    except ValueError as exc:
+        raise CombatEngineError(str(exc)) from exc
+
+
+def _reconcile_ended_effects(sheet: dict[str, Any], ended_effect_ids: list[str]) -> None:
+    """Project all effect endings through the shared condition-ownership primitive."""
+
+    ids = set(ended_effect_ids)
+    reconcile_ended_effect_conditions(
+        sheet,
+        ended_effects=[
+            effect for effect in sheet.get("effects", []) if str(effect.get("id") or "") in ids
+        ],
+    )
 
 
 def allows_trance_rest(sheet: dict[str, Any]) -> bool:
@@ -129,62 +130,96 @@ def record_rest_completion(
     sheet: dict[str, Any],
     *,
     rest_type: str,
-    started_elapsed_minutes: int,
-    completed_elapsed_minutes: int,
+    started_elapsed_ticks: int | None = None,
+    completed_elapsed_ticks: int | None = None,
+    started_elapsed_minutes: int | None = None,
+    completed_elapsed_minutes: int | None = None,
     rest_schedule: dict[str, int] | None = None,
 ) -> dict[str, Any]:
-    """Validate campaign-clock rest timing and preserve the last benefit time."""
+    """Validate game-time rest timing and preserve canonical tick positions."""
     normalized = str(rest_type).strip().lower().replace("-", "_")
     if normalized not in REST_MINIMUM_MINUTES:
         raise CombatEngineError("rest_type must be short_rest or long_rest")
-    started = int(started_elapsed_minutes)
-    completed = int(completed_elapsed_minutes)
+    using_ticks = started_elapsed_ticks is not None or completed_elapsed_ticks is not None
+    using_legacy_minutes = (
+        started_elapsed_minutes is not None or completed_elapsed_minutes is not None
+    )
+    if using_ticks == using_legacy_minutes:
+        raise CombatEngineError(
+            "provide exactly one complete rest interval in elapsed ticks or legacy minutes"
+        )
+    if using_ticks:
+        if started_elapsed_ticks is None or completed_elapsed_ticks is None:
+            raise CombatEngineError("rest tick bounds must be supplied together")
+        started = int(started_elapsed_ticks)
+        completed = int(completed_elapsed_ticks)
+    else:
+        if started_elapsed_minutes is None or completed_elapsed_minutes is None:
+            raise CombatEngineError("rest minute bounds must be supplied together")
+        started = int(started_elapsed_minutes) * TICKS_PER_MINUTE
+        completed = int(completed_elapsed_minutes) * TICKS_PER_MINUTE
     if started < 0 or completed < started:
         raise CombatEngineError("rest clock bounds are invalid")
     allows_trance = allows_trance_rest(sheet)
     minimum_minutes = (
         240 if normalized == "long_rest" and allows_trance else REST_MINIMUM_MINUTES[normalized]
     )
-    if completed - started < minimum_minutes:
+    duration_ticks = completed - started
+    if duration_ticks < minimum_minutes * TICKS_PER_MINUTE:
         raise CombatEngineError(f"{normalized} requires at least {minimum_minutes} minutes")
+    if duration_ticks % TICKS_PER_MINUTE:
+        raise CombatEngineError("rest duration must contain a whole number of minutes")
     validate_rest_schedule(
         rest_type=normalized,
-        duration_minutes=completed - started,
+        duration_minutes=duration_ticks // TICKS_PER_MINUTE,
         rest_schedule=rest_schedule,
         allows_trance=allows_trance,
     )
     hp = int(dict(sheet.get("combat", {}).get("hp") or {}).get("value", 0) or 0)
-    conditions = {str(item).casefold() for item in sheet.get("conditions", [])}
+    conditions = condition_ids(sheet.get("conditions"))
     if hp <= 0 or "dead" in conditions:
         raise CombatEngineError("a creature must have at least 1 hit point at the start of a rest")
     history = dict(dict(sheet.get("combat") or {}).get("rest_history") or {})
-    previous_completed = history.get("last_rest_completed_elapsed_minutes")
+    previous_completed = history.get("last_rest_completed_elapsed_ticks")
+    if (
+        previous_completed is None
+        and history.get("last_rest_completed_elapsed_minutes") is not None
+    ):
+        previous_completed = int(history["last_rest_completed_elapsed_minutes"]) * TICKS_PER_MINUTE
     if previous_completed is not None and completed <= int(previous_completed):
         raise CombatEngineError(
             "a creature cannot benefit from more than one rest ending at the same campaign time"
         )
-    previous_long = history.get("last_long_rest_elapsed_minutes")
+    previous_long = history.get("last_long_rest_elapsed_ticks")
+    if previous_long is None and history.get("last_long_rest_elapsed_minutes") is not None:
+        previous_long = int(history["last_long_rest_elapsed_minutes"]) * TICKS_PER_MINUTE
     if (
         normalized == "long_rest"
         and previous_long is not None
-        and completed - int(previous_long) < 1440
+        and completed - int(previous_long) < TICKS_PER_DAY
     ):
         raise CombatEngineError(
             "a creature cannot benefit from more than one long rest in 24 hours"
         )
     value = deepcopy(sheet)
     next_history = value.setdefault("combat", {}).setdefault("rest_history", {})
+    for legacy_key in (
+        "last_rest_started_elapsed_minutes",
+        "last_rest_completed_elapsed_minutes",
+        "last_long_rest_elapsed_minutes",
+    ):
+        next_history.pop(legacy_key, None)
     next_history.update(
         {
             "last_rest_type": normalized,
-            "last_rest_started_elapsed_minutes": started,
-            "last_rest_completed_elapsed_minutes": completed,
+            "last_rest_started_elapsed_ticks": started,
+            "last_rest_completed_elapsed_ticks": completed,
         }
     )
     if normalized == "long_rest":
-        next_history["last_long_rest_elapsed_minutes"] = completed
+        next_history["last_long_rest_elapsed_ticks"] = completed
     else:
-        next_history.setdefault("last_long_rest_elapsed_minutes", previous_long)
+        next_history.setdefault("last_long_rest_elapsed_ticks", previous_long)
     return value
 
 
@@ -200,7 +235,6 @@ def advance_effect_durations(
     value = deepcopy(sheet)
     advanced: list[str] = []
     expired: list[str] = []
-    expired_condition_additions: set[str] = set()
     for effect in value.get("effects", []):
         if not effect.get("active"):
             continue
@@ -212,23 +246,11 @@ def advance_effect_durations(
             effect["active"] = False
             effect["ended_reason"] = "duration_expired"
             expired.append(str(effect.get("id")))
-            if effect.get("kind") == "timed_conditions":
-                for change in effect.get("changes", []):
-                    if change.get("path") != "conditions" or change.get("mode") != "add":
-                        continue
-                    raw = change.get("value")
-                    values = raw if isinstance(raw, list) else [raw]
-                    expired_condition_additions.update(
-                        str(item).strip().casefold()
-                        for item in values
-                        if str(item).strip()
-                    )
         else:
             duration["remaining"] = remaining - amount
             effect["duration"] = duration
             advanced.append(str(effect.get("id")))
-    _remove_conditions_from_expired_effects(value, expired_condition_additions)
-    clear_ended_invisibility_spell_condition(value, ended_effect_ids=expired)
+    _reconcile_ended_effects(value, expired)
     return {
         "sheet": value,
         "period": normalized,
@@ -248,7 +270,6 @@ def advance_source_turn_effect_durations(
     value = deepcopy(sheet)
     advanced: list[str] = []
     expired: list[str] = []
-    expired_condition_additions: set[str] = set()
     for effect in value.get("effects", []):
         if not effect.get("active"):
             continue
@@ -263,23 +284,11 @@ def advance_source_turn_effect_durations(
             effect["active"] = False
             effect["ended_reason"] = "duration_expired"
             expired.append(str(effect.get("id")))
-            if effect.get("kind") == "timed_conditions":
-                for change in effect.get("changes", []):
-                    if change.get("path") != "conditions" or change.get("mode") != "add":
-                        continue
-                    raw = change.get("value")
-                    values = raw if isinstance(raw, list) else [raw]
-                    expired_condition_additions.update(
-                        str(item).strip().casefold()
-                        for item in values
-                        if str(item).strip()
-                    )
         else:
             duration["remaining"] = remaining - 1
             effect["duration"] = duration
             advanced.append(str(effect.get("id")))
-    _remove_conditions_from_expired_effects(value, expired_condition_additions)
-    clear_ended_invisibility_spell_condition(value, ended_effect_ids=expired)
+    _reconcile_ended_effects(value, expired)
     return {
         "sheet": value,
         "source_actor_id": source_id,
@@ -294,7 +303,6 @@ def expire_combat_bound_effects(sheet: dict[str, Any]) -> dict[str, Any]:
     """End effects whose duration clock cannot continue after combat closes."""
     value = deepcopy(sheet)
     expired: list[str] = []
-    expired_condition_additions: set[str] = set()
     for effect in value.get("effects", []):
         if not effect.get("active"):
             continue
@@ -304,20 +312,7 @@ def expire_combat_bound_effects(sheet: dict[str, Any]) -> dict[str, Any]:
         effect["active"] = False
         effect["ended_reason"] = "combat_ended"
         expired.append(str(effect.get("id")))
-        if effect.get("kind") != "timed_conditions":
-            continue
-        for change in effect.get("changes", []):
-            if change.get("path") != "conditions" or change.get("mode") != "add":
-                continue
-            raw = change.get("value")
-            values = raw if isinstance(raw, list) else [raw]
-            expired_condition_additions.update(
-                str(item).strip().casefold()
-                for item in values
-                if str(item).strip()
-            )
-    _remove_conditions_from_expired_effects(value, expired_condition_additions)
-    clear_ended_invisibility_spell_condition(value, ended_effect_ids=expired)
+    _reconcile_ended_effects(value, expired)
     return {
         "sheet": value,
         "periods": sorted(COMBAT_BOUND_EFFECT_PERIODS),
@@ -325,40 +320,64 @@ def expire_combat_bound_effects(sheet: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def advance_elapsed_effect_durations(
-    sheet: dict[str, Any], *, elapsed_minutes: int
-) -> dict[str, Any]:
-    """Advance every real-time actor effect by one elapsed-time interval.
+def _elapsed_duration_ticks(
+    *,
+    elapsed_ticks: int | None,
+    elapsed_minutes: int | None,
+    subject: str,
+) -> int:
+    """Normalize a duration delta while retaining the legacy minute input."""
 
-    Hour- and day-based effects retain a sub-unit minute remainder so separate
-    clock advances such as 30 + 30 minutes expire a one-hour effect exactly
-    once. Turn, round, encounter, and rest-bound durations are not elapsed-time
-    effects and remain untouched.
-    """
-    if (
-        isinstance(elapsed_minutes, bool)
-        or not isinstance(elapsed_minutes, int)
-        or elapsed_minutes < 1
-    ):
-        raise CombatEngineError("elapsed effect duration minutes must be positive")
-    value = deepcopy(sheet)
+    using_ticks = elapsed_ticks is not None
+    using_minutes = elapsed_minutes is not None
+    if using_ticks == using_minutes:
+        raise CombatEngineError(
+            f"elapsed {subject} duration requires exactly one tick or legacy minute delta"
+        )
+    raw = elapsed_ticks if using_ticks else elapsed_minutes
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
+        unit = "ticks" if using_ticks else "minutes"
+        raise CombatEngineError(f"elapsed {subject} duration {unit} must be positive")
+    return raw if using_ticks else raw * TICKS_PER_MINUTE
+
+
+def _advance_elapsed_effect_collection(
+    value: dict[str, Any],
+    *,
+    collection_key: str,
+    elapsed_ticks: int,
+) -> tuple[dict[str, Any], list[str], list[str]]:
+    """Apply the one tick-based elapsed-duration algorithm to any effect ledger."""
+
+    result = deepcopy(value)
     advanced: list[str] = []
     expired: list[str] = []
-    expired_condition_additions: set[str] = set()
-    unit_minutes = {"minute": 1, "hour": 60, "day": 1440}
-    for effect in value.get("effects", []):
+    unit_ticks = {
+        "minute": TICKS_PER_MINUTE,
+        "hour": TICKS_PER_HOUR,
+        "day": TICKS_PER_DAY,
+    }
+    for effect in result.get(collection_key, []):
         if not effect.get("active"):
             continue
         duration = dict(effect.get("duration") or {})
         period = str(duration.get("period") or "")
-        unit = unit_minutes.get(period)
+        unit = unit_ticks.get(period)
         if unit is None:
             continue
-        previous_remainder = int(duration.get("elapsed_minutes_remainder", 0) or 0)
-        elapsed_units, remainder = divmod(previous_remainder + elapsed_minutes, unit)
+        legacy_remainder = int(duration.get("elapsed_minutes_remainder", 0) or 0)
+        previous_remainder = int(
+            duration.get(
+                "elapsed_ticks_remainder",
+                legacy_remainder * TICKS_PER_MINUTE,
+            )
+            or 0
+        )
+        duration.pop("elapsed_minutes_remainder", None)
+        elapsed_units, remainder = divmod(previous_remainder + elapsed_ticks, unit)
         if elapsed_units == 0:
             if remainder != previous_remainder:
-                duration["elapsed_minutes_remainder"] = remainder
+                duration["elapsed_ticks_remainder"] = remainder
                 effect["duration"] = duration
                 advanced.append(str(effect.get("id")))
             continue
@@ -366,33 +385,43 @@ def advance_elapsed_effect_durations(
         if remaining <= elapsed_units:
             effect["active"] = False
             effect["ended_reason"] = "duration_expired"
-            duration.pop("elapsed_minutes_remainder", None)
+            duration.pop("elapsed_ticks_remainder", None)
             effect["duration"] = duration
             expired.append(str(effect.get("id")))
-            if effect.get("kind") == "timed_conditions":
-                for change in effect.get("changes", []):
-                    if change.get("path") != "conditions" or change.get("mode") != "add":
-                        continue
-                    raw = change.get("value")
-                    values = raw if isinstance(raw, list) else [raw]
-                    expired_condition_additions.update(
-                        str(item).strip().casefold()
-                        for item in values
-                        if str(item).strip()
-                    )
             continue
         duration["remaining"] = remaining - elapsed_units
         if remainder:
-            duration["elapsed_minutes_remainder"] = remainder
+            duration["elapsed_ticks_remainder"] = remainder
         else:
-            duration.pop("elapsed_minutes_remainder", None)
+            duration.pop("elapsed_ticks_remainder", None)
         effect["duration"] = duration
         advanced.append(str(effect.get("id")))
-    _remove_conditions_from_expired_effects(value, expired_condition_additions)
-    clear_ended_invisibility_spell_condition(value, ended_effect_ids=expired)
+    return result, advanced, expired
+
+
+def advance_elapsed_effect_durations(
+    sheet: dict[str, Any],
+    *,
+    elapsed_ticks: int | None = None,
+    elapsed_minutes: int | None = None,
+) -> dict[str, Any]:
+    """Advance actor effects by an exact interval on the canonical tick stream."""
+
+    delta_ticks = _elapsed_duration_ticks(
+        elapsed_ticks=elapsed_ticks,
+        elapsed_minutes=elapsed_minutes,
+        subject="effect",
+    )
+    value, advanced, expired = _advance_elapsed_effect_collection(
+        sheet,
+        collection_key="effects",
+        elapsed_ticks=delta_ticks,
+    )
+    _reconcile_ended_effects(value, expired)
     return {
         "sheet": value,
-        "elapsed_minutes": elapsed_minutes,
+        "elapsed_ticks": delta_ticks,
+        "elapsed_minutes": delta_ticks // TICKS_PER_MINUTE,
         "advanced": advanced,
         "expired": expired,
     }
@@ -433,52 +462,27 @@ def advance_world_effect_durations(
 
 
 def advance_elapsed_world_effect_durations(
-    state: dict[str, Any], *, elapsed_minutes: int
+    state: dict[str, Any],
+    *,
+    elapsed_ticks: int | None = None,
+    elapsed_minutes: int | None = None,
 ) -> dict[str, Any]:
-    """Advance every real-time campaign-space effect by elapsed minutes."""
-    if (
-        isinstance(elapsed_minutes, bool)
-        or not isinstance(elapsed_minutes, int)
-        or elapsed_minutes < 1
-    ):
-        raise CombatEngineError("elapsed world effect duration minutes must be positive")
-    value = deepcopy(state)
-    advanced: list[str] = []
-    expired: list[str] = []
-    unit_minutes = {"minute": 1, "hour": 60, "day": 1440}
-    for effect in value.get("world_effects", []):
-        if not effect.get("active"):
-            continue
-        duration = dict(effect.get("duration") or {})
-        unit = unit_minutes.get(str(duration.get("period") or ""))
-        if unit is None:
-            continue
-        previous_remainder = int(duration.get("elapsed_minutes_remainder", 0) or 0)
-        elapsed_units, remainder = divmod(previous_remainder + elapsed_minutes, unit)
-        if elapsed_units == 0:
-            if remainder != previous_remainder:
-                duration["elapsed_minutes_remainder"] = remainder
-                effect["duration"] = duration
-                advanced.append(str(effect.get("id")))
-            continue
-        remaining = int(duration.get("remaining", 0) or 0)
-        if remaining <= elapsed_units:
-            effect["active"] = False
-            effect["ended_reason"] = "duration_expired"
-            duration.pop("elapsed_minutes_remainder", None)
-            effect["duration"] = duration
-            expired.append(str(effect.get("id")))
-            continue
-        duration["remaining"] = remaining - elapsed_units
-        if remainder:
-            duration["elapsed_minutes_remainder"] = remainder
-        else:
-            duration.pop("elapsed_minutes_remainder", None)
-        effect["duration"] = duration
-        advanced.append(str(effect.get("id")))
+    """Advance campaign-space effects with the actor tick algorithm."""
+
+    delta_ticks = _elapsed_duration_ticks(
+        elapsed_ticks=elapsed_ticks,
+        elapsed_minutes=elapsed_minutes,
+        subject="world effect",
+    )
+    value, advanced, expired = _advance_elapsed_effect_collection(
+        state,
+        collection_key="world_effects",
+        elapsed_ticks=delta_ticks,
+    )
     return {
         "state": value,
-        "elapsed_minutes": elapsed_minutes,
+        "elapsed_ticks": delta_ticks,
+        "elapsed_minutes": delta_ticks // TICKS_PER_MINUTE,
         "advanced": advanced,
         "expired": expired,
     }
@@ -493,19 +497,12 @@ def recover_stable_creature(sheet: dict[str, Any], *, recovery_hours: int) -> di
     value = deepcopy(sheet)
     combat = value.setdefault("combat", {})
     hp = dict(combat.get("hp") or {})
-    conditions = {str(item).casefold() for item in value.get("conditions", [])}
+    conditions = condition_ids(value.get("conditions"))
     if "dead" in conditions:
         raise CombatEngineError("a dead creature cannot recover from being stable")
     if int(hp.get("value", 0) or 0) != 0 or "stable" not in conditions:
         raise CombatEngineError("stable recovery requires a Stable creature at 0 hit points")
-    hp["value"] = 1
-    combat["hp"] = hp
-    combat["death_saves"] = {"successes": 0, "failures": 0}
-    value["conditions"] = [
-        item
-        for item in value.get("conditions", [])
-        if str(item).casefold() not in {"stable", "unconscious"}
-    ]
+    value = apply_basic_healing_to_sheet(value, amount=1)["sheet"]
     return {
         "sheet": value,
         "status": "recovered",
@@ -528,14 +525,14 @@ def initialize_source_state(sheet: dict[str, Any], *, state: str) -> dict[str, A
     value = deepcopy(sheet)
     combat = value.setdefault("combat", {})
     hp = dict(combat.get("hp") or {})
-    conditions = {str(item).casefold() for item in value.get("conditions", [])}
+    conditions = condition_ids(value.get("conditions"))
     if int(hp.get("value", 0) or 0) != 0:
         raise CombatEngineError("stable_unconscious source state requires 0 hit points")
     if "dead" in conditions:
         raise CombatEngineError("a dead creature cannot be initialized as stable unconscious")
     conditions.update({"prone", "stable", "unconscious"})
     combat["death_saves"] = {"successes": 0, "failures": 0}
-    value["conditions"] = sorted(conditions)
+    reconcile_condition_projection(value, conditions)
     return {
         "sheet": value,
         "status": "initialized",
@@ -547,14 +544,14 @@ def stand_outside_combat(sheet: dict[str, Any]) -> dict[str, Any]:
     """Stand a conscious living creature without exposing arbitrary condition edits."""
     value = deepcopy(sheet)
     hp = int(dict(value.get("combat", {}).get("hp") or {}).get("value", 0) or 0)
-    conditions = [str(item).casefold() for item in value.get("conditions", [])]
+    conditions = condition_ids(value.get("conditions"))
     if hp <= 0 or "dead" in conditions or "unconscious" in conditions:
         raise CombatEngineError("standing requires a conscious living creature above 0 hit points")
     if "prone" not in conditions:
         raise CombatEngineError("standing requires the Prone condition")
-    value["conditions"] = [
-        item for item in value.get("conditions", []) if str(item).casefold() != "prone"
-    ]
+    apply_condition_change(value, condition_id="prone", add=False)
+    if "prone" in condition_ids(value.get("conditions")):
+        raise CombatEngineError("the Prone condition is still owned by an active effect")
     return {"sheet": value, "status": "stood", "removed_condition": "prone"}
 
 
@@ -562,14 +559,20 @@ def knock_prone_outside_combat(sheet: dict[str, Any]) -> dict[str, Any]:
     """Apply Prone to a conscious living creature without arbitrary condition edits."""
     value = deepcopy(sheet)
     hp = int(dict(value.get("combat", {}).get("hp") or {}).get("value", 0) or 0)
-    conditions = [str(item).casefold() for item in value.get("conditions", [])]
+    conditions = condition_ids(value.get("conditions"))
     if hp <= 0 or "dead" in conditions or "unconscious" in conditions:
         raise CombatEngineError(
             "knocking prone outside combat requires a conscious living creature above 0 hit points"
         )
     if "prone" in conditions:
         return {"sheet": value, "status": "already_prone", "added_condition": None}
-    value.setdefault("conditions", []).append("prone")
+    apply_condition_change(value, condition_id="prone", add=True)
+    if "prone" not in condition_ids(value.get("conditions")):
+        return {
+            "sheet": value,
+            "status": "immune",
+            "added_condition": None,
+        }
     return {"sheet": value, "status": "knocked_prone", "added_condition": "prone"}
 
 
@@ -603,8 +606,7 @@ def recover_chase_exhaustion(sheet: dict[str, Any]) -> dict[str, Any]:
         changes = [
             item
             for item in effect.get("changes", [])
-            if item.get("path") == "combat.exhaustion"
-            and item.get("mode") == "chase_levels"
+            if item.get("path") == "combat.exhaustion" and item.get("mode") == "chase_levels"
         ]
         if len(changes) != 1:
             raise CombatEngineError("active chase exhaustion effect is malformed")
@@ -616,7 +618,8 @@ def recover_chase_exhaustion(sheet: dict[str, Any]) -> dict[str, Any]:
         effect["ended_reason"] = "short_or_long_rest"
     combat = value.setdefault("combat", {})
     before = int(combat.get("exhaustion", 0) or 0)
-    combat["exhaustion"] = max(0, before - recovered)
+    value = set_exhaustion_level(value, max(0, before - recovered))
+    combat = value["combat"]
     return {
         "sheet": value,
         "before": before,
@@ -638,6 +641,7 @@ def apply_rest(
     song_of_rest_source_sheet: dict[str, Any] | None = None,
     rules: ResolutionContext | None = None,
     rng: Any = None,
+    game_day: int | None = None,
     world_day: int | None = None,
 ) -> dict[str, Any]:
     """Settle a short or long rest without inventing player-choice allocations."""
@@ -664,7 +668,12 @@ def apply_rest(
     )
     if rest_type == "short_rest":
         validate_rest_hit_dice_requests(sheet, hit_dice_spends)
-        validate_arcane_recovery_choice(sheet, arcane_recovery, world_day=world_day)
+        validate_arcane_recovery_choice(
+            sheet,
+            arcane_recovery,
+            game_day=game_day,
+            world_day=world_day,
+        )
         validate_natural_recovery_choice(
             sheet,
             natural_recovery,
@@ -684,11 +693,9 @@ def apply_rest(
     value = chase_recovery["sheet"]
     combat = value.setdefault("combat", {})
     hp = dict(combat.get("hp") or {})
-    if int(hp.get("value", 0) or 0) <= 0 or "dead" in {
-        str(item).casefold() for item in value.get("conditions", [])
-    }:
+    if int(hp.get("value", 0) or 0) <= 0 or "dead" in condition_ids(value.get("conditions")):
         raise CombatEngineError("a creature at 0 hit points or dead cannot benefit from a rest")
-    edition = "2024" if "2024" in str(value.get("edition") or "") else "2014"
+    edition = _sheet_edition(value)
     recovered: dict[str, int] = {}
     unmet_recovery_requirements: dict[str, dict[str, Any]] = {}
     hit_die_healing = 0
@@ -699,22 +706,18 @@ def apply_rest(
     song_of_rest_result: dict[str, Any] | None = None
     sorcerous_restoration_result: dict[str, Any] | None = None
     if rest_type == "long_rest":
-        hp["value"] = int(hp.get("max", 0) or 0)
-        hp["temp"] = 0
-        combat["death_saves"] = {"successes": 0, "failures": 0}
-        value["conditions"] = [
-            item
-            for item in value.get("conditions", [])
-            if str(item).casefold() not in {"unconscious", "stable"}
-        ]
         exhaustion = int(combat.get("exhaustion", 0) or 0)
         if edition == "2024" or food_and_drink:
-            combat["exhaustion"] = max(0, exhaustion - 1)
-        if edition == "2014" and int(combat["exhaustion"]) >= 4:
-            hp["value"] = min(
-                int(hp["value"]),
-                max(1, int(hp.get("max", 0) or 0) // 2),
-            )
+            exhaustion = max(0, exhaustion - 1)
+        value = set_exhaustion_level(value, exhaustion)
+        combat = value["combat"]
+        hp = dict(combat["hp"])
+        hp["value"] = effective_hit_point_maximum(value)
+        hp["temp"] = 0
+        combat["hp"] = hp
+        combat["death_saves"] = {"successes": 0, "failures": 0}
+        apply_condition_change(value, condition_id="unconscious", add=False)
+        apply_condition_change(value, condition_id="stable", add=False)
     else:
         hit_dice = combat.get("hit_dice", {})
         hit_die_resolution = roll_rest_hit_dice(value, hit_dice_spends, rng=rng)
@@ -728,9 +731,7 @@ def apply_rest(
             hit_die_healing += max(1 if edition == "2024" else 0, healing)
         if hit_die_healing:
             hp_before_hit_dice = int(hp.get("value", 0) or 0)
-            hp["value"] = min(
-                int(hp.get("max", 0) or 0), hp_before_hit_dice + hit_die_healing
-            )
+            hp["value"] = min(int(hp.get("max", 0) or 0), hp_before_hit_dice + hit_die_healing)
             hit_die_applied_healing = int(hp["value"]) - hp_before_hit_dice
         if hit_die_applied_healing > 0 and song_of_rest_die_sides is not None:
             song_roll = asdict(roll(f"1d{song_of_rest_die_sides}", rng=rng))
@@ -749,6 +750,7 @@ def apply_rest(
             arcane_recovery_result = apply_arcane_recovery_choice(
                 value,
                 arcane_recovery,
+                game_day=game_day,
                 world_day=world_day,
             )
             for level, amount in arcane_recovery_result["recovered"].items():
@@ -760,9 +762,7 @@ def apply_rest(
                 rest_activity_minutes=normalized_rest_activities,
             )
             for level, amount in natural_recovery_result["recovered"].items():
-                recovered[f"spell_slot:{level}"] = (
-                    recovered.get(f"spell_slot:{level}", 0) + amount
-                )
+                recovered[f"spell_slot:{level}"] = recovered.get(f"spell_slot:{level}", 0) + amount
         sorcerous_restoration_result = apply_sorcerous_restoration(value)
         if sorcerous_restoration_result is not None:
             recovered["sorcery_points"] = sorcerous_restoration_result["recovered"]
@@ -788,23 +788,32 @@ def apply_rest(
             return
         if bool(resource.get("unlimited", False)):
             return
-        before = int(resource.get("value", 0) or 0)
-        resource["value"] = int(resource.get("max", 0) or 0)
-        recovered[key] = recovered.get(key, 0) + resource["value"] - before
+        mutation = mutate_bounded_resource(
+            resource,
+            amount=int(resource.get("max", 0) or 0),
+            direction="recover",
+        )
+        recovered[key] = recovered.get(key, 0) + mutation["amount"]
 
     for key, resource in value.get("resources", {}).items():
         recover_resource(resource, key)
     for key, resource in value.get("spellcasting", {}).get("spell_slots", {}).items():
         if rest_type == "long_rest":
-            before = int(resource.get("value", 0) or 0)
-            resource["value"] = int(resource.get("max", 0) or 0)
-            recovered[f"spell_slot:{key}"] = resource["value"] - before
+            mutation = mutate_bounded_resource(
+                resource,
+                amount=int(resource.get("max", 0) or 0),
+                direction="recover",
+            )
+            recovered[f"spell_slot:{key}"] = mutation["amount"]
     if rest_type == "long_rest":
         points = value.get("spellcasting", {}).get("spell_points")
         if isinstance(points, dict):
-            before = int(points.get("value", 0) or 0)
-            points["value"] = int(points.get("max", 0) or 0)
-            recovered["spell_points"] = points["value"] - before
+            mutation = mutate_bounded_resource(
+                points,
+                amount=int(points.get("max", 0) or 0),
+                direction="recover",
+            )
+            recovered["spell_points"] = mutation["amount"]
     pact_magic = value.get("spellcasting", {}).get("pact_magic")
     recover_resource(pact_magic, "pact_magic")
     if (
@@ -812,9 +821,12 @@ def apply_rest(
         and isinstance(pact_magic, dict)
         and pact_magic.get("recovers_on") == "none"
     ):
-        before = int(pact_magic.get("value", 0) or 0)
-        pact_magic["value"] = int(pact_magic.get("max", 0) or 0)
-        recovered["pact_magic"] = pact_magic["value"] - before
+        mutation = mutate_bounded_resource(
+            pact_magic,
+            amount=int(pact_magic.get("max", 0) or 0),
+            direction="recover",
+        )
+        recovered["pact_magic"] = mutation["amount"]
     if rest_type == "long_rest":
         hit_dice = value.get("combat", {}).get("hit_dice", {})
         if edition == "2024":
@@ -856,9 +868,12 @@ def apply_rest(
                 raise CombatEngineError("2014 hit-die recovery allocation is invalid")
         for key, amount in allocation.items():
             resource = hit_dice[key]
-            before = int(resource.get("value", 0) or 0)
-            resource["value"] = min(int(resource.get("max", 0) or 0), before + amount)
-            recovered[f"hit_dice:{key}"] = resource["value"] - before
+            mutation = mutate_bounded_resource(
+                resource,
+                amount=amount,
+                direction="recover",
+            )
+            recovered[f"hit_dice:{key}"] = mutation["amount"]
     for section in ("activities", "features", "feats"):
         for index, item in enumerate(value.get("content", {}).get(section, [])):
             recover_resource(item.get("uses"), f"{section}:{index}:uses")
@@ -914,11 +929,7 @@ def apply_rest(
                         if natural_recovery_result is not None
                         else []
                     ),
-                    *(
-                        ["dnd5e.core.rest.song_of_rest"]
-                        if song_of_rest_result is not None
-                        else []
-                    ),
+                    *(["dnd5e.core.rest.song_of_rest"] if song_of_rest_result is not None else []),
                     *(
                         ["dnd5e.core.rest.sorcerous_restoration"]
                         if sorcerous_restoration_result is not None
@@ -936,11 +947,11 @@ def apply_rest(
 
 def validate_song_of_rest_source(sheet: dict[str, Any]) -> int:
     """Return the 2014 Song of Rest die size for a living source-bound bard."""
-    edition = "2024" if "2024" in str(sheet.get("edition") or "") else "2014"
+    edition = _sheet_edition(sheet)
     if edition != "2014":
         raise CombatEngineError("Song of Rest requires the 2014 Bard feature")
     hp = int(dict(sheet.get("combat", {}).get("hp") or {}).get("value", 0) or 0)
-    conditions = {str(item).casefold() for item in sheet.get("conditions", [])}
+    conditions = condition_ids(sheet.get("conditions"))
     if hp <= 0 or "dead" in conditions or "unconscious" in conditions:
         raise CombatEngineError("Song of Rest requires a conscious living bard")
     feature = next(
@@ -963,8 +974,7 @@ def validate_song_of_rest_source(sheet: dict[str, Any]) -> int:
     bard_level = sum(
         int(item.get("level", 0) or 0)
         for item in sheet.get("progression", {}).get("classes", [])
-        if isinstance(item, dict)
-        and str(item.get("name") or "").strip().casefold() == "bard"
+        if isinstance(item, dict) and str(item.get("name") or "").strip().casefold() == "bard"
     )
     if feature is None or bard_level < 2:
         raise CombatEngineError("Song of Rest requires a source-bound Bard level of at least 2")
@@ -1008,9 +1018,10 @@ def validate_arcane_recovery_choice(
     sheet: dict[str, Any],
     choice: dict[str, int] | None,
     *,
+    game_day: int | None = None,
     world_day: int | None = None,
 ) -> dict[str, Any] | None:
-    """Validate the Wizard's once-per-day short-rest slot allocation."""
+    """Validate Arcane Recovery using the edition's source-defined reset."""
     if not choice:
         return None
     if not isinstance(choice, dict):
@@ -1018,20 +1029,41 @@ def validate_arcane_recovery_choice(
     feature = _arcane_recovery_feature(sheet)
     if feature is None:
         raise CombatEngineError("the actor does not have Arcane Recovery")
-    if isinstance(world_day, bool) or not isinstance(world_day, int) or world_day < 1:
-        raise CombatEngineError("Arcane Recovery requires the current campaign day")
+    if game_day is not None and world_day is not None and game_day != world_day:
+        raise CombatEngineError("Arcane Recovery legacy world_day must match canonical game_day")
+    resolved_game_day = game_day if game_day is not None else world_day
+    edition = _sheet_edition(sheet)
     choices = dict(feature.get("choices") or {})
-    last_used_day = choices.get("_arcane_recovery_last_used_day")
-    if last_used_day is not None and int(last_used_day) == world_day:
-        raise CombatEngineError("Arcane Recovery has already been used on this campaign day")
     uses = dict(feature.get("uses") or {})
-    if (
-        last_used_day is None
-        and int(uses.get("max", 0) or 0) == 1
-        and int(uses.get("value", 0) or 0) == 0
-    ):
+    if edition == "2014":
+        if (
+            isinstance(resolved_game_day, bool)
+            or not isinstance(resolved_game_day, int)
+            or resolved_game_day < 1
+        ):
+            raise CombatEngineError("2014 Arcane Recovery requires the current game day")
+        canonical_last_day = choices.get("_arcane_recovery_last_used_game_day")
+        legacy_last_day = choices.get("_arcane_recovery_last_used_day")
+        if (
+            canonical_last_day is not None
+            and legacy_last_day is not None
+            and int(canonical_last_day) != int(legacy_last_day)
+        ):
+            raise CombatEngineError("Arcane Recovery day markers disagree")
+        last_used_day = canonical_last_day if canonical_last_day is not None else legacy_last_day
+        if last_used_day is not None and int(last_used_day) == resolved_game_day:
+            raise CombatEngineError("Arcane Recovery has already been used on this game day")
+        if (
+            last_used_day is None
+            and int(uses.get("max", 0) or 0) == 1
+            and int(uses.get("value", 0) or 0) == 0
+        ):
+            raise CombatEngineError(
+                "Arcane Recovery has a legacy used marker without a game day; reconcile it first"
+            )
+    elif int(uses.get("max", 0) or 0) != 1 or int(uses.get("value", 0) or 0) < 1:
         raise CombatEngineError(
-            "Arcane Recovery has a legacy used marker without a campaign day; reconcile it first"
+            "2024 Arcane Recovery has already been used since the last long rest"
         )
     wizard_level = next(
         (
@@ -1073,38 +1105,51 @@ def validate_arcane_recovery_choice(
     used_levels = sum(int(level) * count for level, count in normalized.items())
     if used_levels > allowance:
         raise CombatEngineError("Arcane Recovery exceeds half the Wizard level rounded up")
-    return {
+    result = {
         "allowance": allowance,
         "used_levels": used_levels,
         "recovered": normalized,
-        "campaign_day": world_day,
+        "edition": edition,
+        "reset_on": "game_day" if edition == "2014" else "long_rest",
     }
+    if edition == "2014":
+        result["game_day"] = resolved_game_day
+    return result
 
 
 def apply_arcane_recovery_choice(
     sheet: dict[str, Any],
     choice: dict[str, int],
     *,
-    world_day: int,
+    game_day: int | None = None,
+    world_day: int | None = None,
 ) -> dict[str, Any]:
     """Apply one previously validated Arcane Recovery allocation in place."""
-    result = validate_arcane_recovery_choice(sheet, choice, world_day=world_day)
+    result = validate_arcane_recovery_choice(
+        sheet,
+        choice,
+        game_day=game_day,
+        world_day=world_day,
+    )
     assert result is not None
     slots = sheet["spellcasting"]["spell_slots"]
     for level, count in result["recovered"].items():
-        slots[level]["value"] = int(slots[level].get("value", 0) or 0) + count
+        mutate_bounded_resource(slots[level], amount=count, direction="recover")
     feature = _arcane_recovery_feature(sheet)
     assert feature is not None
     feature["uses"] = {
         "label": "Arcane Recovery",
         "value": 0,
         "max": 1,
-        "recovers_on": "manual",
+        "recovers_on": ("manual" if result["edition"] == "2014" else "long_rest"),
         "source_key": "Wizard",
         "slot_level": 0,
     }
     feature_choices = dict(feature.get("choices") or {})
-    feature_choices["_arcane_recovery_last_used_day"] = world_day
+    feature_choices.pop("_arcane_recovery_last_used_day", None)
+    feature_choices.pop("_arcane_recovery_last_used_game_day", None)
+    if result["edition"] == "2014":
+        feature_choices["_arcane_recovery_last_used_game_day"] = result["game_day"]
     feature["choices"] = feature_choices
     return result
 
@@ -1120,7 +1165,7 @@ def validate_natural_recovery_choice(
         return None
     if not isinstance(choice, dict):
         raise CombatEngineError("natural_recovery must map spell-slot levels to counts")
-    if "2024" in str(sheet.get("edition") or ""):
+    if _sheet_edition(sheet) != "2014":
         raise CombatEngineError("Natural Recovery requires the 2014 Druid feature")
     feature = _natural_recovery_feature(sheet)
     if feature is None:
@@ -1128,16 +1173,12 @@ def validate_natural_recovery_choice(
     if int((rest_activity_minutes or {}).get("meditation", 0) or 0) < 1:
         raise CombatEngineError("Natural Recovery requires declared meditation during the rest")
     uses = dict(feature.get("uses") or {})
-    if (
-        int(uses.get("max", 0) or 0) == 1
-        and int(uses.get("value", 0) or 0) == 0
-    ):
+    if int(uses.get("max", 0) or 0) == 1 and int(uses.get("value", 0) or 0) == 0:
         raise CombatEngineError("Natural Recovery has already been used since the last long rest")
     druid_level = sum(
         int(item.get("level", 0) or 0)
         for item in sheet.get("progression", {}).get("classes", [])
-        if isinstance(item, dict)
-        and str(item.get("name") or "").strip().casefold() == "druid"
+        if isinstance(item, dict) and str(item.get("name") or "").strip().casefold() == "druid"
     )
     if druid_level < 2:
         raise CombatEngineError("Natural Recovery requires at least 2 Druid levels")
@@ -1168,7 +1209,7 @@ def apply_natural_recovery_choice(
     assert result is not None
     slots = sheet["spellcasting"]["spell_slots"]
     for level, count in result["recovered"].items():
-        slots[level]["value"] = int(slots[level].get("value", 0) or 0) + count
+        mutate_bounded_resource(slots[level], amount=count, direction="recover")
     feature = _natural_recovery_feature(sheet)
     assert feature is not None
     feature["uses"] = {
@@ -1186,28 +1227,25 @@ def apply_sorcerous_restoration(sheet: dict[str, Any]) -> dict[str, Any] | None:
     """Apply the 2014 level-20 Sorcerer's automatic short-rest recovery."""
     if _sorcerous_restoration_feature(sheet) is None:
         return None
-    if "2024" in str(sheet.get("edition") or ""):
+    if _sheet_edition(sheet) != "2014":
         raise CombatEngineError("Sorcerous Restoration requires the 2014 Sorcerer feature")
     sorcerer_level = sum(
         int(item.get("level", 0) or 0)
         for item in sheet.get("progression", {}).get("classes", [])
-        if isinstance(item, dict)
-        and str(item.get("name") or "").strip().casefold() == "sorcerer"
+        if isinstance(item, dict) and str(item.get("name") or "").strip().casefold() == "sorcerer"
     )
     if sorcerer_level < 20:
         raise CombatEngineError("Sorcerous Restoration requires 20 Sorcerer levels")
     resource = sheet.get("resources", {}).get("sorcery_points")
     if not isinstance(resource, dict):
         raise CombatEngineError("Sorcerous Restoration requires the Sorcery Points resource")
-    before = int(resource.get("value", 0) or 0)
-    maximum = int(resource.get("max", 0) or 0)
-    resource["value"] = min(maximum, before + 4)
+    mutation = mutate_bounded_resource(resource, amount=4, direction="recover")
     return {
         "sorcerer_level": sorcerer_level,
-        "before": before,
-        "recovered": int(resource["value"]) - before,
-        "after": int(resource["value"]),
-        "maximum": maximum,
+        "before": mutation["before"],
+        "recovered": mutation["amount"],
+        "after": mutation["after"],
+        "maximum": int(resource.get("max", 0) or 0),
     }
 
 
@@ -1226,21 +1264,15 @@ def _validate_recovered_spell_slots(
             raise CombatEngineError(f"{feature_name} spell-slot levels must be integers")
         level = int(level_text)
         if level < 1 or level >= 6:
-            raise CombatEngineError(
-                f"{feature_name} cannot restore a level 6 or higher slot"
-            )
+            raise CombatEngineError(f"{feature_name} cannot restore a level 6 or higher slot")
         if isinstance(raw_count, bool) or not isinstance(raw_count, int) or raw_count < 1:
-            raise CombatEngineError(
-                f"{feature_name} slot counts must be positive integers"
-            )
+            raise CombatEngineError(f"{feature_name} slot counts must be positive integers")
         resource = slots.get(str(level))
         if not isinstance(resource, dict):
             raise CombatEngineError(f"the actor has no level {level} spell slots")
         missing = int(resource.get("max", 0) or 0) - int(resource.get("value", 0) or 0)
         if raw_count > missing:
-            raise CombatEngineError(
-                f"{feature_name} exceeds missing level {level} slots"
-            )
+            raise CombatEngineError(f"{feature_name} exceeds missing level {level} slots")
         normalized[str(level)] = normalized.get(str(level), 0) + raw_count
     if not normalized:
         raise CombatEngineError(f"{feature_name} requires at least one spell-slot choice")
@@ -1273,11 +1305,8 @@ def _natural_recovery_feature(sheet: dict[str, Any]) -> dict[str, Any] | None:
             for item in sheet.get("content", {}).get("features", [])
             if isinstance(item, dict)
             and (
-                str(item.get("id") or "").endswith(
-                    "circle-of-the-land-natural-recovery"
-                )
-                or str(item.get("name") or "").strip().casefold()
-                == "natural recovery"
+                str(item.get("id") or "").endswith("circle-of-the-land-natural-recovery")
+                or str(item.get("name") or "").strip().casefold() == "natural recovery"
             )
             and any(
                 str(ref).startswith("bundled:srd2014/02_Classes/Druid")
@@ -1295,14 +1324,10 @@ def _sorcerous_restoration_feature(sheet: dict[str, Any]) -> dict[str, Any] | No
             for item in sheet.get("content", {}).get("features", [])
             if isinstance(item, dict)
             and (
-                str(item.get("id") or "").endswith(
-                    "sorcerer-sorcerous-restoration"
-                )
-                or str(item.get("name") or "").strip().casefold()
-                == "sorcerous restoration"
+                str(item.get("id") or "").endswith("sorcerer-sorcerous-restoration")
+                or str(item.get("name") or "").strip().casefold() == "sorcerous restoration"
             )
-            and str(item.get("source_key") or "").strip().casefold()
-            == "sorcerer"
+            and str(item.get("source_key") or "").strip().casefold() == "sorcerer"
             and any(
                 str(ref).startswith("bundled:srd2014/02_Classes/Sorcerer")
                 for ref in item.get("rule_refs", [])

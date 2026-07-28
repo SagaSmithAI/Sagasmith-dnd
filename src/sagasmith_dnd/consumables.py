@@ -4,15 +4,18 @@ from __future__ import annotations
 
 from typing import Any
 
+from sagasmith_dnd.editions import normalize_dnd_edition
+
 HEALING_POTION_MECHANIC_ID = "dnd5e.core.item.healing_potion"
 
 
 def healing_potion_formula(item: dict[str, Any], *, edition: str) -> str:
     """Return the core healing expression for an identified standard potion."""
 
-    normalized_edition = str(edition).strip()
-    if normalized_edition not in {"2014", "2024"}:
-        raise ValueError("healing potion use requires edition 2014 or 2024")
+    try:
+        normalize_dnd_edition(edition)
+    except ValueError as exc:
+        raise ValueError("healing potion use requires edition 2014 or 2024") from exc
     if not isinstance(item, dict):
         raise ValueError("healing potion item must be an object")
     if str(item.get("kind") or "") != "consumable":

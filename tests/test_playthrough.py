@@ -12,7 +12,7 @@ SOURCE_REF = {
     "page_start": 2,
     "page_end": 2,
     "heading_path": ["Introduction"],
-    "chunk_content_sha256": "b" * 64,
+    "content_sha256": "b" * 64,
 }
 
 
@@ -51,6 +51,23 @@ def test_manifest_records_every_required_resume_section() -> None:
     assert state["playthrough_manifest"] == manifest
 
 
+def test_manifest_migrates_legacy_chunk_hash_name_to_canonical_source_ref() -> None:
+    legacy = {key: value for key, value in SOURCE_REF.items() if key != "content_sha256"}
+    legacy["chunk_content_sha256"] = SOURCE_REF["content_sha256"]
+    manifest = new_playthrough_manifest(
+        run_id="legacy-source-ref",
+        campaign_line_id="campaign-1",
+        module_ids=["module-1"],
+        recommended_party_minimum=4,
+        recommended_party_maximum=4,
+        selected_party_size=4,
+        source_refs=[legacy],
+    )
+
+    assert manifest["source_refs"][0]["content_sha256"] == "b" * 64
+    assert "chunk_content_sha256" not in manifest["source_refs"][0]
+
+
 def test_manifest_preserves_completed_party_size_dm_review_without_faking_source() -> None:
     manifest = new_playthrough_manifest(
         run_id="waterdeep-1",
@@ -71,12 +88,7 @@ def test_manifest_preserves_completed_party_size_dm_review_without_faking_source
 
     assert manifest["party"]["party_size_status"] == "dm_review_completed"
     assert manifest["party"]["selected_size"] == 4
-    assert (
-        manifest["party"]["party_size_review"][
-            "represented_as_module_recommendation"
-        ]
-        is False
-    )
+    assert manifest["party"]["party_size_review"]["represented_as_module_recommendation"] is False
 
     invalid = deepcopy(manifest)
     invalid["party"]["party_size_review"]["represented_as_module_recommendation"] = True
@@ -191,6 +203,86 @@ def test_ending_conditions_require_exact_source_and_machine_checks() -> None:
         validate_party_state({"playthrough_manifest": manifest})
 
 
+def test_manifest_completion_has_one_verified_ending_state() -> None:
+    manifest = _manifest()
+    member = {
+        "actor_id": "",
+        "name": "Party member",
+        "status": "active",
+        "source": "generated",
+        "source_asset_path": "",
+        "level": 1,
+        "xp": 0,
+        "hit_points": {"current": 8, "maximum": 8},
+        "resources": {},
+        "wallet": {},
+        "equipment": [],
+        "knowledge_scope_actor_id": "",
+    }
+    for index in range(6):
+        current = deepcopy(member)
+        current["actor_id"] = f"actor-{index}"
+        current["knowledge_scope_actor_id"] = current["actor_id"]
+        manifest["party"]["members"].append(current)
+    manifest["current"]["scene_id"] = "ending-scene"
+    manifest["ending"]["conditions"] = [
+        {
+            "id": "victory",
+            "label": "The threat is ended",
+            "source_ref": deepcopy(SOURCE_REF),
+            "all_of": [
+                {
+                    "kind": "manifest_value",
+                    "path": "quests.main.status",
+                    "actor_id": "",
+                    "fact_key": "",
+                    "operator": "equals",
+                    "value": "completed",
+                }
+            ],
+        }
+    ]
+
+    top_only = deepcopy(manifest)
+    top_only["status"] = "completed"
+    with pytest.raises(ValueError, match="enter completed together"):
+        validate_party_state({"playthrough_manifest": top_only})
+
+    ending_only = deepcopy(manifest)
+    ending_only["status"] = "in_progress"
+    ending_only["ending"]["status"] = "completed"
+    ending_only["ending"]["achieved_condition_id"] = "victory"
+    ending_only["ending"]["verification"] = [{"passed": True}]
+    with pytest.raises(ValueError, match="enter completed together"):
+        validate_party_state({"playthrough_manifest": ending_only})
+
+    unverified = deepcopy(manifest)
+    unverified["status"] = "completed"
+    unverified["ending"]["status"] = "completed"
+    unverified["ending"]["achieved_condition_id"] = "victory"
+    unverified["ending"]["verification"] = [{"passed": False}]
+    with pytest.raises(ValueError, match="every verification result"):
+        validate_party_state({"playthrough_manifest": unverified})
+
+    stale = deepcopy(manifest)
+    stale["status"] = "in_progress"
+    stale["ending"]["achieved_condition_id"] = "victory"
+    with pytest.raises(ValueError, match="cannot retain achieved_condition_id"):
+        validate_party_state({"playthrough_manifest": stale})
+
+    completed = deepcopy(manifest)
+    completed["status"] = "completed"
+    completed["ending"]["status"] = "completed"
+    completed["ending"]["achieved_condition_id"] = "victory"
+    completed["ending"]["verification"] = [{"passed": True}]
+    assert (
+        validate_party_state({"playthrough_manifest": completed})[
+            "playthrough_manifest"
+        ]["status"]
+        == "completed"
+    )
+
+
 def test_manifest_cannot_leave_lobby_before_quality_gate_passes() -> None:
     manifest = _manifest()
     manifest["status"] = "ready"
@@ -223,9 +315,7 @@ def test_manifest_cannot_leave_lobby_before_quality_gate_passes() -> None:
         current["knowledge_scope_actor_id"] = current["actor_id"]
         manifest["party"]["members"].append(current)
     validated = validate_party_state({"playthrough_manifest": manifest})
-    assert validated["playthrough_manifest"]["party"]["members"][0]["wallet"] == {
-        "gp": 10
-    }
+    assert validated["playthrough_manifest"]["party"]["members"][0]["wallet"] == {"gp": 10}
     legacy = deepcopy(manifest)
     for legacy_member in legacy["party"]["members"]:
         legacy_member.pop("wallet")

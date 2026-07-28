@@ -49,7 +49,7 @@ def test_rest_completion_enforces_duration_and_daily_limit() -> None:
         completed_elapsed_minutes=480,
         rest_schedule=long_schedule,
     )
-    assert recorded["combat"]["rest_history"]["last_long_rest_elapsed_minutes"] == 480
+    assert recorded["combat"]["rest_history"]["last_long_rest_elapsed_ticks"] == 4800
     with pytest.raises(CombatEngineError, match="in 24 hours"):
         record_rest_completion(
             recorded,
@@ -74,7 +74,7 @@ def test_rest_completion_enforces_duration_and_daily_limit() -> None:
         completed_elapsed_minutes=1920,
         rest_schedule=long_schedule,
     )
-    assert next_day["combat"]["rest_history"]["last_long_rest_elapsed_minutes"] == 1920
+    assert next_day["combat"]["rest_history"]["last_long_rest_elapsed_ticks"] == 19200
 
 
 def test_rest_completion_rejects_incomplete_or_interrupted_schedules() -> None:
@@ -149,7 +149,7 @@ def test_source_granted_trance_completes_a_long_rest_in_four_hours() -> None:
         rest_schedule=schedule,
     )
 
-    assert recorded["combat"]["rest_history"]["last_long_rest_elapsed_minutes"] == 240
+    assert recorded["combat"]["rest_history"]["last_long_rest_elapsed_ticks"] == 2400
     with pytest.raises(CombatEngineError, match="at least 480"):
         record_rest_completion(
             default_character_sheet(),
@@ -376,7 +376,7 @@ def test_combat_end_expires_every_combat_clock_but_preserves_elapsed_effects() -
     assert by_id["long-poison"]["active"] is True
 
 
-def test_elapsed_minutes_accumulate_for_hour_actor_effects() -> None:
+def test_elapsed_ticks_accumulate_for_hour_actor_effects() -> None:
     sheet = default_character_sheet()
     sheet["conditions"] = ["poisoned", "paralyzed", "prone"]
     sheet["effects"] = [
@@ -396,21 +396,21 @@ def test_elapsed_minutes_accumulate_for_hour_actor_effects() -> None:
         }
     ]
 
-    first = advance_elapsed_effect_durations(sheet, elapsed_minutes=30)
+    first = advance_elapsed_effect_durations(sheet, elapsed_ticks=300)
     assert first["expired"] == []
     assert first["sheet"]["effects"][0]["duration"] == {
         "period": "hour",
         "remaining": 1,
-        "elapsed_minutes_remainder": 30,
+        "elapsed_ticks_remainder": 300,
     }
 
-    second = advance_elapsed_effect_durations(first["sheet"], elapsed_minutes=30)
+    second = advance_elapsed_effect_durations(first["sheet"], elapsed_ticks=300)
     assert second["expired"] == ["giant-spider-poison"]
     assert second["sheet"]["conditions"] == ["prone"]
     assert second["sheet"]["effects"][0]["active"] is False
 
 
-def test_elapsed_minutes_clear_invisibility_when_spell_expires() -> None:
+def test_elapsed_ticks_clear_invisibility_when_spell_expires() -> None:
     sheet = default_character_sheet()
     sheet["conditions"] = ["invisible", "prone"]
     sheet["effects"] = [
@@ -426,14 +426,14 @@ def test_elapsed_minutes_clear_invisibility_when_spell_expires() -> None:
         }
     ]
 
-    result = advance_elapsed_effect_durations(sheet, elapsed_minutes=60)
+    result = advance_elapsed_effect_durations(sheet, elapsed_ticks=600)
 
     assert result["expired"] == ["invisibility"]
     assert result["sheet"]["conditions"] == ["prone"]
     assert result["sheet"]["effects"][0]["ended_reason"] == "duration_expired"
 
 
-def test_elapsed_minutes_clear_turned_when_turn_undead_expires() -> None:
+def test_elapsed_ticks_clear_turned_when_turn_undead_expires() -> None:
     sheet = default_character_sheet()
     sheet["conditions"] = ["turned", "prone"]
     sheet["effects"] = [
@@ -446,13 +446,13 @@ def test_elapsed_minutes_clear_turned_when_turn_undead_expires() -> None:
         }
     ]
 
-    result = advance_elapsed_effect_durations(sheet, elapsed_minutes=1)
+    result = advance_elapsed_effect_durations(sheet, elapsed_ticks=10)
 
     assert result["expired"] == ["turn-undead"]
     assert result["sheet"]["conditions"] == ["prone"]
 
 
-def test_elapsed_minutes_advance_minute_hour_and_day_world_effects() -> None:
+def test_elapsed_ticks_advance_minute_hour_and_day_world_effects() -> None:
     state = {
         "world_effects": [
             {
@@ -473,17 +473,43 @@ def test_elapsed_minutes_advance_minute_hour_and_day_world_effects() -> None:
         ]
     }
 
-    first = advance_elapsed_world_effect_durations(state, elapsed_minutes=60)
+    first = advance_elapsed_world_effect_durations(state, elapsed_ticks=600)
     assert first["state"]["world_effects"][0]["duration"]["remaining"] == 30
     assert first["state"]["world_effects"][1]["duration"]["remaining"] == 1
     assert first["state"]["world_effects"][2]["duration"] == {
         "period": "day",
         "remaining": 1,
-        "elapsed_minutes_remainder": 60,
+        "elapsed_ticks_remainder": 600,
     }
 
-    second = advance_elapsed_world_effect_durations(first["state"], elapsed_minutes=1380)
+    second = advance_elapsed_world_effect_durations(first["state"], elapsed_ticks=13800)
     assert set(second["expired"]) == {"minutes", "hours", "days"}
+
+
+def test_minute_effect_duration_is_relative_to_its_start_tick() -> None:
+    sheet = default_character_sheet()
+    sheet["effects"] = [
+        {
+            "id": "one-minute",
+            "name": "One Minute",
+            "active": True,
+            "duration": {"period": "minute", "remaining": 1},
+        }
+    ]
+
+    after_seven_rounds = advance_elapsed_effect_durations(sheet, elapsed_ticks=7)
+    assert after_seven_rounds["expired"] == []
+    assert after_seven_rounds["sheet"]["effects"][0]["duration"] == {
+        "period": "minute",
+        "remaining": 1,
+        "elapsed_ticks_remainder": 7,
+    }
+
+    after_ten_rounds = advance_elapsed_effect_durations(
+        after_seven_rounds["sheet"],
+        elapsed_ticks=3,
+    )
+    assert after_ten_rounds["expired"] == ["one-minute"]
 
 
 def test_long_rest_also_recovers_short_rest_resources() -> None:
@@ -528,6 +554,30 @@ def test_long_rest_clears_stable_and_unconscious_case_insensitively() -> None:
 
     assert result["sheet"]["combat"]["hp"]["value"] == 10
     assert result["sheet"]["conditions"] == ["prone"]
+
+
+def test_long_rest_does_not_remove_condition_owned_by_persistent_effect() -> None:
+    sheet = default_character_sheet()
+    sheet["combat"]["hp"] = {"value": 1, "max": 10, "temp": 0}
+    sheet["conditions"] = ["stable", "unconscious"]
+    sheet["effects"] = [
+        {
+            "id": "persistent-unconsciousness",
+            "name": "Persistent Unconsciousness",
+            "kind": "timed_conditions",
+            "source": "source:module",
+            "active": True,
+            "concentration": False,
+            "duration": {"period": "manual", "remaining": 0},
+            "changes": [{"path": "conditions", "mode": "add", "value": "unconscious"}],
+            "description": "",
+        }
+    ]
+
+    result = apply_rest(sheet, rest_type="long_rest")
+
+    assert result["sheet"]["combat"]["hp"]["value"] == 10
+    assert result["sheet"]["conditions"] == ["unconscious"]
 
 
 @pytest.mark.parametrize("rest_type", ["short_rest", "long_rest"])
@@ -843,26 +893,31 @@ def test_arcane_recovery_is_a_once_per_day_short_rest_choice() -> None:
         sheet,
         rest_type="short_rest",
         arcane_recovery={"1": 1},
-        world_day=1,
+        game_day=1,
     )
 
     assert recovered["arcane_recovery"] == {
         "allowance": 1,
         "used_levels": 1,
         "recovered": {"1": 1},
-        "campaign_day": 1,
+        "edition": "2014",
+        "reset_on": "game_day",
+        "game_day": 1,
     }
     assert recovered["sheet"]["spellcasting"]["spell_slots"]["1"]["value"] == 1
     feature_uses = recovered["sheet"]["content"]["features"][0]["uses"]
     assert feature_uses["value"] == 0
     assert feature_uses["max"] == 1
     assert feature_uses["recovers_on"] == "manual"
-    with pytest.raises(CombatEngineError, match="campaign day"):
+    assert recovered["sheet"]["content"]["features"][0]["choices"] == {
+        "_arcane_recovery_last_used_game_day": 1
+    }
+    with pytest.raises(CombatEngineError, match="game day"):
         apply_rest(
             recovered["sheet"],
             rest_type="short_rest",
             arcane_recovery={"1": 1},
-            world_day=1,
+            game_day=1,
         )
     long_rested = apply_rest(recovered["sheet"], rest_type="long_rest")
     assert long_rested["sheet"]["content"]["features"][0]["uses"]["value"] == 0
@@ -872,24 +927,79 @@ def test_arcane_recovery_is_a_once_per_day_short_rest_choice() -> None:
         next_day_sheet,
         rest_type="short_rest",
         arcane_recovery={"1": 1},
-        world_day=2,
+        game_day=2,
     )
-    assert next_day["arcane_recovery"]["campaign_day"] == 2
+    assert next_day["arcane_recovery"]["game_day"] == 2
 
     with pytest.raises(CombatEngineError, match="exceeds half"):
         apply_rest(
             sheet,
             rest_type="short_rest",
             arcane_recovery={"1": 2},
-            world_day=1,
+            game_day=1,
         )
     with pytest.raises(CombatEngineError, match="only when finishing a short rest"):
         apply_rest(
             sheet,
             rest_type="long_rest",
             arcane_recovery={"1": 1},
-            world_day=1,
+            game_day=1,
         )
+
+
+def test_2024_arcane_recovery_resets_only_on_a_long_rest() -> None:
+    sheet = default_character_sheet()
+    sheet["edition"] = "2024"
+    sheet["progression"] = {
+        "level": 2,
+        "classes": [{"name": "Wizard", "level": 2, "hit_die": 6}],
+    }
+    sheet["spellcasting"]["spell_slots"] = {
+        "1": {
+            "label": "Level 1 spell slots",
+            "value": 0,
+            "max": 3,
+            "recovers_on": "long_rest",
+            "source_key": "Wizard",
+            "slot_level": 1,
+        }
+    }
+    sheet["content"]["features"] = [
+        {
+            "id": "dnd5e.content.srd2024.feature.wizard-arcane-recovery",
+            "name": "Arcane Recovery",
+            "source_key": "Wizard",
+            "uses": {
+                "label": "Arcane Recovery",
+                "value": 1,
+                "max": 1,
+                "recovers_on": "long_rest",
+            },
+        }
+    ]
+
+    recovered = apply_rest(
+        sheet,
+        rest_type="short_rest",
+        arcane_recovery={"1": 1},
+    )
+    assert recovered["arcane_recovery"]["reset_on"] == "long_rest"
+    assert "game_day" not in recovered["arcane_recovery"]
+    with pytest.raises(CombatEngineError, match="since the last long rest"):
+        apply_rest(
+            recovered["sheet"],
+            rest_type="short_rest",
+            arcane_recovery={"1": 1},
+        )
+
+    long_rested = apply_rest(recovered["sheet"], rest_type="long_rest")
+    long_rested["sheet"]["spellcasting"]["spell_slots"]["1"]["value"] = 0
+    used_again = apply_rest(
+        long_rested["sheet"],
+        rest_type="short_rest",
+        arcane_recovery={"1": 1},
+    )
+    assert used_again["sheet"]["content"]["features"][0]["uses"]["value"] == 0
 
 
 def test_natural_recovery_is_once_per_long_rest() -> None:
@@ -1108,6 +1218,34 @@ def test_conscious_creature_can_be_knocked_prone_outside_combat() -> None:
     assert result["sheet"]["conditions"] == ["prone"]
     assert replay["status"] == "already_prone"
     assert sheet["conditions"] == []
+
+
+def test_outside_combat_prone_changes_honor_immunity_and_effect_ownership() -> None:
+    immune = default_character_sheet()
+    immune["combat"]["hp"] = {"value": 7, "max": 12, "temp": 0}
+    immune["traits"]["condition_immunities"] = ["prone"]
+
+    resisted = knock_prone_outside_combat(immune)
+
+    assert resisted["status"] == "immune"
+    assert resisted["sheet"]["conditions"] == []
+
+    sourced = default_character_sheet()
+    sourced["combat"]["hp"] = {"value": 7, "max": 12, "temp": 0}
+    sourced["conditions"] = ["prone"]
+    sourced["effects"] = [
+        {
+            "id": "held-prone",
+            "name": "Held Prone",
+            "kind": "timed_conditions",
+            "active": True,
+            "duration": {"period": "manual", "remaining": 0},
+            "changes": [{"path": "conditions", "mode": "add", "value": "prone"}],
+        }
+    ]
+
+    with pytest.raises(CombatEngineError, match="still owned"):
+        stand_outside_combat(sourced)
 
 
 def test_outside_combat_knock_prone_rejects_incapacitated_creature() -> None:

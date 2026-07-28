@@ -7,6 +7,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
+from sagasmith_dnd.abilities import ABILITY_ABBREVIATIONS, ABILITY_NAMES
 from sagasmith_dnd.character_schema import default_character_sheet, validate_character_sheet
 from sagasmith_dnd.combat_engine import structured_critical_followup
 
@@ -29,15 +30,6 @@ class ParsedStatblock:
     spellcasting: dict[str, Any] | None = None
 
 
-_ABILITIES = ("strength", "dexterity", "constitution", "intelligence", "wisdom", "charisma")
-_ABILITY_ABBREVIATIONS = {
-    "str": "strength",
-    "dex": "dexterity",
-    "con": "constitution",
-    "int": "intelligence",
-    "wis": "wisdom",
-    "cha": "charisma",
-}
 _SKILL_NAMES = {
     "acrobatics": "acrobatics",
     "animal handling": "animal_handling",
@@ -203,7 +195,7 @@ def _parse_ability_scores(markdown: str) -> dict[str, int]:
     scores = [int(value) for value in re.findall(r"\|\s*(\d+)\s*\([+\-−]?\d+\)", value_line)]
     if len(scores) != 6:
         raise StatblockImportError("statblock ability table must contain six scores")
-    return dict(zip(_ABILITIES, scores, strict=True))
+    return dict(zip(ABILITY_NAMES, scores, strict=True))
 
 
 def _parse_bonus_list(value: str) -> dict[str, int]:
@@ -1190,7 +1182,7 @@ def parse_2014_statblock(
         }
 
     for abbreviation, target in _parse_bonus_list(_field(markdown, "Saving Throws")).items():
-        ability = _ABILITY_ABBREVIATIONS.get(abbreviation)
+        ability = ABILITY_ABBREVIATIONS.get(abbreviation)
         if ability:
             sheet["abilities"][ability]["bonus"] = target - (ability_scores[ability] - 10) // 2
     for label, target in _parse_bonus_list(_field(markdown, "Skills")).items():

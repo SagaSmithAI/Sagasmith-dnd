@@ -34,6 +34,9 @@ def test_json_cli_campaign_rules_module_and_save(
     assert created["ok"] is True
     campaign_id = created["data"]["campaign"]["id"]
     assert created["data"]["rule_profile"]["edition"] == "2014"
+    assert "edition" not in created["data"]["campaign"]["settings"]
+    assert "locale" not in created["data"]["campaign"]["settings"]
+    assert "combat" not in created["data"]["campaign"]["settings"]
 
     assert (
         _call(
@@ -242,6 +245,55 @@ def test_cli_error_is_a_single_json_document(tmp_path: Path, monkeypatch, capsys
     assert result["error"]["code"] == "not_found"
 
 
+def test_cli_cannot_create_a_second_simplified_combat_state(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setenv(
+        "DND_DATABASE_URL",
+        f"sqlite+pysqlite:///{(tmp_path / 'combat.db').as_posix()}",
+    )
+    created = _call(
+        capsys,
+        "campaign",
+        "start",
+        "--name",
+        "Structured combat only",
+        "--edition",
+        "2014",
+    )[1]
+    campaign_id = created["data"]["campaign"]["id"]
+
+    code, result = _call(
+        capsys,
+        "combat",
+        "start",
+        "--campaign",
+        campaign_id,
+        "--payload",
+        '{"round":99}',
+    )
+
+    assert code == 4
+    assert result["error"]["code"] == "retired_command"
+    assert "D&D MCP structured combat tools" in result["error"]["message"]
+    assert _call(capsys, "combat", "status", "--campaign", campaign_id)[1]["data"] is None
+
+    bypass_code, bypass = _call(
+        capsys,
+        "campaign",
+        "update",
+        "--campaign",
+        campaign_id,
+        "--state",
+        '{"combat":{"active":true}}',
+    )
+    assert bypass_code == 2
+    assert bypass["error"]["code"] == "invalid_value"
+    assert "system-owned state fields: combat" in bypass["error"]["message"]
+
+
 def test_cli_character_v2_inventory_party_and_memory_workflow(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
@@ -299,6 +351,8 @@ def test_cli_character_v2_inventory_party_and_memory_workflow(
     )
     mira_id = mira_created["data"]["id"]
     assert mira_created["data"]["template_id"] == mira_template["data"]["id"]
+    assert mira_template["data"]["sheet"]["edition"] == "2014"
+    assert mira_created["data"]["sheet"]["edition"] == "2014"
     code, direct_pc = _call(
         capsys,
         "character",
@@ -311,6 +365,7 @@ def test_cli_character_v2_inventory_party_and_memory_workflow(
     assert code == 0
     assert direct_pc["data"]["campaign_id"] == campaign_id
     assert direct_pc["data"]["template_id"] is None
+    assert direct_pc["data"]["sheet"]["edition"] == "2014"
     code, library_monster = _call(
         capsys,
         "character",
@@ -373,6 +428,8 @@ def test_cli_character_v2_inventory_party_and_memory_workflow(
     )
     assert built["data"]["template"]["campaign_id"] is None
     assert built["data"]["instance"]["template_id"] == built["data"]["template"]["id"]
+    assert built["data"]["template"]["sheet"]["edition"] == "2014"
+    assert built["data"]["instance"]["sheet"]["edition"] == "2014"
     assignments = (
         '{"strength":15,"dexterity":14,"constitution":13,'
         '"intelligence":12,"wisdom":10,"charisma":8}'
@@ -494,13 +551,18 @@ def test_cli_character_v2_inventory_party_and_memory_workflow(
     assert (
         _call(
             capsys,
-            "character",
-            "memory",
+            "knowledge",
             "add",
-            "--id",
+            "--campaign",
+            campaign_id,
+            "--actor-id",
             nox_id,
-            "--payload",
-            '{"kind":"conversation","summary":"The party accepted the cellar job.","importance":4}',
+            "--knowledge-key",
+            "cellar-job-accepted",
+            "--content",
+            "The party accepted the cellar job.",
+            "--confidence",
+            "4",
         )[0]
         == 0
     )
@@ -623,7 +685,20 @@ def test_cli_character_v2_inventory_party_and_memory_workflow(
     assert set(mira["data"]["derived"]["spellcasting"]["prepared_spell_ids"]) == {"cure", "bless"}
     _, nox = _call(capsys, "character", "show", "--id", nox_id)
     assert nox["data"]["notes"]["profile"]["summary"] == "A cautious innkeeper."
-    assert nox["data"]["notes"]["memories"][0]["importance"] == 4
+    assert nox["data"]["notes"]["memories"] == []
+    _, nox_knowledge = _call(
+        capsys,
+        "knowledge",
+        "list",
+        "--campaign",
+        campaign_id,
+        "--actor-id",
+        nox_id,
+    )
+    assert nox_knowledge["data"]["knowledge"][0]["proposition"] == (
+        "The party accepted the cellar job."
+    )
+    assert nox_knowledge["data"]["knowledge"][0]["confidence"] == 4
 
 
 def test_2014_translation_links_to_english_source(
@@ -753,9 +828,9 @@ def test_cli_long_term_memory_v2_and_atomic_continuity_commit(
     monkeypatch.setenv(
         "DND_DATABASE_URL", f"sqlite+pysqlite:///{(tmp_path / 'memory-v2.db').as_posix()}"
     )
-    campaign_id = _call(capsys, "campaign", "start", "--name", "Memory v2")[1]["data"][
-        "campaign"
-    ]["id"]
+    campaign_id = _call(capsys, "campaign", "start", "--name", "Memory v2")[1]["data"]["campaign"][
+        "id"
+    ]
     _, actor = _call(
         capsys,
         "character",
@@ -770,13 +845,35 @@ def test_cli_long_term_memory_v2_and_atomic_continuity_commit(
     )
     actor_id = actor["data"]["id"]
 
-    _, migration = _call(
-        capsys, "character", "memory", "migrate", "--id", actor_id
+    retired_code, retired = _call(
+        capsys,
+        "character",
+        "memory",
+        "add",
+        "--id",
+        actor_id,
+        "--payload",
+        '{"summary":"This must not become a second knowledge store."}',
     )
+    assert retired_code == 2
+    assert retired["error"]["code"] == "retired_character_memory"
+
+    replacement_code, replacement = _call(
+        capsys,
+        "character",
+        "update",
+        "--id",
+        actor_id,
+        "--notes",
+        '{"memories":[{"id":"new-memory","summary":"A bypass."}]}',
+    )
+    assert replacement_code == 2
+    assert replacement["error"]["code"] == "invalid_value"
+    assert "import-only" in replacement["error"]["message"]
+
+    _, migration = _call(capsys, "character", "memory", "migrate", "--id", actor_id)
     assert migration["data"]["target"] == "actor_knowledge"
-    assert migration["data"]["candidates"][0]["knowledge_key"] == (
-        "legacy-memory:old-promise"
-    )
+    assert migration["data"]["candidates"][0]["knowledge_key"] == ("legacy-memory:old-promise")
 
     _, created = _call(
         capsys,
@@ -846,9 +943,8 @@ def test_cli_long_term_memory_v2_and_atomic_continuity_commit(
         payload,
     )
     assert committed["data"]["snapshot"] is not None
-    assert committed["data"]["facts"][0]["source_event_ids"] == [
-        committed["data"]["event"]["id"]
-    ]
-    assert committed["data"]["actor_knowledge"][0]["source_event_id"] == (
-        committed["data"]["event"]["id"]
+    assert committed["data"]["facts"][0]["source_event_ids"] == [committed["data"]["event"]["id"]]
+    assert (
+        committed["data"]["actor_knowledge"][0]["source_event_id"]
+        == (committed["data"]["event"]["id"])
     )

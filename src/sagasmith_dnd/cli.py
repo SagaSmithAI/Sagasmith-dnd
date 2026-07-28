@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import sys
+import uuid
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -32,10 +34,13 @@ from sagasmith_core.modules import MarkdownModuleParser
 
 from sagasmith_dnd import __version__
 from sagasmith_dnd.ability_generation import apply_ability_generation, roll_ability_scores
+from sagasmith_dnd.campaign_state import (
+    merge_reviewed_campaign_settings,
+    merge_reviewed_campaign_state,
+)
 from sagasmith_dnd.character_schema import (
     add_effect,
     add_inventory_item,
-    add_memory,
     adjust_wallet,
     consume_weapon_ammunition,
     default_character_sheet,
@@ -45,11 +50,11 @@ from sagasmith_dnd.character_schema import (
     receive_inventory_item,
     remove_effect,
     remove_inventory_item,
-    resolve_memory,
     set_resource_value,
     set_spell_prepared,
     update_inventory_item,
     validate_character_notes,
+    validate_character_notes_update,
     validate_character_sheet,
     validate_party_state,
 )
@@ -200,32 +205,6 @@ def _profile_for(args, profiles: RuleProfileService) -> tuple[str | None, str | 
     return edition, locale, publications
 
 
-def _campaign_revision(revisions, before, after, operation: str) -> None:
-    fields = ("name", "status", "description", "settings", "state", "revision")
-    revisions.record(
-        before.id,
-        operation=operation,
-        entity_type="campaign",
-        entity_id=before.id,
-        before={name: getattr(before, name) for name in fields},
-        after={name: getattr(after, name) for name in fields},
-    )
-
-
-def _character_revision(revisions, before, after, operation: str) -> None:
-    if before.campaign_id is None:
-        return
-    fields = ("name", "player_name", "summary", "sheet", "notes", "revision")
-    revisions.record(
-        before.campaign_id,
-        operation=operation,
-        entity_type="character",
-        entity_id=before.id,
-        before={name: getattr(before, name) for name in fields},
-        after={name: getattr(after, name) for name in fields},
-    )
-
-
 def _character_view(character) -> dict[str, Any]:
     sheet = validate_character_sheet(character.sheet)
     notes = validate_character_notes(character.notes, character_type=character.character_type)
@@ -248,18 +227,75 @@ def _party_state_with_sheet(state: dict[str, Any], sheet: dict[str, Any]) -> dic
     return validate_party_state(value)
 
 
-def _persist_character(characters, revisions, before, *, sheet=None, notes=None, operation: str):
-    updated = characters.update(
-        before.id,
-        sheet=validate_character_sheet(sheet) if sheet is not None else None,
-        notes=(
-            validate_character_notes(notes, character_type=before.character_type)
-            if notes is not None
-            else None
-        ),
+def _sheet_for_campaign(
+    sheet: dict[str, Any],
+    campaign_id: str | None,
+    profiles: RuleProfileService,
+) -> dict[str, Any]:
+    """Project the campaign rule-profile edition onto a bound character sheet."""
+
+    value = copy.deepcopy(sheet)
+    if campaign_id is not None:
+        profile = profiles.get(campaign_id)
+        if profile is None:
+            raise RuntimeError("campaign has no rule profile")
+        value["edition"] = profile.edition
+    return validate_character_sheet(value)
+
+
+def _persist_character(
+    characters,
+    before,
+    *,
+    name=None,
+    player_name=None,
+    summary=None,
+    sheet=None,
+    notes=None,
+    operation: str,
+):
+    sheet_value = copy.deepcopy(sheet if sheet is not None else before.sheet)
+    if before.campaign_id is not None:
+        profile = RuleProfileService(characters.database).get(before.campaign_id)
+        if profile is None:
+            raise RuntimeError("campaign has no rule profile")
+        sheet_value["edition"] = profile.edition
+    validated_sheet = validate_character_sheet(sheet_value)
+    validated_notes = (
+        validate_character_notes_update(
+            before.notes,
+            notes,
+            character_type=before.character_type,
+        )
+        if notes is not None
+        else before.notes
     )
-    _character_revision(revisions, before, updated, operation)
-    return updated
+    if before.campaign_id is None:
+        return characters.update(
+            before.id,
+            name=name,
+            player_name=player_name,
+            summary=summary,
+            sheet=validated_sheet,
+            notes=validated_notes,
+            expected_revision=before.revision,
+        )
+    StateMutationService(characters.database).replace(
+        before.campaign_id,
+        character_updates=[
+            CharacterStateUpdate(
+                before.id,
+                validated_sheet,
+                validated_notes,
+                before.revision,
+                name=name,
+                player_name=player_name,
+                summary=summary,
+            )
+        ],
+        operation=operation,
+    )
+    return characters.get(before.id)
 
 
 def _dispatch(args) -> Any:
@@ -323,21 +359,29 @@ def _dispatch(args) -> Any:
 
         if args.group == "campaign":
             if args.action in {"create", "start"}:
-                campaign = campaigns.create(
+                edition = args.edition or "2024"
+                locale = args.locale or "en"
+                publications = args.publications or []
+                options = _dict(args.options)
+                campaign = campaigns.create_owned(
                     system_id=DND5E.id,
                     name=_require(args.name, "name"),
+                    principal_id="system:local",
+                    idempotency_key=str(uuid.uuid4()),
                     slug=args.slug,
                     description=args.description or "",
                     settings={**DND5E.campaign_defaults, **_dict(args.settings)},
                     state=validate_party_state(_dict(args.state)),
+                    rule_profile={
+                        "edition": edition,
+                        "locale": locale,
+                        "publications": publications,
+                        "options": options,
+                    },
                 )
-                profile = profiles.set(
-                    campaign.id,
-                    edition=args.edition or "2024",
-                    locale=args.locale or "en",
-                    publications=args.publications or [],
-                    options=_dict(args.options),
-                )
+                profile = profiles.get(campaign.id)
+                if profile is None:
+                    raise RuntimeError("campaign creation did not persist its rule profile")
                 result = {"campaign": asdict(campaign), "rule_profile": asdict(profile)}
                 if args.action == "start":
                     result["snapshot"] = asdict(saves.create(campaign.id, label="Initial state"))
@@ -360,15 +404,30 @@ def _dispatch(args) -> Any:
             if args.action in {"update", "archive"}:
                 campaign_id = _require(args.campaign or args.id, "campaign")
                 before = campaigns.get(campaign_id)
-                updated = campaigns.update(
+                settings = None
+                if args.settings:
+                    settings = merge_reviewed_campaign_settings(
+                        before.settings,
+                        _dict(args.settings),
+                    )
+                state = None
+                if args.state:
+                    state = validate_party_state(
+                        merge_reviewed_campaign_state(
+                            before.state,
+                            _dict(args.state),
+                        )
+                    )
+                updated = campaigns.update_audited(
                     campaign_id,
                     name=args.name,
                     status="archived" if args.action == "archive" else args.status,
                     description=args.description,
-                    settings=_dict(args.settings) if args.settings else None,
-                    state=validate_party_state(_dict(args.state)) if args.state else None,
+                    settings=settings,
+                    state=state,
+                    expected_revision=before.revision,
+                    operation="campaign.update",
                 )
-                _campaign_revision(revisions, before, updated, "campaign.update")
                 return asdict(updated)
             if args.action == "delete":
                 campaign_id = _require(args.campaign or args.id, "campaign")
@@ -402,7 +461,11 @@ def _dispatch(args) -> Any:
                     character_type=character_type,
                     player_name=args.player,
                     summary=args.summary or "",
-                    sheet=validate_character_sheet(_dict(args.sheet)),
+                    sheet=_sheet_for_campaign(
+                        _dict(args.sheet),
+                        args.campaign,
+                        profiles,
+                    ),
                     notes=validate_character_notes(
                         _dict(args.notes), character_type=character_type
                     ),
@@ -414,7 +477,11 @@ def _dispatch(args) -> Any:
                     raise CliError(
                         "invalid_value", "--type must be pc, npc, or monster", exit_code=2
                     )
-                sheet = validate_character_sheet(_dict(args.sheet))
+                sheet = _sheet_for_campaign(
+                    _dict(args.sheet),
+                    _require(args.campaign, "campaign"),
+                    profiles,
+                )
                 if args.ability_method:
                     raw_rolls = _json_value(args.rolls) if args.rolls else None
                     sheet = validate_character_sheet(
@@ -458,7 +525,6 @@ def _dispatch(args) -> Any:
                     return _character_view(
                         _persist_character(
                             characters,
-                            revisions,
                             before,
                             sheet=sheet,
                             operation=f"character.ability.{args.method}",
@@ -489,6 +555,11 @@ def _dispatch(args) -> Any:
                     campaign_id=_require(args.campaign, "campaign"),
                     name=args.name,
                     player_name=args.player,
+                    sheet=_sheet_for_campaign(
+                        template.sheet,
+                        _require(args.campaign, "campaign"),
+                        profiles,
+                    ),
                 )
                 return _character_view(created)
             if args.action == "list":
@@ -508,21 +579,24 @@ def _dispatch(args) -> Any:
             if args.action == "update":
                 sheet = _dict(args.sheet) if args.sheet else None
                 before = characters.get(_require(args.id, "id"))
-                updated = characters.update(
-                    _require(args.id, "id"),
+                updated = _persist_character(
+                    characters,
+                    before,
                     name=args.name,
                     player_name=args.player,
                     summary=args.summary,
                     sheet=validate_character_sheet(sheet) if sheet is not None else None,
                     notes=(
-                        validate_character_notes(
-                            _dict(args.notes), character_type=before.character_type
+                        validate_character_notes_update(
+                            before.notes,
+                            _dict(args.notes),
+                            character_type=before.character_type,
                         )
                         if args.notes
                         else None
                     ),
+                    operation="character.update",
                 )
-                _character_revision(revisions, before, updated, "character.update")
                 return _character_view(updated)
             if args.action == "inventory":
                 before = characters.get(_require(args.id, "id"))
@@ -532,7 +606,6 @@ def _dispatch(args) -> Any:
                     sheet, item_id = add_inventory_item(before.sheet, _dict(args.payload))
                     updated = _persist_character(
                         characters,
-                        revisions,
                         before,
                         sheet=sheet,
                         operation="character.inventory.add",
@@ -545,7 +618,6 @@ def _dispatch(args) -> Any:
                     return _character_view(
                         _persist_character(
                             characters,
-                            revisions,
                             before,
                             sheet=sheet,
                             operation="character.inventory.update",
@@ -557,7 +629,6 @@ def _dispatch(args) -> Any:
                     )
                     updated = _persist_character(
                         characters,
-                        revisions,
                         before,
                         sheet=sheet,
                         operation="character.inventory.remove",
@@ -570,7 +641,6 @@ def _dispatch(args) -> Any:
                     )
                     updated = _persist_character(
                         characters,
-                        revisions,
                         before,
                         sheet=sheet,
                         operation="character.inventory.use_ammunition",
@@ -600,15 +670,10 @@ def _dispatch(args) -> Any:
                                 target.id, target_sheet, target.notes, target.revision
                             ),
                         ],
+                        operation="character.inventory.transfer",
                     )
                     source_after = characters.get(before.id)
                     target_after = characters.get(target.id)
-                    _character_revision(
-                        revisions, before, source_after, "character.inventory.transfer"
-                    )
-                    _character_revision(
-                        revisions, target, target_after, "character.inventory.receive"
-                    )
                     return {
                         "source": _character_view(source_after),
                         "target": _character_view(target_after),
@@ -625,7 +690,6 @@ def _dispatch(args) -> Any:
                     return _character_view(
                         _persist_character(
                             characters,
-                            revisions,
                             before,
                             sheet=sheet,
                             operation="character.wallet.credit",
@@ -636,7 +700,6 @@ def _dispatch(args) -> Any:
                     return _character_view(
                         _persist_character(
                             characters,
-                            revisions,
                             before,
                             sheet=sheet,
                             operation="character.wallet.debit",
@@ -666,13 +729,10 @@ def _dispatch(args) -> Any:
                                 target.id, target_sheet, target.notes, target.revision
                             ),
                         ],
+                        operation="character.wallet.transfer",
                     )
                     source_after = characters.get(before.id)
                     target_after = characters.get(target.id)
-                    _character_revision(
-                        revisions, before, source_after, "character.wallet.transfer"
-                    )
-                    _character_revision(revisions, target, target_after, "character.wallet.receive")
                     return {
                         "source": _character_view(source_after),
                         "target": _character_view(target_after),
@@ -693,7 +753,6 @@ def _dispatch(args) -> Any:
                     return _character_view(
                         _persist_character(
                             characters,
-                            revisions,
                             before,
                             sheet=sheet,
                             operation=f"character.equipment.{args.subaction}",
@@ -706,7 +765,7 @@ def _dispatch(args) -> Any:
                 if args.subaction == "add":
                     sheet, effect_id = add_effect(before.sheet, _dict(args.payload))
                     updated = _persist_character(
-                        characters, revisions, before, sheet=sheet, operation="character.effect.add"
+                        characters, before, sheet=sheet, operation="character.effect.add"
                     )
                     return {"character": _character_view(updated), "effect_id": effect_id}
                 if args.subaction == "remove":
@@ -714,7 +773,6 @@ def _dispatch(args) -> Any:
                     return _character_view(
                         _persist_character(
                             characters,
-                            revisions,
                             before,
                             sheet=sheet,
                             operation="character.effect.remove",
@@ -726,29 +784,13 @@ def _dispatch(args) -> Any:
                     return validate_character_notes(
                         before.notes, character_type=before.character_type
                     )["memories"]
-                if args.subaction == "add":
-                    notes, memory_id = add_memory(before.notes, _dict(args.payload))
-                    updated = _persist_character(
-                        characters, revisions, before, notes=notes, operation="character.memory.add"
+                if args.subaction in {"add", "resolve"}:
+                    raise CliError(
+                        "retired_character_memory",
+                        "embedded character memory writes are retired; use the "
+                        "actor-knowledge add/revise commands",
+                        exit_code=2,
                     )
-                    return {
-                        "character": _character_view(updated),
-                        "memory_id": memory_id,
-                        "deprecated": "write new subjective memory with ActorKnowledge",
-                    }
-                if args.subaction == "resolve":
-                    notes = resolve_memory(before.notes, _require(args.memory_id, "memory-id"))
-                    updated = _persist_character(
-                        characters,
-                        revisions,
-                        before,
-                        notes=notes,
-                        operation="character.memory.resolve",
-                    )
-                    return {
-                        "character": _character_view(updated),
-                        "deprecated": "revise ActorKnowledge for new runtime memory",
-                    }
                 if args.subaction == "migrate":
                     return {
                         "actor_id": before.id,
@@ -770,7 +812,6 @@ def _dispatch(args) -> Any:
                     return _character_view(
                         _persist_character(
                             characters,
-                            revisions,
                             before,
                             sheet=sheet,
                             operation=f"character.spell.{args.subaction}",
@@ -786,7 +827,6 @@ def _dispatch(args) -> Any:
                 return _character_view(
                     _persist_character(
                         characters,
-                        revisions,
                         before,
                         sheet=sheet,
                         operation="character.resource.set",
@@ -810,16 +850,24 @@ def _dispatch(args) -> Any:
                 if args.subaction == "add":
                     updated_sheet, item_id = add_inventory_item(party_sheet, _dict(args.payload))
                     updated_state = _party_state_with_sheet(state, updated_sheet)
-                    after = campaigns.update(campaign_id, state=updated_state)
-                    _campaign_revision(revisions, campaign, after, "party.inventory.add")
+                    campaigns.update_audited(
+                        campaign_id,
+                        state=updated_state,
+                        expected_revision=campaign.revision,
+                        operation="party.inventory.add",
+                    )
                     return {"inventory": updated_sheet["inventory"], "item_id": item_id}
                 if args.subaction == "remove":
                     updated_sheet, removed = remove_inventory_item(
                         party_sheet, _require(args.item, "item"), args.amount
                     )
                     updated_state = _party_state_with_sheet(state, updated_sheet)
-                    after = campaigns.update(campaign_id, state=updated_state)
-                    _campaign_revision(revisions, campaign, after, "party.inventory.remove")
+                    campaigns.update_audited(
+                        campaign_id,
+                        state=updated_state,
+                        expected_revision=campaign.revision,
+                        operation="party.inventory.remove",
+                    )
                     return {"inventory": updated_sheet["inventory"], "removed": removed}
                 if args.subaction in {"deposit", "withdraw"}:
                     character = characters.get(_require(args.id, "id"))
@@ -849,15 +897,10 @@ def _dispatch(args) -> Any:
                                 character.revision,
                             )
                         ],
+                        expected_campaign_revision=campaign.revision,
+                        operation=f"party.inventory.{args.subaction}",
                     )
-                    campaign_after = campaigns.get(campaign_id)
                     character_after = characters.get(character.id)
-                    _campaign_revision(
-                        revisions, campaign, campaign_after, f"party.inventory.{args.subaction}"
-                    )
-                    _character_revision(
-                        revisions, character, character_after, f"party.inventory.{args.subaction}"
-                    )
                     return {
                         "inventory": updated_party_sheet["inventory"],
                         "character": _character_view(character_after),
@@ -873,8 +916,12 @@ def _dispatch(args) -> Any:
                         party_sheet, denomination, amount if args.subaction == "credit" else -amount
                     )
                     updated_state = _party_state_with_sheet(state, updated_sheet)
-                    after = campaigns.update(campaign_id, state=updated_state)
-                    _campaign_revision(revisions, campaign, after, f"party.wallet.{args.subaction}")
+                    campaigns.update_audited(
+                        campaign_id,
+                        state=updated_state,
+                        expected_revision=campaign.revision,
+                        operation=f"party.wallet.{args.subaction}",
+                    )
                     return updated_sheet["inventory"]["wallet"]
                 if args.subaction in {"deposit", "withdraw"}:
                     character = characters.get(_require(args.id, "id"))
@@ -900,15 +947,10 @@ def _dispatch(args) -> Any:
                                 character.revision,
                             )
                         ],
+                        expected_campaign_revision=campaign.revision,
+                        operation=f"party.wallet.{args.subaction}",
                     )
-                    campaign_after = campaigns.get(campaign_id)
                     character_after = characters.get(character.id)
-                    _campaign_revision(
-                        revisions, campaign, campaign_after, f"party.wallet.{args.subaction}"
-                    )
-                    _character_revision(
-                        revisions, character, character_after, f"party.wallet.{args.subaction}"
-                    )
                     return {
                         "wallet": updated_party_sheet["inventory"]["wallet"],
                         "character": _character_view(character_after),
@@ -1376,36 +1418,15 @@ def _dispatch(args) -> Any:
             campaign_id = _require(args.campaign, "campaign")
             campaign = campaigns.get(campaign_id)
             state = dict(campaign.state)
-            if args.action == "start":
-                before = campaign
-                state["combat"] = {
-                    "active": True,
-                    "round": 1,
-                    "turn": 0,
-                    **_dict(args.payload),
-                }
-                updated = campaigns.update(campaign_id, state=state)
-                _campaign_revision(revisions, before, updated, "combat.start")
-                return state["combat"]
             if args.action == "status":
                 return state.get("combat")
-            if args.action == "act":
-                before = campaign
-                combat = dict(state.get("combat") or {})
-                if not combat.get("active"):
-                    raise CliError("combat_not_active", "combat is not active", exit_code=4)
-                combat.update(_dict(args.payload))
-                state["combat"] = combat
-                updated = campaigns.update(campaign_id, state=state)
-                _campaign_revision(revisions, before, updated, "combat.act")
-                return combat
-            if args.action == "end":
-                before = campaign
-                result = state.get("combat")
-                state["combat"] = None
-                updated = campaigns.update(campaign_id, state=state)
-                _campaign_revision(revisions, before, updated, "combat.end")
-                return {"ended": True, "combat": result}
+            if args.action in {"start", "act", "end"}:
+                raise CliError(
+                    "retired_command",
+                    "legacy CLI combat mutations are retired; use the D&D MCP "
+                    "structured combat tools",
+                    exit_code=4,
+                )
 
         raise CliError(
             "unknown_command",

@@ -842,6 +842,41 @@ def test_turn_undead_applies_and_enforces_turned() -> None:
     assert damaged["ended_effect_ids"] == [resolved["targets"][0]["effect_id"]]
 
 
+def test_damage_condition_cleanup_preserves_other_active_effect_owners() -> None:
+    actor = _actor("target", hp=10)
+    actor["sheet"]["conditions"] = ["turned", "unconscious"]
+    actor["sheet"]["effects"] = [
+        {
+            "id": "turn-undead",
+            "kind": "turn_undead",
+            "active": True,
+            "changes": [],
+        },
+        {
+            "id": "other-turned-owner",
+            "kind": "timed_conditions",
+            "active": True,
+            "changes": [{"path": "conditions", "mode": "add", "value": "turned"}],
+        },
+        {
+            "id": "sleep",
+            "kind": "timed_conditions",
+            "active": True,
+            "changes": [{"path": "conditions", "mode": "add", "value": "unconscious"}],
+        },
+    ]
+
+    damaged = apply_damage_to_sheet(
+        actor["sheet"],
+        amount=1,
+        damage_type="radiant",
+    )
+
+    assert set(damaged["sheet"]["conditions"]) == {"turned", "unconscious"}
+    assert damaged["sheet"]["effects"][0]["active"] is False
+    assert damaged["ended_effect_ids"] == ["turn-undead"]
+
+
 def test_restrained_actor_can_spend_its_action_to_escape() -> None:
     first = _actor("first")
     second = _actor("second")

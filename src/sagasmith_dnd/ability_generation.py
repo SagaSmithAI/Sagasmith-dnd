@@ -6,16 +6,10 @@ import copy
 import random
 from typing import Any
 
+from sagasmith_dnd.abilities import ABILITY_NAMES
+from sagasmith_dnd.editions import normalize_dnd_edition
 from sagasmith_dnd.random_stream import RandomSource, active_random_source
 
-ABILITY_NAMES = (
-    "strength",
-    "dexterity",
-    "constitution",
-    "intelligence",
-    "wisdom",
-    "charisma",
-)
 PENDING_ROLL_METHOD = "roll_4d6_drop_lowest_pending"
 
 ABILITY_GENERATION_RULESETS = {
@@ -45,6 +39,7 @@ ABILITY_GENERATION_RULESETS = {
 
 
 def ruleset_for_edition(edition: str) -> tuple[str, dict[str, Any]]:
+    edition = normalize_dnd_edition(edition)
     for ruleset_id, ruleset in ABILITY_GENERATION_RULESETS.items():
         if ruleset["edition"] == edition:
             return ruleset_id, ruleset

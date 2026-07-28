@@ -92,6 +92,221 @@ def test_rule_extension_settles_whitelisted_operation_with_receipt() -> None:
     assert result["ruleset_fingerprint"] == rules.fingerprint
 
 
+def test_rule_extension_resource_operations_preserve_unlimited_counters() -> None:
+    sheet = default_character_sheet()
+    sheet["resources"]["at_will"] = {
+        "label": "At Will",
+        "value": 0,
+        "max": 0,
+        "unlimited": True,
+        "recovers_on": "none",
+        "source_key": "Test",
+        "slot_level": 0,
+    }
+    rules = resolution_context(
+        _effective(
+            [
+                {
+                    "id": "dnd5e.extension.at-will",
+                    "event": "rest.after",
+                    "operations": [
+                        {
+                            "op": "resource.spend",
+                            "path": "resources.at_will",
+                            "amount": 1,
+                        },
+                        {
+                            "op": "resource.recover",
+                            "path": "resources.at_will",
+                            "amount": 1,
+                        },
+                    ],
+                    "citations": [{"source": "local:extension", "section": "At Will"}],
+                }
+            ]
+        )
+    )
+
+    result = apply_rule_event(sheet, "rest.after", rules)
+
+    assert result.sheet["resources"]["at_will"] == sheet["resources"]["at_will"]
+
+
+def test_rule_extension_healing_uses_the_canonical_zero_hp_transition() -> None:
+    sheet = default_character_sheet()
+    sheet["combat"]["hp"] = {"value": 0, "max": 10, "temp": 0}
+    sheet["combat"]["death_saves"] = {"successes": 1, "failures": 2}
+    sheet["conditions"] = ["Stable", "UNCONSCIOUS"]
+    rules = resolution_context(
+        _effective(
+            [
+                {
+                    "id": "dnd5e.extension.heal",
+                    "event": "rest.after",
+                    "operations": [{"op": "hp.heal", "amount": 3}],
+                    "citations": [{"source": "local:extension", "section": "Healing"}],
+                }
+            ]
+        )
+    )
+
+    result = apply_rule_event(sheet, "rest.after", rules)
+
+    assert result.sheet["combat"]["hp"]["value"] == 3
+    assert result.sheet["combat"]["death_saves"] == {"successes": 0, "failures": 0}
+    assert result.sheet["conditions"] == []
+
+
+def test_healing_does_not_remove_unconscious_owned_by_an_active_effect() -> None:
+    sheet = default_character_sheet()
+    sheet["combat"]["hp"] = {"value": 0, "max": 10, "temp": 0}
+    sheet["conditions"] = ["stable", "unconscious"]
+    sheet["effects"] = [
+        {
+            "id": "magical-sleep",
+            "name": "Magical Sleep",
+            "kind": "timed_conditions",
+            "source": "spell:sleep",
+            "active": True,
+            "duration": {"period": "round", "remaining": 10},
+            "changes": [{"path": "conditions", "mode": "add", "value": "unconscious"}],
+        }
+    ]
+    rules = resolution_context(
+        _effective(
+            [
+                {
+                    "id": "dnd5e.extension.heal",
+                    "event": "rest.after",
+                    "operations": [{"op": "hp.heal", "amount": 3}],
+                    "citations": [{"source": "local:extension", "section": "Healing"}],
+                }
+            ]
+        )
+    )
+
+    result = apply_rule_event(validate_character_sheet(sheet), "rest.after", rules)
+
+    assert result.sheet["combat"]["hp"]["value"] == 3
+    assert result.sheet["conditions"] == ["unconscious"]
+
+
+def test_rule_extension_healing_obeys_effective_maximum_and_death() -> None:
+    exhausted = default_character_sheet()
+    exhausted["combat"]["hp"] = {"value": 1, "max": 37, "temp": 0}
+    exhausted["combat"]["exhaustion"] = 4
+    rules = resolution_context(
+        _effective(
+            [
+                {
+                    "id": "dnd5e.extension.heal",
+                    "event": "rest.after",
+                    "operations": [{"op": "hp.heal", "amount": 100}],
+                    "citations": [{"source": "local:extension", "section": "Healing"}],
+                }
+            ]
+        )
+    )
+
+    assert apply_rule_event(exhausted, "rest.after", rules).sheet["combat"]["hp"]["value"] == 18
+    dead = default_character_sheet()
+    dead["conditions"] = ["dead"]
+    with pytest.raises(ValueError, match="dead actor"):
+        apply_rule_event(dead, "rest.after", rules)
+
+
+def test_rule_extension_condition_changes_share_immunity_and_effect_ownership() -> None:
+    immune = default_character_sheet()
+    immune["traits"]["condition_immunities"] = ["Frightened"]
+    add_rules = resolution_context(
+        _effective(
+            [
+                {
+                    "id": "dnd5e.extension.frighten",
+                    "event": "rest.after",
+                    "operations": [{"op": "condition.add", "id": "FRIGHTENED"}],
+                    "citations": [{"source": "local:extension", "section": "Condition"}],
+                }
+            ]
+        )
+    )
+    assert apply_rule_event(immune, "rest.after", add_rules).sheet["conditions"] == []
+
+    sourced = default_character_sheet()
+    sourced["conditions"] = ["frightened"]
+    sourced["effects"] = [
+        {
+            "id": "fear",
+            "name": "Fear",
+            "kind": "timed_conditions",
+            "active": True,
+            "duration": {"period": "manual", "remaining": 0},
+            "changes": [{"path": "conditions", "mode": "add", "value": "frightened"}],
+        }
+    ]
+    remove_rules = resolution_context(
+        _effective(
+            [
+                {
+                    "id": "dnd5e.extension.calm",
+                    "event": "rest.after",
+                    "operations": [{"op": "condition.remove", "id": "frightened"}],
+                    "citations": [{"source": "local:extension", "section": "Condition"}],
+                }
+            ]
+        )
+    )
+    assert apply_rule_event(sourced, "rest.after", remove_rules).sheet[
+        "conditions"
+    ] == ["frightened"]
+
+
+def test_rule_extension_effects_share_condition_projection_and_cleanup() -> None:
+    effect = {
+        "kind": "timed_conditions",
+        "changes": [{"path": "conditions", "mode": "add", "value": "frightened"}],
+    }
+    add_rules = resolution_context(
+        _effective(
+            [
+                {
+                    "id": "dnd5e.extension.fear-effect",
+                    "event": "rest.after",
+                    "operations": [{"op": "effect.add", "id": "fear", "effect": effect}],
+                    "citations": [{"source": "local:extension", "section": "Fear"}],
+                }
+            ]
+        )
+    )
+    remove_rules = resolution_context(
+        _effective(
+            [
+                {
+                    "id": "dnd5e.extension.end-fear",
+                    "event": "rest.after",
+                    "operations": [{"op": "effect.remove", "id": "fear"}],
+                    "citations": [{"source": "local:extension", "section": "Fear"}],
+                }
+            ]
+        )
+    )
+
+    immune = default_character_sheet()
+    immune["traits"]["condition_immunities"] = ["frightened"]
+    assert apply_rule_event(immune, "rest.after", add_rules).sheet["conditions"] == []
+
+    affected = apply_rule_event(
+        default_character_sheet(), "rest.after", add_rules
+    ).sheet
+    assert affected["conditions"] == ["frightened"]
+    assert apply_rule_event(affected, "rest.after", remove_rules).sheet[
+        "conditions"
+    ] == []
+
+    with pytest.raises(RuleCompilationError, match="effect does not exist"):
+        apply_rule_event(default_character_sheet(), "rest.after", remove_rules)
+
+
 def test_spellbook_copy_event_accepts_only_cost_and_time_modifiers() -> None:
     rules = resolution_context(
         _effective(

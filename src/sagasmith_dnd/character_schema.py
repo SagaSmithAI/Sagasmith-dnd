@@ -5,10 +5,18 @@ from __future__ import annotations
 import copy
 import re
 import uuid
-import warnings
 from typing import Any
 
+from sagasmith_dnd.abilities import ABILITY_NAMES, SKILL_ABILITIES
 from sagasmith_dnd.ability_generation import normalize_ability_generation
+from sagasmith_dnd.conditions import (
+    apply_effect_conditions,
+    condition_ids,
+    reconcile_ended_effect_conditions,
+)
+from sagasmith_dnd.editions import normalize_dnd_edition
+from sagasmith_dnd.game_time import TICKS_PER_DAY, TICKS_PER_HOUR, TICKS_PER_MINUTE
+from sagasmith_dnd.hit_points import effective_hit_point_maximum_value
 from sagasmith_dnd.rule_engine import (
     EXTERNAL_RULING_KINDS,
     ResolutionContext,
@@ -18,34 +26,6 @@ from sagasmith_dnd.rule_engine import (
 )
 from sagasmith_dnd.spell_resolution import normalize_spell_resolution
 
-ABILITY_NAMES = (
-    "strength",
-    "dexterity",
-    "constitution",
-    "intelligence",
-    "wisdom",
-    "charisma",
-)
-SKILL_ABILITIES = {
-    "acrobatics": "dexterity",
-    "animal_handling": "wisdom",
-    "arcana": "intelligence",
-    "athletics": "strength",
-    "deception": "charisma",
-    "history": "intelligence",
-    "insight": "wisdom",
-    "intimidation": "charisma",
-    "investigation": "intelligence",
-    "medicine": "wisdom",
-    "nature": "intelligence",
-    "perception": "wisdom",
-    "performance": "charisma",
-    "persuasion": "charisma",
-    "religion": "intelligence",
-    "sleight_of_hand": "dexterity",
-    "stealth": "dexterity",
-    "survival": "wisdom",
-}
 DENOMINATIONS = ("cp", "sp", "ep", "gp", "pp")
 ITEM_KINDS = {
     "weapon",
@@ -290,9 +270,9 @@ def default_character_sheet() -> dict[str, Any]:
             "wounded": False,
             "rest_history": {
                 "last_rest_type": "",
-                "last_rest_started_elapsed_minutes": None,
-                "last_rest_completed_elapsed_minutes": None,
-                "last_long_rest_elapsed_minutes": None,
+                "last_rest_started_elapsed_ticks": None,
+                "last_rest_completed_elapsed_ticks": None,
+                "last_long_rest_elapsed_ticks": None,
             },
         },
         "traits": {
@@ -740,9 +720,9 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
                 "copyable",
             },
         )
-        edition = _text(mechanics.get("edition"), f"{field}.edition", default="2014")
-        if edition not in {"2014", "2024"}:
-            raise ValueError(f"{field}.edition must be 2014 or 2024")
+        edition = normalize_dnd_edition(
+            _text(mechanics.get("edition"), f"{field}.edition", default="2014")
+        )
         spell_ids = _string_list(mechanics.get("spell_ids"), f"{field}.spell_ids")
         if len(spell_ids) != len(set(spell_ids)):
             raise ValueError(f"{field}.spell_ids contains duplicate ids")
@@ -1095,9 +1075,7 @@ def _normalize_ruling_requirements(value: Any, field: str) -> list[dict[str, Any
             f"{entry_field}.ruling_kind",
             maximum=200,
         )
-        expected_resolver = (
-            "external_input" if ruling_kind in EXTERNAL_RULING_KINDS else "agent"
-        )
+        expected_resolver = "external_input" if ruling_kind in EXTERNAL_RULING_KINDS else "agent"
         if resolver != expected_resolver:
             raise ValueError(
                 f"{entry_field}.default_resolver must be {expected_resolver} "
@@ -1335,15 +1313,11 @@ def _normalize_effect(value: Any, field: str) -> dict[str, Any]:
         "ended_reason",
     }
     _reject_unknown(effect, field, allowed)
-    duration = _object(effect.get("duration") or {}, f"{field}.duration")
-    _reject_unknown(
-        duration,
+    normalized_duration = _normalize_effect_duration(
+        effect.get("duration"),
         f"{field}.duration",
-        {"period", "remaining", "elapsed_minutes_remainder"},
+        allowed_periods=EFFECT_PERIODS,
     )
-    period = _text(duration.get("period"), f"{field}.duration.period", default="manual")
-    if period not in EFFECT_PERIODS:
-        raise ValueError(f"{field}.duration.period is invalid")
     changes = []
     for index, change in enumerate(_array(effect.get("changes") or [], f"{field}.changes")):
         item = _object(change, f"{field}.changes[{index}]")
@@ -1360,28 +1334,6 @@ def _normalize_effect(value: Any, field: str) -> dict[str, Any]:
                 "value": item.get("value"),
             }
         )
-    normalized_duration = {
-        "period": period,
-        "remaining": _integer(
-            duration.get("remaining"), f"{field}.duration.remaining", minimum=0
-        ),
-    }
-    elapsed_minutes_remainder = _integer(
-        duration.get("elapsed_minutes_remainder"),
-        f"{field}.duration.elapsed_minutes_remainder",
-        minimum=0,
-    )
-    if elapsed_minutes_remainder:
-        if period not in {"hour", "day"}:
-            raise ValueError(
-                f"{field}.duration.elapsed_minutes_remainder requires an hour or day period"
-            )
-        unit_minutes = 60 if period == "hour" else 1440
-        if elapsed_minutes_remainder >= unit_minutes:
-            raise ValueError(
-                f"{field}.duration.elapsed_minutes_remainder must be below {unit_minutes}"
-            )
-        normalized_duration["elapsed_minutes_remainder"] = elapsed_minutes_remainder
     normalized = {
         "id": _text(effect.get("id"), f"{field}.id", default=_uuid(), maximum=100),
         "name": _text(effect.get("name"), f"{field}.name", maximum=300),
@@ -1401,6 +1353,70 @@ def _normalize_effect(value: Any, field: str) -> dict[str, Any]:
         if normalized["active"]:
             raise ValueError(f"{field}.ended_reason requires an inactive effect")
         normalized["ended_reason"] = ended_reason
+    return normalized
+
+
+def _normalize_effect_duration(
+    value: Any,
+    field: str,
+    *,
+    allowed_periods: set[str] | frozenset[str],
+) -> dict[str, Any]:
+    """Normalize actor and world durations onto the same tick remainder."""
+
+    duration = _object(value or {}, field)
+    _reject_unknown(
+        duration,
+        field,
+        {
+            "period",
+            "remaining",
+            "elapsed_ticks_remainder",
+            "elapsed_minutes_remainder",
+        },
+    )
+    period = _text(duration.get("period"), f"{field}.period", default="manual")
+    if period not in allowed_periods:
+        raise ValueError(f"{field}.period is invalid")
+    normalized = {
+        "period": period,
+        "remaining": _integer(
+            duration.get("remaining"),
+            f"{field}.remaining",
+            minimum=0,
+        ),
+    }
+    legacy_minutes = _integer(
+        duration.get("elapsed_minutes_remainder"),
+        f"{field}.elapsed_minutes_remainder",
+        minimum=0,
+    )
+    elapsed_ticks = _integer(
+        duration.get("elapsed_ticks_remainder"),
+        f"{field}.elapsed_ticks_remainder",
+        default=legacy_minutes * TICKS_PER_MINUTE,
+        minimum=0,
+    )
+    if (
+        "elapsed_ticks_remainder" in duration
+        and "elapsed_minutes_remainder" in duration
+        and elapsed_ticks != legacy_minutes * TICKS_PER_MINUTE
+    ):
+        raise ValueError(f"{field}.elapsed_minutes_remainder must match elapsed_ticks_remainder")
+    if elapsed_ticks:
+        period_ticks = {
+            "minute": TICKS_PER_MINUTE,
+            "hour": TICKS_PER_HOUR,
+            "day": TICKS_PER_DAY,
+        }
+        unit_ticks = period_ticks.get(period)
+        if unit_ticks is None:
+            raise ValueError(
+                f"{field}.elapsed_ticks_remainder requires a minute, hour, or day period"
+            )
+        if elapsed_ticks >= unit_ticks:
+            raise ValueError(f"{field}.elapsed_ticks_remainder must be below {unit_ticks}")
+        normalized["elapsed_ticks_remainder"] = elapsed_ticks
     return normalized
 
 
@@ -1429,9 +1445,7 @@ def validate_character_sheet(
     _reject_unknown(value, "sheet", allowed)
     if _integer(value["schema_version"], "sheet.schema_version") != 2:
         raise ValueError("sheet.schema_version must be 2")
-    edition = _text(value["edition"], "sheet.edition")
-    if edition not in {"2014", "2024"}:
-        raise ValueError("sheet.edition must be 2014 or 2024")
+    edition = normalize_dnd_edition(_text(value["edition"], "sheet.edition"))
     ability_generation = normalize_ability_generation(value["ability_generation"], edition)
 
     identity = _object(value["identity"], "sheet.identity")
@@ -1537,6 +1551,20 @@ def validate_character_sheet(
     hp_value = _integer(hp["value"], "sheet.combat.hp.value", minimum=0)
     if hp_value > hp_max:
         raise ValueError("sheet.combat.hp.value cannot exceed max")
+    exhaustion = _integer(
+        combat["exhaustion"],
+        "sheet.combat.exhaustion",
+        minimum=0,
+        maximum=6,
+    )
+    hp_value = min(
+        hp_value,
+        effective_hit_point_maximum_value(
+            edition=edition,
+            base_maximum=hp_max,
+            exhaustion=exhaustion,
+        ),
+    )
     ac = _object(combat["ac"], "sheet.combat.ac")
     _reject_unknown(ac, "sheet.combat.ac", {"base", "override"})
     initiative = _object(combat["initiative"], "sheet.combat.initiative")
@@ -1591,6 +1619,9 @@ def validate_character_sheet(
         "sheet.combat.rest_history",
         {
             "last_rest_type",
+            "last_rest_started_elapsed_ticks",
+            "last_rest_completed_elapsed_ticks",
+            "last_long_rest_elapsed_ticks",
             "last_rest_started_elapsed_minutes",
             "last_rest_completed_elapsed_minutes",
             "last_long_rest_elapsed_minutes",
@@ -1602,24 +1633,45 @@ def validate_character_sheet(
     if last_rest_type not in {"", "short_rest", "long_rest"}:
         raise ValueError("sheet.combat.rest_history.last_rest_type is invalid")
 
-    def optional_elapsed(key: str) -> int | None:
-        raw = rest_history.get(key)
-        return (
-            _integer(raw, f"sheet.combat.rest_history.{key}", minimum=0)
-            if raw is not None
+    def optional_elapsed_ticks(tick_key: str, legacy_minute_key: str) -> int | None:
+        raw_ticks = rest_history.get(tick_key)
+        raw_minutes = rest_history.get(legacy_minute_key)
+        ticks = (
+            _integer(raw_ticks, f"sheet.combat.rest_history.{tick_key}", minimum=0)
+            if raw_ticks is not None
             else None
         )
+        legacy_ticks = (
+            _integer(
+                raw_minutes,
+                f"sheet.combat.rest_history.{legacy_minute_key}",
+                minimum=0,
+            )
+            * 10
+            if raw_minutes is not None
+            else None
+        )
+        if ticks is not None and legacy_ticks is not None and ticks != legacy_ticks:
+            raise ValueError(f"sheet.combat.rest_history.{legacy_minute_key} must match {tick_key}")
+        return ticks if ticks is not None else legacy_ticks
 
     normalized_rest_history = {
         "last_rest_type": last_rest_type,
-        "last_rest_started_elapsed_minutes": optional_elapsed("last_rest_started_elapsed_minutes"),
-        "last_rest_completed_elapsed_minutes": optional_elapsed(
-            "last_rest_completed_elapsed_minutes"
+        "last_rest_started_elapsed_ticks": optional_elapsed_ticks(
+            "last_rest_started_elapsed_ticks",
+            "last_rest_started_elapsed_minutes",
         ),
-        "last_long_rest_elapsed_minutes": optional_elapsed("last_long_rest_elapsed_minutes"),
+        "last_rest_completed_elapsed_ticks": optional_elapsed_ticks(
+            "last_rest_completed_elapsed_ticks",
+            "last_rest_completed_elapsed_minutes",
+        ),
+        "last_long_rest_elapsed_ticks": optional_elapsed_ticks(
+            "last_long_rest_elapsed_ticks",
+            "last_long_rest_elapsed_minutes",
+        ),
     }
-    started = normalized_rest_history["last_rest_started_elapsed_minutes"]
-    completed = normalized_rest_history["last_rest_completed_elapsed_minutes"]
+    started = normalized_rest_history["last_rest_started_elapsed_ticks"]
+    completed = normalized_rest_history["last_rest_completed_elapsed_ticks"]
     if (started is None) != (completed is None):
         raise ValueError("sheet.combat.rest_history must record rest start and completion together")
     if started is not None and completed is not None and completed < started:
@@ -1985,11 +2037,7 @@ def validate_character_sheet(
                         maximum=2000,
                     ),
                     "uses": _normalize_resource(
-                        (
-                            entry.get("uses") or {}
-                            if "uses" in entry
-                            else {"unlimited": True}
-                        ),
+                        (entry.get("uses") or {} if "uses" in entry else {"unlimited": True}),
                         f"sheet.content.{name}[{index}].uses",
                     ),
                     "resource_key": _text(
@@ -2115,8 +2163,12 @@ def validate_character_sheet(
     }
     item_spell_ids.discard("")
 
-    conditions = _string_list(value["conditions"], "sheet.conditions")
-    if "dead" in {condition.casefold() for condition in conditions}:
+    conditions = sorted(
+        condition_ids(_string_list(value["conditions"], "sheet.conditions"))
+    )
+    if exhaustion >= 6 and "dead" not in conditions:
+        conditions.append("dead")
+    if "dead" in conditions:
         for item in inventory["items"]:
             if item["attunement"] == "attuned":
                 item["attunement"] = "required"
@@ -2251,9 +2303,7 @@ def validate_character_sheet(
                     maximum=3,
                 ),
             },
-            "exhaustion": _integer(
-                combat["exhaustion"], "sheet.combat.exhaustion", minimum=0, maximum=6
-            ),
+            "exhaustion": exhaustion,
             "inspiration": _boolean(combat["inspiration"], "sheet.combat.inspiration"),
             "wounded": _boolean(combat["wounded"], "sheet.combat.wounded"),
             "rest_history": normalized_rest_history,
@@ -2462,6 +2512,23 @@ def validate_character_notes(
     return normalized
 
 
+def validate_character_notes_update(
+    current: dict[str, Any],
+    candidate: dict[str, Any],
+    *,
+    character_type: str | None = None,
+) -> dict[str, Any]:
+    """Validate mutable notes while keeping legacy embedded memories import-only."""
+
+    # Legacy actor rows may predate the required NPC/monster profile summary.
+    # They remain readable so a canonical update can repair them in place.
+    before = validate_character_notes(current)
+    after = validate_character_notes(candidate, character_type=character_type)
+    if after["memories"] != before["memories"]:
+        raise ValueError("notes.memories is import-only; use ActorKnowledge for subjective memory")
+    return after
+
+
 def validate_party_state(state: dict[str, Any]) -> dict[str, Any]:
     from sagasmith_dnd.game_time import (
         game_time_from_ticks,
@@ -2472,6 +2539,18 @@ def validate_party_state(state: dict[str, Any]) -> dict[str, Any]:
     from sagasmith_dnd.random_stream import validate_random_stream_state
 
     value = copy.deepcopy(_object(state, "campaign.state"))
+    # ModuleService owns the active immutable module revision. Older MCP
+    # releases copied that fact into campaign state, where it could drift
+    # across activation, restore, and branch operations.
+    value.pop("module_imports", None)
+    game_phase = str(value.get("game_phase") or "lobby").strip().casefold()
+    if game_phase == "combat":
+        # Legacy state duplicated the active encounter as a second combat flag.
+        # Combat exposure is now derived only from campaign.state.combat.active.
+        game_phase = "play"
+    if game_phase not in {"lobby", "play"}:
+        raise ValueError("campaign.state.game_phase must be lobby or play")
+    value["game_phase"] = game_phase
     if "game_time" in value:
         game_time = validate_game_time(value["game_time"])
     else:
@@ -2551,15 +2630,11 @@ def validate_world_effect(value: Any, *, field: str = "world_effect") -> dict[st
             "ended_reason",
         },
     )
-    duration = _object(effect.get("duration") or {}, f"{field}.duration")
-    _reject_unknown(
-        duration,
+    normalized_duration = _normalize_effect_duration(
+        effect.get("duration"),
         f"{field}.duration",
-        {"period", "remaining", "elapsed_minutes_remainder"},
+        allowed_periods={"manual", "round", "encounter", "minute", "hour", "day"},
     )
-    period = _text(duration.get("period"), f"{field}.duration.period", default="manual")
-    if period not in {"manual", "round", "encounter", "minute", "hour", "day"}:
-        raise ValueError(f"{field}.duration.period is invalid")
     target = _object(effect.get("target") or {}, f"{field}.target")
     _reject_unknown(target, f"{field}.target", {"kind", "id", "label"})
     target_kind = _text(target.get("kind"), f"{field}.target.kind", default="campaign")
@@ -2568,43 +2643,31 @@ def validate_world_effect(value: Any, *, field: str = "world_effect") -> dict[st
     target_id = _text(target.get("id"), f"{field}.target.id", maximum=300)
     if target_kind != "campaign" and not target_id:
         raise ValueError(f"{field}.target.id is required for {target_kind} effects")
-    normalized_duration = {
-        "period": period,
-        "remaining": _integer(
-            duration.get("remaining"), f"{field}.duration.remaining", minimum=0
-        ),
-    }
-    elapsed_minutes_remainder = _integer(
-        duration.get("elapsed_minutes_remainder"),
-        f"{field}.duration.elapsed_minutes_remainder",
-        minimum=0,
-    )
-    if elapsed_minutes_remainder:
-        if period not in {"hour", "day"}:
-            raise ValueError(
-                f"{field}.duration.elapsed_minutes_remainder requires an hour or day period"
-            )
-        unit_minutes = 60 if period == "hour" else 1440
-        if elapsed_minutes_remainder >= unit_minutes:
-            raise ValueError(
-                f"{field}.duration.elapsed_minutes_remainder must be below {unit_minutes}"
-            )
-        normalized_duration["elapsed_minutes_remainder"] = elapsed_minutes_remainder
-    created_at_elapsed_minutes = _integer(
-        effect.get("created_at_elapsed_minutes"),
-        f"{field}.created_at_elapsed_minutes",
-        minimum=0,
-    )
-    created_at_elapsed_ticks = _integer(
-        effect.get("created_at_elapsed_ticks"),
-        f"{field}.created_at_elapsed_ticks",
-        default=created_at_elapsed_minutes * 10,
-        minimum=0,
-    )
-    if created_at_elapsed_minutes != created_at_elapsed_ticks // 10:
-        raise ValueError(
-            f"{field}.created_at_elapsed_minutes must match created_at_elapsed_ticks"
+    raw_created_minutes = effect.get("created_at_elapsed_minutes")
+    raw_created_ticks = effect.get("created_at_elapsed_ticks")
+    created_at_elapsed_minutes = (
+        _integer(
+            raw_created_minutes,
+            f"{field}.created_at_elapsed_minutes",
+            minimum=0,
         )
+        if raw_created_minutes is not None
+        else None
+    )
+    created_at_elapsed_ticks = (
+        _integer(
+            raw_created_ticks,
+            f"{field}.created_at_elapsed_ticks",
+            minimum=0,
+        )
+        if raw_created_ticks is not None
+        else (created_at_elapsed_minutes or 0) * TICKS_PER_MINUTE
+    )
+    if (
+        created_at_elapsed_minutes is not None
+        and created_at_elapsed_minutes != created_at_elapsed_ticks // TICKS_PER_MINUTE
+    ):
+        raise ValueError(f"{field}.created_at_elapsed_minutes must match created_at_elapsed_ticks")
     normalized = {
         "id": _text(effect.get("id"), f"{field}.id", default=_uuid(), maximum=100),
         "name": _text(effect.get("name"), f"{field}.name", maximum=300),
@@ -2626,7 +2689,6 @@ def validate_world_effect(value: Any, *, field: str = "world_effect") -> dict[st
         "duration": normalized_duration,
         "description": _text(effect.get("description"), f"{field}.description", maximum=1200),
         "created_at_elapsed_ticks": created_at_elapsed_ticks,
-        "created_at_elapsed_minutes": created_at_elapsed_minutes,
         "metadata": _object(effect.get("metadata") or {}, f"{field}.metadata"),
     }
     if normalized["visibility"] not in {"public", "party", "dm"}:
@@ -2990,21 +3052,18 @@ def effective_hit_point_maximum(sheet: dict[str, Any]) -> int:
     """Return the rules-effective maximum without overwriting the recorded base maximum."""
     combat = dict(sheet.get("combat") or {})
     hit_points = dict(combat.get("hp") or {})
-    maximum = int(hit_points.get("max", 0) or 0)
-    exhaustion = int(combat.get("exhaustion", 0) or 0)
-    if str(sheet.get("edition") or "2014") == "2014" and exhaustion >= 4:
-        return max(1, maximum // 2)
-    return maximum
+    return effective_hit_point_maximum_value(
+        edition=str(sheet.get("edition") or "2014"),
+        base_maximum=int(hit_points.get("max", 0) or 0),
+        exhaustion=int(combat.get("exhaustion", 0) or 0),
+    )
 
 
 def effective_ability_scores(sheet: dict[str, Any]) -> dict[str, int]:
     """Return ability scores after narrow, source-owned override effects."""
 
     value = validate_character_sheet(sheet)
-    scores = {
-        ability: int(entry["score"])
-        for ability, entry in value["abilities"].items()
-    }
+    scores = {ability: int(entry["score"]) for ability, entry in value["abilities"].items()}
     for effect in value["effects"]:
         if not effect["active"]:
             continue
@@ -3034,10 +3093,7 @@ def derive_character_sheet(
     proficiency = 2 + (level - 1) // 4
     active_effects = [effect for effect in value["effects"] if effect["active"]]
     ability_scores = effective_ability_scores(value)
-    ability_modifiers = {
-        ability: (score - 10) // 2
-        for ability, score in ability_scores.items()
-    }
+    ability_modifiers = {ability: (score - 10) // 2 for ability, score in ability_scores.items()}
     saves = {
         ability: ability_modifiers[ability]
         + entry["bonus"]
@@ -3185,12 +3241,8 @@ def derive_character_sheet(
             {
                 "mechanic_id": str(item.get("mechanic_id") or ""),
                 "reason": str(item.get("id") or "declarative rule adjudication"),
-                "default_resolver": str(
-                    item.get("default_resolver") or "agent"
-                ),
-                "ruling_kind": str(
-                    item.get("ruling_kind") or "agent_dm_adjudication"
-                ),
+                "default_resolver": str(item.get("default_resolver") or "agent"),
+                "ruling_kind": str(item.get("ruling_kind") or "agent_dm_adjudication"),
             }
             for item in extension.pending
         ]
@@ -3255,17 +3307,12 @@ def attune_inventory_item(sheet: dict[str, Any], item_id: str) -> dict[str, Any]
         raise ValueError("item does not require attunement")
     if item["attunement"] == "attuned":
         raise ValueError("item is already attuned")
-    attuned = [
-        entry
-        for entry in value["inventory"]["items"]
-        if entry["attunement"] == "attuned"
-    ]
+    attuned = [entry for entry in value["inventory"]["items"] if entry["attunement"] == "attuned"]
     if len(attuned) >= 3:
         raise ValueError("a character cannot be attuned to more than three magic items")
     identity = str(item.get("name") or item.get("source_key") or "").strip().casefold()
     if any(
-        str(entry.get("name") or entry.get("source_key") or "").strip().casefold()
-        == identity
+        str(entry.get("name") or entry.get("source_key") or "").strip().casefold() == identity
         for entry in attuned
     ):
         raise ValueError("a character cannot attune to more than one copy of an item")
@@ -3391,28 +3438,7 @@ def add_effect(sheet: dict[str, Any], effect: dict[str, Any]) -> tuple[dict[str,
     if any(current["id"] == entry["id"] for current in value["effects"]):
         raise ValueError("effect id already exists")
     value["effects"].append(entry)
-    if entry["active"] and entry["kind"] == "timed_conditions":
-        added_conditions: set[str] = set()
-        for change in entry["changes"]:
-            if change["path"] != "conditions" or change["mode"] != "add":
-                continue
-            raw = change["value"]
-            values = raw if isinstance(raw, list) else [raw]
-            added_conditions.update(
-                str(item).strip().casefold()
-                for item in values
-                if str(item).strip()
-            )
-        if added_conditions:
-            existing = {
-                str(condition).strip().casefold()
-                for condition in value["conditions"]
-            }
-            value["conditions"].extend(
-                condition
-                for condition in sorted(added_conditions)
-                if condition not in existing
-            )
+    apply_effect_conditions(value, entry)
     return validate_character_sheet(value), entry["id"]
 
 
@@ -3422,57 +3448,8 @@ def remove_effect(sheet: dict[str, Any], effect_id: str) -> dict[str, Any]:
     effect = next((entry for entry in effects if entry["id"] == effect_id), None)
     if effect is None:
         raise LookupError(effect_id)
-    removed_condition_additions: set[str] = set()
-    if effect.get("kind") == "timed_conditions":
-        for change in effect.get("changes", []):
-            if change.get("path") != "conditions" or change.get("mode") != "add":
-                continue
-            raw = change.get("value")
-            values = raw if isinstance(raw, list) else [raw]
-            removed_condition_additions.update(
-                str(item).strip().casefold()
-                for item in values
-                if str(item).strip()
-            )
     effects.remove(effect)
-    active_condition_additions: set[str] = set()
-    for current in effects:
-        if not current.get("active") or current.get("kind") != "timed_conditions":
-            continue
-        for change in current.get("changes", []):
-            if change.get("path") != "conditions" or change.get("mode") != "add":
-                continue
-            raw = change.get("value")
-            values = raw if isinstance(raw, list) else [raw]
-            active_condition_additions.update(
-                str(item).strip().casefold()
-                for item in values
-                if str(item).strip()
-            )
-    removable_conditions = removed_condition_additions - active_condition_additions
-    if effect.get("kind") == "turn_undead" and not any(
-        current.get("active") and current.get("kind") == "turn_undead"
-        for current in effects
-    ):
-        removable_conditions.add("turned")
-    removed_spell_id = (
-        str(effect.get("source_spell_id") or "").strip().casefold().rsplit(".", 1)[-1]
-    )
-    if removed_spell_id == "invisibility" and not any(
-        current.get("active")
-        and str(current.get("source_spell_id") or "")
-        .strip()
-        .casefold()
-        .rsplit(".", 1)[-1]
-        == "invisibility"
-        for current in effects
-    ):
-        removable_conditions.add("invisible")
-    value["conditions"] = [
-        condition
-        for condition in value.get("conditions", [])
-        if str(condition).casefold() not in removable_conditions
-    ]
+    reconcile_ended_effect_conditions(value, ended_effects=[effect])
     return validate_character_sheet(value)
 
 
@@ -3528,44 +3505,9 @@ def set_exhaustion_level(sheet: dict[str, Any], value: int) -> dict[str, Any]:
         int(hit_points["value"]),
         effective_hit_point_maximum(result),
     )
-    if level >= 6 and "dead" not in {
-        str(condition).strip().casefold()
-        for condition in result["conditions"]
-    }:
+    if level >= 6 and "dead" not in condition_ids(result["conditions"]):
         result["conditions"].append("dead")
     return validate_character_sheet(result)
-
-
-def add_memory(notes: dict[str, Any], memory: dict[str, Any]) -> tuple[dict[str, Any], str]:
-    """Append a legacy embedded note retained for character-document compatibility."""
-    warnings.warn(
-        "notes.memories is deprecated; persist new subjective memory as ActorKnowledge",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    value = validate_character_notes(notes)
-    candidate = _object(memory, "memory")
-    candidate.setdefault("id", _uuid())
-    value["memories"].append(candidate)
-    normalized = validate_character_notes(value)
-    return normalized, candidate["id"]
-
-
-def resolve_memory(
-    notes: dict[str, Any], memory_id: str, status: str = "resolved"
-) -> dict[str, Any]:
-    """Resolve a legacy embedded memory retained for document compatibility."""
-    warnings.warn(
-        "notes.memories is deprecated; revise ActorKnowledge for new runtime memory",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    value = validate_character_notes(notes)
-    memory = next((entry for entry in value["memories"] if entry["id"] == memory_id), None)
-    if memory is None:
-        raise LookupError(memory_id)
-    memory["status"] = status
-    return validate_character_notes(value)
 
 
 def legacy_memory_candidates(

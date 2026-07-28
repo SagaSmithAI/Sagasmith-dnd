@@ -62,6 +62,19 @@ def game_time_from_ticks(elapsed_ticks: int = 0) -> dict[str, int]:
     }
 
 
+def rules_day_from_ticks(elapsed_ticks: int) -> int:
+    """Return the deterministic 1-based rules day on the game timeline."""
+
+    return (
+        _integer(
+            elapsed_ticks,
+            "campaign.state.game_time.elapsed_ticks",
+        )
+        // TICKS_PER_DAY
+        + 1
+    )
+
+
 def validate_game_time(value: Any) -> dict[str, int]:
     """Validate an authoritative game-time record."""
 

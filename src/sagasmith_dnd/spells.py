@@ -7,6 +7,9 @@ from typing import Any
 from uuid import uuid4
 
 from sagasmith_dnd.combat_engine import CombatEngineError, NeedsRulingError
+from sagasmith_dnd.conditions import reconcile_ended_effect_conditions
+from sagasmith_dnd.editions import normalize_dnd_edition
+from sagasmith_dnd.resources import mutate_bounded_resource
 from sagasmith_dnd.rule_engine import ResolutionContext, apply_rule_event, core_receipts
 
 _SPELL_POINT_COSTS = {1: 2, 2: 3, 3: 5, 4: 6, 5: 7, 6: 9, 7: 10, 8: 11, 9: 13}
@@ -147,7 +150,7 @@ def consume_magic_item_spell_cast(
         raise CombatEngineError("magic item has no structured charge resource")
     if int(charges.get("value", 0) or 0) < charge_cost:
         raise CombatEngineError("magic item has insufficient charges")
-    charges["value"] = int(charges["value"]) - charge_cost
+    mutate_bounded_resource(charges, amount=charge_cost, direction="spend")
     last_charge_expended = int(charges["value"]) == 0
     charge_rules = dict(dict(item.get("mechanics") or {}).get("charge_rules") or {})
     last_charge_rule = (
@@ -254,15 +257,14 @@ def recharge_magic_item_charges(
     amount = int(rolled_total)
     if amount < 0:
         raise CombatEngineError("magic item charge recovery roll cannot be negative")
-    before = int(charges.get("value", 0) or 0)
-    charges["value"] = min(int(charges["max"]), before + amount)
+    mutation = mutate_bounded_resource(charges, amount=amount, direction="recover")
     return {
         "sheet": value,
         "item_id": source_item_id,
         "trigger": trigger,
         "formula": str(charge_rules["recovery_formula"]),
         "rolled_total": amount,
-        "recovered": int(charges["value"]) - before,
+        "recovered": mutation["amount"],
         "charges": deepcopy(charges),
         "rule_receipts": [],
     }
@@ -459,22 +461,16 @@ def _end_spell_cast_broken_invisibility(sheet: dict[str, Any]) -> list[str]:
     """End only the exact Invisibility spell when its target casts a spell."""
 
     ended: list[str] = []
+    ended_effects: list[dict[str, Any]] = []
     for effect in sheet.get("effects", []):
         spell_id = str(effect.get("source_spell_id") or "").strip().casefold()
-        if (
-            effect.get("active")
-            and spell_id
-            and spell_id.rsplit(".", 1)[-1] == "invisibility"
-        ):
+        if effect.get("active") and spell_id and spell_id.rsplit(".", 1)[-1] == "invisibility":
             effect["active"] = False
             effect["ended_reason"] = "actor_cast_spell"
             ended.append(str(effect.get("id") or ""))
+            ended_effects.append(effect)
     if ended:
-        sheet["conditions"] = [
-            condition
-            for condition in sheet.get("conditions", [])
-            if str(condition).casefold() != "invisible"
-        ]
+        reconcile_ended_effect_conditions(sheet, ended_effects=ended_effects)
     return ended
 
 
@@ -768,7 +764,7 @@ def consume_spell_cast(
         resource = value.setdefault("resources", {}).get(resource_key)
         if not isinstance(resource, dict) or int(resource.get("value", 0) or 0) <= 0:
             raise CombatEngineError("Signature Spell free use is unavailable")
-        resource["value"] = int(resource["value"]) - 1
+        mutate_bounded_resource(resource, amount=1, direction="spend")
         paid = {
             "economy": "signature_spell",
             "resource_key": resource_key,
@@ -784,7 +780,7 @@ def consume_spell_cast(
             resource = value.setdefault("resources", {}).get(resource_key)
             if not isinstance(resource, dict) or int(resource.get("value", 0) or 0) <= 0:
                 raise CombatEngineError("Mystic Arcanum use is unavailable")
-            resource["value"] = int(resource["value"]) - 1
+            mutate_bounded_resource(resource, amount=1, direction="spend")
             paid = {
                 "economy": "mystic_arcanum",
                 "resource_key": resource_key,
@@ -798,13 +794,13 @@ def consume_spell_cast(
             cost = int(spell.get("point_cost") or _SPELL_POINT_COSTS[level])
             if int(points.get("value", 0) or 0) < cost:
                 raise CombatEngineError("insufficient spell points")
-            points["value"] = int(points["value"]) - cost
+            mutate_bounded_resource(points, amount=cost, direction="spend")
             paid = {"economy": "spell_points", "cost": cost, "level": level, "ritual": False}
         else:
             slots = spellcasting.get("spell_slots", {})
             slot = slots.get(str(level)) or slots.get(f"spell{level}")
             if isinstance(slot, dict) and int(slot.get("value", 0) or 0) > 0:
-                slot["value"] = int(slot["value"]) - 1
+                mutate_bounded_resource(slot, amount=1, direction="spend")
                 paid = {"economy": "slots", "level": level, "ritual": False}
             else:
                 pact_magic = spellcasting.get("pact_magic")
@@ -819,7 +815,7 @@ def consume_spell_cast(
                     raise CombatEngineError(
                         f"Pact Magic casts this spell at its level {pact_level} slot level"
                     )
-                pact_magic["value"] = int(pact_magic["value"]) - 1
+                mutate_bounded_resource(pact_magic, amount=1, direction="spend")
                 level = pact_level
                 paid = {"economy": "pact_magic", "level": level, "ritual": False}
     ended_invisibility_effect_ids = _end_spell_cast_broken_invisibility(value)
@@ -1172,8 +1168,10 @@ def _class_key(value: Any) -> str:
 
 
 def _edition(sheet: dict[str, Any]) -> str:
-    text = str(sheet.get("edition") or "2014").lower()
-    return "2024" if "2024" in text or "5.2" in text else "2014"
+    try:
+        return normalize_dnd_edition(sheet.get("edition"))
+    except ValueError as exc:
+        raise CombatEngineError(str(exc)) from exc
 
 
 def _prepared_limit(sheet: dict[str, Any], edition: str, source: str, level: int) -> int:

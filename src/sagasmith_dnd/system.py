@@ -10,13 +10,9 @@ DND5E = SystemDefinition(
     id="dnd5e",
     display_name="Dungeons & Dragons 5e",
     character_types=("pc", "npc", "monster"),
-    campaign_defaults={
-        "edition": "2024",
-        "locale": "en",
-        "initiative": [],
-        "combat": None,
-        "world": {},
-    },
+    # Campaign settings contain configuration only. Runtime combat, initiative,
+    # world state, edition, and locale each have a dedicated authority.
+    campaign_defaults={},
     validate_sheet=validate_character_sheet,
 )
 

@@ -102,6 +102,60 @@ def test_casting_a_spell_ends_only_the_exact_invisibility_spell() -> None:
     assert effect["ended_reason"] == "actor_cast_spell"
 
 
+def test_casting_preserves_invisible_condition_owned_by_another_effect() -> None:
+    sheet = default_character_sheet()
+    sheet["spellcasting"]["spell_slots"] = {
+        "1": {
+            "label": "1st",
+            "value": 1,
+            "max": 1,
+            "recovers_on": "long_rest",
+            "source_key": "wizard",
+        }
+    }
+    sheet["content"]["spells"] = [
+        _spell("magic-missile", level=1),
+        _spell(
+            "dnd5e.content.srd2014.spell.invisibility",
+            level=2,
+            concentration=True,
+        ),
+    ]
+    sheet["conditions"] = ["invisible"]
+    sheet["effects"] = [
+        {
+            "id": "invisibility-spell",
+            "name": "Concentrating: Invisibility",
+            "kind": "concentration",
+            "source": "spell.cast",
+            "source_spell_id": "dnd5e.content.srd2014.spell.invisibility",
+            "active": True,
+            "concentration": True,
+            "duration": {"period": "hour", "remaining": 1},
+            "changes": [],
+        },
+        {
+            "id": "other-invisibility",
+            "name": "Other Invisibility",
+            "kind": "timed_conditions",
+            "source": "feature",
+            "active": True,
+            "concentration": False,
+            "duration": {"period": "manual", "remaining": 0},
+            "changes": [{"path": "conditions", "mode": "add", "value": "invisible"}],
+            "description": "",
+        },
+    ]
+
+    result = consume_spell_cast(
+        validate_character_sheet(sheet),
+        spell_id="magic-missile",
+    )
+
+    assert result["ended_invisibility_effect_ids"] == ["invisibility-spell"]
+    assert "invisible" in result["sheet"]["conditions"]
+
+
 def test_magic_item_spell_cast_also_ends_invisibility() -> None:
     sheet = default_character_sheet()
     item_spell = _spell("module-spell", level=1)

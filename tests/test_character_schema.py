@@ -5,7 +5,6 @@ import pytest
 from sagasmith_dnd.character_schema import (
     add_effect,
     add_inventory_item,
-    add_memory,
     adjust_wallet,
     attune_inventory_item,
     consume_weapon_ammunition,
@@ -19,6 +18,7 @@ from sagasmith_dnd.character_schema import (
     set_exhaustion_level,
     set_spell_prepared,
     validate_character_notes,
+    validate_character_notes_update,
     validate_character_sheet,
     validate_party_state,
     validate_world_time,
@@ -114,6 +114,130 @@ def test_world_time_requires_one_canonical_elapsed_instant() -> None:
 def test_world_time_rejects_invalid_or_noncanonical_fields(world_time: dict) -> None:
     with pytest.raises(ValueError):
         validate_party_state({"world_time": world_time})
+
+
+def test_effect_duration_migrates_legacy_minutes_to_tick_remainder() -> None:
+    sheet = default_character_sheet()
+    sheet["effects"] = [
+        {
+            "id": "legacy-hour",
+            "name": "Legacy Hour",
+            "active": True,
+            "duration": {
+                "period": "hour",
+                "remaining": 1,
+                "elapsed_minutes_remainder": 30,
+            },
+        }
+    ]
+    state = {
+        "world_effects": [
+            {
+                "id": "legacy-day",
+                "name": "Legacy Day",
+                "active": True,
+                "duration": {
+                    "period": "day",
+                    "remaining": 1,
+                    "elapsed_minutes_remainder": 60,
+                },
+            }
+        ]
+    }
+
+    normalized_sheet = validate_character_sheet(sheet)
+    normalized_state = validate_party_state(state)
+
+    assert normalized_sheet["effects"][0]["duration"] == {
+        "period": "hour",
+        "remaining": 1,
+        "elapsed_ticks_remainder": 300,
+    }
+    assert normalized_state["world_effects"][0]["duration"] == {
+        "period": "day",
+        "remaining": 1,
+        "elapsed_ticks_remainder": 600,
+    }
+
+
+def test_world_effect_creation_time_has_one_canonical_tick_field() -> None:
+    canonical = validate_party_state(
+        {
+            "world_effects": [
+                {
+                    "id": "canonical",
+                    "name": "Canonical",
+                    "created_at_elapsed_ticks": 15,
+                }
+            ]
+        }
+    )
+    legacy = validate_party_state(
+        {
+            "world_effects": [
+                {
+                    "id": "legacy",
+                    "name": "Legacy",
+                    "created_at_elapsed_minutes": 2,
+                }
+            ]
+        }
+    )
+
+    assert canonical["world_effects"][0]["created_at_elapsed_ticks"] == 15
+    assert "created_at_elapsed_minutes" not in canonical["world_effects"][0]
+    assert legacy["world_effects"][0]["created_at_elapsed_ticks"] == 20
+    assert "created_at_elapsed_minutes" not in legacy["world_effects"][0]
+    with pytest.raises(ValueError, match="must match"):
+        validate_party_state(
+            {
+                "world_effects": [
+                    {
+                        "id": "conflict",
+                        "name": "Conflict",
+                        "created_at_elapsed_ticks": 15,
+                        "created_at_elapsed_minutes": 2,
+                    }
+                ]
+            }
+        )
+
+
+def test_party_state_keeps_combat_authority_only_on_the_active_encounter() -> None:
+    normalized = validate_party_state(
+        {"game_phase": "combat", "combat": {"active": True}}
+    )
+
+    assert normalized["game_phase"] == "play"
+    assert normalized["combat"] == {"active": True}
+    with pytest.raises(ValueError, match="game_phase must be lobby or play"):
+        validate_party_state({"game_phase": "paused"})
+
+
+def test_party_state_drops_legacy_module_activation_projection() -> None:
+    normalized = validate_party_state(
+        {
+            "module_imports": {
+                "active": {
+                    "module-key": {
+                        "module_id": "stale-module",
+                        "checksum": "stale-checksum",
+                    }
+                }
+            }
+        }
+    )
+
+    assert "module_imports" not in normalized
+
+
+def test_character_conditions_are_canonical_identifiers() -> None:
+    sheet = default_character_sheet()
+    sheet["conditions"] = [" Prone ", "PRONE", "Unconscious"]
+
+    normalized = validate_character_sheet(sheet)
+
+    assert normalized["conditions"] == ["prone", "unconscious"]
 
 
 def test_v2_sheet_exposes_complete_derived_card_and_prepared_spells() -> None:
@@ -228,17 +352,32 @@ def test_inventory_wallet_effect_and_memory_contracts() -> None:
     assert moved["quantity"] == 1
     assert remaining["inventory"]["items"][0]["quantity"] == 1
 
-    with pytest.warns(DeprecationWarning, match="ActorKnowledge"):
-        notes, memory_id = add_memory(
-            validate_character_notes({}),
+    memory_id = "legacy-promise"
+    notes = validate_character_notes(
+        {
+            "memories": [
+                {
+                    "id": memory_id,
+                    "kind": "promise",
+                    "summary": "Mira promised to return the signet ring.",
+                    "importance": 4,
+                    "visibility": "dm",
+                }
+            ]
+        }
+    )
+    assert notes["memories"][0]["id"] == memory_id
+    with pytest.raises(ValueError, match="import-only"):
+        validate_character_notes_update(
+            notes,
             {
-                "kind": "promise",
-                "summary": "Mira promised to return the signet ring.",
-                "importance": 4,
-                "visibility": "dm",
+                **notes,
+                "memories": [
+                    *notes["memories"],
+                    {"id": "new-memory", "summary": "Must use ActorKnowledge."},
+                ],
             },
         )
-    assert notes["memories"][0]["id"] == memory_id
     candidates = legacy_memory_candidates(notes, actor_id="mira")
     assert candidates == [
         {
@@ -270,19 +409,17 @@ def test_removing_an_effect_cleans_only_conditions_no_longer_owned() -> None:
         "kind": "timed_conditions",
         "source": "gazer-a",
         "duration": {"period": "source_turn_start", "remaining": 1},
-        "changes": [
-            {"path": "conditions", "mode": "add", "value": "frightened"}
-        ],
+        "changes": [{"path": "conditions", "mode": "add", "value": "frightened"}],
     }
     sheet, first_id = add_effect(sheet, {"id": "fear-a", **fear})
     sheet, second_id = add_effect(
         sheet,
         {"id": "fear-b", **fear, "source": "gazer-b"},
     )
-    assert sheet["conditions"] == ["prone", "frightened"]
+    assert sheet["conditions"] == ["frightened", "prone"]
 
     one_removed = remove_effect(sheet, first_id)
-    assert one_removed["conditions"] == ["prone", "frightened"]
+    assert one_removed["conditions"] == ["frightened", "prone"]
 
     both_removed = remove_effect(one_removed, second_id)
     assert both_removed["conditions"] == ["prone"]
@@ -717,18 +854,12 @@ def test_attunement_enforces_capacity_copies_transfer_and_death() -> None:
     with pytest.raises(ValueError, match="cannot be transferred"):
         receive_inventory_item(
             validate_character_sheet({}),
-            next(
-                item
-                for item in sheet["inventory"]["items"]
-                if item["id"] == "ring-1"
-            ),
+            next(item for item in sheet["inventory"]["items"] if item["id"] == "ring-1"),
         )
 
     sheet["conditions"] = ["dead"]
     dead = validate_character_sheet(sheet)
-    assert {
-        item["attunement"] for item in dead["inventory"]["items"]
-    } == {"required"}
+    assert {item["attunement"] for item in dead["inventory"]["items"]} == {"required"}
 
 
 def test_unarmored_base_formula_keeps_shield_and_chooses_highest_source() -> None:
@@ -1126,6 +1257,12 @@ def test_schema_rejects_legacy_fields_and_invalid_container_cycles() -> None:
         )
     with pytest.raises(ValueError, match="npc notes.profile.summary"):
         validate_character_notes({}, character_type="npc")
+    repaired = validate_character_notes({"profile": {"summary": "Reviewed NPC."}})
+    assert validate_character_notes_update(
+        {},
+        repaired,
+        character_type="npc",
+    )["profile"]["summary"] == "Reviewed NPC."
 
 
 def test_content_selection_provenance_is_normalized_and_unique() -> None:
@@ -1166,11 +1303,41 @@ def test_2014_exhaustion_halves_effective_hit_point_maximum() -> None:
     sheet["combat"]["hp"] = {"value": 37, "max": 37, "temp": 0}
     sheet["combat"]["exhaustion"] = 4
 
-    derived = derive_character_sheet(sheet)
+    normalized = validate_character_sheet(sheet)
+    derived = derive_character_sheet(normalized)
 
+    assert normalized["combat"]["hp"]["value"] == 18
     assert derived["hit_points"] == {
         "value": 18,
         "max": 18,
         "temp": 0,
         "base_max": 37,
+    }
+
+
+def test_whole_sheet_validation_enforces_exhaustion_death() -> None:
+    sheet = default_character_sheet()
+    sheet["combat"]["exhaustion"] = 6
+
+    normalized = validate_character_sheet(sheet)
+
+    assert normalized["conditions"] == ["dead"]
+
+
+def test_legacy_rest_minute_positions_migrate_to_game_ticks() -> None:
+    sheet = default_character_sheet()
+    sheet["combat"]["rest_history"] = {
+        "last_rest_type": "long_rest",
+        "last_rest_started_elapsed_minutes": 60,
+        "last_rest_completed_elapsed_minutes": 540,
+        "last_long_rest_elapsed_minutes": 540,
+    }
+
+    validated = validate_character_sheet(sheet)
+
+    assert validated["combat"]["rest_history"] == {
+        "last_rest_type": "long_rest",
+        "last_rest_started_elapsed_ticks": 600,
+        "last_rest_completed_elapsed_ticks": 5400,
+        "last_long_rest_elapsed_ticks": 5400,
     }

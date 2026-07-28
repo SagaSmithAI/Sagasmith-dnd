@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from sagasmith_dnd.resources import mutate_bounded_resource
 from sagasmith_dnd.rule_engine import ResolutionContext, apply_rule_event, core_receipts
 
 
@@ -45,9 +46,10 @@ def consume_activity(
         if not resource:
             raise ActivityError("activity resource_key does not exist on this character")
         if not bool(resource.get("unlimited", False)):
-            if int(resource.get("value", 0) or 0) < 1:
-                raise ActivityError("activity resource is exhausted")
-            resource["value"] = int(resource["value"]) - 1
+            try:
+                mutate_bounded_resource(resource, amount=1, direction="spend")
+            except ValueError as error:
+                raise ActivityError("activity resource is exhausted") from error
             value["resources"][resource_key] = resource
             payment = {"kind": "resource", "key": resource_key, "amount": 1}
     else:
@@ -55,9 +57,10 @@ def consume_activity(
         # Zero capacity is not the same thing as unlimited capacity.  Only a
         # source-authored explicit flag may make a structured counter free.
         if uses and not bool(uses.get("unlimited", False)):
-            if int(uses.get("value", 0) or 0) < 1:
-                raise ActivityError("activity uses are exhausted")
-            uses["value"] = int(uses["value"]) - 1
+            try:
+                mutate_bounded_resource(uses, amount=1, direction="spend")
+            except ValueError as error:
+                raise ActivityError("activity uses are exhausted") from error
             activity["uses"] = uses
             payment = {"kind": "card_uses", "amount": 1}
     value["content"][section] = [

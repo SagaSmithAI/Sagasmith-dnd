@@ -4,6 +4,7 @@ from pathlib import Path
 from sagasmith_dnd.core_content import (
     PACK_VERSION,
     _feat_prerequisites,
+    _known_feature_structure,
     build_srd2014_content,
 )
 
@@ -19,6 +20,22 @@ def test_non_numeric_feat_prerequisite_defaults_to_agent_review() -> None:
             "ruling_kind": "source_or_scene_fact",
         }
     ]
+
+
+def test_arcane_recovery_reset_is_derived_from_the_source_edition_text() -> None:
+    daily = _known_feature_structure(
+        "Wizard",
+        "Arcane Recovery",
+        "Once per day when you finish a short rest, recover spell slots.",
+    )
+    long_rest = _known_feature_structure(
+        "Wizard",
+        "Arcane Recovery",
+        "Once you use this feature, you can't do so again until you finish a Long Rest.",
+    )
+
+    assert daily["uses"]["recovers_on"] == "manual"
+    assert long_rest["uses"]["recovers_on"] == "long_rest"
 
 
 def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:

@@ -102,6 +102,62 @@ def test_urban_complication_affects_next_participant() -> None:
     assert second["turn"]["moved_ft"] == 50
 
 
+def test_chase_prone_changes_share_immunity_and_effect_ownership() -> None:
+    pursuer = _actor("pursuer", initiative=20)
+    quarry = _actor("quarry", initiative=10)
+    quarry["sheet"]["traits"]["condition_immunities"] = ["prone"]
+    quarry["derived"] = derive_character_sheet(quarry["sheet"])
+    chase = start_chase(
+        [pursuer, quarry],
+        quarry_ids=["quarry"],
+        initial_distance_ft=100,
+    )
+    chase["turn_index"] = 1
+    chase["pending_complication"] = {
+        "number": 3,
+        "source_actor_id": "pursuer",
+        "affected_actor_id": "quarry",
+    }
+
+    immune = advance_chase_turn(
+        chase,
+        quarry,
+        actor_id_value="quarry",
+        action="move",
+        complication_choice="strength",
+        rng=_SequenceRng(1, 20),
+    )
+
+    assert immune["turn"]["complication"]["knocked_prone"] is False
+    assert "prone" not in immune["sheet"]["conditions"]
+
+    pursuer["sheet"]["conditions"] = ["prone"]
+    pursuer["sheet"]["effects"] = [
+        {
+            "id": "restraining-prone-effect",
+            "kind": "timed_conditions",
+            "active": True,
+            "changes": [{"path": "conditions", "mode": "add", "value": "prone"}],
+        }
+    ]
+    pursuer["derived"] = derive_character_sheet(pursuer["sheet"])
+    owned = start_chase(
+        [pursuer, _actor("other-quarry", initiative=10)],
+        quarry_ids=["other-quarry"],
+        initial_distance_ft=100,
+    )
+    remained = advance_chase_turn(
+        owned,
+        pursuer,
+        actor_id_value="pursuer",
+        action="move",
+        stand_from_prone=True,
+    )
+
+    assert "prone" in remained["sheet"]["conditions"]
+    assert remained["turn"]["moved_ft"] == 15
+
+
 def test_extra_dash_uses_constitution_check_and_exhaustion() -> None:
     pursuer = _actor("pursuer", initiative=20, constitution=10)
     quarry = _actor("quarry", initiative=10)
