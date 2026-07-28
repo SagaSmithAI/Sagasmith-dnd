@@ -11,7 +11,7 @@ from sagasmith_dnd.abilities import ABILITY_ABBREVIATIONS, ABILITY_NAMES
 from sagasmith_dnd.character_schema import default_character_sheet, validate_character_sheet
 from sagasmith_dnd.combat_engine import structured_critical_followup
 from sagasmith_dnd.engine import ability_modifier
-from sagasmith_dnd.vocabulary import ATTACK_MODES
+from sagasmith_dnd.vocabulary import ATTACK_MODES, DAMAGE_TYPES
 
 
 class StatblockImportError(ValueError):
@@ -1552,6 +1552,9 @@ def apply_statblock_variant(
         "alignment",
         "darkvision_ft",
         "languages",
+        "damage_resistances",
+        "damage_immunities",
+        "damage_vulnerabilities",
         "spell_replacements",
         "expend_all_spell_slots",
         "add_features",
@@ -1671,6 +1674,35 @@ def apply_statblock_variant(
         ):
             raise StatblockImportError("languages must contain unique non-empty strings")
         result["traits"]["languages"] = normalized_languages
+
+    damage_variant_fields = {
+        "damage_resistances": "resistances",
+        "damage_immunities": "immunities",
+        "damage_vulnerabilities": "vulnerabilities",
+    }
+    for variant_field, trait_field in damage_variant_fields.items():
+        if variant_field not in variant:
+            continue
+        raw_damage_types = variant[variant_field]
+        if not isinstance(raw_damage_types, list):
+            raise StatblockImportError(f"{variant_field} must be a list")
+        normalized_damage_types = [
+            str(item).strip().casefold() for item in raw_damage_types
+        ]
+        if (
+            any(not item for item in normalized_damage_types)
+            or len(normalized_damage_types) != len(set(normalized_damage_types))
+        ):
+            raise StatblockImportError(
+                f"{variant_field} must contain unique non-empty damage types"
+            )
+        unsupported_damage_types = set(normalized_damage_types) - DAMAGE_TYPES
+        if unsupported_damage_types:
+            raise StatblockImportError(
+                f"{variant_field} contains unsupported D&D 5e damage types: "
+                f"{sorted(unsupported_damage_types)}"
+            )
+        result["traits"][trait_field] = normalized_damage_types
 
     if "spell_replacements" in variant:
         replacements = variant["spell_replacements"]

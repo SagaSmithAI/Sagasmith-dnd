@@ -1618,6 +1618,54 @@ def test_statblock_variant_rejects_unbound_or_broad_sheet_patches() -> None:
         )
 
 
+def test_statblock_variant_applies_canonical_damage_defenses() -> None:
+    parsed = parse_2014_statblock(COMMONER, source_key="srd-commoner")
+
+    sheet = apply_statblock_variant(
+        parsed.sheet,
+        {
+            "source_ref": "module-chunk:ice-troll",
+            "damage_resistances": [" Fire "],
+            "damage_immunities": ["COLD"],
+            "damage_vulnerabilities": ["radiant"],
+        },
+    )
+
+    assert sheet["traits"]["resistances"] == ["fire"]
+    assert sheet["traits"]["immunities"] == ["cold"]
+    assert sheet["traits"]["vulnerabilities"] == ["radiant"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    [
+        ("damage_resistances", "fire", "must be a list"),
+        (
+            "damage_immunities",
+            ["cold", "COLD"],
+            "unique non-empty damage types",
+        ),
+        (
+            "damage_vulnerabilities",
+            ["frost"],
+            "unsupported D&D 5e damage types",
+        ),
+    ],
+)
+def test_statblock_variant_rejects_invalid_damage_defenses(
+    field: str,
+    value: object,
+    match: str,
+) -> None:
+    parsed = parse_2014_statblock(COMMONER, source_key="srd-commoner")
+
+    with pytest.raises(StatblockImportError, match=match):
+        apply_statblock_variant(
+            parsed.sheet,
+            {"source_ref": "module-chunk:variant", field: value},
+        )
+
+
 def test_unresolved_multiattack_produces_one_specific_warning() -> None:
     parsed = parse_2014_statblock(
         COMMONER.replace(

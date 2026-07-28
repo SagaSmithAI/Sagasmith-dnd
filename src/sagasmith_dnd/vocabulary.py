@@ -7,6 +7,24 @@ from typing import Mapping
 
 ATTACK_MODES = frozenset({"melee", "ranged"})
 
+DAMAGE_TYPES = frozenset(
+    {
+        "acid",
+        "bludgeoning",
+        "cold",
+        "fire",
+        "force",
+        "lightning",
+        "necrotic",
+        "piercing",
+        "poison",
+        "psychic",
+        "radiant",
+        "slashing",
+        "thunder",
+    }
+)
+
 DENOMINATION_CP_VALUES: Mapping[str, int] = MappingProxyType(
     {"cp": 1, "sp": 10, "ep": 50, "gp": 100, "pp": 1000}
 )
