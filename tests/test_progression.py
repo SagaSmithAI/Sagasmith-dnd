@@ -194,9 +194,89 @@ def test_feature_resource_formula_reacts_to_ability_changes_and_unlimited_levels
         "max": 3,
         "unlimited": False,
         "recovers_on": "long_rest",
-        "recovery_requirements": {},
         "source_key": "Bard",
         "slot_level": 0,
+    }
+
+
+def test_feature_resource_sync_removes_only_unreferenced_shadow_counter() -> None:
+    sheet = _single_class_sheet("Bard", hit_die=8, constitution=12, hp=(8, 8))
+    sheet["abilities"]["charisma"]["score"] = 20
+    sheet["resources"] = {
+        "bardic_inspiration": {
+            "label": "Bardic Inspiration",
+            "value": 3,
+            "max": 3,
+            "recovers_on": "long_rest",
+            "source_key": "Bard",
+        },
+        "shared_inspiration": {
+            "label": "Bardic Inspiration",
+            "value": 1,
+            "max": 1,
+            "recovers_on": "long_rest",
+            "source_key": "Bard",
+        },
+    }
+    sheet["content"]["features"] = [
+        {
+            "id": "bardic-inspiration",
+            "name": "Bardic Inspiration",
+            "source_key": "Bard",
+            "uses": {
+                "label": "Bardic Inspiration",
+                "value": 2,
+                "max": 3,
+                "recovers_on": "long_rest",
+                "source_key": "Bard",
+            },
+            "resource_scaling": {
+                "target": "uses",
+                "label": "Bardic Inspiration",
+                "class_name": "Bard",
+                "maximum_by_level": {},
+                "maximum_formula": {
+                    "kind": "ability_modifier",
+                    "ability": "charisma",
+                    "minimum": 1,
+                    "multiplier": 1,
+                    "offset": 0,
+                },
+                "recovers_on": "long_rest",
+                "recovery_by_level": {"5": "short_rest"},
+            },
+        },
+        {
+            "id": "shared-inspiration-consumer",
+            "name": "Shared Inspiration Consumer",
+            "resource_key": "shared_inspiration",
+        },
+    ]
+
+    synchronized = synchronize_class_feature_resources(sheet)
+
+    assert synchronized["sheet"]["content"]["features"][0]["uses"] == {
+        "label": "Bardic Inspiration",
+        "value": 4,
+        "max": 5,
+        "unlimited": False,
+        "recovers_on": "long_rest",
+        "source_key": "Bard",
+        "slot_level": 0,
+    }
+    assert "bardic_inspiration" not in synchronized["sheet"]["resources"]
+    assert synchronized["sheet"]["resources"]["shared_inspiration"]["value"] == 1
+    assert synchronized["changes"][-1] == {
+        "feature_id": "bardic-inspiration",
+        "target": "resources.bardic_inspiration",
+        "operation": "remove_shadow",
+        "old_resource": {
+            "label": "Bardic Inspiration",
+            "value": 3,
+            "max": 3,
+            "recovers_on": "long_rest",
+            "source_key": "Bard",
+        },
     }
 
 
@@ -456,7 +536,15 @@ def test_per_level_hit_point_bonus_updates_every_recorded_level() -> None:
     assert updated["combat"]["hp"] == {"value": 11, "max": 22, "temp": 0}
     assert [entry["value"] for entry in updated["combat"]["hp_progression"]] == [12, 10]
     assert all(
-        "Dwarven Toughness" in entry["source"] for entry in updated["combat"]["hp_progression"]
+        entry["adjustments"]
+        == [
+            {
+                "kind": "per_level_bonus",
+                "amount": 1,
+                "source": "Hill Dwarf: Dwarven Toughness",
+            }
+        ]
+        for entry in updated["combat"]["hp_progression"]
     )
     assert sheet["combat"]["hp"]["max"] == 20
 
@@ -496,7 +584,44 @@ def test_constitution_score_change_updates_maximum_not_current_hp_and_ledger() -
     assert updated["combat"]["hp"] == {"value": 14, "max": 16, "temp": 0}
     assert [item["value"] for item in updated["combat"]["hp_progression"]] == [9, 7]
     assert all(
-        "Half-Elf Constitution increase" in item["source"]
+        item["adjustments"]
+        == [
+            {
+                "kind": "constitution_modifier_change",
+                "amount": 1,
+                "source": "Half-Elf Constitution increase",
+                "previous_score": 13,
+                "new_score": 14,
+            }
+        ]
+        for item in updated["combat"]["hp_progression"]
+    )
+
+
+def test_constitution_change_preserves_long_base_sources_in_structured_adjustment() -> None:
+    sheet = default_character_sheet()
+    sheet["progression"]["level"] = 2
+    sheet["combat"]["hp"] = {"value": 14, "max": 14, "temp": 0}
+    long_source = "module:" + ("source-bound-evidence-" * 13)
+    assert len(long_source) <= 300
+    sheet["combat"]["hp_progression"] = [
+        {"level": 1, "method": "fixed", "value": 8, "source": long_source},
+        {"level": 2, "method": "fixed", "value": 6, "source": long_source},
+    ]
+
+    updated = apply_constitution_score_hit_point_change(
+        sheet,
+        previous_score=13,
+        new_score=14,
+        source="Rogue level 10 Ability Score Improvement",
+    )
+
+    assert all(
+        item["source"] == long_source for item in updated["combat"]["hp_progression"]
+    )
+    assert all(
+        item["adjustments"][0]["source"]
+        == "Rogue level 10 Ability Score Improvement"
         for item in updated["combat"]["hp_progression"]
     )
 

@@ -1720,7 +1720,15 @@ def validate_character_sheet(
         _reject_unknown(
             entry,
             f"sheet.combat.hp_progression[{index}]",
-            {"level", "method", "value", "source", "source_ref", "reason"},
+            {
+                "level",
+                "method",
+                "value",
+                "source",
+                "source_ref",
+                "reason",
+                "adjustments",
+            },
         )
         gain_level = _integer(
             entry.get("level"), f"sheet.combat.hp_progression[{index}].level", minimum=1, maximum=20
@@ -1755,6 +1763,77 @@ def validate_character_sheet(
                 f"sheet.combat.hp_progression[{index}].reason",
                 maximum=1000,
             )
+        if "adjustments" in entry:
+            normalized_adjustments = []
+            for adjustment_index, raw_adjustment in enumerate(
+                _array(
+                    entry.get("adjustments"),
+                    f"sheet.combat.hp_progression[{index}].adjustments",
+                )
+            ):
+                adjustment_path = (
+                    f"sheet.combat.hp_progression[{index}]"
+                    f".adjustments[{adjustment_index}]"
+                )
+                adjustment = _object(raw_adjustment, adjustment_path)
+                _reject_unknown(
+                    adjustment,
+                    adjustment_path,
+                    {
+                        "kind",
+                        "amount",
+                        "source",
+                        "previous_score",
+                        "new_score",
+                    },
+                )
+                kind = _text(adjustment.get("kind"), f"{adjustment_path}.kind")
+                if kind not in {
+                    "per_level_bonus",
+                    "constitution_modifier_change",
+                }:
+                    raise ValueError(f"{adjustment_path}.kind is invalid")
+                amount = _integer(
+                    adjustment.get("amount"),
+                    f"{adjustment_path}.amount",
+                    minimum=-30,
+                    maximum=30,
+                )
+                if amount == 0:
+                    raise ValueError(f"{adjustment_path}.amount must not be zero")
+                normalized_adjustment = {
+                    "kind": kind,
+                    "amount": amount,
+                    "source": _text(
+                        adjustment.get("source"),
+                        f"{adjustment_path}.source",
+                        maximum=300,
+                    ),
+                }
+                score_fields = {"previous_score", "new_score"} & set(adjustment)
+                if kind == "constitution_modifier_change":
+                    if score_fields != {"previous_score", "new_score"}:
+                        raise ValueError(
+                            f"{adjustment_path} requires previous_score and new_score"
+                        )
+                    normalized_adjustment["previous_score"] = _integer(
+                        adjustment.get("previous_score"),
+                        f"{adjustment_path}.previous_score",
+                        minimum=1,
+                        maximum=30,
+                    )
+                    normalized_adjustment["new_score"] = _integer(
+                        adjustment.get("new_score"),
+                        f"{adjustment_path}.new_score",
+                        minimum=1,
+                        maximum=30,
+                    )
+                elif score_fields:
+                    raise ValueError(
+                        f"{adjustment_path} score fields require a Constitution change"
+                    )
+                normalized_adjustments.append(normalized_adjustment)
+            normalized_gain["adjustments"] = normalized_adjustments
         hp_progression.append(normalized_gain)
     death_saves = _object(combat["death_saves"], "sheet.combat.death_saves")
     _reject_unknown(death_saves, "sheet.combat.death_saves", {"successes", "failures"})

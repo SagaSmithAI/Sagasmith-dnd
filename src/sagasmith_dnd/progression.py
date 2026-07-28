@@ -221,15 +221,14 @@ def apply_per_level_hit_point_bonus(
         for existing_level in range(1, level + 1):
             entry = by_level[existing_level]
             entry["value"] = int(entry.get("value", 0) or 0) + amount
-            old_source = str(entry.get("source") or "").strip()
-            combined_source = (
-                f"{old_source}; {normalized_source}" if old_source else normalized_source
+            _append_hit_point_adjustment(
+                entry,
+                {
+                    "kind": "per_level_bonus",
+                    "amount": amount,
+                    "source": normalized_source,
+                },
             )
-            if len(combined_source) > 300:
-                raise CombatEngineError(
-                    "combined hit-point progression source exceeds 300 characters"
-                )
-            entry["source"] = combined_source
     return value
 
 
@@ -284,11 +283,29 @@ def apply_constitution_score_hit_point_change(
         for existing_level in range(1, level + 1):
             entry = by_level[existing_level]
             entry["value"] = int(entry.get("value", 0) or 0) + modifier_delta
-            old_source = str(entry.get("source") or "").strip()
-            entry["source"] = (
-                f"{old_source}; {normalized_source}" if old_source else normalized_source
+            _append_hit_point_adjustment(
+                entry,
+                {
+                    "kind": "constitution_modifier_change",
+                    "amount": modifier_delta,
+                    "source": normalized_source,
+                    "previous_score": previous_score,
+                    "new_score": new_score,
+                },
             )
     return value
+
+
+def _append_hit_point_adjustment(
+    entry: dict[str, Any],
+    adjustment: dict[str, Any],
+) -> None:
+    """Record a retroactive HP cause without rewriting the level's base source."""
+
+    adjustments = list(entry.get("adjustments") or [])
+    if adjustment not in adjustments:
+        adjustments.append(deepcopy(adjustment))
+    entry["adjustments"] = adjustments
 
 
 def advance_single_class_level(
@@ -448,15 +465,19 @@ def synchronize_class_feature_resources(sheet: dict[str, Any]) -> dict[str, Any]
             old_resource = dict(resources.get(target) or {})
         old_maximum = int(old_resource.get("max", 0) or 0)
         old_value = int(old_resource.get("value", old_maximum) or 0)
+        recovery_requirements = dict(
+            old_resource.get("recovery_requirements") or {}
+        )
         updated = {
             "label": str(scaling.get("label") or old_resource.get("label") or target),
             "value": old_value,
             "max": old_maximum,
             "recovers_on": recovery,
-            "recovery_requirements": dict(old_resource.get("recovery_requirements") or {}),
             "source_key": str(scaling.get("class_name") or old_resource.get("source_key") or ""),
             "slot_level": int(old_resource.get("slot_level", 0) or 0),
         }
+        if recovery_requirements:
+            updated["recovery_requirements"] = recovery_requirements
         resize_bounded_resource(
             updated,
             maximum=new_maximum,
@@ -483,6 +504,7 @@ def synchronize_class_feature_resources(sheet: dict[str, Any]) -> dict[str, Any]
                     "unlimited": unlimited,
                 }
             )
+    _remove_unreferenced_shadow_resources(value, changes)
     current_attacks = int(value.setdefault("combat", {}).get("attacks_per_action", 1) or 1)
     scaled_attacks = 1
     attack_sources: list[str] = []
@@ -519,6 +541,76 @@ def synchronize_class_feature_resources(sheet: dict[str, Any]) -> dict[str, Any]
             }
         )
     return {"sheet": value, "changes": changes}
+
+
+def _remove_unreferenced_shadow_resources(
+    sheet: dict[str, Any],
+    changes: list[dict[str, Any]],
+) -> None:
+    """Remove legacy top-level counters shadowed by authoritative card-local uses.
+
+    Early callers could manually seed ``sheet.resources`` for a class feature
+    and later apply the structured feature card.  A local-use card deliberately
+    leaves ``resource_key`` empty, so the card's ``uses`` counter is the only
+    counter consumed by :func:`consume_activity`.  Keeping an unreferenced
+    top-level counter with the same label and class creates two independently
+    recoverable representations of one rules concept.
+
+    The migration is intentionally conservative: a top-level counter is removed
+    only when no card or spell references its key and exactly one scaling
+    feature owns an identically labelled, identically sourced local counter.
+    """
+
+    content = dict(sheet.get("content") or {})
+    referenced_keys: set[str] = set()
+    for section in ("activities", "features", "feats"):
+        for card in content.get(section, []):
+            resource_key = str(card.get("resource_key") or "")
+            if resource_key:
+                referenced_keys.add(resource_key)
+    for spell in content.get("spells", []):
+        access = dict(spell.get("access") or {})
+        innate_key = str(access.get("innate_resource_key") or "")
+        if innate_key:
+            referenced_keys.add(innate_key)
+
+    local_owners: dict[tuple[str, str], list[str]] = {}
+    for feature in content.get("features", []):
+        scaling = dict(feature.get("resource_scaling") or {})
+        if str(scaling.get("target") or "") != "uses":
+            continue
+        uses = dict(feature.get("uses") or {})
+        label = str(uses.get("label") or scaling.get("label") or "").strip().casefold()
+        source_key = str(
+            uses.get("source_key") or scaling.get("class_name") or ""
+        ).strip().casefold()
+        if not label or not source_key:
+            continue
+        local_owners.setdefault((label, source_key), []).append(
+            str(feature.get("id") or "")
+        )
+
+    resources = sheet.setdefault("resources", {})
+    for resource_key, raw_resource in list(resources.items()):
+        if resource_key in referenced_keys:
+            continue
+        resource = dict(raw_resource or {})
+        semantic_key = (
+            str(resource.get("label") or "").strip().casefold(),
+            str(resource.get("source_key") or "").strip().casefold(),
+        )
+        owners = local_owners.get(semantic_key, [])
+        if len(owners) != 1:
+            continue
+        del resources[resource_key]
+        changes.append(
+            {
+                "feature_id": owners[0],
+                "target": f"resources.{resource_key}",
+                "operation": "remove_shadow",
+                "old_resource": resource,
+            }
+        )
 
 
 def _scaled_resource_capacity(
