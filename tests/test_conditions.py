@@ -1,5 +1,15 @@
 from sagasmith_dnd.character_schema import default_character_sheet
-from sagasmith_dnd.conditions import reconcile_condition_projection
+from sagasmith_dnd.conditions import (
+    DEATH_SAVE_SETTLED_CONDITIONS,
+    INCAPACITATING_STATE_IDS,
+    LIVING_INCAPACITATING_STATE_IDS,
+    reconcile_condition_projection,
+)
+
+
+def test_condition_state_groups_have_one_canonical_relationship() -> None:
+    assert DEATH_SAVE_SETTLED_CONDITIONS == {"dead", "stable"}
+    assert LIVING_INCAPACITATING_STATE_IDS == INCAPACITATING_STATE_IDS - {"dead"}
 
 
 def test_condition_projection_respects_immunity_and_active_effect_ownership() -> None:

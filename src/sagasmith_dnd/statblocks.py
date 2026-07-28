@@ -7,10 +7,13 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
+from sagasmith_core.text import ascii_slug, compact_ascii_key
+
 from sagasmith_dnd.abilities import ABILITY_ABBREVIATIONS, ABILITY_NAMES
 from sagasmith_dnd.character_schema import default_character_sheet, validate_character_sheet
 from sagasmith_dnd.combat_engine import structured_critical_followup
 from sagasmith_dnd.engine import ability_modifier
+from sagasmith_dnd.resources import mutate_bounded_resource
 from sagasmith_dnd.vocabulary import ATTACK_MODES, DAMAGE_TYPES
 
 
@@ -81,7 +84,7 @@ _2014_ARMOR = {
 
 
 def _slug(value: str) -> str:
-    result = re.sub(r"[^a-z0-9]+", "-", value.casefold()).strip("-")
+    result = ascii_slug(value)
     return result or "action"
 
 
@@ -1806,7 +1809,11 @@ def apply_statblock_variant(
                 "expend_all_spell_slots requires a statblock with spell slots"
             )
         for slot in slots.values():
-            slot["value"] = 0
+            mutate_bounded_resource(
+                slot,
+                amount=int(slot.get("value", 0) or 0),
+                direction="spend",
+            )
 
     if "add_features" in variant:
         features = variant["add_features"]
@@ -2371,7 +2378,7 @@ _OCR_ENTRY_RE = re.compile(
 
 
 def _ocr_key(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "", value.casefold())
+    return compact_ascii_key(value)
 
 
 def _strip_ocr_label(text: str, label: str) -> str:

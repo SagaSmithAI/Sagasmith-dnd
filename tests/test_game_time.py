@@ -3,10 +3,15 @@ from __future__ import annotations
 import pytest
 
 from sagasmith_dnd.game_time import (
+    advance_calendar_minute_point,
+    advance_calendar_minutes_from_elapsed,
     advance_game_time,
     anchor_world_time,
+    calendar_minute_point,
+    calendar_minute_point_from_elapsed,
     game_time_from_ticks,
     game_time_ticks,
+    validate_calendar_minute_point,
     validate_world_time,
 )
 
@@ -94,6 +99,27 @@ def test_game_time_units_share_one_tick_scale() -> None:
     assert game_time_ticks("round", 10) == game_time_ticks("minute")
     assert game_time_ticks("minute", 60) == game_time_ticks("hour")
     assert game_time_ticks("hour", 24) == game_time_ticks("day")
+
+
+def test_minute_calendar_points_share_validation_and_projection() -> None:
+    point = calendar_minute_point(day=3, hour=7, minute=15)
+    assert point == {
+        "day": 3,
+        "hour": 7,
+        "minute": 15,
+        "elapsed_minutes": 3315,
+    }
+    assert validate_calendar_minute_point(point) == point
+    assert calendar_minute_point_from_elapsed(3315) == point
+    assert advance_calendar_minutes_from_elapsed(3315, 60)["elapsed_minutes"] == 3375
+    assert advance_calendar_minute_point(point, 60) == {
+        "day": 3,
+        "hour": 8,
+        "minute": 15,
+        "elapsed_minutes": 3375,
+    }
+    with pytest.raises(ValueError, match="must match"):
+        validate_calendar_minute_point({**point, "elapsed_minutes": 3314})
 
 
 def test_v2_rejects_a_calendar_field_that_drifts_from_game_time() -> None:

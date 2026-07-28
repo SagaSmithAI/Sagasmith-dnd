@@ -12,7 +12,7 @@ from sagasmith_dnd.editions import normalize_dnd_edition
 from sagasmith_dnd.engine import ability_modifier
 from sagasmith_dnd.resources import mutate_bounded_resource
 from sagasmith_dnd.rule_engine import ResolutionContext, apply_rule_event, core_receipts
-from sagasmith_dnd.vocabulary import PREPARED_SELECTION_MODES
+from sagasmith_dnd.vocabulary import PREPARED_SELECTION_MODES, WEAPON_HAND_SLOTS
 
 _SPELL_POINT_COSTS = {1: 2, 2: 3, 3: 5, 4: 6, 5: 7, 6: 9, 7: 10, 8: 11, 9: 13}
 CORE_SHIELD_MECHANIC_ID = "dnd5e.core.spell.shield"
@@ -333,10 +333,7 @@ def _magic_item_spell_binding(
     spell_id: str,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     item = _magic_item_by_id(sheet, source_item_id)
-    if not item.get("equipped") or item.get("equipped_slot") not in {
-        "main_hand",
-        "off_hand",
-    }:
+    if not item.get("equipped") or item.get("equipped_slot") not in WEAPON_HAND_SLOTS:
         raise CombatEngineError("magic item spell casting requires the item to be held")
     if str(item.get("condition") or "normal") != "normal":
         raise CombatEngineError("magic item is not in a usable condition")

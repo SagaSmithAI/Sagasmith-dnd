@@ -9,6 +9,7 @@ from typing import Any
 from sagasmith_dnd.combat_engine import CombatEngineError
 from sagasmith_dnd.editions import normalize_dnd_edition
 from sagasmith_dnd.engine import ability_modifier, roll
+from sagasmith_dnd.resources import resize_bounded_resource
 from sagasmith_dnd.vocabulary import PREPARED_SELECTION_MODES
 
 FULL_CASTER_SLOTS: dict[int, tuple[int, ...]] = {
@@ -447,25 +448,21 @@ def synchronize_class_feature_resources(sheet: dict[str, Any]) -> dict[str, Any]
             old_resource = dict(resources.get(target) or {})
         old_maximum = int(old_resource.get("max", 0) or 0)
         old_value = int(old_resource.get("value", old_maximum) or 0)
-        if not old_resource:
-            new_value = 0 if unlimited else new_maximum
-        elif unlimited:
-            new_value = 0
-        else:
-            new_value = min(
-                new_maximum,
-                old_value + max(0, new_maximum - old_maximum),
-            )
         updated = {
             "label": str(scaling.get("label") or old_resource.get("label") or target),
-            "value": new_value,
-            "max": new_maximum,
-            "unlimited": unlimited,
+            "value": old_value,
+            "max": old_maximum,
             "recovers_on": recovery,
             "recovery_requirements": dict(old_resource.get("recovery_requirements") or {}),
             "source_key": str(scaling.get("class_name") or old_resource.get("source_key") or ""),
             "slot_level": int(old_resource.get("slot_level", 0) or 0),
         }
+        resize_bounded_resource(
+            updated,
+            maximum=new_maximum,
+            unlimited=unlimited,
+            previous_maximum=old_maximum,
+        )
         if target == "uses":
             feature["uses"] = updated
         else:
@@ -478,10 +475,10 @@ def synchronize_class_feature_resources(sheet: dict[str, Any]) -> dict[str, Any]
                     "feature_id": str(feature.get("id") or ""),
                     "target": target,
                     "class_level": class_level,
-                    "old_max": old_maximum,
-                    "new_max": new_maximum,
-                    "old_value": old_value,
-                    "new_value": new_value,
+                        "old_max": old_maximum,
+                        "new_max": new_maximum,
+                        "old_value": old_value,
+                        "new_value": updated["value"],
                     "recovers_on": recovery,
                     "unlimited": unlimited,
                 }
@@ -579,11 +576,13 @@ def _advance_spellcasting(
         old_max, old_slot_level = PACT_MAGIC[old_level]
         new_max, new_slot_level = PACT_MAGIC[new_level]
         pact = dict(spellcasting.get("pact_magic") or {})
-        old_value = int(pact.get("value", old_max) or 0)
+        resize_bounded_resource(
+            pact,
+            maximum=new_max,
+            previous_maximum=old_max,
+        )
         pact.update(
             label="Pact Magic",
-            value=old_value + max(0, new_max - old_max),
-            max=new_max,
             recovers_on="short_rest",
             source_key=class_name,
             slot_level=new_slot_level,
@@ -606,11 +605,13 @@ def _advance_spellcasting(
             if new_max == 0:
                 continue
             resource = dict(resources.get(str(slot_level)) or {})
-            old_value = int(resource.get("value", old_max) or 0)
+            resize_bounded_resource(
+                resource,
+                maximum=new_max,
+                previous_maximum=old_max,
+            )
             resource.update(
                 label=f"Level {slot_level} spell slots",
-                value=old_value + max(0, new_max - old_max),
-                max=new_max,
                 recovers_on="long_rest",
                 source_key=class_name,
                 slot_level=slot_level,

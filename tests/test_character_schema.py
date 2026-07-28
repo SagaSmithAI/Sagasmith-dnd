@@ -10,6 +10,7 @@ from sagasmith_dnd.character_schema import (
     consume_weapon_ammunition,
     default_character_sheet,
     derive_character_sheet,
+    effective_ability_modifier,
     equip_inventory_item,
     legacy_memory_candidates,
     receive_inventory_item,
@@ -24,6 +25,27 @@ from sagasmith_dnd.character_schema import (
     validate_world_time,
 )
 from sagasmith_dnd.vocabulary import DENOMINATION_CP_VALUES
+
+
+def test_effective_ability_modifier_uses_the_shared_override_projection() -> None:
+    sheet = default_character_sheet()
+    sheet["abilities"]["constitution"]["score"] = 10
+    sheet, _ = add_effect(
+        sheet,
+        {
+            "name": "Constitution override",
+            "kind": "feature",
+            "changes": [
+                {
+                    "path": "abilities.constitution.score",
+                    "mode": "override",
+                    "value": 18,
+                }
+            ],
+        },
+    )
+
+    assert effective_ability_modifier(sheet, "constitution") == 4
 
 
 def _caster_sheet() -> dict:

@@ -26,6 +26,7 @@ from sagasmith_dnd.combat_engine import (
     available_attack_defenses,
     available_reactions,
     current_combatant,
+    damage_amount_after_reduction,
     detach_attachment,
     end_concentration_for_incapacitating_conditions,
     end_turn,
@@ -66,6 +67,14 @@ from sagasmith_dnd.rule_engine import resolution_context
 from sagasmith_dnd.spatial import compile_battle_map
 
 
+def test_damage_reduction_uses_one_round_down_contract() -> None:
+    assert damage_amount_after_reduction(7, "full") == 7
+    assert damage_amount_after_reduction(7, "half") == 3
+    assert damage_amount_after_reduction(7, "none") == 0
+    with pytest.raises(CombatEngineError, match="full, half, or none"):
+        damage_amount_after_reduction(7, "quarter")
+
+
 class _SequenceRng:
     def __init__(self, *values: int) -> None:
         self.values = list(values)
@@ -87,6 +96,16 @@ def _actor(identifier: str, *, hp: int = 12, ac: int = 10) -> dict:
         "sheet": sheet,
         "derived": derive_character_sheet(sheet),
     }
+
+
+def test_actor_check_rejects_attack_rolls_owned_by_the_attack_engine() -> None:
+    with pytest.raises(CombatEngineError, match="unsupported check kind"):
+        resolve_actor_check(
+            _actor("attacker"),
+            kind="attack",
+            ability="strength",
+            dc=10,
+        )
 
 
 def _gazer_eye_ray_spec() -> dict:
@@ -2857,10 +2876,16 @@ def test_2024_exhaustion_reduces_speed_attacks_and_death_saves() -> None:
 
     exhausted["sheet"]["combat"]["hp"]["value"] = 0
     exhausted["sheet"]["conditions"] = ["prone", "unconscious"]
-    save = resolve_death_save_to_sheet(exhausted["sheet"], bonus=-2, rng=random.Random(7))
+    save = resolve_death_save_to_sheet(exhausted["sheet"], rng=random.Random(7))
     assert save["natural"] == 11
     assert save["total"] == 9
     assert save["failures"] == 1
+
+    legacy = _actor("legacy-exhausted")
+    legacy["sheet"]["combat"]["hp"]["value"] = 0
+    legacy["sheet"]["combat"]["exhaustion"] = 3
+    legacy_save = resolve_death_save_to_sheet(legacy["sheet"], rng=random.Random(7))
+    assert len(legacy_save["rolls"]) == 2
 
 
 def test_condition_saving_throw_effects_are_not_left_to_client_modifiers() -> None:
@@ -3700,3 +3725,4 @@ def test_grimvault_followup_does_not_trigger_on_an_ordinary_hit() -> None:
     assert result["critical_followup"]["requires_dm_ruling"] is False
     assert result["critical_followup"]["ruling_requirement"] is None
     assert "on_hit_ruling" not in result
+    damage_amount_after_reduction,

@@ -5,7 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-from sagasmith_core.modules import canonical_heading_path
+from sagasmith_core.modules import EXACT_MODULE_SOURCE_FIELDS, canonical_heading_path
 
 SCHEMA_VERSION = 1
 PLAYTHROUGH_STATUSES = {
@@ -30,6 +30,14 @@ PARTY_SIZE_STATUSES = {
     "source_confirmed",
     "dm_review_required",
     "dm_review_completed",
+}
+PARTY_MEMBER_SOURCES = frozenset({"pregen", "generated", "replacement"})
+PLAYTHROUGH_SOURCE_FIELDS = EXACT_MODULE_SOURCE_FIELDS | {
+    "purpose",
+    "asset_path",
+    "asset_sha256",
+    "chunk_content_sha256",
+    "excerpt",
 }
 
 
@@ -207,20 +215,7 @@ def validate_source_ref(value: Any, *, field: str = "source_ref") -> dict[str, A
     _only(
         ref,
         field,
-        {
-            "purpose",
-            "asset_path",
-            "asset_sha256",
-            "page_start",
-            "page_end",
-            "heading_path",
-            "content_sha256",
-            "chunk_content_sha256",
-            "module_id",
-            "scene_id",
-            "chunk_id",
-            "excerpt",
-        },
+        PLAYTHROUGH_SOURCE_FIELDS,
     )
     page_start = _integer(ref.get("page_start"), f"{field}.page_start", minimum=1)
     page_end = _integer(ref.get("page_end"), f"{field}.page_end", minimum=page_start)
@@ -480,7 +475,7 @@ def _validate_party_member(value: Any, index: int) -> dict[str, Any]:
         },
     )
     actor_id = _required_text(item.get("actor_id"), f"{field}.actor_id")
-    source = _choice(item.get("source"), f"{field}.source", {"pregen", "generated", "replacement"})
+    source = _choice(item.get("source"), f"{field}.source", PARTY_MEMBER_SOURCES)
     knowledge_actor = _required_text(
         item.get("knowledge_scope_actor_id"), f"{field}.knowledge_scope_actor_id"
     )

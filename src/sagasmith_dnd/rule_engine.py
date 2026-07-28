@@ -88,6 +88,18 @@ AGENT_RULING_KIND_ORDER = (
 EXTERNAL_RULING_KINDS = frozenset(EXTERNAL_RULING_KIND_ORDER)
 AGENT_RULING_KINDS = frozenset(AGENT_RULING_KIND_ORDER)
 RULING_KINDS = AGENT_RULING_KINDS | EXTERNAL_RULING_KINDS
+PENDING_RULE_RESULT_STATUSES = frozenset({"pending_choice", "pending_ruling"})
+NESTED_RULING_COLLECTION_FIELDS = (
+    "pending",
+    "pending_rulings",
+    "ruling_requirements",
+    "review_requirements",
+)
+NESTED_RULING_SINGLE_FIELDS = (
+    "ruling_requirement",
+    "ruling",
+    "review_resolution",
+)
 
 
 class RuleCompilationError(ValueError):
@@ -136,6 +148,56 @@ def rule_event_ruling_kind(
         return external[0]
     agent = [kind for kind in AGENT_RULING_KIND_ORDER if kind in kinds]
     return agent[0] if agent else "agent_dm_adjudication"
+
+
+def nested_ruling_kind(
+    value: Any,
+    *,
+    fallback: str = "agent_dm_adjudication",
+) -> str:
+    """Classify a nested public ruling envelope with one canonical traversal."""
+
+    if isinstance(value, dict) and value.get("status") == "pending_choice":
+        return "player_owned_choice"
+    kinds: set[str] = set()
+    visited: set[int] = set()
+
+    def collect(candidate: Any) -> None:
+        if not isinstance(candidate, dict) or id(candidate) in visited:
+            return
+        visited.add(id(candidate))
+        direct_kind = str(candidate.get("ruling_kind") or "")
+        if direct_kind:
+            kinds.add(direct_kind)
+        for field in NESTED_RULING_COLLECTION_FIELDS:
+            nested = candidate.get(field)
+            if isinstance(nested, dict):
+                collect(nested)
+            elif isinstance(nested, (list, tuple)):
+                for item in nested:
+                    collect(item)
+        for field in NESTED_RULING_SINGLE_FIELDS:
+            collect(candidate.get(field))
+        nested_result = candidate.get("result")
+        if isinstance(nested_result, dict) and (
+            nested_result.get("status") in PENDING_RULE_RESULT_STATUSES
+            or any(
+                field in nested_result
+                for field in (
+                    *NESTED_RULING_COLLECTION_FIELDS,
+                    *NESTED_RULING_SINGLE_FIELDS,
+                )
+            )
+        ):
+            collect(nested_result)
+
+    collect(value)
+    if kinds:
+        return rule_event_ruling_kind(
+            "pending_ruling",
+            ({"ruling_kind": kind} for kind in kinds),
+        )
+    return fallback if fallback in RULING_KINDS else "agent_dm_adjudication"
 
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")

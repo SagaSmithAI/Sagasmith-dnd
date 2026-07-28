@@ -3,7 +3,12 @@ from copy import deepcopy
 import pytest
 
 from sagasmith_dnd.character_schema import validate_party_state
-from sagasmith_dnd.playthrough import new_playthrough_manifest, playthrough_source_bindings
+from sagasmith_dnd.playthrough import (
+    PARTY_MEMBER_SOURCES,
+    PLAYTHROUGH_SOURCE_FIELDS,
+    new_playthrough_manifest,
+    playthrough_source_bindings,
+)
 
 SOURCE_REF = {
     "purpose": "party_size",
@@ -29,6 +34,8 @@ def _manifest():
 
 
 def test_manifest_records_every_required_resume_section() -> None:
+    assert PARTY_MEMBER_SOURCES == {"pregen", "generated", "replacement"}
+    assert set(SOURCE_REF) <= PLAYTHROUGH_SOURCE_FIELDS
     manifest = _manifest()
     assert manifest["party"]["selected_size"] == 6
     assert manifest["party"]["party_size_status"] == "source_confirmed"

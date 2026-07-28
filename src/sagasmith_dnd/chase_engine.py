@@ -12,7 +12,7 @@ from copy import deepcopy
 from typing import Any, Literal, get_args
 from uuid import uuid4
 
-from sagasmith_dnd.character_schema import set_exhaustion_level
+from sagasmith_dnd.character_schema import effective_ability_modifier, set_exhaustion_level
 from sagasmith_dnd.combat_engine import (
     CombatEngineError,
     actor_derived,
@@ -24,7 +24,7 @@ from sagasmith_dnd.combat_engine import (
 )
 from sagasmith_dnd.conditions import apply_condition_change, condition_ids
 from sagasmith_dnd.editions import DEFAULT_CHARACTER_EDITION, normalize_dnd_edition
-from sagasmith_dnd.engine import ability_modifier, roll, roll_d20
+from sagasmith_dnd.engine import roll, roll_d20
 from sagasmith_dnd.rule_engine import ResolutionContext
 
 CHASE_BOUNDARY_IDS = (
@@ -45,11 +45,6 @@ CHASE_MANUAL_OUTCOME_STATUSES = frozenset(CHASE_MANUAL_OUTCOME_STATUS_ORDER)
 
 def _conditions(sheet: dict[str, Any]) -> set[str]:
     return condition_ids(sheet.get("conditions"))
-
-
-def _constitution_modifier(sheet: dict[str, Any]) -> int:
-    score = int(dict(sheet.get("abilities", {}).get("constitution") or {}).get("score", 10))
-    return ability_modifier(score)
 
 
 def _participant(chase: dict[str, Any], identifier: str) -> dict[str, Any]:
@@ -153,7 +148,10 @@ def start_chase(
                 "speed_ft": speed,
                 "position_ft": int(initial_distance_ft) if role == "quarry" else 0,
                 "dash_count": 0,
-                "free_dash_limit": max(0, 3 + _constitution_modifier(sheet)),
+                "free_dash_limit": max(
+                    0,
+                    3 + effective_ability_modifier(sheet, "constitution"),
+                ),
                 "starting_exhaustion": int(
                     dict(sheet.get("combat") or {}).get("exhaustion", 0) or 0
                 ),

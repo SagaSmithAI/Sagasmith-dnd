@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from sagasmith_core.documents import NormalizedDocument
+from sagasmith_core.text import compact_ascii_key
 
 _CLASSES = (
     "artificer",
@@ -40,7 +41,7 @@ _REQUIRED_FORM_SIGNALS = (
 
 
 def _key(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "", value.casefold())
+    return compact_ascii_key(value)
 
 
 def _text(value: Any) -> str | None:

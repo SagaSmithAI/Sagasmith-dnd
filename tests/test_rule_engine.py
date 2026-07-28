@@ -16,6 +16,7 @@ from sagasmith_dnd.rule_engine import (
     RuleCompilationError,
     RuleEventRulingRequiredError,
     apply_rule_event,
+    nested_ruling_kind,
     resolution_context,
     rule_event_ruling_kind,
     run_mechanic_tests,
@@ -41,6 +42,25 @@ def test_mechanic_schema_matches_the_runtime_capability_table() -> None:
     assert set(schema["properties"]["event"]["enum"]) == ALLOWED_EVENTS
     opcode = schema["properties"]["operations"]["items"]["properties"]["op"]
     assert set(opcode["enum"]) == ALLOWED_OPS
+
+
+def test_nested_ruling_kind_uses_one_owner_priority_across_envelopes() -> None:
+    assert (
+        nested_ruling_kind(
+            {
+                "status": "pending_ruling",
+                "result": {
+                    "pending_rulings": [
+                        {"ruling_kind": "owner_approval"},
+                        {"ruling_kind": "player_owned_choice"},
+                    ]
+                },
+            }
+        )
+        == "player_owned_choice"
+    )
+    assert nested_ruling_kind({"status": "pending_choice"}) == "player_owned_choice"
+    assert nested_ruling_kind({}, fallback="not-a-ruling-kind") == "agent_dm_adjudication"
 
 
 def test_rule_extension_settles_whitelisted_operation_with_receipt() -> None:

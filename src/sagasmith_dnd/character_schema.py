@@ -30,6 +30,7 @@ from sagasmith_dnd.rule_engine import (
 from sagasmith_dnd.spell_resolution import normalize_spell_resolution
 from sagasmith_dnd.vocabulary import (
     ATTACK_MODES,
+    CAMPAIGN_GAME_PHASES,
     DAMAGE_TYPES,
     DENOMINATION_CP_VALUES,
     DENOMINATIONS,
@@ -37,6 +38,7 @@ from sagasmith_dnd.vocabulary import (
     PLAYER_GAMEPLAY_VISIBILITY_SCOPES,
     PREPARATION_MODES,
     PREPARED_SELECTION_MODES,
+    REST_TYPES,
 )
 
 ITEM_KINDS = {
@@ -93,16 +95,14 @@ SLOT_ITEM_KINDS = {
 }
 SENSE_NAMES = ("darkvision", "blindsight", "tremorsense", "truesight")
 ATTACK_ABILITIES = {"strength", "dexterity", "spell", "none"}
-RECOVERY_PERIODS = {"none", "turn", "short_rest", "long_rest", "dawn", "manual"}
-EFFECT_PERIODS = {
+RECOVERY_PERIODS = REST_TYPES | {"none", "turn", "dawn", "manual"}
+EFFECT_PERIODS = REST_TYPES | {
     "manual",
     "source_turn_start",
     "turn_start",
     "turn_end",
     "round",
     "encounter",
-    "short_rest",
-    "long_rest",
     "minute",
     "hour",
     "day",
@@ -1774,7 +1774,7 @@ def validate_character_sheet(
     last_rest_type = _text(
         rest_history.get("last_rest_type"), "sheet.combat.rest_history.last_rest_type"
     )
-    if last_rest_type not in {"", "short_rest", "long_rest"}:
+    if last_rest_type not in REST_TYPES | {""}:
         raise ValueError("sheet.combat.rest_history.last_rest_type is invalid")
 
     def optional_elapsed_ticks(tick_key: str, legacy_minute_key: str) -> int | None:
@@ -2692,7 +2692,7 @@ def validate_party_state(state: dict[str, Any]) -> dict[str, Any]:
         # Legacy state duplicated the active encounter as a second combat flag.
         # Combat exposure is now derived only from campaign.state.combat.active.
         game_phase = "play"
-    if game_phase not in {"lobby", "play"}:
+    if game_phase not in CAMPAIGN_GAME_PHASES:
         raise ValueError("campaign.state.game_phase must be lobby or play")
     value["game_phase"] = game_phase
     if "game_time" in value:
@@ -3227,6 +3227,15 @@ def effective_ability_scores(sheet: dict[str, Any]) -> dict[str, int]:
                 raise ValueError("active ability-score override effect is malformed")
             scores[ability] = score
     return scores
+
+
+def effective_ability_modifier(sheet: dict[str, Any], ability: str) -> int:
+    """Return one modifier from the same effective ability-score projection."""
+
+    normalized = str(ability).strip().casefold().replace("-", "_").replace(" ", "_")
+    if normalized not in ABILITY_NAMES:
+        raise ValueError(f"unsupported ability: {ability}")
+    return ability_modifier(effective_ability_scores(sheet)[normalized])
 
 
 def derive_character_sheet(

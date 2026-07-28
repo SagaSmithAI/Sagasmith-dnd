@@ -5,6 +5,53 @@ from __future__ import annotations
 from typing import Any, Literal
 
 
+def resize_bounded_resource(
+    resource: dict[str, Any],
+    *,
+    maximum: int,
+    unlimited: bool = False,
+    previous_maximum: int | None = None,
+) -> dict[str, Any]:
+    """Resize one counter while preserving its already-spent capacity."""
+
+    if isinstance(maximum, bool) or not isinstance(maximum, int) or maximum < 0:
+        raise ValueError("resource maximum must be a non-negative integer")
+    if previous_maximum is not None and (
+        isinstance(previous_maximum, bool)
+        or not isinstance(previous_maximum, int)
+        or previous_maximum < 0
+    ):
+        raise ValueError("previous resource maximum must be a non-negative integer")
+    if not isinstance(unlimited, bool):
+        raise ValueError("resource unlimited must be a boolean")
+    prior_maximum = (
+        previous_maximum
+        if previous_maximum is not None
+        else int(resource.get("max", 0) or 0)
+    )
+    prior_value = int(resource.get("value", prior_maximum) or 0)
+    if prior_value < 0 or prior_value > prior_maximum:
+        raise ValueError("resource bounds are invalid")
+    if unlimited:
+        next_value = 0
+        maximum = 0
+    else:
+        next_value = min(
+            maximum,
+            prior_value + max(0, maximum - prior_maximum),
+        )
+    resource["value"] = next_value
+    resource["max"] = maximum
+    resource["unlimited"] = unlimited
+    return {
+        "before": prior_value,
+        "after": next_value,
+        "old_max": prior_maximum,
+        "new_max": maximum,
+        "unlimited": unlimited,
+    }
+
+
 def mutate_bounded_resource(
     resource: dict[str, Any],
     *,

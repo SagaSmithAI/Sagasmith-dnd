@@ -6,6 +6,7 @@ import json
 import re
 
 from sagasmith_core.modules import GenericModuleProfile, SceneBoundary
+from sagasmith_core.text import ascii_slug, compact_ascii_key
 
 _ROOM_CODE_PATTERN = (
     r"(?:(?=[A-Z]{1,3}\s*[0-9IlO]{1,3}[A-Za-z]?\s*[.．。:：-])"
@@ -291,7 +292,7 @@ def _looks_like_scene_heading(title: str) -> bool:
 def _is_diagram_overview(title: str) -> bool:
     """Recognize authored flow-chart/index sections that are not spatial scenes."""
 
-    compact = re.sub(r"[^a-z0-9]+", "", title.casefold())
+    compact = compact_ascii_key(title)
     return compact in {
         "adventureflowchart",
         "encounterchainsbyseason",
@@ -517,7 +518,7 @@ def _location_key(title: str, ordinal: int) -> str:
     matched = _ROOM_CODE.match(title.strip())
     if matched is not None:
         source = f"{_normalized_room_code(matched.group('code'))} {title.strip()[matched.end():]}"
-    folded = re.sub(r"[^a-z0-9]+", "-", source.casefold()).strip("-")
+    folded = ascii_slug(source)
     return folded[:72] or f"location-{ordinal + 1}"
 
 

@@ -23,6 +23,7 @@ from sagasmith_dnd.character_schema import (
     validate_character_sheet,
 )
 from sagasmith_dnd.conditions import (
+    DEATH_SAVE_SETTLED_CONDITIONS,
     INCAPACITATING_STATE_IDS,
     apply_condition_change,
     apply_effect_conditions,
@@ -42,6 +43,7 @@ from sagasmith_dnd.engine import (
     roll_d20,
 )
 from sagasmith_dnd.hit_points import apply_basic_healing_to_sheet
+from sagasmith_dnd.resources import mutate_bounded_resource
 from sagasmith_dnd.rule_engine import (
     ResolutionContext,
     apply_rule_event,
@@ -53,6 +55,64 @@ from sagasmith_dnd.spell_resolution import (
     SPELL_RESOLUTION_MECHANIC_ID,
     scaled_roll_expression,
 )
+from sagasmith_dnd.vocabulary import WEAPON_HAND_SLOTS
+
+ABILITY_CHECK_KINDS = frozenset({"ability", "check"})
+SAVING_THROW_KINDS = frozenset({"save", "death_save"})
+ACTOR_CHECK_KINDS = ABILITY_CHECK_KINDS | SAVING_THROW_KINDS
+DAMAGE_REDUCTION_OUTCOMES = frozenset({"full", "half", "none"})
+
+
+def damage_amount_after_reduction(amount: int, outcome: str) -> int:
+    """Apply the canonical full/half/none damage result, rounding half down."""
+
+    if not isinstance(amount, int) or isinstance(amount, bool) or amount < 0:
+        raise CombatEngineError("damage amount must be a non-negative integer")
+    normalized = str(outcome).strip().casefold()
+    if normalized not in DAMAGE_REDUCTION_OUTCOMES:
+        raise CombatEngineError("damage outcome must be full, half, or none")
+    if normalized == "none":
+        return 0
+    if normalized == "half":
+        return amount // 2
+    return amount
+
+
+def d20_exhaustion_adjustment(
+    *,
+    ruleset: str,
+    exhaustion: int,
+    kind: str,
+    bonus: int = 0,
+    disadvantage: bool = False,
+) -> dict[str, Any]:
+    """Apply the edition-specific exhaustion rule to one d20 roll."""
+
+    normalized_ruleset = _normalize_ruleset(ruleset)
+    if isinstance(exhaustion, bool) or not isinstance(exhaustion, int) or exhaustion < 0:
+        raise CombatEngineError("exhaustion must be a non-negative integer")
+    if kind not in {"ability", "attack", "check", "death_save", "initiative", "save"}:
+        raise CombatEngineError("unsupported exhaustion roll kind")
+    adjusted_bonus = int(bonus)
+    adjusted_disadvantage = bool(disadvantage)
+    exhaustion_disadvantage = False
+    if normalized_ruleset == "2024":
+        adjusted_bonus -= 2 * exhaustion
+    elif (
+        kind in ABILITY_CHECK_KINDS | {"initiative"}
+        and exhaustion >= 1
+        or kind in {"attack", "death_save", "save"}
+        and exhaustion >= 3
+    ):
+        adjusted_disadvantage = True
+        exhaustion_disadvantage = True
+    return {
+        "bonus": adjusted_bonus,
+        "disadvantage": adjusted_disadvantage,
+        "exhaustion_disadvantage": exhaustion_disadvantage,
+        "applied": adjusted_bonus != int(bonus)
+        or adjusted_disadvantage != bool(disadvantage),
+    }
 
 
 class CombatEngineError(ValueError):
@@ -352,8 +412,19 @@ def start_encounter(
             initiative_bonus += jack_of_all_trades_bonus
             rule_boundary_ids.add(_JACK_OF_ALL_TRADES_BOUNDARY_ID)
             participant_boundary_ids.append(_JACK_OF_ALL_TRADES_BOUNDARY_ID)
-        if normalized_ruleset == "2024":
-            initiative_bonus -= 2 * exhaustion
+        surprised = bool(actor.get("surprised", False))
+        initiative_disadvantage = bool(actor.get("initiative_disadvantage", False)) or (
+            surprised and normalized_ruleset == "2024"
+        )
+        exhaustion_adjustment = d20_exhaustion_adjustment(
+            ruleset=normalized_ruleset,
+            exhaustion=exhaustion,
+            kind="initiative",
+            bonus=initiative_bonus,
+            disadvantage=initiative_disadvantage,
+        )
+        initiative_bonus = int(exhaustion_adjustment["bonus"])
+        initiative_disadvantage = bool(exhaustion_adjustment["disadvantage"])
         speed = int(derived.get("speed", {}).get("walk", 30) or 30)
         if normalized_ruleset == "2024":
             speed = max(0, speed - 5 * exhaustion)
@@ -366,13 +437,10 @@ def start_encounter(
         supplied = actor.get("initiative")
         die = None
         if supplied is None:
-            surprised = bool(actor.get("surprised", False))
             die = roll_d20(
                 advantage=bool(actor.get("initiative_advantage", False))
                 or ("invisible" in conditions and normalized_ruleset == "2024"),
-                disadvantage=bool(actor.get("initiative_disadvantage", False))
-                or (surprised and normalized_ruleset == "2024")
-                or (exhaustion >= 1 and normalized_ruleset == "2014"),
+                disadvantage=initiative_disadvantage,
                 reroll_ones=_has_halfling_lucky(sheet),
                 rng=rng,
             )
@@ -1087,11 +1155,19 @@ def preflight_attack(
         if encounter is not None
         else _normalize_ruleset(actor_sheet(attacker).get("edition"))
     )
-    if ruleset == "2024":
-        attack_bonus -= 2 * attacker_exhaustion
-    elif attacker_exhaustion >= 3:
+    exhaustion_adjustment = d20_exhaustion_adjustment(
+        ruleset=ruleset,
+        exhaustion=attacker_exhaustion,
+        kind="attack",
+        bonus=attack_bonus,
+        disadvantage=bool(context.get("disadvantage", False)),
+    )
+    attack_bonus = int(exhaustion_adjustment["bonus"])
+    if exhaustion_adjustment["exhaustion_disadvantage"]:
         context["disadvantage"] = True
-        context.setdefault("disadvantage_sources", []).append("exhaustion")
+        sources = context.setdefault("disadvantage_sources", [])
+        if "exhaustion" not in sources:
+            sources.append("exhaustion")
     target_conditions = _condition_set(
         target.get("conditions") or actor_sheet(target).get("conditions")
     )
@@ -2070,7 +2146,7 @@ def _dueling_damage_bonus(
         ),
         None,
     )
-    if selected is None or selected.get("equipped_slot") not in {"main_hand", "off_hand"}:
+    if selected is None or selected.get("equipped_slot") not in WEAPON_HAND_SLOTS:
         return 0
     other_weapons = [
         item
@@ -2078,7 +2154,7 @@ def _dueling_damage_bonus(
         if item.get("id") != weapon_id
         and item.get("kind") == "weapon"
         and item.get("equipped")
-        and item.get("equipped_slot") in {"main_hand", "off_hand"}
+        and item.get("equipped_slot") in WEAPON_HAND_SLOTS
     ]
     return 0 if other_weapons else 2
 
@@ -2466,12 +2542,11 @@ def _apply_adjusted_damage(
     if relentless_endurance_triggered:
         hp["value"] = 1
         uses = relentless_endurance_feature["uses"]
-        before_uses = int(uses["value"])
-        uses["value"] = before_uses - 1
+        mutation = mutate_bounded_resource(uses, amount=1, direction="spend")
         relentless_endurance_use = {
             "feature_id": str(relentless_endurance_feature["id"]),
-            "before_uses": before_uses,
-            "after_uses": int(uses["value"]),
+            "before_uses": mutation["before"],
+            "after_uses": mutation["after"],
             "recovers_on": "long_rest",
         }
     elif became_zero:
@@ -2711,6 +2786,7 @@ def resolve_death_save_to_sheet(
     advantage: bool = False,
     disadvantage: bool = False,
     bonus: int = 0,
+    ruleset: str | None = None,
     rng: Any = None,
 ) -> dict[str, Any]:
     """Resolve and persist one death save, including natural-20 recovery."""
@@ -2724,13 +2800,20 @@ def resolve_death_save_to_sheet(
         raise CombatEngineError("dead actors cannot make death saves")
     if "stable" in conditions:
         raise CombatEngineError("stable actors do not make additional death saves")
+    exhaustion_adjustment = d20_exhaustion_adjustment(
+        ruleset=str(ruleset or value.get("edition") or DEFAULT_CHARACTER_EDITION),
+        exhaustion=int(combat.get("exhaustion", 0) or 0),
+        kind="death_save",
+        bonus=bonus,
+        disadvantage=disadvantage,
+    )
     death = dict(combat.setdefault("death_saves", {"successes": 0, "failures": 0}))
     result = resolve_death_save(
         successes=int(death.get("successes", 0)),
         failures=int(death.get("failures", 0)),
         advantage=advantage,
-        disadvantage=disadvantage,
-        bonus=bonus,
+        disadvantage=bool(exhaustion_adjustment["disadvantage"]),
+        bonus=int(exhaustion_adjustment["bonus"]),
         reroll_ones=_has_halfling_lucky(value),
         rng=rng,
     )
@@ -4076,6 +4159,8 @@ def resolve_actor_check(
     rules: ResolutionContext | None = None,
     rng: Any = None,
 ) -> dict[str, Any]:
+    if kind not in ACTOR_CHECK_KINDS:
+        raise CombatEngineError("unsupported check kind")
     sheet = actor_sheet(actor)
     derived = actor_derived(actor)
     normalized_ruleset = _normalize_ruleset(ruleset or sheet.get("edition"))
@@ -4102,7 +4187,7 @@ def resolve_actor_check(
     skill_proficiency = str(skill.get("proficiency") or "none")
     jack_of_all_trades_bonus = 0
     if (
-        kind in {"ability", "check"}
+        kind in ABILITY_CHECK_KINDS
         and _jack_of_all_trades_bonus(sheet)
         and (
             (normalized_ability in SKILL_ABILITIES and skill_proficiency == "none")
@@ -4112,7 +4197,7 @@ def resolve_actor_check(
         jack_of_all_trades_bonus = _jack_of_all_trades_bonus(sheet)
         roll_bonus += jack_of_all_trades_bonus
     armor_stealth_disadvantage = (
-        kind in {"ability", "check"}
+        kind in ABILITY_CHECK_KINDS
         and normalized_ability == "stealth"
         and bool(derived.get("stealth_disadvantage", False))
     )
@@ -4136,8 +4221,6 @@ def resolve_actor_check(
 
     abilities = dict(sheet.get("abilities") or {})
     ability_scores = effective_ability_scores(sheet)
-    if kind not in {"ability", "check", "save", "death_save", "attack"}:
-        raise CombatEngineError("unsupported check kind")
     if kind == "save" and _long_ability_name(ability) in {"strength", "dexterity"}:
         automatic = conditions & {"paralyzed", "petrified", "stunned", "unconscious"}
         if automatic:
@@ -4155,18 +4238,21 @@ def resolve_actor_check(
                     "reason": sorted(automatic)[0],
                 }
             )
-    if kind in {"ability", "check"} and "poisoned" in conditions:
+    if kind in ABILITY_CHECK_KINDS and "poisoned" in conditions:
         disadvantage = True
     if kind == "save" and _long_ability_name(ability) == "dexterity" and "restrained" in conditions:
         disadvantage = True
-    if normalized_ruleset == "2024":
-        roll_bonus -= 2 * exhaustion
-    elif (kind in {"ability", "check"} and exhaustion >= 1) or (
-        kind in {"save", "death_save"} and exhaustion >= 3
-    ):
-        disadvantage = True
+    exhaustion_adjustment = d20_exhaustion_adjustment(
+        ruleset=normalized_ruleset,
+        exhaustion=exhaustion,
+        kind=kind,
+        bonus=roll_bonus,
+        disadvantage=disadvantage,
+    )
+    roll_bonus = int(exhaustion_adjustment["bonus"])
+    disadvantage = bool(exhaustion_adjustment["disadvantage"])
     derived_skills = dict(derived.get("skills") or {})
-    if kind in {"ability", "check"} and normalized_ability in derived_skills:
+    if kind in ABILITY_CHECK_KINDS and normalized_ability in derived_skills:
         score_ability = SKILL_ABILITIES[normalized_ability]
         entry = dict(sheet.get("abilities", {}).get(score_ability) or {})
         score = int(ability_scores.get(score_ability, entry.get("score", 10)))
@@ -4815,7 +4901,7 @@ def end_turn(encounter: dict[str, Any], *, actor_id_value: str | None = None) ->
     if (
         current.get("death_saves", False)
         and "unconscious" in current_conditions
-        and not current_conditions & {"dead", "stable"}
+        and not current_conditions & DEATH_SAVE_SETTLED_CONDITIONS
         and not current_flags.get("death_save_used")
     ):
         raise CombatEngineError("a required death save must be resolved before ending the turn")

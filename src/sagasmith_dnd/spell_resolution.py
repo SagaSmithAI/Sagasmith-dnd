@@ -6,6 +6,8 @@ import re
 from copy import deepcopy
 from typing import Any
 
+from sagasmith_core.text import ascii_slug
+
 from sagasmith_dnd.abilities import ABILITY_IDS
 from sagasmith_dnd.vocabulary import ATTACK_MODES
 
@@ -349,21 +351,32 @@ def normalize_spell_resolution(value: Any, field: str = "spell.resolution") -> d
 
 
 def scaled_roll_expression(
-    roll: dict[str, Any], *, cast_level: int, actor_level: int
+    roll: dict[str, Any],
+    *,
+    cast_level: int,
+    actor_level: int,
+    flat_modifier: int = 0,
 ) -> str:
     """Build one trusted dice expression from normalized slot/cantrip scaling."""
+    if isinstance(flat_modifier, bool) or not isinstance(flat_modifier, int):
+        raise ValueError("flat_modifier must be an integer")
     cantrip = dict(roll.get("cantrip_dice") or {})
     if cantrip:
         eligible = [int(level) for level in cantrip if int(level) <= int(actor_level)]
         level = max(eligible or [1])
-        return str(cantrip[str(level)])
-    expressions = [str(roll["base_dice"])]
-    per_slot = str(roll.get("per_slot_dice") or "")
-    base_level = int(roll.get("slot_base_level", 0) or 0)
-    if per_slot and int(cast_level) > base_level:
-        count, sides = _DICE.fullmatch(per_slot).groups()  # type: ignore[union-attr]
-        expressions.append(f"{int(count) * (int(cast_level) - base_level)}d{sides}")
-    return " + ".join(expressions)
+        expression = str(cantrip[str(level)])
+    else:
+        expressions = [str(roll["base_dice"])]
+        per_slot = str(roll.get("per_slot_dice") or "")
+        base_level = int(roll.get("slot_base_level", 0) or 0)
+        if per_slot and int(cast_level) > base_level:
+            count, sides = _DICE.fullmatch(per_slot).groups()  # type: ignore[union-attr]
+            expressions.append(f"{int(count) * (int(cast_level) - base_level)}d{sides}")
+        expression = " + ".join(expressions)
+    if flat_modifier:
+        operator = "+" if flat_modifier > 0 else "-"
+        expression = f"{expression} {operator} {abs(flat_modifier)}"
+    return expression
 
 
 def spell_attack_count(resolution: dict[str, Any], *, cast_level: int) -> int:
@@ -377,7 +390,7 @@ def spell_attack_count(resolution: dict[str, Any], *, cast_level: int) -> int:
 
 def known_spell_resolution(name: str) -> dict[str, Any] | None:
     """Return the reviewed executable subset for selected bundled SRD spells."""
-    key = re.sub(r"[^a-z0-9]+", "-", str(name).casefold()).strip("-")
+    key = ascii_slug(name)
     values: dict[str, dict[str, Any]] = {
         "healing-word": {
             "kind": "healing",

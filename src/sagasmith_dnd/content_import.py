@@ -7,6 +7,8 @@ import re
 from copy import deepcopy
 from typing import Any
 
+from sagasmith_core.text import ascii_slug
+
 from sagasmith_dnd.abilities import ABILITY_LABELS
 from sagasmith_dnd.spell_resolution import (
     SPELL_RESOLUTION_MECHANIC_ID,
@@ -995,7 +997,7 @@ def _maximum_page(left: Any, right: Any) -> int | None:
 
 
 def _artifact_id(pack_id: str, kind: str, name: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", name.casefold()).strip("-")
+    slug = ascii_slug(name)
     if not slug:
         slug = hashlib.sha256(name.encode("utf-8")).hexdigest()[:12]
     return f"{pack_id}.{kind}.{slug[:100]}"

@@ -8,6 +8,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable
 
+from sagasmith_core.text import ascii_slug
+
 from sagasmith_dnd.spell_resolution import (
     SPELL_RESOLUTION_MECHANIC_ID,
     known_spell_resolution,
@@ -1626,7 +1628,7 @@ def _leading_count(value: str) -> int:
 
 
 def _artifact(kind: str, name: str, path: Path, card: dict[str, Any]) -> dict[str, Any]:
-    slug = re.sub(r"[^a-z0-9]+", "-", name.casefold()).strip("-") or "entry"
+    slug = ascii_slug(name) or "entry"
     rel = path.as_posix().split("references-2014-en/", 1)[-1]
     if kind in {"feat", "feature", "activity"}:
         card.setdefault("activation", {"type": "passive"})
@@ -1666,7 +1668,7 @@ def _heading_or_stem(text: str, path: Path) -> str:
 
 
 def _name_key(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", value.casefold()).strip("-")
+    return ascii_slug(value)
 
 
 def _description(text: str) -> str:

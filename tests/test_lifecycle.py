@@ -14,12 +14,19 @@ from sagasmith_dnd.lifecycle import (
     expire_combat_bound_effects,
     initialize_source_state,
     knock_prone_outside_combat,
+    minimum_rest_minutes,
     record_rest_completion,
     recover_stable_creature,
     roll_rest_hit_dice,
     stand_outside_combat,
 )
 from sagasmith_dnd.rule_engine import resolution_context
+
+
+def test_rest_minimums_have_one_runtime_authority() -> None:
+    assert minimum_rest_minutes("short_rest") == 60
+    assert minimum_rest_minutes("long_rest") == 480
+    assert minimum_rest_minutes("long_rest", allows_trance=True) == 240
 
 
 def test_rest_completion_enforces_duration_and_daily_limit() -> None:
@@ -716,6 +723,34 @@ def test_short_rest_engine_rolls_hit_die_and_2024_long_rest_recovers_all() -> No
     assert short_rest["sheet"]["combat"]["hp"]["value"] == 8
     long_rest = apply_rest(short_rest["sheet"], rest_type="long_rest")
     assert long_rest["sheet"]["combat"]["hit_dice"]["d8"]["value"] == 3
+
+
+def test_2014_short_rest_healing_uses_the_effective_exhaustion_hp_maximum() -> None:
+    sheet = default_character_sheet()
+    sheet["edition"] = "2014"
+    sheet["combat"]["exhaustion"] = 4
+    sheet["combat"]["hp"] = {"value": 5, "max": 20, "temp": 0}
+    sheet["combat"]["hit_dice"] = {
+        "d8": {
+            "label": "d8",
+            "value": 1,
+            "max": 1,
+            "recovers_on": "long_rest",
+            "source_key": "fighter",
+        }
+    }
+
+    rested = apply_rest(
+        sheet,
+        rest_type="short_rest",
+        hit_dice_spends=[{"key": "d8", "count": 1}],
+        rng=_SequenceRng(8),
+    )
+
+    assert rested["hit_die_healing"] == 8
+    assert rested["hit_die_applied_healing"] == 5
+    assert rested["sheet"]["combat"]["hp"] == {"value": 10, "max": 20, "temp": 0}
+    assert rested["sheet"]["combat"]["hit_dice"]["d8"]["value"] == 0
 
 
 def test_song_of_rest_applies_once_per_eligible_creature() -> None:

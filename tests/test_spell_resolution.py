@@ -37,6 +37,15 @@ def test_reviewed_spell_resolutions_scale_without_free_form_formulas() -> None:
         )
         == "3d8"
     )
+    assert (
+        scaled_roll_expression(
+            {"base_dice": "1d4", "per_slot_dice": "1d4", "slot_base_level": 1},
+            cast_level=3,
+            actor_level=5,
+            flat_modifier=3,
+        )
+        == "1d4 + 2d4 + 3"
+    )
 
 
 def test_spell_resolution_rejects_unreviewed_fields_and_invalid_dice() -> None:

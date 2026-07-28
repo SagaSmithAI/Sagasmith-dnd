@@ -17,6 +17,7 @@ TICK_SECONDS = 6
 TICKS_PER_MINUTE = 10
 TICKS_PER_HOUR = 600
 TICKS_PER_DAY = 14_400
+CALENDAR_MINUTE_FIELDS = ("day", "hour", "minute", "elapsed_minutes")
 
 _PERIOD_TICKS = {
     "round": 1,
@@ -24,6 +25,8 @@ _PERIOD_TICKS = {
     "hour": TICKS_PER_HOUR,
     "day": TICKS_PER_DAY,
 }
+FIXED_GAME_TIME_PERIODS = frozenset(_PERIOD_TICKS)
+NARRATIVE_GAME_TIME_PERIODS = FIXED_GAME_TIME_PERIODS - {"round"}
 
 
 def _integer(value: Any, field: str, *, minimum: int = 0) -> int:
@@ -140,6 +143,89 @@ def _calendar_ticks(
     )
 
 
+def calendar_minute_point(
+    *,
+    day: int,
+    hour: int = 0,
+    minute: int = 0,
+) -> dict[str, int]:
+    """Return one canonical minute-resolution calendar point."""
+
+    elapsed_ticks = _calendar_ticks(day=day, hour=hour, minute=minute)
+    return calendar_minute_point_from_elapsed(elapsed_ticks // TICKS_PER_MINUTE)
+
+
+def calendar_minute_point_from_elapsed(elapsed_minutes: int) -> dict[str, int]:
+    """Project one canonical calendar point from elapsed whole minutes."""
+
+    elapsed_minutes = _integer(elapsed_minutes, "elapsed_minutes")
+    return {
+        "day": elapsed_minutes // 1440 + 1,
+        "hour": (elapsed_minutes % 1440) // 60,
+        "minute": elapsed_minutes % 60,
+        "elapsed_minutes": elapsed_minutes,
+    }
+
+
+def advance_calendar_minutes_from_elapsed(
+    current_elapsed_minutes: int,
+    elapsed_minutes: int,
+) -> dict[str, int]:
+    """Advance an elapsed-minute position and return its calendar projection."""
+
+    current = _integer(current_elapsed_minutes, "current_elapsed_minutes")
+    delta = _integer(elapsed_minutes, "elapsed_minutes", minimum=1)
+    return calendar_minute_point_from_elapsed(current + delta)
+
+
+def validate_calendar_minute_point(
+    value: Any,
+    *,
+    field: str = "world time",
+) -> dict[str, int]:
+    """Validate the legacy/public minute-resolution calendar projection."""
+
+    if not isinstance(value, dict):
+        raise ValueError(f"{field} must be an object")
+    required = set(CALENDAR_MINUTE_FIELDS)
+    unknown = sorted(set(value) - required)
+    missing = sorted(required - set(value))
+    if unknown or missing:
+        details = []
+        if missing:
+            details.append("missing " + ", ".join(missing))
+        if unknown:
+            details.append("unsupported " + ", ".join(unknown))
+        raise ValueError(f"{field} fields are invalid: " + "; ".join(details))
+    expected = calendar_minute_point(
+        day=value.get("day"),
+        hour=value.get("hour"),
+        minute=value.get("minute"),
+    )
+    elapsed_minutes = _integer(
+        value.get("elapsed_minutes"),
+        f"{field}.elapsed_minutes",
+    )
+    if elapsed_minutes != expected["elapsed_minutes"]:
+        raise ValueError(f"{field}.elapsed_minutes must match day/hour/minute")
+    return expected
+
+
+def advance_calendar_minute_point(
+    value: Any,
+    elapsed_minutes: int,
+    *,
+    field: str = "world time",
+) -> dict[str, int]:
+    """Advance a minute-resolution calendar point without a second clock."""
+
+    before = validate_calendar_minute_point(value, field=field)
+    return advance_calendar_minutes_from_elapsed(
+        before["elapsed_minutes"],
+        elapsed_minutes,
+    )
+
+
 def project_world_time(
     game_time: Any,
     *,
@@ -157,15 +243,13 @@ def project_world_time(
     if calendar_ticks < 0:
         raise ValueError("campaign.state.world_time cannot project before day 1")
     whole_minutes, round_remainder = divmod(calendar_ticks, TICKS_PER_MINUTE)
+    minute_point = calendar_minute_point_from_elapsed(whole_minutes)
     return {
         "schema_version": WORLD_TIME_SCHEMA_VERSION,
         "tick_seconds": TICK_SECONDS,
         "calendar_offset_ticks": offset,
-        "day": whole_minutes // 1440 + 1,
-        "hour": (whole_minutes % 1440) // 60,
-        "minute": whole_minutes % 60,
+        **minute_point,
         "second": round_remainder * TICK_SECONDS,
-        "elapsed_minutes": whole_minutes,
         "round_remainder": round_remainder,
         "label": _label(label),
     }
@@ -293,7 +377,7 @@ def game_time_ticks(period: str, count: int = 1) -> int:
     """Convert one supported elapsed-time unit into canonical ticks."""
 
     normalized_period = str(period).strip().lower().replace("-", "_")
-    if normalized_period not in _PERIOD_TICKS:
+    if normalized_period not in FIXED_GAME_TIME_PERIODS:
         raise ValueError("game time period must be round, minute, hour, or day")
     normalized_count = _integer(count, "game time count", minimum=1)
     return _PERIOD_TICKS[normalized_period] * normalized_count

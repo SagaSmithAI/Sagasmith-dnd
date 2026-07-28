@@ -29,6 +29,8 @@ STANDARD_BINARY_CONDITION_IDS = frozenset(
 INCAPACITATING_STATE_IDS = frozenset(
     {"dead", "incapacitated", "paralyzed", "petrified", "stunned", "unconscious"}
 )
+LIVING_INCAPACITATING_STATE_IDS = INCAPACITATING_STATE_IDS - {"dead"}
+DEATH_SAVE_SETTLED_CONDITIONS = frozenset({"dead", "stable"})
 
 
 def condition_ids(value: Any) -> set[str]:

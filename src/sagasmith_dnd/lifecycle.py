@@ -7,7 +7,11 @@ from dataclasses import asdict
 from typing import Any
 
 from sagasmith_dnd.activities import ACTIVITY_CONTENT_SECTIONS
-from sagasmith_dnd.character_schema import effective_hit_point_maximum, set_exhaustion_level
+from sagasmith_dnd.character_schema import (
+    effective_ability_modifier,
+    effective_hit_point_maximum,
+    set_exhaustion_level,
+)
 from sagasmith_dnd.combat_engine import CombatEngineError
 from sagasmith_dnd.conditions import (
     apply_condition_change,
@@ -16,7 +20,7 @@ from sagasmith_dnd.conditions import (
     reconcile_ended_effect_conditions,
 )
 from sagasmith_dnd.editions import normalize_dnd_edition
-from sagasmith_dnd.engine import ability_modifier, roll
+from sagasmith_dnd.engine import roll
 from sagasmith_dnd.game_time import (
     TICKS_PER_DAY,
     TICKS_PER_HOUR,
@@ -25,8 +29,18 @@ from sagasmith_dnd.game_time import (
 from sagasmith_dnd.hit_points import apply_basic_healing_to_sheet
 from sagasmith_dnd.resources import mutate_bounded_resource
 from sagasmith_dnd.rule_engine import ResolutionContext, apply_rule_event, core_receipts
+from sagasmith_dnd.vocabulary import REST_TYPES
 
-REST_MINIMUM_MINUTES = {"short_rest": 60, "long_rest": 480}
+SHORT_REST_MINIMUM_MINUTES = 60
+LONG_REST_MINIMUM_MINUTES = 480
+TRANCE_LONG_REST_MINUTES = 240
+LONG_REST_SLEEP_MINUTES = 360
+LONG_REST_LIGHT_ACTIVITY_MAX_MINUTES = 120
+LONG_REST_INTERRUPTION_MINUTES = 60
+REST_MINIMUM_MINUTES = {
+    "short_rest": SHORT_REST_MINIMUM_MINUTES,
+    "long_rest": LONG_REST_MINIMUM_MINUTES,
+}
 REST_SCHEDULE_FIELDS = {
     "sleep_minutes",
     "light_activity_minutes",
@@ -43,6 +57,17 @@ def _sheet_edition(sheet: dict[str, Any]) -> str:
         return normalize_dnd_edition(sheet.get("edition"))
     except ValueError as exc:
         raise CombatEngineError(str(exc)) from exc
+
+
+def minimum_rest_minutes(rest_type: str, *, allows_trance: bool = False) -> int:
+    """Return the canonical minimum duration for one rest contract."""
+
+    normalized = str(rest_type).strip().lower().replace("-", "_")
+    if normalized not in REST_TYPES:
+        raise CombatEngineError("rest_type must be short_rest or long_rest")
+    if normalized == "long_rest" and allows_trance:
+        return TRANCE_LONG_REST_MINUTES
+    return REST_MINIMUM_MINUTES[normalized]
 
 
 def _reconcile_ended_effects(sheet: dict[str, Any], ended_effect_ids: list[str]) -> None:
@@ -76,12 +101,9 @@ def validate_rest_schedule(
 ) -> dict[str, int]:
     """Require a complete rest schedule matching the 2014 rest definition."""
     normalized_type = str(rest_type).strip().lower().replace("-", "_")
-    if normalized_type not in REST_MINIMUM_MINUTES:
-        raise CombatEngineError("rest_type must be short_rest or long_rest")
-    minimum_minutes = (
-        240
-        if normalized_type == "long_rest" and allows_trance
-        else REST_MINIMUM_MINUTES[normalized_type]
+    minimum_minutes = minimum_rest_minutes(
+        normalized_type,
+        allows_trance=allows_trance,
     )
     if (
         isinstance(duration_minutes, bool)
@@ -113,16 +135,18 @@ def validate_rest_schedule(
                 "a short rest permits no activity more strenuous than light activity"
             )
     else:
-        trance_satisfies_sleep = allows_trance and normalized["trance_minutes"] >= 240
-        if not trance_satisfies_sleep and normalized["sleep_minutes"] < 360:
+        trance_satisfies_sleep = (
+            allows_trance and normalized["trance_minutes"] >= TRANCE_LONG_REST_MINUTES
+        )
+        if not trance_satisfies_sleep and normalized["sleep_minutes"] < LONG_REST_SLEEP_MINUTES:
             raise CombatEngineError(
                 "a long rest requires at least 6 hours of sleep or a source-granted 4-hour trance"
             )
-        if not trance_satisfies_sleep and duration_minutes < 480:
+        if not trance_satisfies_sleep and duration_minutes < LONG_REST_MINIMUM_MINUTES:
             raise CombatEngineError("a long rest requires at least 8 hours")
-        if normalized["light_activity_minutes"] > 120:
+        if normalized["light_activity_minutes"] > LONG_REST_LIGHT_ACTIVITY_MAX_MINUTES:
             raise CombatEngineError("a long rest permits no more than 2 hours of light activity")
-        if normalized["strenuous_activity_minutes"] >= 60:
+        if normalized["strenuous_activity_minutes"] >= LONG_REST_INTERRUPTION_MINUTES:
             raise CombatEngineError("at least 1 hour of strenuous activity interrupts a long rest")
     return normalized
 
@@ -139,8 +163,7 @@ def record_rest_completion(
 ) -> dict[str, Any]:
     """Validate game-time rest timing and preserve canonical tick positions."""
     normalized = str(rest_type).strip().lower().replace("-", "_")
-    if normalized not in REST_MINIMUM_MINUTES:
-        raise CombatEngineError("rest_type must be short_rest or long_rest")
+    minimum_rest_minutes(normalized)
     using_ticks = started_elapsed_ticks is not None or completed_elapsed_ticks is not None
     using_legacy_minutes = (
         started_elapsed_minutes is not None or completed_elapsed_minutes is not None
@@ -162,8 +185,9 @@ def record_rest_completion(
     if started < 0 or completed < started:
         raise CombatEngineError("rest clock bounds are invalid")
     allows_trance = allows_trance_rest(sheet)
-    minimum_minutes = (
-        240 if normalized == "long_rest" and allows_trance else REST_MINIMUM_MINUTES[normalized]
+    minimum_minutes = minimum_rest_minutes(
+        normalized,
+        allows_trance=allows_trance,
     )
     duration_ticks = completed - started
     if duration_ticks < minimum_minutes * TICKS_PER_MINUTE:
@@ -647,7 +671,7 @@ def apply_rest(
 ) -> dict[str, Any]:
     """Settle a short or long rest without inventing player-choice allocations."""
     rest_type = str(rest_type).strip().lower().replace("-", "_")
-    if rest_type not in {"short_rest", "long_rest"}:
+    if rest_type not in REST_TYPES:
         raise CombatEngineError("rest_type must be short_rest or long_rest")
     if rest_type == "long_rest" and hit_dice_spends:
         raise CombatEngineError("hit dice can be spent only during a short rest")
@@ -727,25 +751,29 @@ def apply_rest(
             key = str(spend["key"])
             resource = hit_dice.get(key)
             roll_value = int(spend["roll"])
-            resource["value"] = int(resource["value"]) - 1
-            healing = roll_value + _constitution_modifier(value)
+            mutate_bounded_resource(resource, amount=1, direction="spend")
+            healing = roll_value + effective_ability_modifier(value, "constitution")
             hit_die_healing += max(1 if edition == "2024" else 0, healing)
         if hit_die_healing:
-            hp_before_hit_dice = int(hp.get("value", 0) or 0)
-            hp["value"] = min(int(hp.get("max", 0) or 0), hp_before_hit_dice + hit_die_healing)
-            hit_die_applied_healing = int(hp["value"]) - hp_before_hit_dice
+            healed = apply_basic_healing_to_sheet(value, amount=hit_die_healing)
+            value = healed["sheet"]
+            combat = value["combat"]
+            hp = dict(combat["hp"])
+            hit_die_applied_healing = int(healed["amount"])
         if hit_die_applied_healing > 0 and song_of_rest_die_sides is not None:
             song_roll = asdict(roll(f"1d{song_of_rest_die_sides}", rng=rng))
-            hp_before_song = int(hp.get("value", 0) or 0)
-            hp["value"] = min(
-                int(hp.get("max", 0) or 0),
-                hp_before_song + int(song_roll["total"]),
+            healed = apply_basic_healing_to_sheet(
+                value,
+                amount=int(song_roll["total"]),
             )
+            value = healed["sheet"]
+            combat = value["combat"]
+            hp = dict(combat["hp"])
             song_of_rest_result = {
                 "die": f"1d{song_of_rest_die_sides}",
                 "roll": song_roll,
                 "rolled_healing": int(song_roll["total"]),
-                "applied_healing": int(hp["value"]) - hp_before_song,
+                "applied_healing": int(healed["amount"]),
             }
         if arcane_recovery:
             arcane_recovery_result = apply_arcane_recovery_choice(
@@ -1356,11 +1384,6 @@ def roll_rest_hit_dice(
             resolved.append({"key": key, "roll": int(rolled["total"])})
             audits.append({"key": key, **rolled})
     return {"spends": resolved, "rolls": audits}
-
-
-def _constitution_modifier(sheet: dict[str, Any]) -> int:
-    score = int(sheet.get("abilities", {}).get("constitution", {}).get("score", 10) or 10)
-    return ability_modifier(score)
 
 
 def _hit_die_sides(key: str, resource: dict[str, Any]) -> int:
