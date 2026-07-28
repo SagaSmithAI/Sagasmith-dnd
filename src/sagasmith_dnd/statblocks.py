@@ -558,7 +558,11 @@ def _parse_multiattack(description: str, items: list[dict[str, Any]]) -> list[di
     return options
 
 
-def _parse_spellcasting(description: str) -> dict[str, Any] | None:
+def _parse_spellcasting(
+    description: str,
+    *,
+    innate: bool = False,
+) -> dict[str, Any] | None:
     ability_match = re.search(
         r"(?i)(?:spellcasting ability is\s+"
         r"(?P<ability_after>Strength|Dexterity|Constitution|Intelligence|Wisdom|Charisma)"
@@ -573,8 +577,15 @@ def _parse_spellcasting(description: str) -> dict[str, Any] | None:
     attack_match = re.search(r"(?i)([+\-]\d+)\s+to hit with spell attacks", description)
     headers = list(
         re.finditer(
-            r"(?i)(Cantrips?\s*\(at will\)|"
-            r"([1-9])(?:st|nd|rd|th) level\s*\((\d+) slots?\))\s*:\s*",
+            (
+                r"(?i)(At will|(?P<uses>[1-9]\d*)/day"
+                r"(?P<each>\s+each)?)\s*:\s*"
+                if innate
+                else (
+                    r"(?i)(Cantrips?\s*\(at will\)|"
+                    r"([1-9])(?:st|nd|rd|th) level\s*\((\d+) slots?\))\s*:\s*"
+                )
+            ),
             description,
         )
     )
@@ -603,13 +614,50 @@ def _parse_spellcasting(description: str) -> dict[str, Any] | None:
             for item in description[header.end() : end].split(",")
         ]
         names = [item for item in names if item]
-        level = int(header.group(2) or 0)
-        if level:
-            slots[str(level)] = int(header.group(3))
-        spells.extend(
-            {"name": name, "level": level, "at_will": level == 0}
-            for name in names
-        )
+        if innate:
+            at_will = header.group(1).casefold() == "at will"
+            uses_per_day = (
+                None if at_will else int(header.group("uses"))
+            )
+            for source_name in names:
+                canonical_name = re.sub(
+                    r"\s+\((?P<qualifier>[^()]*)\)\s*$",
+                    "",
+                    source_name,
+                ).strip()
+                qualifier_match = re.search(
+                    r"\s+\((?P<qualifier>[^()]*)\)\s*$",
+                    source_name,
+                )
+                spells.append(
+                    {
+                        "name": canonical_name,
+                        "source_name": source_name,
+                        "source_qualifier": (
+                            qualifier_match.group("qualifier").strip()
+                            if qualifier_match
+                            else ""
+                        ),
+                        "level": None,
+                        "at_will": at_will,
+                        "uses_per_day": uses_per_day,
+                        "uses_are_independent": bool(header.group("each"))
+                        or len(names) == 1,
+                        "usage_group": (
+                            ""
+                            if uses_per_day is None
+                            else f"daily-{uses_per_day}-{index + 1}"
+                        ),
+                    }
+                )
+        else:
+            level = int(header.group(2) or 0)
+            if level:
+                slots[str(level)] = int(header.group(3))
+            spells.extend(
+                {"name": name, "level": level, "at_will": level == 0}
+                for name in names
+            )
     return {
         "ability": (
             ability_match.group("ability_after") or ability_match.group("ability_before")
@@ -619,6 +667,14 @@ def _parse_spellcasting(description: str) -> dict[str, Any] | None:
         "class_lists": list(dict.fromkeys(class_lists)),
         "slots": slots,
         "spells": spells,
+        "innate": innate,
+        "no_material_components": bool(
+            innate
+            and re.search(
+                r"(?i)\brequir(?:e|ing)s?\s+no\s+material\s+components\b",
+                description,
+            )
+        ),
         "description": description,
     }
 
@@ -1263,16 +1319,33 @@ def parse_2014_statblock(
 
     entries = _entry_blocks(markdown)
     spellcasting: dict[str, Any] | None = None
-    spellcasting_entry: tuple[str, str, str] | None = next(
-        (
-            entry
-            for entry in entries
-            if entry[1].strip().casefold() == "spellcasting"
-        ),
-        None,
+    spellcasting_entries = [
+        entry
+        for entry in entries
+        if entry[1].strip().casefold() == "spellcasting"
+        or entry[1].strip().casefold().startswith("innate spellcasting")
+    ]
+    # A source can contain both ordinary and innate casting. The current sheet
+    # owns one canonical spellcasting ability, so prefer a complete ordinary
+    # slot progression and only use innate casting as the primary model when it
+    # is the sole parseable source. Any additional trait remains source-bound
+    # descriptive content instead of silently borrowing the wrong ability.
+    spellcasting_entries.sort(
+        key=lambda entry: entry[1].strip().casefold() != "spellcasting"
     )
-    if spellcasting_entry is not None:
-        spellcasting = _parse_spellcasting(spellcasting_entry[2])
+    spellcasting_entry: tuple[str, str, str] | None = None
+    for candidate in spellcasting_entries:
+        candidate_innate = (
+            candidate[1].strip().casefold().startswith("innate spellcasting")
+        )
+        parsed_spellcasting = _parse_spellcasting(
+            candidate[2],
+            innate=candidate_innate,
+        )
+        if parsed_spellcasting is not None:
+            spellcasting_entry = candidate
+            spellcasting = parsed_spellcasting
+            break
     if spellcasting is not None:
         sheet["spellcasting"]["ability"] = spellcasting["ability"]
         sheet["spellcasting"]["class_lists"] = list(spellcasting.get("class_lists") or [])
@@ -1293,7 +1366,11 @@ def parse_2014_statblock(
     )
     structured_spell_attack_markers = 0
     for section, entry_name, description in entries:
-        if entry_name.casefold() == "spellcasting" and spellcasting is not None:
+        if (
+            spellcasting_entry is not None
+            and entry_name == spellcasting_entry[1]
+            and spellcasting is not None
+        ):
             continue
         if is_multiattack_source_name(entry_name):
             multiattacks.append((entry_name, description))
@@ -1335,10 +1412,19 @@ def parse_2014_statblock(
 
     refs = list(dict.fromkeys(str(item) for item in rule_refs if str(item)))
     if spellcasting is not None:
+        feature_name = (
+            spellcasting_entry[1]
+            if spellcasting_entry is not None
+            else "Spellcasting"
+        )
         sheet["content"]["features"].append(
             {
-                "id": "spellcasting-passive",
-                "name": "Spellcasting",
+                "id": (
+                    f"{_slug(feature_name)}-passive"
+                    if spellcasting.get("innate")
+                    else "spellcasting-passive"
+                ),
+                "name": feature_name,
                 "source_key": source_key,
                 "description": spellcasting["description"],
                 "activation": {"type": "passive", "cost": 0},

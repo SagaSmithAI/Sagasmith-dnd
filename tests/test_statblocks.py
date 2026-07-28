@@ -1315,6 +1315,78 @@ Cantrips (at will): chill touch, mage hand
     assert parsed.warnings == ()
 
 
+def test_innate_spellcasting_preserves_at_will_and_per_day_resources() -> None:
+    parsed = parse_2014_statblock(
+        """# Yuan-ti Malison
+
+*Medium monstrosity (shapechanger, yuan-ti), neutral evil*
+
+**Armor Class** 12
+**Hit Points** 66 (12d8 + 12)
+**Speed** 30 ft.
+
+| STR | DEX | CON | INT | WIS | CHA |
+|---|---|---|---|---|---|
+| 16 (+3) | 14 (+2) | 13 (+1) | 14 (+2) | 12 (+1) | 16 (+3) |
+
+**Senses** darkvision 60 ft., passive Perception 11
+**Languages** Abyssal, Common, Draconic
+**Challenge** 3 (700 XP)
+
+***Innate Spellcasting (Yuan-ti Form Only).*** The yuan-ti's innate
+spellcasting ability is Charisma (spell save DC 13). The yuan-ti can innately
+cast the following spells, requiring no material components:
+
+At will: animal friendship (snakes only)
+
+3/day: suggestion
+
+## Actions
+
+***Bite.*** *Melee Weapon Attack:* +5 to hit, reach 5 ft., one target.
+*Hit:* 5 (1d4 + 3) piercing damage.
+""",
+        source_key="module-review:yuan-ti-malison",
+    )
+
+    assert parsed.spellcasting is not None
+    assert parsed.spellcasting["innate"] is True
+    assert parsed.spellcasting["no_material_components"] is True
+    assert parsed.spellcasting["slots"] == {}
+    assert parsed.spellcasting["spells"] == [
+        {
+            "name": "animal friendship",
+            "source_name": "animal friendship (snakes only)",
+            "source_qualifier": "snakes only",
+            "level": None,
+            "at_will": True,
+            "uses_per_day": None,
+            "uses_are_independent": True,
+            "usage_group": "",
+        },
+        {
+            "name": "suggestion",
+            "source_name": "suggestion",
+            "source_qualifier": "",
+            "level": None,
+            "at_will": False,
+            "uses_per_day": 3,
+            "uses_are_independent": True,
+            "usage_group": "daily-3-2",
+        },
+    ]
+    feature = next(
+        item
+        for item in parsed.sheet["content"]["features"]
+        if item["name"] == "Innate Spellcasting (Yuan-ti Form Only)"
+    )
+    assert "manual_ruling" not in feature["choices"]
+    assert not any(
+        warning.startswith("Innate Spellcasting")
+        for warning in parsed.warnings
+    )
+
+
 def test_statblock_weapon_preserves_additional_damage_and_on_hit_ruling() -> None:
     parsed = parse_2014_statblock(
         """# Master of Souls

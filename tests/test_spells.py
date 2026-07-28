@@ -55,6 +55,46 @@ def test_spell_slot_and_concentration_are_settled_from_card_data() -> None:
     assert result["concentration_started"] is True
 
 
+def test_innate_spell_cast_spends_per_spell_daily_use_and_starts_concentration() -> None:
+    sheet = default_character_sheet()
+    suggestion = _spell("suggestion", level=2, concentration=True)
+    suggestion["grant"] = {
+        "source_type": "statblock",
+        "source_key": "monster-manual:yuan-ti-malison",
+        "method": "innate",
+    }
+    suggestion["access"].update(
+        {
+            "known": True,
+            "prepared": True,
+            "always_prepared": True,
+            "at_will": False,
+        }
+    )
+    sheet["content"]["spells"] = [suggestion]
+    sheet["resources"]["innate_spell:suggestion"] = {
+        "label": "Suggestion (3/day)",
+        "value": 3,
+        "max": 3,
+        "recovers_on": "long_rest",
+        "source_key": "monster-manual:yuan-ti-malison",
+    }
+
+    result = consume_spell_cast(
+        validate_character_sheet(sheet),
+        spell_id="suggestion",
+    )
+
+    assert result["payment"] == {
+        "economy": "innate_spell",
+        "resource_key": "innate_spell:suggestion",
+        "level": 2,
+        "ritual": False,
+    }
+    assert result["sheet"]["resources"]["innate_spell:suggestion"]["value"] == 2
+    assert result["concentration_started"] is True
+
+
 def test_casting_a_spell_ends_only_the_exact_invisibility_spell() -> None:
     sheet = default_character_sheet()
     sheet["spellcasting"]["spell_slots"] = {

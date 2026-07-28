@@ -771,9 +771,37 @@ def consume_spell_cast(
             "level": level,
             "ritual": False,
         }
-    elif base_level > 0 and not ritual and not free_at_will:
+    else:
         grant_method = str(dict(spell.get("grant") or {}).get("method") or "")
-        if grant_method == "mystic_arcanum":
+        if grant_method == "innate" and ritual:
+            raise CombatEngineError("innate spellcasting cannot be declared as a ritual")
+        if grant_method == "innate" and not free_at_will:
+            if level != base_level:
+                raise CombatEngineError(
+                    "innate spellcasting must use the spell's recorded level"
+                )
+            resource_key = str(
+                dict(spell.get("custom_definition") or {}).get(
+                    "innate_resource_key"
+                )
+                or f"innate_spell:{spell_id}"
+            )
+            resource = value.setdefault("resources", {}).get(resource_key)
+            if not isinstance(resource, dict) or int(resource.get("value", 0) or 0) <= 0:
+                raise CombatEngineError("innate spell use is unavailable")
+            mutate_bounded_resource(resource, amount=1, direction="spend")
+            paid = {
+                "economy": "innate_spell",
+                "resource_key": resource_key,
+                "level": level,
+                "ritual": False,
+            }
+        elif (
+            base_level > 0
+            and not ritual
+            and not free_at_will
+            and grant_method == "mystic_arcanum"
+        ):
             if level != base_level:
                 raise CombatEngineError("Mystic Arcanum must be cast at its recorded spell level")
             resource_key = f"mystic_arcanum:{spell_id}"
@@ -787,7 +815,9 @@ def consume_spell_cast(
                 "level": level,
                 "ritual": False,
             }
-        elif spellcasting.get("casting_economy", "slots") == "spell_points":
+        elif base_level > 0 and not ritual and not free_at_will and spellcasting.get(
+            "casting_economy", "slots"
+        ) == "spell_points":
             points = spellcasting.get("spell_points")
             if not isinstance(points, dict):
                 raise CombatEngineError("spell-point casting is not configured")
@@ -796,7 +826,7 @@ def consume_spell_cast(
                 raise CombatEngineError("insufficient spell points")
             mutate_bounded_resource(points, amount=cost, direction="spend")
             paid = {"economy": "spell_points", "cost": cost, "level": level, "ritual": False}
-        else:
+        elif base_level > 0 and not ritual and not free_at_will:
             slots = spellcasting.get("spell_slots", {})
             slot = slots.get(str(level)) or slots.get(f"spell{level}")
             if isinstance(slot, dict) and int(slot.get("value", 0) or 0) > 0:
