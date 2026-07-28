@@ -1766,6 +1766,7 @@ def test_layout_ocr_recovers_one_statblock_without_image_reasoning() -> None:
             block("ADULT BLUE DRAGON", 590, 840, 900, 875),
             block("BLUE DRAGON WYRMLING", 590, 900, 900, 935),
             block("Medium dragon, lawful evil", 590, 935, 810, 960),
+            block("291", 80, 1420, 120, 1450),
         ],
     }
 
@@ -1780,6 +1781,7 @@ def test_layout_ocr_recovers_one_statblock_without_image_reasoning() -> None:
     assert recovered["evidence"]["text_only"] is True
     assert recovered["evidence"]["matching_heading_count"] == 2
     assert recovered["evidence"]["structural_heading_count"] == 1
+    assert recovered["evidence"]["excluded_page_furniture_count"] == 1
     assert recovered["critical_facts"] == {
         "identity": "Huge dragon, lawful evil",
         "armor_class": "19 (natural armor)",
@@ -1808,6 +1810,7 @@ def test_layout_ocr_recovers_one_statblock_without_image_reasoning() -> None:
     assert "| 25 (+7) | 10 (+0) | 23 (+6)" in recovered["normalized_content"]
     assert "half as much damage on" in recovered["normalized_content"]
     assert "darmage" not in recovered["normalized_content"]
+    assert "\n\n291" not in recovered["normalized_content"]
 
     next(
         item for item in layout["blocks"] if item["text"].startswith("Challenge ")

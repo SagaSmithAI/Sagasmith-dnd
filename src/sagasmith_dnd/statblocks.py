@@ -18,7 +18,7 @@ class StatblockImportError(ValueError):
     """Raised when required statblock facts cannot be recovered from the source text."""
 
 
-OCR_STATBLOCK_RECOVERY_VERSION = 1
+OCR_STATBLOCK_RECOVERY_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -2565,7 +2565,19 @@ def recover_2014_statblock_from_ocr(
         if _ocr_peer_heading(ordered[index], following):
             end = index
             break
-    scoped = ordered[heading_index:end]
+    unfiltered_scoped = ordered[heading_index:end]
+    page_furniture = [
+        block
+        for block in unfiltered_scoped
+        if block["y0"] >= float(height) * 0.9
+        and re.fullmatch(r"\d{1,4}", block["text"])
+    ]
+    page_furniture_ids = {block["index"] for block in page_furniture}
+    scoped = [
+        block
+        for block in unfiltered_scoped
+        if block["index"] not in page_furniture_ids
+    ]
     identity = next(
         (block for block in scoped[1:] if _OCR_IDENTITY_RE.fullmatch(block["text"])),
         None,
@@ -2738,6 +2750,7 @@ def recover_2014_statblock_from_ocr(
             "structural_heading_count": len(structural_headings),
             "minimum_core_confidence": min(block["confidence"] for block in critical),
             "block_count": len(scoped),
+            "excluded_page_furniture_count": len(page_furniture),
             "column_split": split,
             "column_bounds": column_bounds,
             "text_only": True,
