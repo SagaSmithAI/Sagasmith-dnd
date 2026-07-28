@@ -5,6 +5,10 @@ from sagasmith_core.modules import MarkdownModuleParser
 from sagasmith_dnd.module_profile import DndModuleProfile
 
 
+def test_module_profile_version_includes_canonical_ocr_room_codes() -> None:
+    assert DndModuleProfile.version == "28"
+
+
 def test_dnd_scene_parser_matches_agent_hierarchy_behavior() -> None:
     parsed = MarkdownModuleParser(profile=DndModuleProfile()).parse(
         "# Arrival\n"
