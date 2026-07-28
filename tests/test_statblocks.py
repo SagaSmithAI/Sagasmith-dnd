@@ -1,5 +1,9 @@
 import pytest
 
+from sagasmith_dnd.activity_identity import (
+    MULTIATTACK_MECHANIC_ID,
+    is_multiattack_source_name,
+)
 from sagasmith_dnd.character_schema import derive_character_sheet, validate_character_sheet
 from sagasmith_dnd.statblocks import (
     StatblockImportError,
@@ -147,6 +151,24 @@ one target. *Hit:* 5 (1d4 + 2) piercing damage.
 
 ***Parry***. The captain adds 2 to its AC against one melee attack that would hit it.
 """
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("Multiattack", True),
+        ("Multiattack (Yuan-ti Form Only)", True),
+        ("Multiattack (Humanoid or Hybrid Form Only)", True),
+        ("Multiattack Defense", False),
+        ("Greater Multiattack", False),
+    ],
+)
+def test_multiattack_source_identity_preserves_qualified_rulebook_titles(
+    name: str,
+    expected: bool,
+) -> None:
+    assert is_multiattack_source_name(name) is expected
+
 
 GIANT_SPIDER = """### Giant Spider
 
@@ -871,6 +893,94 @@ def test_agent_review_can_fill_unresolved_multiattack_without_new_text_heuristic
     assert filled["fill"]["multiattack_options"][0]["ruling_kind"] == (
         "module_specific_procedure"
     )
+
+
+def test_qualified_multiattack_keeps_source_name_and_accepts_reviewed_fill() -> None:
+    source_excerpt = (
+        "The yuan-ti makes two ranged attacks or two melee attacks, "
+        "but can use its bite only once."
+    )
+    qualified = COMMONER.replace("### Commoner", "### Yuan-ti Malison")
+    qualified = qualified.replace(
+        (
+            "***Club***. *Melee Weapon Attack:* +2 to hit, reach 5 ft., one target.\n"
+            "*Hit:* 2 (1d4) bludgeoning damage."
+        ),
+        (
+            "***Multiattack (Yuan-ti Form Only)***. "
+            f"{source_excerpt}\n\n"
+            "***Bite***. *Melee Weapon Attack:* +5 to hit, reach 5 ft., one creature. "
+            "*Hit:* 5 (1d4 + 3) piercing damage.\n\n"
+            "***Scimitar***. *Melee Weapon Attack:* +5 to hit, reach 5 ft., one target. "
+            "*Hit:* 6 (1d6 + 3) slashing damage.\n\n"
+            "***Longbow (Yuan-ti Form Only)***. *Ranged Weapon Attack:* +4 to hit, "
+            "range 150/600 ft., one target. *Hit:* 6 (1d8 + 2) piercing damage."
+        ),
+    )
+
+    parsed = parse_2014_statblock(
+        qualified,
+        source_key="rule-source:mm2014/page-310/yuan-ti-malison-type-1",
+    )
+    activity = next(
+        item
+        for item in parsed.sheet["content"]["activities"]
+        if item["id"] == "multiattack-yuan-ti-form-only-action"
+    )
+    assert activity["name"] == "Multiattack (Yuan-ti Form Only)"
+    assert activity["mechanic_refs"] == [MULTIATTACK_MECHANIC_ID]
+    assert derive_character_sheet(parsed.sheet)["multiattack_options"] == []
+
+    filled = apply_reviewed_statblock_fill(
+        parsed.sheet,
+        {
+            "multiattack_options": [
+                {
+                    "activity_id": activity["id"],
+                    "source_excerpt": source_excerpt,
+                    "reason": (
+                        "The two legal melee compositions and the ranged "
+                        "composition use only parsed source weapons."
+                    ),
+                    "options": [
+                        {
+                            "id": "two-longbows",
+                            "attacks": [
+                                {
+                                    "weapon_id": "longbow-yuan-ti-form-only",
+                                    "attack_mode": "ranged",
+                                    "count": 2,
+                                }
+                            ],
+                        },
+                        {
+                            "id": "bite-and-scimitar",
+                            "attacks": [
+                                {
+                                    "weapon_id": "bite",
+                                    "attack_mode": "melee",
+                                    "count": 1,
+                                },
+                                {
+                                    "weapon_id": "scimitar",
+                                    "attack_mode": "melee",
+                                    "count": 1,
+                                },
+                            ],
+                        },
+                    ],
+                }
+            ]
+        },
+    )
+
+    assert [item["id"] for item in derive_character_sheet(filled["sheet"])[
+        "multiattack_options"
+    ]] == ["two-longbows", "bite-and-scimitar"]
+    assert filled["resolved_warnings"] == [
+        "Multiattack (Yuan-ti Form Only): "
+        "Multiattack composition requires a DM ruling"
+    ]
 
 
 def test_agent_reviewed_multiattack_fill_requires_exact_source_and_parsed_weapons() -> None:

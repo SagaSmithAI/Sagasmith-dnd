@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from sagasmith_core.access import LOCAL_SYSTEM_PRINCIPAL_ID
 
+from sagasmith_dnd.activity_identity import is_multiattack_activity
 from sagasmith_dnd.character_schema import (
     SKILL_ABILITIES,
     effective_ability_scores,
@@ -2168,7 +2169,7 @@ def _validated_multiattack_options(attacker: dict[str, Any]) -> list[dict[str, A
     result: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
     for activity in sheet.get("content", {}).get("activities", []):
-        if str(activity.get("name") or "").casefold() != "multiattack":
+        if not is_multiattack_activity(activity):
             continue
         if str(dict(activity.get("activation") or {}).get("type") or "") != "action":
             raise CombatEngineError("recorded Multiattack must use action activation")
@@ -2236,7 +2237,7 @@ def _validated_multiattack_options(attacker: dict[str, Any]) -> list[dict[str, A
                 component_activity = actor_activities.get(activity_id)
                 if (
                     component_activity is None
-                    or str(component_activity.get("name") or "").casefold() == "multiattack"
+                    or is_multiattack_activity(component_activity)
                 ):
                     raise CombatEngineError("Multiattack references an invalid component activity")
                 if (

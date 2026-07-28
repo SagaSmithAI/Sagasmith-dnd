@@ -9,6 +9,7 @@ from typing import Any
 
 from sagasmith_dnd.abilities import ABILITY_NAMES, SKILL_ABILITIES
 from sagasmith_dnd.ability_generation import normalize_ability_generation
+from sagasmith_dnd.activity_identity import is_multiattack_activity
 from sagasmith_dnd.actor_types import NON_PLAYER_CHARACTER_TYPES
 from sagasmith_dnd.conditions import (
     apply_effect_conditions,
@@ -3313,7 +3314,7 @@ def derive_character_sheet(
     multiattack_options = []
     for activity in value["content"]["activities"]:
         if (
-            str(activity.get("name") or "").casefold() != "multiattack"
+            not is_multiattack_activity(activity)
             or str(dict(activity.get("activation") or {}).get("type") or "") != "action"
         ):
             continue

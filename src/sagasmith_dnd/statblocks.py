@@ -10,6 +10,11 @@ from typing import Any
 from sagasmith_core.text import ascii_slug, compact_ascii_key
 
 from sagasmith_dnd.abilities import ABILITY_ABBREVIATIONS, ABILITY_NAMES
+from sagasmith_dnd.activity_identity import (
+    MULTIATTACK_MECHANIC_ID,
+    is_multiattack_activity,
+    is_multiattack_source_name,
+)
 from sagasmith_dnd.character_schema import default_character_sheet, validate_character_sheet
 from sagasmith_dnd.combat_engine import structured_critical_followup
 from sagasmith_dnd.engine import ability_modifier
@@ -488,39 +493,53 @@ def _parse_multiattack(description: str, items: list[dict[str, Any]]) -> list[di
                     }
                 )
         if not attacks:
-            generic = re.search(
-                r"(?i)\b(?:makes?|can make)\s+"
+            generic_attacks = list(
+                re.finditer(
+                    r"(?i)\b"
                 r"(one|two|three|four|five|six|\d+)\s+"
-                r"(melee|ranged)\s+(?:weapon\s+)?attacks?\b",
-                group,
-            )
-            if generic:
-                count = _count(generic.group(1))
-                attack_mode = generic.group(2).casefold()
-                compatible: list[dict[str, Any]] = []
-                for item in items:
-                    mechanics = dict(item.get("mechanics") or {})
-                    properties = {
-                        str(value).casefold() for value in mechanics.get("properties") or []
-                    }
-                    if attack_mode == "melee":
-                        supported = mechanics.get("attack_type") == "melee"
-                    else:
-                        supported = (
-                            mechanics.get("attack_type") == "ranged"
-                            or "thrown" in properties
-                        )
-                    if supported:
-                        compatible.append(item)
-                if count is None or len(compatible) != 1:
-                    return []
-                attacks.append(
-                    {
-                        "weapon_id": compatible[0]["id"],
-                        "attack_mode": attack_mode,
-                        "count": count,
-                    }
+                    r"(melee|ranged)\s+(?:weapon\s+)?attacks?\b",
+                    group,
                 )
+            )
+            if generic_attacks:
+                generic_options: list[dict[str, Any]] = []
+                for generic in generic_attacks:
+                    count = _count(generic.group(1))
+                    generic_mode = generic.group(2).casefold()
+                    compatible: list[dict[str, Any]] = []
+                    for item in items:
+                        mechanics = dict(item.get("mechanics") or {})
+                        properties = {
+                            str(value).casefold()
+                            for value in mechanics.get("properties") or []
+                        }
+                        if generic_mode == "melee":
+                            supported = mechanics.get("attack_type") == "melee"
+                        else:
+                            supported = (
+                                mechanics.get("attack_type") == "ranged"
+                                or "thrown" in properties
+                            )
+                        if supported:
+                            compatible.append(item)
+                    if count is None or len(compatible) != 1:
+                        # Never publish only the uniquely inferred subset of a
+                        # source action containing multiple legal branches.
+                        return []
+                    generic_options.append(
+                        {
+                            "id": generic_mode,
+                            "attacks": [
+                                {
+                                    "weapon_id": compatible[0]["id"],
+                                    "attack_mode": generic_mode,
+                                    "count": count,
+                                }
+                            ],
+                        }
+                    )
+                options.extend(generic_options)
+                continue
         if attacks:
             if sum(int(item["count"]) for item in attacks) < 2:
                 # A source Multiattack can combine one weapon attack with a
@@ -949,7 +968,7 @@ def _structure_intellect_devourer_actions(
         (
             item
             for item in activities
-            if str(item.get("name") or "").strip().casefold() == "multiattack"
+            if is_multiattack_activity(item)
         ),
         None,
     )
@@ -1276,7 +1295,7 @@ def parse_2014_statblock(
     for section, entry_name, description in entries:
         if entry_name.casefold() == "spellcasting" and spellcasting is not None:
             continue
-        if entry_name.casefold() == "multiattack":
+        if is_multiattack_source_name(entry_name):
             multiattacks.append((entry_name, description))
             continue
         spell_spec = spell_specs.get(_spell_action_name(entry_name))
@@ -1338,12 +1357,13 @@ def parse_2014_statblock(
             sheet["content"]["activities"].append(
                 {
                     "id": f"{_slug(entry_name)}-activity",
-                    "name": "Multiattack",
+                    "name": entry_name,
                     "source_key": source_key,
                     "description": description,
                     "activation": {"type": "action", "cost": 1},
                     "choices": {"multiattack_options": options},
                     "rule_refs": refs,
+                    "mechanic_refs": [MULTIATTACK_MECHANIC_ID],
                 }
             )
         else:
@@ -1365,6 +1385,8 @@ def parse_2014_statblock(
             "activation": {"type": activation, "cost": 1 if activation != "passive" else 0},
             "rule_refs": refs,
         }
+        if entry_name in unresolved_multiattacks:
+            entry["mechanic_refs"] = [MULTIATTACK_MECHANIC_ID]
         source_trait = None
         if activation == "passive":
             normalized_name = entry_name.strip().casefold()
@@ -2197,7 +2219,7 @@ def apply_reviewed_statblock_fill(
         manual_ruling = dict(choices.get("manual_ruling") or {})
         parsed_options = choices.get("multiattack_options")
         if (
-            str(activity.get("name") or "").casefold() != "multiattack"
+            not is_multiattack_activity(activity)
             or (
                 manual_ruling.get("kind") != "descriptive_activity"
                 and not isinstance(parsed_options, list)

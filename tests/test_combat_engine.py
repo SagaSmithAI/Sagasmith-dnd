@@ -1483,7 +1483,7 @@ def test_dueling_style_adds_damage_only_for_one_equipped_melee_weapon() -> None:
     ]
 
 
-def test_bandit_captain_multiattack_preserves_recorded_weapon_composition() -> None:
+def test_qualified_multiattack_preserves_recorded_weapon_composition() -> None:
     captain = _actor("captain", hp=65)
     captain["sheet"]["inventory"]["items"] = [
         {
@@ -1523,7 +1523,7 @@ def test_bandit_captain_multiattack_preserves_recorded_weapon_composition() -> N
     captain["sheet"]["content"]["activities"] = [
         {
             "id": "bandit-captain-multiattack",
-            "name": "Multiattack",
+            "name": "Multiattack (Armed Form Only)",
             "source_key": "Bandit Captain",
             "activation": {"type": "action"},
             "choices": {
