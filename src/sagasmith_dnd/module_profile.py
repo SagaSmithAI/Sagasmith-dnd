@@ -57,6 +57,7 @@ _LOCATION_TITLE_SIGNALS = (
     "courtyard",
     "crypt",
     "dungeon",
+    "entrance",
     "gate",
     "hall",
     "hideout",
@@ -151,6 +152,20 @@ _ROOM_TITLE_LINE = re.compile(
     rf"(?P<title>(?P<code>{_ROOM_CODE_PATTERN})"
     r"\s*[.\uFF0E\u3002\uFF61\uFF1A:]\s*(?=[^\W_])\S[^\r\n]*)\s*$",
     re.IGNORECASE | re.MULTILINE,
+)
+
+_OCR_HEADING_CONTINUATION = re.compile(
+    r"[ \t]*(?:\r?\n[ \t]*)?"
+    r"(?P<title>(?:[A-Za-z]\s+){3,}[A-Za-z])"
+    r"(?=\s+[A-Z][a-z]{2,}\b)"
+)
+
+_OCR_INLINE_ROOM_ONE = re.compile(
+    r"(?:^|[.!?]\s+)"
+    r"(?P<code>[1IlL])\s+"
+    r"(?P<title>(?:[A-Za-z]\s+){4,}[A-Za-z])"
+    r"(?=\s+[A-Z][a-z]{2,}\b)",
+    re.MULTILINE,
 )
 
 
@@ -592,6 +607,7 @@ def _spatial_manifest(
                 "key": scene_key,
                 "title": title,
                 "kind": "room",
+                "_source_offset": -1,
                 "dimensions_ft": (
                     {
                         "width": int(dimensions.group("width")),
@@ -603,6 +619,7 @@ def _spatial_manifest(
                 "confidence": "explicit_heading",
             }
         )
+    subsection_search_offset = 0
     for ordinal, item in enumerate(subsections):
         location_kind = str(item.get("type") or "")
         if location_kind not in {"room", "scene"}:
@@ -625,11 +642,24 @@ def _spatial_manifest(
             if occurrence == 1
             else f"{base_key[: max(1, 71 - len(str(occurrence)))]}-{occurrence}"
         )
+        heading_match = re.search(
+            rf"^(?:#{{1,6}}\s+)?{re.escape(label)}\s*$",
+            text[subsection_search_offset:],
+            re.MULTILINE,
+        )
+        source_offset = (
+            subsection_search_offset + heading_match.start()
+            if heading_match is not None
+            else len(text) + ordinal
+        )
+        if heading_match is not None:
+            subsection_search_offset += heading_match.end()
         locations.append(
             {
                 "key": location_key,
                 "title": label,
                 "kind": location_kind,
+                "_source_offset": source_offset,
                 "line": item.get("line"),
                 "dimensions_ft": item.get("dimensions_ft"),
                 "confidence": "explicit_heading",
@@ -650,12 +680,21 @@ def _spatial_manifest(
             if code in existing_codes:
                 continue
             label = matched_title.group("title").strip()
+            section_start = matched_title.end()
+            continuation = _OCR_HEADING_CONTINUATION.match(text, section_start)
+            if continuation is not None:
+                candidate = f"{label} {continuation.group('title').strip()}"
+                if _ROOM.match(candidate) and _contains_location_title_signal(
+                    candidate.casefold()
+                ):
+                    label = candidate
+                    section_start = continuation.end()
             section_end = (
                 room_title_matches[match_index + 1].start()
                 if match_index + 1 < len(room_title_matches)
                 else len(text)
             )
-            section = text[matched_title.end() : section_end]
+            section = text[section_start:section_end]
             dimensions = _DIMENSIONS.search(section)
             base_key = _location_key(label, len(locations))
             location_key_counts[base_key] = location_key_counts.get(base_key, 0) + 1
@@ -670,6 +709,7 @@ def _spatial_manifest(
                     "key": location_key,
                     "title": label,
                     "kind": "room",
+                    "_source_offset": matched_title.start(),
                     "line": _line_number(text, matched_title.start()),
                     "dimensions_ft": (
                         {
@@ -687,12 +727,48 @@ def _spatial_manifest(
                 }
             )
             existing_codes.add(code)
+    # Display-font extraction can also lose both the period and the distinction
+    # between ``1`` and a capital ``I``/``L``, then splice the room-one title
+    # into the preceding paragraph. Recover only a sentence-boundary run of
+    # individually spaced glyphs whose compacted title contains a physical
+    # location signal. This remains evidence-based and avoids treating ordinary
+    # first-person prose as a room.
+    if "1" not in existing_codes:
+        for matched_title in _OCR_INLINE_ROOM_ONE.finditer(text):
+            display_title = matched_title.group("title").strip()
+            candidate = f"1. {display_title}"
+            if not _contains_location_title_signal(candidate.casefold()):
+                continue
+            base_key = _location_key(candidate, len(locations))
+            location_key_counts[base_key] = location_key_counts.get(base_key, 0) + 1
+            occurrence = location_key_counts[base_key]
+            location_key = (
+                base_key
+                if occurrence == 1
+                else f"{base_key[: max(1, 71 - len(str(occurrence)))]}-{occurrence}"
+            )
+            locations.append(
+                {
+                    "key": location_key,
+                    "title": candidate,
+                    "kind": "room",
+                    "_source_offset": matched_title.start("code"),
+                    "line": _line_number(text, matched_title.start("code")),
+                    "dimensions_ft": None,
+                    "confidence": "explicit_ocr_text_heading",
+                }
+            )
+            existing_codes.add("1")
+            break
     locations.sort(
         key=lambda location: (
+            int(location.get("_source_offset", len(text))),
             int(location.get("line") or 0),
             str(location.get("key") or ""),
         )
     )
+    for location in locations:
+        location.pop("_source_offset", None)
     if not locations and not allow_fallback:
         return {
             "schema_version": 1,
@@ -732,7 +808,7 @@ def _spatial_manifest(
 
 class DndModuleProfile(GenericModuleProfile):
     name = "dnd5e"
-    version = "28"
+    version = "29"
 
     def document_metadata(self, content: str) -> dict[str, object]:
         """Parse and validate the optional generated-module runtime manifest."""

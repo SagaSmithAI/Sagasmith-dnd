@@ -5,8 +5,8 @@ from sagasmith_core.modules import MarkdownModuleParser
 from sagasmith_dnd.module_profile import DndModuleProfile
 
 
-def test_module_profile_version_includes_canonical_ocr_room_codes() -> None:
-    assert DndModuleProfile.version == "28"
+def test_module_profile_version_includes_inline_ocr_room_recovery() -> None:
+    assert DndModuleProfile.version == "29"
 
 
 def test_dnd_scene_parser_matches_agent_hierarchy_behavior() -> None:
@@ -245,6 +245,71 @@ def test_scene_atlas_recovers_numbered_room_lines_missing_markdown_markers() -> 
         "explicit_text_heading",
     ]
     assert scene.metadata["spatial"]["connections"] == []
+
+
+def test_scene_atlas_recovers_inline_ocr_room_one_and_split_title() -> None:
+    content = (
+        "# Episode 2\n## Ice Caves\n"
+        "The ice trolls defend area 12. L E n t r a n c e f r o m H u t "
+        "Inside the hut, steep icy stairs descend into a rectangular chamber.\n"
+        "2. E n t r a n c e f r o m\n"
+        "t h e V i l l a g e H a l l Hidden beneath the planks is another chute.\n"
+        "##### 3. L a r d e r\nFrozen fish is stored here.\n"
+    )
+    scene = next(
+        item
+        for item in MarkdownModuleParser(profile=DndModuleProfile()).parse(content)[0].scenes
+        if item.title == "Ice Caves"
+    )
+
+    assert scene.metadata["spatial"]["locations"] == [
+        {
+            "key": "1-e-n-t-r-a-n-c-e-f-r-o-m-h-u-t",
+            "title": "1. E n t r a n c e f r o m H u t",
+            "kind": "room",
+            "line": 2,
+            "dimensions_ft": None,
+            "confidence": "explicit_ocr_text_heading",
+        },
+        {
+            "key": "2-e-n-t-r-a-n-c-e-f-r-o-m-t-h-e-v-i-l-l-a-g-e-h-a-l-l",
+            "title": "2. E n t r a n c e f r o m t h e V i l l a g e H a l l",
+            "kind": "room",
+            "line": 3,
+            "dimensions_ft": None,
+            "confidence": "explicit_text_heading",
+        },
+        {
+            "key": "3-l-a-r-d-e-r",
+            "title": "3. L a r d e r",
+            "kind": "room",
+            "line": 6,
+            "dimensions_ft": None,
+            "confidence": "explicit_heading",
+        },
+    ]
+
+
+def test_scene_atlas_orders_mixed_heading_evidence_by_scene_offset() -> None:
+    content = (
+        "# Episode 2\n"
+        + ("Campaign preamble.\n" * 50)
+        + "## Ice Caves\n"
+        "##### 3. L a r d e r\nFrozen fish is stored here.\n"
+        "7. H a l l o f G i a n t s\nFrozen giants line the walls.\n"
+        "##### 12. Ic e T r o l l s\nThe trolls lair here.\n"
+    )
+    scene = next(
+        item
+        for item in MarkdownModuleParser(profile=DndModuleProfile()).parse(content)[0].scenes
+        if item.title == "Ice Caves"
+    )
+
+    assert [item["key"] for item in scene.metadata["spatial"]["locations"]] == [
+        "3-l-a-r-d-e-r",
+        "7-h-a-l-l-o-f-g-i-a-n-t-s",
+        "12-ic-e-t-r-o-l-l-s",
+    ]
 
 
 def test_spatial_connections_require_explicit_route_language() -> None:
