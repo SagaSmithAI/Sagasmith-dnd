@@ -77,6 +77,29 @@ def test_fixed_level_advancement_updates_max_hp_and_hit_die_without_healing() ->
     assert sheet["progression"]["level"] == 1
 
 
+def test_level_advancement_keeps_machine_source_separate_from_display_source() -> None:
+    sheet = _single_class_sheet("Rogue", hit_die=8, constitution=14, hp=(10, 10))
+    source_ref = '{"content_sha256":"' + ("a" * 64) + '","heading_path":[' + (
+        '"long heading",' * 30
+    ).rstrip(",") + "]}"
+    reason = "Reached the module milestone after resolving the chapter."
+
+    result = advance_single_class_level(
+        sheet,
+        class_name="Rogue",
+        hp_method="fixed",
+        source="Rogue level 2",
+        source_ref=source_ref,
+        reason=reason,
+    )
+
+    updated = validate_character_sheet(result["sheet"])
+    gain = updated["combat"]["hp_progression"][-1]
+    assert gain["source"] == "Rogue level 2"
+    assert gain["source_ref"] == source_ref
+    assert gain["reason"] == reason
+
+
 def test_feature_resources_scale_without_refilling_spent_capacity() -> None:
     sheet = _single_class_sheet("Fighter", hit_die=10, constitution=14, hp=(12, 12))
     sheet["progression"]["level"] = 16

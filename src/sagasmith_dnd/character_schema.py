@@ -1586,7 +1586,7 @@ def validate_character_sheet(
         _reject_unknown(
             entry,
             f"sheet.combat.hp_progression[{index}]",
-            {"level", "method", "value", "source"},
+            {"level", "method", "value", "source", "source_ref", "reason"},
         )
         gain_level = _integer(
             entry.get("level"), f"sheet.combat.hp_progression[{index}].level", minimum=1, maximum=20
@@ -1599,18 +1599,29 @@ def validate_character_sheet(
         )
         if method not in {"fixed", "rolled", "manual"}:
             raise ValueError(f"sheet.combat.hp_progression[{index}].method is invalid")
-        hp_progression.append(
-            {
-                "level": gain_level,
-                "method": method,
-                "value": _integer(
-                    entry.get("value"), f"sheet.combat.hp_progression[{index}].value", minimum=0
-                ),
-                "source": _text(
-                    entry.get("source"), f"sheet.combat.hp_progression[{index}].source", maximum=300
-                ),
-            }
-        )
+        normalized_gain = {
+            "level": gain_level,
+            "method": method,
+            "value": _integer(
+                entry.get("value"), f"sheet.combat.hp_progression[{index}].value", minimum=0
+            ),
+            "source": _text(
+                entry.get("source"), f"sheet.combat.hp_progression[{index}].source", maximum=300
+            ),
+        }
+        if "source_ref" in entry:
+            normalized_gain["source_ref"] = _text(
+                entry.get("source_ref"),
+                f"sheet.combat.hp_progression[{index}].source_ref",
+                maximum=8192,
+            )
+        if "reason" in entry:
+            normalized_gain["reason"] = _text(
+                entry.get("reason"),
+                f"sheet.combat.hp_progression[{index}].reason",
+                maximum=1000,
+            )
+        hp_progression.append(normalized_gain)
     death_saves = _object(combat["death_saves"], "sheet.combat.death_saves")
     _reject_unknown(death_saves, "sheet.combat.death_saves", {"successes", "failures"})
     rest_history = _object(combat["rest_history"], "sheet.combat.rest_history")

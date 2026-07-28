@@ -296,6 +296,8 @@ def advance_single_class_level(
     hp_method: str,
     hp_per_level_bonus: int = 0,
     source: str = "",
+    source_ref: str = "",
+    reason: str = "",
     rng: Any = None,
 ) -> dict[str, Any]:
     """Advance an existing 2014 class exactly one level.
@@ -353,14 +355,17 @@ def advance_single_class_level(
     hp["max"] = old_hp_max + hp_gain
     # The 2014 rule increases maximum HP; it does not say that leveling heals
     # damage already taken. Current HP therefore remains unchanged.
-    hp_progression.append(
-        {
-            "level": new_level,
-            "method": normalized_method,
-            "value": hp_gain,
-            "source": source or f"{class_name} level {new_level}",
-        }
-    )
+    hp_gain_entry = {
+        "level": new_level,
+        "method": normalized_method,
+        "value": hp_gain,
+        "source": source or f"{class_name} level {new_level}",
+    }
+    if source_ref:
+        hp_gain_entry["source_ref"] = str(source_ref)
+    if reason:
+        hp_gain_entry["reason"] = str(reason)
+    hp_progression.append(hp_gain_entry)
 
     hit_dice = value["combat"].setdefault("hit_dice", {})
     hit_die_key, hit_die_resource = _class_hit_die_resource(hit_dice, class_name, hit_die)
