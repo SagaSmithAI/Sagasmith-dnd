@@ -8,6 +8,8 @@ from typing import Any
 from sagasmith_dnd.resources import mutate_bounded_resource
 from sagasmith_dnd.rule_engine import ResolutionContext, apply_rule_event, core_receipts
 
+ACTIVITY_CONTENT_SECTIONS = ("activities", "features", "feats")
+
 
 class ActivityError(ValueError):
     """Raised when a declared activity cannot pay its structured cost."""
@@ -115,7 +117,7 @@ def consume_activity(
 
 
 def _find_activity(sheet: dict[str, Any], activity_id: str) -> tuple[str, dict[str, Any]]:
-    for section in ("activities", "features", "feats"):
+    for section in ACTIVITY_CONTENT_SECTIONS:
         for item in sheet.get("content", {}).get(section, []):
             if item.get("id") == activity_id:
                 return section, dict(item)

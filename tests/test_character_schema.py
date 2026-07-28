@@ -23,6 +23,7 @@ from sagasmith_dnd.character_schema import (
     validate_party_state,
     validate_world_time,
 )
+from sagasmith_dnd.vocabulary import DENOMINATION_CP_VALUES
 
 
 def _caster_sheet() -> dict:
@@ -399,6 +400,16 @@ def test_inventory_wallet_effect_and_memory_contracts() -> None:
             },
         }
     ]
+
+
+def test_wallet_valuation_uses_the_shared_denomination_contract() -> None:
+    sheet = validate_character_sheet(
+        {"inventory": {"wallet": {name: 1 for name in DENOMINATION_CP_VALUES}}}
+    )
+
+    assert derive_character_sheet(sheet)["inventory"]["wallet_value_cp"] == sum(
+        DENOMINATION_CP_VALUES.values()
+    )
 
 
 def test_removing_an_effect_cleans_only_conditions_no_longer_owned() -> None:

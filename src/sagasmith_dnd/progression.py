@@ -8,7 +8,8 @@ from typing import Any
 
 from sagasmith_dnd.combat_engine import CombatEngineError
 from sagasmith_dnd.editions import normalize_dnd_edition
-from sagasmith_dnd.engine import roll
+from sagasmith_dnd.engine import ability_modifier, roll
+from sagasmith_dnd.vocabulary import PREPARED_SELECTION_MODES
 
 FULL_CASTER_SLOTS: dict[int, tuple[int, ...]] = {
     1: (2,),
@@ -251,7 +252,7 @@ def apply_constitution_score_hit_point_change(
         raise CombatEngineError("Constitution hit-point change source is required")
     if len(normalized_source) > 300:
         raise CombatEngineError("Constitution hit-point change source exceeds 300 characters")
-    modifier_delta = (new_score - 10) // 2 - (previous_score - 10) // 2
+    modifier_delta = ability_modifier(new_score) - ability_modifier(previous_score)
     value = deepcopy(sheet)
     if modifier_delta == 0:
         return value
@@ -617,7 +618,7 @@ def _advance_spellcasting(
             resources[str(slot_level)] = resource
             if old_max != new_max:
                 slot_changes[str(slot_level)] = {"old_max": old_max, "new_max": new_max}
-    if mode in {"prepared", "spellbook"}:
+    if mode in PREPARED_SELECTION_MODES:
         modifier = _ability_modifier(sheet, ability)
         class_contribution = new_level // 2 if key == "paladin" else new_level
         preparation["max_prepared"] = max(1, class_contribution + modifier)
@@ -652,7 +653,7 @@ def _spell_choice_delta(class_name: str, old_level: int, new_level: int) -> dict
 
 def _ability_modifier(sheet: dict[str, Any], ability: str) -> int:
     score = int(sheet.get("abilities", {}).get(ability, {}).get("score", 10) or 10)
-    return (score - 10) // 2
+    return ability_modifier(score)
 
 
 def _class_hit_die_resource(

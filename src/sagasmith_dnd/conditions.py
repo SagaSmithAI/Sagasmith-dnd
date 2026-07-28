@@ -23,6 +23,13 @@ STANDARD_BINARY_CONDITION_IDS = frozenset(
     }
 )
 
+# These states either are Incapacitated or imply it under the D&D condition
+# definitions. Cards may store only the more specific condition, so callers
+# must use the complete set when enforcing action/reaction/concentration loss.
+INCAPACITATING_STATE_IDS = frozenset(
+    {"dead", "incapacitated", "paralyzed", "petrified", "stunned", "unconscious"}
+)
+
 
 def condition_ids(value: Any) -> set[str]:
     """Return canonical condition identifiers from a card or combat projection."""

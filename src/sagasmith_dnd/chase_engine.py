@@ -9,7 +9,7 @@ transition that ends a particular chase.
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any
+from typing import Any, Literal, get_args
 from uuid import uuid4
 
 from sagasmith_dnd.character_schema import set_exhaustion_level
@@ -24,7 +24,7 @@ from sagasmith_dnd.combat_engine import (
 )
 from sagasmith_dnd.conditions import apply_condition_change, condition_ids
 from sagasmith_dnd.editions import DEFAULT_CHARACTER_EDITION, normalize_dnd_edition
-from sagasmith_dnd.engine import roll, roll_d20
+from sagasmith_dnd.engine import ability_modifier, roll, roll_d20
 from sagasmith_dnd.rule_engine import ResolutionContext
 
 CHASE_BOUNDARY_IDS = (
@@ -33,6 +33,14 @@ CHASE_BOUNDARY_IDS = (
     "dnd5e.core.chase.urban_complications",
     "dnd5e.core.chase.ending",
 )
+ChaseManualOutcomeStatus = Literal[
+    "caught",
+    "destination_reached",
+    "quarry_escaped",
+    "pursuers_abandoned",
+]
+CHASE_MANUAL_OUTCOME_STATUS_ORDER = get_args(ChaseManualOutcomeStatus)
+CHASE_MANUAL_OUTCOME_STATUSES = frozenset(CHASE_MANUAL_OUTCOME_STATUS_ORDER)
 
 
 def _conditions(sheet: dict[str, Any]) -> set[str]:
@@ -41,7 +49,7 @@ def _conditions(sheet: dict[str, Any]) -> set[str]:
 
 def _constitution_modifier(sheet: dict[str, Any]) -> int:
     score = int(dict(sheet.get("abilities", {}).get("constitution") or {}).get("score", 10))
-    return (score - 10) // 2
+    return ability_modifier(score)
 
 
 def _participant(chase: dict[str, Any], identifier: str) -> dict[str, Any]:
@@ -762,12 +770,7 @@ def end_chase(
         raise CombatEngineError("chase is not active")
     normalized_status = str(status or "").strip()
     normalized_summary = str(summary or "").strip()
-    if normalized_status not in {
-        "caught",
-        "destination_reached",
-        "quarry_escaped",
-        "pursuers_abandoned",
-    }:
+    if normalized_status not in CHASE_MANUAL_OUTCOME_STATUSES:
         raise CombatEngineError("unsupported chase outcome status")
     if not normalized_summary:
         raise CombatEngineError("chase outcome summary is required")

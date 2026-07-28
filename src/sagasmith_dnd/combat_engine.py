@@ -23,6 +23,7 @@ from sagasmith_dnd.character_schema import (
     validate_character_sheet,
 )
 from sagasmith_dnd.conditions import (
+    INCAPACITATING_STATE_IDS,
     apply_condition_change,
     apply_effect_conditions,
     condition_ids,
@@ -32,6 +33,8 @@ from sagasmith_dnd.conditions import (
 )
 from sagasmith_dnd.editions import DEFAULT_CHARACTER_EDITION, normalize_dnd_edition
 from sagasmith_dnd.engine import (
+    ability_modifier,
+    proficiency_bonus,
     resolve_attack,
     resolve_check,
     resolve_death_save,
@@ -79,14 +82,7 @@ def end_concentration_for_incapacitating_conditions(
 ) -> list[str]:
     """End concentration when the actor is Incapacitated, directly or indirectly."""
     conditions = condition_ids(sheet.get("conditions"))
-    if not conditions & {
-        "dead",
-        "incapacitated",
-        "paralyzed",
-        "petrified",
-        "stunned",
-        "unconscious",
-    }:
+    if not conditions & INCAPACITATING_STATE_IDS:
         return []
     ended: list[str] = []
     for effect in sheet.get("effects", []):
@@ -309,8 +305,7 @@ def _jack_of_all_trades_bonus(sheet: dict[str, Any]) -> int:
     if not has_feature:
         return 0
     level = int(dict(sheet.get("progression") or {}).get("level", 1) or 1)
-    proficiency_bonus = 2 + (level - 1) // 4
-    return proficiency_bonus // 2
+    return proficiency_bonus(level) // 2
 
 
 def start_encounter(
@@ -952,7 +947,7 @@ def preflight_attack(
         strength = int(
             (actor_sheet(attacker).get("abilities", {}).get("strength") or {}).get("score", 10)
         )
-        modifier = (strength - 10) // 2
+        modifier = ability_modifier(strength)
         weapon = {
             "item_id": "unarmed-strike",
             "name": "Unarmed Strike",
@@ -972,7 +967,7 @@ def preflight_attack(
             strength = int(
                 (actor_sheet(attacker).get("abilities", {}).get("strength") or {}).get("score", 10)
             )
-            modifier = (strength - 10) // 2
+            modifier = ability_modifier(strength)
             weapon = {
                 "item_id": "unarmed-strike",
                 "attack_bonus": modifier + int(actor_derived(attacker).get("proficiency_bonus", 2)),
@@ -1048,14 +1043,7 @@ def preflight_attack(
                 or not _are_hostile(candidate, attacker)
                 or not _can_see(candidate, attacker)
                 or _condition_set(candidate.get("conditions"))
-                & {
-                    "dead",
-                    "unconscious",
-                    "stunned",
-                    "incapacitated",
-                    "paralyzed",
-                    "petrified",
-                }
+                & INCAPACITATING_STATE_IDS
             ):
                 continue
             close_combat_threat_ids.append(candidate_id)
@@ -1232,7 +1220,7 @@ def preflight_attack(
                 and helper_position is not None
                 and _grid_distance(helper_position, target_position) <= 5
                 and not _condition_set(helper.get("conditions"))
-                & {"dead", "unconscious", "stunned", "incapacitated", "paralyzed", "petrified"}
+                & INCAPACITATING_STATE_IDS
             ):
                 context["advantage"] = True
                 context.setdefault("advantage_sources", []).append("help")
@@ -1275,14 +1263,7 @@ def preflight_attack(
                     and (candidate_position := _position(candidate.get("position"))) is not None
                     and _grid_distance(candidate_position, target_position) <= 5
                     and not _condition_set(candidate.get("conditions"))
-                    & {
-                        "dead",
-                        "unconscious",
-                        "stunned",
-                        "incapacitated",
-                        "paralyzed",
-                        "petrified",
-                    }
+                    & INCAPACITATING_STATE_IDS
                 ),
                 None,
             )
@@ -1602,14 +1583,7 @@ def available_attack_defenses(
         target_conditions |= _condition_set(combatant.get("conditions"))
         if int(dict(combatant.get("turn_budget") or {}).get("reaction", 0) or 0) <= 0:
             return []
-    if target_conditions & {
-        "dead",
-        "unconscious",
-        "stunned",
-        "incapacitated",
-        "paralyzed",
-        "petrified",
-    }:
+    if target_conditions & INCAPACITATING_STATE_IDS:
         return []
     equipped_melee = any(
         str(item.get("attack_type") or "").casefold() == "melee"
@@ -2017,14 +1991,7 @@ def _sneak_attack_plan(
         for candidate in encounter.get("combatants", []):
             if candidate.get("actor_id") in {actor_id(attacker), actor_id(target)}:
                 continue
-            if _condition_set(candidate.get("conditions")) & {
-                "dead",
-                "unconscious",
-                "stunned",
-                "incapacitated",
-                "paralyzed",
-                "petrified",
-            }:
+            if _condition_set(candidate.get("conditions")) & INCAPACITATING_STATE_IDS:
                 continue
             candidate_position = _position(candidate.get("position"))
             if target_position is None or candidate_position is None:
@@ -3218,14 +3185,10 @@ def resolve_common_action(
         raise CombatEngineError("actor has no legal action payment available")
     acting = combatant if out_of_turn_reaction else current
     assert acting is not None
-    if out_of_turn_reaction and _condition_set(acting.get("conditions")) & {
-        "dead",
-        "unconscious",
-        "stunned",
-        "incapacitated",
-        "paralyzed",
-        "petrified",
-    }:
+    if (
+        out_of_turn_reaction
+        and _condition_set(acting.get("conditions")) & INCAPACITATING_STATE_IDS
+    ):
         raise CombatEngineError("actor cannot take a reaction under its current conditions")
     budget = dict(acting.get("turn_budget") or {})
     payment = payment or ("extra_action" if budget.get("extra_action", 0) > 0 else "main_action")
@@ -3681,14 +3644,7 @@ def available_reactions(encounter: dict[str, Any], actor_id_value: str) -> list[
         raise CombatEngineError(f"combatant not found: {actor_id_value}")
     if int(dict(combatant.get("turn_budget") or {}).get("reaction", 0) or 0) <= 0:
         return []
-    if _condition_set(combatant.get("conditions")) & {
-        "dead",
-        "unconscious",
-        "stunned",
-        "incapacitated",
-        "paralyzed",
-        "petrified",
-    }:
+    if _condition_set(combatant.get("conditions")) & INCAPACITATING_STATE_IDS:
         return []
     return [
         deepcopy(item)
@@ -4138,13 +4094,13 @@ def resolve_actor_check(
         score_ability = SKILL_ABILITIES[normalized_ability]
         entry = dict(sheet.get("abilities", {}).get(score_ability) or {})
         score = int(ability_scores.get(score_ability, entry.get("score", 10)))
-        proficiency_bonus = 2 + (level - 1) // 4
+        proficiency_value = proficiency_bonus(level)
         skill_bonus = int(skill.get("bonus", 0) or 0) + roll_bonus
         skill_is_proficient = skill_proficiency in {"proficient", "expertise"}
         if skill_proficiency == "half":
-            skill_bonus += proficiency_bonus // 2
+            skill_bonus += proficiency_value // 2
         elif skill_proficiency == "expertise":
-            skill_bonus += proficiency_bonus
+            skill_bonus += proficiency_value
         return with_rule_receipts(
             resolve_check(
                 dc=dc,
@@ -4180,7 +4136,7 @@ def resolve_actor_check(
         bonus = int(skill.get("bonus", 0) or 0)
         proficient = multiplier > 0
         if multiplier == 2:
-            bonus += 2 + (level - 1) // 4
+            bonus += proficiency_bonus(level)
     if kind == "attack":
         raise CombatEngineError("use resolve_attack for attacks")
     if kind == "death_save":

@@ -10,6 +10,8 @@ from typing import Any
 from sagasmith_dnd.abilities import ABILITY_ABBREVIATIONS, ABILITY_NAMES
 from sagasmith_dnd.character_schema import default_character_sheet, validate_character_sheet
 from sagasmith_dnd.combat_engine import structured_critical_followup
+from sagasmith_dnd.engine import ability_modifier
+from sagasmith_dnd.vocabulary import ATTACK_MODES
 
 
 class StatblockImportError(ValueError):
@@ -217,7 +219,7 @@ def _parse_senses(value: str, sheet: dict[str, Any], ability_scores: dict[str, i
             sheet["traits"]["senses"][key] = int(match.group(1))
     passive = re.search(r"(?i)passive\s+Perception\s+(\d+)", value)
     if passive:
-        wisdom_modifier = (ability_scores["wisdom"] - 10) // 2
+        wisdom_modifier = ability_modifier(ability_scores["wisdom"])
         perception = sheet["skills"]["perception"]
         calculated = 10 + wisdom_modifier + int(perception.get("bonus", 0) or 0)
         sheet["traits"]["senses"]["passive_perception_bonus"] = (
@@ -1184,7 +1186,9 @@ def parse_2014_statblock(
     for abbreviation, target in _parse_bonus_list(_field(markdown, "Saving Throws")).items():
         ability = ABILITY_ABBREVIATIONS.get(abbreviation)
         if ability:
-            sheet["abilities"][ability]["bonus"] = target - (ability_scores[ability] - 10) // 2
+            sheet["abilities"][ability]["bonus"] = target - ability_modifier(
+                ability_scores[ability]
+            )
     for label, target in _parse_bonus_list(_field(markdown, "Skills")).items():
         skill = _SKILL_NAMES.get(label)
         if skill:
@@ -1208,7 +1212,9 @@ def parse_2014_statblock(
                 "performance": "charisma",
                 "persuasion": "charisma",
             }[skill]
-            sheet["skills"][skill]["bonus"] = target - (ability_scores[ability] - 10) // 2
+            sheet["skills"][skill]["bonus"] = target - ability_modifier(
+                ability_scores[ability]
+            )
 
     for label, key in (
         ("Damage Resistances", "resistances"),
@@ -2240,7 +2246,7 @@ def apply_reviewed_statblock_fill(
                         "reviewed multiattack weapon_id must identify a parsed weapon"
                     )
                 attack_mode = str(raw_attack.get("attack_mode") or "").strip().casefold()
-                if attack_mode not in {"melee", "ranged"}:
+                if attack_mode not in ATTACK_MODES:
                     raise StatblockImportError(
                         "reviewed multiattack attack_mode must be melee or ranged"
                     )

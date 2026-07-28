@@ -1,7 +1,9 @@
 from sagasmith_dnd.character_schema import default_character_sheet, derive_character_sheet
 from sagasmith_dnd.chase_engine import (
+    CHASE_MANUAL_OUTCOME_STATUS_ORDER,
     advance_chase_turn,
     current_chase_participant,
+    end_chase,
     start_chase,
 )
 
@@ -230,3 +232,16 @@ def test_starting_exhaustion_halves_chase_speed_only_once() -> None:
     assert chase["participants"][0]["speed_ft"] == 30
     assert result["turn"]["speed_ft"] == 15
     assert result["turn"]["moved_ft"] == 30
+
+
+def test_manual_chase_endings_share_one_public_status_contract() -> None:
+    chase = start_chase(
+        [_actor("pursuer", initiative=20), _actor("quarry", initiative=10)],
+        quarry_ids=["quarry"],
+        initial_distance_ft=100,
+    )
+
+    for status in CHASE_MANUAL_OUTCOME_STATUS_ORDER:
+        ended = end_chase(chase, status=status, summary=f"Ended as {status}.")
+        assert ended["active"] is False
+        assert ended["outcome"]["status"] == status

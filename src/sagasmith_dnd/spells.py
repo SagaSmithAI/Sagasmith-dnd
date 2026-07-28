@@ -9,8 +9,10 @@ from uuid import uuid4
 from sagasmith_dnd.combat_engine import CombatEngineError, NeedsRulingError
 from sagasmith_dnd.conditions import reconcile_ended_effect_conditions
 from sagasmith_dnd.editions import normalize_dnd_edition
+from sagasmith_dnd.engine import ability_modifier
 from sagasmith_dnd.resources import mutate_bounded_resource
 from sagasmith_dnd.rule_engine import ResolutionContext, apply_rule_event, core_receipts
+from sagasmith_dnd.vocabulary import PREPARED_SELECTION_MODES
 
 _SPELL_POINT_COSTS = {1: 2, 2: 3, 3: 5, 4: 6, 5: 7, 6: 9, 7: 10, 8: 11, 9: 13}
 CORE_SHIELD_MECHANIC_ID = "dnd5e.core.spell.shield"
@@ -26,6 +28,7 @@ CORE_MAGIC_ITEM_SPELL_MECHANIC_ID = "dnd5e.core.spell.magic_item_charges"
 CORE_MAGIC_MISSILE_MECHANIC_ID = "dnd5e.core.spell.magic_missile"
 CORE_MAGIC_MISSILE_BOUNDARY_ID = "dnd5e.core.spell.magic_missile_darts"
 CORE_MAGIC_MISSILE_SPELL_ID = "dnd5e.content.srd2014.spell.magic-missile"
+SLOT_PAYMENT_ECONOMIES = frozenset({"slots", "pact_magic"})
 
 
 def _agent_ruling_requirements(kinds: list[str]) -> list[dict[str, str]]:
@@ -694,7 +697,7 @@ def consume_spell_cast(
     ordinary_available = bool(access.get("always_prepared"))
     available = bool(at_will_available or ordinary_available)
     if base_level := int(spell.get("level", 0) or 0):
-        if mode in {"prepared", "spellbook"}:
+        if mode in PREPARED_SELECTION_MODES:
             ordinary_available = ordinary_available or bool(access.get("prepared"))
         else:
             ordinary_available = ordinary_available or bool(access.get("known"))
@@ -987,7 +990,7 @@ def replace_prepared_spells(
     """Replace a complete prepared list under the 2014/2024 class rules."""
     value = deepcopy(sheet)
     preparation = value.get("spellcasting", {}).get("preparation", {})
-    if preparation.get("mode") not in {"prepared", "spellbook"}:
+    if preparation.get("mode") not in PREPARED_SELECTION_MODES:
         raise CombatEngineError("this character does not prepare level 1+ spells")
     normalized_event = str(event).strip().lower().replace("-", "_")
     if normalized_event not in {"setup", "long_rest", "level_up"}:
@@ -1185,7 +1188,7 @@ def _prepared_limit(sheet: dict[str, Any], edition: str, source: str, level: int
             "wizard": "intelligence",
         }[source]
         score = int(sheet.get("abilities", {}).get(ability_name, {}).get("score", 10) or 10)
-        modifier = (score - 10) // 2
+        modifier = ability_modifier(score)
         class_levels = level // 2 if source == "paladin" else level
         return max(1, class_levels + modifier)
     if edition == "2014" and source in {"bard", "ranger", "sorcerer", "warlock"}:

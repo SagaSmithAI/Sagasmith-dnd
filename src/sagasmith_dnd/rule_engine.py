@@ -67,25 +67,26 @@ READ_ONLY_OPS = {
     "ruling.require",
 }
 ATOMIC_AFTER_EVENTS = {"attack.after", "turn.end", "duration.advance"}
-EXTERNAL_RULING_KINDS = frozenset(
-    {
-        "player_owned_choice",
-        "owner_approval",
-        "permission_escalation",
-        "missing_or_conflicting_source_review",
-    }
+DERIVED_STAT_MODIFIER_TARGETS = frozenset(
+    {"armor_class", "initiative", "passive_perception"}
 )
-AGENT_RULING_KINDS = frozenset(
-    {
-        "agent_dm_adjudication",
-        "source_or_scene_fact",
-        "descriptive_activity",
-        "generic_spell_effect",
-        "ready_release_effect",
-        "environmental_consequence",
-        "module_specific_procedure",
-    }
+EXTERNAL_RULING_KIND_ORDER = (
+    "player_owned_choice",
+    "owner_approval",
+    "permission_escalation",
+    "missing_or_conflicting_source_review",
 )
+AGENT_RULING_KIND_ORDER = (
+    "agent_dm_adjudication",
+    "source_or_scene_fact",
+    "descriptive_activity",
+    "generic_spell_effect",
+    "ready_release_effect",
+    "environmental_consequence",
+    "module_specific_procedure",
+)
+EXTERNAL_RULING_KINDS = frozenset(EXTERNAL_RULING_KIND_ORDER)
+AGENT_RULING_KINDS = frozenset(AGENT_RULING_KIND_ORDER)
 RULING_KINDS = AGENT_RULING_KINDS | EXTERNAL_RULING_KINDS
 
 
@@ -130,10 +131,10 @@ def rule_event_ruling_kind(
         for item in pending
         if isinstance(item, dict)
     }
-    external = sorted(kinds & EXTERNAL_RULING_KINDS)
+    external = [kind for kind in EXTERNAL_RULING_KIND_ORDER if kind in kinds]
     if external:
         return external[0]
-    agent = sorted(kinds & AGENT_RULING_KINDS)
+    agent = [kind for kind in AGENT_RULING_KIND_ORDER if kind in kinds]
     return agent[0] if agent else "agent_dm_adjudication"
 
 
@@ -555,7 +556,7 @@ def _validate_event_operation(event: str, operation: dict[str, Any]) -> None:
         allowed_targets = {
             "attack.preflight": {"attack_bonus", "target_ac"},
             "check.before": {"check_bonus"},
-            "character.derive": {"armor_class", "initiative", "passive_perception"},
+            "character.derive": DERIVED_STAT_MODIFIER_TARGETS,
             "spellbook.copy.before": {"copy_cost_percent", "copy_time_percent"},
         }.get(event, set())
         if target not in allowed_targets:

@@ -9,15 +9,18 @@ from typing import Any
 
 from sagasmith_dnd.abilities import ABILITY_NAMES, SKILL_ABILITIES
 from sagasmith_dnd.ability_generation import normalize_ability_generation
+from sagasmith_dnd.actor_types import NON_PLAYER_CHARACTER_TYPES
 from sagasmith_dnd.conditions import (
     apply_effect_conditions,
     condition_ids,
     reconcile_ended_effect_conditions,
 )
 from sagasmith_dnd.editions import DEFAULT_CHARACTER_EDITION, normalize_dnd_edition
+from sagasmith_dnd.engine import ability_modifier, proficiency_bonus
 from sagasmith_dnd.game_time import TICKS_PER_DAY, TICKS_PER_HOUR, TICKS_PER_MINUTE
 from sagasmith_dnd.hit_points import effective_hit_point_maximum_value
 from sagasmith_dnd.rule_engine import (
+    DERIVED_STAT_MODIFIER_TARGETS,
     EXTERNAL_RULING_KINDS,
     ResolutionContext,
     RuleEventRulingRequiredError,
@@ -25,8 +28,16 @@ from sagasmith_dnd.rule_engine import (
     core_receipts,
 )
 from sagasmith_dnd.spell_resolution import normalize_spell_resolution
+from sagasmith_dnd.vocabulary import (
+    ATTACK_MODES,
+    DENOMINATION_CP_VALUES,
+    DENOMINATIONS,
+    GAMEPLAY_VISIBILITY_SCOPES,
+    PLAYER_GAMEPLAY_VISIBILITY_SCOPES,
+    PREPARATION_MODES,
+    PREPARED_SELECTION_MODES,
+)
 
-DENOMINATIONS = ("cp", "sp", "ep", "gp", "pp")
 ITEM_KINDS = {
     "weapon",
     "armor",
@@ -95,6 +106,9 @@ EFFECT_PERIODS = {
     "hour",
     "day",
 }
+# Compatibility names retained for callers that imported these from the card schema.
+EFFECT_VISIBILITY_SCOPES = GAMEPLAY_VISIBILITY_SCOPES
+PLAYER_EFFECT_VISIBILITY_SCOPES = PLAYER_GAMEPLAY_VISIBILITY_SCOPES
 
 
 def _uuid() -> str:
@@ -618,7 +632,7 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
         if category not in {"simple", "martial", "natural", "improvised", "other"}:
             raise ValueError(f"{field}.category is invalid")
         attack_type = _text(mechanics.get("attack_type"), f"{field}.attack_type", default="melee")
-        if attack_type not in {"melee", "ranged"}:
+        if attack_type not in ATTACK_MODES:
             raise ValueError(f"{field}.attack_type is invalid")
         attack_ability = _text(
             mechanics.get("attack_ability"), f"{field}.attack_ability", default="strength"
@@ -1790,7 +1804,7 @@ def validate_character_sheet(
         {"mode", "max_prepared", "changes_on", "selected_spell_ids"},
     )
     preparation_mode = _text(preparation["mode"], "sheet.spellcasting.preparation.mode")
-    if preparation_mode not in {"none", "known", "prepared", "spellbook"}:
+    if preparation_mode not in PREPARATION_MODES:
         raise ValueError("sheet.spellcasting.preparation.mode is invalid")
     changes_on = _text(preparation["changes_on"], "sheet.spellcasting.preparation.changes_on")
     if changes_on not in {"long_rest", "manual"}:
@@ -2465,7 +2479,7 @@ def validate_character_notes(
         visibility = _text(
             memory.get("visibility"), f"notes.memories[{index}].visibility", default="dm"
         )
-        if visibility not in {"dm", "party", "public"}:
+        if visibility not in GAMEPLAY_VISIBILITY_SCOPES:
             raise ValueError("memory visibility is invalid")
         status = _text(memory.get("status"), f"notes.memories[{index}].status", default="active")
         if status not in {"active", "resolved", "superseded"}:
@@ -2522,7 +2536,7 @@ def validate_character_notes(
         ],
         "goals": [_object(item, "notes.goals[]") for item in _array(value["goals"], "notes.goals")],
     }
-    if character_type in {"npc", "monster"} and not normalized["profile"]["summary"]:
+    if character_type in NON_PLAYER_CHARACTER_TYPES and not normalized["profile"]["summary"]:
         raise ValueError(f"{character_type} notes.profile.summary is required")
     return normalized
 
@@ -2706,7 +2720,7 @@ def validate_world_effect(value: Any, *, field: str = "world_effect") -> dict[st
         "created_at_elapsed_ticks": created_at_elapsed_ticks,
         "metadata": _object(effect.get("metadata") or {}, f"{field}.metadata"),
     }
-    if normalized["visibility"] not in {"public", "party", "dm"}:
+    if normalized["visibility"] not in EFFECT_VISIBILITY_SCOPES:
         raise ValueError(f"{field}.visibility is invalid")
     ended_reason = _text(effect.get("ended_reason"), f"{field}.ended_reason", maximum=300)
     if ended_reason:
@@ -3105,10 +3119,12 @@ def derive_character_sheet(
 ) -> dict[str, Any]:
     value = validate_character_sheet(sheet)
     level = value["progression"]["level"]
-    proficiency = 2 + (level - 1) // 4
+    proficiency = proficiency_bonus(level)
     active_effects = [effect for effect in value["effects"] if effect["active"]]
     ability_scores = effective_ability_scores(value)
-    ability_modifiers = {ability: (score - 10) // 2 for ability, score in ability_scores.items()}
+    ability_modifiers = {
+        ability: ability_modifier(score) for ability, score in ability_scores.items()
+    }
     saves = {
         ability: ability_modifiers[ability]
         + entry["bonus"]
@@ -3126,7 +3142,7 @@ def derive_character_sheet(
     total_weight = _inventory_weight_oz(inventory)
     wallet_cp = sum(
         inventory["wallet"][name] * multiplier
-        for name, multiplier in {"cp": 1, "sp": 10, "ep": 50, "gp": 100, "pp": 1000}.items()
+        for name, multiplier in DENOMINATION_CP_VALUES.items()
     )
     spell_ability = value["spellcasting"]["ability"]
     spell_attack_bonus_override = value["spellcasting"]["attack_bonus_override"]
@@ -3265,7 +3281,7 @@ def derive_character_sheet(
         if modifier["op"] != "modifier.add":
             continue
         target = str(modifier.get("target") or "")
-        if target in {"armor_class", "initiative", "passive_perception"}:
+        if target in DERIVED_STAT_MODIFIER_TARGETS:
             derived[target] = int(derived[target]) + int(modifier.get("value", 0) or 0)
         else:
             derived["unresolved_rules"] = sorted(
@@ -3472,7 +3488,7 @@ def set_spell_prepared(sheet: dict[str, Any], spell_id: str, prepared: bool) -> 
     """Set one preparation during card setup; live rest changes use an atomic full list."""
     value = validate_character_sheet(sheet)
     preparation = value["spellcasting"]["preparation"]
-    if preparation["mode"] not in {"prepared", "spellbook"}:
+    if preparation["mode"] not in PREPARED_SELECTION_MODES:
         raise ValueError("this character does not prepare spells")
     spell = next((entry for entry in value["content"]["spells"] if entry["id"] == spell_id), None)
     if spell is None:

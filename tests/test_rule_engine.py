@@ -17,6 +17,7 @@ from sagasmith_dnd.rule_engine import (
     RuleEventRulingRequiredError,
     apply_rule_event,
     resolution_context,
+    rule_event_ruling_kind,
     run_mechanic_tests,
     validate_source_bound_mechanics,
 )
@@ -478,6 +479,16 @@ def test_character_rule_pauses_preserve_agent_and_external_ownership() -> None:
     with pytest.raises(RuleEventRulingRequiredError) as choice:
         validate_character_sheet(default_character_sheet(), rules=choice_rules)
     assert choice.value.ruling_kind == "player_owned_choice"
+
+
+def test_multiple_ruling_requirements_use_the_canonical_priority() -> None:
+    pending = [
+        {"ruling_kind": "module_specific_procedure"},
+        {"ruling_kind": "missing_or_conflicting_source_review"},
+        {"ruling_kind": "player_owned_choice"},
+    ]
+
+    assert rule_event_ruling_kind("pending_ruling", pending) == "player_owned_choice"
 
 
 def test_derived_rule_pauses_publish_structured_agent_requirements() -> None:

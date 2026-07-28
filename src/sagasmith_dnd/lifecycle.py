@@ -6,6 +6,7 @@ from copy import deepcopy
 from dataclasses import asdict
 from typing import Any
 
+from sagasmith_dnd.activities import ACTIVITY_CONTENT_SECTIONS
 from sagasmith_dnd.character_schema import effective_hit_point_maximum, set_exhaustion_level
 from sagasmith_dnd.combat_engine import CombatEngineError
 from sagasmith_dnd.conditions import (
@@ -15,7 +16,7 @@ from sagasmith_dnd.conditions import (
     reconcile_ended_effect_conditions,
 )
 from sagasmith_dnd.editions import normalize_dnd_edition
-from sagasmith_dnd.engine import roll
+from sagasmith_dnd.engine import ability_modifier, roll
 from sagasmith_dnd.game_time import (
     TICKS_PER_DAY,
     TICKS_PER_HOUR,
@@ -874,7 +875,7 @@ def apply_rest(
                 direction="recover",
             )
             recovered[f"hit_dice:{key}"] = mutation["amount"]
-    for section in ("activities", "features", "feats"):
+    for section in ACTIVITY_CONTENT_SECTIONS:
         for index, item in enumerate(value.get("content", {}).get(section, [])):
             recover_resource(item.get("uses"), f"{section}:{index}:uses")
     for index, item in enumerate(value.get("inventory", {}).get("items", [])):
@@ -1359,7 +1360,7 @@ def roll_rest_hit_dice(
 
 def _constitution_modifier(sheet: dict[str, Any]) -> int:
     score = int(sheet.get("abilities", {}).get("constitution", {}).get("score", 10) or 10)
-    return (score - 10) // 2
+    return ability_modifier(score)
 
 
 def _hit_die_sides(key: str, resource: dict[str, Any]) -> int:

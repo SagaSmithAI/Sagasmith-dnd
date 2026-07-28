@@ -7,6 +7,7 @@ from copy import deepcopy
 from typing import Any
 
 from sagasmith_dnd.abilities import ABILITY_IDS
+from sagasmith_dnd.vocabulary import ATTACK_MODES
 
 SPELL_RESOLUTION_MECHANIC_ID = "dnd5e.core.spell.structured_resolution"
 
@@ -219,7 +220,7 @@ def normalize_spell_resolution(value: Any, field: str = "spell.resolution") -> d
             },
         )
         attack_mode = _text(attack.get("mode"), f"{field}.attack.mode").casefold()
-        if attack_mode not in {"melee", "ranged"}:
+        if attack_mode not in ATTACK_MODES:
             raise ValueError(f"{field}.attack.mode is invalid")
         count = _object(attack.get("count") or {}, f"{field}.attack.count")
         _reject_unknown(
