@@ -881,6 +881,7 @@ def test_agent_can_compile_a_custom_statblock_action_without_a_python_branch() -
                                     "ability": "wisdom",
                                     "dc": 14,
                                     "source": "Prismatic Pulse",
+                                    "success_reduction": "none",
                                 },
                             },
                             {

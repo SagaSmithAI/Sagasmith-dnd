@@ -113,6 +113,7 @@ _STEP_FIELDS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
                 "advantage",
                 "disadvantage",
                 "source",
+                "success_reduction",
             }
         ),
     ),
@@ -842,6 +843,13 @@ def _validate_common_concrete_arguments(
     if "dc" in arguments and not _is_result_ref(arguments["dc"]):
         if not 1 <= int(arguments["dc"]) <= 40:
             raise ResolutionPlanBindingError("dc must be in the range 1..40")
+    if "success_reduction" in arguments and not _is_result_ref(
+        arguments["success_reduction"]
+    ):
+        if arguments["success_reduction"] not in {"full", "half", "none"}:
+            raise ResolutionPlanBindingError(
+                "success_reduction must be full, half, or none"
+            )
     for field in (
         "advantage",
         "critical",
