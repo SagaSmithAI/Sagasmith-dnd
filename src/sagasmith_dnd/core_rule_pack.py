@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.43.0"
+CORE_RULE_PACK_VERSION = "1.44.0"
 
 
 @dataclass(frozen=True)
@@ -672,6 +672,16 @@ BOUNDARIES = (
         "sagasmith_dnd_mcp.server.combat_cast_spell|combat_magic_missile_defense",
         ("SagaSmith-dnd-mcp/tests/test_magic_missile_mcp.py",),
         "runtime:mcp/magic-missile-targeting-darts-shield",
+    ),
+    CoreBoundary(
+        "dnd5e.core.mcp.save_damage_atomicity",
+        ("2014", "2024"),
+        (
+            "sagasmith_dnd_mcp.server.combat_save_damage|"
+            "combat_engine.resolve_save_damage_to_sheets"
+        ),
+        ("SagaSmith-dnd-mcp/tests/test_agent_save_damage_mcp.py",),
+        "runtime:mcp/source-bound-save-and-damage",
     ),
     CoreBoundary(
         "dnd5e.core.mcp.duration_clock",

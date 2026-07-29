@@ -43,6 +43,7 @@ REQUIRED_BOUNDARIES = {
     "dnd5e.core.mcp.opportunity_melee_only",
     "dnd5e.core.mcp.reaction_defense_atomicity",
     "dnd5e.core.mcp.shield_attack_reaction_atomicity",
+    "dnd5e.core.mcp.save_damage_atomicity",
     "dnd5e.core.mcp.duration_clock",
     "dnd5e.core.mcp.combat_spell_boundary",
     "dnd5e.core.mcp.pending_ruling_atomicity",
