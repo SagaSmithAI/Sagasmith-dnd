@@ -818,6 +818,68 @@ def test_required_attunement_suppresses_all_equipment_magic_properties() -> None
     assert attack["on_hit_effect"] == "target burns"
 
 
+def test_weapon_cards_preserve_reviewed_source_bound_resolution_plans() -> None:
+    source_excerpt = "On a hit, the binding blade restrains the target."
+    sheet = default_character_sheet()
+    sheet, weapon_id = add_inventory_item(
+        sheet,
+        {
+            "id": "binding-blade",
+            "name": "Binding Blade",
+            "kind": "weapon",
+            "description": source_excerpt,
+            "mechanics": {
+                "attack_type": "melee",
+                "damage_formula": "1d6",
+                "damage_type": "slashing",
+                "on_hit_effect": source_excerpt,
+            },
+            "resolution_plan": {
+                "schema_version": 1,
+                "id": "module.binding-blade.on-hit",
+                "source_card_id": "binding-blade",
+                "source_card_kind": "item",
+                "trigger": "attack.after_hit",
+                "slots": {
+                    "target": {
+                        "kind": "actor_id",
+                        "owner": "agent",
+                        "description": "The creature hit by the triggering attack.",
+                    },
+                },
+                "steps": [
+                    {
+                        "id": "restrain",
+                        "op": "condition.apply",
+                        "args": {
+                            "target_ids": [{"$slot": "target"}],
+                            "condition_id": "restrained",
+                            "source": "Binding Blade",
+                        },
+                    }
+                ],
+                "citations": [
+                    {
+                        "source": "module-review:binding-blade",
+                        "source_ref": {"chunk_id": "binding-blade"},
+                        "source_excerpt": source_excerpt,
+                    }
+                ],
+            },
+        },
+    )
+    assert weapon_id == "binding-blade"
+    sheet = equip_inventory_item(sheet, weapon_id, "main_hand")
+
+    normalized_item = next(
+        item for item in sheet["inventory"]["items"] if item["id"] == weapon_id
+    )
+    attack = derive_character_sheet(sheet)["inventory"]["weapon_attacks"][0]
+
+    assert normalized_item["resolution_plan"]["fingerprint"]
+    assert attack["resolution_plan"] == normalized_item["resolution_plan"]
+
+
 def test_attunement_enforces_capacity_copies_transfer_and_death() -> None:
     sheet = validate_character_sheet({})
     for index, name in enumerate(("Ring A", "Ring B", "Ring C", "Ring D"), start=1):

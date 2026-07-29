@@ -2384,6 +2384,7 @@ def apply_reviewed_statblock_fill(
     content_cards = [
         *result["content"]["activities"],
         *result["content"]["features"],
+        *weapons.values(),
     ]
     for declaration in resolution_plans:
         if not isinstance(declaration, dict):
@@ -2423,9 +2424,10 @@ def apply_reviewed_statblock_fill(
         if len(matching_cards) != 1:
             raise StatblockImportError(
                 "reviewed resolution plan source_card_id must identify exactly "
-                "one parsed activity or feature"
+                "one parsed activity, feature, or weapon"
             )
         card = matching_cards[0]
+        is_weapon_card = str(card.get("kind") or "") == "weapon"
         reason = " ".join(str(declaration.get("reason") or "").split())
         if not 10 <= len(reason) <= 500:
             raise StatblockImportError(
@@ -2443,10 +2445,14 @@ def apply_reviewed_statblock_fill(
                 "reviewed resolution plan source_card_id must match its parsed card"
             )
         expected_kinds = (
-            {"feature", "trait"}
-            if str(dict(card.get("activation") or {}).get("type") or "")
-            == "passive"
-            else {"activity", "monster_action"}
+            {"item"}
+            if is_weapon_card
+            else (
+                {"feature", "trait"}
+                if str(dict(card.get("activation") or {}).get("type") or "")
+                == "passive"
+                else {"activity", "monster_action"}
+            )
         )
         if compiled_plan.source_card_kind not in expected_kinds:
             raise StatblockImportError(
@@ -2466,25 +2472,34 @@ def apply_reviewed_statblock_fill(
             )
         stored_plan = resolution_plan_template(compiled_plan)
         card["resolution_plan"] = stored_plan
-        card["mechanic_refs"] = list(
-            dict.fromkeys(
-                [
-                    *list(card.get("mechanic_refs") or []),
-                    compiled_plan.id,
-                ]
+        if not is_weapon_card:
+            card["mechanic_refs"] = list(
+                dict.fromkeys(
+                    [
+                        *list(card.get("mechanic_refs") or []),
+                        compiled_plan.id,
+                    ]
+                )
             )
-        )
-        choices = dict(card.get("choices") or {})
-        manual_ruling = dict(choices.pop("manual_ruling", {}) or {})
-        choices["resolution_plan"] = {
-            "id": compiled_plan.id,
-            "fingerprint": compiled_plan.fingerprint,
-        }
-        card["choices"] = choices
+            choices = dict(card.get("choices") or {})
+            manual_ruling = dict(choices.pop("manual_ruling", {}) or {})
+            choices["resolution_plan"] = {
+                "id": compiled_plan.id,
+                "fingerprint": compiled_plan.fingerprint,
+            }
+            card["choices"] = choices
+        else:
+            manual_ruling = {}
         activation = str(
             dict(card.get("activation") or {}).get("type") or "passive"
         )
-        if manual_ruling:
+        if is_weapon_card and str(
+            dict(card.get("mechanics") or {}).get("on_hit_effect") or ""
+        ).strip():
+            resolved_warnings.append(
+                f"{card['name']}: on-hit effect requires DM settlement"
+            )
+        elif manual_ruling:
             resolved_warnings.append(
                 (
                     f"{card['name']}: Multiattack composition requires a DM ruling"

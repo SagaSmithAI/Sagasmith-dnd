@@ -1042,6 +1042,7 @@ def _normalize_item(value: Any, field: str, *, generate_id: bool = True) -> dict
         "uses",
         "charges",
         "mechanics",
+        "resolution_plan",
     }
     _reject_unknown(item, field, allowed)
     item_id = _text(
@@ -1067,7 +1068,7 @@ def _normalize_item(value: Any, field: str, *, generate_id: bool = True) -> dict
             raise ValueError(f"{field}.equipped_slot is invalid")
     uses = _normalize_resource(item.get("uses") or {}, f"{field}.uses")
     charges = _normalize_resource(item.get("charges") or {}, f"{field}.charges")
-    return {
+    result = {
         "id": item_id,
         "name": _text(item.get("name"), f"{field}.name", maximum=300),
         "kind": kind,
@@ -1097,6 +1098,14 @@ def _normalize_item(value: Any, field: str, *, generate_id: bool = True) -> dict
         "charges": charges,
         "mechanics": _normalize_item_mechanics(kind, item.get("mechanics"), f"{field}.mechanics"),
     }
+    if item.get("resolution_plan") is not None:
+        result["resolution_plan"] = _normalize_embedded_resolution_plan(
+            item["resolution_plan"],
+            f"{field}.resolution_plan",
+            source_card_id=item_id,
+            source_card_kinds={"item"},
+        )
+    return result
 
 
 def validate_inventory(value: Any) -> dict[str, Any]:
@@ -3351,6 +3360,11 @@ def _weapon_attacks(
                     for part in (mechanics["additional_damage"] if magic_properties_active else [])
                 ],
                 "on_hit_effect": (mechanics["on_hit_effect"] if magic_properties_active else ""),
+                "resolution_plan": (
+                    copy.deepcopy(item.get("resolution_plan"))
+                    if magic_properties_active
+                    else None
+                ),
                 "magic_bonus": magic_bonus,
                 "magic_suppressed_by_attunement": (
                     not magic_properties_active

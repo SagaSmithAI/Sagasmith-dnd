@@ -981,6 +981,96 @@ def test_agent_can_compile_a_custom_statblock_action_without_a_python_branch() -
     assert filled["fill"]["resolution_plans"][0]["resolution_plan"]["fingerprint"]
 
 
+def test_agent_can_compile_a_weapon_on_hit_plan_from_the_exact_statblock_text() -> None:
+    parsed = parse_2014_statblock(
+        GIANT_SPIDER,
+        source_key="module-review:giant-spider-web-plan",
+    )
+    web = next(
+        item
+        for item in parsed.sheet["inventory"]["items"]
+        if item["id"] == "web-recharge-5-6"
+    )
+    source_excerpt = web["description"]
+    filled = apply_reviewed_statblock_fill(
+        parsed.sheet,
+        {
+            "resolution_plans": [
+                {
+                    "source_card_id": web["id"],
+                    "reason": (
+                        "The Agent mapped the printed on-hit restraint to a "
+                        "source-bound condition plan."
+                    ),
+                    "resolution_plan": {
+                        "schema_version": 1,
+                        "id": "module.giant-spider.web.on-hit",
+                        "source_card_id": web["id"],
+                        "source_card_kind": "item",
+                        "trigger": "attack.after_hit",
+                        "slots": {
+                            "source_actor": {
+                                "kind": "actor_id",
+                                "owner": "agent",
+                                "description": (
+                                    "The giant spider that made the triggering attack."
+                                ),
+                            },
+                            "target": {
+                                "kind": "actor_id",
+                                "owner": "agent",
+                                "description": (
+                                    "The creature hit by the triggering web attack."
+                                ),
+                            },
+                        },
+                        "steps": [
+                            {
+                                "id": "targets",
+                                "op": "target.validate",
+                                "args": {
+                                    "source_actor_id": {"$slot": "source_actor"},
+                                    "target_ids": [{"$slot": "target"}],
+                                    "exclude_self": True,
+                                    "require_visible": True,
+                                    "source": "Web",
+                                },
+                            },
+                            {
+                                "id": "restrain",
+                                "op": "condition.apply",
+                                "args": {
+                                    "target_ids": [{"$slot": "target"}],
+                                    "condition_id": "restrained",
+                                    "source": "Web",
+                                },
+                            },
+                        ],
+                        "citations": [
+                            {
+                                "source": "module-review:giant-spider-web-plan",
+                                "source_ref": {"chunk_id": "giant-spider-web"},
+                                "source_excerpt": source_excerpt,
+                            }
+                        ],
+                    },
+                }
+            ]
+        },
+    )
+    compiled_web = next(
+        item
+        for item in filled["sheet"]["inventory"]["items"]
+        if item["id"] == web["id"]
+    )
+
+    assert compiled_web["resolution_plan"]["source_card_kind"] == "item"
+    assert compiled_web["resolution_plan"]["fingerprint"]
+    assert filled["resolved_warnings"] == [
+        "Web (Recharge 5-6): on-hit effect requires DM settlement"
+    ]
+
+
 def test_descriptive_statblock_sections_preserve_nonstandard_action_economies() -> None:
     parsed = parse_2014_statblock(
         COMMONER

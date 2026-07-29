@@ -3904,6 +3904,39 @@ def test_common_use_object_action_preserves_the_reviewed_source_payload() -> Non
     }
 
 
+def test_lookalike_critical_text_does_not_gain_an_automatic_attack_contract() -> None:
+    effect = (
+        "If the target is a creature and Durnan rolls a 20 on the d20 for the "
+        "attack roll, the target takes an extra 14 slashing damage, and Durnan "
+        "rolls another d20. On a roll of 20, he lops off one of the target's "
+        "limbs, or some other part of its body if it is limbless."
+    )
+    attacker = _actor("durnan")
+    attacker["derived"]["inventory"]["weapon_attacks"] = [
+        {
+            "item_id": "lookalike-sword",
+            "attack_type": "melee",
+            "reach_ft": 5,
+            "properties": [],
+            "attack_bonus": 8,
+            "damage_expression": "2d6 + 4",
+            "damage_type": "slashing",
+            "additional_damage": [],
+            "on_hit_effect": effect,
+        }
+    ]
+    target = _actor("target")
+
+    plan = preflight_attack(
+        attacker,
+        target,
+        action={"weapon_id": "lookalike-sword"},
+    )
+
+    assert plan["critical_followup"] is None
+    assert plan["on_hit_effect"] == effect
+
+
 def test_grimvault_fixed_critical_followup_is_conditional_and_simultaneous() -> None:
     effect = (
         "If the target is an object, the hit instead deals 16 slashing damage. "

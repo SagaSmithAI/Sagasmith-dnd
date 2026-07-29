@@ -175,11 +175,11 @@ class NeedsRulingError(CombatEngineError):
 
 
 def structured_critical_followup(effect: str) -> dict[str, Any] | None:
-    """Parse a complete fixed-damage Sword of Sharpness statblock rider.
+    """Compile a reviewed fixed-damage Sword of Sharpness compatibility rider.
 
-    Reviewed NPC statblocks replace the magic item's 4d6 rider with its
-    average (14). The rider applies only when the attack die itself is a 20,
-    followed by a separate d20 that can cause anatomical loss.
+    This helper is intentionally never called by ordinary attack preflight.
+    Lookalike prose cannot grant a mechanical contract; imported custom items
+    must carry a reviewed, source-bound ``resolution_plan`` instead.
     """
 
     text = " ".join(str(effect or "").split())
@@ -1130,9 +1130,7 @@ def preflight_attack(
                 missing=("multiple_on_hit_effects",),
             )
         on_hit_effect = str(ammunition_slaying["source_excerpt"])
-    critical_followup = structured_critical_followup(on_hit_effect)
-    if critical_followup is not None:
-        on_hit_effect = ""
+    critical_followup = None
     range_result = _attack_range(attacker, target, weapon, attack_mode=attack_mode)
     if range_result["disadvantage"]:
         context["disadvantage"] = True
