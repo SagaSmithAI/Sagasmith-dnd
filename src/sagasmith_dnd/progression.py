@@ -10,6 +10,7 @@ from sagasmith_dnd.combat_engine import CombatEngineError
 from sagasmith_dnd.editions import normalize_dnd_edition
 from sagasmith_dnd.engine import ability_modifier, roll
 from sagasmith_dnd.resources import resize_bounded_resource
+from sagasmith_dnd.spells import prepared_spell_limit, synchronize_prepared_spell_limit
 from sagasmith_dnd.vocabulary import PREPARED_SELECTION_MODES
 
 FULL_CASTER_SLOTS: dict[int, tuple[int, ...]] = {
@@ -540,6 +541,10 @@ def synchronize_class_feature_resources(sheet: dict[str, Any]) -> dict[str, Any]
                 "source_feature_ids": list(dict.fromkeys(attack_sources)),
             }
         )
+    preparation_sync = synchronize_prepared_spell_limit(value)
+    value = preparation_sync["sheet"]
+    if preparation_sync["change"] is not None:
+        changes.append(preparation_sync["change"])
     return {"sheet": value, "changes": changes}
 
 
@@ -712,9 +717,12 @@ def _advance_spellcasting(
             if old_max != new_max:
                 slot_changes[str(slot_level)] = {"old_max": old_max, "new_max": new_max}
     if mode in PREPARED_SELECTION_MODES:
-        modifier = _ability_modifier(sheet, ability)
-        class_contribution = new_level // 2 if key == "paladin" else new_level
-        preparation["max_prepared"] = max(1, class_contribution + modifier)
+        preparation["max_prepared"] = prepared_spell_limit(
+            sheet,
+            normalize_dnd_edition(sheet.get("edition")),
+            key,
+            new_level,
+        )
     return {
         "kind": kind,
         "ability": ability,

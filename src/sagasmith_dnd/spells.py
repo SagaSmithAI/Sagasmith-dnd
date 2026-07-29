@@ -1096,7 +1096,7 @@ def replace_prepared_spells(
 
     source_limits: dict[str, int] = {}
     for source, chosen in by_source_new.items():
-        limit = _prepared_limit(value, edition, source, classes[source])
+        limit = prepared_spell_limit(value, edition, source, classes[source])
         source_limits[source] = limit
         if len(chosen) > limit:
             raise CombatEngineError(f"{source} prepared spell selection exceeds {limit}")
@@ -1215,10 +1215,26 @@ def _edition(sheet: dict[str, Any]) -> str:
         raise CombatEngineError(str(exc)) from exc
 
 
-def _prepared_limit(sheet: dict[str, Any], edition: str, source: str, level: int) -> int:
+def prepared_spell_limit(
+    sheet: dict[str, Any],
+    edition: str,
+    source: str,
+    level: int,
+) -> int:
+    """Return one class's canonical prepared-spell limit.
+
+    The limit is derived from the current ability score for 2014 prepared
+    casters and from the class table for 2024 casters.  Keeping this calculation
+    public gives level advancement, content application, and maintenance
+    migrations one authoritative implementation.
+    """
+
+    source = _class_key(source)
     if edition == "2024" and source in _PREPARED_2024:
         return _PREPARED_2024[source][level - 1]
     if edition == "2014" and source in _PREPARED_2014:
+        if source == "paladin" and level < 2:
+            return 0
         ability_name = {
             "cleric": "wisdom",
             "druid": "wisdom",
@@ -1232,6 +1248,52 @@ def _prepared_limit(sheet: dict[str, Any], edition: str, source: str, level: int
     if edition == "2014" and source in {"bard", "ranger", "sorcerer", "warlock"}:
         raise CombatEngineError(f"2014 {source} uses spells known, not prepared spells")
     return int(sheet.get("spellcasting", {}).get("preparation", {}).get("max_prepared", 0) or 0)
+
+
+def synchronize_prepared_spell_limit(sheet: dict[str, Any]) -> dict[str, Any]:
+    """Recompute the stored prepared-spell cap from class levels and abilities.
+
+    ``max_prepared`` is persisted so the schema can validate atomic preparation
+    changes, but it is a derived rule value.  Any operation that changes a class
+    level or spellcasting ability must therefore be able to reconcile it without
+    replaying the original level-up transaction.
+    """
+
+    value = deepcopy(sheet)
+    preparation = value.get("spellcasting", {}).get("preparation", {})
+    if preparation.get("mode") not in PREPARED_SELECTION_MODES:
+        return {"sheet": value, "change": None, "limits": {}}
+    edition = _edition(value)
+    classes = {
+        _class_key(item.get("name")): int(item.get("level", 0) or 0)
+        for item in value.get("progression", {}).get("classes", [])
+        if int(item.get("level", 0) or 0) > 0
+    }
+    eligible = _PREPARED_2014 if edition == "2014" else set(_PREPARED_2024)
+    limits = {
+        source: prepared_spell_limit(value, edition, source, level)
+        for source, level in classes.items()
+        if source in eligible
+    }
+    if not limits:
+        return {"sheet": value, "change": None, "limits": {}}
+    old_limit = int(preparation.get("max_prepared", 0) or 0)
+    new_limit = sum(limits.values())
+    selected_count = len(preparation.get("selected_spell_ids") or [])
+    if selected_count > new_limit:
+        raise CombatEngineError(
+            "prepared spell selection exceeds the recomputed class and ability limit"
+        )
+    preparation["max_prepared"] = new_limit
+    change = None
+    if old_limit != new_limit:
+        change = {
+            "target": "spellcasting.preparation.max_prepared",
+            "old_value": old_limit,
+            "new_value": new_limit,
+            "class_limits": limits,
+        }
+    return {"sheet": value, "change": change, "limits": limits}
 
 
 def _maximum_spell_level(edition: str, source: str, level: int) -> int:

@@ -388,6 +388,54 @@ def test_extra_attack_scaling_uses_the_highest_class_feature_without_stacking() 
     }
 
 
+@pytest.mark.parametrize(
+    ("class_name", "ability", "mode", "expected"),
+    [
+        ("Cleric", "wisdom", "prepared", 8),
+        ("Druid", "wisdom", "prepared", 8),
+        ("Paladin", "charisma", "prepared", 6),
+        ("Wizard", "intelligence", "spellbook", 8),
+    ],
+)
+def test_resource_sync_recomputes_2014_prepared_limit_after_an_ability_change(
+    class_name: str,
+    ability: str,
+    mode: str,
+    expected: int,
+) -> None:
+    sheet = default_character_sheet()
+    sheet["progression"]["level"] = 4
+    sheet["progression"]["classes"] = [
+        {"name": class_name, "level": 4, "subclass": "", "hit_die": 8}
+    ]
+    sheet["abilities"][ability]["score"] = 18
+    sheet["spellcasting"]["ability"] = ability
+    sheet["spellcasting"]["preparation"] = {
+        "mode": mode,
+        "max_prepared": expected - 1,
+        "changes_on": "long_rest",
+        "selected_spell_ids": [],
+    }
+    if mode == "spellbook":
+        sheet["spellcasting"]["spellbook"] = {"enabled": True, "spell_ids": []}
+
+    synchronized = synchronize_class_feature_resources(sheet)
+
+    assert synchronized["sheet"]["spellcasting"]["preparation"]["max_prepared"] == expected
+    assert synchronized["changes"] == [
+        {
+            "target": "spellcasting.preparation.max_prepared",
+            "old_value": expected - 1,
+            "new_value": expected,
+            "class_limits": {class_name.casefold(): expected},
+        }
+    ]
+    assert (
+        synchronize_class_feature_resources(synchronized["sheet"])["changes"]
+        == []
+    )
+
+
 def test_per_level_hp_bonus_is_separate_from_the_minimum_class_gain() -> None:
     sheet = _single_class_sheet("Cleric", hit_die=8, constitution=16, hp=(7, 12))
     sheet["abilities"]["wisdom"]["score"] = 14
