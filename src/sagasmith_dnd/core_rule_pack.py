@@ -157,6 +157,18 @@ BOUNDARIES = (
         "bundled:srd2014/02_Classes/Rogue.md#cunning-action",
     ),
     CoreBoundary(
+        "dnd5e.core.activity.battle_cry",
+        ("2014",),
+        "combat_engine.settle_core_activity_effect",
+        (
+            "tests/test_combat_engine.py::"
+            "test_battle_cry_grants_temporary_attack_advantage_and_bonus_attack",
+            "tests/test_statblocks.py::"
+            "test_orc_war_chief_standard_traits_and_multiattack_are_structured",
+        ),
+        "source:monster-manual-2014:p246",
+    ),
+    CoreBoundary(
         "dnd5e.core.activity.preserve_life",
         ("2014",),
         "combat_engine.resolve_preserve_life_to_sheets",
@@ -326,6 +338,51 @@ BOUNDARIES = (
             "test_kobold_attack_traits_are_structured",
         ),
         "source:monster-manual-2014:p195",
+    ),
+    CoreBoundary(
+        "dnd5e.core.attack.battle_cry",
+        ("2014",),
+        "combat_engine.preflight_attack",
+        (
+            "tests/test_combat_engine.py::"
+            "test_battle_cry_grants_temporary_attack_advantage_and_bonus_attack",
+        ),
+        "source:monster-manual-2014:p246",
+    ),
+    CoreBoundary(
+        "dnd5e.core.attack.sneak_attack",
+        ("2014",),
+        "combat_engine._sneak_attack_plan|combat_engine.resolve_attack_action",
+        (
+            "tests/test_combat_engine.py::"
+            "test_sneak_attack_requires_card_feature_and_records_critical_bonus_damage",
+            "tests/test_combat_engine.py::"
+            "test_statblock_sneak_attack_uses_recorded_formula_without_rogue_levels",
+            "tests/test_statblocks.py::"
+            "test_spy_standard_traits_are_structured_from_their_exact_text",
+        ),
+        "bundled:srd2014/02_Classes/Rogue.md#sneak-attack|"
+        "source:monster-manual-2014:p349",
+    ),
+    CoreBoundary(
+        "dnd5e.core.attack.weapon_grip",
+        ("2014", "2024"),
+        "combat_engine.preflight_attack",
+        (
+            "tests/test_combat_engine.py::"
+            "test_versatile_weapon_grip_uses_exact_alternate_damage_once",
+        ),
+        "bundled:srd/equipment/weapon-properties",
+    ),
+    CoreBoundary(
+        "dnd5e.core.monster.aggressive",
+        ("2014",),
+        "combat_engine.settle_core_activity_effect",
+        (
+            "tests/test_combat_engine.py::"
+            "test_aggressive_grants_only_toward_visible_hostile_movement",
+        ),
+        "source:monster-manual-2014:p246",
     ),
     CoreBoundary(
         "dnd5e.core.check.keen_perception",

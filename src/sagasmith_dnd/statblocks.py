@@ -544,6 +544,46 @@ def _parse_multiattack(description: str, items: list[dict[str, Any]]) -> list[di
     for group in sentence_groups:
         if "attack" not in group.casefold():
             continue
+        named_alternatives = re.search(
+            r"(?i)\bmakes?\s+"
+            r"(one|once|two|twice|three|thrice|four|five|six|\d+)\s+attacks?\s+"
+            r"with\s+(?:its|his|her|their)\s+"
+            r"([a-z][a-z '\-]+?)\s+or\s+"
+            r"(?:(?:its|his|her|their)\s+)?([a-z][a-z '\-]+?)\s*$",
+            group,
+        )
+        if named_alternatives is not None:
+            count = _count(named_alternatives.group(1))
+            alternatives = [
+                _weapon_id(named_alternatives.group(2), weapons),
+                _weapon_id(named_alternatives.group(3), weapons),
+            ]
+            if count is None or any(weapon_id is None for weapon_id in alternatives):
+                return []
+            for weapon_id in alternatives:
+                assert weapon_id is not None
+                weapon = next(item for item in items if item["id"] == weapon_id)
+                mechanics = dict(weapon.get("mechanics") or {})
+                modes = [str(mechanics.get("attack_type") or "melee")]
+                if "thrown" in {
+                    str(value).casefold()
+                    for value in mechanics.get("properties") or []
+                }:
+                    modes.append("ranged")
+                options.extend(
+                    {
+                        "id": mode,
+                        "attacks": [
+                            {
+                                "weapon_id": weapon_id,
+                                "attack_mode": mode,
+                                "count": count,
+                            }
+                        ],
+                    }
+                    for mode in modes
+                )
+            continue
         alternative = re.search(
             r"(?i)\battacks?\s+"
             r"(one|once|two|twice|three|thrice|four|five|six|\d+)\s*,?\s+"
@@ -928,6 +968,114 @@ def _keen_perception_source_trait(description: str) -> dict[str, Any] | None:
     }
 
 
+def _aggressive_source_trait(description: str) -> dict[str, Any] | None:
+    normalized = " ".join(description.split())
+    if not re.fullmatch(
+        r"As a bonus action, the [A-Za-z][A-Za-z '\-]* can move up to its "
+        r"speed toward a hostile creature that it can see\.",
+        normalized,
+        flags=re.IGNORECASE,
+    ):
+        return None
+    return {
+        "kind": "aggressive",
+        "trigger": "bonus_action",
+        "maximum_movement": "speed",
+        "requires_visible_hostile_target": True,
+        "direction": "toward_target",
+    }
+
+
+def _cunning_action_source_trait(description: str) -> dict[str, Any] | None:
+    normalized = " ".join(description.split())
+    if not re.fullmatch(
+        r"On each of its turns, the [A-Za-z][A-Za-z '\-]* can use a bonus "
+        r"action to take the Dash, Disengage, or Hide action\.",
+        normalized,
+        flags=re.IGNORECASE,
+    ):
+        return None
+    return {
+        "kind": "cunning_action",
+        "trigger": "bonus_action",
+        "options": ["dash", "disengage", "hide"],
+    }
+
+
+def _included_weapon_damage_source_trait(description: str) -> dict[str, Any] | None:
+    normalized = " ".join(description.split())
+    match = re.fullmatch(
+        r"The [A-Za-z][A-Za-z '\-]* deals an extra (?P<average>\d+) "
+        r"\((?P<formula>\d+d\d+)\) damage when it hits with a weapon attack "
+        r"\(included in the attacks?\)\.",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    return {
+        "kind": "included_weapon_damage",
+        "trigger": "weapon_hit",
+        "damage_formula": match.group("formula").casefold(),
+        "average_damage": int(match.group("average")),
+        "embedded_in_weapon_actions": True,
+    }
+
+
+def _battle_cry_source_trait(description: str) -> dict[str, Any] | None:
+    normalized = " ".join(description.split())
+    match = re.fullmatch(
+        r"Each creature of the [^.]{1,80}?'s choice that is within "
+        r"(?P<distance>\d+) feet of it, can hear it, and is not already "
+        r"affected by Battle Cry gains advantage on attack rolls until the "
+        r"start of the [^.]{1,80}?'s next turn\. The "
+        r"[^.]{1,80}? can then make one attack as a bonus action\.",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    return {
+        "kind": "battle_cry",
+        "trigger": "action",
+        "uses": 1,
+        "recovers_on": "long_rest",
+        "range_ft": int(match.group("distance")),
+        "requires_hearing": True,
+        "grants": "attack_advantage",
+        "duration": "until_source_next_turn_start",
+        "grants_source_bonus_attack": True,
+    }
+
+
+def _sneak_attack_source_trait(description: str) -> dict[str, Any] | None:
+    normalized = " ".join(description.split())
+    match = re.fullmatch(
+        r"The [A-Za-z][A-Za-z '\-]* deals an extra (?P<average>\d+) "
+        r"\((?P<formula>\d+d6)\) damage when it hits a target with a weapon "
+        r"attack and has advantage on the attack roll, or when the target is "
+        r"within (?P<distance>\d+) feet of an ally of the "
+        r"[A-Za-z][A-Za-z '\-]* that isn't incapacitated and the "
+        r"[A-Za-z][A-Za-z '\-]* doesn't have disadvantage on the attack roll\.",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    return {
+        "kind": "sneak_attack",
+        "trigger": "eligible_weapon_hit",
+        "damage_formula": match.group("formula").casefold(),
+        "average_damage": int(match.group("average")),
+        "uses_per_turn": 1,
+        "requires_finesse_or_ranged": False,
+        "ally_within_target_ft": int(match.group("distance")),
+        "requires_ally_not_incapacitated": True,
+        "requires_no_disadvantage": True,
+        "alternative": "effective_advantage",
+    }
+
+
 def _source_trait_from_description(description: str) -> dict[str, Any] | None:
     matches = [
         parsed
@@ -936,6 +1084,11 @@ def _source_trait_from_description(description: str) -> dict[str, Any] | None:
             _pack_tactics_source_trait,
             _sunlight_sensitivity_source_trait,
             _keen_perception_source_trait,
+            _aggressive_source_trait,
+            _cunning_action_source_trait,
+            _included_weapon_damage_source_trait,
+            _battle_cry_source_trait,
+            _sneak_attack_source_trait,
         )
         if (parsed := parser(description)) is not None
     ]
@@ -1717,15 +1870,47 @@ def parse_2014_statblock(
         }
         if entry_name in unresolved_multiattacks:
             entry["mechanic_refs"] = [MULTIATTACK_MECHANIC_ID]
-        source_trait = None
-        if activation == "passive":
-            source_trait = _source_trait_from_description(description)
+        source_trait = _source_trait_from_description(description)
         if source_trait is not None:
+            if source_trait["kind"] in {"aggressive", "cunning_action"}:
+                activation = "bonus_action"
+                entry["activation"] = {"type": activation, "cost": 1}
+            elif source_trait["kind"] == "battle_cry":
+                activation = "action"
+                entry["activation"] = {"type": activation, "cost": 1}
+            if source_trait["kind"] == "aggressive":
+                entry["id"] = "dnd5e.core.monster.aggressive"
+            elif source_trait["kind"] == "cunning_action":
+                entry["id"] = "dnd5e.content.srd2014.feature.rogue-cunning-action"
+            elif source_trait["kind"] == "battle_cry":
+                entry["id"] = "dnd5e.core.monster.battle-cry"
+                daily_uses = re.search(
+                    r"\((?P<count>\d+)\s*/\s*Day\)",
+                    entry_name,
+                    flags=re.IGNORECASE,
+                )
+                if daily_uses is None:
+                    raise StatblockImportError(
+                        "Battle Cry needs an explicit uses-per-day source marker"
+                    )
+                count = int(daily_uses.group("count"))
+                entry["uses"] = {
+                    "label": entry_name,
+                    "value": count,
+                    "max": count,
+                    "recovers_on": "long_rest",
+                    "source_key": source_key,
+                }
             entry["activation"]["trigger"] = {
                 "regeneration": "start of its turn",
                 "pack_tactics": "attack roll",
                 "sunlight_sensitivity": "attack roll or sight-based Perception check",
                 "keen_perception": "hearing- or sight-based Perception check",
+                "aggressive": "bonus action on its turn",
+                "cunning_action": "bonus action on its turn",
+                "included_weapon_damage": "weapon hit; included in weapon actions",
+                "battle_cry": "action on its turn",
+                "sneak_attack": "eligible weapon hit once per turn",
             }[str(source_trait["kind"])]
             entry["choices"] = {"source_trait": source_trait}
         reaction_description = (
@@ -1767,6 +1952,30 @@ def parse_2014_statblock(
                     f"{entry_name}: descriptive "
                     f"{activation.replace('_', ' ')} is not automatically settled"
                 )
+            )
+
+    included_damage_traits = [
+        dict(dict(item.get("choices") or {}).get("source_trait") or {})
+        for item in sheet["content"]["features"]
+        if dict(dict(item.get("choices") or {}).get("source_trait") or {}).get(
+            "kind"
+        )
+        == "included_weapon_damage"
+    ]
+    for source_trait in included_damage_traits:
+        formula = str(source_trait.get("damage_formula") or "")
+        if not weapons or any(
+            formula
+            not in {
+                str(part.get("damage_formula") or "").casefold()
+                for part in dict(weapon.get("mechanics") or {}).get(
+                    "additional_damage", []
+                )
+            }
+            for weapon in weapons
+        ):
+            raise StatblockImportError(
+                "included weapon damage is missing from one or more weapon actions"
             )
 
     validated = validate_character_sheet(sheet)

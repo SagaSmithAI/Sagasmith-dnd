@@ -1285,6 +1285,113 @@ def test_keen_perception_trait_is_structured() -> None:
     assert parsed.warnings == ()
 
 
+def test_orc_war_chief_standard_traits_and_multiattack_are_structured() -> None:
+    source = (
+        COMMONER.replace(
+            "**Challenge** 0 (10 XP)",
+            """**Challenge** 4 (1,100 XP)
+
+***Aggressive.*** As a bonus action, the commoner can move up to its speed
+toward a hostile creature that it can see.
+
+***Gruumsh's Fury.*** The commoner deals an extra 4 (1d8) damage when it hits
+with a weapon attack (included in the attacks).""",
+        )
+        .replace(
+            "###### Actions",
+            """###### Actions
+
+***Multiattack.*** The commoner makes two attacks with its club or its spear.
+
+***Battle Cry (1/Day).*** Each creature of the commoner's choice that is within
+30 feet of it, can hear it, and is not already affected by Battle Cry gains
+advantage on attack rolls until the start of the commoner's next turn. The
+commoner can then make one attack as a bonus action.""",
+        )
+        .replace(
+            "*Hit:* 2 (1d4) bludgeoning damage.",
+            """*Hit:* 6 (1d4 plus 1d8) bludgeoning damage.
+
+***Spear.*** *Melee or Ranged Weapon Attack:* +2 to hit, reach 5 ft. or range
+20/60 ft., one target. *Hit:* 7 (1d6 plus 1d8) piercing damage.""",
+        )
+    )
+    parsed = parse_2014_statblock(
+        source,
+        source_key="monster-manual-2014:p246",
+    )
+    activities = {
+        item["name"]: item for item in parsed.sheet["content"]["activities"]
+    }
+    features = {
+        item["name"]: item for item in parsed.sheet["content"]["features"]
+    }
+
+    assert activities["Aggressive"]["id"] == "dnd5e.core.monster.aggressive"
+    battle_cry = activities["Battle Cry (1/Day)"]
+    assert battle_cry["id"] == "dnd5e.core.monster.battle-cry"
+    assert battle_cry["uses"] == {
+        "label": "Battle Cry (1/Day)",
+        "value": 1,
+        "max": 1,
+        "recovers_on": "long_rest",
+        "source_key": "monster-manual-2014:p246",
+        "slot_level": 0,
+    }
+    assert [
+        option["id"]
+        for option in activities["Multiattack"]["choices"]["multiattack_options"]
+    ] == ["melee", "melee-2", "ranged"]
+    assert features["Gruumsh's Fury"]["choices"]["source_trait"][
+        "embedded_in_weapon_actions"
+    ] is True
+    assert parsed.warnings == ()
+
+
+def test_spy_standard_traits_are_structured_from_their_exact_text() -> None:
+    source = COMMONER.replace(
+        "###### Actions",
+        """***Cunning Action.*** On each of its turns, the commoner can use a
+bonus action to take the Dash, Disengage, or Hide action.
+
+***Sneak Attack (1/Turn).*** The commoner deals an extra 7 (2d6) damage when it
+hits a target with a weapon attack and has advantage on the attack roll, or
+when the target is within 5 feet of an ally of the commoner that isn't
+incapacitated and the commoner doesn't have disadvantage on the attack roll.
+
+###### Actions""",
+    )
+    parsed = parse_2014_statblock(
+        source,
+        source_key="monster-manual-2014:p349",
+    )
+    activities = {
+        item["name"]: item for item in parsed.sheet["content"]["activities"]
+    }
+    sneak_attack = next(
+        item
+        for item in parsed.sheet["content"]["features"]
+        if item["name"] == "Sneak Attack (1/Turn)"
+    )
+
+    assert activities["Cunning Action"]["id"] == (
+        "dnd5e.content.srd2014.feature.rogue-cunning-action"
+    )
+    assert sneak_attack["choices"]["source_trait"] == {
+        "kind": "sneak_attack",
+        "trigger": "eligible_weapon_hit",
+        "damage_formula": "2d6",
+        "average_damage": 7,
+        "uses_per_turn": 1,
+        "requires_finesse_or_ranged": False,
+        "ally_within_target_ft": 5,
+        "requires_ally_not_incapacitated": True,
+        "requires_no_disadvantage": True,
+        "alternative": "effective_advantage",
+    }
+    assert parsed.warnings == ()
+
+
 def test_source_traits_are_compiled_from_complete_text_not_feature_names() -> None:
     parsed = parse_2014_statblock(
         KOBOLD.replace(

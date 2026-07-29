@@ -3517,6 +3517,328 @@ def test_cunning_action_settles_dash_and_disengage_but_not_hide_outcome() -> Non
     }
 
 
+def test_aggressive_grants_only_separately_paid_movement_toward_visible_hostile() -> None:
+    orc = _actor("orc")
+    target = _actor("target")
+    orc.update(
+        initiative=20,
+        tie_breaker=0,
+        position={"x": 0, "y": 0},
+        disposition="hostile",
+    )
+    target.update(
+        initiative=10,
+        tie_breaker=0,
+        position={"x": 6, "y": 0},
+        disposition="friendly",
+    )
+    encounter = start_encounter([orc, target])
+    paid = pay_activity_activation(
+        encounter,
+        actor_id_value="orc",
+        activation_type="bonus_action",
+    )
+    aggressive, effect = settle_core_activity_effect(
+        paid,
+        actor_id_value="orc",
+        activity_id="dnd5e.core.monster.aggressive",
+        declaration={"target_id": "target"},
+    )
+
+    assert effect == {
+        "kind": "aggressive",
+        "target_id": "target",
+        "movement_granted_ft": 30,
+    }
+    assert aggressive["combatants"][0]["turn_budget"]["movement"] == 30
+    ordinary = spend_movement(
+        aggressive,
+        "orc",
+        5,
+        destination={"x": -1, "y": 0},
+    )
+    assert ordinary["combatants"][0]["turn_budget"]["movement"] == 25
+    with pytest.raises(CombatEngineError, match="must move toward"):
+        spend_movement(
+            ordinary,
+            "orc",
+            5,
+            destination={"x": -2, "y": 0},
+            movement_mode="aggressive",
+        )
+    moved = spend_movement(
+        ordinary,
+        "orc",
+        5,
+        destination={"x": 0, "y": 0},
+        movement_mode="aggressive",
+    )
+    assert moved["combatants"][0]["turn_budget"]["movement"] == 25
+    assert moved["combatants"][0]["turn_flags"]["aggressive_movement"][
+        "remaining_ft"
+    ] == 25
+
+
+def test_battle_cry_grants_temporary_attack_advantage_and_bonus_attack() -> None:
+    war_chief = _actor("war-chief")
+    ally = _actor("ally")
+    target = _actor("target")
+    for actor, initiative, position, disposition in (
+        (war_chief, 20, {"x": 0, "y": 0}, "hostile"),
+        (ally, 15, {"x": 1, "y": 0}, "hostile"),
+        (target, 10, {"x": 2, "y": 0}, "friendly"),
+    ):
+        actor.update(
+            initiative=initiative,
+            tie_breaker=0,
+            position=position,
+            disposition=disposition,
+        )
+        actor["derived"]["inventory"]["weapon_attacks"] = [
+            {
+                "item_id": "sword",
+                "attack_type": "melee",
+                "properties": [],
+                "attack_bonus": 5,
+                "damage_expression": "1",
+                "damage_type": "slashing",
+            }
+        ]
+    encounter = start_encounter([war_chief, ally, target])
+    paid = pay_activity_activation(
+        encounter,
+        actor_id_value="war-chief",
+        activation_type="action",
+    )
+    affected, effect = settle_core_activity_effect(
+        paid,
+        actor_id_value="war-chief",
+        activity_id="dnd5e.core.monster.battle-cry",
+        declaration={
+            "targets": [
+                {
+                    "actor_id": "ally",
+                    "can_hear": True,
+                    "reason": "The ally is five feet away in the same open area.",
+                }
+            ]
+        },
+    )
+
+    assert effect == {
+        "kind": "battle_cry",
+        "target_ids": ["ally"],
+        "bonus_attack_available": True,
+    }
+    plan = preflight_attack(
+        ally,
+        target,
+        action={"weapon_id": "sword"},
+        encounter=affected,
+        allow_out_of_turn=True,
+        require_attack_action=False,
+    )
+    assert plan["advantage"] is True
+    assert "battle_cry" in plan["advantage_sources"]
+    attacked, payment = pay_attack_action(
+        affected,
+        war_chief,
+        weapon_id="sword",
+        attack_mode="melee",
+    )
+    assert payment == {
+        "kind": "battle_cry_bonus_attack",
+        "payment": "bonus_action",
+        "attack_count": 1,
+    }
+    assert attacked["combatants"][0]["turn_budget"]["bonus_action"] == 0
+
+    ally_turn = end_turn(attacked, actor_id_value="war-chief")
+    assert "battle_cry_advantage" in ally_turn["combatants"][1]["turn_flags"]
+    target_turn = end_turn(ally_turn, actor_id_value="ally")
+    returned = end_turn(target_turn, actor_id_value="target")
+    assert "battle_cry_advantage" not in returned["combatants"][1].get(
+        "turn_flags", {}
+    )
+
+
+def test_battle_cry_requires_agent_supplied_hearing_fact() -> None:
+    war_chief = _actor("war-chief")
+    ally = _actor("ally")
+    war_chief.update(
+        initiative=20,
+        tie_breaker=0,
+        position={"x": 0, "y": 0},
+    )
+    ally.update(
+        initiative=10,
+        tie_breaker=0,
+        position={"x": 1, "y": 0},
+    )
+    encounter = start_encounter([war_chief, ally])
+    paid = pay_activity_activation(
+        encounter,
+        actor_id_value="war-chief",
+        activation_type="action",
+    )
+
+    with pytest.raises(CombatEngineError, match="can_hear scene fact"):
+        settle_core_activity_effect(
+            paid,
+            actor_id_value="war-chief",
+            activity_id="dnd5e.core.monster.battle-cry",
+            declaration={"targets": [{"actor_id": "ally"}]},
+        )
+
+
+def test_statblock_sneak_attack_uses_recorded_formula_without_rogue_levels() -> None:
+    spy = _actor("spy")
+    ally = _actor("ally")
+    target = _actor("target")
+    spy["sheet"]["content"]["features"] = [
+        {
+            "id": "sneak-attack-1-turn-passive",
+            "name": "Sneak Attack (1/Turn)",
+            "choices": {
+                "source_trait": {
+                    "kind": "sneak_attack",
+                    "damage_formula": "2d6",
+                    "uses_per_turn": 1,
+                    "requires_finesse_or_ranged": False,
+                    "ally_within_target_ft": 5,
+                    "requires_ally_not_incapacitated": True,
+                    "requires_no_disadvantage": True,
+                }
+            },
+        }
+    ]
+    spy["derived"] = derive_character_sheet(spy["sheet"])
+    spy["derived"]["inventory"]["weapon_attacks"] = [
+        {
+            "item_id": "shortsword",
+            "attack_type": "melee",
+            "properties": [],
+            "attack_bonus": 5,
+            "damage_expression": "1d6 + 2",
+            "damage_type": "piercing",
+        }
+    ]
+    spy.update(
+        initiative=20,
+        tie_breaker=0,
+        position={"x": 0, "y": 0},
+        disposition="friendly",
+    )
+    ally.update(
+        initiative=15,
+        tie_breaker=0,
+        position={"x": 1, "y": 0},
+        disposition="friendly",
+    )
+    target.update(
+        initiative=10,
+        tie_breaker=0,
+        position={"x": 1, "y": 0},
+        disposition="hostile",
+    )
+    encounter = start_encounter([spy, ally, target])
+
+    plan = preflight_attack(
+        spy,
+        target,
+        action={"weapon_id": "shortsword", "use_sneak_attack": True},
+        encounter=encounter,
+    )
+
+    assert plan["sneak_attack"]["expression"] == "2d6"
+    assert plan["sneak_attack"]["eligibility"] == "adjacent_enemy"
+
+
+def test_versatile_weapon_grip_uses_exact_alternate_damage_once() -> None:
+    orc = _actor("orc")
+    target = _actor("target")
+    orc["derived"]["inventory"]["weapon_attacks"] = [
+        {
+            "item_id": "spear",
+            "attack_type": "melee",
+            "properties": ["thrown", "versatile"],
+            "attack_bonus": 6,
+            "damage_formula": "1d6",
+            "damage_bonus": 4,
+            "damage_expression": "1d6 + 4",
+            "damage_type": "piercing",
+            "additional_damage": [
+                {
+                    "damage_formula": "1d8",
+                    "damage_bonus": 0,
+                    "damage_expression": "1d8",
+                    "damage_type": "piercing",
+                }
+            ],
+            "versatile_damage_formula": "2d8",
+            "reach_ft": 5,
+            "thrown_range_ft": {"normal": 20, "long": 60},
+        }
+    ]
+    orc.update(
+        initiative=20,
+        tie_breaker=0,
+        position={"x": 0, "y": 0},
+        disposition="hostile",
+    )
+    target.update(
+        initiative=10,
+        tie_breaker=0,
+        position={"x": 1, "y": 0},
+        disposition="friendly",
+    )
+    encounter = start_encounter([orc, target])
+
+    one_handed = preflight_attack(
+        orc,
+        target,
+        action={"weapon_id": "spear", "weapon_grip": "one_handed"},
+        encounter=encounter,
+    )
+    two_handed = preflight_attack(
+        orc,
+        target,
+        action={"weapon_id": "spear", "weapon_grip": "two_handed"},
+        encounter=encounter,
+    )
+
+    assert one_handed["damage_expression"] == "1d6 + 4"
+    assert [part["damage_expression"] for part in one_handed["additional_damage"]] == [
+        "1d8"
+    ]
+    assert two_handed["damage_expression"] == "2d8 + 4"
+    assert two_handed["additional_damage"] == []
+    assert two_handed["weapon_grip"] == "two_handed"
+
+    shielded = deepcopy(orc)
+    shielded_sheet, shield_id = add_inventory_item(
+        shielded["sheet"],
+        {
+            "id": "shield",
+            "name": "Shield",
+            "kind": "shield",
+            "mechanics": {"ac_bonus": 2, "magic_bonus": 0},
+        },
+    )
+    shielded["sheet"] = equip_inventory_item(
+        shielded_sheet,
+        shield_id,
+        "shield",
+    )
+    with pytest.raises(CombatEngineError, match="wielding a shield"):
+        preflight_attack(
+            shielded,
+            target,
+            action={"weapon_id": "spear", "weapon_grip": "two_handed"},
+            encounter=encounter,
+        )
+
+
 def test_second_wind_rolls_fighter_level_healing_and_clamps_at_maximum() -> None:
     actor = _actor("fighter")
     actor["sheet"]["progression"]["level"] = 2

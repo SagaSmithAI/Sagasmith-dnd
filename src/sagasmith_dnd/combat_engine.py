@@ -856,13 +856,23 @@ def pay_attack_action(
             payment = {"kind": "extra_attack"}
         budget["attack_budget"] -= 1
     else:
-        payment_key = (
-            "main_action"
-            if int(budget.get("main_action", 0) or 0) > 0
-            else "extra_action"
-            if int(budget.get("extra_action", 0) or 0) > 0
-            else ""
-        )
+        if (
+            flags.get("battle_cry_bonus_attack")
+            and int(budget.get("bonus_action", 0) or 0) > 0
+            and multiattack_option_id is None
+        ):
+            payment_key = "bonus_action"
+            flags.pop("battle_cry_bonus_attack", None)
+            battle_cry_payment = True
+        else:
+            payment_key = (
+                "main_action"
+                if int(budget.get("main_action", 0) or 0) > 0
+                else "extra_action"
+                if int(budget.get("extra_action", 0) or 0) > 0
+                else ""
+            )
+            battle_cry_payment = False
         if not payment_key:
             raise CombatEngineError("actor has no attack payment available")
         if multiattack_option_id:
@@ -885,10 +895,18 @@ def pay_attack_action(
                 "attack_count": total,
             }
         else:
-            count = int(actor_derived(attacker).get("attacks_per_action", 1) or 1)
+            count = (
+                1
+                if battle_cry_payment
+                else int(actor_derived(attacker).get("attacks_per_action", 1) or 1)
+            )
             budget["attack_budget"] = max(0, count - 1)
             payment = {
-                "kind": "attack_action",
+                "kind": (
+                    "battle_cry_bonus_attack"
+                    if battle_cry_payment
+                    else "attack_action"
+                ),
                 "payment": payment_key,
                 "attack_count": count,
             }
@@ -1117,11 +1135,57 @@ def preflight_attack(
         thrown_range = weapon.get("thrown_range_ft")
         if not isinstance(thrown_range, dict) or not thrown_range.get("normal"):
             raise CombatEngineError("weapon has no recorded ranged attack mode")
-    dueling_bonus = _dueling_damage_bonus(attacker, weapon, attack_mode=attack_mode)
+    properties = {
+        str(item).strip().casefold() for item in weapon.get("properties", [])
+    }
+    supplied_grip = str(action.get("weapon_grip") or "").strip().casefold()
+    if supplied_grip and supplied_grip not in {"one_handed", "two_handed"}:
+        raise CombatEngineError("weapon_grip must be one_handed or two_handed")
+    weapon_grip = supplied_grip or (
+        "two_handed" if "two_handed" in properties else "one_handed"
+    )
+    if weapon_grip == "one_handed" and "two_handed" in properties:
+        raise CombatEngineError("this weapon requires two hands")
+    if weapon_grip == "two_handed":
+        if not properties & {"two_handed", "versatile"}:
+            raise CombatEngineError("this weapon has no two-handed attack mode")
+        equipped_shield_id = str(
+            dict(actor_sheet(attacker).get("inventory") or {})
+            .get("equipment_slots", {})
+            .get("shield")
+            or ""
+        )
+        if equipped_shield_id:
+            raise CombatEngineError(
+                "a two-handed weapon attack cannot be made while wielding a shield"
+            )
+    additional_damage = deepcopy(list(weapon.get("additional_damage") or []))
+    if weapon_grip == "two_handed" and "versatile" in properties:
+        versatile_formula = str(weapon.get("versatile_damage_formula") or "")
+        if not versatile_formula:
+            raise CombatEngineError(
+                "versatile weapon is missing its two-handed damage formula"
+            )
+        damage_bonus = int(weapon.get("damage_bonus", 0) or 0)
+        expression = (
+            f"{versatile_formula} "
+            f"{'+' if damage_bonus >= 0 else '-'} {abs(damage_bonus)}"
+            if damage_bonus
+            else versatile_formula
+        )
+        # The statblock's printed versatile formula is the complete alternate
+        # damage expression. Any dice folded into it (such as Gruumsh's Fury)
+        # must not be rolled a second time.
+        additional_damage = []
+    dueling_bonus = _dueling_damage_bonus(
+        attacker,
+        weapon,
+        attack_mode=attack_mode,
+        weapon_grip=weapon_grip,
+    )
     if dueling_bonus and expression:
         expression = f"{expression} + {dueling_bonus}"
     damage_type = str(weapon.get("damage_type") or "")
-    additional_damage = deepcopy(list(weapon.get("additional_damage") or []))
     on_hit_effect = str(weapon.get("on_hit_effect") or "").strip()
     if ammunition_slaying is not None:
         if on_hit_effect:
@@ -1193,6 +1257,12 @@ def preflight_attack(
     if not attacker_can_see_target:
         context["disadvantage"] = True
         context.setdefault("disadvantage_sources", []).append("target_unseen")
+    battle_cry_advantage = dict(
+        dict(attacker.get("turn_flags") or {}).get("battle_cry_advantage") or {}
+    )
+    if battle_cry_advantage:
+        context["advantage"] = True
+        context.setdefault("advantage_sources", []).append("battle_cry")
     sunlight_trait = dict(
         dict(attack_source_traits.get("sunlight_sensitivity") or {}).get("trait") or {}
     )
@@ -1484,6 +1554,12 @@ def preflight_attack(
         core_boundary_ids.append("dnd5e.core.attack.sunlight_sensitivity")
     if "pack_tactics" in attack_source_traits:
         core_boundary_ids.append("dnd5e.core.attack.pack_tactics")
+    if battle_cry_advantage:
+        core_boundary_ids.append("dnd5e.core.attack.battle_cry")
+    if sneak_attack:
+        core_boundary_ids.append("dnd5e.core.attack.sneak_attack")
+    if properties & {"two_handed", "versatile"}:
+        core_boundary_ids.append("dnd5e.core.attack.weapon_grip")
     if required_target_sizes or weapon.get("requires_attack_advantage", False):
         core_boundary_ids.append("dnd5e.core.attack.source_targeting")
     return {
@@ -1504,6 +1580,7 @@ def preflight_attack(
             [{"source": "Fighting Style: Dueling", "value": dueling_bonus}] if dueling_bonus else []
         ),
         "damage_type": damage_type,
+        "weapon_grip": weapon_grip,
         "additional_damage": additional_damage,
         "on_hit_effect": on_hit_effect,
         "critical_followup": critical_followup,
@@ -2075,6 +2152,19 @@ def _sneak_attack_plan(
     if not requested:
         return None
     sheet = actor_sheet(attacker)
+    statblock_trait = next(
+        (
+            source_trait
+            for item in sheet.get("content", {}).get("features", [])
+            if (
+                source_trait := dict(
+                    dict(item.get("choices") or {}).get("source_trait") or {}
+                )
+            ).get("kind")
+            == "sneak_attack"
+        ),
+        None,
+    )
     feature = next(
         (
             item
@@ -2087,6 +2177,15 @@ def _sneak_attack_plan(
         ),
         None,
     )
+    if feature is None and statblock_trait is not None:
+        feature = next(
+            item
+            for item in sheet.get("content", {}).get("features", [])
+            if dict(dict(item.get("choices") or {}).get("source_trait") or {}).get(
+                "kind"
+            )
+            == "sneak_attack"
+        )
     if feature is None:
         raise CombatEngineError("Sneak Attack is not recorded on this actor card")
     rogue_level = sum(
@@ -2094,10 +2193,18 @@ def _sneak_attack_plan(
         for item in sheet.get("progression", {}).get("classes", [])
         if str(item.get("name") or "").casefold() == "rogue"
     )
-    if rogue_level < 1:
+    if rogue_level < 1 and statblock_trait is None:
         raise CombatEngineError("Sneak Attack requires at least one Rogue level")
     properties = {str(item).casefold() for item in weapon.get("properties", [])}
-    if str(weapon.get("attack_type") or "melee") != "ranged" and "finesse" not in properties:
+    requires_finesse_or_ranged = (
+        statblock_trait is None
+        or bool(statblock_trait.get("requires_finesse_or_ranged"))
+    )
+    if (
+        requires_finesse_or_ranged
+        and str(weapon.get("attack_type") or "melee") != "ranged"
+        and "finesse" not in properties
+    ):
         raise CombatEngineError("Sneak Attack requires a finesse or ranged weapon")
     advantage = bool(context.get("advantage"))
     disadvantage = bool(context.get("disadvantage"))
@@ -2160,17 +2267,25 @@ def _sneak_attack_plan(
             "Sneak Attack needs effective advantage or another active enemy within 5 feet "
             "of the target"
         )
-    dice = (rogue_level + 1) // 2
+    expression = (
+        str(statblock_trait["damage_formula"])
+        if statblock_trait is not None
+        else f"{(rogue_level + 1) // 2}d6"
+    )
     return {
         "feature_id": str(feature.get("id") or "sneak-attack"),
-        "expression": f"{dice}d6",
+        "expression": expression,
         "turn_token": turn_token,
         "eligibility": "advantage" if effective_advantage else "adjacent_enemy",
     }
 
 
 def _dueling_damage_bonus(
-    attacker: dict[str, Any], weapon: dict[str, Any], *, attack_mode: str
+    attacker: dict[str, Any],
+    weapon: dict[str, Any],
+    *,
+    attack_mode: str,
+    weapon_grip: str,
 ) -> int:
     sheet = actor_sheet(attacker)
     has_style = any(
@@ -2179,7 +2294,7 @@ def _dueling_damage_bonus(
         and str(dict(item.get("choices") or {}).get("option") or "").casefold() == "dueling"
         for item in sheet.get("content", {}).get("features", [])
     )
-    if not has_style or attack_mode != "melee":
+    if not has_style or attack_mode != "melee" or weapon_grip != "one_handed":
         return 0
     weapon_id = str(weapon.get("item_id") or "")
     selected = next(
@@ -2947,8 +3062,11 @@ def spend_movement(
     if distance < 0:
         raise CombatEngineError("movement distance cannot be negative")
     movement_mode = str(movement_mode).strip().lower().replace("-", "_")
-    if movement_mode not in {"voluntary", "forced", "teleport"}:
-        raise CombatEngineError("movement_mode must be voluntary, forced, or teleport")
+    if movement_mode not in {"voluntary", "aggressive", "forced", "teleport"}:
+        raise CombatEngineError(
+            "movement_mode must be voluntary, aggressive, forced, or teleport"
+        )
+    willing_movement = movement_mode in {"voluntary", "aggressive"}
     combatant = next(
         (item for item in value.get("combatants", []) if item.get("actor_id") == actor_id_value),
         None,
@@ -2988,7 +3106,17 @@ def spend_movement(
     if combatant.get("surprised") and _normalize_ruleset(value.get("ruleset")) == "2014":
         raise CombatEngineError("surprised actor cannot move on its first turn")
     budget = dict(combatant.get("turn_budget") or {})
-    available = int(budget.get("movement", 0) or 0)
+    flags = dict(combatant.get("turn_flags") or {})
+    aggressive = dict(flags.get("aggressive_movement") or {})
+    if movement_mode == "aggressive" and not aggressive:
+        raise CombatEngineError(
+            "aggressive movement requires an active Aggressive movement grant"
+        )
+    available = (
+        int(aggressive.get("remaining_ft", 0) or 0)
+        if movement_mode == "aggressive"
+        else int(budget.get("movement", 0) or 0)
+    )
     origin = _position(combatant.get("position"))
     waypoints: list[tuple[float, float]] = []
     if path is not None:
@@ -3016,10 +3144,46 @@ def spend_movement(
             raise CombatEngineError(
                 "movement distance must equal the grid distance between origin and destination"
             )
+    if movement_mode == "aggressive" and distance > 0:
+        target = next(
+            (
+                item
+                for item in value.get("combatants", [])
+                if str(item.get("actor_id") or "")
+                == str(aggressive.get("target_id") or "")
+            ),
+            None,
+        )
+        aggressive_target_position = _position((target or {}).get("position"))
+        route = (
+            waypoints[1:]
+            if path is not None
+            else [target_position]
+        )
+        previous = origin
+        if (
+            origin is None
+            or target_position is None
+            or aggressive_target_position is None
+            or any(point is None for point in route)
+        ):
+            raise CombatEngineError(
+                "Aggressive movement requires source, destination, and target positions"
+            )
+        for point in route:
+            assert previous is not None and point is not None
+            if _grid_distance(point, aggressive_target_position) >= _grid_distance(
+                previous, aggressive_target_position
+            ):
+                raise CombatEngineError(
+                    "each Aggressive movement segment must move toward its recorded "
+                    "hostile target"
+                )
+            previous = point
     battle_map = dict(value.get("battle_map") or {})
     difficult_cells = set(battle_map.get("difficult_cells") or [])
     terrain_cost = 0
-    if movement_mode == "voluntary" and difficult_cells and distance > 0:
+    if willing_movement and difficult_cells and distance > 0:
         if path is None and distance > 5:
             raise NeedsRulingError(
                 "a cell-by-cell path is required to settle difficult terrain",
@@ -3052,7 +3216,7 @@ def spend_movement(
             bool(item.get("can_share_space")) for item in occupants
         )
         if occupants and not sharing_allowed:
-            if movement_mode == "voluntary":
+            if willing_movement:
                 raise CombatEngineError(
                     "an actor cannot willingly end movement in another creature's space"
                 )
@@ -3062,7 +3226,7 @@ def spend_movement(
             )
     turning = dict(combatant.get("turned") or {})
     if (
-        movement_mode == "voluntary"
+        willing_movement
         and "turned" in conditions
         and origin is not None
         and target_position is not None
@@ -3093,7 +3257,7 @@ def spend_movement(
                 "a turned creature cannot willingly move within 30 feet of the turning source"
             )
     if (
-        movement_mode == "voluntary"
+        willing_movement
         and "frightened" in conditions
         and origin is not None
         and target_position is not None
@@ -3135,8 +3299,25 @@ def spend_movement(
                 raise CombatEngineError(
                     "a frightened creature cannot willingly move closer to its visible fear source"
                 )
-    budget["movement"] = available - movement_cost
-    combatant["turn_budget"] = budget
+    if movement_mode == "aggressive":
+        remaining = max(
+            0,
+            int(aggressive.get("remaining_ft", 0) or 0) - movement_cost,
+        )
+        if remaining:
+            flags["aggressive_movement"] = {
+                **aggressive,
+                "remaining_ft": remaining,
+            }
+        else:
+            flags.pop("aggressive_movement", None)
+        if flags:
+            combatant["turn_flags"] = flags
+        else:
+            combatant.pop("turn_flags", None)
+    else:
+        budget["movement"] = available - movement_cost
+        combatant["turn_budget"] = budget
     if destination is not None:
         from sagasmith_dnd.spatial import validate_position
 
@@ -3145,7 +3326,7 @@ def spend_movement(
                 validate_position(battle_map, point)
         combatant["position"] = deepcopy(destination)
     if (
-        movement_mode == "voluntary"
+        willing_movement
         and origin is not None
         and target_position is not None
         and not _disengaged(combatant)
@@ -3766,7 +3947,14 @@ def settle_core_activity_effect(
     value = deepcopy(encounter)
     action_surge_id = "dnd5e.content.srd2014.feature.fighter-action-surge"
     cunning_action_id = "dnd5e.content.srd2014.feature.rogue-cunning-action"
-    if activity_id not in {action_surge_id, cunning_action_id}:
+    aggressive_id = "dnd5e.core.monster.aggressive"
+    battle_cry_id = "dnd5e.core.monster.battle-cry"
+    if activity_id not in {
+        action_surge_id,
+        cunning_action_id,
+        aggressive_id,
+        battle_cry_id,
+    }:
         return value, None
     current = current_combatant(value)
     if current is None or current.get("actor_id") != actor_id_value:
@@ -3774,7 +3962,122 @@ def settle_core_activity_effect(
     combatant = next(
         item for item in value.get("combatants", []) if item.get("actor_id") == actor_id_value
     )
-    if activity_id == cunning_action_id:
+    if activity_id == aggressive_id:
+        target_id = str(dict(declaration or {}).get("target_id") or "")
+        target = next(
+            (
+                item
+                for item in value.get("combatants", [])
+                if str(item.get("actor_id") or "") == target_id
+            ),
+            None,
+        )
+        if (
+            target is None
+            or not _are_hostile(combatant, target)
+            or not _can_see(combatant, target)
+        ):
+            raise CombatEngineError(
+                "Aggressive requires one recorded visible hostile target"
+            )
+        source_position = _position(combatant.get("position"))
+        target_position = _position(target.get("position"))
+        if source_position is None or target_position is None:
+            raise NeedsRulingError(
+                "Aggressive requires source and target positions",
+                missing=("aggressive_positions",),
+                ruling_kind="source_or_scene_fact",
+            )
+        budget = dict(combatant.get("turn_budget") or {})
+        speed = int(budget.get("speed", 0) or 0)
+        flags = dict(combatant.get("turn_flags") or {})
+        flags["aggressive_movement"] = {
+            "target_id": target_id,
+            "remaining_ft": speed,
+        }
+        combatant["turn_flags"] = flags
+        effect = {
+            "kind": "aggressive",
+            "target_id": target_id,
+            "movement_granted_ft": speed,
+        }
+    elif activity_id == battle_cry_id:
+        selected_targets = list(dict(declaration or {}).get("targets") or [])
+        if any(not isinstance(item, dict) for item in selected_targets):
+            raise CombatEngineError("Battle Cry targets must be objects")
+        target_ids = [
+            str(dict(item).get("actor_id") or "").strip()
+            for item in selected_targets
+        ]
+        if (
+            not target_ids
+            or any(not value for value in target_ids)
+            or len(target_ids) != len(set(target_ids))
+        ):
+            raise CombatEngineError(
+                "Battle Cry requires unique non-empty target_ids"
+            )
+        source_position = _position(combatant.get("position"))
+        if source_position is None:
+            raise NeedsRulingError(
+                "Battle Cry requires source and target positions",
+                missing=("battle_cry_positions",),
+                ruling_kind="source_or_scene_fact",
+            )
+        targets: list[dict[str, Any]] = []
+        for selected_target, target_id in zip(selected_targets, target_ids):
+            target = next(
+                (
+                    item
+                    for item in value.get("combatants", [])
+                    if str(item.get("actor_id") or "") == target_id
+                ),
+                None,
+            )
+            target_position = _position((target or {}).get("position"))
+            can_hear = dict(selected_target).get("can_hear")
+            if not isinstance(can_hear, bool):
+                raise CombatEngineError(
+                    "each Battle Cry target requires an explicit can_hear scene fact"
+                )
+            if (
+                target is None
+                or target_position is None
+                or _grid_distance(source_position, target_position) > 30
+                or not can_hear
+                or "deafened" in _condition_set(target.get("conditions"))
+            ):
+                raise CombatEngineError(
+                    "Battle Cry target must be within 30 feet and able to hear"
+                )
+            existing = dict(target.get("turn_flags") or {}).get(
+                "battle_cry_advantage"
+            )
+            if existing:
+                raise CombatEngineError(
+                    "Battle Cry target is already affected by Battle Cry"
+                )
+            targets.append(target)
+        for target in targets:
+            target_flags = dict(target.get("turn_flags") or {})
+            target_flags["battle_cry_advantage"] = {
+                "source_actor_id": actor_id_value,
+            }
+            target["turn_flags"] = target_flags
+        flags = dict(combatant.get("turn_flags") or {})
+        bonus_attack_available = (
+            int(dict(combatant.get("turn_budget") or {}).get("bonus_action", 0) or 0)
+            > 0
+        )
+        if bonus_attack_available:
+            flags["battle_cry_bonus_attack"] = True
+        combatant["turn_flags"] = flags
+        effect = {
+            "kind": "battle_cry",
+            "target_ids": target_ids,
+            "bonus_attack_available": bonus_attack_available,
+        }
+    elif activity_id == cunning_action_id:
         selected = str(dict(declaration or {}).get("action") or "")
         selected = selected.strip().lower().replace("-", "_").replace(" ", "_")
         if selected not in {"dash", "disengage", "hide"}:
@@ -3814,6 +4117,16 @@ def settle_core_activity_effect(
         value["log"] = [
             *list(value.get("log") or []),
             {"type": "cunning_action", "actor_id": actor_id_value, "effect": effect},
+        ][-100:]
+        return value, effect
+    if activity_id in {aggressive_id, battle_cry_id}:
+        value["log"] = [
+            *list(value.get("log") or []),
+            {
+                "type": effect["kind"],
+                "actor_id": actor_id_value,
+                "effect": effect,
+            },
         ][-100:]
         return value, effect
     flags = dict(combatant.get("turn_flags") or {})
@@ -5177,7 +5490,9 @@ def end_turn(encounter: dict[str, Any], *, actor_id_value: str | None = None) ->
     was_surprised = bool(current.get("surprised"))
     current["surprised"] = False
     retained_flags = {
-        key: deepcopy(item) for key, item in current_flags.items() if key in {"dodging", "helping"}
+        key: deepcopy(item)
+        for key, item in current_flags.items()
+        if key in {"dodging", "helping", "battle_cry_advantage"}
     }
     if retained_flags:
         current["turn_flags"] = retained_flags
@@ -5263,6 +5578,18 @@ def end_turn(encounter: dict[str, Any], *, actor_id_value: str | None = None) ->
     value["turn_index"] = next_index
     next_actor = current_combatant(value)
     if next_actor:
+        next_actor_id = str(next_actor.get("actor_id") or "")
+        for combatant in value.get("combatants", []):
+            combatant_flags = dict(combatant.get("turn_flags") or {})
+            battle_cry = dict(
+                combatant_flags.get("battle_cry_advantage") or {}
+            )
+            if str(battle_cry.get("source_actor_id") or "") == next_actor_id:
+                combatant_flags.pop("battle_cry_advantage", None)
+                if combatant_flags:
+                    combatant["turn_flags"] = combatant_flags
+                else:
+                    combatant.pop("turn_flags", None)
         next_flags = dict(next_actor.get("turn_flags") or {})
         next_flags.pop("dodging", None)
         next_flags.pop("helping", None)
