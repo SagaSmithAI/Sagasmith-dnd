@@ -679,6 +679,9 @@ def test_gazer_eye_rays_are_structured_from_the_exact_source_action() -> None:
         "distance_ft": 30,
         "direction": "directly_away",
     }
+    assert eye_rays["mechanic_refs"] == [
+        "dnd5e.core.activity.random_save_effects"
+    ]
     assert not {
         "Dazing Ray",
         "Fear Ray",
@@ -749,6 +752,9 @@ def test_intellect_devourer_actions_are_structured_from_exact_source() -> None:
         },
         "source_excerpt": " ".join(devour["description"].split()),
     }
+    assert devour["mechanic_refs"] == [
+        "dnd5e.core.activity.source_save_effect"
+    ]
     assert derived["multiattack_options"] == [
         {
             "id": "claws-and-devour-intellect",
@@ -788,6 +794,9 @@ def test_intellect_devourer_actions_are_structured_from_exact_source() -> None:
         },
         "source_excerpt": " ".join(body_thief["description"].split()),
     }
+    assert body_thief["mechanic_refs"] == [
+        "dnd5e.core.activity.source_contest_effect"
+    ]
     assert tuple(reviewed_warnings) == (
         "Body Thief: protection, wish, and voluntary exit require DM settlement",
     )

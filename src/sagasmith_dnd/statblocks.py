@@ -1021,6 +1021,12 @@ def _structure_gazer_eye_rays(
     activities = list(sheet["content"]["activities"])
     parent = next(item for item in activities if item.get("id") == "eye-rays-action")
     parent["choices"] = {"random_save_effects": spec}
+    parent["mechanic_refs"] = sorted(
+        {
+            *list(parent.get("mechanic_refs") or []),
+            "dnd5e.core.activity.random_save_effects",
+        }
+    )
     component_ids = {
         str(item["source_activity_id"]) for item in spec["effects"]
     }
@@ -1188,6 +1194,12 @@ def _structure_intellect_devourer_actions(
                     "source_excerpt": body_description,
                 },
             }
+            body_thief["mechanic_refs"] = sorted(
+                {
+                    *list(body_thief.get("mechanic_refs") or []),
+                    "dnd5e.core.activity.source_contest_effect",
+                }
+            )
             warnings[:] = [
                 warning
                 for warning in warnings
@@ -1241,6 +1253,12 @@ def _structure_intellect_devourer_actions(
             "source_excerpt": description,
         },
     }
+    devour["mechanic_refs"] = sorted(
+        {
+            *list(devour.get("mechanic_refs") or []),
+            "dnd5e.core.activity.source_save_effect",
+        }
+    )
     warnings[:] = [
         warning
         for warning in warnings
