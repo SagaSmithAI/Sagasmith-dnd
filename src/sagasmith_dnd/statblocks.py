@@ -325,6 +325,23 @@ def _parse_weapon(
                 }
             )
         last_damage_end = hit.end()
+        versatile_damage_formula = ""
+        versatile = re.match(
+            (
+                r"(?i)\s*,?\s*or\s+\d+\s*"
+                r"\((\d+\s*d\s*\d+)(?:\s*([+\-])\s*(\d+))?\)\s*"
+                rf"{re.escape(hit.group(3))}\s+damage\s+"
+                r"if\s+used\s+with\s+two\s+hands\s+to\s+make\s+a\s+melee\s+attack"
+            ),
+            description[hit.end() :],
+        )
+        if versatile:
+            versatile_bonus = int(
+                f"{versatile.group(2) or '+'}{versatile.group(3) or '0'}"
+            )
+            if versatile_bonus == (int(damage.group(2) or 0) if damage else 0):
+                versatile_damage_formula = re.sub(r"\s+", "", versatile.group(1))
+                last_damage_end = hit.end() + versatile.end()
         for extra in re.finditer(
             r"(?i)\bplus\s+\d+\s*\((\d+\s*d\s*\d+"
             r"(?:\s*[+\-]\s*\d+)?)\)\s*"
@@ -359,6 +376,7 @@ def _parse_weapon(
         damage_type = ""
         damage_bonus = 0
         on_hit_effect = effect_hit.group(1).strip()
+        versatile_damage_formula = ""
     trailing_prose = ""
     trailing_warning = ""
     normalized_actor_name = actor_name.strip()
@@ -404,6 +422,8 @@ def _parse_weapon(
     properties: list[str] = []
     if mode == "melee or ranged":
         properties.append("thrown")
+    if versatile_damage_formula:
+        properties.append("versatile")
     mechanics: dict[str, Any] = {
         "attack_type": "ranged" if mode == "ranged" else "melee",
         "attack_ability": (
@@ -417,6 +437,7 @@ def _parse_weapon(
         "damage_type": damage_type,
         "additional_damage": additional_damage,
         "on_hit_effect": on_hit_effect,
+        "versatile_damage_formula": versatile_damage_formula,
         "properties": properties,
         "proficient": False,
         "attack_bonus_override": _signed(attack.group(3).replace("−", "-")),

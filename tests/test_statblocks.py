@@ -647,6 +647,35 @@ def test_weapon_damage_structures_in_parentheses_additional_dice() -> None:
     assert parsed.warnings == ()
 
 
+def test_weapon_damage_structures_two_handed_melee_alternative() -> None:
+    parsed = parse_2014_statblock(
+        COMMONER.replace(
+            "*Melee Weapon Attack:* +2 to hit, reach 5 ft., one target.\n"
+            "*Hit:* 2 (1d4) bludgeoning damage.",
+            "*Melee or Ranged Weapon Attack:* +6 to hit, reach 5 ft. or range "
+            "20/60 ft., one target. *Hit:* 12 (1d6 + 4 plus 1d8) piercing "
+            "damage, or 13 (2d8 + 4) piercing damage if used with two hands "
+            "to make a melee attack.",
+        ),
+        source_key="monster-manual:orc-war-chief",
+    )
+    weapon = parsed.sheet["inventory"]["items"][0]
+
+    assert weapon["mechanics"]["damage_formula"] == "1d6"
+    assert weapon["mechanics"]["damage_bonus_override"] == 4
+    assert weapon["mechanics"]["additional_damage"] == [
+        {
+            "damage_formula": "1d8",
+            "damage_bonus": 0,
+            "damage_type": "piercing",
+        }
+    ]
+    assert weapon["mechanics"]["versatile_damage_formula"] == "2d8"
+    assert weapon["mechanics"]["properties"] == ["thrown", "versatile"]
+    assert weapon["mechanics"]["on_hit_effect"] == ""
+    assert parsed.warnings == ()
+
+
 def test_trailing_page_number_is_not_imported_as_an_on_hit_effect() -> None:
     parsed = parse_2014_statblock(
         TROLL + "\n291\n",
