@@ -16,6 +16,10 @@ from sagasmith_dnd.conditions import (
     condition_ids,
     reconcile_ended_effect_conditions,
 )
+from sagasmith_dnd.content_solution import (
+    ContentSolutionError,
+    normalize_content_solution,
+)
 from sagasmith_dnd.editions import DEFAULT_CHARACTER_EDITION, normalize_dnd_edition
 from sagasmith_dnd.engine import ability_modifier, proficiency_bonus
 from sagasmith_dnd.game_time import TICKS_PER_DAY, TICKS_PER_HOUR, TICKS_PER_MINUTE
@@ -1043,6 +1047,7 @@ def _normalize_item(value: Any, field: str, *, generate_id: bool = True) -> dict
         "charges",
         "mechanics",
         "resolution_plan",
+        "resolution_solution",
     }
     _reject_unknown(item, field, allowed)
     item_id = _text(
@@ -1104,6 +1109,16 @@ def _normalize_item(value: Any, field: str, *, generate_id: bool = True) -> dict
             f"{field}.resolution_plan",
             source_card_id=item_id,
             source_card_kinds={"item"},
+        )
+    if item.get("resolution_solution") is not None:
+        if "resolution_plan" not in result:
+            raise ValueError(
+                f"{field}.resolution_solution requires resolution_plan"
+            )
+        result["resolution_solution"] = _normalize_embedded_resolution_solution(
+            item["resolution_solution"],
+            result["resolution_plan"],
+            f"{field}.resolution_solution",
         )
     return result
 
@@ -1381,6 +1396,7 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
         "mechanic_refs",
         "resolution",
         "resolution_plan",
+        "resolution_solution",
         "ruling_requirements",
     }
     _reject_unknown(spell, field, allowed)
@@ -1475,6 +1491,16 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
             source_card_id=spell_id,
             source_card_kinds={"spell"},
         )
+    if spell.get("resolution_solution") is not None:
+        if "resolution_plan" not in result:
+            raise ValueError(
+                f"{field}.resolution_solution requires resolution_plan"
+            )
+        result["resolution_solution"] = _normalize_embedded_resolution_solution(
+            spell["resolution_solution"],
+            result["resolution_plan"],
+            f"{field}.resolution_solution",
+        )
     if result["resolution"] is not None and "resolution_plan" in result:
         raise ValueError(
             f"{field} cannot combine structured resolution and resolution_plan"
@@ -1506,6 +1532,18 @@ def _normalize_embedded_resolution_plan(
     if compiled.source_card_kind not in source_card_kinds:
         raise ValueError(f"{field}.source_card_kind is invalid for this content card")
     return resolution_plan_template(compiled)
+
+
+def _normalize_embedded_resolution_solution(
+    value: Any,
+    plan: dict[str, Any],
+    field: str,
+) -> dict[str, Any]:
+    try:
+        compiled = compile_resolution_plan(plan)
+        return normalize_content_solution(value, plan=compiled)
+    except (ContentSolutionError, ResolutionPlanCompilationError) as error:
+        raise ValueError(f"{field}: {error}") from error
 
 
 def _normalize_effect(value: Any, field: str) -> dict[str, Any]:
@@ -2155,6 +2193,7 @@ def validate_character_sheet(
                     "rule_refs",
                     "mechanic_refs",
                     "resolution_plan",
+                    "resolution_solution",
                 },
             )
             activation = _object(
@@ -2406,6 +2445,22 @@ def validate_character_sheet(
                         "fingerprint"
                     ],
                 }
+            if entry.get("resolution_solution") is not None:
+                if "resolution_plan" not in normalized_entry:
+                    raise ValueError(
+                        f"sheet.content.{name}[{index}].resolution_solution "
+                        "requires resolution_plan"
+                    )
+                normalized_entry["resolution_solution"] = (
+                    _normalize_embedded_resolution_solution(
+                        entry["resolution_solution"],
+                        normalized_entry["resolution_plan"],
+                        (
+                            f"sheet.content.{name}[{index}]."
+                            "resolution_solution"
+                        ),
+                    )
+                )
             result.append(normalized_entry)
         return result
 

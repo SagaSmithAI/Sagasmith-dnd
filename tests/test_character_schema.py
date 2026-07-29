@@ -24,6 +24,8 @@ from sagasmith_dnd.character_schema import (
     validate_party_state,
     validate_world_time,
 )
+from sagasmith_dnd.content_solution import build_content_solution
+from sagasmith_dnd.resolution_plan import compile_resolution_plan
 from sagasmith_dnd.vocabulary import DENOMINATION_CP_VALUES
 
 
@@ -878,6 +880,30 @@ def test_weapon_cards_preserve_reviewed_source_bound_resolution_plans() -> None:
 
     assert normalized_item["resolution_plan"]["fingerprint"]
     assert attack["resolution_plan"] == normalized_item["resolution_plan"]
+    compiled = compile_resolution_plan(normalized_item["resolution_plan"])
+    normalized_item["resolution_solution"] = build_content_solution(
+        compiled,
+        application_id="choice:binding-blade",
+        agent_ruling={
+            "default_resolver": "agent",
+            "ruling_kind": "module_specific_procedure",
+            "decision": (
+                "Store the quoted on-hit condition as this item's solution."
+            ),
+            "reason": (
+                "The exact source clause deterministically restrains the target."
+            ),
+        },
+    )
+    persisted = validate_character_sheet(sheet)
+    persisted_item = next(
+        item
+        for item in persisted["inventory"]["items"]
+        if item["id"] == weapon_id
+    )
+    assert persisted_item["resolution_solution"]["plan_fingerprint"] == (
+        compiled.fingerprint
+    )
 
 
 def test_attunement_enforces_capacity_copies_transfer_and_death() -> None:
