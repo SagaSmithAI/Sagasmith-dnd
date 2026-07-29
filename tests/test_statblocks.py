@@ -1080,6 +1080,51 @@ def test_kobold_attack_traits_are_structured() -> None:
     assert parsed.warnings == ()
 
 
+def test_source_traits_are_compiled_from_complete_text_not_feature_names() -> None:
+    parsed = parse_2014_statblock(
+        KOBOLD.replace(
+            "***Pack Tactics***.",
+            "***Coordinated Assault***.",
+        ).replace(
+            "***Sunlight Sensitivity***.",
+            "***Harsh Light***.",
+        ),
+        source_key="module-review:renamed-kobold-traits",
+    )
+    features = {
+        item["name"]: item
+        for item in parsed.sheet["content"]["features"]
+    }
+
+    assert features["Coordinated Assault"]["choices"]["source_trait"]["kind"] == (
+        "pack_tactics"
+    )
+    assert features["Harsh Light"]["choices"]["source_trait"]["kind"] == (
+        "sunlight_sensitivity"
+    )
+    assert parsed.warnings == ()
+
+
+def test_source_trait_with_unparsed_clause_stays_an_agent_ruling() -> None:
+    parsed = parse_2014_statblock(
+        KOBOLD.replace(
+            "ally isn't incapacitated.",
+            "ally isn't incapacitated. The kobold also deals 2 extra damage.",
+        ),
+        source_key="module-review:extended-pack-tactics",
+    )
+    feature = next(
+        item
+        for item in parsed.sheet["content"]["features"]
+        if item["name"] == "Pack Tactics"
+    )
+
+    assert feature["choices"]["manual_ruling"]["default_resolver"] == "agent"
+    assert "Pack Tactics: descriptive passive is not automatically settled" in (
+        parsed.warnings
+    )
+
+
 def test_statblock_entries_accept_period_inside_emphasis() -> None:
     markdown = (
         KOBOLD.replace(
@@ -1759,6 +1804,39 @@ def test_source_parry_preserves_visibility_and_wielded_weapon_requirements() -> 
         "requires_wielded_melee_weapon": True,
     }
     assert parsed.warnings == ()
+
+
+def test_reaction_defense_is_compiled_from_complete_text_not_activity_name() -> None:
+    parsed = parse_2014_statblock(
+        BANDIT_CAPTAIN.replace("***Parry***.", "***Deflect***."),
+        source_key="module-review:renamed-parry",
+    )
+    reaction = next(
+        item
+        for item in parsed.sheet["content"]["activities"]
+        if item["name"] == "Deflect"
+    )
+
+    assert reaction["choices"]["reaction_defense"]["kind"] == "armor_class_bonus"
+    assert parsed.warnings == ()
+
+
+def test_reaction_defense_with_unparsed_clause_stays_an_agent_ruling() -> None:
+    parsed = parse_2014_statblock(
+        BANDIT_CAPTAIN.replace(
+            "one melee attack that would hit it.",
+            "one melee attack that would hit it. It may then move 10 feet.",
+        ),
+        source_key="module-review:extended-parry",
+    )
+    reaction = next(
+        item
+        for item in parsed.sheet["content"]["activities"]
+        if item["name"] == "Parry"
+    )
+
+    assert reaction["choices"]["manual_ruling"]["default_resolver"] == "agent"
+    assert "Parry: descriptive reaction is not automatically settled" in parsed.warnings
 
 
 def test_statblock_explicit_heavy_armor_preserves_non_ac_mechanics_with_override() -> None:

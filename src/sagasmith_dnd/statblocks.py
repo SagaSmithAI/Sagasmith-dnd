@@ -745,28 +745,23 @@ def _spell_action_name(value: str) -> str:
 
 
 def _regeneration_source_trait(description: str) -> dict[str, Any] | None:
-    amount_match = re.search(
-        r"(?i)\bregains\s+(\d+)\s+hit points at the start of "
-        r"(?:its|his|her|their)\s+turn\b",
-        description,
+    normalized = " ".join(description.split())
+    match = re.fullmatch(
+        r"The (?P<subject>[A-Za-z][A-Za-z '\-]*) regains "
+        r"(?P<amount>\d+) hit points at the start of its turn\. "
+        r"If the (?P=subject) takes "
+        r"(?P<damage_types>[a-z]+(?:\s+or\s+[a-z]+)+) damage, "
+        r"this trait doesn't function at the start of the "
+        r"(?P=subject)'s next turn\. The (?P=subject) dies only if it starts "
+        r"its turn with 0 hit points and doesn't regenerate\.",
+        normalized,
+        flags=re.IGNORECASE,
     )
-    suppression_match = re.search(
-        r"(?i)\btakes\s+([a-z]+(?:\s+or\s+[a-z]+)+)\s+damage,\s+"
-        r"this trait doesn't function at the start of "
-        r"(?:(?:its|his|her|their)|the\s+[a-z][a-z '\-]*'s)\s+next turn\b",
-        description,
-    )
-    zero_hp_match = re.search(
-        r"(?i)\bdies only if (?:it|he|she|they) starts? "
-        r"(?:its|his|her|their)\s+turn with 0 hit points and "
-        r"doesn't regenerate\b",
-        description,
-    )
-    if not amount_match or not suppression_match or not zero_hp_match:
+    if match is None:
         return None
     damage_types = [
         item.strip().casefold()
-        for item in re.split(r"\s+or\s+", suppression_match.group(1))
+        for item in re.split(r"\s+or\s+", match.group("damage_types"))
         if item.strip()
     ]
     if not damage_types or len(damage_types) != len(set(damage_types)):
@@ -774,7 +769,7 @@ def _regeneration_source_trait(description: str) -> dict[str, Any] | None:
     return {
         "kind": "regeneration",
         "trigger": "turn_start",
-        "amount": int(amount_match.group(1)),
+        "amount": int(match.group("amount")),
         "suppressed_by_damage_types": damage_types,
         "dies_at_zero_when_suppressed": True,
     }
@@ -821,22 +816,35 @@ def _sunlight_sensitivity_source_trait(description: str) -> dict[str, Any] | Non
     }
 
 
-def _parry_reaction_defense(
-    entry_name: str,
-    description: str,
-) -> dict[str, Any] | None:
-    """Structure the standard post-hit Parry reaction without broad inference."""
+def _source_trait_from_description(description: str) -> dict[str, Any] | None:
+    matches = [
+        parsed
+        for parser in (
+            _regeneration_source_trait,
+            _pack_tactics_source_trait,
+            _sunlight_sensitivity_source_trait,
+        )
+        if (parsed := parser(description)) is not None
+    ]
+    return matches[0] if len(matches) == 1 else None
 
-    if entry_name.strip().casefold() != "parry":
-        return None
-    bonus_match = re.search(
-        r"(?i)\badds?\s+(\d+)\s+to\s+(?:its|his|her|their)\s+AC\s+against\s+"
-        r"one\s+melee\s+attack\s+that\s+would\s+hit\s+(?:it|him|her|them)\b",
-        description,
+
+def _parry_reaction_defense(description: str) -> dict[str, Any] | None:
+    """Structure a complete standard post-hit reaction without trusting its title."""
+
+    normalized = " ".join(description.split())
+    match = re.fullmatch(
+        r"The (?P<subject>[A-Za-z][A-Za-z '\-]*) adds? "
+        r"(?P<bonus>\d+) to (?:its|his|her|their) AC against one melee attack "
+        r"that would hit (?:it|him|her|them)\."
+        r"(?: To do so, the (?P=subject) must see the attacker and be wielding "
+        r"a melee weapon\.)?",
+        normalized,
+        flags=re.IGNORECASE,
     )
-    if bonus_match is None:
+    if match is None:
         return None
-    bonus = int(bonus_match.group(1))
+    bonus = int(match.group("bonus"))
     if bonus <= 0:
         return None
     return {
@@ -844,15 +852,13 @@ def _parry_reaction_defense(
         "bonus": bonus,
         "attack_modes": ["melee"],
         "requires_visible_attacker": bool(
-            re.search(
-                r"(?i)\bmust\s+see\s+the\s+attacker\b",
-                description,
-            )
+            re.search(r"\bmust\s+see\s+the\s+attacker\b", normalized, re.IGNORECASE)
         ),
         "requires_wielded_melee_weapon": bool(
             re.search(
-                r"(?i)\b(?:be\s+)?wielding\s+a\s+melee\s+weapon\b",
-                description,
+                r"\b(?:be\s+)?wielding\s+a\s+melee\s+weapon\b",
+                normalized,
+                re.IGNORECASE,
             )
         ),
     }
@@ -1582,13 +1588,7 @@ def parse_2014_statblock(
             entry["mechanic_refs"] = [MULTIATTACK_MECHANIC_ID]
         source_trait = None
         if activation == "passive":
-            normalized_name = entry_name.strip().casefold()
-            if normalized_name == "regeneration":
-                source_trait = _regeneration_source_trait(description)
-            elif normalized_name == "pack tactics":
-                source_trait = _pack_tactics_source_trait(description)
-            elif normalized_name == "sunlight sensitivity":
-                source_trait = _sunlight_sensitivity_source_trait(description)
+            source_trait = _source_trait_from_description(description)
         if source_trait is not None:
             entry["activation"]["trigger"] = {
                 "regeneration": "start of its turn",
@@ -1597,7 +1597,7 @@ def parse_2014_statblock(
             }[str(source_trait["kind"])]
             entry["choices"] = {"source_trait": source_trait}
         reaction_defense = (
-            _parry_reaction_defense(entry_name, description)
+            _parry_reaction_defense(description)
             if activation == "reaction"
             else None
         )
