@@ -11,6 +11,11 @@ from sagasmith_core.text import ascii_slug
 
 from sagasmith_dnd.abilities import ABILITY_LABELS
 from sagasmith_dnd.character_schema import normalize_spell_definition
+from sagasmith_dnd.resolution_plan import (
+    ResolutionPlanCompilationError,
+    compile_resolution_plan,
+    resolution_plan_template,
+)
 from sagasmith_dnd.spell_resolution import (
     SPELL_RESOLUTION_MECHANIC_ID,
     normalize_spell_resolution,
@@ -207,6 +212,9 @@ def extract_content_candidates(
                 "extraction_confidence": "high" if len(signals) >= 3 else "medium",
                 "extraction_signals": list(signals),
                 "review_status": "pending",
+                "mechanical_scope": (
+                    "mechanical" if kind in {"spell", "statblock"} else "review_required"
+                ),
                 "application_state": "catalog_only",
                 "execution_state": "not_compiled",
                 "artifact": {
@@ -793,6 +801,57 @@ def compiled_artifacts_from_candidates(
             )
             value["mechanic_refs"] = mechanic_refs
             card["mechanic_refs"] = mechanic_refs
+        raw_plan = value.get("resolution_plan", card.get("resolution_plan"))
+        if raw_plan is not None:
+            try:
+                compiled_plan = compile_resolution_plan(raw_plan)
+            except ResolutionPlanCompilationError as error:
+                raise ValueError(
+                    f"candidate {candidate.get('id')} resolution_plan: {error}"
+                ) from error
+            if compiled_plan.source_card_id != artifact_id:
+                raise ValueError(
+                    f"candidate {candidate.get('id')} resolution_plan source_card_id "
+                    "must match its artifact id"
+                )
+            _require_candidate_plan_evidence(
+                compiled_plan.citations,
+                candidate=candidate,
+            )
+            stored_plan = resolution_plan_template(compiled_plan)
+            value["resolution_plan"] = stored_plan
+            card.pop("resolution_plan", None)
+            mechanic_refs = list(
+                dict.fromkeys(
+                    [
+                        *list(value.get("mechanic_refs") or []),
+                        *list(card.get("mechanic_refs") or []),
+                        compiled_plan.id,
+                    ]
+                )
+            )
+            value["mechanic_refs"] = mechanic_refs
+            card["mechanic_refs"] = mechanic_refs
+            value["execution_state"] = "plan_ready"
+        mechanical_scope = str(
+            value.get("mechanical_scope")
+            or candidate.get("mechanical_scope")
+            or "review_required"
+        )
+        if mechanical_scope not in {"descriptive", "mechanical", "review_required"}:
+            raise ValueError(
+                f"candidate {candidate.get('id')} mechanical_scope is invalid"
+            )
+        if (
+            state == "selection_ready"
+            and mechanical_scope == "mechanical"
+            and raw_plan is None
+            and not (kind == "spell" and card.get("resolution") is not None)
+        ):
+            raise ValueError(
+                f"candidate {candidate.get('id')} mechanical content needs a "
+                "resolution_plan before it becomes selection_ready"
+            )
         artifacts.append(
             {
                 **value,
@@ -800,6 +859,7 @@ def compiled_artifacts_from_candidates(
                 "kind": kind,
                 "card": card,
                 "application_state": state,
+                "mechanical_scope": mechanical_scope,
                 "source_chunk_ids": chunk_ids,
             }
         )
@@ -815,6 +875,31 @@ def validate_selection_ready_artifacts(artifacts: list[dict[str, Any]]) -> list[
         kind = str(artifact.get("kind") or "")
         card = dict(artifact.get("card") or {})
         prefix = f"artifacts[{index}]"
+        raw_plan = artifact.get("resolution_plan", card.get("resolution_plan"))
+        if raw_plan is not None:
+            try:
+                compiled_plan = compile_resolution_plan(raw_plan)
+            except ResolutionPlanCompilationError as error:
+                errors.append(f"{prefix}.resolution_plan: {error}")
+            else:
+                if compiled_plan.source_card_id != str(artifact.get("id") or ""):
+                    errors.append(
+                        f"{prefix}.resolution_plan source_card_id must match artifact id"
+                    )
+        mechanical_scope = str(
+            artifact.get("mechanical_scope")
+            or ("mechanical" if kind in {"spell", "statblock"} else "review_required")
+        )
+        if mechanical_scope not in {"descriptive", "mechanical", "review_required"}:
+            errors.append(f"{prefix}.mechanical_scope is invalid")
+        if (
+            mechanical_scope == "mechanical"
+            and raw_plan is None
+            and not (kind == "spell" and card.get("resolution") is not None)
+        ):
+            errors.append(
+                f"{prefix} mechanical content needs a resolution_plan"
+            )
         if kind == "spell":
             if not isinstance(card.get("classes"), list) or not card["classes"]:
                 errors.append(f"{prefix} spell needs a nonempty classes list")
@@ -853,6 +938,32 @@ def validate_selection_ready_artifacts(artifacts: list[dict[str, Any]]) -> list[
         ):
             errors.append(f"{prefix} feat prerequisites must be a list")
     return errors
+
+
+def _require_candidate_plan_evidence(
+    citations: tuple[dict[str, Any], ...],
+    *,
+    candidate: dict[str, Any],
+) -> None:
+    """Keep every executable plan citation inside the reviewed candidate source."""
+
+    allowed_chunks = {
+        str(item)
+        for item in candidate.get("source_chunk_ids") or []
+        if str(item)
+    }
+    if not allowed_chunks:
+        raise ValueError(
+            f"candidate {candidate.get('id')} needs source chunks before plan compilation"
+        )
+    for citation in citations:
+        source_ref = dict(citation.get("source_ref") or {})
+        chunk_id = str(source_ref.get("chunk_id") or "")
+        if chunk_id not in allowed_chunks:
+            raise ValueError(
+                f"candidate {candidate.get('id')} resolution_plan citation must "
+                "reference one of its reviewed source chunks"
+            )
 
 
 def _classify(

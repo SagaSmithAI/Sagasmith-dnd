@@ -823,6 +823,109 @@ def test_descriptive_statblock_action_is_marked_for_agent_ruling() -> None:
     )
 
 
+def test_agent_can_compile_a_custom_statblock_action_without_a_python_branch() -> None:
+    source_excerpt = (
+        "The commoner releases a prismatic pulse. Each creature chosen in the "
+        "area must make a DC 14 Wisdom saving throw, taking 3d8 radiant damage "
+        "on a failed save."
+    )
+    parsed = parse_2014_statblock(
+        COMMONER.replace(
+            "***Club***. *Melee Weapon Attack:* +2 to hit, reach 5 ft., one target.",
+            (
+                f"***Prismatic Pulse (Recharge 5-6)***. {source_excerpt}\n\n"
+                "***Club***. *Melee Weapon Attack:* +2 to hit, reach 5 ft., one target."
+            ),
+        ),
+        source_key="module-review:custom-prismatic-pulse",
+        rule_refs=("module-chunk:prismatic-pulse",),
+    )
+    activity = next(
+        item
+        for item in parsed.sheet["content"]["activities"]
+        if item["name"] == "Prismatic Pulse (Recharge 5-6)"
+    )
+    plan_id = "module.custom-prismatic-pulse.plan"
+    filled = apply_reviewed_statblock_fill(
+        parsed.sheet,
+        {
+            "resolution_plans": [
+                {
+                    "source_card_id": activity["id"],
+                    "reason": (
+                        "The Agent mapped only the explicit save and damage clauses "
+                        "from the reviewed source action."
+                    ),
+                    "resolution_plan": {
+                        "schema_version": 1,
+                        "id": plan_id,
+                        "source_card_id": activity["id"],
+                        "source_card_kind": "monster_action",
+                        "trigger": "action",
+                        "slots": {
+                            "targets": {
+                                "kind": "actor_ids",
+                                "owner": "agent",
+                                "description": (
+                                    "Creatures selected within the source-defined area."
+                                ),
+                                "minimum_items": 1,
+                            }
+                        },
+                        "steps": [
+                            {
+                                "id": "save",
+                                "op": "check.save",
+                                "args": {
+                                    "target_ids": {"$slot": "targets"},
+                                    "ability": "wisdom",
+                                    "dc": 14,
+                                    "source": "Prismatic Pulse",
+                                },
+                            },
+                            {
+                                "id": "damage",
+                                "op": "damage.apply",
+                                "args": {
+                                    "target_ids": {"$slot": "targets"},
+                                    "expression": "3d8",
+                                    "damage_type": "radiant",
+                                    "source": "Prismatic Pulse",
+                                    "reduction": {
+                                        "$result": "save.damage_reduction_by_actor_id"
+                                    },
+                                },
+                            },
+                        ],
+                        "citations": [
+                            {
+                                "source": "module-review:custom-prismatic-pulse",
+                                "source_ref": {
+                                    "chunk_id": "module-chunk:prismatic-pulse"
+                                },
+                                "source_excerpt": source_excerpt,
+                            }
+                        ],
+                    },
+                }
+            ]
+        },
+    )
+    compiled_activity = next(
+        item
+        for item in filled["sheet"]["content"]["activities"]
+        if item["id"] == activity["id"]
+    )
+
+    assert compiled_activity["resolution_plan"]["id"] == plan_id
+    assert compiled_activity["choices"]["resolution_plan"]["id"] == plan_id
+    assert "manual_ruling" not in compiled_activity["choices"]
+    assert filled["resolved_warnings"] == [
+        "Prismatic Pulse (Recharge 5-6): descriptive action is not automatically settled"
+    ]
+    assert filled["fill"]["resolution_plans"][0]["resolution_plan"]["fingerprint"]
+
+
 def test_descriptive_statblock_sections_preserve_nonstandard_action_economies() -> None:
     parsed = parse_2014_statblock(
         COMMONER

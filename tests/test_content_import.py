@@ -1108,6 +1108,22 @@ def test_compiler_requires_review_and_selection_ready_structure() -> None:
         "level": 3,
         "classes": ["wizard"],
         "definition": {},
+        "resolution": {
+            "kind": "saving_throw",
+            "targeting": {
+                "mode": "area",
+                "max_targets": 100,
+                "area": {"shape": "sphere", "radius_ft": 20},
+            },
+            "save": {
+                "ability": "dexterity",
+                "success": "half",
+                "damage": {
+                    "base_dice": "8d6",
+                    "damage_type": "fire",
+                },
+            },
+        },
     }
     assert validate_selection_ready_artifacts(artifacts) == []
 
@@ -1121,6 +1137,18 @@ def test_selection_ready_spell_uses_character_definition_validation() -> None:
             "name": "Chromatic Orb",
             "level": 1,
             "classes": ["sorcerer", "wizard"],
+            "resolution": {
+                "kind": "spell_attack",
+                "targeting": {"mode": "creature", "max_targets": 1},
+                "attack": {
+                    "mode": "ranged",
+                    "count": {"base": 1},
+                    "damage": {
+                        "base_dice": "3d8",
+                        "damage_type": "acid",
+                    },
+                },
+            },
             "definition": {
                 "duration": {
                     "kind": "instantaneous",
@@ -1197,3 +1225,140 @@ def test_reviewed_extension_spell_resolution_binds_to_core_executor() -> None:
     assert artifacts[0]["card"]["mechanic_refs"] == [
         "dnd5e.core.spell.structured_resolution"
     ]
+
+
+def test_custom_mechanical_artifact_persists_a_source_bound_plan_template() -> None:
+    artifact_id = "dnd5e.extension.feature.prismatic-pulse"
+    excerpt = (
+        "Prismatic Pulse. Each chosen creature must make a Wisdom saving throw, "
+        "taking 3d8 radiant damage on a failed save."
+    )
+    candidate = {
+        "id": "candidate:prismatic-pulse",
+        "kind": "feature",
+        "name": "Prismatic Pulse",
+        "source_chunk_ids": ["chunk:prismatic-pulse"],
+        "review_status": "accepted",
+        "mechanical_scope": "mechanical",
+        "application_state": "selection_ready",
+        "artifact": {
+            "kind": "feature",
+            "application_state": "selection_ready",
+            "mechanical_scope": "mechanical",
+            "card": {"name": "Prismatic Pulse"},
+            "resolution_plan": {
+                "schema_version": 1,
+                "id": "dnd5e.extension.plan.prismatic-pulse",
+                "source_card_id": artifact_id,
+                "source_card_kind": "feature",
+                "trigger": "action",
+                "slots": {
+                    "targets": {
+                        "kind": "actor_ids",
+                        "owner": "agent",
+                        "description": "Creatures selected inside the reviewed source area.",
+                        "minimum_items": 1,
+                    }
+                },
+                "steps": [
+                    {
+                        "id": "save",
+                        "op": "check.save",
+                        "args": {
+                            "target_ids": {"$slot": "targets"},
+                            "ability": "wisdom",
+                            "dc": 14,
+                            "source": "Prismatic Pulse",
+                        },
+                    },
+                    {
+                        "id": "damage",
+                        "op": "damage.apply",
+                        "args": {
+                            "target_ids": {"$slot": "targets"},
+                            "expression": "3d8",
+                            "damage_type": "radiant",
+                            "source": "Prismatic Pulse",
+                            "reduction": {
+                                "$result": "save.damage_reduction_by_actor_id"
+                            },
+                        },
+                    },
+                ],
+                "citations": [
+                    {
+                        "source": "rule-source:custom",
+                        "source_ref": {"chunk_id": "chunk:prismatic-pulse"},
+                        "source_excerpt": excerpt,
+                    }
+                ],
+            },
+        },
+    }
+
+    artifacts = compiled_artifacts_from_candidates(
+        [candidate],
+        pack_id="dnd5e.extension",
+    )
+
+    assert validate_selection_ready_artifacts(artifacts) == []
+    assert artifacts[0]["execution_state"] == "plan_ready"
+    assert artifacts[0]["resolution_plan"]["source_card_id"] == artifact_id
+    assert artifacts[0]["resolution_plan"]["fingerprint"]
+    assert artifacts[0]["mechanic_refs"] == [
+        "dnd5e.extension.plan.prismatic-pulse"
+    ]
+
+
+def test_custom_mechanical_artifact_cannot_escape_its_reviewed_source_chunks() -> None:
+    candidate = {
+        "id": "candidate:unsafe",
+        "kind": "feature",
+        "name": "Unsafe",
+        "source_chunk_ids": ["chunk:reviewed"],
+        "review_status": "accepted",
+        "mechanical_scope": "mechanical",
+        "application_state": "selection_ready",
+        "artifact": {
+            "id": "dnd5e.extension.feature.unsafe",
+            "kind": "feature",
+            "application_state": "selection_ready",
+            "mechanical_scope": "mechanical",
+            "card": {"name": "Unsafe"},
+            "resolution_plan": {
+                "schema_version": 1,
+                "id": "dnd5e.extension.plan.unsafe",
+                "source_card_id": "dnd5e.extension.feature.unsafe",
+                "source_card_kind": "feature",
+                "trigger": "action",
+                "slots": {},
+                "steps": [
+                    {
+                        "id": "damage",
+                        "op": "damage.apply",
+                        "args": {
+                            "target_ids": ["target"],
+                            "amount": 1,
+                            "damage_type": "force",
+                            "source": "Unsafe",
+                        },
+                    }
+                ],
+                "citations": [
+                    {
+                        "source": "rule-source:other",
+                        "source_ref": {"chunk_id": "chunk:not-reviewed"},
+                        "source_excerpt": (
+                            "This unrelated text must not authorize the imported effect."
+                        ),
+                    }
+                ],
+            },
+        },
+    }
+
+    with pytest.raises(ValueError, match="reviewed source chunks"):
+        compiled_artifacts_from_candidates(
+            [candidate],
+            pack_id="dnd5e.extension",
+        )

@@ -372,6 +372,7 @@ def compile_resolution_plan(value: dict[str, Any]) -> CompiledResolutionPlan:
         "slots",
         "steps",
         "citations",
+        "fingerprint",
     }
     unknown = set(value) - allowed
     if unknown:
@@ -446,6 +447,12 @@ def compile_resolution_plan(value: dict[str, Any]) -> CompiledResolutionPlan:
         "steps": steps,
         "citations": list(citations),
     }
+    fingerprint = _fingerprint(canonical)
+    supplied_fingerprint = str(value.get("fingerprint") or "")
+    if supplied_fingerprint and supplied_fingerprint != fingerprint:
+        raise ResolutionPlanCompilationError(
+            "resolution plan fingerprint does not match its canonical template"
+        )
     return CompiledResolutionPlan(
         schema_version=schema_version,
         id=plan_id,
@@ -455,7 +462,7 @@ def compile_resolution_plan(value: dict[str, Any]) -> CompiledResolutionPlan:
         slots=deepcopy(slots),
         steps=tuple(deepcopy(steps)),
         citations=citations,
-        fingerprint=_fingerprint(canonical),
+        fingerprint=fingerprint,
     )
 
 
@@ -593,6 +600,22 @@ def resolution_plan_contract(plan: CompiledResolutionPlan) -> dict[str, Any]:
         "trigger": plan.trigger,
         "slots": deepcopy(plan.slots),
         "citations": [deepcopy(item) for item in plan.citations],
+    }
+
+
+def resolution_plan_template(plan: CompiledResolutionPlan) -> dict[str, Any]:
+    """Serialize the canonical rule-card template for durable content storage."""
+
+    return {
+        "schema_version": plan.schema_version,
+        "id": plan.id,
+        "source_card_id": plan.source_card_id,
+        "source_card_kind": plan.source_card_kind,
+        "trigger": plan.trigger,
+        "slots": deepcopy(plan.slots),
+        "steps": [deepcopy(item) for item in plan.steps],
+        "citations": [deepcopy(item) for item in plan.citations],
+        "fingerprint": plan.fingerprint,
     }
 
 
@@ -1238,4 +1261,5 @@ __all__ = [
     "compile_resolution_plan",
     "execute_resolution_plan",
     "resolution_plan_contract",
+    "resolution_plan_template",
 ]

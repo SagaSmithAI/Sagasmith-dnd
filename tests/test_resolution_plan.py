@@ -12,6 +12,7 @@ from sagasmith_dnd.resolution_plan import (
     compile_resolution_plan,
     execute_resolution_plan,
     resolution_plan_contract,
+    resolution_plan_template,
 )
 
 
@@ -145,6 +146,7 @@ def test_rule_card_locks_steps_while_agent_only_fills_typed_slots() -> None:
     assert bound.steps[0]["args"]["target_ids"] == ["hero-1", "hero-2"]
     assert bound.steps[1]["args"]["expression"] == "3d8+2"
     assert bound.fingerprint != compiled.fingerprint
+    assert compile_resolution_plan(resolution_plan_template(compiled)) == compiled
 
 
 def test_plan_rejects_extra_operations_unknown_slots_and_unsafe_values() -> None:

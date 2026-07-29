@@ -20,6 +20,11 @@ from sagasmith_dnd.editions import DEFAULT_CHARACTER_EDITION, normalize_dnd_edit
 from sagasmith_dnd.engine import ability_modifier, proficiency_bonus
 from sagasmith_dnd.game_time import TICKS_PER_DAY, TICKS_PER_HOUR, TICKS_PER_MINUTE
 from sagasmith_dnd.hit_points import effective_hit_point_maximum_value
+from sagasmith_dnd.resolution_plan import (
+    ResolutionPlanCompilationError,
+    compile_resolution_plan,
+    resolution_plan_template,
+)
 from sagasmith_dnd.rule_engine import (
     DERIVED_STAT_MODIFIER_TARGETS,
     EXTERNAL_RULING_KINDS,
@@ -1362,6 +1367,7 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
         "rule_refs",
         "mechanic_refs",
         "resolution",
+        "resolution_plan",
         "ruling_requirements",
     }
     _reject_unknown(spell, field, allowed)
@@ -1391,8 +1397,9 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
     )
     if len(at_will_sources) != len(set(at_will_sources)):
         raise ValueError(f"{field}.access.at_will_sources contains duplicates")
-    return {
-        "id": _text(spell.get("id"), f"{field}.id", default=_uuid(), maximum=100),
+    spell_id = _text(spell.get("id"), f"{field}.id", default=_uuid(), maximum=100)
+    result = {
+        "id": spell_id,
         "source_key": _text(spell.get("source_key"), f"{field}.source_key", maximum=300),
         "name": _text(spell.get("name"), f"{field}.name", maximum=300),
         "level": _integer(spell.get("level"), f"{field}.level", minimum=0, maximum=9),
@@ -1448,6 +1455,34 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
             else {}
         ),
     }
+    if spell.get("resolution_plan") is not None:
+        result["resolution_plan"] = _normalize_embedded_resolution_plan(
+            spell["resolution_plan"],
+            f"{field}.resolution_plan",
+            source_card_id=spell_id,
+            source_card_kinds={"spell"},
+        )
+    return result
+
+
+def _normalize_embedded_resolution_plan(
+    value: Any,
+    field: str,
+    *,
+    source_card_id: str,
+    source_card_kinds: set[str],
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{field} must be an object")
+    try:
+        compiled = compile_resolution_plan(value)
+    except ResolutionPlanCompilationError as error:
+        raise ValueError(f"{field}: {error}") from error
+    if compiled.source_card_id != source_card_id:
+        raise ValueError(f"{field}.source_card_id must match its content card id")
+    if compiled.source_card_kind not in source_card_kinds:
+        raise ValueError(f"{field}.source_card_kind is invalid for this content card")
+    return resolution_plan_template(compiled)
 
 
 def _normalize_effect(value: Any, field: str) -> dict[str, Any]:
@@ -2096,6 +2131,7 @@ def validate_character_sheet(
                     "pack_version",
                     "rule_refs",
                     "mechanic_refs",
+                    "resolution_plan",
                 },
             )
             activation = _object(
@@ -2258,14 +2294,14 @@ def validate_character_sheet(
                 if raw_attack_scaling
                 else {}
             )
-            result.append(
-                {
-                    "id": _text(
-                        entry.get("id"),
-                        f"sheet.content.{name}[{index}].id",
-                        default=_uuid(),
-                        maximum=100,
-                    ),
+            entry_id = _text(
+                entry.get("id"),
+                f"sheet.content.{name}[{index}].id",
+                default=_uuid(),
+                maximum=100,
+            )
+            normalized_entry = {
+                    "id": entry_id,
                     "name": _text(
                         entry.get("name"), f"sheet.content.{name}[{index}].name", maximum=300
                     ),
@@ -2330,7 +2366,18 @@ def validate_character_sheet(
                         f"sheet.content.{name}[{index}].mechanic_refs",
                     ),
                 }
-            )
+            if entry.get("resolution_plan") is not None:
+                normalized_entry["resolution_plan"] = _normalize_embedded_resolution_plan(
+                    entry["resolution_plan"],
+                    f"sheet.content.{name}[{index}].resolution_plan",
+                    source_card_id=entry_id,
+                    source_card_kinds=(
+                        {"activity", "monster_action", "scene_procedure"}
+                        if name == "activities"
+                        else {"feature", "trait"}
+                    ),
+                )
+            result.append(normalized_entry)
         return result
 
     selections: list[dict[str, Any]] = []

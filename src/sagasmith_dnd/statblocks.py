@@ -18,6 +18,11 @@ from sagasmith_dnd.activity_identity import (
 from sagasmith_dnd.character_schema import default_character_sheet, validate_character_sheet
 from sagasmith_dnd.combat_engine import structured_critical_followup
 from sagasmith_dnd.engine import ability_modifier
+from sagasmith_dnd.resolution_plan import (
+    ResolutionPlanCompilationError,
+    compile_resolution_plan,
+    resolution_plan_template,
+)
 from sagasmith_dnd.resources import mutate_bounded_resource
 from sagasmith_dnd.vocabulary import ATTACK_MODES, DAMAGE_TYPES
 
@@ -2327,18 +2332,25 @@ def apply_reviewed_statblock_fill(
 
     if not isinstance(fill, dict):
         raise StatblockImportError("reviewed statblock fill must be an object")
-    unknown = set(fill) - {"multiattack_options", "additional_actions"}
+    unknown = set(fill) - {
+        "multiattack_options",
+        "additional_actions",
+        "resolution_plans",
+    }
     if unknown:
         raise StatblockImportError(
             f"unsupported reviewed statblock fill fields: {sorted(unknown)}"
         )
     declarations = fill.get("multiattack_options", [])
     additional_actions = fill.get("additional_actions", [])
+    resolution_plans = fill.get("resolution_plans", [])
     if not isinstance(declarations, list):
         raise StatblockImportError("reviewed multiattack_options must be a list")
     if not isinstance(additional_actions, list):
         raise StatblockImportError("reviewed additional_actions must be a list")
-    if not declarations and not additional_actions:
+    if not isinstance(resolution_plans, list):
+        raise StatblockImportError("reviewed resolution_plans must be a list")
+    if not declarations and not additional_actions and not resolution_plans:
         raise StatblockImportError(
             "reviewed statblock fill must contain at least one semantic declaration"
         )
@@ -2352,9 +2364,134 @@ def apply_reviewed_statblock_fill(
     }
     normalized_declarations: list[dict[str, Any]] = []
     normalized_additional_actions: list[dict[str, Any]] = []
+    normalized_resolution_plans: list[dict[str, Any]] = []
     resolved_warnings: list[str] = []
     added_warnings: list[str] = []
     used_activity_ids: set[str] = set()
+
+    content_cards = [
+        *result["content"]["activities"],
+        *result["content"]["features"],
+    ]
+    for declaration in resolution_plans:
+        if not isinstance(declaration, dict):
+            raise StatblockImportError(
+                "each reviewed resolution plan fill must be an object"
+            )
+        allowed = {
+            "source_card_id",
+            "resolution_plan",
+            "reason",
+            "default_resolver",
+            "ruling_kind",
+        }
+        if set(declaration) - allowed:
+            raise StatblockImportError(
+                "unsupported reviewed resolution plan fields: "
+                f"{sorted(set(declaration) - allowed)}"
+            )
+        if declaration.get("default_resolver", "agent") != "agent":
+            raise StatblockImportError(
+                "reviewed resolution plan default_resolver must be agent"
+            )
+        if (
+            declaration.get("ruling_kind", "module_specific_procedure")
+            != "module_specific_procedure"
+        ):
+            raise StatblockImportError(
+                "reviewed resolution plan ruling_kind must be "
+                "module_specific_procedure"
+            )
+        source_card_id = str(declaration.get("source_card_id") or "").strip()
+        matching_cards = [
+            card
+            for card in content_cards
+            if str(card.get("id") or "") == source_card_id
+        ]
+        if len(matching_cards) != 1:
+            raise StatblockImportError(
+                "reviewed resolution plan source_card_id must identify exactly "
+                "one parsed activity or feature"
+            )
+        card = matching_cards[0]
+        reason = " ".join(str(declaration.get("reason") or "").split())
+        if not 10 <= len(reason) <= 500:
+            raise StatblockImportError(
+                "reviewed resolution plan reason must contain 10 to 500 characters"
+            )
+        raw_plan = declaration.get("resolution_plan")
+        try:
+            compiled_plan = compile_resolution_plan(raw_plan)
+        except ResolutionPlanCompilationError as error:
+            raise StatblockImportError(
+                f"reviewed resolution plan is invalid: {error}"
+            ) from error
+        if compiled_plan.source_card_id != source_card_id:
+            raise StatblockImportError(
+                "reviewed resolution plan source_card_id must match its parsed card"
+            )
+        expected_kinds = (
+            {"feature", "trait"}
+            if str(dict(card.get("activation") or {}).get("type") or "")
+            == "passive"
+            else {"activity", "monster_action"}
+        )
+        if compiled_plan.source_card_kind not in expected_kinds:
+            raise StatblockImportError(
+                "reviewed resolution plan source_card_kind does not match its "
+                "parsed activity type"
+            )
+        source_description = " ".join(
+            str(card.get("description") or "").split()
+        )
+        if not any(
+            " ".join(str(citation.get("source_excerpt") or "").split())
+            == source_description
+            for citation in compiled_plan.citations
+        ):
+            raise StatblockImportError(
+                "reviewed resolution plan must cite the exact parsed source excerpt"
+            )
+        stored_plan = resolution_plan_template(compiled_plan)
+        card["resolution_plan"] = stored_plan
+        card["mechanic_refs"] = list(
+            dict.fromkeys(
+                [
+                    *list(card.get("mechanic_refs") or []),
+                    compiled_plan.id,
+                ]
+            )
+        )
+        choices = dict(card.get("choices") or {})
+        manual_ruling = dict(choices.pop("manual_ruling", {}) or {})
+        choices["resolution_plan"] = {
+            "id": compiled_plan.id,
+            "fingerprint": compiled_plan.fingerprint,
+        }
+        card["choices"] = choices
+        activation = str(
+            dict(card.get("activation") or {}).get("type") or "passive"
+        )
+        if manual_ruling:
+            resolved_warnings.append(
+                (
+                    f"{card['name']}: Multiattack composition requires a DM ruling"
+                    if is_multiattack_activity(card)
+                    else (
+                        f"{card['name']}: descriptive "
+                        f"{activation.replace('_', ' ')} is not automatically settled"
+                    )
+                )
+            )
+        normalized_resolution_plans.append(
+            {
+                "source_card_id": source_card_id,
+                "resolution_plan": stored_plan,
+                "reason": reason,
+                "default_resolver": "agent",
+                "ruling_kind": "module_specific_procedure",
+            }
+        )
 
     for declaration in additional_actions:
         if not isinstance(declaration, dict):
@@ -2657,6 +2794,8 @@ def apply_reviewed_statblock_fill(
     }
     if normalized_additional_actions:
         normalized_fill["additional_actions"] = normalized_additional_actions
+    if normalized_resolution_plans:
+        normalized_fill["resolution_plans"] = normalized_resolution_plans
     added_warnings.extend(
         f"{activity['name']}: Multiattack composition requires a DM ruling"
         for declaration in normalized_declarations
