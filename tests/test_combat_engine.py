@@ -30,6 +30,7 @@ from sagasmith_dnd.combat_engine import (
     detach_attachment,
     end_concentration_for_incapacitating_conditions,
     end_turn,
+    execute_split_reaction,
     force_move_directly_away,
     pay_activity_activation,
     pay_attack_action,
@@ -171,6 +172,181 @@ def _actor(identifier: str, *, hp: int = 12, ac: int = 10) -> dict:
         "sheet": sheet,
         "derived": derive_character_sheet(sheet),
     }
+
+
+def test_corrosive_form_damages_attacker_and_corrodes_mundane_weapon() -> None:
+    attacker = _actor("attacker", hp=20)
+    attacker["sheet"]["inventory"]["items"] = [
+        {
+            "id": "longsword",
+            "name": "Longsword",
+            "kind": "weapon",
+            "equipped": True,
+            "equipped_slot": "main_hand",
+            "mechanics": {
+                "attack_type": "melee",
+                "attack_ability": "strength",
+                "damage_formula": "1d8",
+                "damage_type": "slashing",
+                "properties": [],
+            },
+        }
+    ]
+    attacker["sheet"]["inventory"]["equipment_slots"]["main_hand"] = "longsword"
+    attacker["sheet"] = validate_character_sheet(attacker["sheet"])
+    attacker["derived"] = derive_character_sheet(attacker["sheet"])
+    pudding = _actor("pudding", hp=85, ac=7)
+    pudding["sheet"]["traits"]["size"] = "large"
+    pudding["sheet"]["traits"]["immunities"] = [
+        "acid",
+        "cold",
+        "lightning",
+        "slashing",
+    ]
+    pudding["sheet"]["content"]["features"].append(
+        {
+            "id": "corrosive-form-passive",
+            "name": "Corrosive Form",
+            "activation": {"type": "passive", "cost": 0},
+            "choices": {
+                "source_trait": {
+                    "kind": "corrosive_form",
+                    "trigger": "contact_or_melee_hit",
+                    "melee_range_ft": 5,
+                    "contact_damage_formula": "1d8",
+                    "contact_damage_type": "acid",
+                    "weapon_materials": ["metal", "wood"],
+                    "requires_nonmagical_weapon": True,
+                    "weapon_damage_roll_penalty": -1,
+                    "weapon_destroyed_at_penalty": -5,
+                    "ammunition_destroyed_after_hit": True,
+                    "object_materials": ["wood", "metal"],
+                    "object_maximum_thickness_inches": 2,
+                    "object_dissolution_rounds": 1,
+                    "automatic": True,
+                }
+            },
+        }
+    )
+    pudding["sheet"]["content"]["activities"].append(
+        {
+            "id": "split-reaction",
+            "name": "Split",
+            "activation": {"type": "reaction", "cost": 1},
+            "choices": {
+                "source_trait": {
+                    "kind": "split",
+                    "trigger": "subjected_to_damage",
+                    "damage_types": ["lightning", "slashing"],
+                    "minimum_size": "medium",
+                    "minimum_hit_points": 10,
+                    "new_creature_count": 2,
+                    "hit_points": "half_original_rounded_down",
+                    "size_change": -1,
+                }
+            },
+        }
+    )
+    pudding["derived"] = derive_character_sheet(pudding["sheet"])
+
+    plan = preflight_attack(
+        attacker,
+        pudding,
+        action={"weapon_id": "longsword"},
+    )
+    updated_attacker, updated_pudding, result = resolve_attack_action(
+        attacker,
+        pudding,
+        plan=plan,
+        rng=_SequenceRng(2, 4, 5),
+    )
+
+    assert result["hit"] is True
+    assert result["damage"]["applied_amount"] == 0
+    assert updated_pudding["sheet"]["combat"]["hp"]["value"] == 85
+    assert updated_attacker["sheet"]["combat"]["hp"]["value"] == 15
+    assert result["corrosive_form"]["weapon_corrosion"]["after_penalty"] == 1
+    weapon = updated_attacker["sheet"]["inventory"]["items"][0]
+    assert weapon["mechanics"]["corrosion_penalty"] == 1
+    assert derive_character_sheet(updated_attacker["sheet"])["inventory"][
+        "weapon_attacks"
+    ][0]["damage_bonus"] == 2
+    assert result["split_reaction"]["new_hit_points_each"] == 42
+    children = execute_split_reaction(
+        updated_pudding["sheet"],
+        result["split_reaction"],
+    )
+    assert [child["traits"]["size"] for child in children] == ["medium", "medium"]
+    assert [child["combat"]["hp"]["value"] for child in children] == [42, 42]
+
+
+def test_pseudopod_corrosion_reduces_and_destroys_worn_armor() -> None:
+    pudding = _actor("pudding", hp=85, ac=7)
+    source_excerpt = (
+        "In addition, nonmagical armor worn by the target is partly dissolved "
+        "and takes a permanent and cumulative -1 penalty to the AC it offers. "
+        "The armor is destroyed if the penalty reduces its AC to 10."
+    )
+    pudding["sheet"]["inventory"]["items"] = [
+        {
+            "id": "pseudopod",
+            "name": "Pseudopod",
+            "kind": "weapon",
+            "mechanics": {
+                "attack_type": "melee",
+                "attack_ability": "strength",
+                "attack_bonus_override": 5,
+                "damage_formula": "1d4",
+                "damage_type": "bludgeoning",
+                "always_available": True,
+                "on_hit_resolution": {
+                    "kind": "armor_corrosion",
+                    "trigger": "weapon_hit",
+                    "requires_worn_armor": True,
+                    "requires_nonmagical_armor": True,
+                    "armor_class_penalty": -1,
+                    "destroyed_at_armor_class": 10,
+                    "automatic": True,
+                    "source_excerpt": source_excerpt,
+                },
+            },
+        }
+    ]
+    pudding["sheet"] = validate_character_sheet(pudding["sheet"])
+    pudding["derived"] = derive_character_sheet(pudding["sheet"])
+    target = _actor("target", hp=20)
+    target_sheet, armor_id = add_inventory_item(
+        target["sheet"],
+        {
+            "id": "corrosion-test-armor",
+            "name": "Corrosion test armor",
+            "kind": "armor",
+            "mechanics": {
+                "base_ac": 11,
+                "dexterity_mode": "none",
+                "magic_bonus": 0,
+            },
+        },
+    )
+    target["sheet"] = equip_inventory_item(target_sheet, armor_id, "armor")
+    target["derived"] = derive_character_sheet(target["sheet"])
+
+    plan = preflight_attack(
+        pudding,
+        target,
+        action={"weapon_id": "pseudopod"},
+    )
+    _updated_pudding, updated_target, result = resolve_attack_action(
+        pudding,
+        target,
+        plan=plan,
+        rng=_SequenceRng(10, 1),
+    )
+
+    assert result["structured_on_hit"]["destroyed"] is True
+    assert updated_target["sheet"]["inventory"]["equipment_slots"]["armor"] is None
+    armor = updated_target["sheet"]["inventory"]["items"][0]
+    assert armor["condition"] == "destroyed"
 
 
 def test_actor_check_rejects_attack_rolls_owned_by_the_attack_engine() -> None:

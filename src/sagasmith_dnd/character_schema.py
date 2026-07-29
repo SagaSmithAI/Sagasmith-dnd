@@ -125,6 +125,43 @@ EFFECT_PERIODS = REST_TYPES | {
 EFFECT_VISIBILITY_SCOPES = GAMEPLAY_VISIBILITY_SCOPES
 PLAYER_EFFECT_VISIBILITY_SCOPES = PLAYER_GAMEPLAY_VISIBILITY_SCOPES
 
+STANDARD_WEAPON_MATERIALS = {
+    "club": ["wood"],
+    "dagger": ["metal"],
+    "greatclub": ["wood"],
+    "handaxe": ["wood", "metal"],
+    "javelin": ["wood", "metal"],
+    "light hammer": ["wood", "metal"],
+    "mace": ["metal"],
+    "quarterstaff": ["wood"],
+    "sickle": ["metal"],
+    "spear": ["wood", "metal"],
+    "light crossbow": ["wood", "metal"],
+    "dart": ["metal"],
+    "shortbow": ["wood"],
+    "battleaxe": ["wood", "metal"],
+    "flail": ["metal"],
+    "glaive": ["wood", "metal"],
+    "greataxe": ["wood", "metal"],
+    "greatsword": ["metal"],
+    "halberd": ["wood", "metal"],
+    "lance": ["wood", "metal"],
+    "longsword": ["metal"],
+    "maul": ["wood", "metal"],
+    "morningstar": ["wood", "metal"],
+    "pike": ["wood", "metal"],
+    "rapier": ["metal"],
+    "scimitar": ["metal"],
+    "shortsword": ["metal"],
+    "trident": ["wood", "metal"],
+    "war pick": ["wood", "metal"],
+    "warhammer": ["wood", "metal"],
+    "blowgun": ["wood"],
+    "hand crossbow": ["wood", "metal"],
+    "heavy crossbow": ["wood", "metal"],
+    "longbow": ["wood"],
+}
+
 
 def _uuid() -> str:
     return str(uuid.uuid4())
@@ -614,6 +651,65 @@ def _normalize_resource_scaling(value: Any, field: str) -> dict[str, Any]:
     }
 
 
+def _normalize_weapon_on_hit_resolution(value: Any, field: str) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    resolution = _object(value, field)
+    _reject_unknown(
+        resolution,
+        field,
+        {
+            "kind",
+            "trigger",
+            "requires_worn_armor",
+            "requires_nonmagical_armor",
+            "armor_class_penalty",
+            "destroyed_at_armor_class",
+            "automatic",
+            "source_excerpt",
+        },
+    )
+    kind = _text(resolution.get("kind"), f"{field}.kind")
+    if kind != "armor_corrosion":
+        raise ValueError(f"{field}.kind is unsupported")
+    trigger = _text(resolution.get("trigger"), f"{field}.trigger")
+    if trigger != "weapon_hit":
+        raise ValueError(f"{field}.trigger is unsupported")
+    penalty = _integer(
+        resolution.get("armor_class_penalty"),
+        f"{field}.armor_class_penalty",
+    )
+    if penalty >= 0:
+        raise ValueError(f"{field}.armor_class_penalty must be negative")
+    return {
+        "kind": kind,
+        "trigger": trigger,
+        "requires_worn_armor": _boolean(
+            resolution.get("requires_worn_armor"),
+            f"{field}.requires_worn_armor",
+        ),
+        "requires_nonmagical_armor": _boolean(
+            resolution.get("requires_nonmagical_armor"),
+            f"{field}.requires_nonmagical_armor",
+        ),
+        "armor_class_penalty": penalty,
+        "destroyed_at_armor_class": _integer(
+            resolution.get("destroyed_at_armor_class"),
+            f"{field}.destroyed_at_armor_class",
+            minimum=0,
+        ),
+        "automatic": _boolean(
+            resolution.get("automatic"),
+            f"{field}.automatic",
+        ),
+        "source_excerpt": _text(
+            resolution.get("source_excerpt"),
+            f"{field}.source_excerpt",
+            maximum=1200,
+        ),
+    }
+
+
 def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, Any]:
     mechanics = _object(value or {}, field)
     if kind == "weapon":
@@ -628,8 +724,11 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
                 "damage_type",
                 "additional_damage",
                 "on_hit_effect",
+                "on_hit_resolution",
                 "versatile_damage_formula",
                 "properties",
+                "materials",
+                "corrosion_penalty",
                 "normal_range_ft",
                 "long_range_ft",
                 "thrown_normal_range_ft",
@@ -684,12 +783,28 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
             "on_hit_effect": _text(
                 mechanics.get("on_hit_effect"), f"{field}.on_hit_effect", maximum=4000
             ),
+            "on_hit_resolution": _normalize_weapon_on_hit_resolution(
+                mechanics.get("on_hit_resolution"),
+                f"{field}.on_hit_resolution",
+            ),
             "versatile_damage_formula": _text(
                 mechanics.get("versatile_damage_formula"),
                 f"{field}.versatile_damage_formula",
                 maximum=100,
             ),
             "properties": properties,
+            "materials": [
+                material.casefold()
+                for material in _string_list(
+                    mechanics.get("materials"),
+                    f"{field}.materials",
+                )
+            ],
+            "corrosion_penalty": _integer(
+                mechanics.get("corrosion_penalty"),
+                f"{field}.corrosion_penalty",
+                minimum=0,
+            ),
             "normal_range_ft": _integer(
                 mechanics.get("normal_range_ft"), f"{field}.normal_range_ft", minimum=0
             ),
@@ -808,6 +923,7 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
                 "dexterity_max",
                 "magic_bonus",
                 "stealth_disadvantage",
+                "corrosion_penalty",
             },
         )
         if "base_ac" not in mechanics:
@@ -829,6 +945,11 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
             "dexterity_mode": dexterity_mode,
             "dexterity_max": dexterity_max,
             "magic_bonus": _integer(mechanics.get("magic_bonus"), f"{field}.magic_bonus"),
+            "corrosion_penalty": _integer(
+                mechanics.get("corrosion_penalty"),
+                f"{field}.corrosion_penalty",
+                minimum=0,
+            ),
             "stealth_disadvantage": _boolean(
                 mechanics.get("stealth_disadvantage"),
                 f"{field}.stealth_disadvantage",
@@ -1103,6 +1224,16 @@ def _normalize_item(value: Any, field: str, *, generate_id: bool = True) -> dict
         "charges": charges,
         "mechanics": _normalize_item_mechanics(kind, item.get("mechanics"), f"{field}.mechanics"),
     }
+    if kind == "weapon" and not result["mechanics"].get("materials"):
+        standard_name = re.sub(
+            r"\s+",
+            " ",
+            re.sub(r"[^a-z ]", " ", result["name"].casefold()),
+        ).strip()
+        if standard_name in STANDARD_WEAPON_MATERIALS:
+            result["mechanics"]["materials"] = list(
+                STANDARD_WEAPON_MATERIALS[standard_name]
+            )
     if item.get("resolution_plan") is not None:
         result["resolution_plan"] = _normalize_embedded_resolution_plan(
             item["resolution_plan"],
@@ -3171,7 +3302,13 @@ def _derive_armor_class(
                 dexterity_bonus = dexterity_modifier
             else:
                 dexterity_bonus = min(dexterity_modifier, mechanics["dexterity_max"])
-            total = mechanics["base_ac"] + dexterity_bonus + magic_bonus
+            corrosion_penalty = int(mechanics.get("corrosion_penalty", 0) or 0)
+            total = (
+                mechanics["base_ac"]
+                - corrosion_penalty
+                + dexterity_bonus
+                + magic_bonus
+            )
             breakdown["mode"] = "armor"
             breakdown["base"] = mechanics["base_ac"]
             breakdown["armor"] = {
@@ -3179,6 +3316,7 @@ def _derive_armor_class(
                 "name": armor["name"],
                 "dexterity_bonus": dexterity_bonus,
                 "magic_bonus": magic_bonus,
+                "corrosion_penalty": corrosion_penalty,
                 "magic_suppressed_by_attunement": (
                     armor.get("attunement") == "required" and mechanics["magic_bonus"] != 0
                 ),
@@ -3370,7 +3508,7 @@ def _weapon_attacks(
 ) -> list[dict[str, Any]]:
     attacks = []
     for item in inventory["items"]:
-        if item["kind"] != "weapon" or not (
+        if item["kind"] != "weapon" or item.get("condition") == "destroyed" or not (
             item["equipped"] or item["mechanics"].get("always_available", False)
         ):
             continue
@@ -3391,6 +3529,7 @@ def _weapon_attacks(
         damage_bonus = mechanics.get("damage_bonus_override")
         if damage_bonus is None:
             damage_bonus = modifier + magic_bonus
+        damage_bonus -= int(mechanics.get("corrosion_penalty", 0) or 0)
         damage_formula = mechanics["damage_formula"]
         damage_expression = damage_formula
         if damage_formula and damage_bonus:
@@ -3424,6 +3563,11 @@ def _weapon_attacks(
                     for part in (mechanics["additional_damage"] if magic_properties_active else [])
                 ],
                 "on_hit_effect": (mechanics["on_hit_effect"] if magic_properties_active else ""),
+                "on_hit_resolution": (
+                    copy.deepcopy(mechanics["on_hit_resolution"])
+                    if magic_properties_active
+                    else None
+                ),
                 "resolution_plan": (
                     copy.deepcopy(item.get("resolution_plan"))
                     if magic_properties_active
@@ -3436,10 +3580,15 @@ def _weapon_attacks(
                         mechanics["magic_bonus"] != 0
                         or bool(mechanics["additional_damage"])
                         or bool(mechanics["on_hit_effect"])
+                        or bool(mechanics["on_hit_resolution"])
                     )
                 ),
                 "versatile_damage_formula": mechanics["versatile_damage_formula"],
                 "properties": mechanics["properties"],
+                "materials": mechanics["materials"],
+                "corrosion_penalty": int(
+                    mechanics.get("corrosion_penalty", 0) or 0
+                ),
                 "range_ft": {
                     "normal": mechanics["normal_range_ft"],
                     "long": mechanics["long_range_ft"],

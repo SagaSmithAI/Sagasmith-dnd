@@ -1187,6 +1187,11 @@ def preflight_attack(
         expression = f"{expression} + {dueling_bonus}"
     damage_type = str(weapon.get("damage_type") or "")
     on_hit_effect = str(weapon.get("on_hit_effect") or "").strip()
+    on_hit_resolution = deepcopy(weapon.get("on_hit_resolution"))
+    if on_hit_resolution is not None and on_hit_effect:
+        raise CombatEngineError(
+            "a weapon cannot combine a structured and unresolved on-hit effect"
+        )
     if ammunition_slaying is not None:
         if on_hit_effect:
             raise NeedsRulingError(
@@ -1583,6 +1588,7 @@ def preflight_attack(
         "weapon_grip": weapon_grip,
         "additional_damage": additional_damage,
         "on_hit_effect": on_hit_effect,
+        "on_hit_resolution": on_hit_resolution,
         "critical_followup": critical_followup,
         "advantage": bool(context.get("advantage", False)),
         "disadvantage": bool(context.get("disadvantage", False)),
@@ -1590,6 +1596,7 @@ def preflight_attack(
         "disadvantage_sources": list(context.get("disadvantage_sources") or []),
         "rulings": list(action.get("rulings") or []),
         "weapon_id": weapon.get("item_id"),
+        "weapon_reach_ft": int(weapon.get("reach_ft", 5) or 5),
         "ammunition_item_id": str(ammunition_item_id or ""),
         "ammunition_slaying": ammunition_slaying,
         "attack_mode": attack_mode,
@@ -1600,6 +1607,10 @@ def preflight_attack(
         "ruleset": ruleset,
         "target_uses_death_saves": bool(
             target.get("death_saves", True) or target.get("zero_hp_recovery", False)
+        ),
+        "attacker_uses_death_saves": bool(
+            attacker.get("death_saves", True)
+            or attacker.get("zero_hp_recovery", False)
         ),
         "target_relentless_endurance_feature_id": (
             str(relentless_endurance_feature["id"])
@@ -1996,6 +2007,17 @@ def resolve_attack_damage(
                 "detail": sneak_roll.detail,
             }
             result["damage"]["sneak_attack"] = deepcopy(result["sneak_attack"])
+        if plan.get("on_hit_resolution"):
+            structured_on_hit = resolve_standard_weapon_on_hit(
+                updated_target["sheet"],
+                dict(plan["on_hit_resolution"]),
+            )
+            updated_target["sheet"] = structured_on_hit["sheet"]
+            result["structured_on_hit"] = {
+                key: value
+                for key, value in structured_on_hit.items()
+                if key != "sheet"
+            }
         if plan.get("on_hit_effect"):
             result["on_hit_ruling"] = {
                 "required": True,
@@ -2010,8 +2032,37 @@ def resolve_attack_damage(
             "default_resolver": "agent",
             "ruling_kind": "source_or_scene_fact",
         }
+    elif attack["hit"] and plan.get("on_hit_resolution"):
+        structured_on_hit = resolve_standard_weapon_on_hit(
+            updated_target["sheet"],
+            dict(plan["on_hit_resolution"]),
+        )
+        updated_target["sheet"] = structured_on_hit["sheet"]
+        result["structured_on_hit"] = {
+            key: value for key, value in structured_on_hit.items() if key != "sheet"
+        }
     elif plan.get("sneak_attack"):
         result["sneak_attack"] = {**dict(plan["sneak_attack"]), "used": False}
+    if attack["hit"]:
+        corrosive_form = resolve_corrosive_form_melee_hit(
+            updated_attacker["sheet"],
+            updated_target["sheet"],
+            plan=plan,
+            rng=rng,
+        )
+        updated_attacker["sheet"] = corrosive_form["attacker_sheet"]
+        if corrosive_form["triggered"]:
+            result["corrosive_form"] = {
+                key: value
+                for key, value in corrosive_form.items()
+                if key not in {"attacker_sheet", "target_sheet"}
+            }
+        split_reaction = split_reaction_eligibility(
+            updated_target["sheet"],
+            result.get("damage"),
+        )
+        if split_reaction is not None:
+            result["split_reaction"] = split_reaction
     if critical_followup:
         followup_roll = None
         anatomical_loss_triggered = False
@@ -2865,6 +2916,297 @@ def apply_damage_parts_to_sheet(
         "massive_damage": applied["massive_damage"],
         "relentless_endurance_triggered": applied["relentless_endurance_triggered"],
         "relentless_endurance_use": applied["relentless_endurance_use"],
+    }
+
+
+def _source_trait(sheet: dict[str, Any], kind: str) -> dict[str, Any] | None:
+    return next(
+        (
+            trait
+            for feature in [
+                *dict(sheet.get("content") or {}).get("features", []),
+                *dict(sheet.get("content") or {}).get("activities", []),
+            ]
+            if isinstance(feature, dict)
+            and (
+                trait := dict(
+                    dict(feature.get("choices") or {}).get("source_trait") or {}
+                )
+            ).get("kind")
+            == kind
+        ),
+        None,
+    )
+
+
+def resolve_corrosive_form_melee_hit(
+    attacker_sheet: dict[str, Any],
+    target_sheet: dict[str, Any],
+    *,
+    plan: dict[str, Any],
+    rng: Any = None,
+) -> dict[str, Any]:
+    """Apply Black Pudding Corrosive Form after a qualifying melee hit."""
+
+    trait = _source_trait(target_sheet, "corrosive_form")
+    if trait is None or str(plan.get("attack_mode") or "") != "melee":
+        return {
+            "attacker_sheet": deepcopy(attacker_sheet),
+            "target_sheet": deepcopy(target_sheet),
+            "triggered": False,
+        }
+    distance = dict(plan.get("range") or {}).get("distance_ft")
+    maximum_distance = int(trait["melee_range_ft"])
+    if distance is None:
+        reach = int(plan.get("weapon_reach_ft", 5) or 5)
+        if reach > maximum_distance:
+            raise NeedsRulingError(
+                "Corrosive Form needs the exact melee attack distance",
+                missing=("corrosive_form_distance",),
+            )
+        distance = reach
+    if int(distance) > maximum_distance:
+        return {
+            "attacker_sheet": deepcopy(attacker_sheet),
+            "target_sheet": deepcopy(target_sheet),
+            "triggered": False,
+            "reason": "melee_hit_beyond_corrosive_range",
+        }
+    updated_attacker = deepcopy(attacker_sheet)
+    acid_roll = roll(str(trait["contact_damage_formula"]), rng=rng)
+    acid = apply_damage_to_sheet(
+        updated_attacker,
+        amount=acid_roll.total,
+        damage_type=str(trait["contact_damage_type"]),
+        source="dnd5e.core.monster.corrosive_form",
+        death_saves=bool(plan.get("attacker_uses_death_saves", True)),
+        ruleset=str(plan.get("ruleset") or DEFAULT_CHARACTER_EDITION),
+    )
+    updated_attacker = acid["sheet"]
+    weapon_id = str(plan.get("weapon_id") or "")
+    weapon_corrosion: dict[str, Any] | None = None
+    if weapon_id and weapon_id != "unarmed-strike":
+        inventory = updated_attacker.setdefault("inventory", {})
+        weapon = next(
+            (
+                item
+                for item in inventory.get("items", [])
+                if isinstance(item, dict)
+                and str(item.get("id") or "") == weapon_id
+                and str(item.get("kind") or "") == "weapon"
+            ),
+            None,
+        )
+        if weapon is not None:
+            mechanics = dict(weapon.get("mechanics") or {})
+            materials = {
+                str(item).casefold() for item in mechanics.get("materials", [])
+            }
+            magical = (
+                int(mechanics.get("magic_bonus", 0) or 0) != 0
+                or str(weapon.get("attunement") or "none")
+                in {"required", "attuned"}
+            )
+            if not materials and str(mechanics.get("category") or "") != "natural":
+                raise NeedsRulingError(
+                    "Corrosive Form needs the weapon's stored material fact",
+                    missing=(f"weapon.materials:{weapon_id}",),
+                )
+            if (
+                not magical
+                and materials.intersection(
+                    {str(item).casefold() for item in trait["weapon_materials"]}
+                )
+            ):
+                before_penalty = int(
+                    mechanics.get("corrosion_penalty", 0) or 0
+                )
+                after_penalty = before_penalty + abs(
+                    int(trait["weapon_damage_roll_penalty"])
+                )
+                mechanics["corrosion_penalty"] = after_penalty
+                weapon["mechanics"] = mechanics
+                destroyed = -after_penalty <= int(
+                    trait["weapon_destroyed_at_penalty"]
+                )
+                if destroyed:
+                    weapon["condition"] = "destroyed"
+                    weapon["equipped"] = False
+                    weapon["equipped_slot"] = None
+                    for slot, equipped_id in list(
+                        inventory.setdefault("equipment_slots", {}).items()
+                    ):
+                        if str(equipped_id or "") == weapon_id:
+                            inventory["equipment_slots"][slot] = None
+                else:
+                    weapon["condition"] = f"corroded-{after_penalty}"
+                weapon_corrosion = {
+                    "weapon_id": weapon_id,
+                    "before_penalty": before_penalty,
+                    "after_penalty": after_penalty,
+                    "destroyed": destroyed,
+                }
+    return {
+        "attacker_sheet": updated_attacker,
+        "target_sheet": deepcopy(target_sheet),
+        "triggered": True,
+        "acid_damage": {
+            **{
+                key: value
+                for key, value in acid.items()
+                if key != "sheet"
+            },
+            "expression": acid_roll.expression,
+            "rolls": list(acid_roll.rolls),
+            "detail": acid_roll.detail,
+        },
+        "weapon_corrosion": weapon_corrosion,
+        "mechanic_id": "dnd5e.core.monster.corrosive_form",
+    }
+
+
+def split_reaction_eligibility(
+    sheet: dict[str, Any],
+    damage: Any,
+) -> dict[str, Any] | None:
+    """Return the exact optional Split reaction when its printed trigger fires."""
+
+    trait = _source_trait(sheet, "split")
+    if trait is None or not isinstance(damage, dict):
+        return None
+    triggering_types = {
+        str(part.get("damage_type") or "").casefold()
+        for part in damage.get("roll_parts", [])
+        if isinstance(part, dict) and int(part.get("amount", 0) or 0) > 0
+    }.intersection({str(item).casefold() for item in trait["damage_types"]})
+    size_order = ["tiny", "small", "medium", "large", "huge", "gargantuan"]
+    size = str(dict(sheet.get("traits") or {}).get("size") or "").casefold()
+    minimum_size = str(trait["minimum_size"]).casefold()
+    hit_points = int(
+        dict(dict(sheet.get("combat") or {}).get("hp") or {}).get("value", 0)
+        or 0
+    )
+    if (
+        not triggering_types
+        or size not in size_order
+        or size_order.index(size) < size_order.index(minimum_size)
+        or hit_points < int(trait["minimum_hit_points"])
+    ):
+        return None
+    return {
+        "eligible": True,
+        "optional": True,
+        "requires_agent_choice": True,
+        "damage_types": sorted(triggering_types),
+        "current_size": size,
+        "current_hit_points": hit_points,
+        "new_creature_count": int(trait["new_creature_count"]),
+        "new_hit_points_each": hit_points // int(trait["new_creature_count"]),
+        "new_size": size_order[size_order.index(size) + int(trait["size_change"])],
+        "mechanic_id": "dnd5e.core.monster.split",
+    }
+
+
+def execute_split_reaction(
+    sheet: dict[str, Any],
+    eligibility: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Create the two deterministic child sheets for an accepted Split reaction."""
+
+    if (
+        eligibility.get("eligible") is not True
+        or int(eligibility.get("new_creature_count", 0) or 0) != 2
+        or int(eligibility.get("new_hit_points_each", 0) or 0) <= 0
+    ):
+        raise CombatEngineError("Split reaction is not executable")
+    children: list[dict[str, Any]] = []
+    for _index in range(2):
+        child = deepcopy(sheet)
+        child.setdefault("traits", {})["size"] = str(eligibility["new_size"])
+        hp = child.setdefault("combat", {}).setdefault("hp", {})
+        hp["value"] = int(eligibility["new_hit_points_each"])
+        hp["max"] = int(eligibility["new_hit_points_each"])
+        hp["base_max"] = int(eligibility["new_hit_points_each"])
+        hp["temp"] = 0
+        children.append(child)
+    return children
+
+
+def resolve_standard_weapon_on_hit(
+    sheet: dict[str, Any],
+    resolution: dict[str, Any],
+) -> dict[str, Any]:
+    """Execute a canonical statblock weapon rider without an Agent ruling."""
+
+    expected = {
+        "kind": "armor_corrosion",
+        "trigger": "weapon_hit",
+        "requires_worn_armor": True,
+        "requires_nonmagical_armor": True,
+        "armor_class_penalty": -1,
+        "destroyed_at_armor_class": 10,
+        "automatic": True,
+        "source_excerpt": str(resolution.get("source_excerpt") or ""),
+    }
+    if resolution != expected:
+        raise CombatEngineError("unsupported standard weapon on-hit resolution")
+    value = deepcopy(sheet)
+    inventory = value.setdefault("inventory", {})
+    slots = inventory.setdefault("equipment_slots", {})
+    armor_id = str(slots.get("armor") or "")
+    if not armor_id:
+        return {
+            "sheet": value,
+            "kind": "armor_corrosion",
+            "applied": False,
+            "reason": "target_has_no_worn_armor",
+            "mechanic_id": "dnd5e.core.monster.armor_corrosion",
+        }
+    armor = next(
+        (
+            item
+            for item in inventory.get("items", [])
+            if isinstance(item, dict) and str(item.get("id") or "") == armor_id
+        ),
+        None,
+    )
+    if armor is None or str(armor.get("kind") or "") != "armor":
+        raise CombatEngineError("equipped armor slot does not reference armor")
+    mechanics = dict(armor.get("mechanics") or {})
+    if int(mechanics.get("magic_bonus", 0) or 0) != 0 or str(
+        armor.get("attunement") or "none"
+    ) in {"required", "attuned"}:
+        return {
+            "sheet": value,
+            "kind": "armor_corrosion",
+            "applied": False,
+            "reason": "worn_armor_is_magical",
+            "armor_id": armor_id,
+            "mechanic_id": "dnd5e.core.monster.armor_corrosion",
+        }
+    before_penalty = int(mechanics.get("corrosion_penalty", 0) or 0)
+    after_penalty = before_penalty + abs(int(resolution["armor_class_penalty"]))
+    mechanics["corrosion_penalty"] = after_penalty
+    armor["mechanics"] = mechanics
+    offered_armor_class = int(mechanics.get("base_ac", 10) or 10) - after_penalty
+    destroyed = offered_armor_class <= int(resolution["destroyed_at_armor_class"])
+    if destroyed:
+        armor["condition"] = "destroyed"
+        armor["equipped"] = False
+        armor["equipped_slot"] = None
+        slots["armor"] = None
+    else:
+        armor["condition"] = f"corroded-{after_penalty}"
+    return {
+        "sheet": value,
+        "kind": "armor_corrosion",
+        "applied": True,
+        "armor_id": armor_id,
+        "before_penalty": before_penalty,
+        "after_penalty": after_penalty,
+        "armor_class_offered": offered_armor_class,
+        "destroyed": destroyed,
+        "mechanic_id": "dnd5e.core.monster.armor_corrosion",
     }
 
 

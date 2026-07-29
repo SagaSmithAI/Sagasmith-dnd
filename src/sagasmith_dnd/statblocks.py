@@ -472,6 +472,10 @@ def _parse_weapon(
         "reach_ft": int(reach.group(1)) if reach else 5,
         "always_available": True,
     }
+    armor_corrosion = _armor_corrosion_on_hit(on_hit_effect)
+    if armor_corrosion is not None:
+        mechanics["on_hit_resolution"] = armor_corrosion
+        mechanics["on_hit_effect"] = ""
     advantage_target = re.search(
         (
             r"(?i)\bone\s+"
@@ -514,6 +518,33 @@ def _parse_weapon(
     if trailing_prose:
         result["_normalization_note"] = trailing_warning
     return result
+
+
+def _armor_corrosion_on_hit(description: str) -> dict[str, Any] | None:
+    normalized = " ".join(description.split())
+    match = re.fullmatch(
+        r"In addition, non\s*magical armor worn by the target is partly dissolved "
+        r"and takes a permanent and cumulative (?P<penalty>-\s*\d+) penalty "
+        r"to the AC it offers\. The armor is destroyed if the penalty reduces "
+        r"its AC\s*to (?P<destroyed_ac>\d+)\.",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    penalty = int(match.group("penalty").replace(" ", ""))
+    if penalty >= 0:
+        return None
+    return {
+        "kind": "armor_corrosion",
+        "trigger": "weapon_hit",
+        "requires_worn_armor": True,
+        "requires_nonmagical_armor": True,
+        "armor_class_penalty": penalty,
+        "destroyed_at_armor_class": int(match.group("destroyed_ac")),
+        "automatic": True,
+        "source_excerpt": normalized,
+    }
 
 
 def _count(value: str) -> int | None:
@@ -1076,6 +1107,121 @@ def _sneak_attack_source_trait(description: str) -> dict[str, Any] | None:
     }
 
 
+def _amorphous_source_trait(description: str) -> dict[str, Any] | None:
+    normalized = " ".join(description.split())
+    match = re.fullmatch(
+        r"The [A-Za-z][A-Za-z '\-]* can move through a space as narrow as "
+        r"(?P<width>\d+) inch wide without squeezing\.",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    return {
+        "kind": "amorphous",
+        "trigger": "movement",
+        "minimum_space_width_inches": int(match.group("width")),
+        "requires_squeezing": False,
+        "automatic": True,
+    }
+
+
+def _spider_climb_source_trait(description: str) -> dict[str, Any] | None:
+    normalized = " ".join(description.split())
+    if not re.fullmatch(
+        r"The [A-Za-z][A-Za-z '\-]* can climb difficult surfaces, including "
+        r"upside down on ceilings, without needing to make an ability check\.",
+        normalized,
+        flags=re.IGNORECASE,
+    ):
+        return None
+    return {
+        "kind": "spider_climb",
+        "trigger": "climb_movement",
+        "difficult_surfaces": True,
+        "ceilings": True,
+        "ability_check_required": False,
+        "automatic": True,
+    }
+
+
+def _corrosive_form_source_trait(description: str) -> dict[str, Any] | None:
+    normalized = " ".join(description.split())
+    match = re.fullmatch(
+        r"A creature that touches the (?P<subject>[A-Za-z][A-Za-z '\-]*) or hits "
+        r"it with a melee attack while within (?P<range>\d+) feet of it takes "
+        r"\d+ \((?P<damage>\d+\s*d\s*\d+)\) acid damage\. Any non\s*magical "
+        r"weapon made of metal or wood that hits the (?P=subject) corrodes\. "
+        r"After dealing damage, the weapon takes a permanent (?:and )?cumulative "
+        r"(?P<penalty>-\s*(?:\d+|~)) penalty to damage r[0o]lls\. If its penalty drops "
+        r"to (?P<destroyed>-\s*\d+), the weapon is [de]estroyed\. Non\s*magical "
+        r"ammunition made of metal (?:or|br) wood that hits the (?P=subject) is "
+        r"destroyed after dealing damage\. The (?P=subject) can eat through "
+        r"(?P<thickness>\d+)-inch-thick, non\s*magical wood or metal in "
+        r"(?P<rounds>\d+) round\s*\.",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    raw_penalty = match.group("penalty").replace(" ", "")
+    penalty = -1 if raw_penalty == "-~" else int(raw_penalty)
+    destroyed_at = int(match.group("destroyed").replace(" ", ""))
+    if penalty >= 0 or destroyed_at >= 0:
+        return None
+    return {
+        "kind": "corrosive_form",
+        "trigger": "contact_or_melee_hit",
+        "melee_range_ft": int(match.group("range")),
+        "contact_damage_formula": re.sub(r"\s+", "", match.group("damage")).casefold(),
+        "contact_damage_type": "acid",
+        "weapon_materials": ["metal", "wood"],
+        "requires_nonmagical_weapon": True,
+        "weapon_damage_roll_penalty": penalty,
+        "weapon_destroyed_at_penalty": destroyed_at,
+        "ammunition_destroyed_after_hit": True,
+        "object_materials": ["wood", "metal"],
+        "object_maximum_thickness_inches": int(match.group("thickness")),
+        "object_dissolution_rounds": int(match.group("rounds")),
+        "automatic": True,
+    }
+
+
+def _split_source_trait(description: str) -> dict[str, Any] | None:
+    normalized = " ".join(description.split())
+    match = re.fullmatch(
+        r"When a [A-Za-z][A-Za-z '\-]* that is Medium or larger is subjected "
+        r"to (?P<damage_types>[a-z]+(?:\s+or\s+[a-z]+)+) damage, it splits "
+        r"into (?P<count>\w+) new [A-Za-z][A-Za-z '\-]* if it has at least "
+        r"(?P<hit_points>\d+) hit points\. Each new [A-Za-z][A-Za-z '\-]* "
+        r"has hit points equal to half the original [A-Za-z][A-Za-z '\-]*'s, "
+        r"rounded down\s*\. New [A-Za-z][A-Za-z '\-]* are one size smaller than "
+        r"the original [A-Za-z][A-Za-z '\-]*\.",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    count = _count(match.group("count"))
+    damage_types = [
+        item.strip().casefold()
+        for item in re.split(r"\s+or\s+", match.group("damage_types"))
+        if item.strip()
+    ]
+    if count is None or count < 2 or len(damage_types) != len(set(damage_types)):
+        return None
+    return {
+        "kind": "split",
+        "trigger": "subjected_to_damage",
+        "damage_types": damage_types,
+        "minimum_size": "medium",
+        "minimum_hit_points": int(match.group("hit_points")),
+        "new_creature_count": count,
+        "hit_points": "half_original_rounded_down",
+        "size_change": -1,
+    }
+
+
 def _source_trait_from_description(description: str) -> dict[str, Any] | None:
     matches = [
         parsed
@@ -1089,6 +1235,10 @@ def _source_trait_from_description(description: str) -> dict[str, Any] | None:
             _included_weapon_damage_source_trait,
             _battle_cry_source_trait,
             _sneak_attack_source_trait,
+            _amorphous_source_trait,
+            _spider_climb_source_trait,
+            _corrosive_form_source_trait,
+            _split_source_trait,
         )
         if (parsed := parser(description)) is not None
     ]
@@ -1870,8 +2020,18 @@ def parse_2014_statblock(
         }
         if entry_name in unresolved_multiattacks:
             entry["mechanic_refs"] = [MULTIATTACK_MECHANIC_ID]
-        source_trait = _source_trait_from_description(description)
+        source_trait_description = (
+            description.split("\n\n", 1)[0].strip()
+            if activation == "reaction"
+            else description
+        )
+        source_trait = _source_trait_from_description(source_trait_description)
         if source_trait is not None:
+            if source_trait_description != description:
+                entry["description"] = source_trait_description
+                normalization_notes.append(
+                    f"{entry_name}: trailing creature prose excluded from trait settlement"
+                )
             if source_trait["kind"] in {"aggressive", "cunning_action"}:
                 activation = "bonus_action"
                 entry["activation"] = {"type": activation, "cost": 1}
@@ -1911,6 +2071,10 @@ def parse_2014_statblock(
                 "included_weapon_damage": "weapon hit; included in weapon actions",
                 "battle_cry": "action on its turn",
                 "sneak_attack": "eligible weapon hit once per turn",
+                "amorphous": "movement through narrow spaces",
+                "spider_climb": "climb movement",
+                "corrosive_form": "contact or a melee hit within range",
+                "split": "subjected to a listed damage type",
             }[str(source_trait["kind"])]
             entry["choices"] = {"source_trait": source_trait}
         reaction_description = (

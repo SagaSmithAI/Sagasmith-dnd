@@ -79,6 +79,61 @@ start of the troll's next turn. The troll dies only if it starts its turn with
 *Hit:* 11 (2d6+4) slashing damage.
 """
 
+BLACK_PUDDING = """## Black Pudding
+
+*Large ooze, unaligned*
+
+**Armor Class** 7
+
+**Hit Points** 85 (10d10 + 30)
+
+**Speed** 20 ft., climb 20 ft.
+
+| STR | DEX | CON | INT | WIS | CHA |
+|:---:|:---:|:---:|:---:|:---:|:---:|
+| 16 (+3) | 5 (-3) | 16 (+3) | 1 (-5) | 6 (-2) | 1 (-5) |
+
+**Damage Immunities** acid, cold, lightning, slashing
+
+**Condition Immunities** blinded, charmed, deafened, exhaustion, frightened, prone
+
+**Senses** blindsight 60 ft. (blind beyond this radius), passive Perception 8
+
+**Languages** -
+
+**Challenge** 4 (1,100 XP)
+
+***Amorphous.*** The pudding can move through a space as narrow as 1 inch wide
+without squeezing.
+
+***Corrosive Form.*** A creature that touches the pudding or hits it with a
+melee attack while within 5 feet of it takes 4 (1d8) acid damage. Any
+nonmagical weapon made of metal or wood that hits the pudding corrodes. After
+dealing damage, the weapon takes a permanent and cumulative -1 penalty to
+damage rolls. If its penalty drops to -5, the weapon is destroyed. Nonmagical
+ammunition made of metal or wood that hits the pudding is destroyed after
+dealing damage. The pudding can eat through 2-inch-thick, nonmagical wood or
+metal in 1 round.
+
+***Spider Climb.*** The pudding can climb difficult surfaces, including upside
+down on ceilings, without needing to make an ability check.
+
+###### Actions
+
+***Pseudopod.*** *Melee Weapon Attack:* +5 to hit, reach 5 ft., one target.
+*Hit:* 6 (1d6 + 3) bludgeoning damage plus 18 (4d8) acid damage. In addition,
+nonmagical armor worn by the target is partly dissolved and takes a permanent
+and cumulative -1 penalty to the AC it offers. The armor is destroyed if the
+penalty reduces its AC to 10.
+
+###### Reactions
+
+***Split.*** When a pudding that is Medium or larger is subjected to lightning
+or slashing damage, it splits into two new puddings if it has at least 10 hit
+points. Each new pudding has hit points equal to half the original pudding's,
+rounded down. New puddings are one size smaller than the original pudding.
+"""
+
 KOBOLD = """# Kobold
 
 *Small humanoid (kobold), lawful evil*
@@ -1251,6 +1306,53 @@ def test_kobold_attack_traits_are_structured() -> None:
         "grants": "disadvantage",
         "automatic": True,
     }
+    assert parsed.warnings == ()
+
+
+def test_black_pudding_standard_traits_are_structured() -> None:
+    parsed = parse_2014_statblock(
+        BLACK_PUDDING,
+        source_key="monster-manual-2014:p241",
+    )
+    features = {
+        item["name"]: item for item in parsed.sheet["content"]["features"]
+    }
+    activities = {
+        item["name"]: item for item in parsed.sheet["content"]["activities"]
+    }
+    pseudopod = next(
+        item
+        for item in parsed.sheet["inventory"]["items"]
+        if item["name"] == "Pseudopod"
+    )
+
+    assert features["Amorphous"]["choices"]["source_trait"] == {
+        "kind": "amorphous",
+        "trigger": "movement",
+        "minimum_space_width_inches": 1,
+        "requires_squeezing": False,
+        "automatic": True,
+    }
+    assert features["Corrosive Form"]["choices"]["source_trait"][
+        "contact_damage_formula"
+    ] == "1d8"
+    assert features["Spider Climb"]["choices"]["source_trait"][
+        "ability_check_required"
+    ] is False
+    assert activities["Split"]["choices"]["source_trait"] == {
+        "kind": "split",
+        "trigger": "subjected_to_damage",
+        "damage_types": ["lightning", "slashing"],
+        "minimum_size": "medium",
+        "minimum_hit_points": 10,
+        "new_creature_count": 2,
+        "hit_points": "half_original_rounded_down",
+        "size_change": -1,
+    }
+    assert pseudopod["mechanics"]["on_hit_effect"] == ""
+    assert pseudopod["mechanics"]["on_hit_resolution"]["kind"] == (
+        "armor_corrosion"
+    )
     assert parsed.warnings == ()
 
 

@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.44.0"
+CORE_RULE_PACK_VERSION = "1.45.0"
 
 
 @dataclass(frozen=True)
@@ -363,6 +363,43 @@ BOUNDARIES = (
         ),
         "bundled:srd2014/02_Classes/Rogue.md#sneak-attack|"
         "source:monster-manual-2014:p349",
+    ),
+    CoreBoundary(
+        "dnd5e.core.monster.corrosive_form",
+        ("2014",),
+        "statblocks._corrosive_form_source_trait|combat_engine.resolve_corrosive_form_melee_hit",
+        (
+            "tests/test_statblocks.py::test_black_pudding_standard_traits_are_structured",
+            "tests/test_combat_engine.py::test_corrosive_form_damages_attacker_and_corrodes_mundane_weapon",
+        ),
+        "source:monster-manual-2014:p241",
+    ),
+    CoreBoundary(
+        "dnd5e.core.monster.armor_corrosion",
+        ("2014",),
+        "statblocks._armor_corrosion_on_hit|combat_engine.resolve_standard_weapon_on_hit",
+        (
+            "tests/test_statblocks.py::test_black_pudding_standard_traits_are_structured",
+            "tests/test_combat_engine.py::test_pseudopod_corrosion_reduces_and_destroys_worn_armor",
+        ),
+        "source:monster-manual-2014:p241",
+    ),
+    CoreBoundary(
+        "dnd5e.core.monster.split",
+        ("2014",),
+        "statblocks._split_source_trait|combat_engine.split_reaction_eligibility|combat_engine.execute_split_reaction",
+        (
+            "tests/test_statblocks.py::test_black_pudding_standard_traits_are_structured",
+            "tests/test_combat_engine.py::test_black_pudding_split_uses_raw_immune_damage_trigger",
+        ),
+        "source:monster-manual-2014:p241",
+    ),
+    CoreBoundary(
+        "dnd5e.core.monster.ooze_movement",
+        ("2014",),
+        "statblocks._amorphous_source_trait|statblocks._spider_climb_source_trait",
+        ("tests/test_statblocks.py::test_black_pudding_standard_traits_are_structured",),
+        "source:monster-manual-2014:p241",
     ),
     CoreBoundary(
         "dnd5e.core.attack.weapon_grip",
