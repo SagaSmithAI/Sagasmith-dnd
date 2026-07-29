@@ -24,7 +24,8 @@ def compile_battle_map(
     location = next((item for item in locations if item.get("key") == requested_key), None)
     if requested_key and location is None:
         raise BattleMapError("battle-map location_key is not in scene spatial evidence")
-    location = location or (locations[0] if locations else None)
+    if not requested_key and len(locations) == 1:
+        location = locations[0]
     dimensions = dict((location or {}).get("dimensions_ft") or {})
     grid = dict(spatial.get("grid") or {"kind": "square", "cell_ft": 5})
     if str(grid.get("kind") or "square") != "square":

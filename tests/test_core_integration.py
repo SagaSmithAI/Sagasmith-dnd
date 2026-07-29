@@ -103,6 +103,22 @@ def test_dnd_module_spatial_manifest_and_temporary_map() -> None:
     assert linked_map["bounds"] == {"width_cells": 12, "height_cells": 12}
     assert linked_map["dm_overrides"] is False
 
+    ambiguous_map = compile_battle_map(
+        {
+            "scene_id": "stronghold-scene",
+            "spatial": {
+                "schema_version": 1,
+                "locations": [
+                    {"key": "island-chamber"},
+                    {"key": "cultist-common-room"},
+                ],
+            },
+        }
+    )
+    assert ambiguous_map["source"]["location_key"] is None
+    assert ambiguous_map["bounds"] == {"width_cells": 12, "height_cells": 12}
+    assert ambiguous_map["dm_overrides"] is False
+
     updated = patch_battle_map(battle_map, [{"key": "gate.open", "value": True}])
     assert updated["map_revision"] == 2
     assert updated["checksum"] != battle_map["checksum"]
