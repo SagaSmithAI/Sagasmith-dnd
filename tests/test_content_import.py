@@ -1112,6 +1112,31 @@ def test_compiler_requires_review_and_selection_ready_structure() -> None:
     assert validate_selection_ready_artifacts(artifacts) == []
 
 
+def test_selection_ready_spell_uses_character_definition_validation() -> None:
+    artifact = {
+        "id": "spell:chromatic-orb",
+        "kind": "spell",
+        "application_state": "selection_ready",
+        "card": {
+            "name": "Chromatic Orb",
+            "level": 1,
+            "classes": ["sorcerer", "wizard"],
+            "definition": {
+                "duration": {
+                    "kind": "instantaneous",
+                    "unit": "",
+                }
+            },
+        },
+    }
+
+    errors = validate_selection_ready_artifacts([artifact])
+
+    assert errors == ["artifacts[0].card.definition.duration.unit is invalid"]
+    del artifact["card"]["definition"]["duration"]["unit"]
+    assert validate_selection_ready_artifacts([artifact]) == []
+
+
 def test_compiler_rejects_duplicate_generated_ids() -> None:
     candidates = [
         {

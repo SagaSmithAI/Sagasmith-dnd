@@ -1264,6 +1264,86 @@ def _normalize_ruling_requirements(value: Any, field: str) -> list[dict[str, Any
     return normalized
 
 
+def normalize_spell_definition(value: Any, field: str = "spell.definition") -> dict[str, Any]:
+    """Validate and normalize the shared spell-definition schema.
+
+    Imported rule artifacts and hydrated character spells must use this same
+    boundary so a pack cannot activate data that a character sheet rejects.
+    """
+    definition = _object(value or {}, field)
+    _reject_unknown(
+        definition,
+        field,
+        {"school", "casting_time", "range", "duration", "components", "effect"},
+    )
+    spell_range = _object(definition.get("range") or {}, f"{field}.range")
+    _reject_unknown(
+        spell_range, f"{field}.range", {"kind", "normal_ft", "long_ft", "area"}
+    )
+    range_kind = _text(spell_range.get("kind"), f"{field}.range.kind", default="special")
+    if range_kind not in {"self", "touch", "distance", "sight", "unlimited", "special"}:
+        raise ValueError(f"{field}.range.kind is invalid")
+    duration = _object(definition.get("duration") or {}, f"{field}.duration")
+    _reject_unknown(
+        duration, f"{field}.duration", {"kind", "value", "unit", "concentration"}
+    )
+    duration_kind = _text(
+        duration.get("kind"), f"{field}.duration.kind", default="instantaneous"
+    )
+    if duration_kind not in {"instantaneous", "timed", "until_dispelled", "special"}:
+        raise ValueError(f"{field}.duration.kind is invalid")
+    duration_unit = _text(duration.get("unit"), f"{field}.duration.unit", default="round")
+    if duration_unit not in {"round", "minute", "hour", "day", "special"}:
+        raise ValueError(f"{field}.duration.unit is invalid")
+    components = _object(definition.get("components") or {}, f"{field}.components")
+    _reject_unknown(
+        components,
+        f"{field}.components",
+        {"verbal", "somatic", "material", "material_description", "material_cost_cp", "consumed"},
+    )
+    return {
+        "school": _text(definition.get("school"), f"{field}.school", maximum=100),
+        "casting_time": _text(
+            definition.get("casting_time"), f"{field}.casting_time", maximum=200
+        ),
+        "range": {
+            "kind": range_kind,
+            "normal_ft": _integer(
+                spell_range.get("normal_ft"), f"{field}.range.normal_ft", minimum=0
+            ),
+            "long_ft": _integer(
+                spell_range.get("long_ft"), f"{field}.range.long_ft", minimum=0
+            ),
+            "area": _text(spell_range.get("area"), f"{field}.range.area", maximum=200),
+        },
+        "duration": {
+            "kind": duration_kind,
+            "value": _integer(duration.get("value"), f"{field}.duration.value", minimum=0),
+            "unit": duration_unit,
+            "concentration": _boolean(
+                duration.get("concentration"), f"{field}.duration.concentration"
+            ),
+        },
+        "components": {
+            "verbal": _boolean(components.get("verbal"), f"{field}.components.verbal"),
+            "somatic": _boolean(components.get("somatic"), f"{field}.components.somatic"),
+            "material": _boolean(components.get("material"), f"{field}.components.material"),
+            "material_description": _text(
+                components.get("material_description"),
+                f"{field}.components.material_description",
+                maximum=500,
+            ),
+            "material_cost_cp": _integer(
+                components.get("material_cost_cp"),
+                f"{field}.components.material_cost_cp",
+                minimum=0,
+            ),
+            "consumed": _boolean(components.get("consumed"), f"{field}.components.consumed"),
+        },
+        "effect": _text(definition.get("effect"), f"{field}.effect", maximum=4000),
+    }
+
+
 def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
     spell = _object(value, field)
     allowed = {
@@ -1301,38 +1381,9 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
             "at_will_sources",
         },
     )
-    definition = _object(spell.get("definition") or {}, f"{field}.definition")
-    _reject_unknown(
-        definition,
+    definition = normalize_spell_definition(
+        spell.get("definition") or {},
         f"{field}.definition",
-        {"school", "casting_time", "range", "duration", "components", "effect"},
-    )
-    spell_range = _object(definition.get("range") or {}, f"{field}.definition.range")
-    _reject_unknown(
-        spell_range, f"{field}.definition.range", {"kind", "normal_ft", "long_ft", "area"}
-    )
-    range_kind = _text(spell_range.get("kind"), f"{field}.definition.range.kind", default="special")
-    if range_kind not in {"self", "touch", "distance", "sight", "unlimited", "special"}:
-        raise ValueError(f"{field}.definition.range.kind is invalid")
-    duration = _object(definition.get("duration") or {}, f"{field}.definition.duration")
-    _reject_unknown(
-        duration, f"{field}.definition.duration", {"kind", "value", "unit", "concentration"}
-    )
-    duration_kind = _text(
-        duration.get("kind"), f"{field}.definition.duration.kind", default="instantaneous"
-    )
-    if duration_kind not in {"instantaneous", "timed", "until_dispelled", "special"}:
-        raise ValueError(f"{field}.definition.duration.kind is invalid")
-    duration_unit = _text(
-        duration.get("unit"), f"{field}.definition.duration.unit", default="round"
-    )
-    if duration_unit not in {"round", "minute", "hour", "day", "special"}:
-        raise ValueError(f"{field}.definition.duration.unit is invalid")
-    components = _object(definition.get("components") or {}, f"{field}.definition.components")
-    _reject_unknown(
-        components,
-        f"{field}.definition.components",
-        {"verbal", "somatic", "material", "material_description", "material_cost_cp", "consumed"},
     )
     at_will_sources = _string_list(
         access.get("at_will_sources") or [],
@@ -1369,59 +1420,7 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
             ),
             "at_will_sources": at_will_sources,
         },
-        "definition": {
-            "school": _text(definition.get("school"), f"{field}.definition.school", maximum=100),
-            "casting_time": _text(
-                definition.get("casting_time"), f"{field}.definition.casting_time", maximum=200
-            ),
-            "range": {
-                "kind": range_kind,
-                "normal_ft": _integer(
-                    spell_range.get("normal_ft"), f"{field}.definition.range.normal_ft", minimum=0
-                ),
-                "long_ft": _integer(
-                    spell_range.get("long_ft"), f"{field}.definition.range.long_ft", minimum=0
-                ),
-                "area": _text(
-                    spell_range.get("area"), f"{field}.definition.range.area", maximum=200
-                ),
-            },
-            "duration": {
-                "kind": duration_kind,
-                "value": _integer(
-                    duration.get("value"), f"{field}.definition.duration.value", minimum=0
-                ),
-                "unit": duration_unit,
-                "concentration": _boolean(
-                    duration.get("concentration"), f"{field}.definition.duration.concentration"
-                ),
-            },
-            "components": {
-                "verbal": _boolean(
-                    components.get("verbal"), f"{field}.definition.components.verbal"
-                ),
-                "somatic": _boolean(
-                    components.get("somatic"), f"{field}.definition.components.somatic"
-                ),
-                "material": _boolean(
-                    components.get("material"), f"{field}.definition.components.material"
-                ),
-                "material_description": _text(
-                    components.get("material_description"),
-                    f"{field}.definition.components.material_description",
-                    maximum=500,
-                ),
-                "material_cost_cp": _integer(
-                    components.get("material_cost_cp"),
-                    f"{field}.definition.components.material_cost_cp",
-                    minimum=0,
-                ),
-                "consumed": _boolean(
-                    components.get("consumed"), f"{field}.definition.components.consumed"
-                ),
-            },
-            "effect": _text(definition.get("effect"), f"{field}.definition.effect", maximum=4000),
-        },
+        "definition": definition,
         "point_cost": _integer(spell.get("point_cost"), f"{field}.point_cost", minimum=0),
         "custom_definition": (
             _object(spell["custom_definition"], f"{field}.custom_definition")

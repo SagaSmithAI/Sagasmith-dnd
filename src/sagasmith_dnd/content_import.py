@@ -10,6 +10,7 @@ from typing import Any
 from sagasmith_core.text import ascii_slug
 
 from sagasmith_dnd.abilities import ABILITY_LABELS
+from sagasmith_dnd.character_schema import normalize_spell_definition
 from sagasmith_dnd.spell_resolution import (
     SPELL_RESOLUTION_MECHANIC_ID,
     normalize_spell_resolution,
@@ -821,6 +822,14 @@ def validate_selection_ready_artifacts(artifacts: list[dict[str, Any]]) -> list[
                 errors.append(f"{prefix} spell level must be an integer from 0 to 9")
             if not isinstance(card.get("definition"), dict):
                 errors.append(f"{prefix} spell needs a structured definition")
+            else:
+                try:
+                    normalize_spell_definition(
+                        card["definition"],
+                        f"{prefix}.card.definition",
+                    )
+                except ValueError as error:
+                    errors.append(str(error))
             if card.get("resolution") is not None:
                 try:
                     normalize_spell_resolution(
