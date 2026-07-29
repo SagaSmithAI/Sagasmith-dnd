@@ -134,7 +134,26 @@ def start_chase(
         identifier = str(combatant["actor_id"])
         actor = actors[identifier]
         sheet = actor_sheet(actor)
-        speed = int(actor_derived(actor).get("speed", {}).get("walk", 30) or 30)
+        base_speed = int(
+            actor_derived(actor).get("speed", {}).get("walk", 30) or 30
+        )
+        speed_adjustment = actor.get("chase_speed_adjustment_ft", 0)
+        if (
+            isinstance(speed_adjustment, bool)
+            or not isinstance(speed_adjustment, int)
+            or not -100 <= speed_adjustment <= 100
+        ):
+            raise CombatEngineError(
+                "chase_speed_adjustment_ft must be an integer from -100 to 100"
+            )
+        speed = max(0, base_speed + speed_adjustment)
+        speed_source_excerpt = str(
+            actor.get("chase_speed_source_excerpt") or ""
+        ).strip()
+        if speed_adjustment and not speed_source_excerpt:
+            raise CombatEngineError(
+                "a chase speed adjustment requires its reviewed source excerpt"
+            )
         role = "quarry" if identifier in quarry_set else "pursuer"
         chase_participants.append(
             {
@@ -145,6 +164,9 @@ def start_chase(
                 "initiative_roll": deepcopy(combatant.get("initiative_roll")),
                 "initiative_bonus": int(combatant.get("initiative_bonus", 0) or 0),
                 "tie_breaker": int(combatant.get("tie_breaker", 0) or 0),
+                "base_speed_ft": base_speed,
+                "speed_adjustment_ft": speed_adjustment,
+                "speed_source_excerpt": speed_source_excerpt,
                 "speed_ft": speed,
                 "position_ft": int(initial_distance_ft) if role == "quarry" else 0,
                 "dash_count": 0,
