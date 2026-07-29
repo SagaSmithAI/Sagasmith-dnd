@@ -2430,8 +2430,14 @@ def validate_character_sheet(
         raise ValueError("a character can have only one active concentration effect")
     for effect in effects:
         source_spell_id = effect["source_spell_id"]
-        if source_spell_id and source_spell_id not in spell_ids | item_spell_ids:
-            raise ValueError("effect source_spell_id references an unknown spell")
+        if (
+            source_spell_id
+            and source_spell_id not in spell_ids | item_spell_ids
+            and not effect["source"]
+        ):
+            raise ValueError(
+                "external effect source_spell_id requires its source actor or source reference"
+            )
 
     adventure_state = _object(value["adventure_state"], "sheet.adventure_state")
     _reject_unknown(
@@ -3159,6 +3165,18 @@ def _derive_armor_class(
                 else:
                     unresolved_effects.add(effect["id"])
                 continue
+            if change["path"] in {
+                "rolls.attack.bonus",
+                "rolls.ability_check.bonus",
+                "rolls.saving_throw.bonus",
+            }:
+                if (
+                    change["mode"] != "add"
+                    or isinstance(change["value"], bool)
+                    or not isinstance(change["value"], int)
+                ):
+                    unresolved_effects.add(effect["id"])
+                continue
             if change["path"] not in {"derived.armor_class", "combat.ac"}:
                 unresolved_effects.add(effect["id"])
                 continue
@@ -3338,6 +3356,37 @@ def effective_ability_modifier(sheet: dict[str, Any], ability: str) -> int:
     if normalized not in ABILITY_NAMES:
         raise ValueError(f"unsupported ability: {ability}")
     return ability_modifier(effective_ability_scores(sheet)[normalized])
+
+
+def active_effect_roll_bonus(sheet: dict[str, Any], kind: str) -> int:
+    """Return additive roll modifiers supplied by active, validated effects."""
+
+    normalized = str(kind).strip().casefold().replace("-", "_").replace(" ", "_")
+    paths = {
+        "attack": "rolls.attack.bonus",
+        "ability": "rolls.ability_check.bonus",
+        "check": "rolls.ability_check.bonus",
+        "save": "rolls.saving_throw.bonus",
+    }
+    if normalized not in paths:
+        raise ValueError(f"unsupported effect roll kind: {kind}")
+    path = paths[normalized]
+    bonus = 0
+    for effect in validate_character_sheet(sheet)["effects"]:
+        if not effect["active"]:
+            continue
+        for change in effect["changes"]:
+            if change["path"] != path:
+                continue
+            value = change["value"]
+            if (
+                change["mode"] != "add"
+                or isinstance(value, bool)
+                or not isinstance(value, int)
+            ):
+                raise ValueError(f"active {path} effect modifier is malformed")
+            bonus += value
+    return bonus
 
 
 def derive_character_sheet(

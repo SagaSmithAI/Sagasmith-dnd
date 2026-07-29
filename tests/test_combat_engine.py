@@ -2946,6 +2946,52 @@ def test_2024_exhaustion_reduces_speed_attacks_and_death_saves() -> None:
     assert len(legacy_save["rolls"]) == 2
 
 
+def test_active_roll_effects_apply_to_attacks_saves_and_ability_checks() -> None:
+    actor = _actor("revived")
+    actor["sheet"]["effects"].append(
+        {
+            "id": "raise-dead-ordeal",
+            "name": "Raise Dead ordeal",
+            "kind": "revival_ordeal",
+            "source": "allied-cleric",
+            "source_spell_id": "dnd5e.content.srd2014.spell.raise-dead",
+            "active": True,
+            "concentration": False,
+            "duration": {"period": "long_rest", "remaining": 4},
+            "changes": [
+                {"path": "rolls.attack.bonus", "mode": "add", "value": -4},
+                {"path": "rolls.ability_check.bonus", "mode": "add", "value": -4},
+                {"path": "rolls.saving_throw.bonus", "mode": "add", "value": -4},
+            ],
+            "description": "Raise Dead ordeal.",
+        }
+    )
+    actor["derived"] = derive_character_sheet(actor["sheet"])
+    target = _actor("target")
+
+    plan = preflight_attack(actor, target, action={})
+    assert plan["effect_roll_bonus"] == -4
+    assert plan["attack_bonus"] == 1
+    check = resolve_actor_check(
+        actor,
+        kind="ability",
+        ability="strength",
+        dc=10,
+        rng=_SequenceRng(10),
+    )
+    save = resolve_actor_check(
+        actor,
+        kind="save",
+        ability="strength",
+        dc=10,
+        rng=_SequenceRng(10),
+    )
+    assert check["effect_roll_bonus"] == -4
+    assert save["effect_roll_bonus"] == -4
+    assert check["total"] == 9
+    assert save["total"] == 9
+
+
 def test_condition_saving_throw_effects_are_not_left_to_client_modifiers() -> None:
     actor = _actor("target")
     actor["sheet"]["conditions"] = ["paralyzed"]

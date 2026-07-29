@@ -19,6 +19,7 @@ from sagasmith_core.access import LOCAL_SYSTEM_PRINCIPAL_ID
 from sagasmith_dnd.activity_identity import is_multiattack_activity
 from sagasmith_dnd.character_schema import (
     SKILL_ABILITIES,
+    active_effect_roll_bonus,
     effective_ability_scores,
     effective_hit_point_maximum,
     validate_character_sheet,
@@ -1082,7 +1083,8 @@ def preflight_attack(
                 "matched_groups": matched_groups,
                 "ammunition_item_id": str(ammunition_item_id),
             }
-    attack_bonus = int(weapon.get("attack_bonus", 0))
+    effect_roll_bonus = active_effect_roll_bonus(actor_sheet(attacker), "attack")
+    attack_bonus = int(weapon.get("attack_bonus", 0)) + effect_roll_bonus
     context = dict(action.get("context") or {})
     cover = dict(context.get("cover") or {})
     if cover.get("degree") == "total" or context.get("targetable") is False:
@@ -1483,6 +1485,7 @@ def preflight_attack(
         "attacker_id": actor_id(attacker),
         "target_id": actor_id(target),
         "attack_bonus": attack_bonus,
+        "effect_roll_bonus": effect_roll_bonus,
         "target_ac": target_ac,
         "damage_expression": str(expression),
         "damage_modifiers": (
@@ -4193,7 +4196,8 @@ def resolve_actor_check(
     normalized_ruleset = _normalize_ruleset(ruleset or sheet.get("edition"))
     conditions = _condition_set(sheet.get("conditions"))
     exhaustion = int(sheet.get("combat", {}).get("exhaustion", 0) or 0)
-    roll_bonus = int(bonus)
+    effect_roll_bonus = active_effect_roll_bonus(sheet, kind)
+    roll_bonus = int(bonus) + effect_roll_bonus
     extension = apply_rule_event(sheet, "check.before", rules)
     if extension.status != "committed":
         raise NeedsRulingError(
@@ -4239,6 +4243,7 @@ def resolve_actor_check(
         boundary_ids.append(_JACK_OF_ALL_TRADES_BOUNDARY_ID)
 
     def with_rule_receipts(result: dict[str, Any]) -> dict[str, Any]:
+        result["effect_roll_bonus"] = effect_roll_bonus
         result["rule_receipts"] = [
             *core_receipts(rules, boundary_ids, "check.resolve"),
             *extension.receipts,

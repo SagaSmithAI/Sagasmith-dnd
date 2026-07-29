@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import asdict
 from typing import Any
+from uuid import uuid4
 
 from sagasmith_dnd.activities import ACTIVITY_CONTENT_SECTIONS
 from sagasmith_dnd.character_schema import (
@@ -50,6 +51,13 @@ REST_SCHEDULE_OPTIONAL_FIELDS = {"trance_minutes"}
 COMBAT_BOUND_EFFECT_PERIODS = frozenset(
     {"source_turn_start", "turn_start", "turn_end", "round", "encounter"}
 )
+RAISE_DEAD_SPELL_ID = "dnd5e.content.srd2014.spell.raise-dead"
+REVIVAL_ORDEAL_EFFECT_KIND = "revival_ordeal"
+REVIVAL_ORDEAL_ROLL_PATHS = (
+    "rolls.attack.bonus",
+    "rolls.ability_check.bonus",
+    "rolls.saving_throw.bonus",
+)
 
 
 def _sheet_edition(sheet: dict[str, Any]) -> str:
@@ -68,6 +76,140 @@ def minimum_rest_minutes(rest_type: str, *, allows_trance: bool = False) -> int:
     if normalized == "long_rest" and allows_trance:
         return TRANCE_LONG_REST_MINUTES
     return REST_MINIMUM_MINUTES[normalized]
+
+
+def apply_raise_dead_to_sheet(
+    sheet: dict[str, Any],
+    *,
+    elapsed_days: int,
+    soul_willing: bool,
+    body_intact: bool,
+    source_ref: str,
+    source_actor_id: str | None = None,
+) -> dict[str, Any]:
+    """Apply the complete 2014 Raise Dead state transition to a dead actor."""
+
+    value = deepcopy(sheet)
+    if _sheet_edition(value) != "2014":
+        raise CombatEngineError("this Raise Dead executor is bound to the 2014 rules")
+    if isinstance(elapsed_days, bool) or not isinstance(elapsed_days, int):
+        raise CombatEngineError("Raise Dead elapsed_days must be an integer")
+    if elapsed_days < 0 or elapsed_days > 10:
+        raise CombatEngineError("Raise Dead requires death no longer than 10 days ago")
+    if soul_willing is not True:
+        raise CombatEngineError("Raise Dead requires a willing soul at liberty to return")
+    if body_intact is not True:
+        raise CombatEngineError("Raise Dead requires all body parts integral for survival")
+    exact_source_ref = str(source_ref).strip()
+    if not exact_source_ref:
+        raise CombatEngineError("Raise Dead requires an exact source_ref")
+    creature_type = str(
+        dict(value.get("progression") or {}).get("species") or ""
+    ).strip().casefold()
+    if "undead" in creature_type.split():
+        raise CombatEngineError("Raise Dead cannot return an undead creature to life")
+    conditions = condition_ids(value.get("conditions"))
+    hit_points = dict(dict(value.get("combat") or {}).get("hp") or {})
+    if "dead" not in conditions or int(hit_points.get("value", 0) or 0) != 0:
+        raise CombatEngineError("Raise Dead requires a dead creature at 0 hit points")
+
+    neutralized_effect_ids: list[str] = []
+    for effect in value.get("effects", []):
+        if not effect.get("active"):
+            continue
+        effect_kind = str(effect.get("kind") or "").strip().casefold().replace("-", "_")
+        if effect_kind not in {"poison", "poisoned", "nonmagical_disease"}:
+            continue
+        effect["active"] = False
+        effect["ended_reason"] = "neutralized_by_raise_dead"
+        neutralized_effect_ids.append(str(effect.get("id") or ""))
+    for condition_id in ("dead", "unconscious", "stable", "poisoned"):
+        apply_condition_change(value, condition_id=condition_id, add=False)
+    combat = value.setdefault("combat", {})
+    hp = dict(combat.get("hp") or {})
+    hp["value"] = 1
+    hp["temp"] = 0
+    combat["hp"] = hp
+    combat["death_saves"] = {"successes": 0, "failures": 0}
+
+    for effect in value.get("effects", []):
+        if effect.get("active") and effect.get("kind") == REVIVAL_ORDEAL_EFFECT_KIND:
+            effect["active"] = False
+            effect["ended_reason"] = "replaced_by_raise_dead"
+    effect_id = f"raise-dead-ordeal-{uuid4().hex}"
+    value.setdefault("effects", []).append(
+        {
+            "id": effect_id,
+            "name": "Raise Dead ordeal",
+            "kind": REVIVAL_ORDEAL_EFFECT_KIND,
+            "source": str(source_actor_id or exact_source_ref),
+            "source_spell_id": RAISE_DEAD_SPELL_ID,
+            "active": True,
+            "concentration": False,
+            "duration": {"period": "long_rest", "remaining": 4},
+            "changes": [
+                {"path": path, "mode": "add", "value": -4}
+                for path in REVIVAL_ORDEAL_ROLL_PATHS
+            ],
+            "description": (
+                "2014 Raise Dead: -4 to attack rolls, saving throws, and ability "
+                "checks; the penalty decreases by 1 after each long rest."
+            ),
+        }
+    )
+    reconcile_condition_projection(value, value.get("conditions"))
+    return {
+        "sheet": value,
+        "status": "revived",
+        "spell_id": RAISE_DEAD_SPELL_ID,
+        "hit_points": 1,
+        "effect_id": effect_id,
+        "penalty": -4,
+        "remaining_long_rests": 4,
+        "source_ref": exact_source_ref,
+        "source_actor_id": source_actor_id,
+        "neutralized_effect_ids": neutralized_effect_ids,
+    }
+
+
+def reduce_revival_ordeal_after_long_rest(sheet: dict[str, Any]) -> dict[str, Any]:
+    """Reduce each active Raise Dead ordeal by exactly one before duration expiry."""
+
+    value = deepcopy(sheet)
+    reduced: list[dict[str, Any]] = []
+    for effect in value.get("effects", []):
+        if not effect.get("active") or effect.get("kind") != REVIVAL_ORDEAL_EFFECT_KIND:
+            continue
+        changes = list(effect.get("changes") or [])
+        applicable = [
+            change
+            for change in changes
+            if str(change.get("path") or "") in REVIVAL_ORDEAL_ROLL_PATHS
+        ]
+        if {str(change.get("path") or "") for change in applicable} != set(
+            REVIVAL_ORDEAL_ROLL_PATHS
+        ) or any(
+            change.get("mode") != "add"
+            or isinstance(change.get("value"), bool)
+            or not isinstance(change.get("value"), int)
+            for change in applicable
+        ):
+            raise CombatEngineError("active Raise Dead ordeal effect is malformed")
+        before = {int(change["value"]) for change in applicable}
+        if len(before) != 1 or next(iter(before)) >= 0:
+            raise CombatEngineError("active Raise Dead ordeal penalty is malformed")
+        before_penalty = next(iter(before))
+        after_penalty = min(0, before_penalty + 1)
+        for change in applicable:
+            change["value"] = after_penalty
+        reduced.append(
+            {
+                "effect_id": str(effect.get("id") or ""),
+                "before": before_penalty,
+                "after": after_penalty,
+            }
+        )
+    return {"sheet": value, "reduced": reduced}
 
 
 def _reconcile_ended_effects(sheet: dict[str, Any], ended_effect_ids: list[str]) -> None:
@@ -910,6 +1052,10 @@ def apply_rest(
         recover_resource(item.get("uses"), f"inventory:{index}:uses")
         recover_resource(item.get("charges"), f"inventory:{index}:charges")
     value["combat"] = combat | {"hp": hp}
+    revival_ordeals = {"sheet": value, "reduced": []}
+    if rest_type == "long_rest":
+        revival_ordeals = reduce_revival_ordeal_after_long_rest(value)
+        value = revival_ordeals["sheet"]
     duration = advance_effect_durations(value, period=rest_type)
     after_rules = apply_rule_event(duration["sheet"], "rest.after", rules)
     if after_rules.status != "committed":
@@ -940,6 +1086,7 @@ def apply_rest(
         "natural_recovery": natural_recovery_result,
         "song_of_rest": song_of_rest_result,
         "sorcerous_restoration": sorcerous_restoration_result,
+        "revival_ordeals": revival_ordeals["reduced"],
         "effects_expired": duration["expired"],
         "status": "committed",
         "rule_receipts": [

@@ -10,6 +10,7 @@ from sagasmith_dnd.lifecycle import (
     advance_elapsed_world_effect_durations,
     advance_source_turn_effect_durations,
     advance_world_effect_durations,
+    apply_raise_dead_to_sheet,
     apply_rest,
     expire_combat_bound_effects,
     initialize_source_state,
@@ -27,6 +28,107 @@ def test_rest_minimums_have_one_runtime_authority() -> None:
     assert minimum_rest_minutes("short_rest") == 60
     assert minimum_rest_minutes("long_rest") == 480
     assert minimum_rest_minutes("long_rest", allows_trance=True) == 240
+
+
+def test_raise_dead_restores_one_hp_and_reduces_its_ordeal_each_long_rest() -> None:
+    sheet = default_character_sheet()
+    sheet["edition"] = "2014"
+    sheet["combat"]["hp"] = {"value": 0, "max": 24, "temp": 0}
+    sheet["combat"]["death_saves"] = {"successes": 1, "failures": 3}
+    sheet["conditions"] = ["dead", "poisoned", "prone", "unconscious"]
+    sheet["effects"] = [
+        {
+            "id": "wyvern-poison",
+            "name": "Wyvern poison",
+            "kind": "poison",
+            "source": "wyvern-stinger",
+            "active": True,
+            "concentration": False,
+            "duration": {"period": "manual", "remaining": 0},
+            "changes": [{"path": "conditions", "mode": "add", "value": "poisoned"}],
+            "description": "A poison affecting the creature at death.",
+        },
+        {
+            "id": "magical-curse",
+            "name": "Magical curse",
+            "kind": "curse",
+            "source": "hexed-idol",
+            "active": True,
+            "concentration": False,
+            "duration": {"period": "manual", "remaining": 0},
+            "changes": [],
+            "description": "Raise Dead does not remove curses.",
+        },
+    ]
+
+    revived = apply_raise_dead_to_sheet(
+        sheet,
+        elapsed_days=1,
+        soul_willing=True,
+        body_intact=True,
+        source_ref="module:rise-of-tiamat:p57",
+    )
+    assert revived["status"] == "revived"
+    assert revived["sheet"]["combat"]["hp"]["value"] == 1
+    assert revived["sheet"]["combat"]["death_saves"] == {"successes": 0, "failures": 0}
+    assert revived["sheet"]["conditions"] == ["prone"]
+    assert revived["neutralized_effect_ids"] == ["wyvern-poison"]
+    assert not next(
+        effect for effect in revived["sheet"]["effects"] if effect["id"] == "wyvern-poison"
+    )["active"]
+    assert next(
+        effect for effect in revived["sheet"]["effects"] if effect["id"] == "magical-curse"
+    )["active"]
+    ordeal = next(
+        effect
+        for effect in revived["sheet"]["effects"]
+        if effect["kind"] == "revival_ordeal"
+    )
+    assert {change["value"] for change in ordeal["changes"]} == {-4}
+
+    current = revived["sheet"]
+    for expected in (-3, -2, -1):
+        rested = apply_rest(current, rest_type="long_rest")
+        assert rested["revival_ordeals"][0]["after"] == expected
+        current = rested["sheet"]
+        active = next(
+            effect
+            for effect in current["effects"]
+            if effect["kind"] == "revival_ordeal" and effect["active"]
+        )
+        assert {change["value"] for change in active["changes"]} == {expected}
+    final = apply_rest(current, rest_type="long_rest")
+    assert final["revival_ordeals"][0]["after"] == 0
+    assert not any(
+        effect["active"] and effect["kind"] == "revival_ordeal"
+        for effect in final["sheet"]["effects"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("patch", "message"),
+    [
+        ({"elapsed_days": 11}, "10 days"),
+        ({"soul_willing": False}, "willing soul"),
+        ({"body_intact": False}, "body parts"),
+    ],
+)
+def test_raise_dead_rejects_source_conditions_that_make_the_spell_fail(
+    patch: dict, message: str
+) -> None:
+    sheet = default_character_sheet()
+    sheet["edition"] = "2014"
+    sheet["combat"]["hp"] = {"value": 0, "max": 8, "temp": 0}
+    sheet["conditions"] = ["dead", "prone"]
+    arguments = {
+        "elapsed_days": 1,
+        "soul_willing": True,
+        "body_intact": True,
+        "source_ref": "srd2014:raise-dead",
+        **patch,
+    }
+    with pytest.raises(CombatEngineError, match=message):
+        apply_raise_dead_to_sheet(sheet, **arguments)
 
 
 def test_rest_completion_enforces_duration_and_daily_limit() -> None:

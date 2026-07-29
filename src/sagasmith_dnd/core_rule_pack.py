@@ -489,6 +489,18 @@ BOUNDARIES = (
         "bundled:srd2014/07_Spells",
     ),
     CoreBoundary(
+        "dnd5e.core.spell.raise_dead",
+        ("2014",),
+        "lifecycle.apply_raise_dead_to_sheet|reduce_revival_ordeal_after_long_rest",
+        (
+            "tests/test_lifecycle.py::"
+            "test_raise_dead_restores_one_hp_and_reduces_its_ordeal_each_long_rest",
+            "tests/test_combat_engine.py::"
+            "test_active_roll_effects_apply_to_attacks_saves_and_ability_checks",
+        ),
+        "bundled:srd2014/07_Spells/Spells_Each/Raise_Dead.md",
+    ),
+    CoreBoundary(
         "dnd5e.core.ready.action",
         ("2014", "2024"),
         "combat_engine.trigger_readied_action|resolve_readied_action_window",
