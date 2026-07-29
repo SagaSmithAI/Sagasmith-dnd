@@ -1119,6 +1119,7 @@ def _normalize_item(value: Any, field: str, *, generate_id: bool = True) -> dict
             item["resolution_solution"],
             result["resolution_plan"],
             f"{field}.resolution_solution",
+            source_card=result,
         )
     return result
 
@@ -1500,6 +1501,7 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
             spell["resolution_solution"],
             result["resolution_plan"],
             f"{field}.resolution_solution",
+            source_card=result,
         )
     if result["resolution"] is not None and "resolution_plan" in result:
         raise ValueError(
@@ -1538,10 +1540,16 @@ def _normalize_embedded_resolution_solution(
     value: Any,
     plan: dict[str, Any],
     field: str,
+    *,
+    source_card: dict[str, Any],
 ) -> dict[str, Any]:
     try:
         compiled = compile_resolution_plan(plan)
-        return normalize_content_solution(value, plan=compiled)
+        return normalize_content_solution(
+            value,
+            plan=compiled,
+            source_card=source_card,
+        )
     except (ContentSolutionError, ResolutionPlanCompilationError) as error:
         raise ValueError(f"{field}: {error}") from error
 
@@ -2459,6 +2467,7 @@ def validate_character_sheet(
                             f"sheet.content.{name}[{index}]."
                             "resolution_solution"
                         ),
+                        source_card=normalized_entry,
                     )
                 )
             result.append(normalized_entry)

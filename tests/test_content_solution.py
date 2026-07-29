@@ -76,11 +76,23 @@ def _ruling() -> dict:
     }
 
 
+def _card() -> dict:
+    return {
+        "id": "binding-blade",
+        "name": "Binding Blade",
+        "description": "On a hit, the binding blade restrains the target.",
+        "mechanics": {"on_hit": {"condition": "restrained"}},
+        "uses": {"value": 1, "max": 1},
+    }
+
+
 def test_first_use_solution_locks_plan_identity_evidence_and_agent_reason() -> None:
     plan = _plan()
+    card = _card()
 
     solution = build_content_solution(
         plan,
+        source_card=card,
         application_id="choice:binding-blade",
         agent_ruling=_ruling(),
     )
@@ -88,13 +100,19 @@ def test_first_use_solution_locks_plan_identity_evidence_and_agent_reason() -> N
     assert solution["source_card_id"] == "binding-blade"
     assert solution["plan_fingerprint"] == plan.fingerprint
     assert len(solution["source_fingerprint"]) == 64
-    assert normalize_content_solution(solution, plan=plan) == solution
+    assert len(solution["source_card_fingerprint"]) == 64
+    assert (
+        normalize_content_solution(solution, plan=plan, source_card=card)
+        == solution
+    )
 
 
 def test_solution_cannot_be_reused_with_changed_plan_or_evidence() -> None:
     plan = _plan()
+    card = _card()
     solution = build_content_solution(
         plan,
+        source_card=card,
         application_id="choice:binding-blade",
         agent_ruling=_ruling(),
     )
@@ -102,4 +120,33 @@ def test_solution_cannot_be_reused_with_changed_plan_or_evidence() -> None:
     changed["source_fingerprint"] = "0" * 64
 
     with pytest.raises(ContentSolutionError, match="does not match"):
-        normalize_content_solution(changed, plan=plan)
+        normalize_content_solution(changed, plan=plan, source_card=card)
+
+    changed_card = {**card, "description": "The blade now causes blindness."}
+    with pytest.raises(ContentSolutionError, match="does not match"):
+        normalize_content_solution(
+            solution,
+            plan=plan,
+            source_card=changed_card,
+        )
+
+    changed_mechanics = {
+        **card,
+        "mechanics": {"on_hit": {"condition": "blinded"}},
+    }
+    with pytest.raises(ContentSolutionError, match="does not match"):
+        normalize_content_solution(
+            solution,
+            plan=plan,
+            source_card=changed_mechanics,
+        )
+
+    spent_card = {**card, "uses": {"value": 0, "max": 1}}
+    assert (
+        normalize_content_solution(
+            solution,
+            plan=plan,
+            source_card=spent_card,
+        )
+        == solution
+    )

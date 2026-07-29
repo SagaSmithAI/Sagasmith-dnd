@@ -10,7 +10,7 @@ from typing import Any
 
 from sagasmith_dnd.resolution_plan import CompiledResolutionPlan
 
-CONTENT_SOLUTION_SCHEMA_VERSION = 1
+CONTENT_SOLUTION_SCHEMA_VERSION = 2
 
 _FINGERPRINT_RE = re.compile(r"^[0-9a-f]{64}$")
 _SAFE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._:-]{0,199}$")
@@ -49,9 +49,48 @@ def content_solution_source_fingerprint(
     ).hexdigest()
 
 
+def content_solution_card_fingerprint(source_card: dict[str, Any]) -> str:
+    """Hash immutable source-card semantics while ignoring runtime counters."""
+
+    root_runtime_fields = {
+        "access",
+        "attunement",
+        "charges",
+        "condition",
+        "equipped",
+        "equipped_slot",
+        "identified",
+        "quantity",
+        "uses",
+    }
+    derived_fields = {"resolution_plan", "resolution_solution"}
+
+    def semantic_value(value: Any, *, root: bool = False) -> Any:
+        if isinstance(value, dict):
+            return {
+                str(key): semantic_value(child)
+                for key, child in value.items()
+                if str(key) not in derived_fields
+                and (not root or str(key) not in root_runtime_fields)
+            }
+        if isinstance(value, list):
+            return [semantic_value(item) for item in value]
+        return deepcopy(value)
+
+    return hashlib.sha256(
+        json.dumps(
+            semantic_value(source_card, root=True),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
 def build_content_solution(
     plan: CompiledResolutionPlan,
     *,
+    source_card: dict[str, Any],
     application_id: str,
     agent_ruling: dict[str, Any],
     solution_version: int = 1,
@@ -67,12 +106,16 @@ def build_content_solution(
             "source_card_id": plan.source_card_id,
             "source_card_kind": plan.source_card_kind,
             "source_fingerprint": content_solution_source_fingerprint(plan),
+            "source_card_fingerprint": content_solution_card_fingerprint(
+                source_card
+            ),
             "plan_fingerprint": plan.fingerprint,
             "application_id": application_id,
             "compiled_by": agent_ruling,
             "replaces_plan_fingerprint": replaces_plan_fingerprint,
         },
         plan=plan,
+        source_card=source_card,
     )
 
 
@@ -80,6 +123,7 @@ def normalize_content_solution(
     value: Any,
     *,
     plan: CompiledResolutionPlan,
+    source_card: dict[str, Any],
 ) -> dict[str, Any]:
     """Validate stored solution provenance against its exact compiled plan."""
 
@@ -92,6 +136,7 @@ def normalize_content_solution(
         "source_card_id",
         "source_card_kind",
         "source_fingerprint",
+        "source_card_fingerprint",
         "plan_fingerprint",
         "application_id",
         "compiled_by",
@@ -107,6 +152,9 @@ def normalize_content_solution(
     solution_version = value.get("solution_version")
     application_id = str(value.get("application_id") or "").strip()
     source_fingerprint = str(value.get("source_fingerprint") or "")
+    source_card_fingerprint = str(
+        value.get("source_card_fingerprint") or ""
+    )
     plan_fingerprint = str(value.get("plan_fingerprint") or "")
     replaces = str(value.get("replaces_plan_fingerprint") or "")
     if schema_version != CONTENT_SOLUTION_SCHEMA_VERSION:
@@ -132,6 +180,8 @@ def normalize_content_solution(
         or str(value.get("source_card_kind") or "") != plan.source_card_kind
         or plan_fingerprint != plan.fingerprint
         or source_fingerprint != content_solution_source_fingerprint(plan)
+        or source_card_fingerprint
+        != content_solution_card_fingerprint(source_card)
     ):
         raise ContentSolutionError(
             "resolution_solution does not match its compiled plan and evidence"
@@ -148,6 +198,7 @@ def normalize_content_solution(
         "source_card_id": plan.source_card_id,
         "source_card_kind": plan.source_card_kind,
         "source_fingerprint": source_fingerprint,
+        "source_card_fingerprint": source_card_fingerprint,
         "plan_fingerprint": plan_fingerprint,
         "application_id": application_id,
         "compiled_by": compiled_by,
@@ -194,6 +245,7 @@ __all__ = [
     "CONTENT_SOLUTION_SCHEMA_VERSION",
     "ContentSolutionError",
     "build_content_solution",
+    "content_solution_card_fingerprint",
     "content_solution_source_fingerprint",
     "normalize_content_solution",
 ]

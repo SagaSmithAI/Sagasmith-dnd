@@ -883,6 +883,7 @@ def test_weapon_cards_preserve_reviewed_source_bound_resolution_plans() -> None:
     compiled = compile_resolution_plan(normalized_item["resolution_plan"])
     normalized_item["resolution_solution"] = build_content_solution(
         compiled,
+        source_card=normalized_item,
         application_id="choice:binding-blade",
         agent_ruling={
             "default_resolver": "agent",
