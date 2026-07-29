@@ -290,17 +290,39 @@ def _parse_weapon(
     mode = attack.group(1).casefold()
     hit = re.search(
         r"(?i)\*?Hit:\*?\s*(\d+)"
-        r"(?:\s*\((\d+\s*d\s*\d+(?:\s*[+\-]\s*\d+)?)\))?\s*"
+        r"(?:\s*\((\d+\s*d\s*\d+(?:\s*[+\-]\s*\d+)?"
+        r"(?:\s+plus\s+\d+\s*d\s*\d+(?:\s*[+\-]\s*\d+)?)*)\))?\s*"
         r"([a-z]+)\s+damage",
         description,
     )
     additional_damage: list[dict[str, Any]] = []
     if hit:
-        expression = re.sub(r"\s+", "", hit.group(2) or hit.group(1))
+        expression_parts = re.split(
+            r"(?i)\s+plus\s+",
+            hit.group(2) or hit.group(1),
+        )
+        expression = re.sub(r"\s+", "", expression_parts[0])
         damage = re.fullmatch(r"(\d+d\d+)(?:([+\-]\d+))?", expression)
         if hit.group(2) and not damage:
             raise StatblockImportError(
                 f"weapon action {name!r} has an invalid damage expression"
+            )
+        for raw_extra_expression in expression_parts[1:]:
+            extra_expression = re.sub(r"\s+", "", raw_extra_expression)
+            parsed_extra = re.fullmatch(
+                r"(\d+d\d+)(?:([+\-]\d+))?",
+                extra_expression,
+            )
+            if not parsed_extra:
+                raise StatblockImportError(
+                    f"weapon action {name!r} has an invalid additional damage expression"
+                )
+            additional_damage.append(
+                {
+                    "damage_formula": parsed_extra.group(1),
+                    "damage_bonus": int(parsed_extra.group(2) or 0),
+                    "damage_type": hit.group(3).casefold(),
+                }
             )
         last_damage_end = hit.end()
         for extra in re.finditer(

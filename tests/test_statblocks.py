@@ -623,6 +623,30 @@ one target. *Hit:* 11 (2d 10) force damage plus 9 (2d 8) poison damage.
     assert parsed.warnings == ()
 
 
+def test_weapon_damage_structures_in_parentheses_additional_dice() -> None:
+    parsed = parse_2014_statblock(
+        COMMONER.replace(
+            "*Hit:* 2 (1d4) bludgeoning damage.",
+            "*Hit:* 14 (1d12 + 4 plus 1d8) slashing damage.",
+        ),
+        source_key="monster-manual:orc-war-chief",
+    )
+    weapon = parsed.sheet["inventory"]["items"][0]
+
+    assert weapon["mechanics"]["damage_formula"] == "1d12"
+    assert weapon["mechanics"]["damage_bonus_override"] == 4
+    assert weapon["mechanics"]["damage_type"] == "slashing"
+    assert weapon["mechanics"]["additional_damage"] == [
+        {
+            "damage_formula": "1d8",
+            "damage_bonus": 0,
+            "damage_type": "slashing",
+        }
+    ]
+    assert weapon["mechanics"]["on_hit_effect"] == ""
+    assert parsed.warnings == ()
+
+
 def test_trailing_page_number_is_not_imported_as_an_on_hit_effect() -> None:
     parsed = parse_2014_statblock(
         TROLL + "\n291\n",
