@@ -924,6 +924,51 @@ def test_module_statblock_candidates_keep_scene_local_ordinals_together() -> Non
     assert "Other Guard" not in dragon["normalized_content"]
 
 
+def test_module_statblock_recovers_attack_heading_with_spaced_ocr_connector() -> None:
+    path = ["Appendix A: Monsters", "dragonfang"]
+    chunks = [
+        {
+            "id": "core",
+            "scene_id": "scene",
+            "ordinal": 0,
+            "heading_path": path,
+            "content": (
+                "Medium humanoid (human), neutral evil Armor Class 15 "
+                "(studded leather) Hit Points 78 (12d8 + 24) Speed 30 ft."
+            ),
+        },
+        {
+            "id": "details",
+            "scene_id": "scene",
+            "ordinal": 1,
+            "heading_path": [*path, "STR DEX CON INT WIS CHA"],
+            "content": (
+                "11 (+0) 16 (+3) 14 (+2) 12 (+1) 12 (+1) 14 (+2) "
+                "Senses passive Perception 11 Languages Common, Draconic "
+                "Challenge 5 (1,800 XP)"
+            ),
+        },
+        {
+            "id": "actions",
+            "scene_id": "scene",
+            "ordinal": 2,
+            "heading_path": [*path, "A ct io ns"],
+            "content": (
+                "Multiattack. The dragonfang attacks twice with its shortsword. "
+                "Shortsword. Melee Weapon Attack: +5 to hit, reach 5 ft., one "
+                "target. Hit: 6 (1d6 + 3) piercing damage. "
+                "Orb o f Dragon?s Breath (2/Day). Ranged Spell Attack: +5 to hit, "
+                "range 90 ft., one target. Hit: 22 (5d8) force damage."
+            ),
+        },
+    ]
+
+    candidate = module_statblock_review_candidates(chunks)[0]
+
+    assert candidate["execution_state"] == "review_ready", candidate.get("review_error")
+    assert "***Orb o f Dragon?s Breath (2/Day)***." in candidate["normalized_content"]
+
+
 def test_class_features_are_not_misclassified_as_feats() -> None:
     candidates = extract_content_candidates(
         [

@@ -80,6 +80,13 @@ _ENTRY_START_RE = re.compile(
     r"and|or|of|the|a|an))*(?:\s+\([^.\n]{1,60}\))?)\.\s+"
     r"(?=[A-Z*])"
 )
+_MECHANICAL_ENTRY_START_RE = re.compile(
+    r"(?P<prefix>^|(?<=\.)[ \t]+|\n+)"
+    r"(?P<name>[A-Z][^.\n]{0,99}?)\.\s+"
+    r"(?=(?:\*?)(?:Melee|Ranged|Melee or Ranged)\s+"
+    r"(?:Weapon|Spell)\s+Attack:)",
+    re.IGNORECASE,
+)
 
 
 def _canonical_source_heading(value: str) -> str:
@@ -713,11 +720,17 @@ def _split_statblock_details(content: str) -> tuple[dict[str, str], str]:
 
 
 def _mark_statblock_entries(content: str) -> str:
-    return _ENTRY_START_RE.sub(
+    mechanically_marked = _MECHANICAL_ENTRY_START_RE.sub(
         lambda match: (
             f"{match.group('prefix')}***{match.group('name').strip()}***. "
         ),
         content,
+    )
+    return _ENTRY_START_RE.sub(
+        lambda match: (
+            f"{match.group('prefix')}***{match.group('name').strip()}***. "
+        ),
+        mechanically_marked,
     )
 
 

@@ -1,3 +1,5 @@
+from copy import deepcopy
+
 import pytest
 
 from sagasmith_dnd.activity_identity import (
@@ -218,6 +220,60 @@ def test_statblock_rejects_silently_unparsed_weapon_action_marker() -> None:
         )
 
 
+def test_recognized_unstructured_attack_is_scoped_to_agent_ruling() -> None:
+    parsed = parse_2014_statblock(
+        """# Variant Cultist
+
+*Medium humanoid (human), neutral evil*
+
+**Armor Class** 15
+**Hit Points** 30 (4d8 + 12)
+**Speed** 30 ft.
+
+| STR | DEX | CON | INT | WIS | CHA |
+|---|---|---|---|---|---|---|
+| 10 (+0) | 16 (+3) | 16 (+3) | 10 (+0) | 12 (+1) | 12 (+1) |
+
+**Senses** passive Perception 11
+**Languages** Common
+**Challenge** 2 (450 XP)
+
+## Actions
+
+***Multiattack.*** The cultist attacks twice with its shortsword.
+
+***Shortsword.*** *Melee Weapon Attack:* +5 to hit, reach 5 ft., one target.
+*Hit:* 6 (1d6 + 3) piercing damage.
+
+***Elemental Orb (2/Day).*** *Ranged Spell Attack:* TBD to hit, range 90 ft.,
+one target. *Hit:* 22 (5d8) damage of the type selected for this creature.
+""",
+        source_key="module-review:variant-cultist",
+    )
+
+    derived = derive_character_sheet(parsed.sheet)
+    assert [item["item_id"] for item in derived["inventory"]["weapon_attacks"]] == [
+        "shortsword"
+    ]
+    orb = next(
+        item
+        for item in parsed.sheet["content"]["activities"]
+        if item["name"] == "Elemental Orb (2/Day)"
+    )
+    assert orb["choices"]["manual_ruling"] == {
+        "kind": "descriptive_activity",
+        "default_resolver": "agent",
+        "source_excerpt": (
+            "*Ranged Spell Attack:* TBD to hit, range 90 ft., one target. "
+            "*Hit:* 22 (5d8) damage of the type selected for this creature."
+        ),
+    }
+    assert (
+        "Elemental Orb (2/Day): descriptive action is not automatically settled"
+        in parsed.warnings
+    )
+
+
 GAZER = """### Gazer
 
 *Tiny aberration, neutral evil*
@@ -376,6 +432,50 @@ def test_flat_damage_weapon_is_executable_without_inventing_damage_dice() -> Non
     assert attack["damage_expression"] == "1"
     assert attack["damage_type"] == "piercing"
     assert attack["on_hit_effect"] == ""
+    assert parsed.warnings == ()
+
+
+def test_weapon_damage_accepts_unambiguous_ocr_spacing_inside_dice() -> None:
+    parsed = parse_2014_statblock(
+        """# Neronvain
+
+*Medium humanoid (elf), neutral evil*
+
+**Armor Class** 17
+**Hit Points** 117 (18d8 + 36)
+**Speed** 30 ft.
+
+| STR | DEX | CON | INT | WIS | CHA |
+|---|---|---|---|---|---|---|
+| 8 (-1) | 17 (+3) | 14 (+2) | 16 (+3) | 13 (+1) | 18 (+4) |
+
+**Senses** passive Perception 11
+**Languages** Common, Draconic, Elvish
+**Challenge** 9 (5,000 XP)
+
+## Actions
+
+***Eldritch Arrow.*** *Ranged Spell Attack:* +7 to hit, range 120 ft.,
+one target. *Hit:* 11 (2d 10) force damage plus 9 (2d 8) poison damage.
+""",
+        source_key="module-review:neronvain",
+    )
+
+    weapon = next(
+        item
+        for item in parsed.sheet["inventory"]["items"]
+        if item["id"] == "eldritch-arrow"
+    )
+    assert weapon["mechanics"]["damage_formula"] == "2d10"
+    assert weapon["mechanics"]["damage_type"] == "force"
+    assert weapon["mechanics"]["additional_damage"] == [
+        {
+            "damage_formula": "2d8",
+            "damage_bonus": 0,
+            "damage_type": "poison",
+        }
+    ]
+    assert weapon["mechanics"]["on_hit_effect"] == ""
     assert parsed.warnings == ()
 
 
@@ -1071,6 +1171,104 @@ def test_agent_review_can_confirm_parser_recognized_multiattack() -> None:
     )
     assert filled["resolved_warnings"] == []
     assert filled["fill"]["multiattack_options"][0]["default_resolver"] == "agent"
+
+
+def test_agent_review_can_add_a_source_cited_variant_weapon_action() -> None:
+    parsed = parse_2014_statblock(
+        BANDIT_CAPTAIN,
+        source_key="rule-review:base-statblock",
+    )
+    multiattack = next(
+        item
+        for item in parsed.sheet["content"]["activities"]
+        if item["name"] == "Multiattack"
+    )
+    web_garrote = (
+        "Melee Weapon Attack: +4 to hit, reach 5 ft., one Medium or Small "
+        "creature against which the ettercap has advantage on the attack roll. "
+        "Hit: 4 (1d4 + 2) bludgeoning damage, and the target is grappled "
+        "(escape DC 12). Until this grapple ends, the target can't breathe, "
+        "and the ettercap has advantage on attack rolls against it."
+    )
+
+    filled = apply_reviewed_statblock_fill(
+        parsed.sheet,
+        {
+            "additional_actions": [
+                {
+                    "name": "Web Garrote",
+                    "source_ref": "rule-chunk:web-garrote",
+                    "source_excerpt": web_garrote,
+                    "reason": (
+                        "The reviewed adjacent-column variant grants this exact "
+                        "weapon action to an armed ettercap."
+                    ),
+                }
+            ],
+            "multiattack_options": [
+                {
+                    "activity_id": multiattack["id"],
+                    "source_excerpt": multiattack["description"],
+                    "reason": "The Agent confirmed the printed base composition.",
+                    "options": multiattack["choices"]["multiattack_options"],
+                }
+            ],
+        },
+    )
+
+    weapon = next(
+        item
+        for item in filled["sheet"]["inventory"]["items"]
+        if item["id"] == "web-garrote"
+    )
+    assert weapon["source_key"] == "agent-fill:rule-chunk:web-garrote"
+    assert weapon["mechanics"]["attack_bonus_override"] == 4
+    assert weapon["mechanics"]["damage_formula"] == "1d4"
+    assert weapon["mechanics"]["damage_bonus_override"] == 2
+    assert weapon["mechanics"]["damage_type"] == "bludgeoning"
+    assert "target is grappled" in weapon["mechanics"]["on_hit_effect"]
+    assert weapon["mechanics"]["required_target_sizes"] == ["medium", "small"]
+    assert weapon["mechanics"]["requires_attack_advantage"] is True
+    assert filled["fill"]["additional_actions"][0]["id"] == "web-garrote"
+    assert filled["added_warnings"] == [
+        "Web Garrote: on-hit effect requires DM settlement"
+    ]
+    replayed = apply_reviewed_statblock_fill(parsed.sheet, filled["fill"])
+    assert replayed["fill"] == filled["fill"]
+
+    mismatched = deepcopy(filled["fill"])
+    mismatched["additional_actions"][0]["id"] = "agent-overridden-id"
+    with pytest.raises(StatblockImportError, match="parser-derived weapon id"):
+        apply_reviewed_statblock_fill(parsed.sheet, mismatched)
+
+
+def test_agent_reviewed_additional_action_rejects_unmanaged_or_duplicate_actions() -> None:
+    parsed = parse_2014_statblock(
+        COMMONER,
+        source_key="rule-review:base-commoner",
+    )
+    declaration = {
+        "name": "Web Garrote",
+        "source_ref": "free-text:web-garrote",
+        "source_excerpt": (
+            "Melee Weapon Attack: +4 to hit, reach 5 ft., one target. "
+            "Hit: 4 (1d4 + 2) bludgeoning damage."
+        ),
+        "reason": "The Agent reviewed the printed variant action.",
+    }
+    with pytest.raises(StatblockImportError, match="managed source"):
+        apply_reviewed_statblock_fill(
+            parsed.sheet,
+            {"additional_actions": [declaration]},
+        )
+
+    declaration["source_ref"] = "rule-chunk:web-garrote"
+    declaration["name"] = "Club"
+    with pytest.raises(StatblockImportError, match="duplicates"):
+        apply_reviewed_statblock_fill(
+            parsed.sheet,
+            {"additional_actions": [declaration]},
+        )
 
 
 def test_agent_review_can_keep_custom_multiattack_as_agent_ruling() -> None:

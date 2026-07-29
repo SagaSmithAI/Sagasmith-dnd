@@ -1,3 +1,6 @@
+import re
+from pathlib import Path
+
 import pytest
 
 from sagasmith_dnd.core_rule_pack import get_core_rule_pack
@@ -15,6 +18,7 @@ REQUIRED_BOUNDARIES = {
     "dnd5e.core.attack.help",
     "dnd5e.core.attack.hidden_reveal",
     "dnd5e.core.attack.ranged_close_combat",
+    "dnd5e.core.attack.source_targeting",
     "dnd5e.core.damage.zero_hp",
     "dnd5e.core.damage.knockout",
     "dnd5e.core.damage.stable_recovery",
@@ -69,6 +73,23 @@ def test_builtin_core_pack_wraps_every_preserved_boundary() -> None:
             item.implementation and item.test_refs and item.citation
             for item in pack.boundaries
         )
+
+
+def test_combat_engine_never_emits_an_unregistered_core_boundary() -> None:
+    source = (
+        Path(__file__).parents[1]
+        / "src"
+        / "sagasmith_dnd"
+        / "combat_engine.py"
+    ).read_text(encoding="utf-8")
+    emitted = set(re.findall(r'"(dnd5e\.core\.[a-z0-9_.]+)"', source))
+    registered = {
+        item.id
+        for edition in ("2014", "2024")
+        for item in get_core_rule_pack(edition).boundaries
+    }
+
+    assert emitted <= registered
 
 
 def test_effective_fingerprint_includes_core_pack() -> None:

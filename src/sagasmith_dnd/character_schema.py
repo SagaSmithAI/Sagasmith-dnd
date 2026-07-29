@@ -628,6 +628,8 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
                 "attack_bonus_override",
                 "damage_bonus_override",
                 "always_available",
+                "required_target_sizes",
+                "requires_attack_advantage",
             },
         )
         category = _text(mechanics.get("category"), f"{field}.category", default="other")
@@ -642,6 +644,19 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
         if attack_ability not in ATTACK_ABILITIES:
             raise ValueError(f"{field}.attack_ability is invalid")
         properties = _string_list(mechanics.get("properties"), f"{field}.properties")
+        required_target_sizes = [
+            item.casefold()
+            for item in _string_list(
+                mechanics.get("required_target_sizes"),
+                f"{field}.required_target_sizes",
+            )
+        ]
+        valid_sizes = {"tiny", "small", "medium", "large", "huge", "gargantuan"}
+        if (
+            len(required_target_sizes) != len(set(required_target_sizes))
+            or any(item not in valid_sizes for item in required_target_sizes)
+        ):
+            raise ValueError(f"{field}.required_target_sizes is invalid")
         return {
             "category": category,
             "attack_type": attack_type,
@@ -705,6 +720,11 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
             ),
             "always_available": _boolean(
                 mechanics.get("always_available"), f"{field}.always_available"
+            ),
+            "required_target_sizes": required_target_sizes,
+            "requires_attack_advantage": _boolean(
+                mechanics.get("requires_attack_advantage"),
+                f"{field}.requires_attack_advantage",
             ),
         }
     if kind == "container":
@@ -3267,6 +3287,8 @@ def _weapon_attacks(
                     "long": mechanics["thrown_long_range_ft"],
                 },
                 "ammunition_item_id": mechanics["ammunition_item_id"],
+                "required_target_sizes": list(mechanics["required_target_sizes"]),
+                "requires_attack_advantage": mechanics["requires_attack_advantage"],
             }
         )
     return attacks

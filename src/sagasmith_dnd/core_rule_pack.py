@@ -328,6 +328,16 @@ BOUNDARIES = (
         "source:monster-manual-2014:p195",
     ),
     CoreBoundary(
+        "dnd5e.core.attack.source_targeting",
+        ("2014", "2024"),
+        "combat_engine.preflight_attack",
+        (
+            "tests/test_combat_engine.py::"
+            "test_source_weapon_targeting_requires_eligible_size_and_effective_advantage",
+        ),
+        "source:reviewed-statblock-action-targeting",
+    ),
+    CoreBoundary(
         "dnd5e.core.attack.hidden_reveal",
         ("2014", "2024"),
         "combat_engine.resolve_attack_action",

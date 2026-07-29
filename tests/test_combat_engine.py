@@ -806,6 +806,62 @@ def test_ranged_attack_has_close_combat_disadvantage() -> None:
     assert safe["close_combat_threat_ids"] == []
 
 
+def test_source_weapon_targeting_requires_eligible_size_and_effective_advantage() -> None:
+    attacker = _actor("garroter")
+    attacker["derived"]["inventory"]["weapon_attacks"] = [
+        {
+            "item_id": "web-garrote",
+            "attack_type": "melee",
+            "reach_ft": 5,
+            "attack_bonus": 4,
+            "damage_expression": "1d4 + 2",
+            "damage_type": "bludgeoning",
+            "properties": [],
+            "required_target_sizes": ["small", "medium"],
+            "requires_attack_advantage": True,
+        }
+    ]
+    target = _actor("target")
+    target["sheet"]["traits"]["size"] = "medium"
+
+    with pytest.raises(CombatEngineError, match="advantage requirement"):
+        preflight_attack(attacker, target, action={"weapon_id": "web-garrote"})
+
+    plan = preflight_attack(
+        attacker,
+        target,
+        action={
+            "weapon_id": "web-garrote",
+            "context": {"advantage": True, "advantage_sources": ["attacker_unseen"]},
+        },
+        rules=resolution_context(
+            {"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []}
+        ),
+    )
+    assert plan["advantage"] is True
+    assert [receipt["mechanic_id"] for receipt in plan["rule_receipts"]] == [
+        "dnd5e.core.attack.source_targeting"
+    ]
+
+    with pytest.raises(CombatEngineError, match="advantage requirement"):
+        preflight_attack(
+            attacker,
+            target,
+            action={
+                "weapon_id": "web-garrote",
+                "context": {"advantage": True, "disadvantage": True},
+            },
+        )
+
+    target["sheet"]["traits"]["size"] = "large"
+    with pytest.raises(CombatEngineError, match="target size"):
+        preflight_attack(
+            attacker,
+            target,
+            action={"weapon_id": "web-garrote", "context": {"advantage": True}},
+        )
+
+
 def test_spell_attack_preflight_uses_source_card_and_spellcasting_override() -> None:
     attacker = _actor("caster")
     target = _actor("target")
@@ -2133,6 +2189,8 @@ def test_sneak_attack_requires_card_feature_and_records_critical_bonus_damage() 
         plan=plan,
         rng=random.Random(5),
     )
+    assert result["weapon_id"] == "dagger"
+    assert result["attack_mode"] == "melee"
     assert result["critical"] is True
     assert result["sneak_attack"]["used"] is True
     assert result["sneak_attack"]["rolled_expression"] == "2d6"

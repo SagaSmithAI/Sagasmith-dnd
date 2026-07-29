@@ -1426,6 +1426,28 @@ def preflight_attack(
         elif opcode == "disadvantage.add":
             context["disadvantage"] = True
             context.setdefault("disadvantage_sources", []).append(modifier["mechanic_id"])
+    required_target_sizes = {
+        str(item).strip().casefold()
+        for item in weapon.get("required_target_sizes", [])
+        if str(item).strip()
+    }
+    target_size = str(
+        dict(actor_sheet(target).get("traits") or {}).get("size") or ""
+    ).strip().casefold()
+    if required_target_sizes and target_size not in required_target_sizes:
+        raise CombatEngineError(
+            "weapon target size does not satisfy its recorded targeting restriction"
+        )
+    if (
+        bool(weapon.get("requires_attack_advantage", False))
+        and (
+            not bool(context.get("advantage", False))
+            or bool(context.get("disadvantage", False))
+        )
+    ):
+        raise CombatEngineError(
+            "weapon target does not satisfy its recorded advantage requirement"
+        )
     sneak_attack = _sneak_attack_plan(
         attacker,
         target,
@@ -1453,6 +1475,8 @@ def preflight_attack(
         core_boundary_ids.append("dnd5e.core.attack.sunlight_sensitivity")
     if "pack_tactics" in attack_source_traits:
         core_boundary_ids.append("dnd5e.core.attack.pack_tactics")
+    if required_target_sizes or weapon.get("requires_attack_advantage", False):
+        core_boundary_ids.append("dnd5e.core.attack.source_targeting")
     return {
         "status": "ready",
         "kind": "attack",
@@ -1774,6 +1798,8 @@ def resolve_attack_damage(
     result.update(
         attacker_id=actor_id(attacker),
         target_id=actor_id(target),
+        weapon_id=str(plan.get("weapon_id") or ""),
+        attack_mode=str(plan.get("attack_mode") or ""),
         damage=None,
     )
     expression = str(plan.get("damage_expression") or "")

@@ -277,13 +277,13 @@ def _parse_weapon(
     mode = attack.group(1).casefold()
     hit = re.search(
         r"(?i)\*?Hit:\*?\s*(\d+)"
-        r"(?:\s*\((\d+d\d+(?:\s*[+\-]\s*\d+)?)\))?\s*"
+        r"(?:\s*\((\d+\s*d\s*\d+(?:\s*[+\-]\s*\d+)?)\))?\s*"
         r"([a-z]+)\s+damage",
         description,
     )
     additional_damage: list[dict[str, Any]] = []
     if hit:
-        expression = (hit.group(2) or hit.group(1)).replace(" ", "")
+        expression = re.sub(r"\s+", "", hit.group(2) or hit.group(1))
         damage = re.fullmatch(r"(\d+d\d+)(?:([+\-]\d+))?", expression)
         if hit.group(2) and not damage:
             raise StatblockImportError(
@@ -291,11 +291,12 @@ def _parse_weapon(
             )
         last_damage_end = hit.end()
         for extra in re.finditer(
-            r"(?i)\bplus\s+\d+\s*\((\d+d\d+(?:\s*[+\-]\s*\d+)?)\)\s*"
+            r"(?i)\bplus\s+\d+\s*\((\d+\s*d\s*\d+"
+            r"(?:\s*[+\-]\s*\d+)?)\)\s*"
             r"([a-z]+)\s+damage",
             description[hit.end() :],
         ):
-            extra_expression = extra.group(1).replace(" ", "")
+            extra_expression = re.sub(r"\s+", "", extra.group(1))
             parsed_extra = re.fullmatch(r"(\d+d\d+)(?:([+\-]\d+))?", extra_expression)
             if not parsed_extra:
                 raise StatblockImportError(
@@ -370,6 +371,31 @@ def _parse_weapon(
         "reach_ft": int(reach.group(1)) if reach else 5,
         "always_available": True,
     }
+    advantage_target = re.search(
+        (
+            r"(?i)\bone\s+"
+            r"(?P<sizes>Tiny|Small|Medium|Large|Huge|Gargantuan)"
+            r"(?:\s+or\s+(?P<second_size>Tiny|Small|Medium|Large|Huge|Gargantuan))?"
+            r"\s+creature\s+against\s+which\s+"
+            r"(?:the\s+[a-z][a-z '\-]*|it|he|she|they)\s+has\s+advantage\s+"
+            r"on\s+the\s+attack\s+roll\b"
+        ),
+        description,
+    )
+    if advantage_target:
+        mechanics["required_target_sizes"] = list(
+            dict.fromkeys(
+                [
+                    advantage_target.group("sizes").casefold(),
+                    *(
+                        [advantage_target.group("second_size").casefold()]
+                        if advantage_target.group("second_size")
+                        else []
+                    ),
+                ]
+            )
+        )
+        mechanics["requires_attack_advantage"] = True
     if ranges:
         mechanics["normal_range_ft"] = int(ranges.group(1))
         mechanics["long_range_ft"] = int(ranges.group(2) or ranges.group(1))
@@ -1358,6 +1384,7 @@ def parse_2014_statblock(
     weapons: list[dict[str, Any]] = []
     multiattacks: list[tuple[str, str]] = []
     descriptive: list[tuple[str, str, str]] = []
+    descriptive_attack_markers = 0
     unresolved_multiattacks: set[str] = set()
     warnings: list[str] = []
     attack_marker_pattern = re.compile(
@@ -1396,8 +1423,16 @@ def parse_2014_statblock(
             weapons.append(weapon)
         else:
             descriptive.append((section, entry_name, description))
+            descriptive_attack_markers += len(
+                attack_marker_pattern.findall(description)
+            )
     source_attack_markers = len(attack_marker_pattern.findall(markdown))
-    if source_attack_markers != len(weapons) + structured_spell_attack_markers:
+    settled_attack_markers = (
+        len(weapons)
+        + structured_spell_attack_markers
+        + descriptive_attack_markers
+    )
+    if source_attack_markers != settled_attack_markers:
         raise StatblockImportError(
             "statblock contains unparsed weapon action markers"
         )
@@ -2227,23 +2262,28 @@ def apply_reviewed_statblock_fill(
     This is deliberately narrower than a generic character-sheet patch. The parser
     still owns ordinary source transcription, while the Agent must either turn a
     Multiattack sentence into canonical weapon/count choices or explicitly retain it
-    as an Agent-ruling boundary after reviewing the exact source excerpt. Other
-    descriptive activities remain explicit DM-ruling boundaries.
+    as an Agent-ruling boundary after reviewing the exact source excerpt. An Agent
+    may also add a source-cited weapon action that the selected statblock body omits
+    (for example, a printed variant action in an adjacent rulebook column); the
+    ordinary attack parser still owns all mechanics extraction.
     """
 
     if not isinstance(fill, dict):
         raise StatblockImportError("reviewed statblock fill must be an object")
-    unknown = set(fill) - {"multiattack_options"}
+    unknown = set(fill) - {"multiattack_options", "additional_actions"}
     if unknown:
         raise StatblockImportError(
             f"unsupported reviewed statblock fill fields: {sorted(unknown)}"
         )
     declarations = fill.get("multiattack_options", [])
+    additional_actions = fill.get("additional_actions", [])
     if not isinstance(declarations, list):
         raise StatblockImportError("reviewed multiattack_options must be a list")
-    if not declarations:
+    if not isinstance(additional_actions, list):
+        raise StatblockImportError("reviewed additional_actions must be a list")
+    if not declarations and not additional_actions:
         raise StatblockImportError(
-            "reviewed statblock fill must contain at least one multiattack declaration"
+            "reviewed statblock fill must contain at least one semantic declaration"
         )
 
     result = deepcopy(sheet)
@@ -2254,8 +2294,114 @@ def apply_reviewed_statblock_fill(
         if str(item.get("kind") or "") == "weapon"
     }
     normalized_declarations: list[dict[str, Any]] = []
+    normalized_additional_actions: list[dict[str, Any]] = []
     resolved_warnings: list[str] = []
+    added_warnings: list[str] = []
     used_activity_ids: set[str] = set()
+
+    for declaration in additional_actions:
+        if not isinstance(declaration, dict):
+            raise StatblockImportError(
+                "each reviewed additional action fill must be an object"
+            )
+        declaration_unknown = set(declaration) - {
+            "id",
+            "name",
+            "source_ref",
+            "source_excerpt",
+            "reason",
+            "default_resolver",
+            "ruling_kind",
+        }
+        if declaration_unknown:
+            raise StatblockImportError(
+                "unsupported reviewed additional action fields: "
+                f"{sorted(declaration_unknown)}"
+            )
+        if declaration.get("default_resolver", "agent") != "agent":
+            raise StatblockImportError(
+                "reviewed additional action default_resolver must be agent"
+            )
+        if (
+            declaration.get("ruling_kind", "module_specific_procedure")
+            != "module_specific_procedure"
+        ):
+            raise StatblockImportError(
+                "reviewed additional action ruling_kind must be "
+                "module_specific_procedure"
+            )
+        name = " ".join(str(declaration.get("name") or "").split())
+        source_ref = str(declaration.get("source_ref") or "").strip()
+        source_excerpt = " ".join(
+            str(declaration.get("source_excerpt") or "").split()
+        )
+        reason = " ".join(str(declaration.get("reason") or "").split())
+        if not name or len(name) > 200:
+            raise StatblockImportError(
+                "reviewed additional action name must contain 1 to 200 characters"
+            )
+        if (
+            not re.fullmatch(
+                r"(?:module-chunk|module-review|rule-chunk):[^\s:][^\s]*",
+                source_ref,
+            )
+            or len(source_ref) > 500
+        ):
+            raise StatblockImportError(
+                "reviewed additional action source_ref must identify one managed source"
+            )
+        if not source_excerpt or len(source_excerpt) > 4_000:
+            raise StatblockImportError(
+                "reviewed additional action source_excerpt must contain "
+                "1 to 4000 characters"
+            )
+        if not reason or len(reason) > 500:
+            raise StatblockImportError(
+                "reviewed additional action reason must contain 1 to 500 characters"
+            )
+        weapon = _parse_weapon(
+            name,
+            source_excerpt,
+            source_key=f"agent-fill:{source_ref}",
+        )
+        if weapon is None:
+            raise StatblockImportError(
+                "reviewed additional action source_excerpt must contain one "
+                "parseable weapon attack"
+            )
+        parser_warning = str(weapon.pop("_parser_warning", "") or "")
+        if parser_warning:
+            added_warnings.append(parser_warning)
+        weapon_id = str(weapon.get("id") or "")
+        declared_id = str(declaration.get("id") or "").strip()
+        if declared_id and declared_id != weapon_id:
+            raise StatblockImportError(
+                "reviewed additional action id must match the parser-derived weapon id"
+            )
+        if weapon_id in weapons:
+            raise StatblockImportError(
+                "reviewed additional action duplicates a parsed weapon id"
+            )
+        result["inventory"]["items"].append(weapon)
+        weapons[weapon_id] = weapon
+        on_hit_effect = str(
+            dict(weapon.get("mechanics") or {}).get("on_hit_effect") or ""
+        ).strip()
+        if on_hit_effect and structured_critical_followup(on_hit_effect) is None:
+            added_warnings.append(
+                f"{weapon['name']}: on-hit effect requires DM settlement"
+            )
+        normalized_additional_actions.append(
+            {
+                "id": weapon_id,
+                "name": name,
+                "source_ref": source_ref,
+                "source_excerpt": source_excerpt,
+                "reason": reason,
+                "default_resolver": "agent",
+                "ruling_kind": "module_specific_procedure",
+            }
+        )
 
     for declaration in declarations:
         if not isinstance(declaration, dict):
@@ -2449,17 +2595,23 @@ def apply_reviewed_statblock_fill(
             }
         )
 
+    normalized_fill: dict[str, Any] = {
+        "multiattack_options": normalized_declarations,
+    }
+    if normalized_additional_actions:
+        normalized_fill["additional_actions"] = normalized_additional_actions
+    added_warnings.extend(
+        f"{activity['name']}: Multiattack composition requires a DM ruling"
+        for declaration in normalized_declarations
+        if declaration.get("resolution", "structured") == "agent_ruling"
+        for activity in activities
+        if str(activity.get("id") or "") == declaration["activity_id"]
+    )
     return {
         "sheet": validate_character_sheet(result),
-        "fill": {"multiattack_options": normalized_declarations},
+        "fill": normalized_fill,
         "resolved_warnings": resolved_warnings,
-        "added_warnings": [
-            f"{activity['name']}: Multiattack composition requires a DM ruling"
-            for declaration in normalized_declarations
-            if declaration.get("resolution", "structured") == "agent_ruling"
-            for activity in activities
-            if str(activity.get("id") or "") == declaration["activity_id"]
-        ],
+        "added_warnings": list(dict.fromkeys(added_warnings)),
     }
 
 
