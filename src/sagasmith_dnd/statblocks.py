@@ -649,7 +649,11 @@ def _parse_spellcasting(
             re.sub(r"(?:\s*[-*]\s*)+$", "", item.strip()).lstrip("-* ")
             for item in description[header.end() : end].split(",")
         ]
-        names = [item for item in names if item]
+        names = [
+            re.sub(r"(?i)\bo\s+f\b", "of", item)
+            for item in names
+            if item
+        ]
         if innate:
             at_will = header.group(1).casefold() == "at will"
             uses_per_day = (

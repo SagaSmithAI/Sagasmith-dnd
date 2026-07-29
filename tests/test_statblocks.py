@@ -1579,6 +1579,44 @@ Cantrips (at will): chill touch, mage hand
     assert parsed.warnings == ()
 
 
+def test_spellcasting_repairs_split_of_glyph_in_spell_name() -> None:
+    parsed = parse_2014_statblock(
+        """### Ritual Wizard
+
+*Medium humanoid, neutral evil*
+
+**Armor Class** 12
+**Hit Points** 40 (9d8)
+**Speed** 30 ft.
+
+| STR | DEX | CON | INT | WIS | CHA |
+|:---:|:---:|:---:|:---:|:---:|:---:|
+| 9 (-1) | 14 (+2) | 11 (+0) | 17 (+3) | 12 (+1) | 11 (+0) |
+
+**Senses** passive Perception 11
+**Languages** Common
+**Challenge** 6 (2,300 XP)
+
+***Spellcasting***. The wizard is an 11th-level spellcaster. Its
+spellcasting ability is Intelligence (spell save DC 15, +7 to hit with
+spell attacks). It has the following wizard spells prepared:
+
+6th level (1 slot): globe o f invulnerability
+
+###### Actions
+
+***Quarterstaff***. *Melee Weapon Attack:* +3 to hit, reach 5 ft.,
+one target. *Hit:* 3 (1d6) bludgeoning damage.
+""",
+        source_key="module-chunk:split-spell-name",
+    )
+
+    assert parsed.spellcasting is not None
+    assert [item["name"] for item in parsed.spellcasting["spells"]] == [
+        "globe of invulnerability"
+    ]
+
+
 def test_innate_spellcasting_preserves_at_will_and_per_day_resources() -> None:
     parsed = parse_2014_statblock(
         """# Yuan-ti Malison
