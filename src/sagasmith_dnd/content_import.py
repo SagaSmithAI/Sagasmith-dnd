@@ -16,6 +16,12 @@ from sagasmith_dnd.resolution_plan import (
     compile_resolution_plan,
     resolution_plan_template,
 )
+from sagasmith_dnd.rule_contract import (
+    RuleContractError,
+    compile_rule_clauses,
+    rule_clause_templates,
+    validate_rule_clause_coverage,
+)
 from sagasmith_dnd.spell_resolution import (
     SPELL_RESOLUTION_MECHANIC_ID,
     normalize_spell_resolution,
@@ -802,9 +808,28 @@ def compiled_artifacts_from_candidates(
             value["mechanic_refs"] = mechanic_refs
             card["mechanic_refs"] = mechanic_refs
         raw_plan = value.get("resolution_plan", card.get("resolution_plan"))
-        if raw_plan is not None:
+        raw_plans = value.get("resolution_plans", card.get("resolution_plans"))
+        if raw_plan is not None and raw_plans is not None:
+            raise ValueError(
+                f"candidate {candidate.get('id')} cannot combine resolution_plan "
+                "and resolution_plans"
+            )
+        if raw_plans is not None and (
+            not isinstance(raw_plans, list) or not raw_plans
+        ):
+            raise ValueError(
+                f"candidate {candidate.get('id')} resolution_plans must be "
+                "a non-empty list"
+            )
+        plan_values = (
+            [raw_plan]
+            if raw_plan is not None
+            else list(raw_plans or [])
+        )
+        compiled_plans = []
+        for plan_value in plan_values:
             try:
-                compiled_plan = compile_resolution_plan(raw_plan)
+                compiled_plan = compile_resolution_plan(plan_value)
             except ResolutionPlanCompilationError as error:
                 raise ValueError(
                     f"candidate {candidate.get('id')} resolution_plan: {error}"
@@ -818,21 +843,59 @@ def compiled_artifacts_from_candidates(
                 compiled_plan.citations,
                 candidate=candidate,
             )
-            stored_plan = resolution_plan_template(compiled_plan)
-            value["resolution_plan"] = stored_plan
+            compiled_plans.append(compiled_plan)
+        plan_ids = [plan.id for plan in compiled_plans]
+        if len(plan_ids) != len(set(plan_ids)):
+            raise ValueError(
+                f"candidate {candidate.get('id')} resolution plan ids must be unique"
+            )
+        if compiled_plans:
+            stored_plans = [
+                resolution_plan_template(plan) for plan in compiled_plans
+            ]
+            if raw_plan is not None:
+                value["resolution_plan"] = stored_plans[0]
+            else:
+                value["resolution_plans"] = stored_plans
             card.pop("resolution_plan", None)
+            card.pop("resolution_plans", None)
             mechanic_refs = list(
                 dict.fromkeys(
                     [
                         *list(value.get("mechanic_refs") or []),
                         *list(card.get("mechanic_refs") or []),
-                        compiled_plan.id,
+                        *plan_ids,
                     ]
                 )
             )
             value["mechanic_refs"] = mechanic_refs
             card["mechanic_refs"] = mechanic_refs
+            value["embedded_mechanic_refs"] = list(
+                dict.fromkeys(
+                    [
+                        *list(value.get("embedded_mechanic_refs") or []),
+                        *plan_ids,
+                    ]
+                )
+            )
             value["execution_state"] = "plan_ready"
+        raw_clauses = value.get("rule_clauses", card.get("rule_clauses"))
+        compiled_clauses = ()
+        if raw_clauses is not None:
+            try:
+                compiled_clauses = compile_rule_clauses(raw_clauses)
+            except RuleContractError as error:
+                raise ValueError(
+                    f"candidate {candidate.get('id')} rule_clauses: {error}"
+                ) from error
+            for clause in compiled_clauses:
+                _require_candidate_clause_evidence(
+                    clause.source_citations,
+                    candidate=candidate,
+                    clause_id=clause.id,
+                )
+            value["rule_clauses"] = rule_clause_templates(compiled_clauses)
+            card.pop("rule_clauses", None)
         mechanical_scope = str(
             value.get("mechanical_scope")
             or candidate.get("mechanical_scope")
@@ -842,15 +905,35 @@ def compiled_artifacts_from_candidates(
             raise ValueError(
                 f"candidate {candidate.get('id')} mechanical_scope is invalid"
             )
-        if (
+        artifact_for_coverage = {
+            **value,
+            "id": artifact_id,
+            "kind": kind,
+            "card": card,
+        }
+        if compiled_clauses:
+            coverage_errors = validate_rule_clause_coverage(
+                compiled_clauses,
+                artifact=artifact_for_coverage,
+                plan_ids=set(plan_ids),
+                mechanic_refs=set(value.get("mechanic_refs") or []) - set(plan_ids),
+                require_mechanical_clause=mechanical_scope == "mechanical",
+            )
+            if coverage_errors:
+                raise ValueError(
+                    f"candidate {candidate.get('id')} rule clause coverage: "
+                    + "; ".join(coverage_errors)
+                )
+            value["execution_state"] = "clause_ready"
+        elif (
             state == "selection_ready"
             and mechanical_scope == "mechanical"
-            and raw_plan is None
+            and not compiled_plans
             and not (kind == "spell" and card.get("resolution") is not None)
         ):
             raise ValueError(
                 f"candidate {candidate.get('id')} mechanical content needs a "
-                "resolution_plan before it becomes selection_ready"
+                "rule_clauses or resolution_plan before it becomes selection_ready"
             )
         artifacts.append(
             {
@@ -876,9 +959,27 @@ def validate_selection_ready_artifacts(artifacts: list[dict[str, Any]]) -> list[
         card = dict(artifact.get("card") or {})
         prefix = f"artifacts[{index}]"
         raw_plan = artifact.get("resolution_plan", card.get("resolution_plan"))
-        if raw_plan is not None:
+        raw_plans = artifact.get("resolution_plans", card.get("resolution_plans"))
+        if raw_plan is not None and raw_plans is not None:
+            errors.append(
+                f"{prefix} cannot combine resolution_plan and resolution_plans"
+            )
+            plan_values: list[Any] = []
+        elif raw_plans is not None and (
+            not isinstance(raw_plans, list) or not raw_plans
+        ):
+            errors.append(f"{prefix}.resolution_plans must be a non-empty list")
+            plan_values = []
+        else:
+            plan_values = (
+                [raw_plan]
+                if raw_plan is not None
+                else list(raw_plans or [])
+            )
+        compiled_plans = []
+        for plan_value in plan_values:
             try:
-                compiled_plan = compile_resolution_plan(raw_plan)
+                compiled_plan = compile_resolution_plan(plan_value)
             except ResolutionPlanCompilationError as error:
                 errors.append(f"{prefix}.resolution_plan: {error}")
             else:
@@ -886,19 +987,42 @@ def validate_selection_ready_artifacts(artifacts: list[dict[str, Any]]) -> list[
                     errors.append(
                         f"{prefix}.resolution_plan source_card_id must match artifact id"
                     )
+                compiled_plans.append(compiled_plan)
+        if len({plan.id for plan in compiled_plans}) != len(compiled_plans):
+            errors.append(f"{prefix}.resolution plan ids must be unique")
         mechanical_scope = str(
             artifact.get("mechanical_scope")
             or ("mechanical" if kind in {"spell", "statblock"} else "review_required")
         )
         if mechanical_scope not in {"descriptive", "mechanical", "review_required"}:
             errors.append(f"{prefix}.mechanical_scope is invalid")
+        raw_clauses = artifact.get("rule_clauses", card.get("rule_clauses"))
+        compiled_clauses = ()
+        if raw_clauses is not None:
+            try:
+                compiled_clauses = compile_rule_clauses(raw_clauses)
+            except RuleContractError as error:
+                errors.append(f"{prefix}.rule_clauses: {error}")
+            else:
+                errors.extend(
+                    f"{prefix}: {error}"
+                    for error in validate_rule_clause_coverage(
+                        compiled_clauses,
+                        artifact=artifact,
+                        plan_ids={plan.id for plan in compiled_plans},
+                        mechanic_refs=set(artifact.get("mechanic_refs") or [])
+                        - {plan.id for plan in compiled_plans},
+                        require_mechanical_clause=mechanical_scope == "mechanical",
+                    )
+                )
         if (
             mechanical_scope == "mechanical"
-            and raw_plan is None
+            and not compiled_plans
+            and not compiled_clauses
             and not (kind == "spell" and card.get("resolution") is not None)
         ):
             errors.append(
-                f"{prefix} mechanical content needs a resolution_plan"
+                f"{prefix} mechanical content needs rule_clauses or a resolution_plan"
             )
         if kind == "spell":
             if not isinstance(card.get("classes"), list) or not card["classes"]:
@@ -963,6 +1087,34 @@ def _require_candidate_plan_evidence(
             raise ValueError(
                 f"candidate {candidate.get('id')} resolution_plan citation must "
                 "reference one of its reviewed source chunks"
+            )
+
+
+def _require_candidate_clause_evidence(
+    citations: tuple[dict[str, Any], ...],
+    *,
+    candidate: dict[str, Any],
+    clause_id: str,
+) -> None:
+    """Keep every clause, including prose-only clauses, source-addressable."""
+
+    allowed_chunks = {
+        str(item)
+        for item in candidate.get("source_chunk_ids") or []
+        if str(item)
+    }
+    if not allowed_chunks:
+        raise ValueError(
+            f"candidate {candidate.get('id')} needs source chunks before "
+            "rule clause compilation"
+        )
+    for citation in citations:
+        source_ref = dict(citation.get("source_ref") or {})
+        chunk_id = str(source_ref.get("chunk_id") or "")
+        if chunk_id not in allowed_chunks:
+            raise ValueError(
+                f"candidate {candidate.get('id')} rule clause {clause_id} "
+                "citation must reference one of its reviewed source chunks"
             )
 
 

@@ -1309,6 +1309,106 @@ def test_custom_mechanical_artifact_persists_a_source_bound_plan_template() -> N
     assert artifacts[0]["mechanic_refs"] == [
         "dnd5e.extension.plan.prismatic-pulse"
     ]
+    assert artifacts[0]["embedded_mechanic_refs"] == [
+        "dnd5e.extension.plan.prismatic-pulse"
+    ]
+
+
+def test_static_grant_rule_clause_makes_non_plan_content_selection_ready() -> None:
+    candidate = {
+        "id": "candidate:sage",
+        "kind": "background",
+        "name": "Sage",
+        "source_chunk_ids": ["chunk:sage"],
+        "review_status": "accepted",
+        "mechanical_scope": "mechanical",
+        "application_state": "selection_ready",
+        "artifact": {
+            "id": "dnd5e.extension.background.sage",
+            "kind": "background",
+            "application_state": "selection_ready",
+            "mechanical_scope": "mechanical",
+            "card": {
+                "name": "Sage",
+                "background_grants": {"skills": ["arcana", "history"]},
+            },
+            "rule_clauses": [
+                {
+                    "schema_version": 1,
+                    "id": "skill-proficiencies",
+                    "title": "Skill Proficiencies",
+                    "scope": "mechanical",
+                    "source_citations": [
+                        {
+                            "source": "rule-source:extension",
+                            "source_ref": {"chunk_id": "chunk:sage"},
+                            "source_excerpt": (
+                                "Skill Proficiencies: Arcana and History."
+                            ),
+                        }
+                    ],
+                    "settlement": {
+                        "mode": "static_grant",
+                        "grant_refs": ["card.background_grants.skills"],
+                    },
+                }
+            ],
+        },
+    }
+
+    artifacts = compiled_artifacts_from_candidates(
+        [candidate],
+        pack_id="dnd5e.extension",
+    )
+
+    assert artifacts[0]["execution_state"] == "clause_ready"
+    assert validate_selection_ready_artifacts(artifacts) == []
+
+
+def test_rule_clause_cannot_claim_a_plan_that_the_artifact_does_not_store() -> None:
+    candidate = {
+        "id": "candidate:missing-plan",
+        "kind": "feature",
+        "name": "Missing Plan",
+        "source_chunk_ids": ["chunk:feature"],
+        "review_status": "accepted",
+        "mechanical_scope": "mechanical",
+        "application_state": "selection_ready",
+        "artifact": {
+            "id": "dnd5e.extension.feature.missing-plan",
+            "kind": "feature",
+            "application_state": "selection_ready",
+            "mechanical_scope": "mechanical",
+            "card": {"name": "Missing Plan"},
+            "rule_clauses": [
+                {
+                    "schema_version": 1,
+                    "id": "effect",
+                    "title": "Missing Effect",
+                    "scope": "mechanical",
+                    "source_citations": [
+                        {
+                            "source": "rule-source:extension",
+                            "source_ref": {"chunk_id": "chunk:feature"},
+                            "source_excerpt": (
+                                "The feature produces a source-defined effect."
+                            ),
+                        }
+                    ],
+                    "settlement": {
+                        "mode": "primitive_plan",
+                        "plan_ids": ["dnd5e.extension.plan.missing"],
+                    },
+                }
+            ],
+        },
+    }
+
+    with pytest.raises(ValueError, match="references unavailable plans"):
+        compiled_artifacts_from_candidates(
+            [candidate],
+            pack_id="dnd5e.extension",
+        )
 
 
 def test_custom_mechanical_artifact_cannot_escape_its_reviewed_source_chunks() -> None:

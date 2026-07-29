@@ -14,7 +14,8 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-SEMANTIC_PLAN_VERSION = 1
+SEMANTIC_PLAN_VERSION = 2
+SUPPORTED_SEMANTIC_PLAN_VERSIONS = frozenset({1, 2})
 
 SOURCE_CARD_KINDS = frozenset(
     {
@@ -39,6 +40,87 @@ PLAN_TRIGGERS = frozenset(
         "turn.start",
     }
 )
+TRIGGER_EVENT_FIELDS: dict[str, frozenset[str]] = {
+    "action": frozenset(
+        {
+            "action_kind",
+            "action_ref",
+            "actor_id",
+            "branch_id",
+            "campaign_id",
+            "round",
+            "turn",
+        }
+    ),
+    "attack.after_hit": frozenset(
+        {
+            "application_id",
+            "attack_ref",
+            "branch_id",
+            "campaign_id",
+            "critical",
+            "hit",
+            "round",
+            "source_actor_id",
+            "target_actor_id",
+            "turn",
+            "weapon_id",
+        }
+    ),
+    "damage.after": frozenset(
+        {
+            "application_id",
+            "branch_id",
+            "campaign_id",
+            "damage_type",
+            "source_actor_id",
+            "source_ref",
+            "target_actor_id",
+        }
+    ),
+    "rest.after": frozenset(
+        {
+            "actor_id",
+            "branch_id",
+            "campaign_id",
+            "rest_kind",
+        }
+    ),
+    "rest.before": frozenset(
+        {
+            "actor_id",
+            "branch_id",
+            "campaign_id",
+            "rest_kind",
+        }
+    ),
+    "scene": frozenset(
+        {
+            "branch_id",
+            "campaign_id",
+            "scene_id",
+            "scope_id",
+        }
+    ),
+    "turn.end": frozenset(
+        {
+            "actor_id",
+            "branch_id",
+            "campaign_id",
+            "round",
+            "turn",
+        }
+    ),
+    "turn.start": frozenset(
+        {
+            "actor_id",
+            "branch_id",
+            "campaign_id",
+            "round",
+            "turn",
+        }
+    ),
+}
 PLAN_OPS = frozenset(
     {
         "actor.control",
@@ -333,6 +415,7 @@ class CompiledResolutionPlan:
     source_card_id: str
     source_card_kind: str
     trigger: str
+    trigger_filter: dict[str, Any]
     slots: dict[str, dict[str, Any]]
     steps: tuple[dict[str, Any], ...]
     citations: tuple[dict[str, Any], ...]
@@ -343,6 +426,7 @@ class CompiledResolutionPlan:
 class BoundResolutionPlan:
     compiled: CompiledResolutionPlan
     bindings: dict[str, Any]
+    trigger_filter: dict[str, Any]
     steps: tuple[dict[str, Any], ...]
     agent_ruling: dict[str, Any] | None
     fingerprint: str
@@ -387,6 +471,7 @@ def compile_resolution_plan(value: dict[str, Any]) -> CompiledResolutionPlan:
         "source_card_id",
         "source_card_kind",
         "trigger",
+        "trigger_filter",
         "slots",
         "steps",
         "citations",
@@ -402,9 +487,14 @@ def compile_resolution_plan(value: dict[str, Any]) -> CompiledResolutionPlan:
     source_card_id = str(value.get("source_card_id") or "").strip()
     source_card_kind = str(value.get("source_card_kind") or "").strip()
     trigger = str(value.get("trigger") or "").strip()
-    if schema_version != SEMANTIC_PLAN_VERSION:
+    if schema_version not in SUPPORTED_SEMANTIC_PLAN_VERSIONS:
         raise ResolutionPlanCompilationError(
-            f"resolution plan schema_version must be {SEMANTIC_PLAN_VERSION}"
+            "resolution plan schema_version must be one of "
+            f"{sorted(SUPPORTED_SEMANTIC_PLAN_VERSIONS)}"
+        )
+    if schema_version == 1 and "trigger_filter" in value:
+        raise ResolutionPlanCompilationError(
+            "resolution plan trigger_filter requires schema_version 2"
         )
     for field, candidate in (
         ("id", plan_id),
@@ -448,6 +538,12 @@ def compile_resolution_plan(value: dict[str, Any]) -> CompiledResolutionPlan:
         )
         steps.append(step)
         step_ids.add(step["id"])
+    trigger_filter = _validate_trigger_filter_template(
+        value.get("trigger_filter", {}),
+        trigger=trigger,
+        slots=slots,
+        used_slots=used_slots,
+    )
     unused_slots = set(slots) - used_slots
     if unused_slots:
         raise ResolutionPlanCompilationError(
@@ -465,6 +561,8 @@ def compile_resolution_plan(value: dict[str, Any]) -> CompiledResolutionPlan:
         "steps": steps,
         "citations": list(citations),
     }
+    if schema_version >= 2:
+        canonical["trigger_filter"] = trigger_filter
     fingerprint = _fingerprint(canonical)
     supplied_fingerprint = str(value.get("fingerprint") or "")
     if supplied_fingerprint and supplied_fingerprint != fingerprint:
@@ -477,6 +575,7 @@ def compile_resolution_plan(value: dict[str, Any]) -> CompiledResolutionPlan:
         source_card_id=source_card_id,
         source_card_kind=source_card_kind,
         trigger=trigger,
+        trigger_filter=deepcopy(trigger_filter),
         slots=deepcopy(slots),
         steps=tuple(deepcopy(steps)),
         citations=citations,
@@ -507,6 +606,15 @@ def bind_resolution_plan(
         name: _normalize_slot_value(name, definition, bindings[name])
         for name, definition in compiled.slots.items()
     }
+    bound_trigger_filter = _bind_value(
+        compiled.trigger_filter,
+        normalized_bindings,
+    )
+    _reject_unbound_slots(bound_trigger_filter)
+    _validate_trigger_filter_values(
+        bound_trigger_filter,
+        trigger=compiled.trigger,
+    )
     bound_steps = tuple(
         _bind_value(step, normalized_bindings) for step in compiled.steps
     )
@@ -522,11 +630,13 @@ def bind_resolution_plan(
     canonical = {
         "plan_fingerprint": compiled.fingerprint,
         "bindings": normalized_bindings,
+        "trigger_filter": bound_trigger_filter,
         "agent_ruling": normalized_ruling,
     }
     return BoundResolutionPlan(
         compiled=compiled,
         bindings=deepcopy(normalized_bindings),
+        trigger_filter=deepcopy(bound_trigger_filter),
         steps=deepcopy(bound_steps),
         agent_ruling=deepcopy(normalized_ruling),
         fingerprint=_fingerprint(canonical),
@@ -586,12 +696,13 @@ def execute_resolution_plan(
             f"resolution plan {plan.compiled.id} failed atomically: {error}"
         ) from error
     receipt = {
-        "schema_version": SEMANTIC_PLAN_VERSION,
+        "schema_version": plan.compiled.schema_version,
         "plan_id": plan.compiled.id,
         "plan_fingerprint": plan.fingerprint,
         "source_card_id": plan.compiled.source_card_id,
         "source_card_kind": plan.compiled.source_card_kind,
         "trigger": plan.compiled.trigger,
+        "trigger_filter": deepcopy(plan.trigger_filter),
         "citations": [deepcopy(item) for item in plan.compiled.citations],
         "agent_ruling": deepcopy(plan.agent_ruling),
         "steps": executed,
@@ -609,7 +720,7 @@ def execute_resolution_plan(
 def resolution_plan_contract(plan: CompiledResolutionPlan) -> dict[str, Any]:
     """Return the bounded Agent/external-input contract without executable internals."""
 
-    return {
+    contract = {
         "schema_version": plan.schema_version,
         "plan_id": plan.id,
         "plan_fingerprint": plan.fingerprint,
@@ -619,12 +730,15 @@ def resolution_plan_contract(plan: CompiledResolutionPlan) -> dict[str, Any]:
         "slots": deepcopy(plan.slots),
         "citations": [deepcopy(item) for item in plan.citations],
     }
+    if plan.schema_version >= 2:
+        contract["trigger_filter"] = deepcopy(plan.trigger_filter)
+    return contract
 
 
 def resolution_plan_template(plan: CompiledResolutionPlan) -> dict[str, Any]:
     """Serialize the canonical rule-card template for durable content storage."""
 
-    return {
+    template = {
         "schema_version": plan.schema_version,
         "id": plan.id,
         "source_card_id": plan.source_card_id,
@@ -635,6 +749,106 @@ def resolution_plan_template(plan: CompiledResolutionPlan) -> dict[str, Any]:
         "citations": [deepcopy(item) for item in plan.citations],
         "fingerprint": plan.fingerprint,
     }
+    if plan.schema_version >= 2:
+        template["trigger_filter"] = deepcopy(plan.trigger_filter)
+    return template
+
+
+def resolution_plan_trigger_matches(
+    plan: BoundResolutionPlan,
+    event: dict[str, Any],
+) -> bool:
+    """Match a bound v2 plan against one canonical engine event."""
+
+    if not isinstance(plan, BoundResolutionPlan) or not isinstance(event, dict):
+        return False
+    event_trigger = str(event.get("trigger") or event.get("event") or "")
+    if event_trigger != plan.compiled.trigger:
+        return False
+    return all(
+        field in event and event[field] == expected
+        for field, expected in plan.trigger_filter.items()
+    )
+
+
+def require_resolution_plan_trigger(
+    plan: BoundResolutionPlan,
+    event: dict[str, Any],
+) -> None:
+    """Reject execution when the paid engine event does not satisfy the card."""
+
+    if not resolution_plan_trigger_matches(plan, event):
+        raise ResolutionPlanExecutionError(
+            "resolution plan trigger does not match the paid engine event"
+        )
+
+
+def _validate_trigger_filter_template(
+    value: Any,
+    *,
+    trigger: str,
+    slots: dict[str, dict[str, Any]],
+    used_slots: set[str],
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ResolutionPlanCompilationError(
+            "resolution plan trigger_filter must be an object"
+        )
+    allowed_fields = TRIGGER_EVENT_FIELDS[trigger]
+    unknown = set(value) - allowed_fields
+    if unknown:
+        raise ResolutionPlanCompilationError(
+            "resolution plan trigger_filter has unsupported event fields: "
+            f"{sorted(unknown)}"
+        )
+    normalized: dict[str, Any] = {}
+    for field, expected in value.items():
+        if isinstance(expected, dict) and set(expected) == {"$slot"}:
+            slot_name = str(expected["$slot"] or "")
+            if slot_name not in slots:
+                raise ResolutionPlanCompilationError(
+                    f"resolution plan references unknown slot {slot_name}"
+                )
+            used_slots.add(slot_name)
+            normalized[field] = {"$slot": slot_name}
+            continue
+        if not _is_trigger_filter_literal(expected):
+            raise ResolutionPlanCompilationError(
+                "resolution plan trigger_filter values must be bounded literals "
+                "or declared slots"
+            )
+        normalized[field] = deepcopy(expected)
+    return normalized
+
+
+def _validate_trigger_filter_values(
+    value: dict[str, Any],
+    *,
+    trigger: str,
+) -> None:
+    unknown = set(value) - TRIGGER_EVENT_FIELDS[trigger]
+    if unknown or any(
+        not _is_trigger_filter_literal(expected) for expected in value.values()
+    ):
+        raise ResolutionPlanBindingError(
+            "bound resolution plan trigger_filter is invalid"
+        )
+
+
+def _is_trigger_filter_literal(value: Any) -> bool:
+    if value is None or isinstance(value, (bool, int)):
+        return True
+    if isinstance(value, str):
+        return 0 < len(value) <= 500
+    if isinstance(value, list):
+        return (
+            len(value) <= 100
+            and all(
+                item is None or isinstance(item, (bool, int, str))
+                for item in value
+            )
+        )
+    return False
 
 
 def _validate_slot_definition(name: str, value: Any) -> dict[str, Any]:
@@ -1357,9 +1571,13 @@ __all__ = [
     "SEMANTIC_PLAN_VERSION",
     "SLOT_KINDS",
     "SOURCE_CARD_KINDS",
+    "SUPPORTED_SEMANTIC_PLAN_VERSIONS",
+    "TRIGGER_EVENT_FIELDS",
     "bind_resolution_plan",
     "compile_resolution_plan",
     "execute_resolution_plan",
+    "require_resolution_plan_trigger",
     "resolution_plan_contract",
     "resolution_plan_template",
+    "resolution_plan_trigger_matches",
 ]

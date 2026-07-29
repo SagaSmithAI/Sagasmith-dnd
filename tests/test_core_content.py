@@ -43,7 +43,10 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     manifest, artifacts = build_srd2014_content(workspace / "SagaSmith-dnd-skills")
     counts = Counter(item["kind"] for item in artifacts)
 
-    assert manifest["version"] == PACK_VERSION == "1.12.0"
+    assert manifest["version"] == PACK_VERSION == "1.13.0"
+    assert "dnd5e.core.spell.structured_resolution" in manifest[
+        "native_mechanic_refs"
+    ]
     assert counts["spell"] == 319
     assert counts["species"] == 13
     assert counts["class"] == 12

@@ -11,8 +11,10 @@ from sagasmith_dnd.resolution_plan import (
     bind_resolution_plan,
     compile_resolution_plan,
     execute_resolution_plan,
+    require_resolution_plan_trigger,
     resolution_plan_contract,
     resolution_plan_template,
+    resolution_plan_trigger_matches,
 )
 
 
@@ -248,6 +250,83 @@ def test_plan_rolls_back_every_step_on_primitive_failure() -> None:
 
     assert runtime.events[-1] == "rollback"
     assert "commit" not in runtime.events
+
+
+def test_v2_trigger_filter_binds_a_plan_to_the_paid_attack_event() -> None:
+    plan = _plan()
+    plan["schema_version"] = 2
+    plan["trigger"] = "attack.after_hit"
+    plan["slots"]["target_actor"] = {
+        "kind": "actor_id",
+        "owner": "external_input",
+        "description": "The target recorded by the paid attack event.",
+    }
+    plan["slots"]["weapon_ref"] = {
+        "kind": "text",
+        "owner": "external_input",
+        "description": "The weapon identifier recorded by the paid attack event.",
+    }
+    del plan["slots"]["targets"]
+    for step in plan["steps"]:
+        if "target_ids" in step["args"]:
+            step["args"]["target_ids"] = [{"$slot": "target_actor"}]
+    plan["trigger_filter"] = {
+        "source_actor_id": {"$slot": "source_actor"},
+        "target_actor_id": {"$slot": "target_actor"},
+        "weapon_id": {"$slot": "weapon_ref"},
+        "hit": True,
+    }
+
+    compiled = compile_resolution_plan(plan)
+    bound = bind_resolution_plan(
+        compiled,
+        {
+            "source_actor": "prism-beast",
+            "target_actor": "hero-1",
+            "weapon_ref": "binding-blade",
+            "save_dc": 14,
+            "damage": "3d8",
+        },
+    )
+    event = {
+        "trigger": "attack.after_hit",
+        "source_actor_id": "prism-beast",
+        "target_actor_id": "hero-1",
+        "weapon_id": "binding-blade",
+        "hit": True,
+        "critical": False,
+    }
+
+    assert resolution_plan_contract(compiled)["trigger_filter"]["hit"] is True
+    assert bound.trigger_filter["target_actor_id"] == "hero-1"
+    assert resolution_plan_trigger_matches(bound, event) is True
+    require_resolution_plan_trigger(bound, event)
+    assert resolution_plan_trigger_matches(
+        bound,
+        {**event, "target_actor_id": "hero-2"},
+    ) is False
+    with pytest.raises(ResolutionPlanExecutionError, match="paid engine event"):
+        require_resolution_plan_trigger(
+            bound,
+            {**event, "weapon_id": "lookalike-blade"},
+        )
+    assert compile_resolution_plan(resolution_plan_template(compiled)) == compiled
+
+
+def test_trigger_filter_is_v2_only_and_rejects_unknown_event_fields() -> None:
+    legacy = _plan()
+    legacy["trigger_filter"] = {"actor_id": "prism-beast"}
+    with pytest.raises(ResolutionPlanCompilationError, match="schema_version 2"):
+        compile_resolution_plan(legacy)
+
+    plan = _plan()
+    plan["schema_version"] = 2
+    plan["trigger_filter"] = {"weapon_id": "not-an-action-field"}
+    with pytest.raises(
+        ResolutionPlanCompilationError,
+        match="unsupported event fields",
+    ):
+        compile_resolution_plan(plan)
 
 
 def test_duration_and_random_exclusions_are_source_bounded() -> None:

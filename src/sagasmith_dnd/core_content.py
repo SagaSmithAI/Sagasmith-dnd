@@ -16,7 +16,7 @@ from sagasmith_dnd.spell_resolution import (
 )
 
 PACK_ID = "dnd5e.content.srd2014"
-PACK_VERSION = "1.12.0"
+PACK_VERSION = "1.13.0"
 
 _SUBCLASS_LEVELS = {
     "barbarian": 3,
@@ -62,6 +62,15 @@ def _cached_srd2014_content(skill_root: str) -> tuple[dict[str, Any], list[dict[
     artifacts.extend(_sections(root / "05_Feats", "feat", _h2_sections))
     artifacts.extend(_equipment_items(root / "04_Equipment"))
     artifacts.extend(_simple_files(root / "09_Magic_Items" / "Magic_Items_Each", "item"))
+    artifacts = _deduplicate(artifacts)
+    native_mechanic_refs = sorted(
+        {
+            str(mechanic_ref)
+            for artifact in artifacts
+            for mechanic_ref in artifact.get("mechanic_refs", [])
+            if str(mechanic_ref)
+        }
+    )
     return (
         {
             "id": PACK_ID,
@@ -71,6 +80,7 @@ def _cached_srd2014_content(skill_root: str) -> tuple[dict[str, Any], list[dict[
             "system_id": "dnd5e",
             "editions": ["2014"],
             "capabilities": [],
+            "native_mechanic_refs": native_mechanic_refs,
             "content_kinds": [
                 "class",
                 "subclass",
@@ -82,7 +92,7 @@ def _cached_srd2014_content(skill_root: str) -> tuple[dict[str, Any], list[dict[
                 "item",
             ],
         },
-        _deduplicate(artifacts),
+        artifacts,
     )
 
 
