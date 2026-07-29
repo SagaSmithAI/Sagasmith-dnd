@@ -3503,6 +3503,8 @@ def resolve_common_action(
             "actor_id": actor_id_value,
             "target_id": target_id,
             "payload": deepcopy(payload or {}),
+            "round": int(value.get("round", 1) or 1),
+            "turn_index": int(value.get("turn_index", 0) or 0),
         },
     ][-100:]
     return value
@@ -4402,6 +4404,151 @@ def resolve_actor_check(
             rng=rng,
         )
     )
+
+
+def resolve_save_damage_to_sheets(
+    target_actors: list[dict[str, Any]],
+    *,
+    save_ability: str,
+    save_dc: int,
+    damage_expression: str,
+    damage_type: str,
+    half_on_success: bool,
+    source: str,
+    advantage: bool = False,
+    disadvantage: bool = False,
+    death_saves: bool = True,
+    death_saves_by_actor_id: dict[str, bool] | None = None,
+    ruleset: str | None = None,
+    rules: ResolutionContext | None = None,
+    rng: Any = None,
+) -> dict[str, Any]:
+    """Roll shared damage once, then settle every target save and sheet."""
+
+    ability = _long_ability_name(save_ability)
+    expression = "".join(str(damage_expression or "").split()).casefold()
+    normalized_damage_type = str(damage_type or "").strip().casefold()
+    if (
+        ability not in {
+            "strength",
+            "dexterity",
+            "constitution",
+            "intelligence",
+            "wisdom",
+            "charisma",
+        }
+        or isinstance(save_dc, bool)
+        or not isinstance(save_dc, int)
+        or not 1 <= save_dc <= 40
+        or re.fullmatch(r"[1-9]\d*d[1-9]\d*(?:[+-]\d+)?", expression) is None
+        or not normalized_damage_type
+        or not isinstance(half_on_success, bool)
+        or not isinstance(advantage, bool)
+        or not isinstance(disadvantage, bool)
+        or (advantage and disadvantage)
+        or not str(source or "").strip()
+        or not target_actors
+    ):
+        raise CombatEngineError(
+            "save damage requires an ability, DC, dice expression, damage type, "
+            "success reduction, and source"
+        )
+    target_ids = [actor_id(target) for target in target_actors]
+    if len(target_ids) != len(set(target_ids)):
+        raise CombatEngineError("save-damage targets must be unique")
+    damage_roll = asdict(roll(expression, rng=rng))
+    sheets: dict[str, dict[str, Any]] = {}
+    results: list[dict[str, Any]] = []
+    for target_actor in target_actors:
+        target_id = actor_id(target_actor)
+        target_sheet = actor_sheet(target_actor)
+        normalized_ruleset = _normalize_ruleset(
+            ruleset or target_sheet.get("edition")
+        )
+        saved = resolve_actor_check(
+            target_actor,
+            kind="save",
+            ability=ability,
+            dc=save_dc,
+            advantage=advantage,
+            disadvantage=disadvantage,
+            ruleset=normalized_ruleset,
+            rules=rules,
+            rng=rng,
+        )
+        reduction = (
+            "half"
+            if saved["success"] and half_on_success
+            else "none"
+            if saved["success"]
+            else "full"
+        )
+        damage_amount = damage_amount_after_reduction(
+            int(damage_roll["total"]),
+            reduction,
+        )
+        damaged_result: dict[str, Any] | None = None
+        updated_sheet = target_sheet
+        if damage_amount:
+            damaged = apply_damage_to_sheet(
+                target_sheet,
+                amount=damage_amount,
+                damage_type=normalized_damage_type,
+                source=str(source),
+                ruleset=normalized_ruleset,
+                death_saves=(
+                    bool(death_saves_by_actor_id[target_id])
+                    if death_saves_by_actor_id
+                    and target_id in death_saves_by_actor_id
+                    else death_saves
+                ),
+            )
+            updated_sheet = damaged["sheet"]
+            damaged_result = {
+                key: value for key, value in damaged.items() if key != "sheet"
+            }
+        sheets[target_id] = updated_sheet
+        results.append(
+            {
+                "target_id": target_id,
+                "save": saved,
+                "success": bool(saved["success"]),
+                "damage_reduction": reduction,
+                "damage_amount": damage_amount,
+                "damage": damaged_result,
+            }
+        )
+    return {
+        "sheets": sheets,
+        "result": {
+            "kind": "save_damage",
+            "damage_roll": damage_roll,
+            "targets": results,
+        },
+    }
+
+
+def resolve_save_damage_to_sheet(
+    target_actor: dict[str, Any],
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Resolve the single-target form of the generic save-damage contract."""
+
+    target_id = actor_id(target_actor)
+    settled = resolve_save_damage_to_sheets([target_actor], **kwargs)
+    target_result = dict(settled["result"]["targets"][0])
+    return {
+        "sheet": settled["sheets"][target_id],
+        "result": {
+            "kind": "save_damage",
+            "damage_roll": deepcopy(settled["result"]["damage_roll"]),
+            **{
+                key: value
+                for key, value in target_result.items()
+                if key != "target_id"
+            },
+        },
+    }
 
 
 def resolve_actor_contest(

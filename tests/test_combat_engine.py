@@ -47,6 +47,8 @@ from sagasmith_dnd.combat_engine import (
     resolve_preserve_life_to_sheets,
     resolve_random_save_effects,
     resolve_readied_spell_window,
+    resolve_save_damage_to_sheet,
+    resolve_save_damage_to_sheets,
     resolve_second_wind_to_sheet,
     resolve_source_contest_effect,
     resolve_source_save_effect,
@@ -73,6 +75,79 @@ def test_damage_reduction_uses_one_round_down_contract() -> None:
     assert damage_amount_after_reduction(7, "none") == 0
     with pytest.raises(CombatEngineError, match="full, half, or none"):
         damage_amount_after_reduction(7, "quarter")
+
+
+def test_generic_save_damage_rolls_and_applies_half_damage_atomically() -> None:
+    target = _actor("target", hp=20)
+    target["sheet"]["abilities"]["dexterity"]["score"] = 20
+    target["derived"] = derive_character_sheet(target["sheet"])
+
+    settled = resolve_save_damage_to_sheet(
+        target,
+        save_ability="dexterity",
+        save_dc=10,
+        damage_expression="3d6",
+        damage_type="fire",
+        half_on_success=True,
+        source="agent-ruling:test-save-damage",
+        rng=_SequenceRng(1, 2, 4, 10),
+    )
+
+    assert settled["result"]["save"]["success"] is True
+    assert settled["result"]["damage_roll"]["total"] == 7
+    assert settled["result"]["damage_reduction"] == "half"
+    assert settled["result"]["damage_amount"] == 3
+    assert settled["sheet"]["combat"]["hp"]["value"] == 17
+
+
+def test_generic_save_damage_shares_one_roll_across_targets() -> None:
+    agile = _actor("agile", hp=20)
+    clumsy = _actor("clumsy", hp=20)
+    agile["sheet"]["abilities"]["dexterity"]["score"] = 20
+    clumsy["sheet"]["abilities"]["dexterity"]["score"] = 1
+    agile["derived"] = derive_character_sheet(agile["sheet"])
+    clumsy["derived"] = derive_character_sheet(clumsy["sheet"])
+
+    settled = resolve_save_damage_to_sheets(
+        [agile, clumsy],
+        save_ability="dexterity",
+        save_dc=10,
+        damage_expression="2d6",
+        damage_type="fire",
+        half_on_success=True,
+        source="agent-ruling:test-shared-save-damage",
+        rng=_SequenceRng(3, 4, 20, 1),
+    )
+
+    assert settled["result"]["damage_roll"]["total"] == 7
+    assert [item["success"] for item in settled["result"]["targets"]] == [
+        True,
+        False,
+    ]
+    assert [item["damage_amount"] for item in settled["result"]["targets"]] == [
+        3,
+        7,
+    ]
+    assert settled["sheets"]["agile"]["combat"]["hp"]["value"] == 17
+    assert settled["sheets"]["clumsy"]["combat"]["hp"]["value"] == 13
+
+
+def test_generic_save_damage_rejects_conflicting_roll_states() -> None:
+    with pytest.raises(
+        CombatEngineError,
+        match="save damage requires",
+    ):
+        resolve_save_damage_to_sheet(
+            _actor("target", hp=20),
+            save_ability="dexterity",
+            save_dc=10,
+            damage_expression="2d6",
+            damage_type="fire",
+            half_on_success=True,
+            source="agent-ruling:test-invalid-save-damage",
+            advantage=True,
+            disadvantage=True,
+        )
 
 
 class _SequenceRng:
@@ -3824,6 +3899,8 @@ def test_common_use_object_action_preserves_the_reviewed_source_payload() -> Non
         "actor_id": "hero",
         "target_id": "troll",
         "payload": payload,
+        "round": 1,
+        "turn_index": 0,
     }
 
 
