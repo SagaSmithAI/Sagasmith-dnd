@@ -268,7 +268,10 @@ def _entry_blocks(markdown: str) -> list[tuple[str, str, str]]:
         prior = [heading for heading in headings if heading.start() < marker.start()]
         if prior:
             section = prior[-1].group(1).strip().casefold()
-        description = re.sub(r"\s+", " ", markdown[marker.end() : end]).strip()
+        description = markdown[marker.end() : end].replace("\r\n", "\n").replace("\r", "\n")
+        description = re.sub(r"[^\S\n]+", " ", description)
+        description = re.sub(r"\n[ \t]*\n+", "\n\n", description)
+        description = re.sub(r"(?<!\n)\n(?!\n)", " ", description).strip()
         result.append((section, marker.group(1).strip(), description))
     return result
 
@@ -362,7 +365,15 @@ def _parse_weapon(
                 }
             )
             last_damage_end = hit.end() + extra.end()
-        on_hit_effect = description[last_damage_end:].strip().lstrip(". ,;").strip()
+        raw_on_hit_effect = description[last_damage_end:]
+        trailing_paragraph_match = re.search(r"\n\s*\n", raw_on_hit_effect)
+        trailing_paragraph_prose = ""
+        if trailing_paragraph_match:
+            trailing_paragraph_prose = raw_on_hit_effect[
+                trailing_paragraph_match.end() :
+            ].strip()
+            raw_on_hit_effect = raw_on_hit_effect[: trailing_paragraph_match.start()]
+        on_hit_effect = raw_on_hit_effect.strip().lstrip(". ,;").strip()
         damage_formula = damage.group(1) if damage else expression
         damage_type = hit.group(3).casefold()
         damage_bonus = int(damage.group(2) or 0) if damage else 0
@@ -377,6 +388,7 @@ def _parse_weapon(
         damage_bonus = 0
         on_hit_effect = effect_hit.group(1).strip()
         versatile_damage_formula = ""
+        trailing_paragraph_prose = ""
     trailing_prose = ""
     trailing_warning = ""
     normalized_actor_name = actor_name.strip()
@@ -399,7 +411,22 @@ def _parse_weapon(
         if normalized_actor_name
         else None
     )
-    if re.fullmatch(r"(?i)(?:page\s+)?\d{1,4}", unformatted_on_hit_effect):
+    paragraph_break = re.search(r"\n\s*\n", on_hit_effect)
+    if trailing_paragraph_prose:
+        trailing_prose = trailing_paragraph_prose
+        trailing_warning = (
+            f"{name}: trailing page furniture excluded from action settlement"
+            if re.fullmatch(
+                r"(?i)(?:page\s+)?\d{1,4}",
+                re.sub(r"^[\s*_`~]+", "", trailing_paragraph_prose),
+            )
+            else f"{name}: trailing creature prose excluded from action settlement"
+        )
+    elif paragraph_break:
+        trailing_prose = on_hit_effect[paragraph_break.end() :].strip()
+        on_hit_effect = on_hit_effect[: paragraph_break.start()].strip()
+        trailing_warning = f"{name}: trailing creature prose excluded from action settlement"
+    elif re.fullmatch(r"(?i)(?:page\s+)?\d{1,4}", unformatted_on_hit_effect):
         trailing_prose = on_hit_effect
         on_hit_effect = ""
         trailing_warning = f"{name}: trailing page furniture excluded from action settlement"

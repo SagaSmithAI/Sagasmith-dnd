@@ -425,6 +425,28 @@ artisans, and hermits.
     )
 
 
+def test_lore_paragraph_not_starting_with_actor_name_is_not_an_on_hit_effect() -> None:
+    parsed = parse_2014_statblock(
+        COMMONER.replace("### Commoner", "### Spy").replace(
+            "*Medium humanoid (any race), any alignment*",
+            "*Medium humanoid (any race), any alignment*",
+        )
+        + """
+
+Rulers, nobles, merchants, and other wealthy individuals use **spies** to
+gain the upper hand. A spy is trained to secretly gather information.
+""",
+        source_key="srd-spy-with-lore",
+    )
+    club = derive_character_sheet(parsed.sheet)["inventory"]["weapon_attacks"][0]
+
+    assert club["on_hit_effect"] == ""
+    assert parsed.warnings == ()
+    assert parsed.normalization_notes == (
+        "Club: trailing creature prose excluded from action settlement",
+    )
+
+
 def test_multiword_actor_lore_using_head_noun_is_not_an_on_hit_effect() -> None:
     parsed = parse_2014_statblock(
         """### Cult Fanatic
