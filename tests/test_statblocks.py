@@ -2170,6 +2170,36 @@ one target. *Hit:* 3 (1d6) bludgeoning damage.
     ]
 
 
+def test_spellcasting_preserves_source_qualifier_without_changing_spell_identity() -> None:
+    parsed = parse_2014_statblock(
+        COMMONER.replace(
+            "###### Actions",
+            """***Spellcasting.*** The commoner is a 3rd-level spellcaster. Its
+spellcasting ability is Wisdom (spell save DC 11, +3 to hit with spell
+attacks). The commoner has the following cleric spells prepared:
+
+Cantrips (at will): guidance
+
+1st level (4 slots): bless
+
+2nd level (2 slots): spiritual weapon (spear)
+
+###### Actions""",
+        ),
+        source_key="monster-manual:orc-eye-of-gruumsh",
+    )
+
+    assert parsed.spellcasting is not None
+    spiritual_weapon = parsed.spellcasting["spells"][-1]
+    assert spiritual_weapon == {
+        "name": "spiritual weapon",
+        "source_name": "spiritual weapon (spear)",
+        "source_qualifier": "spear",
+        "level": 2,
+        "at_will": False,
+    }
+
+
 def test_innate_spellcasting_preserves_at_will_and_per_day_resources() -> None:
     parsed = parse_2014_statblock(
         """# Yuan-ti Malison

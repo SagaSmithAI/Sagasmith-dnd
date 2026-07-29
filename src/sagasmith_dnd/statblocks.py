@@ -758,10 +758,28 @@ def _parse_spellcasting(
             level = int(header.group(2) or 0)
             if level:
                 slots[str(level)] = int(header.group(3))
-            spells.extend(
-                {"name": name, "level": level, "at_will": level == 0}
-                for name in names
-            )
+            for source_name in names:
+                qualifier_match = re.search(
+                    r"\s+\((?P<qualifier>[^()]*)\)\s*$",
+                    source_name,
+                )
+                spells.append(
+                    {
+                        "name": (
+                            source_name[: qualifier_match.start()].strip()
+                            if qualifier_match
+                            else source_name
+                        ),
+                        "source_name": source_name,
+                        "source_qualifier": (
+                            qualifier_match.group("qualifier").strip()
+                            if qualifier_match
+                            else ""
+                        ),
+                        "level": level,
+                        "at_will": level == 0,
+                    }
+                )
     return {
         "ability": (
             ability_match.group("ability_after") or ability_match.group("ability_before")
