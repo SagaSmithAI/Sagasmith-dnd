@@ -235,7 +235,15 @@ def _parse_senses(value: str, sheet: dict[str, Any], ability_scores: dict[str, i
         )
 
 
+def _base_statblock_markdown(markdown: str) -> str:
+    """Exclude explicitly labeled variants from the immutable base creature card."""
+
+    variant = re.search(r"(?im)^>\s*\*\*Variant:", markdown)
+    return markdown[: variant.start()] if variant else markdown
+
+
 def _entry_blocks(markdown: str) -> list[tuple[str, str, str]]:
+    markdown = _base_statblock_markdown(markdown)
     markers = list(
         re.finditer(
             r"(?<!\*)\*\*\*(.+?)(?:\.\*\*\*|\*\*\*\.)\s*",
@@ -332,19 +340,27 @@ def _parse_weapon(
         "",
         on_hit_effect,
     )
+    actor_lore_candidate = re.sub(r"[*_`~]", " ", on_hit_effect)
+    actor_lore_match = (
+        re.search(
+            (
+                rf"(?i)(?:^\s*|(?<=[.!?])\s+)"
+                rf"(?:(?:a|an|the)\s+)?"
+                rf"(?:{re.escape(normalized_actor_name)}"
+                rf"|{re.escape(normalized_actor_name.split()[-1])})s?\b"
+            ),
+            actor_lore_candidate,
+        )
+        if normalized_actor_name
+        else None
+    )
     if re.fullmatch(r"(?i)(?:page\s+)?\d{1,4}", unformatted_on_hit_effect):
         trailing_prose = on_hit_effect
         on_hit_effect = ""
         trailing_warning = f"{name}: trailing page furniture excluded from action settlement"
-    elif normalized_actor_name and re.match(
-        (
-            rf"(?i)^(?:{re.escape(normalized_actor_name)}"
-            rf"|{re.escape(normalized_actor_name.split()[-1])})s?\b"
-        ),
-        unformatted_on_hit_effect,
-    ):
-        trailing_prose = on_hit_effect
-        on_hit_effect = ""
+    elif actor_lore_match:
+        trailing_prose = on_hit_effect[actor_lore_match.start() :].strip()
+        on_hit_effect = on_hit_effect[: actor_lore_match.start()].strip()
         trailing_warning = f"{name}: trailing creature prose excluded from action settlement"
     reach = re.search(r"(?i)reach\s+(\d+)\s*ft", description)
     # Some text-only OCR pipelines confuse the slash in a weapon's two-part
@@ -1265,6 +1281,19 @@ def parse_2014_statblock(
     if not actor_name:
         raise StatblockImportError("statblock is missing a creature heading")
     identity = re.search(r"(?m)^\*([^*\n]+)\*\s*$", markdown)
+    if not identity and heading:
+        preamble_end = re.search(r"(?im)^\*\*Armor Class\*\*", markdown)
+        preamble = markdown[
+            heading.end() : preamble_end.start() if preamble_end else len(markdown)
+        ]
+        identity = re.search(
+            (
+                r"(?im)^\s*"
+                r"((?:Tiny|Small|Medium|Large|Huge|Gargantuan)\s+[^,\n]+"
+                r"(?:,\s*[^\n]+)?)\s*$"
+            ),
+            preamble,
+        )
     if not identity:
         raise StatblockImportError("statblock is missing size, type, and alignment")
     identity_text = identity.group(1).strip()
@@ -1440,7 +1469,9 @@ def parse_2014_statblock(
             descriptive_attack_markers += len(
                 attack_marker_pattern.findall(description)
             )
-    source_attack_markers = len(attack_marker_pattern.findall(markdown))
+    source_attack_markers = len(
+        attack_marker_pattern.findall(_base_statblock_markdown(markdown))
+    )
     settled_attack_markers = (
         len(weapons)
         + structured_spell_attack_markers

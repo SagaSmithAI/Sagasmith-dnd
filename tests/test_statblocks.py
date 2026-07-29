@@ -455,6 +455,113 @@ def test_multiword_actor_lore_using_head_noun_is_not_an_on_hit_effect() -> None:
     )
 
 
+def test_article_and_emphasis_before_actor_lore_are_not_an_on_hit_effect() -> None:
+    parsed = parse_2014_statblock(
+        """### Worg
+
+*Large monstrosity, neutral evil*
+
+**Armor Class** 13
+**Hit Points** 26 (4d10 + 4)
+**Speed** 50 ft.
+
+| STR | DEX | CON | INT | WIS | CHA |
+|---:|---:|---:|---:|---:|---:|
+| 16 (+3) | 13 (+1) | 13 (+1) | 7 (-2) | 11 (+0) | 8 (-1) |
+
+**Senses** darkvision 60 ft., passive Perception 14
+**Languages** Goblin, Worg
+**Challenge** 1/2 (100 XP)
+
+## Actions
+
+***Bite.*** *Melee Weapon Attack:* +5 to hit, reach 5 ft., one target.
+*Hit:* 10 (2d6 + 3) piercing damage. If the target is a creature, it must
+succeed on a DC 13 Strength saving throw or be knocked prone.
+
+A **worg** is an evil predator that delights in hunting weaker creatures.
+""",
+        source_key="srd-worg-with-lore",
+    )
+    bite = derive_character_sheet(parsed.sheet)["inventory"]["weapon_attacks"][0]
+
+    assert bite["on_hit_effect"] == (
+        "If the target is a creature, it must succeed on a DC 13 Strength "
+        "saving throw or be knocked prone."
+    )
+    assert parsed.warnings == (
+        "Bite: trailing creature prose excluded from action settlement",
+        "Bite: on-hit effect requires DM settlement",
+    )
+
+
+def test_quoted_variant_actions_do_not_mutate_the_base_statblock() -> None:
+    parsed = parse_2014_statblock(
+        """### Giant Rat
+
+*Small beast, unaligned*
+
+**Armor Class** 12
+**Hit Points** 7 (2d6)
+**Speed** 30 ft.
+
+| STR | DEX | CON | INT | WIS | CHA |
+|---:|---:|---:|---:|---:|---:|
+| 7 (-2) | 15 (+2) | 11 (+0) | 2 (-4) | 10 (+0) | 4 (-3) |
+
+**Senses** darkvision 60 ft., passive Perception 10
+**Languages** -
+**Challenge** 1/8 (25 XP)
+
+## Actions
+
+***Bite.*** *Melee Weapon Attack:* +4 to hit, reach 5 ft., one target.
+*Hit:* 4 (1d4 + 2) piercing damage.
+
+>**Variant: Diseased Giant Rats**
+>
+>***Bite.*** *Melee Weapon Attack:* +4 to hit, reach 5 ft., one target.
+>*Hit:* 4 (1d4 + 2) piercing damage. The target contracts a disease.
+""",
+        source_key="srd-giant-rat-with-variant",
+    )
+    attacks = derive_character_sheet(parsed.sheet)["inventory"]["weapon_attacks"]
+
+    assert [attack["item_id"] for attack in attacks] == ["bite"]
+    assert attacks[0]["on_hit_effect"] == ""
+
+
+def test_plain_size_type_alignment_line_is_accepted() -> None:
+    parsed = parse_2014_statblock(
+        """# Young Red Dragon
+
+Large dragon, chaotic evil
+
+**Armor Class** 18 (natural armor)
+**Hit Points** 178 (17d10 + 85)
+**Speed** 40 ft., climb 40 ft., fly 80 ft.
+
+| STR | DEX | CON | INT | WIS | CHA |
+|---:|---:|---:|---:|---:|---:|
+| 23 (+6) | 10 (+0) | 21 (+5) | 14 (+2) | 11 (+0) | 19 (+4) |
+
+**Senses** blindsight 30 ft., darkvision 120 ft., passive Perception 18
+**Languages** Common, Draconic
+**Challenge** 10 (5,900 XP)
+
+## Actions
+
+***Bite.*** *Melee Weapon Attack:* +10 to hit, reach 10 ft., one target.
+*Hit:* 17 (2d10 + 6) piercing damage plus 3 (1d6) fire damage.
+""",
+        source_key="srd-young-red-dragon-plain-identity",
+    )
+
+    assert parsed.sheet["traits"]["size"] == "large"
+    assert parsed.sheet["progression"]["species"] == "dragon"
+    assert parsed.sheet["traits"]["alignment"] == "chaotic evil"
+
+
 def test_flat_damage_weapon_is_executable_without_inventing_damage_dice() -> None:
     parsed = parse_2014_statblock(
         COMMONER.replace("*Hit:* 2 (1d4) bludgeoning damage.", "*Hit:* 1 piercing damage."),
