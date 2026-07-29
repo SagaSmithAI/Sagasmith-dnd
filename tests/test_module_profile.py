@@ -290,6 +290,41 @@ def test_scene_atlas_recovers_inline_ocr_room_one_and_split_title() -> None:
     ]
 
 
+def test_scene_atlas_recovers_ocr_room_one_heading_without_period() -> None:
+    content = (
+        "# Episode 7\n## The Maze\n"
+        "The maze has seven encounter nodes.\n"
+        "##### L T h e Su n d i a l\n"
+        "After walking into the maze, the characters arrive at an intersection.\n"
+        "##### 2. C h u u l P o o l\n"
+        "Four chuuls dwell in the pool.\n"
+    )
+    scene = next(
+        item
+        for item in MarkdownModuleParser(profile=DndModuleProfile()).parse(content)[0].scenes
+        if item.title == "The Maze"
+    )
+
+    assert scene.metadata["spatial"]["locations"] == [
+        {
+            "key": "1-t-h-e-su-n-d-i-a-l",
+            "title": "1. T h e Su n d i a l",
+            "kind": "room",
+            "line": 4,
+            "dimensions_ft": None,
+            "confidence": "explicit_heading",
+        },
+        {
+            "key": "2-c-h-u-u-l-p-o-o-l",
+            "title": "2. C h u u l P o o l",
+            "kind": "room",
+            "line": 6,
+            "dimensions_ft": None,
+            "confidence": "explicit_heading",
+        },
+    ]
+
+
 def test_scene_atlas_orders_mixed_heading_evidence_by_scene_offset() -> None:
     content = (
         "# Episode 2\n"

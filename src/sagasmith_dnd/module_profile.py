@@ -168,6 +168,18 @@ _OCR_INLINE_ROOM_ONE = re.compile(
     r"(?=\s+[A-Z][a-z]{2,}\b)",
     re.MULTILINE,
 )
+_OCR_HEADING_ROOM_ONE = re.compile(
+    r"^[1IlL]\s+(?P<title>(?:[A-Za-z]{1,3}\s+){3,}[A-Za-z]{1,3})$"
+)
+
+
+def _canonical_ocr_room_one_heading(title: str) -> str:
+    """Repair a display-font room-one glyph without guessing ordinary prose."""
+
+    matched = _OCR_HEADING_ROOM_ONE.fullmatch(title.strip())
+    if matched is None:
+        return title.strip()
+    return f"1. {matched.group('title').strip()}"
 
 
 def _is_reference_chapter(title: str) -> bool:
@@ -217,6 +229,7 @@ def _location_heading_kind(title: str, body: str = "") -> str | None:
         return None
     physical_location = bool(
         _ROOM.match(text)
+        or _OCR_HEADING_ROOM_ONE.fullmatch(text)
         or (
             1 <= len(text.split()) <= 10
             and _contains_location_title_signal(folded)
@@ -625,7 +638,8 @@ def _spatial_manifest(
         location_kind = str(item.get("type") or "")
         if location_kind not in {"room", "scene"}:
             continue
-        label = str(item["title"])
+        source_label = str(item["title"])
+        label = _canonical_ocr_room_one_heading(source_label)
         label_tokens = set(re.findall(r"[a-z0-9]+", label.casefold()))
         if label_tokens == scene_title_tokens:
             continue
@@ -644,7 +658,7 @@ def _spatial_manifest(
             else f"{base_key[: max(1, 71 - len(str(occurrence)))]}-{occurrence}"
         )
         heading_match = re.search(
-            rf"^(?:#{{1,6}}\s+)?{re.escape(label)}\s*$",
+            rf"^(?:#{{1,6}}\s+)?{re.escape(source_label)}\s*$",
             text[subsection_search_offset:],
             re.MULTILINE,
         )
