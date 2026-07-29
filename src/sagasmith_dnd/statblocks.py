@@ -26,7 +26,7 @@ class StatblockImportError(ValueError):
     """Raised when required statblock facts cannot be recovered from the source text."""
 
 
-OCR_STATBLOCK_RECOVERY_VERSION = 3
+OCR_STATBLOCK_RECOVERY_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -2758,8 +2758,20 @@ def _ocr_peer_heading(
         following is not None
         and text == text.upper()
         and 3 <= len(text) <= 80
+        and _ocr_heading_has_identity(block, following)
+    )
+
+
+def _ocr_heading_has_identity(
+    heading: dict[str, Any],
+    following: dict[str, Any] | None,
+) -> bool:
+    """Recognize a statblock heading and identity line with normal OCR box overlap."""
+
+    return bool(
+        following is not None
         and _OCR_IDENTITY_RE.fullmatch(following["text"])
-        and 0 <= following["y0"] - block["y1"] <= 50
+        and -20 <= following["y0"] - heading["y1"] <= 80
     )
 
 
@@ -2813,11 +2825,7 @@ def recover_2014_statblock_from_ocr(
             if candidate_index + 1 < len(candidate_ordered)
             else None
         )
-        if (
-            following is not None
-            and -20 <= following["y0"] - candidate["y1"] <= 80
-            and _OCR_IDENTITY_RE.fullmatch(following["text"])
-        ):
+        if _ocr_heading_has_identity(candidate, following):
             structural_headings.append(candidate)
     if len(headings) == 1:
         heading = headings[0]

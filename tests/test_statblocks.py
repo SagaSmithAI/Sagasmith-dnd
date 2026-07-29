@@ -2222,6 +2222,27 @@ def test_layout_ocr_recovers_one_statblock_without_image_reasoning() -> None:
                 770,
             ),
             block("a successful save.", 80, 770, 260, 795),
+            # Real Monster Manual OCR can overlap the next statblock heading and
+            # identity boxes by a few pixels. The peer still bounds this block.
+            block("BLUE DRAGON WYRMLING", 80, 840, 390, 875),
+            block("Medium dragon, lawful evil", 80, 870, 300, 895),
+            *[
+                block(label, 90 + index * 75, 910, 135 + index * 75, 935)
+                for index, label in enumerate(("STR", "DEX", "CON", "INT", "WIS", "CHA"))
+            ],
+            *[
+                block(value, 85 + index * 75, 935, 145 + index * 75, 960)
+                for index, value in enumerate(
+                    (
+                        "15 (+2)",
+                        "10 (+0)",
+                        "13 (+1)",
+                        "10 (+0)",
+                        "11 (+0)",
+                        "13 (+1)",
+                    )
+                )
+            ],
             block("ADULT BLUE DRAGON", 590, 840, 900, 875),
             block("BLUE DRAGON WYRMLING", 590, 900, 900, 935),
             block("Medium dragon, lawful evil", 590, 935, 810, 960),
@@ -2240,7 +2261,7 @@ def test_layout_ocr_recovers_one_statblock_without_image_reasoning() -> None:
     assert recovered["evidence"]["text_only"] is True
     assert recovered["evidence"]["matching_heading_count"] == 2
     assert recovered["evidence"]["structural_heading_count"] == 1
-    assert recovered["evidence"]["excluded_page_furniture_count"] == 1
+    assert recovered["evidence"]["excluded_page_furniture_count"] == 0
     assert recovered["critical_facts"] == {
         "identity": "Huge dragon, lawful evil",
         "armor_class": "19 (natural armor)",
