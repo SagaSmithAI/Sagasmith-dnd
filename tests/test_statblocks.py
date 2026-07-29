@@ -9,6 +9,8 @@ from sagasmith_dnd.activity_identity import (
 from sagasmith_dnd.character_schema import derive_character_sheet, validate_character_sheet
 from sagasmith_dnd.statblocks import (
     StatblockImportError,
+    _structure_gazer_eye_rays,
+    _structure_intellect_devourer_actions,
     apply_reviewed_statblock_fill,
     apply_statblock_variant,
     effective_statblock_rating,
@@ -641,9 +643,12 @@ def test_gazer_eye_rays_are_structured_from_the_exact_source_action() -> None:
         source_key="module-review:waterdeep-gazer",
         rule_refs=["waterdeep-page-204"],
     )
-    activities = parsed.sheet["content"]["activities"]
+    reviewed_sheet = deepcopy(parsed.sheet)
+    reviewed_warnings = list(parsed.warnings)
+    _structure_gazer_eye_rays(reviewed_sheet, reviewed_warnings)
+    activities = reviewed_sheet["content"]["activities"]
     eye_rays = next(item for item in activities if item["name"] == "Eye Rays")
-    spec = gazer_eye_ray_spec(parsed.sheet, eye_rays["id"])
+    spec = gazer_eye_ray_spec(reviewed_sheet, eye_rays["id"])
 
     assert spec is not None
     assert spec["draw_count"] == 2
@@ -680,7 +685,30 @@ def test_gazer_eye_rays_are_structured_from_the_exact_source_action() -> None:
         "Frost Ray",
         "Telekinetic Ray",
     } & {item["name"] for item in activities}
-    assert parsed.warnings == ()
+    assert reviewed_warnings == []
+
+
+def test_custom_same_named_gazer_requires_agent_semantic_review() -> None:
+    parsed = parse_2014_statblock(
+        GAZER,
+        source_key="custom:gazer-like-creation",
+        rule_refs=["waterdeep-page-204"],
+    )
+    activities = parsed.sheet["content"]["activities"]
+    eye_rays = next(item for item in activities if item["name"] == "Eye Rays")
+
+    assert gazer_eye_ray_spec(parsed.sheet, eye_rays["id"]) is None
+    assert {
+        "Dazing Ray",
+        "Fear Ray",
+        "Frost Ray",
+        "Telekinetic Ray",
+    }.issubset({item["name"] for item in activities})
+    assert eye_rays["choices"]["manual_ruling"]["default_resolver"] == "agent"
+    assert any(
+        warning.startswith("Eye Rays: descriptive action")
+        for warning in parsed.warnings
+    )
 
 
 def test_intellect_devourer_actions_are_structured_from_exact_source() -> None:
@@ -689,19 +717,22 @@ def test_intellect_devourer_actions_are_structured_from_exact_source() -> None:
         source_key="reviewed-intellect-devourer",
         rule_refs=["monster-manual-page-191"],
     )
-    derived = derive_character_sheet(parsed.sheet)
+    reviewed_sheet = deepcopy(parsed.sheet)
+    reviewed_warnings = list(parsed.warnings)
+    _structure_intellect_devourer_actions(reviewed_sheet, reviewed_warnings)
+    derived = derive_character_sheet(reviewed_sheet)
     devour = next(
         item
-        for item in parsed.sheet["content"]["activities"]
+        for item in reviewed_sheet["content"]["activities"]
         if item["name"] == "Devour Intellect"
     )
     body_thief = next(
         item
-        for item in parsed.sheet["content"]["activities"]
+        for item in reviewed_sheet["content"]["activities"]
         if item["name"] == "Body Thief"
     )
 
-    assert source_save_effect_spec(parsed.sheet, devour["id"]) == {
+    assert source_save_effect_spec(reviewed_sheet, devour["id"]) == {
         "kind": "intellect_devourer_devour_intellect_2014",
         "range_ft": 10,
         "target_count": 1,
@@ -729,7 +760,7 @@ def test_intellect_devourer_actions_are_structured_from_exact_source() -> None:
             ],
         }
     ]
-    assert source_contest_effect_spec(parsed.sheet, body_thief["id"]) == {
+    assert source_contest_effect_spec(reviewed_sheet, body_thief["id"]) == {
         "kind": "intellect_devourer_body_thief_2014",
         "range_ft": 5,
         "target_count": 1,
@@ -757,9 +788,32 @@ def test_intellect_devourer_actions_are_structured_from_exact_source() -> None:
         },
         "source_excerpt": " ".join(body_thief["description"].split()),
     }
-    assert parsed.warnings == (
+    assert tuple(reviewed_warnings) == (
         "Body Thief: protection, wish, and voluntary exit require DM settlement",
     )
+
+
+def test_custom_same_named_intellect_actions_do_not_gain_core_privileges() -> None:
+    parsed = parse_2014_statblock(
+        INTELLECT_DEVOURER,
+        source_key="custom:intellect-like-creation",
+        rule_refs=["monster-manual-page-191"],
+    )
+    devour = next(
+        item
+        for item in parsed.sheet["content"]["activities"]
+        if item["name"] == "Devour Intellect"
+    )
+    body_thief = next(
+        item
+        for item in parsed.sheet["content"]["activities"]
+        if item["name"] == "Body Thief"
+    )
+
+    assert source_save_effect_spec(parsed.sheet, devour["id"]) is None
+    assert source_contest_effect_spec(parsed.sheet, body_thief["id"]) is None
+    assert devour["choices"]["manual_ruling"]["default_resolver"] == "agent"
+    assert body_thief["choices"]["manual_ruling"]["default_resolver"] == "agent"
 
 
 def test_mixed_weapon_and_special_action_multiattack_stays_a_dm_boundary() -> None:

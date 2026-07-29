@@ -16,7 +16,6 @@ from sagasmith_dnd.activity_identity import (
     is_multiattack_source_name,
 )
 from sagasmith_dnd.character_schema import default_character_sheet, validate_character_sheet
-from sagasmith_dnd.combat_engine import structured_critical_followup
 from sagasmith_dnd.engine import ability_modifier
 from sagasmith_dnd.resolution_plan import (
     ResolutionPlanCompilationError,
@@ -863,7 +862,7 @@ def gazer_eye_ray_spec(
     sheet: dict[str, Any],
     activity_id: str = "eye-rays-action",
 ) -> dict[str, Any] | None:
-    """Recover the exact 2014 Gazer random-ray action from source-bound cards."""
+    """Return only a previously reviewed and recorded random-ray contract."""
 
     activities = {
         str(item.get("id") or ""): item
@@ -874,8 +873,23 @@ def gazer_eye_ray_spec(
     if parent is None or str(parent.get("name") or "").strip().casefold() != "eye rays":
         return None
     recorded = dict(dict(parent.get("choices") or {}).get("random_save_effects") or {})
-    if recorded:
-        return deepcopy(recorded)
+    return deepcopy(recorded) if recorded else None
+
+
+def _compile_gazer_eye_ray_spec(
+    sheet: dict[str, Any],
+    activity_id: str = "eye-rays-action",
+) -> dict[str, Any] | None:
+    """Compile the legacy contract only at a trusted-source review boundary."""
+
+    activities = {
+        str(item.get("id") or ""): item
+        for item in dict(sheet.get("content") or {}).get("activities", [])
+        if isinstance(item, dict)
+    }
+    parent = activities.get(activity_id)
+    if parent is None or str(parent.get("name") or "").strip().casefold() != "eye rays":
+        return None
     parent_description = " ".join(str(parent.get("description") or "").split())
     parent_match = re.search(
         r"(?i)\bshoots\s+(one|two|three|four|\d+)\s+of\s+the\s+following\s+"
@@ -995,7 +1009,7 @@ def _structure_gazer_eye_rays(
     sheet: dict[str, Any],
     warnings: list[str],
 ) -> None:
-    spec = gazer_eye_ray_spec(sheet)
+    spec = _compile_gazer_eye_ray_spec(sheet)
     if spec is None:
         return
     activities = list(sheet["content"]["activities"])
@@ -1522,7 +1536,7 @@ def parse_2014_statblock(
         on_hit_effect = str(
             dict(weapon.get("mechanics") or {}).get("on_hit_effect") or ""
         ).strip()
-        if on_hit_effect and structured_critical_followup(on_hit_effect) is None:
+        if on_hit_effect:
             warnings.append(f"{weapon['name']}: on-hit effect requires DM settlement")
     for entry_name, description in multiattacks:
         options = _parse_multiattack(description, weapons)
@@ -1613,8 +1627,6 @@ def parse_2014_statblock(
                 )
             )
 
-    _structure_intellect_devourer_actions(sheet, warnings)
-    _structure_gazer_eye_rays(sheet, warnings)
     validated = validate_character_sheet(sheet)
     summary = f"{identity_text}; CR {challenge or 'unrecorded'}"
     return ParsedStatblock(
@@ -2581,7 +2593,7 @@ def apply_reviewed_statblock_fill(
         on_hit_effect = str(
             dict(weapon.get("mechanics") or {}).get("on_hit_effect") or ""
         ).strip()
-        if on_hit_effect and structured_critical_followup(on_hit_effect) is None:
+        if on_hit_effect:
             added_warnings.append(
                 f"{weapon['name']}: on-hit effect requires DM settlement"
             )

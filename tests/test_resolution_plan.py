@@ -39,6 +39,11 @@ def _plan() -> dict:
         "source_card_kind": "monster_action",
         "trigger": "action",
         "slots": {
+            "source_actor": {
+                "kind": "actor_id",
+                "owner": "agent",
+                "description": "The actor using the reviewed source card.",
+            },
             "targets": {
                 "kind": "actor_ids",
                 "owner": "agent",
@@ -60,6 +65,17 @@ def _plan() -> dict:
             },
         },
         "steps": [
+            {
+                "id": "targets",
+                "op": "target.validate",
+                "args": {
+                    "source_actor_id": {"$slot": "source_actor"},
+                    "target_ids": {"$slot": "targets"},
+                    "exclude_self": True,
+                    "require_visible": True,
+                    "source": "Prismatic Pulse",
+                },
+            },
             {
                 "id": "save",
                 "op": "check.save",
@@ -138,6 +154,7 @@ def test_rule_card_locks_steps_while_agent_only_fills_typed_slots() -> None:
     bound = bind_resolution_plan(
         compiled,
         {
+            "source_actor": "prism-beast",
             "targets": ["hero-1", "hero-2"],
             "save_dc": 14,
             "damage": "3d8+2",
@@ -145,7 +162,7 @@ def test_rule_card_locks_steps_while_agent_only_fills_typed_slots() -> None:
         agent_ruling=_agent_ruling(),
     )
     assert bound.steps[0]["args"]["target_ids"] == ["hero-1", "hero-2"]
-    assert bound.steps[1]["args"]["expression"] == "3d8+2"
+    assert bound.steps[2]["args"]["expression"] == "3d8+2"
     assert bound.fingerprint != compiled.fingerprint
     assert compile_resolution_plan(resolution_plan_template(compiled)) == compiled
 
@@ -163,6 +180,7 @@ def test_plan_rejects_extra_operations_unknown_slots_and_unsafe_values() -> None
         bind_resolution_plan(
             compiled,
             {
+                "source_actor": "prism-beast",
                 "targets": ["hero-1"],
                 "save_dc": 14,
                 "damage": "3d8",
@@ -173,6 +191,7 @@ def test_plan_rejects_extra_operations_unknown_slots_and_unsafe_values() -> None
         bind_resolution_plan(
             compiled,
             {
+                "source_actor": "prism-beast",
                 "targets": ["hero-1"],
                 "save_dc": 99,
                 "damage": "3d8",
@@ -182,7 +201,7 @@ def test_plan_rejects_extra_operations_unknown_slots_and_unsafe_values() -> None
 
 def test_result_references_are_backward_only() -> None:
     plan = _plan()
-    plan["steps"][0]["args"]["dc"] = {"$result": "damage.total"}
+    plan["steps"][1]["args"]["dc"] = {"$result": "damage.total"}
     with pytest.raises(ResolutionPlanCompilationError, match="earlier plan step"):
         compile_resolution_plan(plan)
 
@@ -191,6 +210,7 @@ def test_plan_executes_atomically_and_resolves_prior_results() -> None:
     bound = bind_resolution_plan(
         _plan(),
         {
+            "source_actor": "prism-beast",
             "targets": ["hero-1", "hero-2"],
             "save_dc": 14,
             "damage": "3d8",
@@ -215,6 +235,7 @@ def test_plan_rolls_back_every_step_on_primitive_failure() -> None:
     bound = bind_resolution_plan(
         _plan(),
         {
+            "source_actor": "prism-beast",
             "targets": ["hero-1"],
             "save_dc": 14,
             "damage": "3d8",
@@ -227,3 +248,74 @@ def test_plan_rolls_back_every_step_on_primitive_failure() -> None:
 
     assert runtime.events[-1] == "rollback"
     assert "commit" not in runtime.events
+
+
+def test_duration_and_random_exclusions_are_source_bounded() -> None:
+    plan = _plan()
+    plan["steps"].extend(
+        [
+            {
+                "id": "ray",
+                "op": "roll.table",
+                "args": {
+                    "table": [
+                        {"weight": 1, "value": "dazing"},
+                        {"weight": 1, "value": "fear"},
+                    ],
+                    "exclude": ["fear"],
+                },
+            },
+            {
+                "id": "condition",
+                "op": "condition.apply",
+                "args": {
+                    "source_actor_id": {"$slot": "source_actor"},
+                    "target_ids": {"$slot": "targets"},
+                    "condition_id": "frightened",
+                    "duration": {"kind": "source_turn_start"},
+                    "source": "Prismatic Pulse",
+                },
+            },
+        ]
+    )
+    bindings = {
+        "source_actor": "prism-beast",
+        "targets": ["hero-1"],
+        "save_dc": 14,
+        "damage": "3d8",
+    }
+    bound = bind_resolution_plan(
+        plan,
+        bindings,
+        agent_ruling=_agent_ruling(),
+    )
+    assert bound.steps[-2]["args"]["exclude"] == ["fear"]
+    assert bound.steps[-1]["args"]["duration"] == {
+        "kind": "source_turn_start"
+    }
+
+    invalid_duration = deepcopy(plan)
+    invalid_duration["steps"][-1]["args"]["duration"] = {
+        "kind": "source_turn_end"
+    }
+    with pytest.raises(
+        ResolutionPlanBindingError,
+        match="duration kind is unsupported",
+    ):
+        bind_resolution_plan(
+            invalid_duration,
+            bindings,
+            agent_ruling=_agent_ruling(),
+        )
+
+    excluded_all = deepcopy(plan)
+    excluded_all["steps"][-2]["args"]["exclude"] = ["dazing", "fear"]
+    with pytest.raises(
+        ResolutionPlanBindingError,
+        match="cannot remove every",
+    ):
+        bind_resolution_plan(
+            excluded_all,
+            bindings,
+            agent_ruling=_agent_ruling(),
+        )

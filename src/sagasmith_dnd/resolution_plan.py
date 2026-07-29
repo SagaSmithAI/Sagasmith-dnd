@@ -61,6 +61,7 @@ PLAN_OPS = frozenset(
         "resource.spend",
         "roll.table",
         "state.assert",
+        "target.validate",
         "world.counter.adjust",
         "world.counter.set",
     }
@@ -101,7 +102,22 @@ _RESULT_REF_RE = re.compile(r"^[a-zA-Z0-9_.:-]+$")
 _STEP_FIELDS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     "roll.table": (
         frozenset({"table"}),
-        frozenset({"table", "roll_id"}),
+        frozenset({"table", "roll_id", "exclude"}),
+    ),
+    "target.validate": (
+        frozenset({"source_actor_id", "target_ids"}),
+        frozenset(
+            {
+                "source_actor_id",
+                "target_ids",
+                "exclude_self",
+                "forbid_conditions",
+                "maximum_range_ft",
+                "require_conditions",
+                "require_visible",
+                "source",
+            }
+        ),
     ),
     "check.save": (
         frozenset({"target_ids", "ability", "dc"}),
@@ -198,6 +214,7 @@ _STEP_FIELDS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
                 "effect_id",
                 "duration",
                 "repeat_save",
+                "source_actor_id",
             }
         ),
     ),
@@ -835,7 +852,15 @@ def _validate_common_concrete_arguments(
         if field in arguments and not _is_result_ref(arguments[field]):
             if arguments[field] not in _ABILITY_IDS:
                 raise ResolutionPlanBindingError(f"{field} must be a D&D ability")
-    for field in ("dc", "amount", "distance_ft", "minimum", "maximum", "value"):
+    for field in (
+        "dc",
+        "amount",
+        "distance_ft",
+        "maximum_range_ft",
+        "minimum",
+        "maximum",
+        "value",
+    ):
         if field in arguments and not _is_result_ref(arguments[field]):
             candidate = arguments[field]
             if isinstance(candidate, bool) or not isinstance(candidate, int):
@@ -861,6 +886,8 @@ def _validate_common_concrete_arguments(
         "target_advantage",
         "target_disadvantage",
         "target_proficient",
+        "exclude_self",
+        "require_visible",
     ):
         if field in arguments and not _is_result_ref(arguments[field]):
             if not isinstance(arguments[field], bool):
@@ -874,6 +901,20 @@ def _validate_common_concrete_arguments(
         if has_expression == has_amount:
             raise ResolutionPlanBindingError(
                 f"{opcode} requires exactly one of expression or amount"
+            )
+    if opcode == "condition.apply" and isinstance(
+        arguments.get("duration"), dict
+    ):
+        _normalize_duration(
+            arguments["duration"],
+            field="condition.apply",
+        )
+        if (
+            arguments["duration"].get("kind") == "source_turn_start"
+            and "source_actor_id" not in arguments
+        ):
+            raise ResolutionPlanBindingError(
+                "source-turn condition duration requires source_actor_id"
             )
     if opcode == "roll.table":
         table = arguments["table"]
@@ -891,6 +932,58 @@ def _validate_common_concrete_arguments(
         ):
             raise ResolutionPlanBindingError(
                 "roll.table requires weighted value entries"
+            )
+        excluded = arguments.get("exclude", [])
+        if not _is_result_ref(excluded) and not isinstance(excluded, list):
+            raise ResolutionPlanBindingError(
+                "roll.table exclude must be a list or prior result"
+            )
+        if not _is_result_ref(excluded):
+            values = [entry["value"] for entry in table]
+            if any(item not in values for item in excluded):
+                raise ResolutionPlanBindingError(
+                    "roll.table exclude values must exist in the source table"
+                )
+            if len(excluded) != len(
+                {
+                    json.dumps(
+                        item,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        ensure_ascii=True,
+                    )
+                    for item in excluded
+                }
+            ):
+                raise ResolutionPlanBindingError(
+                    "roll.table exclude values must be unique"
+                )
+            if len(excluded) >= len(table):
+                raise ResolutionPlanBindingError(
+                    "roll.table exclude cannot remove every source result"
+                )
+    if opcode == "target.validate":
+        for field in ("require_conditions", "forbid_conditions"):
+            values = arguments.get(field, [])
+            if _is_result_ref(values):
+                continue
+            if (
+                not isinstance(values, list)
+                or any(not str(item).strip() for item in values)
+                or len({str(item).strip().casefold() for item in values})
+                != len(values)
+            ):
+                raise ResolutionPlanBindingError(
+                    f"target.validate {field} must contain unique condition ids"
+                )
+        maximum_range = arguments.get("maximum_range_ft")
+        if (
+            maximum_range is not None
+            and not _is_result_ref(maximum_range)
+            and int(maximum_range) < 0
+        ):
+            raise ResolutionPlanBindingError(
+                "target.validate maximum_range_ft cannot be negative"
             )
     if opcode == "knowledge.transfer":
         knowledge_ids = arguments["knowledge_ids"]
@@ -1032,7 +1125,6 @@ def _normalize_duration(value: Any, *, field: str) -> dict[str, Any]:
     if set(value) - allowed or kind not in {
         "encounter",
         "rounds",
-        "source_turn_end",
         "source_turn_start",
         "target_turn_end",
         "target_turn_start",
