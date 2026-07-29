@@ -78,7 +78,7 @@ SLOT_KINDS = frozenset(
         "enum",
         "integer",
         "position",
-        "proposition_ids",
+        "knowledge_ids",
         "text",
     }
 )
@@ -113,7 +113,7 @@ _STEP_FIELDS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
                 "advantage",
                 "disadvantage",
                 "source",
-                "success_reduction",
+                "success_damage",
             }
         ),
     ),
@@ -267,12 +267,12 @@ _STEP_FIELDS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
         ),
     ),
     "knowledge.transfer": (
-        frozenset({"from_actor_id", "to_actor_id", "proposition_ids"}),
+        frozenset({"from_actor_id", "to_actor_id", "knowledge_ids"}),
         frozenset(
             {
                 "from_actor_id",
                 "to_actor_id",
-                "proposition_ids",
+                "knowledge_ids",
                 "reason",
                 "source",
             }
@@ -843,12 +843,12 @@ def _validate_common_concrete_arguments(
     if "dc" in arguments and not _is_result_ref(arguments["dc"]):
         if not 1 <= int(arguments["dc"]) <= 40:
             raise ResolutionPlanBindingError("dc must be in the range 1..40")
-    if "success_reduction" in arguments and not _is_result_ref(
-        arguments["success_reduction"]
+    if "success_damage" in arguments and not _is_result_ref(
+        arguments["success_damage"]
     ):
-        if arguments["success_reduction"] not in {"full", "half", "none"}:
+        if arguments["success_damage"] not in {"full", "half", "none"}:
             raise ResolutionPlanBindingError(
-                "success_reduction must be full, half, or none"
+                "success_damage must be full, half, or none"
             )
     for field in (
         "advantage",
@@ -893,9 +893,9 @@ def _validate_common_concrete_arguments(
                 "roll.table requires weighted value entries"
             )
     if opcode == "knowledge.transfer":
-        propositions = arguments["proposition_ids"]
-        if not _is_result_ref(propositions):
-            _normalize_proposition_ids(propositions)
+        knowledge_ids = arguments["knowledge_ids"]
+        if not _is_result_ref(knowledge_ids):
+            _normalize_knowledge_ids(knowledge_ids)
     if opcode == "state.assert":
         if arguments["operator"] not in {
             "contains",
@@ -996,8 +996,8 @@ def _normalize_slot_value(
         normalized = {"x": value["x"], "y": value["y"]}
     elif kind == "duration":
         normalized = _normalize_duration(value, field=name)
-    elif kind == "proposition_ids":
-        normalized = _normalize_proposition_ids(value)
+    elif kind == "knowledge_ids":
+        normalized = _normalize_knowledge_ids(value)
     else:
         raise ResolutionPlanBindingError(f"slot {name} has an unsupported kind")
     _validate_slot_bounds(name, definition, normalized)
@@ -1061,14 +1061,14 @@ def _normalize_actor_ids(value: Any, *, field: str) -> list[str]:
     return normalized
 
 
-def _normalize_proposition_ids(value: Any) -> list[str]:
+def _normalize_knowledge_ids(value: Any) -> list[str]:
     if not isinstance(value, list) or not value:
         raise ResolutionPlanBindingError(
-            "knowledge transfer needs explicit proposition ids"
+            "knowledge transfer needs explicit knowledge ids"
         )
-    normalized = [_require_safe_text(item, "proposition_ids") for item in value]
+    normalized = [_require_safe_text(item, "knowledge_ids") for item in value]
     if len(normalized) != len(set(normalized)):
-        raise ResolutionPlanBindingError("proposition ids must be unique")
+        raise ResolutionPlanBindingError("knowledge ids must be unique")
     return normalized
 
 

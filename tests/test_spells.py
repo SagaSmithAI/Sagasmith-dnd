@@ -55,6 +55,34 @@ def test_spell_slot_and_concentration_are_settled_from_card_data() -> None:
     assert result["concentration_started"] is True
 
 
+def test_ordinary_mage_armor_cast_applies_its_engine_owned_effect() -> None:
+    sheet = default_character_sheet()
+    sheet["spellcasting"]["spell_slots"] = {
+        "1": {
+            "label": "1st",
+            "value": 1,
+            "max": 1,
+            "recovers_on": "long_rest",
+            "source_key": "wizard",
+        }
+    }
+    spell = _spell(CORE_MAGE_ARMOR_SPELL_ID, level=1)
+    spell["mechanic_refs"] = ["dnd5e.core.spell.mage_armor"]
+    sheet["content"]["spells"] = [spell]
+
+    result = consume_spell_cast(
+        validate_character_sheet(sheet),
+        spell_id=CORE_MAGE_ARMOR_SPELL_ID,
+    )
+
+    assert result["automatic_effect"] == "mage_armor"
+    assert result["effect_id"]
+    assert any(
+        item["id"] == result["effect_id"] and item["active"]
+        for item in result["sheet"]["effects"]
+    )
+
+
 def test_innate_spell_cast_spends_per_spell_daily_use_and_starts_concentration() -> None:
     sheet = default_character_sheet()
     suggestion = _spell("suggestion", level=2, concentration=True)

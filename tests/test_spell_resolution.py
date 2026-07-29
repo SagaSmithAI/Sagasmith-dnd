@@ -1,6 +1,7 @@
 import pytest
 
 from sagasmith_dnd.spell_resolution import (
+    audit_spell_resolution_paths,
     known_spell_resolution,
     normalize_spell_resolution,
     overlay_spell_attack_action,
@@ -8,6 +9,7 @@ from sagasmith_dnd.spell_resolution import (
     scaled_roll_expression,
     spell_attack_action_resolution,
     spell_attack_count,
+    spell_resolution_path,
 )
 
 
@@ -22,6 +24,51 @@ def test_reviewed_spell_resolutions_scale_without_free_form_formulas() -> None:
         )
         == "2d6"
     )
+
+
+def test_spell_resolution_audit_includes_known_cantrips_and_all_paths() -> None:
+    sheet = {
+        "content": {
+            "spells": [
+                {
+                    "id": "light",
+                    "name": "Light",
+                    "level": 0,
+                    "access": {"known": True},
+                    "ruling_requirements": [
+                        {
+                            "default_resolver": "agent",
+                            "ruling_kind": "generic_spell_effect",
+                            "source_excerpt": "One object sheds bright light.",
+                        }
+                    ],
+                },
+                {
+                    "id": "pulse",
+                    "name": "Pulse",
+                    "level": 1,
+                    "access": {"prepared": True},
+                    "resolution_plan": {"id": "pulse-plan"},
+                },
+                {
+                    "id": "blank",
+                    "name": "Blank",
+                    "level": 1,
+                    "access": {"known": True},
+                },
+            ]
+        }
+    }
+
+    audit = audit_spell_resolution_paths(sheet)
+
+    assert audit["complete"] is False
+    assert audit["cantrip_spell_ids"] == ["light"]
+    assert audit["available_spell_ids"] == ["light", "pulse", "blank"]
+    assert audit["missing_spell_ids"] == ["blank"]
+    assert audit["counts"]["agent_ruling"] == 1
+    assert audit["counts"]["semantic_plan"] == 1
+    assert spell_resolution_path(sheet["content"]["spells"][0]) == "agent_ruling"
 
     fireball = known_spell_resolution("Fireball")
     assert fireball is not None

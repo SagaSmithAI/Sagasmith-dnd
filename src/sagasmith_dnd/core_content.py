@@ -124,8 +124,32 @@ def _spells(folder: Path, spell_classes: dict[str, list[str]]) -> list[dict[str,
             mechanic_refs.append("dnd5e.core.spell.shield")
         elif _name_key(name) == "magic-missile":
             mechanic_refs.append("dnd5e.core.spell.magic_missile")
+        elif _name_key(name) == "mage-armor":
+            mechanic_refs.append("dnd5e.core.spell.mage_armor")
+        elif _name_key(name) == "raise-dead":
+            mechanic_refs.append("dnd5e.core.spell.raise_dead")
         if mechanic_refs:
             card["mechanic_refs"] = mechanic_refs
+        if resolution is None and not mechanic_refs:
+            card["ruling_requirements"] = [
+                {
+                    "kind": "effect_semantics",
+                    "reason": (
+                        "Interpret this source-bound spell and express its concrete "
+                        "outcome through reviewed semantic primitives."
+                    ),
+                    "source_excerpt": str(card["definition"]["effect"])[:4000],
+                    "default_resolver": "agent",
+                    "ruling_kind": "generic_spell_effect",
+                    "policy_ref": "resolution_plan.v1",
+                    "requires_external_input_only_for": [
+                        "player_owned_choice",
+                        "owner_approval",
+                        "permission_escalation",
+                        "missing_or_conflicting_source_review",
+                    ],
+                }
+            ]
         result.append(
             _artifact(
                 "spell",

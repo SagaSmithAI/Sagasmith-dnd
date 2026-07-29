@@ -1269,7 +1269,7 @@ def test_custom_mechanical_artifact_persists_a_source_bound_plan_template() -> N
                             "ability": "wisdom",
                             "dc": 14,
                             "source": "Prismatic Pulse",
-                            "success_reduction": "none",
+                            "success_damage": "none",
                         },
                     },
                     {

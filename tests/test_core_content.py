@@ -91,6 +91,21 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     )
     assert magic_missile["mechanic_refs"] == ["dnd5e.core.spell.magic_missile"]
     assert magic_missile["card"]["mechanic_refs"] == ["dnd5e.core.spell.magic_missile"]
+    light = next(
+        item for item in artifacts if item["id"] == "dnd5e.content.srd2014.spell.light"
+    )
+    assert light["card"]["ruling_requirements"][0]["default_resolver"] == "agent"
+    assert light["card"]["ruling_requirements"][0]["source_excerpt"]
+    assert light["card"]["ruling_requirements"][0]["policy_ref"] == "resolution_plan.v1"
+    assert all(
+        (
+            item["card"].get("resolution")
+            or item["card"].get("mechanic_refs")
+            or item["card"].get("ruling_requirements")
+        )
+        for item in artifacts
+        if item["kind"] == "spell"
+    )
 
     berserker = next(
         item

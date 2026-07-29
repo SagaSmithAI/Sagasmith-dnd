@@ -68,7 +68,7 @@ def _plan() -> dict:
                     "ability": "wisdom",
                     "dc": {"$slot": "save_dc"},
                     "source": "Prismatic Pulse",
-                    "success_reduction": "none",
+                    "success_damage": "none",
                 },
             },
             {

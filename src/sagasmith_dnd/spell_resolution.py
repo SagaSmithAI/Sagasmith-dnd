@@ -12,6 +12,23 @@ from sagasmith_dnd.abilities import ABILITY_IDS
 from sagasmith_dnd.vocabulary import ATTACK_MODES
 
 SPELL_RESOLUTION_MECHANIC_ID = "dnd5e.core.spell.structured_resolution"
+ENGINE_SETTLED_SPELL_MECHANIC_IDS = frozenset(
+    {
+        "dnd5e.core.spell.mage_armor",
+        "dnd5e.core.spell.magic_missile",
+        "dnd5e.core.spell.raise_dead",
+        "dnd5e.core.spell.shield",
+    }
+)
+SPELL_RESOLUTION_PATHS = frozenset(
+    {
+        "agent_ruling",
+        "engine_mechanic",
+        "incomplete",
+        "semantic_plan",
+        "structured_resolution",
+    }
+)
 
 _DICE = re.compile(r"(?i)^([1-9]\d*)d([1-9]\d*)$")
 
@@ -502,6 +519,79 @@ def known_spell_resolution(name: str) -> dict[str, Any] | None:
     return normalize_spell_resolution(deepcopy(value)) if value is not None else None
 
 
+def spell_resolution_path(spell: dict[str, Any]) -> str:
+    """Classify the one explicit effect-settlement path recorded on a spell card."""
+
+    if not isinstance(spell, dict):
+        raise ValueError("spell must be an object")
+    if isinstance(spell.get("resolution_plan"), dict):
+        return "semantic_plan"
+    if isinstance(spell.get("resolution"), dict):
+        return "structured_resolution"
+    mechanic_refs = {
+        str(item).strip()
+        for item in spell.get("mechanic_refs", [])
+        if str(item).strip()
+    }
+    if mechanic_refs & ENGINE_SETTLED_SPELL_MECHANIC_IDS:
+        return "engine_mechanic"
+    requirements = spell.get("ruling_requirements")
+    if isinstance(requirements, list) and any(
+        isinstance(item, dict)
+        and str(item.get("default_resolver") or "") == "agent"
+        and str(item.get("ruling_kind") or "") == "generic_spell_effect"
+        and bool(str(item.get("source_excerpt") or "").strip())
+        for item in requirements
+    ):
+        return "agent_ruling"
+    return "incomplete"
+
+
+def audit_spell_resolution_paths(sheet: dict[str, Any]) -> dict[str, Any]:
+    """Prove that every spell and cantrip retained on a card has one visible path."""
+
+    if not isinstance(sheet, dict):
+        raise ValueError("sheet must be an object")
+    spells = list(dict(sheet.get("content") or {}).get("spells") or [])
+    entries: list[dict[str, Any]] = []
+    counts = {path: 0 for path in sorted(SPELL_RESOLUTION_PATHS)}
+    for raw in spells:
+        if not isinstance(raw, dict):
+            raise ValueError("sheet content spells must be objects")
+        path = spell_resolution_path(raw)
+        counts[path] += 1
+        access = dict(raw.get("access") or {})
+        level = int(raw.get("level", 0) or 0)
+        entries.append(
+            {
+                "spell_id": str(raw.get("id") or ""),
+                "name": str(raw.get("name") or ""),
+                "level": level,
+                "is_cantrip": level == 0,
+                "available": bool(
+                    access.get("known")
+                    or access.get("prepared")
+                    or access.get("always_prepared")
+                    or access.get("at_will")
+                ),
+                "resolution_path": path,
+            }
+        )
+    missing = [item["spell_id"] for item in entries if item["resolution_path"] == "incomplete"]
+    cantrip_entries = [item for item in entries if item["is_cantrip"]]
+    available_entries = [item for item in entries if item["available"]]
+    return {
+        "complete": not missing,
+        "counts": counts,
+        "spell_count": len(entries),
+        "cantrip_count": len(cantrip_entries),
+        "available_spell_ids": [item["spell_id"] for item in available_entries],
+        "cantrip_spell_ids": [item["spell_id"] for item in cantrip_entries],
+        "missing_spell_ids": missing,
+        "entries": entries,
+    }
+
+
 def spell_attack_action_resolution(description: str) -> dict[str, Any] | None:
     """Compile a complete SRD-style statblock spell attack without guessing omissions."""
     text = str(description or "")
@@ -594,7 +684,10 @@ def overlay_spell_attack_card(card: dict[str, Any], description: str) -> dict[st
 
 
 __all__ = [
+    "ENGINE_SETTLED_SPELL_MECHANIC_IDS",
     "SPELL_RESOLUTION_MECHANIC_ID",
+    "SPELL_RESOLUTION_PATHS",
+    "audit_spell_resolution_paths",
     "known_spell_resolution",
     "normalize_spell_resolution",
     "overlay_spell_attack_action",
@@ -602,4 +695,5 @@ __all__ = [
     "scaled_roll_expression",
     "spell_attack_action_resolution",
     "spell_attack_count",
+    "spell_resolution_path",
 ]

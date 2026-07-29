@@ -859,6 +859,15 @@ def consume_spell_cast(
             duration=duration,
             source="spell.cast",
         )
+    automatic_effect = None
+    effect_id = None
+    if spell_id == CORE_MAGE_ARMOR_SPELL_ID:
+        effect_id = _apply_mage_armor_effect(
+            value,
+            spell_id=spell_id,
+            source="spell.cast",
+        )
+        automatic_effect = "mage_armor"
     after = apply_rule_event(value, "spell.after", rules)
     if after.status != "committed":
         return {
@@ -881,6 +890,8 @@ def consume_spell_cast(
         "cast_level": level,
         "payment": paid,
         "concentration_started": concentration,
+        "automatic_effect": automatic_effect,
+        "effect_id": effect_id,
         "ended_invisibility_effect_ids": ended_invisibility_effect_ids,
         "ruling_required": ruling_required,
         "ruling_requirements": _agent_ruling_requirements(ruling_required),

@@ -33,7 +33,11 @@ from sagasmith_dnd.rule_engine import (
     apply_rule_event,
     core_receipts,
 )
-from sagasmith_dnd.spell_resolution import normalize_spell_resolution
+from sagasmith_dnd.spell_resolution import (
+    ENGINE_SETTLED_SPELL_MECHANIC_IDS,
+    audit_spell_resolution_paths,
+    normalize_spell_resolution,
+)
 from sagasmith_dnd.vocabulary import (
     ATTACK_MODES,
     CAMPAIGN_GAME_PHASES,
@@ -1462,6 +1466,16 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
             source_card_id=spell_id,
             source_card_kinds={"spell"},
         )
+    if result["resolution"] is not None and "resolution_plan" in result:
+        raise ValueError(
+            f"{field} cannot combine structured resolution and resolution_plan"
+        )
+    if "resolution_plan" in result and (
+        set(result["mechanic_refs"]) & ENGINE_SETTLED_SPELL_MECHANIC_IDS
+    ):
+        raise ValueError(
+            f"{field} cannot combine an engine-settled mechanic and resolution_plan"
+        )
     return result
 
 
@@ -2377,6 +2391,12 @@ def validate_character_sheet(
                         else {"feature", "trait"}
                     ),
                 )
+                normalized_entry["choices"]["resolution_plan"] = {
+                    "id": normalized_entry["resolution_plan"]["id"],
+                    "fingerprint": normalized_entry["resolution_plan"][
+                        "fingerprint"
+                    ],
+                }
             result.append(normalized_entry)
         return result
 
@@ -3578,6 +3598,9 @@ def derive_character_sheet(
         "active_effects": [
             {"id": effect["id"], "name": effect["name"]} for effect in active_effects
         ],
+        "content_resolution": {
+            "spells": audit_spell_resolution_paths(value),
+        },
         "unresolved_rules": sorted(unresolved_effects),
         "ruling_requirements": [],
     }
