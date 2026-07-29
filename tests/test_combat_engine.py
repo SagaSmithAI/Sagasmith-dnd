@@ -3157,6 +3157,40 @@ def test_common_actions_pay_action_and_keep_tactical_state_explicit() -> None:
     assert readied["readied"][0]["status"] == "armed"
 
 
+def test_free_object_interaction_consumes_only_its_turn_budget() -> None:
+    encounter = start_encounter([_actor("goblin")])
+
+    interacted = resolve_common_action(
+        encounter,
+        actor_id_value="goblin",
+        action="interact_object",
+        payload={
+            "object_description": "an eyeless hollowed-out pumpkin",
+            "interaction": "remove",
+        },
+    )
+
+    actor = current_combatant(interacted)
+    assert actor is not None
+    assert actor["turn_budget"]["object_interaction"] == 0
+    assert actor["turn_budget"]["main_action"] == 1
+    assert "interact_object" not in available_actions(interacted, "goblin")
+    assert actor["turn_flags"]["object_interaction_declared"] == {
+        "object_description": "an eyeless hollowed-out pumpkin",
+        "interaction": "remove",
+    }
+    with pytest.raises(CombatEngineError, match="legal action payment"):
+        resolve_common_action(
+            interacted,
+            actor_id_value="goblin",
+            action="interact_object",
+            payload={
+                "object_description": "a belt pouch",
+                "interaction": "open",
+            },
+        )
+
+
 def test_common_cast_can_pay_available_bonus_action_without_spending_main_action() -> None:
     encounter = start_encounter([_actor("a"), _actor("b")], rng=random.Random(1))
     current = encounter["combatants"][encounter["turn_index"]]["actor_id"]

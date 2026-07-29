@@ -715,6 +715,8 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
             actions.append("escape")
     if budget.get("bonus_action", 0) > 0:
         actions.append("bonus_action")
+    if budget.get("object_interaction", 0) > 0:
+        actions.append("interact_object")
     if budget.get("attack_budget", 0) > 0:
         actions.append("attack")
     if actor_attachment is not None:
@@ -3342,6 +3344,7 @@ def resolve_common_action(
         "escape",
         "help",
         "hide",
+        "interact_object",
         "ready",
         "search",
         "influence",
@@ -3380,8 +3383,20 @@ def resolve_common_action(
     ):
         raise CombatEngineError("actor cannot take a reaction under its current conditions")
     budget = dict(acting.get("turn_budget") or {})
-    payment = payment or ("extra_action" if budget.get("extra_action", 0) > 0 else "main_action")
-    if payment not in {"main_action", "extra_action", "bonus_action", "reaction"}:
+    payment = payment or (
+        "object_interaction"
+        if action == "interact_object"
+        else "extra_action"
+        if budget.get("extra_action", 0) > 0
+        else "main_action"
+    )
+    if payment not in {
+        "main_action",
+        "extra_action",
+        "bonus_action",
+        "reaction",
+        "object_interaction",
+    }:
         raise CombatEngineError("invalid action payment")
     if int(budget.get(payment, 0) or 0) <= 0:
         raise CombatEngineError("actor has no action payment available")
@@ -3423,6 +3438,19 @@ def resolve_common_action(
         }
     elif action == "escape":
         flags["escape_declared"] = deepcopy(payload or {})
+    elif action == "interact_object":
+        interaction_payload = deepcopy(payload or {})
+        object_description = " ".join(
+            str(interaction_payload.get("object_description") or "").split()
+        )
+        interaction = " ".join(
+            str(interaction_payload.get("interaction") or "").split()
+        )
+        if not object_description or not interaction:
+            raise CombatEngineError(
+                "interact_object requires an object_description and interaction"
+            )
+        flags["object_interaction_declared"] = interaction_payload
     elif action in {
         "hide",
         "search",
