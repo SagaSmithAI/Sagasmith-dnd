@@ -6,7 +6,7 @@ from sagasmith_dnd.module_profile import DndModuleProfile
 
 
 def test_module_profile_version_includes_inline_ocr_room_recovery() -> None:
-    assert DndModuleProfile.version == "29"
+    assert DndModuleProfile.version == "30"
 
 
 def test_dnd_scene_parser_matches_agent_hierarchy_behavior() -> None:
