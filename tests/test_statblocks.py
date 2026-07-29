@@ -417,7 +417,8 @@ artisans, and hermits.
     club = derive_character_sheet(parsed.sheet)["inventory"]["weapon_attacks"][0]
 
     assert club["on_hit_effect"] == ""
-    assert parsed.warnings == (
+    assert parsed.warnings == ()
+    assert parsed.normalization_notes == (
         "Club: trailing creature prose excluded from action settlement",
     )
 
@@ -450,7 +451,8 @@ def test_multiword_actor_lore_using_head_noun_is_not_an_on_hit_effect() -> None:
     dagger = derive_character_sheet(parsed.sheet)["inventory"]["weapon_attacks"][0]
 
     assert dagger["on_hit_effect"] == ""
-    assert parsed.warnings == (
+    assert parsed.warnings == ()
+    assert parsed.normalization_notes == (
         "Dagger: trailing creature prose excluded from action settlement",
     )
 
@@ -489,9 +491,9 @@ A **worg** is an evil predator that delights in hunting weaker creatures.
         "If the target is a creature, it must succeed on a DC 13 Strength "
         "saving throw or be knocked prone."
     )
-    assert parsed.warnings == (
+    assert parsed.warnings == ("Bite: on-hit effect requires DM settlement",)
+    assert parsed.normalization_notes == (
         "Bite: trailing creature prose excluded from action settlement",
-        "Bite: on-hit effect requires DM settlement",
     )
 
 
@@ -627,7 +629,8 @@ def test_trailing_page_number_is_not_imported_as_an_on_hit_effect() -> None:
     claw = derive_character_sheet(parsed.sheet)["inventory"]["weapon_attacks"][0]
 
     assert claw["on_hit_effect"] == ""
-    assert parsed.warnings == (
+    assert parsed.warnings == ()
+    assert parsed.normalization_notes == (
         "Claw: trailing page furniture excluded from action settlement",
     )
 
@@ -997,7 +1000,8 @@ Goblins are black-hearted and gather in overwhelming numbers.
     assert attacks[1]["attack_type"] == "ranged"
     assert attacks[1]["range_ft"] == {"normal": 80, "long": 320}
     assert attacks[1]["on_hit_effect"] == ""
-    assert parsed.warnings == (
+    assert parsed.warnings == ()
+    assert parsed.normalization_notes == (
         "Shortbow: trailing creature prose excluded from action settlement",
     )
 

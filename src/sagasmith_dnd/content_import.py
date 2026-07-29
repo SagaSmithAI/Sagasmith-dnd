@@ -319,6 +319,7 @@ def module_statblock_review_candidates(
             "challenge_rating": parsed.challenge_rating,
             "experience_points": parsed.experience_points,
             "warnings": list(parsed.warnings),
+            "normalization_notes": list(parsed.normalization_notes),
             "settlement": "automatic" if not parsed.warnings else "mixed",
         }
     return candidates

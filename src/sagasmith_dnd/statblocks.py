@@ -37,6 +37,7 @@ class ParsedStatblock:
     challenge_rating: str
     experience_points: int | None
     warnings: tuple[str, ...]
+    normalization_notes: tuple[str, ...] = ()
     spellcasting: dict[str, Any] | None = None
 
 
@@ -437,7 +438,7 @@ def _parse_weapon(
         "mechanics": mechanics,
     }
     if trailing_prose:
-        result["_parser_warning"] = trailing_warning
+        result["_normalization_note"] = trailing_warning
     return result
 
 
@@ -1430,6 +1431,7 @@ def parse_2014_statblock(
     descriptive_attack_markers = 0
     unresolved_multiattacks: set[str] = set()
     warnings: list[str] = []
+    normalization_notes: list[str] = []
     attack_marker_pattern = re.compile(
         r"(?i)\b(?:Melee|Ranged|Melee or Ranged)\s+"
         r"(?:Weapon|Spell)\s+Attack:\*?"
@@ -1460,9 +1462,9 @@ def parse_2014_statblock(
             actor_name=source_actor_name,
         )
         if weapon:
-            parser_warning = str(weapon.pop("_parser_warning", "") or "")
-            if parser_warning:
-                warnings.append(parser_warning)
+            normalization_note = str(weapon.pop("_normalization_note", "") or "")
+            if normalization_note:
+                normalization_notes.append(normalization_note)
             weapons.append(weapon)
         else:
             descriptive.append((section, entry_name, description))
@@ -1617,6 +1619,7 @@ def parse_2014_statblock(
         challenge_rating=challenge,
         experience_points=xp,
         warnings=tuple(warnings),
+        normalization_notes=tuple(normalization_notes),
         spellcasting=deepcopy(spellcasting),
     )
 
@@ -3073,6 +3076,7 @@ def recover_2014_statblock_from_ocr(
             "challenge_rating": parsed.challenge_rating,
             "experience_points": parsed.experience_points,
             "warnings": list(parsed.warnings),
+            "normalization_notes": list(parsed.normalization_notes),
         },
         "evidence": {
             "recovery_version": OCR_STATBLOCK_RECOVERY_VERSION,
