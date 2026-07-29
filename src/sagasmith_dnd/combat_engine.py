@@ -1088,16 +1088,23 @@ def preflight_attack(
     effect_roll_bonus = active_effect_roll_bonus(actor_sheet(attacker), "attack")
     attack_bonus = int(weapon.get("attack_bonus", 0)) + effect_roll_bonus
     context = dict(action.get("context") or {})
-    cover = dict(context.get("cover") or {})
-    if cover.get("degree") == "total" or context.get("targetable") is False:
+    raw_cover = context.get("cover")
+    if raw_cover is not None and not isinstance(raw_cover, dict):
+        raise CombatEngineError("cover context must be an object")
+    cover = dict(raw_cover or {})
+    unknown_cover_fields = set(cover) - {"degree"}
+    if unknown_cover_fields:
+        raise CombatEngineError(
+            "cover context accepts only the rules-defined degree"
+        )
+    cover_degree = str(cover.get("degree") or "none").strip().casefold().replace("-", "_")
+    if cover_degree not in {"none", "half", "three_quarters", "total"}:
+        raise CombatEngineError(
+            "cover degree must be none, half, three_quarters, or total"
+        )
+    if cover_degree == "total" or context.get("targetable") is False:
         raise CombatEngineError("target has total cover")
-    cover_degree = str(cover.get("degree") or "").replace("-", "_")
     cover_bonus = {"half": 2, "three_quarters": 5}.get(cover_degree, 0)
-    if cover.get("ac_bonus") is not None:
-        declared_bonus = int(cover["ac_bonus"])
-        if cover_bonus and declared_bonus != cover_bonus:
-            raise CombatEngineError("cover ac_bonus does not match the declared cover degree")
-        cover_bonus = declared_bonus
     target_ac += cover_bonus
     expression = weapon.get("damage_expression") or weapon.get("damage") or ""
     attack_mode = str(action.get("attack_mode") or weapon.get("attack_type") or "melee").lower()
@@ -1471,7 +1478,7 @@ def preflight_attack(
         core_boundary_ids.append("dnd5e.core.attack.ammunition")
     if ammunition_slaying is not None:
         core_boundary_ids.append("dnd5e.core.magic_ammunition.slaying")
-    if cover_degree or cover.get("ac_bonus") is not None:
+    if cover_degree != "none":
         core_boundary_ids.append("dnd5e.core.attack.cover")
     if helped_by:
         core_boundary_ids.append("dnd5e.core.attack.help")
@@ -1489,6 +1496,11 @@ def preflight_attack(
         "attack_bonus": attack_bonus,
         "effect_roll_bonus": effect_roll_bonus,
         "target_ac": target_ac,
+        "cover": {
+            "degree": cover_degree,
+            "armor_class_bonus": cover_bonus,
+        },
+        "context_ruling": deepcopy(context.get("agent_ruling")),
         "damage_expression": str(expression),
         "damage_modifiers": (
             [{"source": "Fighting Style: Dueling", "value": dueling_bonus}] if dueling_bonus else []
@@ -1805,6 +1817,8 @@ def resolve_attack_damage(
         target_id=actor_id(target),
         weapon_id=str(plan.get("weapon_id") or ""),
         attack_mode=str(plan.get("attack_mode") or ""),
+        cover=deepcopy(plan.get("cover") or {}),
+        context_ruling=deepcopy(plan.get("context_ruling")),
         damage=None,
     )
     expression = str(plan.get("damage_expression") or "")

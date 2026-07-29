@@ -2095,6 +2095,72 @@ def test_half_cover_uses_the_rules_ac_bonus() -> None:
         action={"weapon_id": "sword", "context": {"cover": {"degree": "half"}}},
     )
     assert plan["target_ac"] == 12
+    assert plan["cover"] == {
+        "degree": "half",
+        "armor_class_bonus": 2,
+    }
+
+
+def test_cover_uses_only_the_rules_defined_degrees() -> None:
+    attacker = _actor("attacker")
+    target = _actor("target", ac=10)
+    attacker["derived"]["inventory"]["weapon_attacks"] = [
+        {
+            "item_id": "sword",
+            "attack_bonus": 5,
+            "damage_expression": "1",
+            "damage_type": "slashing",
+        }
+    ]
+
+    three_quarters = preflight_attack(
+        attacker,
+        target,
+        action={
+            "weapon_id": "sword",
+            "context": {"cover": {"degree": "three_quarters"}},
+        },
+    )
+    assert three_quarters["target_ac"] == 15
+    assert three_quarters["cover"] == {
+        "degree": "three_quarters",
+        "armor_class_bonus": 5,
+    }
+    _updated_attacker, _updated_target, resolved = resolve_attack_action(
+        attacker,
+        target,
+        plan=three_quarters,
+        rng=random.Random(0),
+    )
+    assert resolved["cover"] == three_quarters["cover"]
+
+    with pytest.raises(CombatEngineError, match="total cover"):
+        preflight_attack(
+            attacker,
+            target,
+            action={
+                "weapon_id": "sword",
+                "context": {"cover": {"degree": "total"}},
+            },
+        )
+    with pytest.raises(CombatEngineError, match="rules-defined degree"):
+        preflight_attack(
+            attacker,
+            target,
+            action={
+                "weapon_id": "sword",
+                "context": {"cover": {"degree": "half", "ac_bonus": 9}},
+            },
+        )
+    with pytest.raises(CombatEngineError, match="cover degree"):
+        preflight_attack(
+            attacker,
+            target,
+            action={
+                "weapon_id": "sword",
+                "context": {"cover": {"degree": "nine_tenths"}},
+            },
+        )
 
 
 def test_help_grants_and_then_consumes_attack_advantage() -> None:
