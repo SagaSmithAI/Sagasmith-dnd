@@ -1505,13 +1505,19 @@ def parse_2014_statblock(
             unresolved_multiattacks.add(entry_name)
             descriptive.append(("actions", entry_name, description))
     for section, entry_name, description in descriptive:
-        activation = (
-            "reaction"
-            if "reaction" in section
-            else "action"
-            if "action" in section
-            else "passive"
-        )
+        if "reaction" in section:
+            activation = "reaction"
+        elif "bonus action" in section:
+            activation = "bonus_action"
+        elif any(
+            special_section in section
+            for special_section in ("legendary action", "lair action", "mythic action")
+        ):
+            activation = "special"
+        elif "action" in section:
+            activation = "action"
+        else:
+            activation = "passive"
         entry = {
             "id": f"{_slug(entry_name)}-{activation}",
             "name": entry_name,
@@ -1563,7 +1569,10 @@ def parse_2014_statblock(
             warnings.append(
                 f"{entry_name}: Multiattack composition requires a DM ruling"
                 if entry_name in unresolved_multiattacks
-                else f"{entry_name}: descriptive {activation} is not automatically settled"
+                else (
+                    f"{entry_name}: descriptive "
+                    f"{activation.replace('_', ' ')} is not automatically settled"
+                )
             )
 
     _structure_intellect_devourer_actions(sheet, warnings)

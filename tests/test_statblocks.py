@@ -713,6 +713,60 @@ def test_descriptive_statblock_action_is_marked_for_agent_ruling() -> None:
     )
 
 
+def test_descriptive_statblock_sections_preserve_nonstandard_action_economies() -> None:
+    parsed = parse_2014_statblock(
+        COMMONER
+        + """
+
+## Bonus Actions
+
+***Shadow Step.*** The commoner teleports to an unoccupied space it can see.
+
+## Legendary Actions
+
+***Detect.*** The commoner makes a Wisdom (Perception) check.
+
+## Lair Actions
+
+***Falling Stones.*** Stones fall at a point the commoner can see.
+""",
+        source_key="module-review:descriptive-action-economies",
+    )
+    activities = {
+        item["name"]: item for item in parsed.sheet["content"]["activities"]
+    }
+
+    assert activities["Shadow Step"]["activation"] == {
+        "type": "bonus_action",
+        "cost": 1,
+        "trigger": "",
+    }
+    assert activities["Detect"]["activation"] == {
+        "type": "special",
+        "cost": 1,
+        "trigger": "",
+    }
+    assert activities["Falling Stones"]["activation"] == {
+        "type": "special",
+        "cost": 1,
+        "trigger": "",
+    }
+    assert all(
+        item["choices"]["manual_ruling"]["kind"] == "descriptive_activity"
+        for item in activities.values()
+        if item["name"] in {"Shadow Step", "Detect", "Falling Stones"}
+    )
+    assert (
+        "Shadow Step: descriptive bonus action is not automatically settled"
+        in parsed.warnings
+    )
+    assert "Detect: descriptive special is not automatically settled" in parsed.warnings
+    assert (
+        "Falling Stones: descriptive special is not automatically settled"
+        in parsed.warnings
+    )
+
+
 def test_regeneration_statblock_trait_is_structured_without_a_descriptive_warning() -> None:
     parsed = parse_2014_statblock(TROLL, source_key="srd-troll")
 
