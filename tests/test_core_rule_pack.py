@@ -75,14 +75,21 @@ def test_builtin_core_pack_wraps_every_preserved_boundary() -> None:
         )
 
 
-def test_combat_engine_never_emits_an_unregistered_core_boundary() -> None:
-    source = (
+def test_dnd_runtime_never_emits_an_unregistered_core_boundary() -> None:
+    source_root = (
         Path(__file__).parents[1]
         / "src"
         / "sagasmith_dnd"
-        / "combat_engine.py"
-    ).read_text(encoding="utf-8")
-    emitted = set(re.findall(r'"(dnd5e\.core\.[a-z0-9_.]+)"', source))
+    )
+    emitted = {
+        mechanic_id
+        for path in source_root.rglob("*.py")
+        if path.name != "core_rule_pack.py"
+        for mechanic_id in re.findall(
+            r'["\'](dnd5e\.core\.[a-z0-9_.]+)["\']',
+            path.read_text(encoding="utf-8"),
+        )
+    }
     registered = {
         item.id
         for edition in ("2014", "2024")

@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.42.0"
+CORE_RULE_PACK_VERSION = "1.43.0"
 
 
 @dataclass(frozen=True)
@@ -415,6 +415,20 @@ BOUNDARIES = (
         "bundled:srd/reactions",
     ),
     CoreBoundary(
+        "dnd5e.core.spell.shield",
+        ("2014", "2024"),
+        (
+            "spells.is_core_shield_spell|available_shield_cast_options|"
+            "consume_shield_reaction"
+        ),
+        (
+            "tests/test_spells.py::test_shield_reaction_pays_slot_and_expires_at_turn_start",
+            "tests/test_spells.py::"
+            "test_shield_name_without_source_bound_mechanic_is_not_executable",
+        ),
+        "bundled:srd/shield",
+    ),
+    CoreBoundary(
         "dnd5e.core.spell.shield_attack_ac",
         ("2014", "2024"),
         "spells.available_shield_attack_defenses|consume_shield_reaction",
@@ -471,6 +485,19 @@ BOUNDARIES = (
         "combat_engine._damage_defense_traits",
         ("tests/test_combat_engine.py::test_attuned_magic_item_grants_damage_resistance",),
         "bundled:srd2014/09_Magic_Items/Magic_Items_Each/Ring_of_Resistance.md",
+    ),
+    CoreBoundary(
+        "dnd5e.core.spell.magic_missile",
+        ("2014", "2024"),
+        (
+            "spells.is_core_magic_missile_spell|magic_missile_dart_count|"
+            "validate_magic_missile_allocations"
+        ),
+        (
+            "tests/test_spells.py::"
+            "test_magic_missile_allocation_and_shield_trigger_are_source_bound",
+        ),
+        "bundled:srd/magic-missile",
     ),
     CoreBoundary(
         "dnd5e.core.spell.magic_missile_darts",

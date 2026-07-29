@@ -7,6 +7,7 @@ from sagasmith_dnd.core_content import (
     _known_feature_structure,
     build_srd2014_content,
 )
+from sagasmith_dnd.core_rule_pack import get_core_rule_pack
 
 
 def test_non_numeric_feat_prerequisite_defaults_to_agent_review() -> None:
@@ -47,6 +48,10 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     assert "dnd5e.core.spell.structured_resolution" in manifest[
         "native_mechanic_refs"
     ]
+    registered = {
+        boundary.id for boundary in get_core_rule_pack("2014").boundaries
+    }
+    assert set(manifest["native_mechanic_refs"]) <= registered
     assert counts["spell"] == 319
     assert counts["species"] == 13
     assert counts["class"] == 12
