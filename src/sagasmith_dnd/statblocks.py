@@ -337,7 +337,10 @@ def _parse_weapon(
         on_hit_effect = ""
         trailing_warning = f"{name}: trailing page furniture excluded from action settlement"
     elif normalized_actor_name and re.match(
-        rf"(?i)^{re.escape(normalized_actor_name)}s?\b",
+        (
+            rf"(?i)^(?:{re.escape(normalized_actor_name)}"
+            rf"|{re.escape(normalized_actor_name.split()[-1])})s?\b"
+        ),
         unformatted_on_hit_effect,
     ):
         trailing_prose = on_hit_effect

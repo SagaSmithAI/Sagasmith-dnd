@@ -422,6 +422,39 @@ artisans, and hermits.
     )
 
 
+def test_multiword_actor_lore_using_head_noun_is_not_an_on_hit_effect() -> None:
+    parsed = parse_2014_statblock(
+        """### Cult Fanatic
+
+*Medium humanoid (any race), any non-good alignment*
+
+**Armor Class** 13
+**Hit Points** 33 (6d8 + 6)
+**Speed** 30 ft.
+
+| STR | DEX | CON | INT | WIS | CHA |
+|---:|---:|---:|---:|---:|---:|
+| 11 (+0) | 14 (+2) | 12 (+1) | 10 (+0) | 13 (+1) | 14 (+2) |
+
+**Senses** passive Perception 10
+**Languages** Common
+**Challenge** 2 (450 XP)
+
+## Actions
+
+***Dagger.*** *Melee Weapon Attack:* +4 to hit, reach 5 ft., one creature.
+*Hit:* 4 (1d4 + 2) piercing damage. Fanatics often lead dangerous cults.
+""",
+        source_key="srd-cult-fanatic-with-lore",
+    )
+    dagger = derive_character_sheet(parsed.sheet)["inventory"]["weapon_attacks"][0]
+
+    assert dagger["on_hit_effect"] == ""
+    assert parsed.warnings == (
+        "Dagger: trailing creature prose excluded from action settlement",
+    )
+
+
 def test_flat_damage_weapon_is_executable_without_inventing_damage_dice() -> None:
     parsed = parse_2014_statblock(
         COMMONER.replace("*Hit:* 2 (1d4) bludgeoning damage.", "*Hit:* 1 piercing damage."),
