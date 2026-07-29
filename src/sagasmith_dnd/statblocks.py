@@ -1702,12 +1702,22 @@ def parse_2014_statblock(
                 "sunlight_sensitivity": "attack roll or sight-based Perception check",
             }[str(source_trait["kind"])]
             entry["choices"] = {"source_trait": source_trait}
+        reaction_description = (
+            description.split("\n\n", 1)[0].strip()
+            if activation == "reaction"
+            else description
+        )
         reaction_defense = (
-            _parry_reaction_defense(description)
+            _parry_reaction_defense(reaction_description)
             if activation == "reaction"
             else None
         )
         if reaction_defense is not None:
+            if reaction_description != description:
+                entry["description"] = reaction_description
+                normalization_notes.append(
+                    f"{entry_name}: trailing creature prose excluded from reaction settlement"
+                )
             entry["activation"]["trigger"] = "hit by a melee attack"
             entry["choices"] = {"reaction_defense": reaction_defense}
         if source_trait is None and reaction_defense is None:

@@ -1980,6 +1980,36 @@ def test_source_parry_preserves_visibility_and_wielded_weapon_requirements() -> 
     assert parsed.warnings == ()
 
 
+def test_source_parry_excludes_a_following_creature_lore_paragraph() -> None:
+    parsed = parse_2014_statblock(
+        BANDIT_CAPTAIN.replace(
+            "The captain adds 2 to its AC against one melee attack that would hit it.",
+            (
+                "The captain adds 2 to its AC against one melee attack that would hit it. "
+                "To do so, the captain must see the attacker and be wielding a melee weapon."
+            ),
+        )
+        + """
+
+It takes a strong personality and ruthless cunning to keep a gang of bandits
+in line. The bandit captain has these qualities in spades.
+""",
+        source_key="srd-bandit-captain-with-lore",
+    )
+
+    parry = next(
+        item
+        for item in parsed.sheet["content"]["activities"]
+        if item["name"] == "Parry"
+    )
+    assert parry["choices"]["reaction_defense"]["kind"] == "armor_class_bonus"
+    assert "strong personality" not in parry["description"]
+    assert parsed.warnings == ()
+    assert parsed.normalization_notes == (
+        "Parry: trailing creature prose excluded from reaction settlement",
+    )
+
+
 def test_reaction_defense_is_compiled_from_complete_text_not_activity_name() -> None:
     parsed = parse_2014_statblock(
         BANDIT_CAPTAIN.replace("***Parry***.", "***Deflect***."),
