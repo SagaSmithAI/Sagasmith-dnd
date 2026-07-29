@@ -347,8 +347,15 @@ def _parse_weapon(
         on_hit_effect = ""
         trailing_warning = f"{name}: trailing creature prose excluded from action settlement"
     reach = re.search(r"(?i)reach\s+(\d+)\s*ft", description)
+    # Some text-only OCR pipelines confuse the slash in a weapon's two-part
+    # range with ``f``.  Recover that glyph only inside the complete attack
+    # range grammar; the source description itself remains unchanged.
     ranges = re.search(
-        r"(?i)range\s+(\d+)(?:\s*ft\.?)?(?:\s*/\s*(\d+))?\s*ft\.?",
+        (
+            r"(?i)\brange\s+(\d+)"
+            r"(?:(?:(?:\s*ft\.?)?\s*/\s*|\s*f\s*)(\d+))?"
+            r"\s*ft\.?"
+        ),
         description,
     )
     properties: list[str] = []

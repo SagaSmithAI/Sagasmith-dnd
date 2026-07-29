@@ -841,6 +841,39 @@ Goblins are black-hearted and gather in overwhelming numbers.
     )
 
 
+def test_weapon_range_recovers_ocr_f_separator_inside_attack_grammar() -> None:
+    source = BANDIT_CAPTAIN.replace("range 20/60 ft.", "range 20f60 ft.")
+    parsed = parse_2014_statblock(source, source_key="module-review:ocr-bandit-captain")
+    dagger = next(
+        item for item in parsed.sheet["inventory"]["items"] if item["name"] == "Dagger"
+    )
+    attacks = {
+        item["item_id"]: item
+        for item in derive_character_sheet(parsed.sheet)["inventory"]["weapon_attacks"]
+    }
+
+    assert "range 20f60 ft." in dagger["description"]
+    assert attacks["dagger"]["thrown_range_ft"] == {"normal": 20, "long": 60}
+
+
+def test_weapon_range_does_not_recover_ambiguous_prose_as_separator() -> None:
+    source = BANDIT_CAPTAIN.replace("range 20/60 ft.", "range 20fuzzy60 ft.")
+    parsed = parse_2014_statblock(
+        source,
+        source_key="module-review:ambiguous-bandit-captain",
+    )
+    dagger = next(
+        item for item in parsed.sheet["inventory"]["items"] if item["name"] == "Dagger"
+    )
+    attacks = {
+        item["item_id"]: item
+        for item in derive_character_sheet(parsed.sheet)["inventory"]["weapon_attacks"]
+    }
+
+    assert "range 20fuzzy60 ft." in dagger["description"]
+    assert attacks["dagger"]["thrown_range_ft"] == {"normal": 0, "long": 0}
+
+
 def test_bandit_captain_preserves_exact_overrides_and_multiattack_composition() -> None:
     parsed = parse_2014_statblock(
         BANDIT_CAPTAIN,
