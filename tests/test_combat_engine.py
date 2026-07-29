@@ -537,6 +537,77 @@ def test_2014_jack_of_all_trades_applies_only_to_unproficient_ability_checks() -
     assert revised_check["total"] == 13
 
 
+def test_keen_perception_requires_and_uses_sensory_facts() -> None:
+    scout = _actor("scout")
+    scout["sheet"]["content"]["features"] = [
+        {
+            "id": "keen-hearing-and-sight-passive",
+            "name": "Keen Hearing and Sight",
+            "activation": {
+                "type": "passive",
+                "trigger": "hearing- or sight-based Perception check",
+            },
+            "choices": {
+                "source_trait": {
+                    "kind": "keen_perception",
+                    "trigger": "perception_check",
+                    "senses": ["hearing", "sight"],
+                    "grants": "advantage",
+                    "automatic": True,
+                }
+            },
+        }
+    ]
+    scout["derived"] = derive_character_sheet(scout["sheet"])
+    base_rules = {
+        "edition": "2014",
+        "fingerprint": "",
+        "lock": [],
+        "mechanics": [],
+    }
+
+    with pytest.raises(NeedsRulingError, match="hearing or sight basis"):
+        resolve_actor_check(
+            scout,
+            kind="check",
+            ability="perception",
+            dc=12,
+            rules=resolution_context(base_rules),
+            rng=_SequenceRng(10),
+        )
+
+    hearing = resolve_actor_check(
+        scout,
+        kind="check",
+        ability="perception",
+        dc=12,
+        rules=resolution_context(
+            base_rules,
+            facts={"perception_senses": ["hearing"]},
+        ),
+        rng=_SequenceRng(4, 17),
+    )
+    assert hearing["rolls"] == [4, 17]
+    assert hearing["natural"] == 17
+    assert any(
+        receipt["mechanic_id"] == "dnd5e.core.check.keen_perception"
+        for receipt in hearing["rule_receipts"]
+    )
+
+    unrelated = resolve_actor_check(
+        scout,
+        kind="check",
+        ability="perception",
+        dc=12,
+        rules=resolution_context(
+            base_rules,
+            facts={"perception_senses": ["other"]},
+        ),
+        rng=_SequenceRng(9),
+    )
+    assert unrelated["rolls"] == [9]
+
+
 def test_2014_ability_contest_compares_totals_and_uses_no_synthetic_dc() -> None:
     deceiver = _actor("deceiver")
     deceiver["sheet"]["abilities"]["charisma"]["score"] = 16

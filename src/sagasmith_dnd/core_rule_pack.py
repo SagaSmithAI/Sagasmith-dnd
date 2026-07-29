@@ -328,6 +328,18 @@ BOUNDARIES = (
         "source:monster-manual-2014:p195",
     ),
     CoreBoundary(
+        "dnd5e.core.check.keen_perception",
+        ("2014",),
+        "combat_engine.resolve_actor_check",
+        (
+            "tests/test_combat_engine.py::"
+            "test_keen_perception_requires_and_uses_sensory_facts",
+            "tests/test_statblocks.py::"
+            "test_keen_perception_trait_is_structured",
+        ),
+        "source:monster-manual-2014:p349",
+    ),
+    CoreBoundary(
         "dnd5e.core.attack.source_targeting",
         ("2014", "2024"),
         "combat_engine.preflight_attack",

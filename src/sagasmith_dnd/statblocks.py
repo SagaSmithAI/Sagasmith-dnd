@@ -904,6 +904,30 @@ def _sunlight_sensitivity_source_trait(description: str) -> dict[str, Any] | Non
     }
 
 
+def _keen_perception_source_trait(description: str) -> dict[str, Any] | None:
+    normalized = " ".join(description.split())
+    match = re.fullmatch(
+        r"The [A-Za-z][A-Za-z '\-]* has advantage on Wisdom "
+        r"\(Perception\) checks that rely on "
+        r"(?P<senses>hearing|sight|hearing or sight)\.",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    senses = [
+        value.strip().casefold()
+        for value in re.split(r"\s+or\s+", match.group("senses"))
+    ]
+    return {
+        "kind": "keen_perception",
+        "trigger": "perception_check",
+        "senses": senses,
+        "grants": "advantage",
+        "automatic": True,
+    }
+
+
 def _source_trait_from_description(description: str) -> dict[str, Any] | None:
     matches = [
         parsed
@@ -911,6 +935,7 @@ def _source_trait_from_description(description: str) -> dict[str, Any] | None:
             _regeneration_source_trait,
             _pack_tactics_source_trait,
             _sunlight_sensitivity_source_trait,
+            _keen_perception_source_trait,
         )
         if (parsed := parser(description)) is not None
     ]
@@ -1700,6 +1725,7 @@ def parse_2014_statblock(
                 "regeneration": "start of its turn",
                 "pack_tactics": "attack roll",
                 "sunlight_sensitivity": "attack roll or sight-based Perception check",
+                "keen_perception": "hearing- or sight-based Perception check",
             }[str(source_trait["kind"])]
             entry["choices"] = {"source_trait": source_trait}
         reaction_description = (

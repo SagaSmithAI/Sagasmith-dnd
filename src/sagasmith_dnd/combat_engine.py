@@ -4277,6 +4277,56 @@ def resolve_actor_check(
     if armor_stealth_disadvantage:
         disadvantage = True
     boundary_ids = []
+    keen_perception_traits = [
+        dict(source_trait)
+        for feature in dict(sheet.get("content") or {}).get("features", [])
+        if (
+            source_trait := dict(
+                dict(feature.get("choices") or {}).get("source_trait") or {}
+            )
+        )
+        and source_trait.get("kind") == "keen_perception"
+    ]
+    if (
+        kind in ABILITY_CHECK_KINDS
+        and normalized_ability == "perception"
+        and keen_perception_traits
+    ):
+        perception_senses = (
+            dict(rules.facts).get("perception_senses") if rules is not None else None
+        )
+        if (
+            not isinstance(perception_senses, list)
+            or not perception_senses
+            or len(perception_senses) > 3
+            or any(
+                str(value).strip().casefold() not in {"hearing", "sight", "other"}
+                for value in perception_senses
+            )
+            or len(
+                {
+                    str(value).strip().casefold()
+                    for value in perception_senses
+                }
+            )
+            != len(perception_senses)
+        ):
+            raise NeedsRulingError(
+                "Keen Perception requires the check's hearing or sight basis",
+                missing=("perception_senses",),
+                ruling_kind="agent_dm_adjudication",
+            )
+        relied_senses = {
+            str(value).strip().casefold() for value in perception_senses
+        }
+        granted_senses = {
+            str(value).strip().casefold()
+            for trait in keen_perception_traits
+            for value in trait.get("senses", [])
+        }
+        if relied_senses & granted_senses:
+            advantage = True
+        boundary_ids.append("dnd5e.core.check.keen_perception")
     if kind == "save" and _long_ability_name(ability) == "dexterity" and "restrained" in conditions:
         boundary_ids.append("dnd5e.core.save.restrained_dexterity")
     if armor_stealth_disadvantage:

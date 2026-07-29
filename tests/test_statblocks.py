@@ -1254,6 +1254,37 @@ def test_kobold_attack_traits_are_structured() -> None:
     assert parsed.warnings == ()
 
 
+def test_keen_perception_trait_is_structured() -> None:
+    parsed = parse_2014_statblock(
+        COMMONER.replace(
+            "###### Actions",
+            (
+                "***Keen Hearing and Sight.*** The commoner has advantage on "
+                "Wisdom (Perception) checks that rely on hearing or sight.\n\n"
+                "###### Actions"
+            ),
+        ),
+        source_key="monster-manual-2014:p349",
+    )
+    feature = next(
+        item
+        for item in parsed.sheet["content"]["features"]
+        if item["name"] == "Keen Hearing and Sight"
+    )
+
+    assert feature["activation"]["trigger"] == (
+        "hearing- or sight-based Perception check"
+    )
+    assert feature["choices"]["source_trait"] == {
+        "kind": "keen_perception",
+        "trigger": "perception_check",
+        "senses": ["hearing", "sight"],
+        "grants": "advantage",
+        "automatic": True,
+    }
+    assert parsed.warnings == ()
+
+
 def test_source_traits_are_compiled_from_complete_text_not_feature_names() -> None:
     parsed = parse_2014_statblock(
         KOBOLD.replace(
