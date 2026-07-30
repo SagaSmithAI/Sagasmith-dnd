@@ -30,7 +30,7 @@ class StatblockImportError(ValueError):
     """Raised when required statblock facts cannot be recovered from the source text."""
 
 
-OCR_STATBLOCK_RECOVERY_VERSION = 4
+OCR_STATBLOCK_RECOVERY_VERSION = 5
 
 
 @dataclass(frozen=True)
@@ -3503,6 +3503,25 @@ def _ocr_heading_has_identity(
     )
 
 
+def _ocr_is_terminal_subject_heading(
+    block: dict[str, Any],
+    *,
+    target_key: str,
+) -> bool:
+    """Recognize a trailing plural lore heading for the recovered creature."""
+
+    text = str(block["text"]).strip()
+    if not text.endswith((".", ":")) or text != text.upper():
+        return False
+    heading_key = _ocr_key(text.rstrip(".:"))
+    plural_keys = {
+        f"{target_key}s",
+        f"{target_key}es",
+        f"{target_key[:-1]}ies" if target_key.endswith("y") else "",
+    }
+    return heading_key in plural_keys
+
+
 def recover_2014_statblock_from_ocr(
     layout: dict[str, Any],
     *,
@@ -3590,10 +3609,28 @@ def recover_2014_statblock_from_ocr(
         and re.fullmatch(r"\d{1,4}", block["text"])
     ]
     page_furniture_ids = {block["index"] for block in page_furniture}
-    scoped = [
+    non_furniture = [
         block
         for block in unfiltered_scoped
         if block["index"] not in page_furniture_ids
+    ]
+    trailing_subject_headings = (
+        [non_furniture[-1]]
+        if non_furniture
+        and _ocr_is_terminal_subject_heading(
+            non_furniture[-1],
+            target_key=target_key,
+        )
+        else []
+    )
+    excluded_ids = {
+        *page_furniture_ids,
+        *(block["index"] for block in trailing_subject_headings),
+    }
+    scoped = [
+        block
+        for block in unfiltered_scoped
+        if block["index"] not in excluded_ids
     ]
     identity = next(
         (block for block in scoped[1:] if _OCR_IDENTITY_RE.fullmatch(block["text"])),
@@ -3769,6 +3806,9 @@ def recover_2014_statblock_from_ocr(
             "minimum_core_confidence": min(block["confidence"] for block in critical),
             "block_count": len(scoped),
             "excluded_page_furniture_count": len(page_furniture),
+            "excluded_trailing_subject_heading_count": len(
+                trailing_subject_headings
+            ),
             "column_split": split,
             "column_bounds": column_bounds,
             "text_only": True,

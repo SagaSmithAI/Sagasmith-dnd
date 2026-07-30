@@ -3135,6 +3135,7 @@ def test_layout_ocr_recovers_one_statblock_without_image_reasoning() -> None:
                 770,
             ),
             block("a successful save.", 80, 770, 260, 795),
+            block("ADULT BLUE DRAGONS.", 80, 805, 280, 830),
             # Real Monster Manual OCR can overlap the next statblock heading and
             # identity boxes by a few pixels. The peer still bounds this block.
             block("BLUE DRAGON WYRMLING", 80, 840, 390, 875),
@@ -3175,6 +3176,7 @@ def test_layout_ocr_recovers_one_statblock_without_image_reasoning() -> None:
     assert recovered["evidence"]["matching_heading_count"] == 2
     assert recovered["evidence"]["structural_heading_count"] == 1
     assert recovered["evidence"]["excluded_page_furniture_count"] == 0
+    assert recovered["evidence"]["excluded_trailing_subject_heading_count"] == 1
     assert recovered["critical_facts"] == {
         "identity": "Huge dragon, lawful evil",
         "armor_class": "19 (natural armor)",
@@ -3203,6 +3205,7 @@ def test_layout_ocr_recovers_one_statblock_without_image_reasoning() -> None:
     assert "| 25 (+7) | 10 (+0) | 23 (+6)" in recovered["normalized_content"]
     assert "half as much damage on" in recovered["normalized_content"]
     assert "darmage" not in recovered["normalized_content"]
+    assert "ADULT BLUE DRAGONS" not in recovered["normalized_content"]
     assert "\n\n291" not in recovered["normalized_content"]
 
     next(
