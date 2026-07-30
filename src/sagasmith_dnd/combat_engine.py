@@ -6735,6 +6735,7 @@ def resolve_save_damage_to_sheets(
             dc=save_dc,
             advantage=advantage,
             disadvantage=disadvantage,
+            save_effect_conditions=[],
             ruleset=normalized_ruleset,
             rules=context_with_facts(
                 rules,

@@ -333,6 +333,18 @@ def test_condition_based_save_advantage_requires_effect_conditions() -> None:
     assert damage_only["roll_mode"] == "normal"
     assert damage_only["rule_receipts"] == []
 
+    settled_damage = resolve_save_damage_to_sheet(
+        actor,
+        save_ability="wisdom",
+        save_dc=12,
+        damage_expression="1d6",
+        damage_type="fire",
+        half_on_success=True,
+        source="pure-damage-effect",
+        rng=_SequenceRng(3, 10),
+    )
+    assert settled_damage["result"]["save"]["roll_mode"] == "normal"
+
 
 def test_evasion_rewrites_dexterity_save_for_half_damage() -> None:
     trait = {
