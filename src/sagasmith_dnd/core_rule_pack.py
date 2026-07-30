@@ -484,6 +484,18 @@ BOUNDARIES = (
         "source:monster-manual-2014:assassin",
     ),
     CoreBoundary(
+        "dnd5e.core.attack.weapon_hit_save_damage",
+        ("2014", "2024"),
+        "statblocks._saving_throw_damage_on_hit|combat_engine.resolve_attack_damage",
+        (
+            "tests/test_combat_engine.py::"
+            "test_weapon_hit_save_damage_is_settled_inside_one_attack",
+            "tests/test_statblocks.py::"
+            "test_weapon_hit_save_damage_is_structured_from_exact_text",
+        ),
+        "bundled:srd/combat/saving-throws-and-damage",
+    ),
+    CoreBoundary(
         "dnd5e.core.monster.aggressive",
         ("2014",),
         "combat_engine.settle_core_activity_effect",

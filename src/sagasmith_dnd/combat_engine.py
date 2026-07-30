@@ -2523,6 +2523,89 @@ def available_attack_defenses(
     return options
 
 
+def _resolve_weapon_hit_save_damage(
+    target: dict[str, Any],
+    resolution: dict[str, Any],
+    *,
+    rules: ResolutionContext | None,
+    rng: Any,
+) -> dict[str, Any]:
+    """Roll one source-bound save-for-half weapon rider without mutating a sheet."""
+
+    expected = {
+        "kind": "save_damage",
+        "trigger": "weapon_hit",
+        "save_ability": str(resolution.get("save_ability") or ""),
+        "save_dc": int(resolution.get("save_dc", 0) or 0),
+        "damage_formula": str(resolution.get("damage_formula") or ""),
+        "average_damage": int(resolution.get("average_damage", 0) or 0),
+        "damage_type": str(resolution.get("damage_type") or ""),
+        "half_on_success": True,
+        "save_source_kind": str(resolution.get("save_source_kind") or ""),
+        "automatic": True,
+        "source_excerpt": str(resolution.get("source_excerpt") or ""),
+    }
+    if (
+        resolution != expected
+        or expected["save_ability"]
+        not in {
+            "strength",
+            "dexterity",
+            "constitution",
+            "intelligence",
+            "wisdom",
+            "charisma",
+        }
+        or not 1 <= expected["save_dc"] <= 40
+        or re.fullmatch(
+            r"\d+d\d+(?:[+-]\d+)?",
+            expected["damage_formula"],
+        )
+        is None
+        or expected["average_damage"] <= 0
+        or not expected["damage_type"]
+        or expected["save_source_kind"]
+        not in {"spell", "magical_effect", "nonmagical_effect"}
+        or not expected["source_excerpt"]
+    ):
+        raise CombatEngineError("unsupported weapon-hit save-damage resolution")
+    save = resolve_actor_check(
+        target,
+        kind="save",
+        ability=expected["save_ability"],
+        dc=expected["save_dc"],
+        rules=context_with_facts(
+            rules,
+            save_source_kind=expected["save_source_kind"],
+        ),
+        rng=rng,
+    )
+    damage_roll = asdict(roll(expected["damage_formula"], rng=rng))
+    reduction_settlement = standard_save_damage_reduction(
+        target,
+        ability=expected["save_ability"],
+        success=bool(save["success"]),
+        ordinary_successful_save="half",
+        rules=rules,
+    )
+    reduction = str(reduction_settlement["damage_reduction"])
+    return {
+        "kind": "save_damage",
+        "save": save,
+        "success": bool(save["success"]),
+        "damage_roll": damage_roll,
+        "damage_reduction": reduction,
+        "damage_amount": damage_amount_after_reduction(
+            int(damage_roll["total"]),
+            reduction,
+        ),
+        "damage_type": expected["damage_type"],
+        "source_excerpt": expected["source_excerpt"],
+        "rule_receipts": list(reduction_settlement.get("rule_receipts") or []),
+        "mechanic_id": "dnd5e.core.attack.weapon_hit_save_damage",
+    }
+
+
 def resolve_attack_damage(
     attacker: dict[str, Any],
     target: dict[str, Any],
@@ -2603,6 +2686,27 @@ def resolve_attack_damage(
                     "source": str(extra.get("source") or ""),
                 }
             )
+        save_damage_on_hit: dict[str, Any] | None = None
+        on_hit_resolution = dict(plan.get("on_hit_resolution") or {})
+        if on_hit_resolution.get("kind") == "save_damage":
+            save_damage_on_hit = _resolve_weapon_hit_save_damage(
+                target,
+                on_hit_resolution,
+                rules=rules,
+                rng=rng,
+            )
+            rider_roll = dict(save_damage_on_hit["damage_roll"])
+            rolled_parts.append(
+                {
+                    "expression": str(rider_roll["expression"]),
+                    "rolled_expression": str(rider_roll["expression"]),
+                    "rolls": list(rider_roll["rolls"]),
+                    "detail": str(rider_roll["detail"]),
+                    "amount": int(save_damage_on_hit["damage_amount"]),
+                    "damage_type": str(save_damage_on_hit["damage_type"]),
+                    "source": "weapon_hit_save_damage",
+                }
+            )
         if len(rolled_parts) == 1:
             damage = apply_damage_to_sheet(
                 target_sheet,
@@ -2648,16 +2752,19 @@ def resolve_attack_damage(
             }
             result["damage"]["sneak_attack"] = deepcopy(result["sneak_attack"])
         if plan.get("on_hit_resolution"):
-            structured_on_hit = resolve_standard_weapon_on_hit(
-                updated_target["sheet"],
-                dict(plan["on_hit_resolution"]),
-            )
-            updated_target["sheet"] = structured_on_hit["sheet"]
-            result["structured_on_hit"] = {
-                key: value
-                for key, value in structured_on_hit.items()
-                if key != "sheet"
-            }
+            if save_damage_on_hit is not None:
+                result["structured_on_hit"] = save_damage_on_hit
+            else:
+                structured_on_hit = resolve_standard_weapon_on_hit(
+                    updated_target["sheet"],
+                    dict(plan["on_hit_resolution"]),
+                )
+                updated_target["sheet"] = structured_on_hit["sheet"]
+                result["structured_on_hit"] = {
+                    key: value
+                    for key, value in structured_on_hit.items()
+                    if key != "sheet"
+                }
         if plan.get("on_hit_effect"):
             result["on_hit_ruling"] = {
                 "required": True,
@@ -2665,6 +2772,38 @@ def resolve_attack_damage(
                 "default_resolver": "agent",
                 "ruling_kind": "source_or_scene_fact",
             }
+    elif (
+        attack["hit"]
+        and dict(plan.get("on_hit_resolution") or {}).get("kind")
+        == "save_damage"
+    ):
+        save_damage_on_hit = _resolve_weapon_hit_save_damage(
+            target,
+            dict(plan["on_hit_resolution"]),
+            rules=rules,
+            rng=rng,
+        )
+        damage_amount = int(save_damage_on_hit["damage_amount"])
+        if damage_amount:
+            damage = apply_damage_to_sheet(
+                actor_sheet(updated_target),
+                amount=damage_amount,
+                damage_type=str(save_damage_on_hit["damage_type"]),
+                source=actor_id(attacker),
+                ruleset=str(plan.get("ruleset") or DEFAULT_CHARACTER_EDITION),
+                death_saves=bool(plan.get("target_uses_death_saves", True)),
+            )
+            updated_target["sheet"] = damage["sheet"]
+            result["damage"] = {
+                **damage,
+                "expression": str(save_damage_on_hit["damage_roll"]["expression"]),
+                "rolled_expression": str(
+                    save_damage_on_hit["damage_roll"]["expression"]
+                ),
+                "rolls": list(save_damage_on_hit["damage_roll"]["rolls"]),
+                "detail": str(save_damage_on_hit["damage_roll"]["detail"]),
+            }
+        result["structured_on_hit"] = save_damage_on_hit
     elif attack["hit"] and plan.get("on_hit_effect"):
         result["on_hit_ruling"] = {
             "required": True,
@@ -2767,6 +2906,13 @@ def resolve_attack_damage(
         resolution_boundaries.append("dnd5e.core.monster.heated_body")
     if isinstance(result.get("corrosive_form"), dict):
         resolution_boundaries.append("dnd5e.core.monster.corrosive_form")
+    if (
+        isinstance(result.get("structured_on_hit"), dict)
+        and result["structured_on_hit"].get("kind") == "save_damage"
+    ):
+        resolution_boundaries.append(
+            "dnd5e.core.attack.weapon_hit_save_damage"
+        )
     extension_receipts: list[dict[str, Any]] = [
         *list(plan.get("rule_receipts") or []),
         *core_receipts(

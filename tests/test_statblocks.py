@@ -2015,6 +2015,53 @@ def test_assassinate_is_structured_from_exact_text() -> None:
     assert parsed.warnings == ()
 
 
+def test_weapon_hit_save_damage_is_structured_from_exact_text() -> None:
+    source_excerpt = (
+        "and the target must make a DC 15 Constitution saving throw, taking "
+        "24 (7d6) poison damage on a failed save, or half as much damage on a "
+        "successful one."
+    )
+    parsed = parse_2014_statblock(
+        COMMONER.replace("### Commoner", "### Assassin").replace(
+            "***Club***. *Melee Weapon Attack:* +2 to hit, reach 5 ft., one target.\n"
+            "*Hit:* 2 (1d4) bludgeoning damage.",
+            "***Shortsword***. *Melee Weapon Attack:* +7 to hit, reach 5 ft., "
+            "one target.\n"
+            "*Hit:* 6 (1d6 + 3) piercing damage, and the target must\n\n"
+            "make a DC 15 Constitution saving throw, taking 24 (7d6)\n\n"
+            "poison damage on a failed save, or half as much damage on a\n\n"
+            "successful one.\n\n"
+            "Assassins are remorseless killers who work for anyone who can "
+            "afford them.",
+        ),
+        source_key="monster-manual-2014:assassin",
+    )
+    shortsword = next(
+        item
+        for item in parsed.sheet["inventory"]["items"]
+        if item["name"] == "Shortsword"
+    )
+
+    assert shortsword["mechanics"]["on_hit_effect"] == ""
+    assert shortsword["mechanics"]["on_hit_resolution"] == {
+        "kind": "save_damage",
+        "trigger": "weapon_hit",
+        "save_ability": "constitution",
+        "save_dc": 15,
+        "damage_formula": "7d6",
+        "average_damage": 24,
+        "damage_type": "poison",
+        "half_on_success": True,
+        "save_source_kind": "nonmagical_effect",
+        "automatic": True,
+        "source_excerpt": source_excerpt,
+    }
+    assert parsed.warnings == ()
+    assert parsed.normalization_notes == (
+        "Shortsword: trailing creature prose excluded from action settlement",
+    )
+
+
 def test_source_trait_with_unparsed_clause_stays_an_agent_ruling() -> None:
     parsed = parse_2014_statblock(
         KOBOLD.replace(

@@ -473,6 +473,39 @@ def _parse_weapon(
                 versatile_additional_damage.append(deepcopy(damage_part))
             last_damage_end = hit.end() + extra.end()
         raw_on_hit_effect = description[last_damage_end:]
+        trailing_paragraph_prose = ""
+        normalized_actor_name = actor_name.strip()
+        actor_lore_candidate = re.sub(r"[*_`~]", " ", raw_on_hit_effect)
+        actor_lore_match = (
+            re.search(
+                (
+                    rf"(?i)(?:^\s*|(?<=[.!?])\s+)"
+                    rf"[^.!?]*?"
+                    rf"(?:(?:a|an|the)\s+)?"
+                    rf"(?:{re.escape(normalized_actor_name)}"
+                    rf"|{re.escape(normalized_actor_name.split()[-1])})s?\b"
+                ),
+                actor_lore_candidate,
+            )
+            if normalized_actor_name
+            else None
+        )
+        carries_standard_ammunition = _trailing_standard_ammunition(
+            raw_on_hit_effect,
+            actor_name=actor_name,
+            weapon_name=name,
+            source_key=source_key,
+        )
+        if (
+            actor_lore_match is not None
+            and carries_standard_ammunition is None
+        ):
+            trailing_paragraph_prose = raw_on_hit_effect[
+                actor_lore_match.start() :
+            ].strip()
+            raw_on_hit_effect = raw_on_hit_effect[
+                : actor_lore_match.start()
+            ].strip()
         complete_structured_on_hit = (
             _armor_corrosion_on_hit(
                 raw_on_hit_effect.strip().lstrip(". ,;").strip()
@@ -480,9 +513,11 @@ def _parse_weapon(
             or _ignition_ongoing_damage_on_hit(
                 raw_on_hit_effect.strip().lstrip(". ,;").strip()
             )
+            or _saving_throw_damage_on_hit(
+                raw_on_hit_effect.strip().lstrip(". ,;").strip()
+            )
         )
         trailing_paragraph_match = re.search(r"\n\s*\n", raw_on_hit_effect)
-        trailing_paragraph_prose = ""
         if trailing_paragraph_match and complete_structured_on_hit is None:
             trailing_paragraph_prose = raw_on_hit_effect[
                 trailing_paragraph_match.end() :
@@ -532,6 +567,7 @@ def _parse_weapon(
         re.search(
             (
                 rf"(?i)(?:^\s*|(?<=[.!?])\s+)"
+                rf"[^.!?]*?"
                 rf"(?:(?:a|an|the)\s+)?"
                 rf"(?:{re.escape(normalized_actor_name)}"
                 rf"|{re.escape(normalized_actor_name.split()[-1])})s?\b"
@@ -608,6 +644,7 @@ def _parse_weapon(
     structured_on_hit = (
         _armor_corrosion_on_hit(on_hit_effect)
         or _ignition_ongoing_damage_on_hit(on_hit_effect)
+        or _saving_throw_damage_on_hit(on_hit_effect)
     )
     if structured_on_hit is not None:
         mechanics["on_hit_resolution"] = structured_on_hit
@@ -719,6 +756,37 @@ def _ignition_ongoing_damage_on_hit(
         "trigger_timing": f"turn_{match.group('timing').casefold()}",
         "end_action": "use_object",
         "end_action_description": "douse the fire",
+        "automatic": True,
+        "source_excerpt": normalized,
+    }
+
+
+def _saving_throw_damage_on_hit(description: str) -> dict[str, Any] | None:
+    """Compile a weapon rider that deals save-for-half damage on a hit."""
+
+    normalized = " ".join(description.split())
+    match = re.fullmatch(
+        r"and the target must make a DC (?P<dc>\d+) "
+        r"(?P<ability>Strength|Dexterity|Constitution|Intelligence|Wisdom|Charisma) "
+        r"saving throw, taking (?P<average>\d+) "
+        r"\((?P<formula>\d+d\d+(?:\s*[+\-]\s*\d+)?)\) "
+        r"(?P<damage_type>[a-z]+) damage on a failed save, or half as much "
+        r"damage on a successful one\.",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    return {
+        "kind": "save_damage",
+        "trigger": "weapon_hit",
+        "save_ability": match.group("ability").casefold(),
+        "save_dc": int(match.group("dc")),
+        "damage_formula": re.sub(r"\s+", "", match.group("formula")).casefold(),
+        "average_damage": int(match.group("average")),
+        "damage_type": match.group("damage_type").casefold(),
+        "half_on_success": True,
+        "save_source_kind": "nonmagical_effect",
         "automatic": True,
         "source_excerpt": normalized,
     }

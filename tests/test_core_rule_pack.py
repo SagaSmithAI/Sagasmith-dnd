@@ -19,6 +19,7 @@ REQUIRED_BOUNDARIES = {
     "dnd5e.core.attack.hidden_reveal",
     "dnd5e.core.attack.ranged_close_combat",
     "dnd5e.core.attack.source_targeting",
+    "dnd5e.core.attack.weapon_hit_save_damage",
     "dnd5e.core.damage.zero_hp",
     "dnd5e.core.damage.knockout",
     "dnd5e.core.damage.stable_recovery",

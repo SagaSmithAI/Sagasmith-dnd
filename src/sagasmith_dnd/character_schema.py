@@ -659,6 +659,86 @@ def _normalize_weapon_on_hit_resolution(value: Any, field: str) -> dict[str, Any
     trigger = _text(resolution.get("trigger"), f"{field}.trigger")
     if trigger != "weapon_hit":
         raise ValueError(f"{field}.trigger is unsupported")
+    if kind == "save_damage":
+        _reject_unknown(
+            resolution,
+            field,
+            {
+                "kind",
+                "trigger",
+                "save_ability",
+                "save_dc",
+                "damage_formula",
+                "average_damage",
+                "damage_type",
+                "half_on_success",
+                "save_source_kind",
+                "automatic",
+                "source_excerpt",
+            },
+        )
+        save_ability = _text(
+            resolution.get("save_ability"),
+            f"{field}.save_ability",
+        ).casefold()
+        if save_ability not in ABILITY_NAMES:
+            raise ValueError(f"{field}.save_ability is invalid")
+        damage_formula = re.sub(
+            r"\s+",
+            "",
+            _text(
+                resolution.get("damage_formula"),
+                f"{field}.damage_formula",
+                maximum=100,
+            ).casefold(),
+        )
+        if not re.fullmatch(r"\d+d\d+(?:[+-]\d+)?", damage_formula):
+            raise ValueError(f"{field}.damage_formula is invalid")
+        save_source_kind = _text(
+            resolution.get("save_source_kind"),
+            f"{field}.save_source_kind",
+        ).casefold()
+        if save_source_kind not in {
+            "spell",
+            "magical_effect",
+            "nonmagical_effect",
+        }:
+            raise ValueError(f"{field}.save_source_kind is invalid")
+        return {
+            "kind": kind,
+            "trigger": trigger,
+            "save_ability": save_ability,
+            "save_dc": _integer(
+                resolution.get("save_dc"),
+                f"{field}.save_dc",
+                minimum=1,
+                maximum=40,
+            ),
+            "damage_formula": damage_formula,
+            "average_damage": _integer(
+                resolution.get("average_damage"),
+                f"{field}.average_damage",
+                minimum=1,
+            ),
+            "damage_type": _text(
+                resolution.get("damage_type"),
+                f"{field}.damage_type",
+            ).casefold(),
+            "half_on_success": _boolean(
+                resolution.get("half_on_success"),
+                f"{field}.half_on_success",
+            ),
+            "save_source_kind": save_source_kind,
+            "automatic": _boolean(
+                resolution.get("automatic"),
+                f"{field}.automatic",
+            ),
+            "source_excerpt": _text(
+                resolution.get("source_excerpt"),
+                f"{field}.source_excerpt",
+                maximum=1200,
+            ),
+        }
     if kind == "ignition_ongoing_damage":
         _reject_unknown(
             resolution,

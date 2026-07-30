@@ -718,6 +718,86 @@ def test_pseudopod_corrosion_reduces_and_destroys_worn_armor() -> None:
     assert armor["condition"] == "destroyed"
 
 
+def test_weapon_hit_save_damage_is_settled_inside_one_attack() -> None:
+    assassin = _actor("assassin")
+    assassin["sheet"]["inventory"]["items"] = [
+        {
+            "id": "shortsword",
+            "name": "Shortsword",
+            "kind": "weapon",
+            "mechanics": {
+                "attack_type": "melee",
+                "attack_ability": "strength",
+                "attack_bonus_override": 7,
+                "damage_formula": "1d6",
+                "damage_type": "piercing",
+                "damage_bonus_override": 3,
+                "always_available": True,
+                "on_hit_resolution": {
+                    "kind": "save_damage",
+                    "trigger": "weapon_hit",
+                    "save_ability": "constitution",
+                    "save_dc": 15,
+                    "damage_formula": "7d6",
+                    "average_damage": 24,
+                    "damage_type": "poison",
+                    "half_on_success": True,
+                    "save_source_kind": "nonmagical_effect",
+                    "automatic": True,
+                    "source_excerpt": (
+                        "and the target must make a DC 15 Constitution saving "
+                        "throw, taking 24 (7d6) poison damage on a failed save, "
+                        "or half as much damage on a successful one."
+                    ),
+                },
+            },
+        }
+    ]
+    assassin["sheet"] = validate_character_sheet(assassin["sheet"])
+    assassin["derived"] = derive_character_sheet(assassin["sheet"])
+    target = _actor("target", hp=100, ac=10)
+    rules = resolution_context(
+        {"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []}
+    )
+    plan = preflight_attack(
+        assassin,
+        target,
+        action={"weapon_id": "shortsword"},
+        rules=rules,
+    )
+
+    _updated_assassin, updated_target, result = resolve_attack_action(
+        assassin,
+        target,
+        plan=plan,
+        rules=rules,
+        rng=_SequenceRng(10, 4, 1, 1, 1, 1, 1, 1, 1, 1),
+    )
+
+    assert result["hit"] is True
+    assert result["structured_on_hit"]["success"] is False
+    assert result["structured_on_hit"]["damage_amount"] == 7
+    assert result["structured_on_hit"]["mechanic_id"] == (
+        "dnd5e.core.attack.weapon_hit_save_damage"
+    )
+    assert result["damage"]["input_amount"] == 14
+    assert result["damage"]["roll_parts"][-1] == {
+        "expression": "7d6",
+        "rolled_expression": "7d6",
+        "rolls": [1, 1, 1, 1, 1, 1, 1],
+        "detail": "7d6[1, 1, 1, 1, 1, 1, 1]",
+        "amount": 7,
+        "damage_type": "poison",
+        "source": "weapon_hit_save_damage",
+    }
+    assert updated_target["sheet"]["combat"]["hp"]["value"] == 86
+    assert "on_hit_ruling" not in result
+    assert any(
+        item["mechanic_id"] == "dnd5e.core.attack.weapon_hit_save_damage"
+        for item in result["rule_receipts"]
+    )
+
+
 def test_magmin_touch_compiles_standard_ongoing_damage() -> None:
     target = _actor("target")
     source_excerpt = (
