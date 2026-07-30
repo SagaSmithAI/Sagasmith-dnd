@@ -499,7 +499,10 @@ def resolve_hypnotic_pattern_target(
         ability="wisdom",
         dc=save_dc,
         ruleset="2014",
-        rules=rules,
+        rules=context_with_facts(
+            rules,
+            save_effect_conditions=["charmed", "incapacitated"],
+        ),
         rng=rng,
     )
     if save["success"]:
@@ -2577,6 +2580,7 @@ def _resolve_weapon_hit_save_damage(
         rules=context_with_facts(
             rules,
             save_source_kind=expected["save_source_kind"],
+            save_effect_conditions=[],
         ),
         rng=rng,
     )
@@ -3805,6 +3809,20 @@ def _validated_standard_source_trait(
             and trait.get("ordinary_successful_save") == "half"
             and trait.get("successful_save") == "none"
             and trait.get("failed_save") == "half"
+            and trait.get("automatic") is True
+            and bool(str(trait.get("source_excerpt") or "").strip())
+        ),
+        "save_advantage_against_conditions": (
+            trait.get("trigger") == "saving_throw"
+            and isinstance(trait.get("effect_conditions"), list)
+            and bool(trait.get("effect_conditions"))
+            and len(trait["effect_conditions"])
+            == len(set(trait["effect_conditions"]))
+            and all(
+                condition in {"charmed", "frightened"}
+                for condition in trait["effect_conditions"]
+            )
+            and trait.get("grants") == "advantage"
             and trait.get("automatic") is True
             and bool(str(trait.get("source_excerpt") or "").strip())
         ),
@@ -5955,7 +5973,10 @@ def resolve_turn_undead_to_sheets(
             kind="save",
             ability="wisdom",
             dc=save_dc,
-            rules=rules,
+            rules=context_with_facts(
+                rules,
+                save_effect_conditions=["turned"],
+            ),
             rng=rng,
         )
         effect_id = None
@@ -6076,7 +6097,7 @@ def resolve_actor_check(
             if rules is not None
             else ""
         )
-        if not save_source_kind and not advantage:
+        if not save_source_kind:
             raise NeedsRulingError(
                 "Magic Resistance requires the saving throw's source kind",
                 missing=("save_source_kind",),
@@ -6093,6 +6114,55 @@ def resolve_actor_check(
         if save_source_kind in set(magic_resistance["save_source_kinds"]):
             advantage = True
             boundary_ids.append("dnd5e.core.save.magic_resistance")
+    save_condition_advantage = (
+        _validated_standard_source_trait(
+            sheet,
+            "save_advantage_against_conditions",
+        )
+        if kind == "save"
+        else None
+    )
+    if save_condition_advantage is not None:
+        raw_effect_conditions = (
+            dict(rules.facts).get("save_effect_conditions")
+            if rules is not None
+            else None
+        )
+        if raw_effect_conditions is None:
+            raise NeedsRulingError(
+                "condition-based save advantage requires the saving throw's "
+                "possible condition outcomes",
+                missing=("save_effect_conditions",),
+                ruling_kind="agent_dm_adjudication",
+            )
+        if (
+            not isinstance(raw_effect_conditions, list)
+            or len(raw_effect_conditions) > 16
+            or any(
+                not isinstance(value, str)
+                or re.fullmatch(r"[a-z][a-z_]{0,63}", value.strip().casefold())
+                is None
+                for value in raw_effect_conditions
+            )
+        ):
+            raise CombatEngineError(
+                "save_effect_conditions must be a list of condition ids"
+            )
+        effect_conditions = [
+            value.strip().casefold()
+            for value in raw_effect_conditions
+        ]
+        if len(effect_conditions) != len(set(effect_conditions)):
+            raise CombatEngineError(
+                "save_effect_conditions must not contain duplicates"
+            )
+        if set(effect_conditions) & set(
+            save_condition_advantage["effect_conditions"]
+        ):
+            advantage = True
+            boundary_ids.append(
+                "dnd5e.core.save.advantage_against_conditions"
+            )
     keen_perception_traits = [
         dict(source_trait)
         for feature in dict(sheet.get("content") or {}).get("features", [])
@@ -6426,7 +6496,10 @@ def resolve_save_damage_to_sheets(
             advantage=advantage,
             disadvantage=disadvantage,
             ruleset=normalized_ruleset,
-            rules=rules,
+            rules=context_with_facts(
+                rules,
+                save_effect_conditions=[],
+            ),
             rng=rng,
         )
         reduction_settlement = standard_save_damage_reduction(
@@ -6706,7 +6779,14 @@ def resolve_random_save_effects(
             kind="save",
             ability=str(save_spec.get("ability") or ""),
             dc=int(save_spec.get("dc", 0) or 0),
-            rules=rules,
+            rules=context_with_facts(
+                rules,
+                save_effect_conditions=(
+                    [str(failure.get("condition") or "").strip().casefold()]
+                    if failure.get("kind") == "timed_condition"
+                    else []
+                ),
+            ),
             rng=rng,
         )
         result.update({"eligible": True, "save": save, "success": save["success"]})
@@ -6841,7 +6921,10 @@ def resolve_source_save_effect(
         kind="save",
         ability="intelligence",
         dc=12,
-        rules=rules,
+        rules=context_with_facts(
+            rules,
+            save_effect_conditions=["stunned"],
+        ),
         rng=rng,
     )
     result: dict[str, Any] = {

@@ -213,6 +213,80 @@ def test_magic_resistance_requires_source_kind_and_applies_advantage() -> None:
     assert nonmagical["rule_receipts"] == []
 
 
+def test_condition_based_save_advantage_requires_effect_conditions() -> None:
+    actor = _actor("cultist")
+    actor["sheet"]["content"]["features"].append(
+        {
+            "id": "dark-devotion-passive",
+            "name": "Dark Devotion",
+            "choices": {
+                "source_trait": {
+                    "kind": "save_advantage_against_conditions",
+                    "trigger": "saving_throw",
+                    "effect_conditions": ["charmed", "frightened"],
+                    "grants": "advantage",
+                    "automatic": True,
+                    "source_excerpt": (
+                        "The cultist has advantage on saving throws against "
+                        "being charmed or frightened."
+                    ),
+                }
+            },
+        }
+    )
+    actor["derived"] = derive_character_sheet(actor["sheet"])
+    effective = {
+        "edition": "2014",
+        "fingerprint": "",
+        "lock": [],
+        "mechanics": [],
+    }
+
+    with pytest.raises(NeedsRulingError, match="condition outcomes"):
+        resolve_actor_check(
+            actor,
+            kind="save",
+            ability="wisdom",
+            dc=12,
+            rules=resolution_context(effective),
+            rng=_SequenceRng(20),
+        )
+
+    frightened = resolve_actor_check(
+        actor,
+        kind="save",
+        ability="wisdom",
+        dc=12,
+        rules=resolution_context(
+            effective,
+            facts={"save_effect_conditions": ["frightened"]},
+        ),
+        rng=_SequenceRng(4, 15),
+    )
+    assert frightened["rolls"] == [4, 15]
+    assert frightened["roll_mode"] == "advantage"
+    assert frightened["success"] is True
+    assert [
+        receipt["mechanic_id"]
+        for receipt in frightened["rule_receipts"]
+    ] == ["dnd5e.core.save.advantage_against_conditions"]
+
+    damage_only = resolve_actor_check(
+        actor,
+        kind="save",
+        ability="constitution",
+        dc=12,
+        rules=resolution_context(
+            effective,
+            facts={"save_effect_conditions": []},
+        ),
+        rng=_SequenceRng(4),
+    )
+    assert damage_only["rolls"] == [4]
+    assert damage_only["roll_mode"] == "normal"
+    assert damage_only["rule_receipts"] == []
+
+
 def test_evasion_rewrites_dexterity_save_for_half_damage() -> None:
     trait = {
         "kind": "evasion",

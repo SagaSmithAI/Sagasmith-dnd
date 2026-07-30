@@ -1910,6 +1910,35 @@ no damage if it succeeds on the saving throw, and only half damage if it fails.
     assert parsed.warnings == ()
 
 
+def test_dark_devotion_is_structured_from_exact_text() -> None:
+    source_excerpt = (
+        "The cultist has advantage on saving throws against being charmed or "
+        "frightened."
+    )
+    parsed = parse_2014_statblock(
+        COMMONER.replace(
+            "###### Actions",
+            f"***Dark Devotion.*** {source_excerpt}\n\n###### Actions",
+        ),
+        source_key="monster-manual-2014:cultist",
+    )
+    feature = next(
+        item
+        for item in parsed.sheet["content"]["features"]
+        if item["name"] == "Dark Devotion"
+    )
+
+    assert feature["choices"]["source_trait"] == {
+        "kind": "save_advantage_against_conditions",
+        "trigger": "saving_throw",
+        "effect_conditions": ["charmed", "frightened"],
+        "grants": "advantage",
+        "automatic": True,
+        "source_excerpt": source_excerpt,
+    }
+    assert parsed.warnings == ()
+
+
 def test_archmage_precombat_footnote_is_not_parsed_as_a_spell_name() -> None:
     source = COMMONER.replace(
         "###### Actions",

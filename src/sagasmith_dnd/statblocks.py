@@ -1302,6 +1302,39 @@ def _evasion_source_trait(description: str) -> dict[str, Any] | None:
     }
 
 
+def _save_advantage_against_conditions_source_trait(
+    description: str,
+) -> dict[str, Any] | None:
+    """Compile a standard trait granting save advantage against named states."""
+
+    normalized = " ".join(description.split())
+    match = re.fullmatch(
+        r"The [A-Za-z][A-Za-z '\-]* has advantage on saving throws against "
+        r"being (?P<first>charmed|frightened)"
+        r"(?: or (?P<second>charmed|frightened))?\.",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    conditions = [
+        match.group("first").casefold(),
+        *(
+            [match.group("second").casefold()]
+            if match.group("second")
+            else []
+        ),
+    ]
+    return {
+        "kind": "save_advantage_against_conditions",
+        "trigger": "saving_throw",
+        "effect_conditions": conditions,
+        "grants": "advantage",
+        "automatic": True,
+        "source_excerpt": normalized,
+    }
+
+
 def _assassinate_source_trait(description: str) -> dict[str, Any] | None:
     """Compile the complete standard Assassin opening-turn rule."""
 
@@ -1679,6 +1712,7 @@ def _source_trait_from_description(description: str) -> dict[str, Any] | None:
             _keen_perception_source_trait,
             _magic_resistance_source_trait,
             _evasion_source_trait,
+            _save_advantage_against_conditions_source_trait,
             _assassinate_source_trait,
             _aggressive_source_trait,
             _cunning_action_source_trait,
@@ -2624,6 +2658,9 @@ def parse_2014_statblock(
                 "keen_perception": "hearing- or sight-based Perception check",
                 "magic_resistance": "saving throw against a spell or magical effect",
                 "evasion": "Dexterity saving throw for half damage",
+                "save_advantage_against_conditions": (
+                    "saving throw against a named condition"
+                ),
                 "assassinate": "attack roll during its first turn",
                 "aggressive": "bonus action on its turn",
                 "cunning_action": "bonus action on its turn",

@@ -785,6 +785,21 @@ BOUNDARIES = (
         "source:monster-manual-2014:magic-resistance",
     ),
     CoreBoundary(
+        "dnd5e.core.save.advantage_against_conditions",
+        ("2014",),
+        (
+            "statblocks._save_advantage_against_conditions_source_trait|"
+            "combat_engine.resolve_actor_check"
+        ),
+        (
+            "tests/test_combat_engine.py::"
+            "test_condition_based_save_advantage_requires_effect_conditions",
+            "tests/test_statblocks.py::"
+            "test_dark_devotion_is_structured_from_exact_text",
+        ),
+        "source:monster-manual-2014:dark-devotion",
+    ),
+    CoreBoundary(
         "dnd5e.core.save.evasion",
         ("2014",),
         "combat_engine.standard_save_damage_reduction",
