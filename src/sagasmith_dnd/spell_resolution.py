@@ -12,6 +12,7 @@ from sagasmith_dnd.abilities import ABILITY_IDS
 from sagasmith_dnd.standard_spell_ids import (
     CORE_BLADE_WARD_MECHANIC_ID,
     CORE_FLY_MECHANIC_ID,
+    CORE_FLY_SPELL_ID,
     CORE_WITCH_BOLT_MECHANIC_ID,
 )
 from sagasmith_dnd.vocabulary import ATTACK_MODES
@@ -604,6 +605,8 @@ def spell_resolution_path(spell: dict[str, Any]) -> str:
         return "semantic_plan"
     if effective_spell_resolution(spell) is not None:
         return "structured_resolution"
+    if str(spell.get("id") or "") == CORE_FLY_SPELL_ID:
+        return "engine_mechanic"
     mechanic_refs = {
         str(item).strip()
         for item in spell.get("mechanic_refs", [])

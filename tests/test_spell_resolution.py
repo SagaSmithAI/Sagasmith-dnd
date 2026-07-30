@@ -70,6 +70,17 @@ def test_spell_resolution_audit_includes_known_cantrips_and_all_paths() -> None:
     assert audit["counts"]["agent_ruling"] == 1
     assert audit["counts"]["semantic_plan"] == 1
     assert spell_resolution_path(sheet["content"]["spells"][0]) == "agent_ruling"
+    assert (
+        spell_resolution_path(
+            {
+                "id": "dnd5e.content.srd2014.spell.fly",
+                "name": "Fly",
+                "level": 3,
+                "access": {"prepared": True},
+            }
+        )
+        == "engine_mechanic"
+    )
 
     fireball = known_spell_resolution("Fireball")
     assert fireball is not None
