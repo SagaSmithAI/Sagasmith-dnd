@@ -2615,6 +2615,44 @@ in line. The bandit captain has these qualities in spades.
     )
 
 
+def test_source_parry_excludes_conflated_trailing_creature_lore() -> None:
+    parsed = parse_2014_statblock(
+        BANDIT_CAPTAIN.replace(
+            "The captain adds 2 to its AC against one melee attack that would hit it.",
+            (
+                "The captain adds 2 to its AC against one melee attack that would hit it. "
+                "To do so, the captain must see the attacker and be wielding a melee weapon. "
+                "It takes a strong personality, ruthless cunning, and a silver tongue to "
+                "keep a gang of bandits in line. The bandit captain has these qualities "
+                "in spades. To keep the crew in line, the captain must mete out rewards "
+                "and punishment on a regular basis."
+            ),
+        ),
+        source_key="rulebook-ocr:bandit-captain-with-conflated-lore",
+    )
+
+    parry = next(
+        item
+        for item in parsed.sheet["content"]["activities"]
+        if item["name"] == "Parry"
+    )
+    assert parry["description"] == (
+        "The captain adds 2 to its AC against one melee attack that would hit it. "
+        "To do so, the captain must see the attacker and be wielding a melee weapon."
+    )
+    assert parry["choices"]["reaction_defense"] == {
+        "kind": "armor_class_bonus",
+        "bonus": 2,
+        "attack_modes": ["melee"],
+        "requires_visible_attacker": True,
+        "requires_wielded_melee_weapon": True,
+    }
+    assert parsed.warnings == ()
+    assert parsed.normalization_notes == (
+        "Parry: trailing creature prose excluded from reaction settlement",
+    )
+
+
 def test_reaction_defense_is_compiled_from_complete_text_not_activity_name() -> None:
     parsed = parse_2014_statblock(
         BANDIT_CAPTAIN.replace("***Parry***.", "***Deflect***."),

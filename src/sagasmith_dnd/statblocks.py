@@ -1545,11 +1545,13 @@ def _source_trait_from_description(description: str) -> dict[str, Any] | None:
     return matches[0] if len(matches) == 1 else None
 
 
-def _parry_reaction_defense(description: str) -> dict[str, Any] | None:
-    """Structure a complete standard post-hit reaction without trusting its title."""
+def _parry_reaction_settlement(
+    description: str,
+) -> tuple[dict[str, Any], str, str] | None:
+    """Structure a complete standard post-hit reaction and isolate adjacent lore."""
 
     normalized = " ".join(description.split())
-    match = re.fullmatch(
+    match = re.match(
         r"The (?P<subject>[A-Za-z][A-Za-z '\-]*) adds? "
         r"(?P<bonus>\d+) to (?:its|his|her|their) AC against one melee attack "
         r"that would hit (?:it|him|her|them)\."
@@ -1560,24 +1562,54 @@ def _parry_reaction_defense(description: str) -> dict[str, Any] | None:
     )
     if match is None:
         return None
+    mechanics_text = normalized[: match.end()].strip()
+    trailing_text = normalized[match.end() :].strip()
+    trailing_lead = trailing_text.split(".", 1)[0]
+    if trailing_text and re.search(
+        (
+            r"(?i)\b(?:AC|action|advantage|attack|attacker|bonus|can|creature|"
+            r"damage|DC|disadvantage|feet|ft|hit|may|move|movement|must|range|"
+            r"reach|reaction|roll|round|save|speed|target|turn|weapon|wield)\b"
+            r"|\b\d+\b|\b\d*d\d+\b"
+        ),
+        trailing_lead,
+    ):
+        # A mechanically meaningful trailing clause remains part of the
+        # reaction and must not be silently discarded.
+        return None
     bonus = int(match.group("bonus"))
     if bonus <= 0:
         return None
-    return {
-        "kind": "armor_class_bonus",
-        "bonus": bonus,
-        "attack_modes": ["melee"],
-        "requires_visible_attacker": bool(
-            re.search(r"\bmust\s+see\s+the\s+attacker\b", normalized, re.IGNORECASE)
-        ),
-        "requires_wielded_melee_weapon": bool(
-            re.search(
-                r"\b(?:be\s+)?wielding\s+a\s+melee\s+weapon\b",
-                normalized,
-                re.IGNORECASE,
-            )
-        ),
-    }
+    return (
+        {
+            "kind": "armor_class_bonus",
+            "bonus": bonus,
+            "attack_modes": ["melee"],
+            "requires_visible_attacker": bool(
+                re.search(
+                    r"\bmust\s+see\s+the\s+attacker\b",
+                    mechanics_text,
+                    re.IGNORECASE,
+                )
+            ),
+            "requires_wielded_melee_weapon": bool(
+                re.search(
+                    r"\b(?:be\s+)?wielding\s+a\s+melee\s+weapon\b",
+                    mechanics_text,
+                    re.IGNORECASE,
+                )
+            ),
+        },
+        mechanics_text,
+        trailing_text,
+    )
+
+
+def _parry_reaction_defense(description: str) -> dict[str, Any] | None:
+    """Return the engine contract for a complete standard Parry reaction."""
+
+    settlement = _parry_reaction_settlement(description)
+    return settlement[0] if settlement is not None else None
 
 
 def gazer_eye_ray_spec(
@@ -2407,14 +2439,19 @@ def parse_2014_statblock(
             if activation == "reaction"
             else description
         )
-        reaction_defense = (
-            _parry_reaction_defense(reaction_description)
+        reaction_settlement = (
+            _parry_reaction_settlement(reaction_description)
             if activation == "reaction"
             else None
         )
+        reaction_defense = (
+            reaction_settlement[0] if reaction_settlement is not None else None
+        )
         if reaction_defense is not None:
-            if reaction_description != description:
-                entry["description"] = reaction_description
+            settled_description = reaction_settlement[1]
+            trailing_reaction_prose = reaction_settlement[2]
+            if trailing_reaction_prose or reaction_description != description:
+                entry["description"] = settled_description
                 normalization_notes.append(
                     f"{entry_name}: trailing creature prose excluded from reaction settlement"
                 )
