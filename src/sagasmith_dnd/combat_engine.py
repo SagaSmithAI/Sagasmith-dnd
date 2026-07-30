@@ -6289,9 +6289,21 @@ def resolve_actor_check(
     if armor_stealth_disadvantage:
         disadvantage = True
     boundary_ids = []
+    save_purpose = (
+        str(dict(rules.facts).get("save_purpose") or "effect")
+        .strip()
+        .casefold()
+        if rules is not None
+        else "effect"
+    )
+    if kind == "save" and save_purpose not in {"effect", "concentration"}:
+        raise CombatEngineError(
+            "save_purpose must be effect or concentration"
+        )
+    source_conditioned_save = kind == "save" and save_purpose == "effect"
     magic_resistance = (
         _validated_standard_source_trait(sheet, "magic_resistance")
-        if kind == "save"
+        if source_conditioned_save
         else None
     )
     if magic_resistance is not None:
@@ -6324,7 +6336,7 @@ def resolve_actor_check(
             sheet,
             "save_advantage_against_conditions",
         )
-        if kind == "save"
+        if source_conditioned_save
         else None
     )
     if save_condition_advantage is not None:

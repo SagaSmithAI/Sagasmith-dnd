@@ -214,6 +214,52 @@ def test_magic_resistance_requires_source_kind_and_applies_advantage() -> None:
     assert nonmagical["rule_receipts"] == []
 
 
+def test_concentration_save_does_not_apply_magic_resistance() -> None:
+    actor = _actor("archmage")
+    actor["sheet"]["content"]["features"].append(
+        {
+            "id": "magic-resistance-passive",
+            "name": "Magic Resistance",
+            "choices": {
+                "source_trait": {
+                    "kind": "magic_resistance",
+                    "trigger": "saving_throw",
+                    "save_source_kinds": ["spell", "magical_effect"],
+                    "grants": "advantage",
+                    "automatic": True,
+                    "source_excerpt": (
+                        "The archmage has advantage on saving throws against "
+                        "spells and other magical effects."
+                    ),
+                }
+            },
+        }
+    )
+    actor["derived"] = derive_character_sheet(actor["sheet"])
+    effective = {
+        "edition": "2014",
+        "fingerprint": "",
+        "lock": [],
+        "mechanics": [],
+    }
+
+    result = resolve_actor_check(
+        actor,
+        kind="save",
+        ability="constitution",
+        dc=10,
+        rules=resolution_context(
+            effective,
+            facts={"save_purpose": "concentration"},
+        ),
+        rng=_SequenceRng(7),
+    )
+
+    assert result["rolls"] == [7]
+    assert result["roll_mode"] == "normal"
+    assert result["rule_receipts"] == []
+
+
 def test_condition_based_save_advantage_requires_effect_conditions() -> None:
     actor = _actor("cultist")
     actor["sheet"]["content"]["features"].append(

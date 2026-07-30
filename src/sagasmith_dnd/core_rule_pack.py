@@ -812,6 +812,8 @@ BOUNDARIES = (
         (
             "tests/test_combat_engine.py::"
             "test_magic_resistance_requires_source_kind_and_applies_advantage",
+            "tests/test_combat_engine.py::"
+            "test_concentration_save_does_not_apply_magic_resistance",
             "tests/test_statblocks.py::"
             "test_magic_resistance_and_evasion_are_structured_from_exact_text",
         ),
