@@ -17,7 +17,7 @@ from sagasmith_dnd.spell_resolution import (
 from sagasmith_dnd.standard_spell_ids import CORE_HYPNOTIC_PATTERN_MECHANIC_ID
 
 PACK_ID = "dnd5e.content.srd2014"
-PACK_VERSION = "1.14.0"
+PACK_VERSION = "1.15.0"
 
 _SUBCLASS_LEVELS = {
     "barbarian": 3,

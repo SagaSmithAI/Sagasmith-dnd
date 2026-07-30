@@ -44,7 +44,7 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     manifest, artifacts = build_srd2014_content(workspace / "SagaSmith-dnd-skills")
     counts = Counter(item["kind"] for item in artifacts)
 
-    assert manifest["version"] == PACK_VERSION == "1.14.0"
+    assert manifest["version"] == PACK_VERSION == "1.15.0"
     assert "dnd5e.core.spell.structured_resolution" in manifest[
         "native_mechanic_refs"
     ]
@@ -77,6 +77,16 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     assert fireball["card"]["resolution"]["targeting"]["area"] == {
         "shape": "sphere",
         "radius_ft": 20,
+    }
+    lightning_bolt = next(
+        item
+        for item in artifacts
+        if item["id"] == "dnd5e.content.srd2014.spell.lightning-bolt"
+    )
+    assert lightning_bolt["card"]["resolution"]["targeting"]["area"] == {
+        "shape": "line",
+        "length_ft": 100,
+        "width_ft": 5,
     }
     scorching_ray = next(
         item for item in artifacts if item["id"] == "dnd5e.content.srd2014.spell.scorching-ray"

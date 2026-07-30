@@ -37,6 +37,7 @@ SPELL_RESOLUTION_PATHS = frozenset(
 )
 
 _DICE = re.compile(r"(?i)^([1-9]\d*)d([1-9]\d*)$")
+_SRD2014_SPELL_PREFIX = "dnd5e.content.srd2014.spell."
 
 
 def _object(value: Any, field: str) -> dict[str, Any]:
@@ -188,21 +189,52 @@ def normalize_spell_resolution(value: Any, field: str = "spell.resolution") -> d
             f"{field}.targeting.excluded_creature_types must contain unique non-empty values"
         )
     area = _object(targeting.get("area") or {}, f"{field}.targeting.area")
-    _reject_unknown(area, f"{field}.targeting.area", {"shape", "radius_ft"})
+    _reject_unknown(
+        area,
+        f"{field}.targeting.area",
+        {"shape", "radius_ft", "length_ft", "width_ft"},
+    )
     normalized_area: dict[str, Any] | None = None
     if mode == "area":
         shape = _text(area.get("shape"), f"{field}.targeting.area.shape").casefold()
-        if shape != "sphere":
-            raise ValueError(f"{field}.targeting.area.shape currently supports sphere")
-        normalized_area = {
-            "shape": shape,
-            "radius_ft": _integer(
-                area.get("radius_ft"),
-                f"{field}.targeting.area.radius_ft",
-                minimum=5,
-                maximum=1000,
-            ),
-        }
+        if shape == "sphere":
+            if area.get("length_ft") is not None or area.get("width_ft") is not None:
+                raise ValueError(
+                    f"{field}.targeting.area sphere cannot define length or width"
+                )
+            normalized_area = {
+                "shape": shape,
+                "radius_ft": _integer(
+                    area.get("radius_ft"),
+                    f"{field}.targeting.area.radius_ft",
+                    minimum=5,
+                    maximum=1000,
+                ),
+            }
+        elif shape == "line":
+            if area.get("radius_ft") is not None:
+                raise ValueError(
+                    f"{field}.targeting.area line cannot define a radius"
+                )
+            normalized_area = {
+                "shape": shape,
+                "length_ft": _integer(
+                    area.get("length_ft"),
+                    f"{field}.targeting.area.length_ft",
+                    minimum=5,
+                    maximum=1000,
+                ),
+                "width_ft": _integer(
+                    area.get("width_ft"),
+                    f"{field}.targeting.area.width_ft",
+                    minimum=5,
+                    maximum=1000,
+                ),
+            }
+        else:
+            raise ValueError(
+                f"{field}.targeting.area.shape currently supports sphere or line"
+            )
     elif area:
         raise ValueError(f"{field}.targeting.area requires area mode")
     normalized_targeting = {
@@ -520,9 +552,45 @@ def known_spell_resolution(name: str) -> dict[str, Any] | None:
                 },
             },
         },
+        "lightning-bolt": {
+            "kind": "saving_throw",
+            "targeting": {
+                "mode": "area",
+                "max_targets": 100,
+                "area": {
+                    "shape": "line",
+                    "length_ft": 100,
+                    "width_ft": 5,
+                },
+            },
+            "save": {
+                "ability": "dexterity",
+                "success": "half",
+                "damage": {
+                    "base_dice": "8d6",
+                    "damage_type": "lightning",
+                    "per_slot_dice": "1d6",
+                    "slot_base_level": 3,
+                },
+            },
+        },
     }
     value = values.get(key)
     return normalize_spell_resolution(deepcopy(value)) if value is not None else None
+
+
+def effective_spell_resolution(spell: dict[str, Any]) -> dict[str, Any] | None:
+    """Return a stored contract or the built-in contract for one exact SRD spell id."""
+
+    if not isinstance(spell, dict):
+        raise ValueError("spell must be an object")
+    stored = spell.get("resolution")
+    if isinstance(stored, dict):
+        return normalize_spell_resolution(deepcopy(stored))
+    spell_id = str(spell.get("id") or "")
+    if not spell_id.startswith(_SRD2014_SPELL_PREFIX):
+        return None
+    return known_spell_resolution(spell_id.removeprefix(_SRD2014_SPELL_PREFIX))
 
 
 def spell_resolution_path(spell: dict[str, Any]) -> str:
@@ -532,7 +600,7 @@ def spell_resolution_path(spell: dict[str, Any]) -> str:
         raise ValueError("spell must be an object")
     if isinstance(spell.get("resolution_plan"), dict):
         return "semantic_plan"
-    if isinstance(spell.get("resolution"), dict):
+    if effective_spell_resolution(spell) is not None:
         return "structured_resolution"
     mechanic_refs = {
         str(item).strip()
@@ -694,6 +762,7 @@ __all__ = [
     "SPELL_RESOLUTION_MECHANIC_ID",
     "SPELL_RESOLUTION_PATHS",
     "audit_spell_resolution_paths",
+    "effective_spell_resolution",
     "known_spell_resolution",
     "normalize_spell_resolution",
     "overlay_spell_attack_action",

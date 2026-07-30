@@ -2,6 +2,7 @@ import pytest
 
 from sagasmith_dnd.spell_resolution import (
     audit_spell_resolution_paths,
+    effective_spell_resolution,
     known_spell_resolution,
     normalize_spell_resolution,
     overlay_spell_attack_action,
@@ -112,6 +113,87 @@ def test_spell_resolution_rejects_unreviewed_fields_and_invalid_dice() -> None:
                 "attack": {
                     "mode": "ranged",
                     "damage": {"base_dice": "1d6 + 99", "damage_type": "fire"},
+                },
+            }
+        )
+
+
+def test_lightning_bolt_has_a_strict_scaling_line_contract() -> None:
+    lightning_bolt = known_spell_resolution("Lightning Bolt")
+
+    assert lightning_bolt is not None
+    assert lightning_bolt["targeting"]["area"] == {
+        "shape": "line",
+        "length_ft": 100,
+        "width_ft": 5,
+    }
+    assert lightning_bolt["save"] == {
+        "ability": "dexterity",
+        "success": "half",
+        "damage": {
+            "base_dice": "8d6",
+            "per_slot_dice": "1d6",
+            "slot_base_level": 3,
+            "cantrip_dice": {},
+            "damage_type": "lightning",
+        },
+        "save_dc_override": None,
+        "ignores_cover": False,
+        "on_failed_save_ruling": "",
+    }
+    assert (
+        scaled_roll_expression(
+            lightning_bolt["save"]["damage"],
+            cast_level=5,
+            actor_level=9,
+        )
+        == "8d6 + 2d6"
+    )
+
+
+def test_effective_resolution_hydrates_only_exact_builtin_spell_ids() -> None:
+    hydrated = effective_spell_resolution(
+        {
+            "id": "dnd5e.content.srd2014.spell.lightning-bolt",
+            "name": "Legacy Lightning Bolt",
+            "resolution": None,
+        }
+    )
+
+    assert hydrated == known_spell_resolution("Lightning Bolt")
+    assert (
+        effective_spell_resolution(
+            {
+                "id": "custom.spell.lightning-bolt",
+                "name": "Lightning Bolt",
+                "resolution": None,
+            }
+        )
+        is None
+    )
+
+
+def test_spell_resolution_rejects_mixed_area_dimensions() -> None:
+    with pytest.raises(ValueError, match="cannot define"):
+        normalize_spell_resolution(
+            {
+                "kind": "saving_throw",
+                "targeting": {
+                    "mode": "area",
+                    "area": {
+                        "shape": "line",
+                        "radius_ft": 20,
+                        "length_ft": 100,
+                        "width_ft": 5,
+                    },
+                },
+                "save": {
+                    "ability": "dexterity",
+                    "success": "half",
+                    "damage": {
+                        "base_dice": "8d6",
+                        "damage_type": "lightning",
+                    },
                 },
             }
         )
