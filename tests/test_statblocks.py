@@ -579,6 +579,51 @@ def test_multiword_actor_lore_using_head_noun_is_not_an_on_hit_effect() -> None:
     )
 
 
+def test_explicit_sling_stones_become_ammunition_not_an_on_hit_effect() -> None:
+    parsed = parse_2014_statblock(
+        """### DARZ HELGAR
+
+*Medium humanoid (human), neutral*
+
+**Armor Class** 12
+**Hit Points** 27 (5d8 + 5)
+**Speed** 30 ft.
+
+| STR | DEX | CON | INT | WIS | CHA |
+|---:|---:|---:|---:|---:|---:|
+| 15 (+2) | 15 (+2) | 12 (+1) | 10 (+0) | 11 (+0) | 11 (+0) |
+
+**Senses** passive Perception 10
+**Languages** Common
+
+## Actions
+
+***Sling***. *Ranged Weapon Attack:* +4 to hit, range 30/120 ft.,
+one target. *Hit:* 4 (1d4 + 2) bludgeoning damage. Darz carries
+twenty sling stones.
+""",
+        source_key="storm-kings-thunder:p60",
+    )
+    derived = derive_character_sheet(parsed.sheet)
+    sling = derived["inventory"]["weapon_attacks"][0]
+    stones = next(
+        item
+        for item in parsed.sheet["inventory"]["items"]
+        if item["kind"] == "ammunition"
+    )
+
+    assert sling["on_hit_effect"] == ""
+    assert sling["ammunition_item_id"] == "sling-ammunition"
+    assert stones["id"] == "sling-ammunition"
+    assert stones["name"] == "Sling Stones"
+    assert stones["quantity"] == 20
+    assert parsed.warnings == ()
+    assert parsed.normalization_notes == (
+        "Sling: trailing ammunition inventory structured separately "
+        "from action settlement",
+    )
+
+
 def test_article_and_emphasis_before_actor_lore_are_not_an_on_hit_effect() -> None:
     parsed = parse_2014_statblock(
         """### Worg

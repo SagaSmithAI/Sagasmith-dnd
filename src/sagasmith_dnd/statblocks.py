@@ -75,6 +75,20 @@ _NUMBER_WORDS = {
     "four": 4,
     "five": 5,
     "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+    "thirteen": 13,
+    "fourteen": 14,
+    "fifteen": 15,
+    "sixteen": 16,
+    "seventeen": 17,
+    "eighteen": 18,
+    "nineteen": 19,
+    "twenty": 20,
 }
 
 _2014_ARMOR = {
@@ -276,6 +290,85 @@ def _entry_blocks(markdown: str) -> list[tuple[str, str, str]]:
     return result
 
 
+def _trailing_standard_ammunition(
+    description: str,
+    *,
+    actor_name: str,
+    weapon_name: str,
+    source_key: str,
+) -> tuple[int, dict[str, Any]] | None:
+    """Recover an explicit standard ammunition count after a weapon action."""
+
+    normalized_weapon = " ".join(weapon_name.casefold().split())
+    ammunition_patterns = (
+        (r"sling", r"sling\s+stones?", "Sling Stones"),
+        (r"(?:short|long)bow", r"arrows?", "Arrows"),
+        (r"(?:hand|light|heavy)\s+crossbow", r"bolts?", "Bolts"),
+        (r"blowgun", r"needles?", "Needles"),
+    )
+    ammunition = next(
+        (
+            (pattern, label)
+            for weapon_pattern, pattern, label in ammunition_patterns
+            if re.fullmatch(weapon_pattern, normalized_weapon)
+        ),
+        None,
+    )
+    actor_tokens = [
+        token
+        for token in re.findall(r"[A-Za-z][A-Za-z'\-]*", actor_name)
+        if token
+    ]
+    aliases = list(
+        dict.fromkeys(
+            [
+                actor_name.strip(),
+                *(actor_tokens[:1] if actor_tokens else []),
+                *(actor_tokens[-1:] if len(actor_tokens) > 1 else []),
+            ]
+        )
+    )
+    if ammunition is None or not aliases:
+        return None
+    ammunition_pattern, ammunition_label = ammunition
+    count_pattern = "|".join(
+        [
+            r"\d+",
+            *(
+                re.escape(value)
+                for value in sorted(_NUMBER_WORDS, key=len, reverse=True)
+                if value not in {"once", "twice", "thrice"}
+            ),
+        ]
+    )
+    match = re.search(
+        (
+            rf"(?i)(?:^|(?<=[.!?])\s+)"
+            rf"(?:{'|'.join(re.escape(alias) for alias in aliases)})\s+"
+            rf"carries\s+(?P<count>{count_pattern})\s+"
+            rf"{ammunition_pattern}\s*\.?\s*$"
+        ),
+        description,
+    )
+    if match is None:
+        return None
+    count = _NUMBER_WORDS.get(match.group("count").casefold())
+    if count is None:
+        count = int(match.group("count"))
+    item_id = f"{_slug(weapon_name)}-ammunition"
+    return (
+        match.start(),
+        {
+            "id": item_id,
+            "name": ammunition_label,
+            "kind": "ammunition",
+            "quantity": count,
+            "source_key": source_key,
+            "description": match.group(0).strip(),
+        },
+    )
+
+
 def _parse_weapon(
     name: str,
     description: str,
@@ -400,6 +493,21 @@ def _parse_weapon(
         trailing_paragraph_prose = ""
     trailing_prose = ""
     trailing_warning = ""
+    ammunition_item: dict[str, Any] | None = None
+    carried_ammunition = _trailing_standard_ammunition(
+        on_hit_effect,
+        actor_name=actor_name,
+        weapon_name=name,
+        source_key=source_key,
+    )
+    if carried_ammunition is not None:
+        ammunition_start, ammunition_item = carried_ammunition
+        trailing_prose = on_hit_effect[ammunition_start:].strip()
+        on_hit_effect = on_hit_effect[:ammunition_start].rstrip(" .;,")
+        trailing_warning = (
+            f"{name}: trailing ammunition inventory structured separately "
+            "from action settlement"
+        )
     normalized_actor_name = actor_name.strip()
     unformatted_on_hit_effect = re.sub(
         r"^[\s*_`~]+",
@@ -421,7 +529,9 @@ def _parse_weapon(
         else None
     )
     paragraph_break = re.search(r"\n\s*\n", on_hit_effect)
-    if trailing_paragraph_prose:
+    if trailing_prose:
+        pass
+    elif trailing_paragraph_prose:
         trailing_prose = trailing_paragraph_prose
         trailing_warning = (
             f"{name}: trailing page furniture excluded from action settlement"
@@ -519,6 +629,12 @@ def _parse_weapon(
         if mode == "melee or ranged":
             mechanics["thrown_normal_range_ft"] = int(ranges.group(1))
             mechanics["thrown_long_range_ft"] = int(ranges.group(2) or ranges.group(1))
+    if ammunition_item is not None:
+        mechanics["properties"] = [
+            *list(mechanics["properties"]),
+            "ammunition",
+        ]
+        mechanics["ammunition_item_id"] = ammunition_item["id"]
     result = {
         "id": _slug(name),
         "name": name,
@@ -529,6 +645,8 @@ def _parse_weapon(
     }
     if trailing_prose:
         result["_normalization_note"] = trailing_warning
+    if ammunition_item is not None:
+        result["_ammunition_item"] = ammunition_item
     return result
 
 
@@ -1996,6 +2114,7 @@ def parse_2014_statblock(
         for item in (spellcasting or {}).get("spells", [])
     }
     weapons: list[dict[str, Any]] = []
+    ammunition_items: dict[str, dict[str, Any]] = {}
     multiattacks: list[tuple[str, str]] = []
     descriptive: list[tuple[str, str, str]] = []
     descriptive_attack_markers = 0
@@ -2032,9 +2151,17 @@ def parse_2014_statblock(
             actor_name=source_actor_name,
         )
         if weapon:
+            ammunition_item = weapon.pop("_ammunition_item", None)
             normalization_note = str(weapon.pop("_normalization_note", "") or "")
             if normalization_note:
                 normalization_notes.append(normalization_note)
+            if ammunition_item is not None:
+                ammunition_id = str(ammunition_item["id"])
+                if ammunition_id in ammunition_items:
+                    raise StatblockImportError(
+                        "statblock contains duplicate explicit ammunition stacks"
+                    )
+                ammunition_items[ammunition_id] = ammunition_item
             weapons.append(weapon)
         else:
             descriptive.append((section, entry_name, description))
@@ -2059,7 +2186,11 @@ def parse_2014_statblock(
     if len(ids) != len(set(ids)):
         raise StatblockImportError("statblock contains duplicate weapon action names")
     armor_items, armor_slots = _parse_armor_equipment(ac_text, source_key)
-    sheet["inventory"]["items"] = [*armor_items, *weapons]
+    sheet["inventory"]["items"] = [
+        *armor_items,
+        *ammunition_items.values(),
+        *weapons,
+    ]
     sheet["inventory"]["equipment_slots"].update(armor_slots)
 
     refs = list(dict.fromkeys(str(item) for item in rule_refs if str(item)))
