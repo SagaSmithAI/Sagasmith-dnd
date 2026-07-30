@@ -387,7 +387,7 @@ BOUNDARIES = (
     CoreBoundary(
         "dnd5e.core.monster.death_burst",
         ("2014",),
-        "statblocks._death_burst_source_trait|combat_engine._standard_death_trigger",
+        "statblocks._death_burst_source_trait|combat_engine.standard_death_trigger_for_sheet",
         (
             "tests/test_statblocks.py::test_magmin_standard_mechanics_are_structured",
             "tests/test_combat_engine.py::test_magmin_death_burst_surfaces_only_on_death_transition",

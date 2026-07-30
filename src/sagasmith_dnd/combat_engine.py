@@ -2925,7 +2925,7 @@ def apply_hit_point_loss_to_sheet(
         )
     after_conditions = _condition_set(value.get("conditions"))
     death_trigger = (
-        _standard_death_trigger(value)
+        standard_death_trigger_for_sheet(value)
         if "dead" not in before_conditions and "dead" in after_conditions
         else None
     )
@@ -3108,7 +3108,7 @@ def _apply_adjusted_damage(
         }
     after_conditions = _condition_set(value.get("conditions"))
     death_trigger = (
-        _standard_death_trigger(value)
+        standard_death_trigger_for_sheet(value)
         if "dead" not in before_conditions and "dead" in after_conditions
         else None
     )
@@ -3238,7 +3238,7 @@ def _source_trait(sheet: dict[str, Any], kind: str) -> dict[str, Any] | None:
     )
 
 
-def _standard_death_trigger(
+def standard_death_trigger_for_sheet(
     sheet: dict[str, Any],
 ) -> dict[str, Any] | None:
     """Return one validated engine-owned trigger for a creature that just died."""
