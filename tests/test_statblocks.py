@@ -3018,6 +3018,70 @@ def test_source_bound_variant_can_apply_common_module_instance_changes() -> None
     assert "Variant source: module-scene:d12" in attack["description"]
 
 
+def test_source_bound_variant_can_replace_ranged_attack_damage_and_range() -> None:
+    parsed = parse_2014_statblock(
+        COMMONER.replace(
+            "***Club***. *Melee Weapon Attack:* +2 to hit, reach 5 ft., one target.\n"
+            "*Hit:* 2 (1d4) bludgeoning damage.",
+            "***Rock***. *Ranged Weapon Attack:* +2 to hit, range 60/240 ft., "
+            "one target.\n*Hit:* 2 (1d4) bludgeoning damage.",
+        ),
+        source_key="srd-commoner-rock",
+    )
+
+    sheet = apply_statblock_variant(
+        parsed.sheet,
+        {
+            "source_ref": "module-chunk:foundry-lower-level",
+            "action_overrides": {
+                "rock": {
+                    "id": "molten-iron",
+                    "name": "Molten Iron",
+                    "damage_formula": "3d6",
+                    "damage_bonus_override": 7,
+                    "normal_range_ft": 30,
+                    "long_range_ft": 120,
+                    "additional_damage": [
+                        {
+                            "damage_formula": "4d10",
+                            "damage_bonus": 0,
+                            "damage_type": "fire",
+                        }
+                    ],
+                }
+            },
+        },
+    )
+
+    attack = next(
+        item
+        for item in derive_character_sheet(sheet)["inventory"]["weapon_attacks"]
+        if item["item_id"] == "molten-iron"
+    )
+    assert attack["range_ft"] == {"normal": 30, "long": 120}
+    assert attack["damage_expression"] == "3d6 + 7"
+    assert [
+        {
+            key: part[key]
+            for key in ("damage_formula", "damage_bonus", "damage_type")
+        }
+        for part in attack["additional_damage"]
+    ] == [
+        {
+            "damage_formula": "4d10",
+            "damage_bonus": 0,
+            "damage_type": "fire",
+        }
+    ]
+    item = next(
+        item
+        for item in sheet["inventory"]["items"]
+        if item["id"] == "molten-iron"
+    )
+    assert "range 30/120 ft." in item["description"]
+    assert "3d6 + 7 bludgeoning damage plus 4d10 fire damage" in item["description"]
+
+
 def test_source_bound_variant_can_apply_a_complete_spellcaster_instance() -> None:
     parsed = parse_2014_statblock(COMMONER, source_key="srd-spellcaster")
     sheet = parsed.sheet
@@ -3296,6 +3360,45 @@ def test_statblock_variant_rejects_unbound_or_broad_sheet_patches() -> None:
             {
                 "source_ref": "module-scene:d12",
                 "action_overrides": {"club": {"remove_on_hit_effect": False}},
+            },
+        )
+    ranged_sheet = parse_2014_statblock(
+        COMMONER.replace(
+            "***Club***. *Melee Weapon Attack:* +2 to hit, reach 5 ft., one target.\n"
+            "*Hit:* 2 (1d4) bludgeoning damage.",
+            "***Rock***. *Ranged Weapon Attack:* +2 to hit, range 60/240 ft., "
+            "one target.\n*Hit:* 2 (1d4) bludgeoning damage.",
+        ),
+        source_key="srd-commoner-rock",
+    ).sheet
+    with pytest.raises(StatblockImportError, match="long range at least as large"):
+        apply_statblock_variant(
+            ranged_sheet,
+            {
+                "source_ref": "module-scene:d12",
+                "action_overrides": {
+                    "rock": {
+                        "normal_range_ft": 120,
+                        "long_range_ft": 30,
+                    }
+                },
+            },
+        )
+    with pytest.raises(StatblockImportError, match="D&D damage type"):
+        apply_statblock_variant(
+            parsed.sheet,
+            {
+                "source_ref": "module-scene:d12",
+                "action_overrides": {
+                    "club": {
+                        "additional_damage": [
+                            {
+                                "damage_formula": "4d10",
+                                "damage_type": "lava",
+                            }
+                        ]
+                    }
+                },
             },
         )
 

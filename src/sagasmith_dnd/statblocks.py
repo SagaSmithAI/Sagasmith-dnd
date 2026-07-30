@@ -2439,9 +2439,24 @@ def _variant_attack_description(item: dict[str, Any], source_ref: str) -> str:
     if damage_bonus:
         formula = f"{formula} {'+' if int(damage_bonus) > 0 else '-'} {abs(int(damage_bonus))}"
     damage_type = str(mechanics.get("damage_type") or "untyped")
+    damage_text = f"{formula} {damage_type} damage"
+    for part in mechanics.get("additional_damage", []):
+        part_formula = str(
+            part.get("damage_formula") or "structured damage"
+        )
+        part_bonus = int(part.get("damage_bonus", 0) or 0)
+        if part_bonus:
+            part_formula = (
+                f"{part_formula} {'+' if part_bonus > 0 else '-'} "
+                f"{abs(part_bonus)}"
+            )
+        damage_text += (
+            f" plus {part_formula} "
+            f"{str(part.get('damage_type') or 'untyped')} damage"
+        )
     return (
         f"*{mode.title()} {attack_kind} Attack:* {attack_bonus_text} to hit, "
-        f"{range_text}, one target. *Hit:* {formula} {damage_type} damage. "
+        f"{range_text}, one target. *Hit:* {damage_text}. "
         f"Variant source: {source_ref}."
     )
 
@@ -3034,6 +3049,9 @@ def apply_statblock_variant(
             "name",
             "damage_type",
             "damage_formula",
+            "additional_damage",
+            "normal_range_ft",
+            "long_range_ft",
             "attack_bonus_override",
             "damage_bonus_override",
             "remove_on_hit_effect",
@@ -3066,6 +3084,83 @@ def apply_statblock_variant(
             if not re.fullmatch(r"\d+d\d+", damage_formula):
                 raise StatblockImportError("action override damage_formula must be NdM dice")
             mechanics["damage_formula"] = damage_formula
+        if "additional_damage" in raw_patch:
+            raw_additional_damage = raw_patch["additional_damage"]
+            if not isinstance(raw_additional_damage, list):
+                raise StatblockImportError(
+                    "action override additional_damage must be a list"
+                )
+            additional_damage: list[dict[str, Any]] = []
+            for index, raw_damage in enumerate(raw_additional_damage):
+                if (
+                    not isinstance(raw_damage, dict)
+                    or set(raw_damage)
+                    - {"damage_formula", "damage_bonus", "damage_type"}
+                ):
+                    raise StatblockImportError(
+                        "each action override additional_damage entry accepts only "
+                        "damage_formula, damage_bonus, and damage_type"
+                    )
+                damage_formula = str(
+                    raw_damage.get("damage_formula") or ""
+                ).replace(" ", "")
+                damage_bonus = raw_damage.get("damage_bonus", 0)
+                damage_type = str(
+                    raw_damage.get("damage_type") or ""
+                ).strip().casefold()
+                if not re.fullmatch(r"\d+d\d+", damage_formula):
+                    raise StatblockImportError(
+                        "action override additional_damage damage_formula "
+                        f"at index {index} must be NdM dice"
+                    )
+                if not isinstance(damage_bonus, int) or isinstance(
+                    damage_bonus, bool
+                ):
+                    raise StatblockImportError(
+                        "action override additional_damage damage_bonus "
+                        f"at index {index} must be an integer"
+                    )
+                if damage_type not in DAMAGE_TYPES:
+                    raise StatblockImportError(
+                        "action override additional_damage damage_type "
+                        f"at index {index} must be a D&D damage type"
+                    )
+                additional_damage.append(
+                    {
+                        "damage_formula": damage_formula,
+                        "damage_bonus": damage_bonus,
+                        "damage_type": damage_type,
+                    }
+                )
+            mechanics["additional_damage"] = additional_damage
+        for field in ("normal_range_ft", "long_range_ft"):
+            if field not in raw_patch:
+                continue
+            value = raw_patch[field]
+            if (
+                not isinstance(value, int)
+                or isinstance(value, bool)
+                or not 0 <= value <= 10_000
+            ):
+                raise StatblockImportError(
+                    f"action override {field} must be an integer from 0 through 10000"
+                )
+            mechanics[field] = value
+        if (
+            "normal_range_ft" in raw_patch
+            or "long_range_ft" in raw_patch
+        ):
+            if str(mechanics.get("attack_type") or "") != "ranged":
+                raise StatblockImportError(
+                    "action override ranged distances require a ranged weapon action"
+                )
+            normal_range = int(mechanics.get("normal_range_ft", 0) or 0)
+            long_range = int(mechanics.get("long_range_ft", 0) or 0)
+            if normal_range < 1 or long_range < normal_range:
+                raise StatblockImportError(
+                    "action override ranged distances require a positive normal "
+                    "range and a long range at least as large"
+                )
         for field in ("attack_bonus_override", "damage_bonus_override"):
             if field in raw_patch:
                 value = raw_patch[field]
