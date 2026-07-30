@@ -15,6 +15,8 @@ from sagasmith_dnd.rule_engine import ResolutionContext, apply_rule_event, core_
 from sagasmith_dnd.standard_spell_ids import (
     CORE_BLADE_WARD_MECHANIC_ID,
     CORE_BLADE_WARD_SPELL_ID,
+    CORE_FLY_MECHANIC_ID,
+    CORE_FLY_SPELL_ID,
     CORE_HYPNOTIC_PATTERN_SPELL_ID,
     CORE_WITCH_BOLT_MECHANIC_ID,
     CORE_WITCH_BOLT_SPELL_ID,
@@ -94,6 +96,159 @@ def is_core_hypnotic_pattern_spell(spell: dict[str, Any]) -> bool:
     """Recognize only the source-bound SRD 2014 Hypnotic Pattern mechanic."""
 
     return str(spell.get("id") or "") == CORE_HYPNOTIC_PATTERN_SPELL_ID
+
+
+def is_core_fly_spell(spell: dict[str, Any]) -> bool:
+    """Recognize only the source-bound SRD 2014 Fly mechanic."""
+
+    return str(spell.get("id") or "") == CORE_FLY_SPELL_ID or (
+        CORE_FLY_MECHANIC_ID
+        in {str(item) for item in spell.get("mechanic_refs", [])}
+    )
+
+
+def fly_target_limit(cast_level: int) -> int:
+    """Return Fly's exact willing-creature target cap for one legal slot."""
+
+    level = int(cast_level)
+    if level < 3 or level > 9:
+        raise CombatEngineError("Fly cast_level must be between 3 and 9")
+    return level - 2
+
+
+def apply_core_fly_effects(
+    sheets: dict[str, dict[str, Any]],
+    *,
+    caster_id: str,
+    target_ids: list[str],
+    willing_target_ids: list[str],
+    spell_id: str,
+    cast_level: int,
+    concentration_effect_id: str,
+) -> dict[str, Any]:
+    """Apply Fly's 60-foot speed to its explicit willing targets."""
+
+    if spell_id != CORE_FLY_SPELL_ID:
+        raise CombatEngineError("Fly requires its exact source-bound SRD spell id")
+    if caster_id not in sheets:
+        raise CombatEngineError("Fly caster sheet is missing")
+    normalized_targets = [str(item).strip() for item in target_ids]
+    normalized_willing = [str(item).strip() for item in willing_target_ids]
+    if (
+        not normalized_targets
+        or any(not item for item in normalized_targets)
+        or len(normalized_targets) != len(set(normalized_targets))
+    ):
+        raise CombatEngineError("Fly target_ids must be unique and non-empty")
+    if (
+        any(not item for item in normalized_willing)
+        or len(normalized_willing) != len(set(normalized_willing))
+        or set(normalized_willing) != set(normalized_targets)
+    ):
+        raise CombatEngineError("every Fly target must be explicitly willing")
+    if len(normalized_targets) > fly_target_limit(cast_level):
+        raise CombatEngineError("Fly target count exceeds the cast level")
+    missing = [item for item in normalized_targets if item not in sheets]
+    if missing:
+        raise CombatEngineError(f"Fly target sheets are missing: {missing}")
+    source_effect = next(
+        (
+            effect
+            for effect in sheets[caster_id].get("effects", [])
+            if effect.get("active")
+            and effect.get("concentration")
+            and str(effect.get("id") or "") == concentration_effect_id
+            and str(effect.get("source_spell_id") or "") == CORE_FLY_SPELL_ID
+        ),
+        None,
+    )
+    if source_effect is None:
+        raise CombatEngineError("Fly requires its exact active concentration effect")
+
+    value = {actor_id: deepcopy(sheet) for actor_id, sheet in sheets.items()}
+    effect_ids: dict[str, str] = {}
+    for target_id in normalized_targets:
+        effect_id = f"fly-{uuid4().hex}"
+        value[target_id].setdefault("effects", []).append(
+            {
+                "id": effect_id,
+                "name": "Fly",
+                "kind": "spell_fly",
+                "source": CORE_FLY_MECHANIC_ID,
+                "source_spell_id": CORE_FLY_SPELL_ID,
+                "dependency": "source_effect_active",
+                "source_actor_id": caster_id,
+                "source_effect_id": concentration_effect_id,
+                "active": True,
+                "concentration": False,
+                "duration": {"period": "minute", "remaining": 10},
+                "changes": [
+                    {
+                        "path": "combat.speed.fly",
+                        "mode": "override",
+                        "value": 60,
+                    }
+                ],
+                "description": "",
+            }
+        )
+        effect_ids[target_id] = effect_id
+    return {
+        "sheets": value,
+        "target_ids": normalized_targets,
+        "effect_ids": effect_ids,
+        "concentration_effect_id": concentration_effect_id,
+        "cast_level": int(cast_level),
+        "target_limit": fly_target_limit(cast_level),
+    }
+
+
+def reconcile_source_effect_dependencies(
+    sheets: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """End actor effects whose recorded source effect is no longer active."""
+
+    value = {actor_id: deepcopy(sheet) for actor_id, sheet in sheets.items()}
+    ended: list[dict[str, str]] = []
+    for target_actor_id, sheet in value.items():
+        for effect in sheet.get("effects", []):
+            if (
+                not effect.get("active")
+                or effect.get("dependency") != "source_effect_active"
+            ):
+                continue
+            source_actor_id = str(effect.get("source_actor_id") or "")
+            source_effect_id = str(effect.get("source_effect_id") or "")
+            if not source_actor_id or not source_effect_id:
+                raise CombatEngineError("dependent actor effect is malformed")
+            source_sheet = value.get(source_actor_id)
+            source_active = bool(
+                source_sheet
+                and any(
+                    source_effect.get("active")
+                    and str(source_effect.get("id") or "") == source_effect_id
+                    for source_effect in source_sheet.get("effects", [])
+                )
+            )
+            if source_active:
+                continue
+            effect["active"] = False
+            effect["ended_reason"] = "source_effect_ended"
+            ended.append(
+                {
+                    "target_actor_id": target_actor_id,
+                    "target_effect_id": str(effect.get("id") or ""),
+                    "source_actor_id": source_actor_id,
+                    "source_effect_id": source_effect_id,
+                }
+            )
+    return {
+        "sheets": value,
+        "changed_actor_ids": sorted(
+            {item["target_actor_id"] for item in ended}
+        ),
+        "ended": ended,
+    }
 
 
 def is_core_witch_bolt_spell(spell: dict[str, Any]) -> bool:

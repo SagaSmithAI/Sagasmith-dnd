@@ -1943,6 +1943,9 @@ def _normalize_effect(value: Any, field: str) -> dict[str, Any]:
         "kind",
         "source",
         "source_spell_id",
+        "dependency",
+        "source_actor_id",
+        "source_effect_id",
         "active",
         "concentration",
         "duration",
@@ -1986,6 +1989,39 @@ def _normalize_effect(value: Any, field: str) -> dict[str, Any]:
         "changes": changes,
         "description": _text(effect.get("description"), f"{field}.description", maximum=1200),
     }
+    dependency = _text(
+        effect.get("dependency"),
+        f"{field}.dependency",
+        maximum=100,
+    )
+    source_actor_id = _text(
+        effect.get("source_actor_id"),
+        f"{field}.source_actor_id",
+        maximum=100,
+    )
+    source_effect_id = _text(
+        effect.get("source_effect_id"),
+        f"{field}.source_effect_id",
+        maximum=100,
+    )
+    if dependency:
+        if dependency != "source_effect_active":
+            raise ValueError(f"{field}.dependency is unsupported")
+        if not source_actor_id or not source_effect_id:
+            raise ValueError(
+                f"{field}.dependency requires source_actor_id and source_effect_id"
+            )
+        normalized.update(
+            {
+                "dependency": dependency,
+                "source_actor_id": source_actor_id,
+                "source_effect_id": source_effect_id,
+            }
+        )
+    elif source_actor_id or source_effect_id:
+        raise ValueError(
+            f"{field}.source_actor_id and source_effect_id require dependency"
+        )
     ended_reason = _text(effect.get("ended_reason"), f"{field}.ended_reason", maximum=300)
     if ended_reason:
         if normalized["active"]:
@@ -3704,6 +3740,19 @@ def _derive_armor_class(
                 ):
                     unresolved_effects.add(effect["id"])
                 continue
+            speed_match = re.fullmatch(
+                r"combat\.speed\.(walk|fly|swim|climb|burrow)",
+                change["path"],
+            )
+            if speed_match is not None:
+                if (
+                    change["mode"] != "override"
+                    or isinstance(change["value"], bool)
+                    or not isinstance(change["value"], int)
+                    or change["value"] < 0
+                ):
+                    unresolved_effects.add(effect["id"])
+                continue
             if change["path"] not in {"derived.armor_class", "combat.ac"}:
                 unresolved_effects.add(effect["id"])
                 continue
@@ -4032,6 +4081,25 @@ def derive_character_sheet(
         options = dict(activity.get("choices") or {}).get("multiattack_options")
         if isinstance(options, list):
             multiattack_options.extend(copy.deepcopy(options))
+    effective_speed = dict(value["combat"]["speed"])
+    for effect in active_effects:
+        for change in effect["changes"]:
+            match = re.fullmatch(
+                r"combat\.speed\.(walk|fly|swim|climb|burrow)",
+                change["path"],
+            )
+            if match is None:
+                continue
+            speed = change["value"]
+            if (
+                change["mode"] != "override"
+                or isinstance(speed, bool)
+                or not isinstance(speed, int)
+                or speed < 0
+            ):
+                raise ValueError("active speed override effect is malformed")
+            mode = match.group(1)
+            effective_speed[mode] = max(int(effective_speed.get(mode, 0) or 0), speed)
     effective_hp_max = effective_hit_point_maximum(value)
     derived = {
         "proficiency_bonus": proficiency,
@@ -4059,7 +4127,7 @@ def derive_character_sheet(
             "gains": list(value["combat"]["hp_progression"]),
             "recorded_gain_total": sum(gain["value"] for gain in value["combat"]["hp_progression"]),
         },
-        "speed": dict(value["combat"]["speed"]),
+        "speed": effective_speed,
         "spellcasting": (
             {
                 "ability": spell_ability,

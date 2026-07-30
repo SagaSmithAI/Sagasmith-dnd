@@ -58,6 +58,7 @@ EDITION_BOUNDARIES = {
         "dnd5e.core.rest.song_of_rest",
         "dnd5e.core.rest.sorcerous_restoration",
         "dnd5e.core.spell.pact_magic",
+        "dnd5e.core.spell.fly",
         "dnd5e.core.progression.hp_hit_dice",
         "dnd5e.core.progression.spellcasting",
         "dnd5e.core.attack.assassinate",

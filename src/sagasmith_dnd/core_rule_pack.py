@@ -666,6 +666,22 @@ BOUNDARIES = (
         "bundled:srd/mage-armor",
     ),
     CoreBoundary(
+        "dnd5e.core.spell.fly",
+        ("2014",),
+        (
+            "spells.fly_target_limit|spells.apply_core_fly_effects|"
+            "spells.reconcile_source_effect_dependencies|"
+            "character_schema.derive_character_sheet"
+        ),
+        (
+            "tests/test_spells.py::"
+            "test_fly_applies_willing_target_speed_and_tracks_concentration",
+            "tests/test_spells.py::"
+            "test_fly_upcast_target_limit_and_source_dependency_are_hard_settled",
+        ),
+        "bundled:srd2014/07_Spells/Spells_Each/Fly.md",
+    ),
+    CoreBoundary(
         "dnd5e.core.spell.blade_ward",
         ("2014",),
         (

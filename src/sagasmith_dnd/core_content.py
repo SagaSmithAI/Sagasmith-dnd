@@ -14,10 +14,13 @@ from sagasmith_dnd.spell_resolution import (
     SPELL_RESOLUTION_MECHANIC_ID,
     known_spell_resolution,
 )
-from sagasmith_dnd.standard_spell_ids import CORE_HYPNOTIC_PATTERN_MECHANIC_ID
+from sagasmith_dnd.standard_spell_ids import (
+    CORE_FLY_MECHANIC_ID,
+    CORE_HYPNOTIC_PATTERN_MECHANIC_ID,
+)
 
 PACK_ID = "dnd5e.content.srd2014"
-PACK_VERSION = "1.15.0"
+PACK_VERSION = "1.16.0"
 
 _SUBCLASS_LEVELS = {
     "barbarian": 3,
@@ -137,6 +140,8 @@ def _spells(folder: Path, spell_classes: dict[str, list[str]]) -> list[dict[str,
             mechanic_refs.append("dnd5e.core.spell.magic_missile")
         elif _name_key(name) == "mage-armor":
             mechanic_refs.append("dnd5e.core.spell.mage_armor")
+        elif _name_key(name) == "fly":
+            mechanic_refs.append(CORE_FLY_MECHANIC_ID)
         elif _name_key(name) == "raise-dead":
             mechanic_refs.append("dnd5e.core.spell.raise_dead")
         elif _name_key(name) == "hypnotic-pattern":

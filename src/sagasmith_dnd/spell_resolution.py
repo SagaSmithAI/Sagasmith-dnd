@@ -11,6 +11,7 @@ from sagasmith_core.text import ascii_slug
 from sagasmith_dnd.abilities import ABILITY_IDS
 from sagasmith_dnd.standard_spell_ids import (
     CORE_BLADE_WARD_MECHANIC_ID,
+    CORE_FLY_MECHANIC_ID,
     CORE_WITCH_BOLT_MECHANIC_ID,
 )
 from sagasmith_dnd.vocabulary import ATTACK_MODES
@@ -23,6 +24,7 @@ ENGINE_SETTLED_SPELL_MECHANIC_IDS = frozenset(
         "dnd5e.core.spell.raise_dead",
         "dnd5e.core.spell.shield",
         CORE_BLADE_WARD_MECHANIC_ID,
+        CORE_FLY_MECHANIC_ID,
         CORE_WITCH_BOLT_MECHANIC_ID,
     }
 )
