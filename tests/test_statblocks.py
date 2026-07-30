@@ -1910,6 +1910,55 @@ no damage if it succeeds on the saving throw, and only half damage if it fails.
     assert parsed.warnings == ()
 
 
+def test_archmage_precombat_footnote_is_not_parsed_as_a_spell_name() -> None:
+    source = COMMONER.replace(
+        "###### Actions",
+        """***Spellcasting.*** The archmage is an 18th-level spellcaster. Its
+spellcasting ability is Intelligence (spell save DC 17, +9 to hit with spell
+attacks). The archmage has the following wizard spells prepared:
+
+Cantrips (at will): fire bolt, light, mage hand, prestidigitation, shocking grasp
+
+1st level (4 slots): detect magic, identify, mage armor*, magic missile
+
+2nd level (3 slots): detect thoughts, mirror image*, misty step
+
+3rd level (3 slots): counterspell, fly*, lightning bolt
+
+4th level (3 slots): banishment, fire shield, stoneskin*
+
+5th level (3 slots): cone of cold, scrying*, wall of force
+
+6th level (1 slot): globe of invulnerability
+
+7th level (1 slot): teleport
+
+8th level (1 slot): mind blank*
+
+9th level (1 slot): time stop
+
+*The archmage casts these spells on itself before combat.*
+
+###### Actions""",
+    )
+
+    parsed = parse_2014_statblock(
+        source,
+        source_key="monster-manual-2014:archmage",
+    )
+    assert parsed.spellcasting is not None
+    names = [item["name"] for item in parsed.spellcasting["spells"]]
+    assert names[-1] == "time stop"
+    assert "mage armor" in names
+    assert all("before combat" not in name for name in names)
+    spellcasting = next(
+        item
+        for item in parsed.sheet["content"]["features"]
+        if item["name"] == "Spellcasting"
+    )
+    assert "casts these spells on itself before combat" in spellcasting["description"]
+
+
 def test_source_traits_are_compiled_from_complete_text_not_feature_names() -> None:
     parsed = parse_2014_statblock(
         KOBOLD.replace(

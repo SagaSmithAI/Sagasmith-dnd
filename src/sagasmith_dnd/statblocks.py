@@ -984,9 +984,20 @@ def _parse_spellcasting(
     slots: dict[str, int] = {}
     for index, header in enumerate(headers):
         end = headers[index + 1].start() if index + 1 < len(headers) else len(description)
+        spell_list_text = description[header.end() : end]
+        # The standard Archmage marks pre-cast self buffs with asterisks and
+        # explains the marker in a separate paragraph after the final spell
+        # list.  Preserve that paragraph in the feature description, while
+        # keeping it out of the final spell identity.
+        spell_list_text = re.split(
+            r"(?is)\n\s*\n\s*\*?The [A-Za-z][A-Za-z '\-]* casts these spells "
+            r"on itself before combat\.\*?",
+            spell_list_text,
+            maxsplit=1,
+        )[0]
         names = [
             re.sub(r"(?:\s*[-*]\s*)+$", "", item.strip()).lstrip("-* ")
-            for item in description[header.end() : end].split(",")
+            for item in spell_list_text.split(",")
         ]
         names = [
             re.sub(r"(?i)\bo\s+f\b", "of", item)
