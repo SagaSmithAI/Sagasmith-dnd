@@ -799,6 +799,7 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
                 "damage_formula",
                 "damage_type",
                 "additional_damage",
+                "versatile_additional_damage",
                 "on_hit_effect",
                 "on_hit_resolution",
                 "versatile_damage_formula",
@@ -855,6 +856,10 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
             "damage_type": _text(mechanics.get("damage_type"), f"{field}.damage_type", maximum=100),
             "additional_damage": _damage_parts(
                 mechanics.get("additional_damage"), f"{field}.additional_damage"
+            ),
+            "versatile_additional_damage": _damage_parts(
+                mechanics.get("versatile_additional_damage"),
+                f"{field}.versatile_additional_damage",
             ),
             "on_hit_effect": _text(
                 mechanics.get("on_hit_effect"), f"{field}.on_hit_effect", maximum=4000
@@ -3638,6 +3643,23 @@ def _weapon_attacks(
                     }
                     for part in (mechanics["additional_damage"] if magic_properties_active else [])
                 ],
+                "versatile_additional_damage": [
+                    {
+                        **part,
+                        "damage_expression": (
+                            f"{part['damage_formula']} "
+                            f"{'+' if part['damage_bonus'] > 0 else '-'} "
+                            f"{abs(part['damage_bonus'])}"
+                            if part["damage_bonus"]
+                            else part["damage_formula"]
+                        ),
+                    }
+                    for part in (
+                        mechanics["versatile_additional_damage"]
+                        if magic_properties_active
+                        else []
+                    )
+                ],
                 "on_hit_effect": (mechanics["on_hit_effect"] if magic_properties_active else ""),
                 "on_hit_resolution": (
                     copy.deepcopy(mechanics["on_hit_resolution"])
@@ -3655,6 +3677,7 @@ def _weapon_attacks(
                     and (
                         mechanics["magic_bonus"] != 0
                         or bool(mechanics["additional_damage"])
+                        or bool(mechanics["versatile_additional_damage"])
                         or bool(mechanics["on_hit_effect"])
                         or bool(mechanics["on_hit_resolution"])
                     )

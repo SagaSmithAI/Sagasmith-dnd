@@ -46,6 +46,7 @@ from sagasmith_dnd.combat_engine import (
     resolve_choice_window,
     resolve_common_action,
     resolve_death_save_to_sheet,
+    resolve_heated_body_melee_hit,
     resolve_preserve_life_to_sheets,
     resolve_random_save_effects,
     resolve_readied_spell_window,
@@ -280,6 +281,95 @@ def test_corrosive_form_damages_attacker_and_corrodes_mundane_weapon() -> None:
     )
     assert [child["traits"]["size"] for child in children] == ["medium", "medium"]
     assert [child["combat"]["hp"]["value"] for child in children] == [42, 42]
+
+
+def test_heated_body_damages_only_a_melee_attacker_within_five_feet() -> None:
+    attacker = _actor("attacker", hp=20)
+    attacker["derived"]["inventory"]["weapon_attacks"] = [
+        {
+            "item_id": "longsword",
+            "attack_type": "melee",
+            "properties": [],
+            "attack_bonus": 6,
+            "damage_formula": "1d8",
+            "damage_bonus": 3,
+            "damage_expression": "1d8 + 3",
+            "damage_type": "slashing",
+            "additional_damage": [],
+            "reach_ft": 5,
+        }
+    ]
+    salamander = _actor("salamander", hp=90, ac=15)
+    salamander["sheet"]["content"]["features"].append(
+        {
+            "id": "heated-body-passive",
+            "name": "Heated Body",
+            "activation": {"type": "passive", "cost": 0},
+            "choices": {
+                "source_trait": {
+                    "kind": "heated_body",
+                    "trigger": "contact_or_melee_hit",
+                    "melee_range_ft": 5,
+                    "contact_damage_formula": "2d6",
+                    "average_damage": 7,
+                    "contact_damage_type": "fire",
+                    "automatic": True,
+                    "source_excerpt": (
+                        "A creature that touches the salamander or hits it with "
+                        "a melee attack while within 5 feet of it takes 7 (2d6) "
+                        "fire damage."
+                    ),
+                }
+            },
+        }
+    )
+    salamander["derived"] = derive_character_sheet(salamander["sheet"])
+    attacker.update(
+        initiative=20,
+        tie_breaker=0,
+        position={"x": 0, "y": 0},
+        disposition="friendly",
+    )
+    salamander.update(
+        initiative=10,
+        tie_breaker=0,
+        position={"x": 1, "y": 0},
+        disposition="hostile",
+    )
+    encounter = start_encounter([attacker, salamander])
+
+    plan = preflight_attack(
+        attacker,
+        salamander,
+        action={"weapon_id": "longsword"},
+        encounter=encounter,
+    )
+    updated_attacker, _, result = resolve_attack_action(
+        attacker,
+        salamander,
+        plan=plan,
+        rng=_SequenceRng(15, 4, 2, 3),
+    )
+
+    assert result["hit"] is True
+    assert result["heated_body"]["fire_damage"]["applied_amount"] == 5
+    assert updated_attacker["sheet"]["combat"]["hp"]["value"] == 15
+    assert result["heated_body"]["mechanic_id"] == (
+        "dnd5e.core.monster.heated_body"
+    )
+    beyond_range = resolve_heated_body_melee_hit(
+        attacker["sheet"],
+        salamander["sheet"],
+        plan={
+            "attack_mode": "melee",
+            "range": {"distance_ft": 10},
+            "weapon_reach_ft": 10,
+            "attacker_uses_death_saves": True,
+            "ruleset": "2014",
+        },
+    )
+    assert beyond_range["triggered"] is False
+    assert beyond_range["attacker_sheet"]["combat"]["hp"]["value"] == 20
 
 
 def test_pseudopod_corrosion_reduces_and_destroys_worn_armor() -> None:
@@ -4207,6 +4297,53 @@ def test_versatile_weapon_grip_uses_exact_alternate_damage_once() -> None:
             action={"weapon_id": "spear", "weapon_grip": "two_handed"},
             encounter=encounter,
         )
+
+
+def test_versatile_weapon_retains_damage_printed_after_alternate_formula() -> None:
+    salamander = _actor("salamander")
+    target = _actor("target")
+    salamander["derived"]["inventory"]["weapon_attacks"] = [
+        {
+            "item_id": "spear",
+            "attack_type": "melee",
+            "properties": ["thrown", "versatile"],
+            "attack_bonus": 7,
+            "damage_formula": "2d6",
+            "damage_bonus": 4,
+            "damage_expression": "2d6 + 4",
+            "damage_type": "piercing",
+            "additional_damage": [
+                {
+                    "damage_formula": "1d6",
+                    "damage_bonus": 0,
+                    "damage_expression": "1d6",
+                    "damage_type": "fire",
+                }
+            ],
+            "versatile_damage_formula": "2d8",
+            "versatile_additional_damage": [
+                {
+                    "damage_formula": "1d6",
+                    "damage_bonus": 0,
+                    "damage_expression": "1d6",
+                    "damage_type": "fire",
+                }
+            ],
+            "reach_ft": 5,
+            "thrown_range_ft": {"normal": 20, "long": 60},
+        }
+    ]
+
+    plan = preflight_attack(
+        salamander,
+        target,
+        action={"weapon_id": "spear", "weapon_grip": "two_handed"},
+    )
+
+    assert plan["damage_expression"] == "2d8 + 4"
+    assert [part["damage_expression"] for part in plan["additional_damage"]] == [
+        "1d6"
+    ]
 
 
 def test_second_wind_rolls_fighter_level_healing_and_clamps_at_maximum() -> None:

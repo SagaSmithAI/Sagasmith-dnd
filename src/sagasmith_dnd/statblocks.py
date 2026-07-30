@@ -402,6 +402,7 @@ def _parse_weapon(
         description,
     )
     additional_damage: list[dict[str, Any]] = []
+    versatile_additional_damage: list[dict[str, Any]] = []
     complete_structured_on_hit: dict[str, Any] | None = None
     if hit:
         expression_parts = re.split(
@@ -462,13 +463,14 @@ def _parse_weapon(
                 raise StatblockImportError(
                     f"weapon action {name!r} has an invalid additional damage expression"
                 )
-            additional_damage.append(
-                {
-                    "damage_formula": parsed_extra.group(1),
-                    "damage_bonus": int(parsed_extra.group(2) or 0),
-                    "damage_type": extra.group(2).casefold(),
-                }
-            )
+            damage_part = {
+                "damage_formula": parsed_extra.group(1),
+                "damage_bonus": int(parsed_extra.group(2) or 0),
+                "damage_type": extra.group(2).casefold(),
+            }
+            additional_damage.append(damage_part)
+            if versatile is not None and extra.start() >= versatile.end():
+                versatile_additional_damage.append(deepcopy(damage_part))
             last_damage_end = hit.end() + extra.end()
         raw_on_hit_effect = description[last_damage_end:]
         complete_structured_on_hit = (
@@ -593,6 +595,7 @@ def _parse_weapon(
         "damage_formula": damage_formula,
         "damage_type": damage_type,
         "additional_damage": additional_damage,
+        "versatile_additional_damage": versatile_additional_damage,
         "on_hit_effect": on_hit_effect,
         "versatile_damage_formula": versatile_damage_formula,
         "properties": properties,
@@ -1227,6 +1230,61 @@ def _included_weapon_damage_source_trait(description: str) -> dict[str, Any] | N
     }
 
 
+def _heated_body_source_trait(description: str) -> dict[str, Any] | None:
+    """Compile the Salamander's standard contact retaliation."""
+
+    normalized = " ".join(description.split())
+    match = re.fullmatch(
+        r"A creature that touches the (?P<subject>[A-Za-z][A-Za-z '\-]*) or hits "
+        r"it with a melee attack while within (?P<range>\d+) feet of it takes "
+        r"(?P<average>\d+) \((?P<formula>\d+d\d+)\) "
+        r"(?P<damage_type>[a-z]+) damage\.",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    return {
+        "kind": "heated_body",
+        "trigger": "contact_or_melee_hit",
+        "melee_range_ft": int(match.group("range")),
+        "contact_damage_formula": match.group("formula").casefold(),
+        "average_damage": int(match.group("average")),
+        "contact_damage_type": match.group("damage_type").casefold(),
+        "automatic": True,
+        "source_excerpt": normalized,
+    }
+
+
+def _heated_weapons_source_trait(description: str) -> dict[str, Any] | None:
+    """Compile damage already printed into the Salamander's weapon action."""
+
+    normalized = " ".join(description.split())
+    match = re.fullmatch(
+        r"Any (?P<material>[a-z]+) melee weapon the "
+        r"(?P<subject>[A-Za-z][A-Za-z '\-]*) wields deals an extra "
+        r"(?P<average>\d+) \((?P<formula>\d+d\d+)\) "
+        r"(?P<damage_type>[a-z]+) damage on a hit "
+        r"\(included in the attack\)\.",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    return {
+        "kind": "heated_weapons",
+        "trigger": "weapon_hit",
+        "required_weapon_material": match.group("material").casefold(),
+        "required_weapon_category": "melee",
+        "damage_formula": match.group("formula").casefold(),
+        "average_damage": int(match.group("average")),
+        "damage_type": match.group("damage_type").casefold(),
+        "embedded_in_weapon_actions": True,
+        "automatic": True,
+        "source_excerpt": normalized,
+    }
+
+
 def _battle_cry_source_trait(description: str) -> dict[str, Any] | None:
     normalized = " ".join(description.split())
     match = re.fullmatch(
@@ -1471,6 +1529,8 @@ def _source_trait_from_description(description: str) -> dict[str, Any] | None:
             _aggressive_source_trait,
             _cunning_action_source_trait,
             _included_weapon_damage_source_trait,
+            _heated_body_source_trait,
+            _heated_weapons_source_trait,
             _battle_cry_source_trait,
             _death_burst_source_trait,
             _ignited_illumination_source_trait,
@@ -2330,6 +2390,8 @@ def parse_2014_statblock(
                 "aggressive": "bonus action on its turn",
                 "cunning_action": "bonus action on its turn",
                 "included_weapon_damage": "weapon hit; included in weapon actions",
+                "heated_body": "contact or a melee hit within range",
+                "heated_weapons": "qualifying weapon hit; included in weapon actions",
                 "battle_cry": "action on its turn",
                 "death_burst": "when it dies",
                 "ignited_illumination": "bonus action on its turn",
@@ -2406,6 +2468,48 @@ def parse_2014_statblock(
             )
 
     validated = validate_character_sheet(sheet)
+    validated_weapons = [
+        item
+        for item in dict(validated.get("inventory") or {}).get("items", [])
+        if isinstance(item, dict) and item.get("kind") == "weapon"
+    ]
+    heated_weapon_traits = [
+        dict(dict(item.get("choices") or {}).get("source_trait") or {})
+        for item in sheet["content"]["features"]
+        if dict(dict(item.get("choices") or {}).get("source_trait") or {}).get(
+            "kind"
+        )
+        == "heated_weapons"
+    ]
+    for source_trait in heated_weapon_traits:
+        material = str(source_trait.get("required_weapon_material") or "")
+        expected_part = {
+            "damage_formula": str(source_trait.get("damage_formula") or ""),
+            "damage_bonus": 0,
+            "damage_type": str(source_trait.get("damage_type") or ""),
+        }
+        qualifying_weapons = [
+            weapon
+            for weapon in validated_weapons
+            if material
+            in {
+                str(item).casefold()
+                for item in dict(weapon.get("mechanics") or {}).get("materials", [])
+            }
+            and str(
+                dict(weapon.get("mechanics") or {}).get("attack_type") or ""
+            ).casefold()
+            == "melee"
+        ]
+        if not qualifying_weapons or any(
+            expected_part
+            not in dict(weapon.get("mechanics") or {}).get("additional_damage", [])
+            for weapon in qualifying_weapons
+        ):
+            raise StatblockImportError(
+                "heated weapon damage is missing from a qualifying weapon action"
+            )
+
     summary = f"{identity_text}; CR {challenge or 'unrecorded'}"
     return ParsedStatblock(
         name=actor_name,

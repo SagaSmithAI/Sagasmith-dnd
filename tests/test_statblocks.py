@@ -214,6 +214,46 @@ takes 3 (1d6) fire damage at the end of each of its turns.
 """
 
 
+SALAMANDER = """# Salamander
+
+*Large elemental, neutral evil*
+
+**Armor Class** 15 (natural armor)
+**Hit Points** 90 (12d10 + 24)
+**Speed** 30 ft.
+
+| STR | DEX | CON | INT | WIS | CHA |
+|---:|---:|---:|---:|---:|---:|
+| 18 (+4) | 14 (+2) | 15 (+2) | 11 (+0) | 10 (+0) | 12 (+1) |
+
+**Damage Vulnerabilities** cold
+**Damage Resistances** bludgeoning, piercing, and slashing from nonmagical weapons
+**Damage Immunities** fire
+**Senses** darkvision 60 ft., passive Perception 10
+**Languages** Ignan
+**Challenge** 5 (1,800 XP)
+
+***Heated Body.*** A creature that touches the salamander or hits it with a
+melee attack while within 5 feet of it takes 7 (2d6) fire damage.
+
+***Heated Weapons.*** Any metal melee weapon the salamander wields deals an
+extra 3 (1d6) fire damage on a hit (included in the attack).
+
+## Actions
+
+***Multiattack.*** The salamander makes two attacks: one with its spear and one
+with its tail.
+
+***Spear.*** *Melee or Ranged Weapon Attack:* +7 to hit, reach 5 ft. or range
+20/60 ft., one target. *Hit:* 11 (2d6 + 4) piercing damage, or 13 (2d8 + 4)
+piercing damage if used with two hands to make a melee attack, plus 3 (1d6)
+fire damage.
+
+***Tail.*** *Melee Weapon Attack:* +7 to hit, reach 10 ft., one target.
+*Hit:* 11 (2d6 + 4) bludgeoning damage plus 7 (2d6) fire damage.
+"""
+
+
 BANDIT_CAPTAIN = """### Bandit Captain
 
 *Medium humanoid (any race), any non-lawful alignment*
@@ -1529,6 +1569,46 @@ def test_black_pudding_standard_traits_are_structured() -> None:
     assert pseudopod["mechanics"]["on_hit_resolution"]["kind"] == (
         "armor_corrosion"
     )
+    assert parsed.warnings == ()
+
+
+def test_salamander_standard_traits_are_structured() -> None:
+    parsed = parse_2014_statblock(
+        SALAMANDER,
+        source_key="monster-manual-2014:p267",
+    )
+    features = {
+        item["name"]: item for item in parsed.sheet["content"]["features"]
+    }
+    weapons = {
+        item["name"]: item for item in parsed.sheet["inventory"]["items"]
+    }
+
+    assert features["Heated Body"]["choices"]["source_trait"] == {
+        "kind": "heated_body",
+        "trigger": "contact_or_melee_hit",
+        "melee_range_ft": 5,
+        "contact_damage_formula": "2d6",
+        "average_damage": 7,
+        "contact_damage_type": "fire",
+        "automatic": True,
+        "source_excerpt": (
+            "A creature that touches the salamander or hits it with a melee "
+            "attack while within 5 feet of it takes 7 (2d6) fire damage."
+        ),
+    }
+    assert features["Heated Weapons"]["choices"]["source_trait"][
+        "embedded_in_weapon_actions"
+    ] is True
+    expected_fire = {
+        "damage_formula": "1d6",
+        "damage_bonus": 0,
+        "damage_type": "fire",
+    }
+    assert weapons["Spear"]["mechanics"]["additional_damage"] == [expected_fire]
+    assert weapons["Spear"]["mechanics"]["versatile_additional_damage"] == [
+        expected_fire
+    ]
     assert parsed.warnings == ()
 
 

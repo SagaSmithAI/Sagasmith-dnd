@@ -1447,10 +1447,12 @@ def preflight_attack(
             if damage_bonus
             else versatile_formula
         )
-        # The statblock's printed versatile formula is the complete alternate
-        # damage expression. Any dice folded into it (such as Gruumsh's Fury)
-        # must not be rolled a second time.
-        additional_damage = []
+        # The alternate formula replaces dice already folded into that
+        # parenthetical. Damage printed after the alternate clause applies to
+        # both grips and is retained separately so its damage type is honored.
+        additional_damage = deepcopy(
+            list(weapon.get("versatile_additional_damage") or [])
+        )
     dueling_bonus = _dueling_damage_bonus(
         attacker,
         weapon,
@@ -2320,6 +2322,19 @@ def resolve_attack_damage(
     elif plan.get("sneak_attack"):
         result["sneak_attack"] = {**dict(plan["sneak_attack"]), "used": False}
     if attack["hit"]:
+        heated_body = resolve_heated_body_melee_hit(
+            updated_attacker["sheet"],
+            updated_target["sheet"],
+            plan=plan,
+            rng=rng,
+        )
+        updated_attacker["sheet"] = heated_body["attacker_sheet"]
+        if heated_body["triggered"]:
+            result["heated_body"] = {
+                key: value
+                for key, value in heated_body.items()
+                if key not in {"attacker_sheet", "target_sheet"}
+            }
         corrosive_form = resolve_corrosive_form_melee_hit(
             updated_attacker["sheet"],
             updated_target["sheet"],
@@ -2386,6 +2401,10 @@ def resolve_attack_damage(
         resolution_boundaries.append("dnd5e.core.damage.zero_hp")
         if bool(plan.get("knock_out", False)):
             resolution_boundaries.append("dnd5e.core.damage.knockout")
+    if isinstance(result.get("heated_body"), dict):
+        resolution_boundaries.append("dnd5e.core.monster.heated_body")
+    if isinstance(result.get("corrosive_form"), dict):
+        resolution_boundaries.append("dnd5e.core.monster.corrosive_form")
     extension_receipts: list[dict[str, Any]] = [
         *list(plan.get("rule_receipts") or []),
         *core_receipts(
@@ -3415,6 +3434,87 @@ def resolve_corrosive_form_melee_hit(
         },
         "weapon_corrosion": weapon_corrosion,
         "mechanic_id": "dnd5e.core.monster.corrosive_form",
+    }
+
+
+def resolve_heated_body_melee_hit(
+    attacker_sheet: dict[str, Any],
+    target_sheet: dict[str, Any],
+    *,
+    plan: dict[str, Any],
+    rng: Any = None,
+) -> dict[str, Any]:
+    """Apply the Salamander's Heated Body after a qualifying melee hit."""
+
+    trait = _source_trait(target_sheet, "heated_body")
+    if trait is None or str(plan.get("attack_mode") or "") != "melee":
+        return {
+            "attacker_sheet": deepcopy(attacker_sheet),
+            "target_sheet": deepcopy(target_sheet),
+            "triggered": False,
+        }
+    expected = {
+        "kind": "heated_body",
+        "trigger": "contact_or_melee_hit",
+        "melee_range_ft": int(trait.get("melee_range_ft", 0) or 0),
+        "contact_damage_formula": str(
+            trait.get("contact_damage_formula") or ""
+        ),
+        "average_damage": int(trait.get("average_damage", 0) or 0),
+        "contact_damage_type": str(trait.get("contact_damage_type") or ""),
+        "automatic": True,
+        "source_excerpt": str(trait.get("source_excerpt") or ""),
+    }
+    if (
+        trait != expected
+        or expected["melee_range_ft"] <= 0
+        or not re.fullmatch(
+            r"\d+d\d+(?:[+-]\d+)?",
+            expected["contact_damage_formula"],
+        )
+        or expected["average_damage"] <= 0
+        or not expected["contact_damage_type"]
+        or not expected["source_excerpt"]
+    ):
+        raise CombatEngineError("standard Heated Body trait is malformed")
+    distance = dict(plan.get("range") or {}).get("distance_ft")
+    maximum_distance = expected["melee_range_ft"]
+    if distance is None:
+        reach = int(plan.get("weapon_reach_ft", 5) or 5)
+        if reach > maximum_distance:
+            raise NeedsRulingError(
+                "Heated Body needs the exact melee attack distance",
+                missing=("heated_body_distance",),
+            )
+        distance = reach
+    if int(distance) > maximum_distance:
+        return {
+            "attacker_sheet": deepcopy(attacker_sheet),
+            "target_sheet": deepcopy(target_sheet),
+            "triggered": False,
+            "reason": "melee_hit_beyond_heated_body_range",
+        }
+    updated_attacker = deepcopy(attacker_sheet)
+    fire_roll = roll(expected["contact_damage_formula"], rng=rng)
+    fire = apply_damage_to_sheet(
+        updated_attacker,
+        amount=fire_roll.total,
+        damage_type=expected["contact_damage_type"],
+        source="dnd5e.core.monster.heated_body",
+        death_saves=bool(plan.get("attacker_uses_death_saves", True)),
+        ruleset=str(plan.get("ruleset") or DEFAULT_CHARACTER_EDITION),
+    )
+    return {
+        "attacker_sheet": fire["sheet"],
+        "target_sheet": deepcopy(target_sheet),
+        "triggered": True,
+        "fire_damage": {
+            **{key: value for key, value in fire.items() if key != "sheet"},
+            "expression": fire_roll.expression,
+            "rolls": list(fire_roll.rolls),
+            "detail": fire_roll.detail,
+        },
+        "mechanic_id": "dnd5e.core.monster.heated_body",
     }
 
 

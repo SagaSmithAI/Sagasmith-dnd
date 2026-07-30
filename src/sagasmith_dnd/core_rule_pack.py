@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.46.0"
+CORE_RULE_PACK_VERSION = "1.47.0"
 
 
 @dataclass(frozen=True)
@@ -383,6 +383,26 @@ BOUNDARIES = (
             "tests/test_combat_engine.py::test_corrosive_form_damages_attacker_and_corrodes_mundane_weapon",
         ),
         "source:monster-manual-2014:p241",
+    ),
+    CoreBoundary(
+        "dnd5e.core.monster.heated_body",
+        ("2014",),
+        "statblocks._heated_body_source_trait|combat_engine.resolve_heated_body_melee_hit",
+        (
+            "tests/test_statblocks.py::test_salamander_standard_traits_are_structured",
+            "tests/test_combat_engine.py::test_heated_body_damages_only_a_melee_attacker_within_five_feet",
+        ),
+        "source:monster-manual-2014:p267",
+    ),
+    CoreBoundary(
+        "dnd5e.core.monster.heated_weapons",
+        ("2014",),
+        "statblocks._heated_weapons_source_trait|statblocks._parse_weapon",
+        (
+            "tests/test_statblocks.py::test_salamander_standard_traits_are_structured",
+            "tests/test_combat_engine.py::test_versatile_weapon_retains_damage_printed_after_alternate_formula",
+        ),
+        "source:monster-manual-2014:p267",
     ),
     CoreBoundary(
         "dnd5e.core.monster.armor_corrosion",
