@@ -1,0 +1,18 @@
+"""Stable identifiers for non-SRD standard 2014 spell mechanics."""
+
+STANDARD_2014_CONTENT_PACK_ID = "dnd5e.content.standard2014"
+STANDARD_2014_CONTENT_PACK_VERSION = "1.0.0"
+
+CORE_BLADE_WARD_MECHANIC_ID = "dnd5e.core.spell.blade_ward"
+CORE_BLADE_WARD_SPELL_ID = f"{STANDARD_2014_CONTENT_PACK_ID}.spell.blade-ward"
+CORE_WITCH_BOLT_MECHANIC_ID = "dnd5e.core.spell.witch_bolt"
+CORE_WITCH_BOLT_SPELL_ID = f"{STANDARD_2014_CONTENT_PACK_ID}.spell.witch-bolt"
+
+__all__ = [
+    "CORE_BLADE_WARD_MECHANIC_ID",
+    "CORE_BLADE_WARD_SPELL_ID",
+    "CORE_WITCH_BOLT_MECHANIC_ID",
+    "CORE_WITCH_BOLT_SPELL_ID",
+    "STANDARD_2014_CONTENT_PACK_ID",
+    "STANDARD_2014_CONTENT_PACK_VERSION",
+]

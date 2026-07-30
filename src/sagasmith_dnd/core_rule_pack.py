@@ -565,6 +565,33 @@ BOUNDARIES = (
         "bundled:srd/mage-armor",
     ),
     CoreBoundary(
+        "dnd5e.core.spell.blade_ward",
+        ("2014",),
+        (
+            "spells.is_core_blade_ward_spell|spells.consume_spell_cast|"
+            "combat_engine._adjust_damage_amount"
+        ),
+        (
+            "tests/test_standard_content.py::"
+            "test_blade_ward_resists_only_weapon_attack_bps_until_next_turn_end",
+        ),
+        "book:players-handbook-2014:p218-219",
+    ),
+    CoreBoundary(
+        "dnd5e.core.spell.witch_bolt",
+        ("2014",),
+        (
+            "spells.is_core_witch_bolt_spell|"
+            "combat_engine.start_witch_bolt_tether|"
+            "combat_engine.pay_witch_bolt_sustain_action"
+        ),
+        (
+            "tests/test_standard_content.py::"
+            "test_witch_bolt_uses_scaled_initial_damage_and_fixed_repeat_action",
+        ),
+        "book:players-handbook-2014:p289",
+    ),
+    CoreBoundary(
         "dnd5e.core.spell.magic_item_charges",
         ("2014", "2024"),
         "spells.consume_magic_item_spell_cast",

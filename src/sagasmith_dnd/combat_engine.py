@@ -57,6 +57,10 @@ from sagasmith_dnd.spell_resolution import (
     SPELL_RESOLUTION_MECHANIC_ID,
     scaled_roll_expression,
 )
+from sagasmith_dnd.standard_spell_ids import (
+    CORE_BLADE_WARD_MECHANIC_ID,
+    CORE_WITCH_BOLT_MECHANIC_ID,
+)
 from sagasmith_dnd.vocabulary import WEAPON_HAND_SLOTS
 
 ABILITY_CHECK_KINDS = frozenset({"ability", "check"})
@@ -635,6 +639,261 @@ def current_combatant(encounter: dict[str, Any]) -> dict[str, Any] | None:
     return combatants[int(encounter.get("turn_index", 0)) % len(combatants)]
 
 
+def _combat_turn_token(encounter: dict[str, Any]) -> str:
+    current = current_combatant(encounter)
+    return (
+        f"{int(encounter.get('round', 1) or 1)}:"
+        f"{int(encounter.get('turn_index', 0) or 0)}:"
+        f"{str((current or {}).get('actor_id') or '')}"
+    )
+
+
+def _record_action_payment(
+    encounter: dict[str, Any],
+    combatant: dict[str, Any],
+    *,
+    action: str,
+    payment: str,
+) -> None:
+    """Record an Action payment and immediately break incompatible tethers."""
+
+    if payment not in {"main_action", "extra_action"}:
+        return
+    flags = dict(combatant.get("turn_flags") or {})
+    payments = list(flags.get("action_payments") or [])
+    payments.append(
+        {
+            "action": str(action),
+            "payment": payment,
+            "turn_token": _combat_turn_token(encounter),
+        }
+    )
+    flags["action_payments"] = payments[-8:]
+    combatant["turn_flags"] = flags
+    if action == "sustain_witch_bolt":
+        return
+    for effect in encounter.get("ongoing_effects", []):
+        if (
+            isinstance(effect, dict)
+            and effect.get("active", True)
+            and effect.get("mechanic_id") == CORE_WITCH_BOLT_MECHANIC_ID
+            and str(effect.get("source_actor_id") or "")
+            == str(combatant.get("actor_id") or "")
+        ):
+            effect["active"] = False
+            effect["ended_reason"] = "caster_used_action_for_another_purpose"
+            effect["ended_turn_token"] = _combat_turn_token(encounter)
+
+
+def start_witch_bolt_tether(
+    encounter: dict[str, Any],
+    *,
+    caster_id: str,
+    target_id: str,
+    spell_id: str,
+    concentration_effect_id: str,
+) -> dict[str, Any]:
+    """Create the hard 2014 Witch Bolt tether after its initial attack hits."""
+
+    value = deepcopy(encounter)
+    if not value.get("active", True):
+        raise CombatEngineError("Witch Bolt requires an active encounter")
+    actor_ids = {
+        str(item.get("actor_id") or "") for item in value.get("combatants", [])
+    }
+    if caster_id not in actor_ids or target_id not in actor_ids:
+        raise CombatEngineError("Witch Bolt caster and target must be combatants")
+    if caster_id == target_id:
+        raise CombatEngineError("Witch Bolt cannot target its caster")
+    effect_id = str(concentration_effect_id).strip()
+    if not effect_id:
+        raise CombatEngineError("Witch Bolt requires its exact concentration effect")
+    for effect in value.get("ongoing_effects", []):
+        if (
+            isinstance(effect, dict)
+            and effect.get("active", True)
+            and effect.get("mechanic_id") == CORE_WITCH_BOLT_MECHANIC_ID
+            and str(effect.get("source_actor_id") or "") == caster_id
+        ):
+            effect["active"] = False
+            effect["ended_reason"] = "replaced_by_witch_bolt"
+    tether = {
+        "id": f"witch-bolt-{uuid4().hex}",
+        "kind": "witch_bolt_tether",
+        "mechanic_id": CORE_WITCH_BOLT_MECHANIC_ID,
+        "active": True,
+        "source_actor_id": caster_id,
+        "target_id": target_id,
+        "source_spell_id": str(spell_id),
+        "concentration_effect_id": effect_id,
+        "range_ft": 30,
+        "repeat_damage": "1d12",
+        "damage_type": "lightning",
+        "started_turn_token": _combat_turn_token(value),
+    }
+    value["ongoing_effects"] = [
+        *list(value.get("ongoing_effects") or []),
+        tether,
+    ]
+    value["log"] = [
+        *list(value.get("log") or []),
+        {
+            "type": "witch_bolt_tether_started",
+            "effect_id": tether["id"],
+            "caster_id": caster_id,
+            "target_id": target_id,
+            "spell_id": str(spell_id),
+        },
+    ][-100:]
+    return {"encounter": value, "effect": deepcopy(tether)}
+
+
+def reconcile_witch_bolt_range(encounter: dict[str, Any]) -> dict[str, Any]:
+    """End active Witch Bolt tethers whose participants are more than 30 feet apart."""
+
+    value = deepcopy(encounter)
+    combatants = {
+        str(item.get("actor_id") or ""): item for item in value.get("combatants", [])
+    }
+    ended: list[dict[str, Any]] = []
+    for effect in value.get("ongoing_effects", []):
+        if (
+            not isinstance(effect, dict)
+            or not effect.get("active", True)
+            or effect.get("mechanic_id") != CORE_WITCH_BOLT_MECHANIC_ID
+        ):
+            continue
+        caster = combatants.get(str(effect.get("source_actor_id") or ""))
+        target = combatants.get(str(effect.get("target_id") or ""))
+        caster_position = _position((caster or {}).get("position"))
+        target_position = _position((target or {}).get("position"))
+        if caster_position is None or target_position is None:
+            continue
+        distance = _grid_distance(caster_position, target_position)
+        if distance <= int(effect.get("range_ft", 30) or 30):
+            continue
+        effect["active"] = False
+        effect["ended_reason"] = "target_outside_spell_range"
+        effect["ended_distance_ft"] = distance
+        ended.append(deepcopy(effect))
+    return {"encounter": value, "ended": ended}
+
+
+def reconcile_witch_bolt_concentration(
+    encounter: dict[str, Any],
+    *,
+    actor_id_value: str,
+    active_concentration_effect_ids: set[str],
+) -> dict[str, Any]:
+    """End a caster's tethers when their exact concentration effect is inactive."""
+
+    value = deepcopy(encounter)
+    active_ids = {
+        str(effect_id).strip()
+        for effect_id in active_concentration_effect_ids
+        if str(effect_id).strip()
+    }
+    ended: list[dict[str, Any]] = []
+    for effect in value.get("ongoing_effects", []):
+        if (
+            not isinstance(effect, dict)
+            or not effect.get("active", True)
+            or effect.get("mechanic_id") != CORE_WITCH_BOLT_MECHANIC_ID
+            or str(effect.get("source_actor_id") or "") != actor_id_value
+            or str(effect.get("concentration_effect_id") or "") in active_ids
+        ):
+            continue
+        effect["active"] = False
+        effect["ended_reason"] = "concentration_ended"
+        effect["ended_turn_token"] = _combat_turn_token(value)
+        ended.append(deepcopy(effect))
+    return {"encounter": value, "ended": ended}
+
+
+def pay_witch_bolt_sustain_action(
+    encounter: dict[str, Any],
+    *,
+    actor_id_value: str,
+    effect_id: str,
+    target_total_cover: bool,
+) -> dict[str, Any]:
+    """Pay one Action for the fixed 1d12 continuation, or end an invalid tether."""
+
+    if not isinstance(target_total_cover, bool):
+        raise CombatEngineError("Witch Bolt total-cover fact must be boolean")
+    ranged = reconcile_witch_bolt_range(encounter)
+    value = ranged["encounter"]
+    effect = next(
+        (
+            item
+            for item in value.get("ongoing_effects", [])
+            if isinstance(item, dict)
+            and str(item.get("id") or "") == str(effect_id)
+            and item.get("mechanic_id") == CORE_WITCH_BOLT_MECHANIC_ID
+        ),
+        None,
+    )
+    if effect is None:
+        raise CombatEngineError("Witch Bolt tether is not recorded")
+    if not effect.get("active", True):
+        return {
+            "encounter": value,
+            "effect": deepcopy(effect),
+            "status": "spell_ended",
+            "payment": None,
+        }
+    if str(effect.get("source_actor_id") or "") != actor_id_value:
+        raise CombatEngineError("only the Witch Bolt caster can sustain this tether")
+    if target_total_cover:
+        effect["active"] = False
+        effect["ended_reason"] = "target_has_total_cover"
+        return {
+            "encounter": value,
+            "effect": deepcopy(effect),
+            "status": "spell_ended",
+            "payment": None,
+        }
+    current = current_combatant(value)
+    if current is None or str(current.get("actor_id") or "") != actor_id_value:
+        raise CombatEngineError("Witch Bolt can be sustained only on the caster's turn")
+    budget = dict(current.get("turn_budget") or {})
+    payment = (
+        "main_action"
+        if int(budget.get("main_action", 0) or 0) > 0
+        else "extra_action"
+        if int(budget.get("extra_action", 0) or 0) > 0
+        else ""
+    )
+    if not payment:
+        raise CombatEngineError("caster has no Action available to sustain Witch Bolt")
+    budget[payment] = int(budget[payment]) - 1
+    current["turn_budget"] = budget
+    _record_action_payment(
+        value,
+        current,
+        action="sustain_witch_bolt",
+        payment=payment,
+    )
+    effect["last_sustained_turn_token"] = _combat_turn_token(value)
+    value["log"] = [
+        *list(value.get("log") or []),
+        {
+            "type": "witch_bolt_sustained",
+            "effect_id": str(effect["id"]),
+            "caster_id": actor_id_value,
+            "target_id": str(effect.get("target_id") or ""),
+            "payment": payment,
+            "turn_token": _combat_turn_token(value),
+        },
+    ][-100:]
+    return {
+        "encounter": value,
+        "effect": deepcopy(effect),
+        "status": "ready",
+        "payment": payment,
+    }
+
+
 def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[str]:
     if not encounter.get("active", True):
         return []
@@ -789,6 +1048,12 @@ def detach_attachment(
                 )
         budget[payment_key] = int(budget[payment_key]) - 1
         payment = {"kind": payment_key, "amount": 1}
+        _record_action_payment(
+            value,
+            current,
+            action="detach_attachment",
+            payment=payment_key,
+        )
     current["turn_budget"] = budget
     effect["active"] = False
     effect["ended_reason"] = "detached_by_action"
@@ -827,6 +1092,7 @@ def pay_attack_action(
     budget = dict(combatant.get("turn_budget") or {})
     flags = dict(combatant.get("turn_flags") or {})
     active_multiattack = flags.get("multiattack")
+    action_payment_key: str | None = None
 
     if int(budget.get("attack_budget", 0) or 0) > 0:
         if active_multiattack:
@@ -875,6 +1141,7 @@ def pay_attack_action(
             battle_cry_payment = False
         if not payment_key:
             raise CombatEngineError("actor has no attack payment available")
+        action_payment_key = payment_key
         if multiattack_option_id:
             multiattack_options = _validated_multiattack_options(attacker)
             option = _select_multiattack_option(multiattack_options, multiattack_option_id)
@@ -917,6 +1184,13 @@ def pay_attack_action(
         combatant["turn_flags"] = flags
     else:
         combatant.pop("turn_flags", None)
+    if action_payment_key is not None:
+        _record_action_payment(
+            value,
+            combatant,
+            action="attack",
+            payment=action_payment_key,
+        )
     return value, payment
 
 
@@ -1976,6 +2250,7 @@ def resolve_attack_damage(
                 death_saves=bool(plan.get("target_uses_death_saves", True)),
                 knock_out=bool(plan.get("knock_out", False)),
                 melee=bool(plan.get("melee_attack", False)),
+                weapon_attack=str(plan.get("kind") or "") == "attack",
             )
         else:
             damage = apply_damage_parts_to_sheet(
@@ -1987,6 +2262,7 @@ def resolve_attack_damage(
                 death_saves=bool(plan.get("target_uses_death_saves", True)),
                 knock_out=bool(plan.get("knock_out", False)),
                 melee=bool(plan.get("melee_attack", False)),
+                weapon_attack=str(plan.get("kind") or "") == "attack",
             )
         updated_target["sheet"] = damage["sheet"]
         result["damage"] = {
@@ -2581,10 +2857,14 @@ def apply_damage_to_sheet(
     death_saves: bool = True,
     knock_out: bool = False,
     melee: bool = False,
+    weapon_attack: bool = False,
 ) -> dict[str, Any]:
     """Apply one typed damage part with temp HP and trait ordering."""
     raw, adjusted, normalized, adjustment, defense_sources = _adjust_damage_amount(
-        sheet, amount=amount, damage_type=damage_type
+        sheet,
+        amount=amount,
+        damage_type=damage_type,
+        weapon_attack=weapon_attack,
     )
     result = _apply_adjusted_damage(
         sheet,
@@ -2848,6 +3128,7 @@ def apply_damage_parts_to_sheet(
     death_saves: bool = True,
     knock_out: bool = False,
     melee: bool = False,
+    weapon_attack: bool = False,
 ) -> dict[str, Any]:
     """Apply one simultaneous multi-type damage instance and preserve each part.
 
@@ -2870,6 +3151,7 @@ def apply_damage_parts_to_sheet(
             sheet,
             amount=grouped_amount,
             damage_type=grouped_type,
+            weapon_attack=weapon_attack,
         )
         details.append(
             {
@@ -3246,7 +3528,11 @@ def _damage_defense_traits(
 
 
 def _adjust_damage_amount(
-    sheet: dict[str, Any], *, amount: int, damage_type: str
+    sheet: dict[str, Any],
+    *,
+    amount: int,
+    damage_type: str,
+    weapon_attack: bool = False,
 ) -> tuple[int, int, str, str, list[str]]:
     raw = int(amount)
     if raw < 0:
@@ -3262,10 +3548,29 @@ def _adjust_damage_amount(
         for item_id, values in item_sources[defense].items()
         if normalized in values
     ]
+    blade_ward_sources = [
+        str(effect.get("id") or "")
+        for effect in sheet.get("effects", [])
+        if (
+            isinstance(effect, dict)
+            and effect.get("active")
+            and effect.get("kind") == "spell_blade_ward"
+            and effect.get("source") == CORE_BLADE_WARD_MECHANIC_ID
+            and weapon_attack
+            and normalized in {"bludgeoning", "piercing", "slashing"}
+        )
+    ]
+    active_sources.extend(
+        f"spell:{effect_id}" for effect_id in blade_ward_sources if effect_id
+    )
     if normalized in immunities:
         return raw, 0, normalized, "immune", active_sources
     adjusted = raw
-    resistant = normalized in resistances or "petrified" in _condition_set(sheet.get("conditions"))
+    resistant = (
+        normalized in resistances
+        or "petrified" in _condition_set(sheet.get("conditions"))
+        or bool(blade_ward_sources)
+    )
     if resistant:
         adjusted //= 2
     if normalized in vulnerabilities:
@@ -3721,7 +4026,7 @@ def spend_movement(
                         "status": "pending",
                     },
                 ]
-    return value
+    return reconcile_witch_bolt_range(value)["encounter"]
 
 
 def stand_up(encounter: dict[str, Any], actor_id_value: str) -> dict[str, Any]:
@@ -3844,13 +4149,17 @@ def force_move_directly_away(
             "opportunity_reactions": False,
         },
     ][-100:]
+    reconciled = reconcile_witch_bolt_range(value)
     return {
-        "encounter": value,
+        "encounter": reconciled["encounter"],
         "source_actor_id": str(source_actor_id),
         "target_actor_id": str(target_actor_id),
         "requested_distance_ft": distance,
         "moved_distance_ft": moved_distance,
         "destination": deepcopy(target["position"]),
+        "ended_witch_bolt_tether_ids": [
+            str(item.get("id") or "") for item in reconciled["ended"]
+        ],
     }
 
 
@@ -3937,6 +4246,12 @@ def resolve_common_action(
         raise CombatEngineError("actor has no action payment available")
     budget[payment] = int(budget[payment]) - 1
     acting["turn_budget"] = budget
+    _record_action_payment(
+        value,
+        acting,
+        action=action,
+        payment=payment,
+    )
     flags = dict(acting.get("turn_flags") or {})
     if "turned" in _condition_set(acting.get("conditions")):
         if action not in {"dash", "dodge", "escape"}:
@@ -4271,6 +4586,12 @@ def pay_activity_activation(
             raise CombatEngineError(f"actor has no {activation} remaining")
         budget[payment] = int(budget[payment]) - 1
         combatant["turn_budget"] = budget
+        _record_action_payment(
+            value,
+            combatant,
+            action=f"activity:{activation}",
+            payment=payment,
+        )
     value["log"] = [
         *list(value.get("log") or []),
         {"type": "activity_activation", "actor_id": actor_id_value, "activation": activation},
@@ -5936,6 +6257,7 @@ def end_turn(encounter: dict[str, Any], *, actor_id_value: str | None = None) ->
         next_flags.pop("dodging", None)
         next_flags.pop("helping", None)
         next_flags.pop("death_save_used", None)
+        next_flags.pop("action_payments", None)
         if next_flags:
             next_actor["turn_flags"] = next_flags
         else:

@@ -12,6 +12,12 @@ from sagasmith_dnd.editions import normalize_dnd_edition
 from sagasmith_dnd.engine import ability_modifier
 from sagasmith_dnd.resources import mutate_bounded_resource
 from sagasmith_dnd.rule_engine import ResolutionContext, apply_rule_event, core_receipts
+from sagasmith_dnd.standard_spell_ids import (
+    CORE_BLADE_WARD_MECHANIC_ID,
+    CORE_BLADE_WARD_SPELL_ID,
+    CORE_WITCH_BOLT_MECHANIC_ID,
+    CORE_WITCH_BOLT_SPELL_ID,
+)
 from sagasmith_dnd.vocabulary import PREPARED_SELECTION_MODES, WEAPON_HAND_SLOTS
 
 _SPELL_POINT_COSTS = {1: 2, 2: 3, 3: 5, 4: 6, 5: 7, 6: 9, 7: 10, 8: 11, 9: 13}
@@ -71,6 +77,24 @@ def is_core_magic_missile_spell(spell: dict[str, Any]) -> bool:
     """Recognize only the source-bound Core Magic Missile mechanic."""
     return str(spell.get("id") or "") == CORE_MAGIC_MISSILE_SPELL_ID or (
         CORE_MAGIC_MISSILE_MECHANIC_ID in {str(item) for item in spell.get("mechanic_refs", [])}
+    )
+
+
+def is_core_blade_ward_spell(spell: dict[str, Any]) -> bool:
+    """Recognize only the source-bound standard 2014 Blade Ward mechanic."""
+
+    return str(spell.get("id") or "") == CORE_BLADE_WARD_SPELL_ID or (
+        CORE_BLADE_WARD_MECHANIC_ID
+        in {str(item) for item in spell.get("mechanic_refs", [])}
+    )
+
+
+def is_core_witch_bolt_spell(spell: dict[str, Any]) -> bool:
+    """Recognize only the source-bound standard 2014 Witch Bolt mechanic."""
+
+    return str(spell.get("id") or "") == CORE_WITCH_BOLT_SPELL_ID or (
+        CORE_WITCH_BOLT_MECHANIC_ID
+        in {str(item) for item in spell.get("mechanic_refs", [])}
     )
 
 
@@ -422,6 +446,72 @@ def _apply_shield_effect(
         }
     )
     return effect_id
+
+
+def _apply_blade_ward_effect(
+    sheet: dict[str, Any],
+    *,
+    spell_id: str,
+) -> str:
+    for effect in sheet.get("effects", []):
+        if (
+            effect.get("active")
+            and effect.get("kind") == "spell_blade_ward"
+            and effect.get("source") == CORE_BLADE_WARD_MECHANIC_ID
+        ):
+            effect["active"] = False
+            effect["ended_reason"] = "replaced_by_blade_ward"
+    effect_id = f"blade-ward-{uuid4().hex}"
+    sheet.setdefault("effects", []).append(
+        {
+            "id": effect_id,
+            "name": "Blade Ward",
+            "kind": "spell_blade_ward",
+            "source": CORE_BLADE_WARD_MECHANIC_ID,
+            "source_spell_id": spell_id,
+            "active": True,
+            "concentration": False,
+            # The casting turn's end consumes the first tick; the next turn's
+            # end consumes the second and expires the effect.
+            "duration": {"period": "turn_end", "remaining": 2},
+            "changes": [],
+            "description": "",
+        }
+    )
+    return effect_id
+
+
+def end_concentration_effects(
+    sheet: dict[str, Any],
+    *,
+    effect_ids: list[str],
+    ended_reason: str,
+) -> dict[str, Any]:
+    """End only the named concentration effects and preserve unrelated spells."""
+
+    value = deepcopy(sheet)
+    requested = {str(item).strip() for item in effect_ids if str(item).strip()}
+    reason = str(ended_reason).strip()
+    if not requested:
+        return {"sheet": value, "ended_effect_ids": []}
+    if not reason:
+        raise CombatEngineError("ended_reason is required")
+    ended: list[str] = []
+    ended_effects: list[dict[str, Any]] = []
+    for effect in value.get("effects", []):
+        effect_id = str(effect.get("id") or "")
+        if (
+            effect_id in requested
+            and effect.get("active")
+            and effect.get("concentration")
+        ):
+            effect["active"] = False
+            effect["ended_reason"] = reason
+            ended.append(effect_id)
+            ended_effects.append(effect)
+    if ended_effects:
+        reconcile_ended_effect_conditions(value, ended_effects=ended_effects)
+    return {"sheet": value, "ended_effect_ids": ended}
 
 
 def _apply_concentration_effect(
@@ -868,6 +958,12 @@ def consume_spell_cast(
             source="spell.cast",
         )
         automatic_effect = "mage_armor"
+    elif is_core_blade_ward_spell(spell):
+        effect_id = _apply_blade_ward_effect(
+            value,
+            spell_id=spell_id,
+        )
+        automatic_effect = "blade_ward"
     after = apply_rule_event(value, "spell.after", rules)
     if after.status != "committed":
         return {
@@ -882,7 +978,12 @@ def consume_spell_cast(
         *(["verbal_component"] if components.get("verbal") else []),
         *(["somatic_component"] if components.get("somatic") else []),
         *(["material_component"] if components.get("material") else []),
-        "targets_and_effect",
+        *(
+            ["targets_and_effect"]
+            if automatic_effect is None
+            and not isinstance(spell.get("resolution"), dict)
+            else []
+        ),
     ]
     return {
         "sheet": after.sheet,
@@ -902,6 +1003,11 @@ def consume_spell_cast(
                 [
                     "dnd5e.core.spell.cantrip_ritual_level",
                     "dnd5e.core.spell.material_components",
+                    *(
+                        [CORE_BLADE_WARD_MECHANIC_ID]
+                        if automatic_effect == "blade_ward"
+                        else []
+                    ),
                     *(
                         ["dnd5e.core.spell.pact_magic"]
                         if rules and rules.core_pack.edition == "2014"
