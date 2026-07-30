@@ -385,6 +385,36 @@ BOUNDARIES = (
         "source:monster-manual-2014:p241",
     ),
     CoreBoundary(
+        "dnd5e.core.monster.death_burst",
+        ("2014",),
+        "statblocks._death_burst_source_trait|combat_engine._standard_death_trigger",
+        (
+            "tests/test_statblocks.py::test_magmin_standard_mechanics_are_structured",
+            "tests/test_combat_engine.py::test_magmin_death_burst_surfaces_only_on_death_transition",
+        ),
+        "source:monster-manual-2014:p212",
+    ),
+    CoreBoundary(
+        "dnd5e.core.monster.ignition_ongoing_damage",
+        ("2014",),
+        "statblocks._ignition_ongoing_damage_on_hit|combat_engine.resolve_standard_weapon_on_hit",
+        (
+            "tests/test_statblocks.py::test_magmin_standard_mechanics_are_structured",
+            "tests/test_combat_engine.py::test_magmin_touch_compiles_standard_ongoing_damage",
+        ),
+        "source:monster-manual-2014:p212",
+    ),
+    CoreBoundary(
+        "dnd5e.core.monster.ignited_illumination",
+        ("2014",),
+        "statblocks._ignited_illumination_source_trait|combat_engine.settle_core_activity_effect",
+        (
+            "tests/test_statblocks.py::test_magmin_standard_mechanics_are_structured",
+            "tests/test_combat_engine.py::test_magmin_illumination_toggles_with_a_paid_bonus_action",
+        ),
+        "source:monster-manual-2014:p212",
+    ),
+    CoreBoundary(
         "dnd5e.core.monster.split",
         ("2014",),
         "statblocks._split_source_trait|combat_engine.split_reaction_eligibility|combat_engine.execute_split_reaction",

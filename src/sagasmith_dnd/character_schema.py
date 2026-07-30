@@ -655,6 +655,88 @@ def _normalize_weapon_on_hit_resolution(value: Any, field: str) -> dict[str, Any
     if value is None:
         return None
     resolution = _object(value, field)
+    kind = _text(resolution.get("kind"), f"{field}.kind")
+    trigger = _text(resolution.get("trigger"), f"{field}.trigger")
+    if trigger != "weapon_hit":
+        raise ValueError(f"{field}.trigger is unsupported")
+    if kind == "ignition_ongoing_damage":
+        _reject_unknown(
+            resolution,
+            field,
+            {
+                "kind",
+                "trigger",
+                "creature_target_automatic",
+                "flammable_object_requires_scene_fact",
+                "damage_formula",
+                "average_damage",
+                "damage_type",
+                "trigger_timing",
+                "end_action",
+                "end_action_description",
+                "automatic",
+                "source_excerpt",
+            },
+        )
+        timing = _text(
+            resolution.get("trigger_timing"),
+            f"{field}.trigger_timing",
+        )
+        if timing not in {"turn_start", "turn_end"}:
+            raise ValueError(f"{field}.trigger_timing is unsupported")
+        end_action = _text(
+            resolution.get("end_action"),
+            f"{field}.end_action",
+        )
+        if end_action != "use_object":
+            raise ValueError(f"{field}.end_action is unsupported")
+        damage_formula = _text(
+            resolution.get("damage_formula"),
+            f"{field}.damage_formula",
+            maximum=100,
+        ).casefold()
+        if not re.fullmatch(r"\d+d\d+(?:[+-]\d+)?", damage_formula):
+            raise ValueError(f"{field}.damage_formula is invalid")
+        return {
+            "kind": kind,
+            "trigger": trigger,
+            "creature_target_automatic": _boolean(
+                resolution.get("creature_target_automatic"),
+                f"{field}.creature_target_automatic",
+            ),
+            "flammable_object_requires_scene_fact": _boolean(
+                resolution.get("flammable_object_requires_scene_fact"),
+                f"{field}.flammable_object_requires_scene_fact",
+            ),
+            "damage_formula": damage_formula,
+            "average_damage": _integer(
+                resolution.get("average_damage"),
+                f"{field}.average_damage",
+                minimum=1,
+            ),
+            "damage_type": _text(
+                resolution.get("damage_type"),
+                f"{field}.damage_type",
+            ).casefold(),
+            "trigger_timing": timing,
+            "end_action": end_action,
+            "end_action_description": _text(
+                resolution.get("end_action_description"),
+                f"{field}.end_action_description",
+                maximum=200,
+            ),
+            "automatic": _boolean(
+                resolution.get("automatic"),
+                f"{field}.automatic",
+            ),
+            "source_excerpt": _text(
+                resolution.get("source_excerpt"),
+                f"{field}.source_excerpt",
+                maximum=1200,
+            ),
+        }
+    if kind != "armor_corrosion":
+        raise ValueError(f"{field}.kind is unsupported")
     _reject_unknown(
         resolution,
         field,
@@ -669,12 +751,6 @@ def _normalize_weapon_on_hit_resolution(value: Any, field: str) -> dict[str, Any
             "source_excerpt",
         },
     )
-    kind = _text(resolution.get("kind"), f"{field}.kind")
-    if kind != "armor_corrosion":
-        raise ValueError(f"{field}.kind is unsupported")
-    trigger = _text(resolution.get("trigger"), f"{field}.trigger")
-    if trigger != "weapon_hit":
-        raise ValueError(f"{field}.trigger is unsupported")
     penalty = _integer(
         resolution.get("armor_class_penalty"),
         f"{field}.armor_class_penalty",

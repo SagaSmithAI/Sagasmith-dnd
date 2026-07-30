@@ -53,6 +53,7 @@ from sagasmith_dnd.combat_engine import (
     resolve_second_wind_to_sheet,
     resolve_source_contest_effect,
     resolve_source_save_effect,
+    resolve_standard_weapon_on_hit,
     resolve_turn_undead_to_sheets,
     roll_attack_action,
     settle_core_activity_effect,
@@ -347,6 +348,110 @@ def test_pseudopod_corrosion_reduces_and_destroys_worn_armor() -> None:
     assert updated_target["sheet"]["inventory"]["equipment_slots"]["armor"] is None
     armor = updated_target["sheet"]["inventory"]["items"][0]
     assert armor["condition"] == "destroyed"
+
+
+def test_magmin_touch_compiles_standard_ongoing_damage() -> None:
+    target = _actor("target")
+    source_excerpt = (
+        "If the target is a creature or a flammable object, it ignites. "
+        "Until a creature takes an action to douse the fire, the creature "
+        "takes 3 (1d6) fire damage at the end of each of its turns."
+    )
+
+    result = resolve_standard_weapon_on_hit(
+        target["sheet"],
+        {
+            "kind": "ignition_ongoing_damage",
+            "trigger": "weapon_hit",
+            "creature_target_automatic": True,
+            "flammable_object_requires_scene_fact": True,
+            "damage_formula": "1d6",
+            "average_damage": 3,
+            "damage_type": "fire",
+            "trigger_timing": "turn_end",
+            "end_action": "use_object",
+            "end_action_description": "douse the fire",
+            "automatic": True,
+            "source_excerpt": source_excerpt,
+        },
+    )
+
+    assert result["sheet"] == target["sheet"]
+    assert result["ongoing_effect"] == {
+        "kind": "source_ongoing_damage",
+        "damage_formula": "1d6",
+        "average_damage": 3,
+        "damage_type": "fire",
+        "trigger_timing": "turn_end",
+        "end_action": "use_object",
+        "end_action_description": "douse the fire",
+        "active": True,
+        "source_excerpt": source_excerpt,
+        "mechanic_id": "dnd5e.core.monster.ignition_ongoing_damage",
+    }
+    assert result["scene_fact_requirement"]["required_for_creature_target"] is False
+
+
+def test_magmin_death_burst_surfaces_only_on_death_transition() -> None:
+    magmin = _actor("magmin", hp=9)
+    source_excerpt = (
+        "When the magmin dies, it explodes in a burst of fire and magma. "
+        "Each creature within 10 ft. of it must make a DC 11 Dexterity saving "
+        "throw, taking 7 (2d6) fire damage on a failed save, or half as much "
+        "damage on a successful one. Flammable objects that aren't being worn "
+        "or carried in that area are ignited."
+    )
+    magmin["sheet"]["content"]["features"].append(
+        {
+            "id": "dnd5e.core.monster.death-burst",
+            "name": "Death Burst",
+            "activation": {"type": "passive", "cost": 0},
+            "choices": {
+                "source_trait": {
+                    "kind": "death_burst",
+                    "trigger": "death",
+                    "range_ft": 10,
+                    "target": "each_creature_in_range",
+                    "save_ability": "dexterity",
+                    "save_dc": 11,
+                    "damage_formula": "2d6",
+                    "average_damage": 7,
+                    "damage_type": "fire",
+                    "failed_save": "full",
+                    "successful_save": "half",
+                    "ignite_flammable_unworn_objects": True,
+                    "automatic": True,
+                    "source_excerpt": source_excerpt,
+                }
+            },
+        }
+    )
+
+    wounded = apply_damage_to_sheet(
+        magmin["sheet"],
+        amount=8,
+        damage_type="cold",
+        death_saves=False,
+    )
+    killed = apply_damage_to_sheet(
+        wounded["sheet"],
+        amount=1,
+        damage_type="cold",
+        death_saves=False,
+    )
+    already_dead = apply_damage_to_sheet(
+        killed["sheet"],
+        amount=1,
+        damage_type="cold",
+        death_saves=False,
+    )
+
+    assert wounded["death_trigger"] is None
+    assert killed["death_trigger"] == {
+        **magmin["sheet"]["content"]["features"][0]["choices"]["source_trait"],
+        "mechanic_id": "dnd5e.core.monster.death_burst",
+    }
+    assert already_dead["death_trigger"] is None
 
 
 def test_actor_check_rejects_attack_rolls_owned_by_the_attack_engine() -> None:
@@ -3753,6 +3858,47 @@ def test_aggressive_grants_only_separately_paid_movement_toward_visible_hostile(
     assert moved["combatants"][0]["turn_flags"]["aggressive_movement"][
         "remaining_ft"
     ] == 25
+
+
+def test_magmin_illumination_toggles_with_a_paid_bonus_action() -> None:
+    magmin = _actor("magmin")
+    other = _actor("other")
+    magmin["initiative"] = 20
+    other["initiative"] = 10
+    encounter = start_encounter([magmin, other])
+
+    paid = pay_activity_activation(
+        encounter,
+        actor_id_value="magmin",
+        activation_type="bonus_action",
+    )
+    lit, lit_effect = settle_core_activity_effect(
+        paid,
+        actor_id_value="magmin",
+        activity_id="dnd5e.core.monster.ignited-illumination",
+    )
+    assert lit_effect == {
+        "kind": "ignited_illumination",
+        "ablaze": True,
+        "bright_light_radius_ft": 10,
+        "dim_light_radius_ft": 20,
+    }
+    assert lit["combatants"][0]["emitted_light"]["ignited_illumination"] is True
+
+    other_turn = end_turn(lit, actor_id_value="magmin")
+    returned = end_turn(other_turn, actor_id_value="other")
+    paid_again = pay_activity_activation(
+        returned,
+        actor_id_value="magmin",
+        activation_type="bonus_action",
+    )
+    dark, dark_effect = settle_core_activity_effect(
+        paid_again,
+        actor_id_value="magmin",
+        activity_id="dnd5e.core.monster.ignited-illumination",
+    )
+    assert dark_effect["ablaze"] is False
+    assert dark["combatants"][0]["emitted_light"] == {}
 
 
 def test_battle_cry_grants_temporary_attack_advantage_and_bonus_attack() -> None:

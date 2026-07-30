@@ -2906,6 +2906,7 @@ def apply_hit_point_loss_to_sheet(
     combat = value.setdefault("combat", {})
     hp = dict(combat.setdefault("hp", {"value": 0, "max": 0, "temp": 0}))
     before_hp = int(hp.get("value", 0) or 0)
+    before_conditions = _condition_set(value.get("conditions"))
     hp["value"] = max(0, before_hp - requested)
     combat["hp"] = hp
     conditions = _condition_set(value.get("conditions"))
@@ -2922,6 +2923,12 @@ def apply_hit_point_loss_to_sheet(
             value,
             ended_reason="unconscious",
         )
+    after_conditions = _condition_set(value.get("conditions"))
+    death_trigger = (
+        _standard_death_trigger(value)
+        if "dead" not in before_conditions and "dead" in after_conditions
+        else None
+    )
     return {
         "sheet": value,
         "requested_amount": requested,
@@ -2930,6 +2937,7 @@ def apply_hit_point_loss_to_sheet(
         "hit_point_loss": before_hp - hp["value"],
         "bypassed_temp_hp": int(hp.get("temp", 0) or 0),
         "ended_effect_ids": ended_effect_ids,
+        "death_trigger": death_trigger,
     }
 
 
@@ -3003,6 +3011,7 @@ def _apply_adjusted_damage(
     hp = dict(combat.setdefault("hp", {"value": 0, "max": 0, "temp": 0}))
     before_temp = int(hp.get("temp", 0) or 0)
     before_hp = int(hp.get("value", 0) or 0)
+    before_conditions = _condition_set(value.get("conditions"))
     absorbed = min(before_temp, adjusted)
     hp_damage = adjusted - absorbed
     hp["temp"] = before_temp - absorbed
@@ -3097,6 +3106,12 @@ def _apply_adjusted_damage(
             "effect_ids": concentration_effects,
             "status": "pending",
         }
+    after_conditions = _condition_set(value.get("conditions"))
+    death_trigger = (
+        _standard_death_trigger(value)
+        if "dead" not in before_conditions and "dead" in after_conditions
+        else None
+    )
     return {
         "sheet": value,
         "input_amount": raw,
@@ -3115,6 +3130,7 @@ def _apply_adjusted_damage(
         "massive_damage": massive_excess >= max_hp,
         "relentless_endurance_triggered": relentless_endurance_triggered,
         "relentless_endurance_use": relentless_endurance_use,
+        "death_trigger": death_trigger,
     }
 
 
@@ -3198,6 +3214,7 @@ def apply_damage_parts_to_sheet(
         "massive_damage": applied["massive_damage"],
         "relentless_endurance_triggered": applied["relentless_endurance_triggered"],
         "relentless_endurance_use": applied["relentless_endurance_use"],
+        "death_trigger": applied["death_trigger"],
     }
 
 
@@ -3219,6 +3236,60 @@ def _source_trait(sheet: dict[str, Any], kind: str) -> dict[str, Any] | None:
         ),
         None,
     )
+
+
+def _standard_death_trigger(
+    sheet: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Return one validated engine-owned trigger for a creature that just died."""
+
+    matches = [
+        dict(dict(feature.get("choices") or {}).get("source_trait") or {})
+        for feature in [
+            *dict(sheet.get("content") or {}).get("features", []),
+            *dict(sheet.get("content") or {}).get("activities", []),
+        ]
+        if isinstance(feature, dict)
+        and dict(dict(feature.get("choices") or {}).get("source_trait") or {}).get(
+            "kind"
+        )
+        == "death_burst"
+    ]
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise CombatEngineError(
+            "actor card has more than one standard Death Burst trait"
+        )
+    trait = matches[0]
+    valid = (
+        trait.get("trigger") == "death"
+        and isinstance(trait.get("range_ft"), int)
+        and not isinstance(trait.get("range_ft"), bool)
+        and int(trait["range_ft"]) > 0
+        and trait.get("target") == "each_creature_in_range"
+        and trait.get("save_ability")
+        in {"strength", "dexterity", "constitution", "intelligence", "wisdom", "charisma"}
+        and isinstance(trait.get("save_dc"), int)
+        and not isinstance(trait.get("save_dc"), bool)
+        and int(trait["save_dc"]) > 0
+        and bool(re.fullmatch(r"\d+d\d+(?:[+-]\d+)?", str(trait.get("damage_formula") or "")))
+        and isinstance(trait.get("average_damage"), int)
+        and not isinstance(trait.get("average_damage"), bool)
+        and int(trait["average_damage"]) > 0
+        and bool(str(trait.get("damage_type") or "").strip())
+        and trait.get("failed_save") == "full"
+        and trait.get("successful_save") == "half"
+        and trait.get("ignite_flammable_unworn_objects") is True
+        and trait.get("automatic") is True
+        and bool(str(trait.get("source_excerpt") or "").strip())
+    )
+    if not valid:
+        raise CombatEngineError("standard Death Burst trait is malformed")
+    return {
+        **deepcopy(trait),
+        "mechanic_id": "dnd5e.core.monster.death_burst",
+    }
 
 
 def resolve_corrosive_form_melee_hit(
@@ -3420,6 +3491,59 @@ def resolve_standard_weapon_on_hit(
 ) -> dict[str, Any]:
     """Execute a canonical statblock weapon rider without an Agent ruling."""
 
+    if resolution.get("kind") == "ignition_ongoing_damage":
+        expected_ignition = {
+            "kind": "ignition_ongoing_damage",
+            "trigger": "weapon_hit",
+            "creature_target_automatic": True,
+            "flammable_object_requires_scene_fact": True,
+            "damage_formula": str(resolution.get("damage_formula") or ""),
+            "average_damage": int(resolution.get("average_damage", 0) or 0),
+            "damage_type": str(resolution.get("damage_type") or ""),
+            "trigger_timing": str(resolution.get("trigger_timing") or ""),
+            "end_action": "use_object",
+            "end_action_description": "douse the fire",
+            "automatic": True,
+            "source_excerpt": str(resolution.get("source_excerpt") or ""),
+        }
+        if (
+            resolution != expected_ignition
+            or not re.fullmatch(
+                r"\d+d\d+(?:[+-]\d+)?",
+                expected_ignition["damage_formula"],
+            )
+            or expected_ignition["average_damage"] <= 0
+            or not expected_ignition["damage_type"]
+            or expected_ignition["trigger_timing"] not in {"turn_start", "turn_end"}
+            or not expected_ignition["source_excerpt"]
+        ):
+            raise CombatEngineError("unsupported standard weapon on-hit resolution")
+        return {
+            "sheet": deepcopy(sheet),
+            "kind": "ignition_ongoing_damage",
+            "applied": True,
+            "ongoing_effect": {
+                "kind": "source_ongoing_damage",
+                "damage_formula": expected_ignition["damage_formula"],
+                "average_damage": expected_ignition["average_damage"],
+                "damage_type": expected_ignition["damage_type"],
+                "trigger_timing": expected_ignition["trigger_timing"],
+                "end_action": expected_ignition["end_action"],
+                "end_action_description": expected_ignition[
+                    "end_action_description"
+                ],
+                "active": True,
+                "source_excerpt": expected_ignition["source_excerpt"],
+                "mechanic_id": "dnd5e.core.monster.ignition_ongoing_damage",
+            },
+            "scene_fact_requirement": {
+                "kind": "flammable_object_target",
+                "required_for_creature_target": False,
+                "default_resolver": "agent",
+                "ruling_kind": "source_or_scene_fact",
+            },
+            "mechanic_id": "dnd5e.core.monster.ignition_ongoing_damage",
+        }
     expected = {
         "kind": "armor_corrosion",
         "trigger": "weapon_hit",
@@ -4612,11 +4736,13 @@ def settle_core_activity_effect(
     cunning_action_id = "dnd5e.content.srd2014.feature.rogue-cunning-action"
     aggressive_id = "dnd5e.core.monster.aggressive"
     battle_cry_id = "dnd5e.core.monster.battle-cry"
+    ignited_illumination_id = "dnd5e.core.monster.ignited-illumination"
     if activity_id not in {
         action_surge_id,
         cunning_action_id,
         aggressive_id,
         battle_cry_id,
+        ignited_illumination_id,
     }:
         return value, None
     current = current_combatant(value)
@@ -4625,7 +4751,26 @@ def settle_core_activity_effect(
     combatant = next(
         item for item in value.get("combatants", []) if item.get("actor_id") == actor_id_value
     )
-    if activity_id == aggressive_id:
+    if activity_id == ignited_illumination_id:
+        currently_ablaze = bool(
+            dict(combatant.get("emitted_light") or {}).get("ignited_illumination")
+        )
+        if currently_ablaze:
+            combatant["emitted_light"] = {}
+        else:
+            combatant["emitted_light"] = {
+                "ignited_illumination": True,
+                "bright_light_radius_ft": 10,
+                "dim_light_radius_ft": 20,
+                "source_activity_id": ignited_illumination_id,
+            }
+        effect = {
+            "kind": "ignited_illumination",
+            "ablaze": not currently_ablaze,
+            "bright_light_radius_ft": 10 if not currently_ablaze else 0,
+            "dim_light_radius_ft": 20 if not currently_ablaze else 0,
+        }
+    elif activity_id == aggressive_id:
         target_id = str(dict(declaration or {}).get("target_id") or "")
         target = next(
             (
@@ -4782,7 +4927,11 @@ def settle_core_activity_effect(
             {"type": "cunning_action", "actor_id": actor_id_value, "effect": effect},
         ][-100:]
         return value, effect
-    if activity_id in {aggressive_id, battle_cry_id}:
+    if activity_id in {
+        aggressive_id,
+        battle_cry_id,
+        ignited_illumination_id,
+    }:
         value["log"] = [
             *list(value.get("log") or []),
             {

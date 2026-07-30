@@ -472,9 +472,12 @@ def _parse_weapon(
         "reach_ft": int(reach.group(1)) if reach else 5,
         "always_available": True,
     }
-    armor_corrosion = _armor_corrosion_on_hit(on_hit_effect)
-    if armor_corrosion is not None:
-        mechanics["on_hit_resolution"] = armor_corrosion
+    structured_on_hit = (
+        _armor_corrosion_on_hit(on_hit_effect)
+        or _ignition_ongoing_damage_on_hit(on_hit_effect)
+    )
+    if structured_on_hit is not None:
+        mechanics["on_hit_resolution"] = structured_on_hit
         mechanics["on_hit_effect"] = ""
     advantage_target = re.search(
         (
@@ -542,6 +545,39 @@ def _armor_corrosion_on_hit(description: str) -> dict[str, Any] | None:
         "requires_nonmagical_armor": True,
         "armor_class_penalty": penalty,
         "destroyed_at_armor_class": int(match.group("destroyed_ac")),
+        "automatic": True,
+        "source_excerpt": normalized,
+    }
+
+
+def _ignition_ongoing_damage_on_hit(
+    description: str,
+) -> dict[str, Any] | None:
+    """Compile the complete standard ignite-and-douse weapon rider."""
+
+    normalized = " ".join(description.split())
+    match = re.fullmatch(
+        r"If the target is a creature or a flammable object, it ignites\. "
+        r"Until a (?:creature|target) takes an action to douse the fire, "
+        r"the (?:creature|target) takes (?P<average>\d+) "
+        r"\((?P<formula>\d+d\d+)\) (?P<damage_type>[a-z]+) damage at the "
+        r"(?P<timing>start|end) of each of its turns\.",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    return {
+        "kind": "ignition_ongoing_damage",
+        "trigger": "weapon_hit",
+        "creature_target_automatic": True,
+        "flammable_object_requires_scene_fact": True,
+        "damage_formula": match.group("formula").casefold(),
+        "average_damage": int(match.group("average")),
+        "damage_type": match.group("damage_type").casefold(),
+        "trigger_timing": f"turn_{match.group('timing').casefold()}",
+        "end_action": "use_object",
+        "end_action_description": "douse the fire",
         "automatic": True,
         "source_excerpt": normalized,
     }
@@ -1079,6 +1115,70 @@ def _battle_cry_source_trait(description: str) -> dict[str, Any] | None:
     }
 
 
+def _death_burst_source_trait(description: str) -> dict[str, Any] | None:
+    """Compile the standard death-triggered area save and damage grammar."""
+
+    normalized = " ".join(description.split())
+    match = re.fullmatch(
+        r"When the (?P<subject>[A-Za-z][A-Za-z '\-]*) dies, "
+        r"(?P<preamble>[^.]{1,180}\.) "
+        r"Each creature within (?P<range>\d+) (?:feet|ft\.) of it must make a "
+        r"DC (?P<dc>\d+) (?P<ability>Strength|Dexterity|Constitution|"
+        r"Intelligence|Wisdom|Charisma) saving throw, taking "
+        r"(?P<average>\d+) \((?P<formula>\d+d\d+(?:\s*[+\-]\s*\d+)?)\) "
+        r"(?P<damage_type>[a-z]+) damage on a failed save, or half as much "
+        r"damage on a successful one\. "
+        r"Flammable objects that aren't being worn or carried in that area "
+        r"are ignited\.",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    return {
+        "kind": "death_burst",
+        "trigger": "death",
+        "range_ft": int(match.group("range")),
+        "target": "each_creature_in_range",
+        "save_ability": match.group("ability").casefold(),
+        "save_dc": int(match.group("dc")),
+        "damage_formula": re.sub(r"\s+", "", match.group("formula")).casefold(),
+        "average_damage": int(match.group("average")),
+        "damage_type": match.group("damage_type").casefold(),
+        "failed_save": "full",
+        "successful_save": "half",
+        "ignite_flammable_unworn_objects": True,
+        "automatic": True,
+        "source_excerpt": normalized,
+    }
+
+
+def _ignited_illumination_source_trait(
+    description: str,
+) -> dict[str, Any] | None:
+    """Compile the Magmin's standard bonus-action light toggle."""
+
+    normalized = " ".join(description.split())
+    match = re.fullmatch(
+        r"As a bonus action, the (?P<subject>[A-Za-z][A-Za-z '\-]*) can set "
+        r"itself ablaze or extinguish its flames\. While ablaze, the "
+        r"(?P=subject) sheds bright light in a (?P<bright>\d+)-foot radius "
+        r"and dim light for an additional (?P<dim>\d+) (?:feet|ft\.)",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    return {
+        "kind": "ignited_illumination",
+        "trigger": "bonus_action",
+        "mode": "toggle",
+        "bright_light_radius_ft": int(match.group("bright")),
+        "additional_dim_light_ft": int(match.group("dim")),
+        "automatic": True,
+    }
+
+
 def _sneak_attack_source_trait(description: str) -> dict[str, Any] | None:
     normalized = " ".join(description.split())
     match = re.fullmatch(
@@ -1234,6 +1334,8 @@ def _source_trait_from_description(description: str) -> dict[str, Any] | None:
             _cunning_action_source_trait,
             _included_weapon_damage_source_trait,
             _battle_cry_source_trait,
+            _death_burst_source_trait,
+            _ignited_illumination_source_trait,
             _sneak_attack_source_trait,
             _amorphous_source_trait,
             _spider_climb_source_trait,
@@ -2032,7 +2134,11 @@ def parse_2014_statblock(
                 normalization_notes.append(
                     f"{entry_name}: trailing creature prose excluded from trait settlement"
                 )
-            if source_trait["kind"] in {"aggressive", "cunning_action"}:
+            if source_trait["kind"] in {
+                "aggressive",
+                "cunning_action",
+                "ignited_illumination",
+            }:
                 activation = "bonus_action"
                 entry["activation"] = {"type": activation, "cost": 1}
             elif source_trait["kind"] == "battle_cry":
@@ -2061,6 +2167,10 @@ def parse_2014_statblock(
                     "recovers_on": "long_rest",
                     "source_key": source_key,
                 }
+            elif source_trait["kind"] == "death_burst":
+                entry["id"] = "dnd5e.core.monster.death-burst"
+            elif source_trait["kind"] == "ignited_illumination":
+                entry["id"] = "dnd5e.core.monster.ignited-illumination"
             entry["activation"]["trigger"] = {
                 "regeneration": "start of its turn",
                 "pack_tactics": "attack roll",
@@ -2070,6 +2180,8 @@ def parse_2014_statblock(
                 "cunning_action": "bonus action on its turn",
                 "included_weapon_damage": "weapon hit; included in weapon actions",
                 "battle_cry": "action on its turn",
+                "death_burst": "when it dies",
+                "ignited_illumination": "bonus action on its turn",
                 "sneak_attack": "eligible weapon hit once per turn",
                 "amorphous": "movement through narrow spaces",
                 "spider_climb": "climb movement",
@@ -3391,9 +3503,14 @@ def _repair_layout_ocr_text(text: str) -> str:
         "1d",
         text,
     )
-    return re.sub(
+    normalized = re.sub(
         r"(?i)(\bhalf\s+as\s+much\s+)darmage(?=\s+on\b)",
         r"\1damage",
+        normalized,
+    )
+    return re.sub(
+        r"(?i)\b(Ignited\s+Illumination),\s+(?=As\s+a\s+bonus\s+action\b)",
+        r"\1. ",
         normalized,
     )
 

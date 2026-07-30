@@ -9,6 +9,7 @@ from sagasmith_dnd.activity_identity import (
 from sagasmith_dnd.character_schema import derive_character_sheet, validate_character_sheet
 from sagasmith_dnd.statblocks import (
     StatblockImportError,
+    _repair_layout_ocr_text,
     _structure_gazer_eye_rays,
     _structure_intellect_devourer_actions,
     apply_reviewed_statblock_fill,
@@ -168,6 +169,48 @@ ally isn't incapacitated.
 
 ***Sling***. *Ranged Weapon Attack:* +4 to hit, range 30/120 ft., one target.
 *Hit:* 4 (1d4 + 2) bludgeoning damage.
+"""
+
+MAGMIN = """# Magmin
+
+*Small elemental, chaotic neutral*
+
+**Armor Class** 14 (natural armor)
+
+**Hit Points** 9 (2d6 + 2)
+
+**Speed** 30 ft.
+
+| STR | DEX | CON | INT | WIS | CHA |
+|:---:|:---:|:---:|:---:|:---:|:---:|
+| 7 (-2) | 15 (+2) | 12 (+1) | 8 (-1) | 11 (+0) | 10 (+0) |
+
+**Damage Resistances** bludgeoning, piercing, and slashing from nonmagical weapons
+
+**Damage Immunities** fire
+
+**Senses** darkvision 60 ft., passive Perception 10
+
+**Languages** Ignan
+
+**Challenge** 1/2 (100 XP)
+
+***Death Burst.*** When the magmin dies, it explodes in a burst of fire and
+magma. Each creature within 10 ft. of it must make a DC 11 Dexterity saving
+throw, taking 7 (2d6) fire damage on a failed save, or half as much damage on
+a successful one. Flammable objects that aren't being worn or carried in that
+area are ignited.
+
+***Ignited Illumination.*** As a bonus action, the magmin can set itself ablaze
+or extinguish its flames. While ablaze, the magmin sheds bright light in a
+10-foot radius and dim light for an additional 10 ft.
+
+###### Actions
+
+***Touch.*** *Melee Weapon Attack:* +4 to hit, reach 5 ft., one target.
+*Hit:* 7 (2d6) fire damage. If the target is a creature or a flammable object,
+it ignites. Until a creature takes an action to douse the fire, the creature
+takes 3 (1d6) fire damage at the end of each of its turns.
 """
 
 
@@ -1354,6 +1397,81 @@ def test_black_pudding_standard_traits_are_structured() -> None:
         "armor_corrosion"
     )
     assert parsed.warnings == ()
+
+
+def test_magmin_standard_mechanics_are_structured() -> None:
+    parsed = parse_2014_statblock(
+        MAGMIN,
+        source_key="monster-manual-2014:p212",
+    )
+    features = {
+        item["name"]: item for item in parsed.sheet["content"]["features"]
+    }
+    activities = {
+        item["name"]: item for item in parsed.sheet["content"]["activities"]
+    }
+    touch = next(
+        item
+        for item in parsed.sheet["inventory"]["items"]
+        if item["name"] == "Touch"
+    )
+
+    assert features["Death Burst"]["id"] == "dnd5e.core.monster.death-burst"
+    assert features["Death Burst"]["choices"]["source_trait"] == {
+        "kind": "death_burst",
+        "trigger": "death",
+        "range_ft": 10,
+        "target": "each_creature_in_range",
+        "save_ability": "dexterity",
+        "save_dc": 11,
+        "damage_formula": "2d6",
+        "average_damage": 7,
+        "damage_type": "fire",
+        "failed_save": "full",
+        "successful_save": "half",
+        "ignite_flammable_unworn_objects": True,
+        "automatic": True,
+        "source_excerpt": (
+            "When the magmin dies, it explodes in a burst of fire and magma. "
+            "Each creature within 10 ft. of it must make a DC 11 Dexterity "
+            "saving throw, taking 7 (2d6) fire damage on a failed save, or "
+            "half as much damage on a successful one. Flammable objects that "
+            "aren't being worn or carried in that area are ignited."
+        ),
+    }
+    assert activities["Ignited Illumination"]["id"] == (
+        "dnd5e.core.monster.ignited-illumination"
+    )
+    assert activities["Ignited Illumination"]["activation"] == {
+        "type": "bonus_action",
+        "cost": 1,
+        "trigger": "bonus action on its turn",
+    }
+    assert activities["Ignited Illumination"]["choices"]["source_trait"] == {
+        "kind": "ignited_illumination",
+        "trigger": "bonus_action",
+        "mode": "toggle",
+        "bright_light_radius_ft": 10,
+        "additional_dim_light_ft": 10,
+        "automatic": True,
+    }
+    assert touch["mechanics"]["on_hit_effect"] == ""
+    assert touch["mechanics"]["on_hit_resolution"]["kind"] == (
+        "ignition_ongoing_damage"
+    )
+    assert touch["mechanics"]["on_hit_resolution"]["trigger_timing"] == "turn_end"
+    assert parsed.warnings == ()
+
+
+def test_magmin_illumination_heading_repairs_only_the_bounded_ocr_comma() -> None:
+    assert _repair_layout_ocr_text(
+        "Ignited Illumination, As a bonus action, the magmin can set itself ablaze."
+    ) == (
+        "Ignited Illumination. As a bonus action, the magmin can set itself ablaze."
+    )
+    assert _repair_layout_ocr_text("Unknown Feature, As a bonus action") == (
+        "Unknown Feature, As a bonus action"
+    )
 
 
 def test_keen_perception_trait_is_structured() -> None:
