@@ -624,6 +624,73 @@ twenty sling stones.
     )
 
 
+@pytest.mark.parametrize(
+    ("name", "weapon", "damage", "inventory", "ammunition_name"),
+    [
+        (
+            "Urgala",
+            "Shortbow",
+            "5 (1d6 + 1) piercing",
+            "Urgala carries a quiver of twenty arrows.",
+            "Arrows",
+        ),
+        (
+            "Narth",
+            "Hand Crossbow",
+            "5 (1d6 + 2) piercing",
+            "Narth carries twenty crossbow bolts.",
+            "Crossbow Bolts",
+        ),
+    ],
+)
+def test_standard_ammunition_container_phrases_are_not_hit_effects(
+    name: str,
+    weapon: str,
+    damage: str,
+    inventory: str,
+    ammunition_name: str,
+) -> None:
+    parsed = parse_2014_statblock(
+        f"""### {name}
+
+*Medium humanoid (human), neutral*
+
+**Armor Class** 12
+**Hit Points** 27 (5d8 + 5)
+**Speed** 30 ft.
+
+| STR | DEX | CON | INT | WIS | CHA |
+|---:|---:|---:|---:|---:|---:|
+| 15 (+2) | 15 (+2) | 12 (+1) | 10 (+0) | 11 (+0) | 11 (+0) |
+
+**Senses** passive Perception 10
+**Languages** Common
+
+## Actions
+
+***{weapon}***. *Ranged Weapon Attack:* +4 to hit, range 30/120 ft.,
+one target. *Hit:* {damage} damage. {inventory}
+""",
+        source_key=f"storm-kings-thunder:{name.casefold()}",
+    )
+    weapon_attack = derive_character_sheet(parsed.sheet)["inventory"][
+        "weapon_attacks"
+    ][0]
+    ammunition = next(
+        item
+        for item in parsed.sheet["inventory"]["items"]
+        if item["kind"] == "ammunition"
+    )
+
+    assert weapon_attack["on_hit_effect"] == ""
+    assert weapon_attack["ammunition_item_id"] == (
+        f"{weapon.casefold().replace(' ', '-')}-ammunition"
+    )
+    assert ammunition["name"] == ammunition_name
+    assert ammunition["quantity"] == 20
+    assert parsed.warnings == ()
+
+
 def test_article_and_emphasis_before_actor_lore_are_not_an_on_hit_effect() -> None:
     parsed = parse_2014_statblock(
         """### Worg
@@ -837,6 +904,27 @@ def test_weapon_damage_structures_two_handed_melee_alternative() -> None:
     ]
     assert weapon["mechanics"]["versatile_damage_formula"] == "2d8"
     assert weapon["mechanics"]["properties"] == ["thrown", "versatile"]
+    assert weapon["mechanics"]["on_hit_effect"] == ""
+    assert parsed.warnings == ()
+
+
+def test_weapon_damage_structures_short_two_handed_alternative() -> None:
+    parsed = parse_2014_statblock(
+        COMMONER.replace(
+            "***Club***. *Melee Weapon Attack:* +2 to hit, reach 5 ft., one target.\n"
+            "*Hit:* 2 (1d4) bludgeoning damage.",
+            "***Battleaxe***. *Melee Weapon Attack:* +6 to hit, reach 5 ft., "
+            "one target. *Hit:* 8 (1d8 + 4) slashing damage, or 9 "
+            "(1d10 + 4) slashing damage if used with two hands.",
+        ),
+        source_key="storm-kings-thunder:ghelryn",
+    )
+    weapon = parsed.sheet["inventory"]["items"][0]
+
+    assert weapon["mechanics"]["damage_formula"] == "1d8"
+    assert weapon["mechanics"]["damage_bonus_override"] == 4
+    assert weapon["mechanics"]["versatile_damage_formula"] == "1d10"
+    assert weapon["mechanics"]["properties"] == ["versatile"]
     assert weapon["mechanics"]["on_hit_effect"] == ""
     assert parsed.warnings == ()
 

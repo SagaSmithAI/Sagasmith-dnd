@@ -301,15 +301,25 @@ def _trailing_standard_ammunition(
 
     normalized_weapon = " ".join(weapon_name.casefold().split())
     ammunition_patterns = (
-        (r"sling", r"sling\s+stones?", "Sling Stones"),
-        (r"(?:short|long)bow", r"arrows?", "Arrows"),
-        (r"(?:hand|light|heavy)\s+crossbow", r"bolts?", "Bolts"),
-        (r"blowgun", r"needles?", "Needles"),
+        (r"sling", "", r"sling\s+stones?", "Sling Stones"),
+        (
+            r"(?:short|long)bow",
+            r"(?:a\s+quiver\s+of\s+)?",
+            r"arrows?",
+            "Arrows",
+        ),
+        (
+            r"(?:hand|light|heavy)\s+crossbow",
+            "",
+            r"(?:crossbow\s+)?bolts?",
+            "Crossbow Bolts",
+        ),
+        (r"blowgun", "", r"needles?", "Blowgun Needles"),
     )
     ammunition = next(
         (
-            (pattern, label)
-            for weapon_pattern, pattern, label in ammunition_patterns
+            (prefix, pattern, label)
+            for weapon_pattern, prefix, pattern, label in ammunition_patterns
             if re.fullmatch(weapon_pattern, normalized_weapon)
         ),
         None,
@@ -330,7 +340,7 @@ def _trailing_standard_ammunition(
     )
     if ammunition is None or not aliases:
         return None
-    ammunition_pattern, ammunition_label = ammunition
+    ammunition_prefix, ammunition_pattern, ammunition_label = ammunition
     count_pattern = "|".join(
         [
             r"\d+",
@@ -345,7 +355,7 @@ def _trailing_standard_ammunition(
         (
             rf"(?i)(?:^|(?<=[.!?])\s+)"
             rf"(?:{'|'.join(re.escape(alias) for alias in aliases)})\s+"
-            rf"carries\s+(?P<count>{count_pattern})\s+"
+            rf"carries\s+{ammunition_prefix}(?P<count>{count_pattern})\s+"
             rf"{ammunition_pattern}\s*\.?\s*$"
         ),
         description,
@@ -428,7 +438,8 @@ def _parse_weapon(
                 r"(?i)\s*,?\s*or\s+\d+\s*"
                 r"\((\d+\s*d\s*\d+)(?:\s*([+\-])\s*(\d+))?\)\s*"
                 rf"{re.escape(hit.group(3))}\s+damage\s+"
-                r"if\s+used\s+with\s+two\s+hands\s+to\s+make\s+a\s+melee\s+attack"
+                r"if\s+used\s+with\s+two\s+hands"
+                r"(?:\s+to\s+make\s+a\s+melee\s+attack)?"
             ),
             description[hit.end() :],
         )
