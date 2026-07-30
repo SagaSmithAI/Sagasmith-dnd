@@ -74,10 +74,31 @@ def effect_condition_additions(effect: dict[str, Any]) -> set[str]:
 
 
 def apply_effect_conditions(sheet: dict[str, Any], effect: dict[str, Any]) -> None:
-    """Project a newly active effect's condition changes through normal immunity."""
+    """Project a newly active effect's one-time and condition changes."""
 
     if not effect.get("active", True):
         return
+    hp = dict(sheet.setdefault("combat", {}).setdefault("hp", {}))
+    for change in effect.get("changes", []):
+        if (
+            not isinstance(change, dict)
+            or change.get("path") != "combat.hp.current_multiplier_on_apply"
+        ):
+            continue
+        multiplier = change.get("value")
+        if (
+            change.get("mode") != "multiply"
+            or isinstance(multiplier, bool)
+            or not isinstance(multiplier, int)
+            or multiplier < 1
+        ):
+            raise ValueError("current hit-point multiplier effect is malformed")
+        maximum = _active_effect_hit_point_maximum(sheet)
+        hp["value"] = min(
+            maximum,
+            max(0, int(hp.get("value", 0) or 0)) * multiplier,
+        )
+    sheet["combat"]["hp"] = hp
     for condition_id in effect_condition_additions(effect):
         apply_condition_change(sheet, condition_id=condition_id, add=True)
 
@@ -87,9 +108,18 @@ def reconcile_ended_effect_conditions(
     *,
     ended_effects: Iterable[dict[str, Any]],
 ) -> None:
-    """Remove only condition projections whose final owning effect has ended."""
+    """Reconcile one-time end transitions and effect-owned conditions."""
 
     ended = [effect for effect in ended_effects if isinstance(effect, dict)]
+    if any(_effect_converts_excess_hit_points(effect) for effect in ended):
+        hp = dict(sheet.setdefault("combat", {}).setdefault("hp", {}))
+        maximum = _active_effect_hit_point_maximum(sheet)
+        current = max(0, int(hp.get("value", 0) or 0))
+        excess = max(0, current - maximum)
+        hp["value"] = min(current, maximum)
+        if excess:
+            hp["temp"] = max(int(hp.get("temp", 0) or 0), excess)
+        sheet["combat"]["hp"] = hp
     removable: set[str] = set()
     for effect in ended:
         removable.update(effect_condition_additions(effect))
@@ -125,6 +155,40 @@ def reconcile_ended_effect_conditions(
 
     if removable:
         sheet["conditions"] = sorted(condition_ids(sheet.get("conditions")) - removable)
+
+
+def _effect_converts_excess_hit_points(effect: dict[str, Any]) -> bool:
+    return any(
+        isinstance(change, dict)
+        and change.get("path") == "combat.hp.excess_on_end"
+        and change.get("mode") == "set"
+        and change.get("value") == "temporary_hit_points"
+        for change in effect.get("changes", [])
+    )
+
+
+def _active_effect_hit_point_maximum(sheet: dict[str, Any]) -> int:
+    hp = dict(dict(sheet.get("combat") or {}).get("hp") or {})
+    maximum = max(0, int(hp.get("max", 0) or 0))
+    for effect in sheet.get("effects", []):
+        if not isinstance(effect, dict) or not effect.get("active", False):
+            continue
+        for change in effect.get("changes", []):
+            if (
+                not isinstance(change, dict)
+                or change.get("path") != "combat.hp.maximum_multiplier"
+            ):
+                continue
+            multiplier = change.get("value")
+            if (
+                change.get("mode") != "multiply"
+                or isinstance(multiplier, bool)
+                or not isinstance(multiplier, int)
+                or multiplier < 1
+            ):
+                raise ValueError("maximum hit-point multiplier effect is malformed")
+            maximum *= multiplier
+    return maximum
 
 
 def apply_condition_change(

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from copy import deepcopy
+
 import pytest
 
 from sagasmith_dnd.character_schema import (
@@ -48,6 +50,114 @@ def test_effective_ability_modifier_uses_the_shared_override_projection() -> Non
     )
 
     assert effective_ability_modifier(sheet, "constitution") == 4
+
+
+def test_source_effect_can_project_giant_size_and_reconcile_hit_points() -> None:
+    sheet = validate_character_sheet(
+        {
+            "abilities": {"strength": {"score": 16}},
+            "combat": {"hp": {"value": 31, "max": 40, "temp": 0}},
+            "traits": {"size": "medium"},
+        }
+    )
+    sheet, weapon_id = add_inventory_item(
+        sheet,
+        {
+            "id": "longsword",
+            "name": "Longsword",
+            "kind": "weapon",
+            "mechanics": {
+                "attack_type": "melee",
+                "damage_formula": "1d8",
+                "damage_type": "slashing",
+                "reach_ft": 5,
+            },
+        },
+    )
+    sheet = equip_inventory_item(sheet, weapon_id, "main_hand")
+    sheet, effect_id = add_effect(
+        sheet,
+        {
+            "id": "source-owned-enlargement",
+            "name": "Source-owned Enlargement",
+            "kind": "custom",
+            "duration": {"period": "hour", "remaining": 24},
+            "changes": [
+                {"path": "traits.size", "mode": "override", "value": "huge"},
+                {
+                    "path": "abilities.strength.score",
+                    "mode": "minimum",
+                    "value": 25,
+                },
+                {
+                    "path": "combat.hp.maximum_multiplier",
+                    "mode": "multiply",
+                    "value": 2,
+                },
+                {
+                    "path": "combat.hp.current_multiplier_on_apply",
+                    "mode": "multiply",
+                    "value": 2,
+                },
+                {
+                    "path": "combat.melee_reach.bonus_ft",
+                    "mode": "add",
+                    "value": 5,
+                },
+                {
+                    "path": "rolls.weapon_damage.dice_multiplier",
+                    "mode": "multiply",
+                    "value": 3,
+                },
+                {
+                    "path": "combat.hp.excess_on_end",
+                    "mode": "set",
+                    "value": "temporary_hit_points",
+                },
+            ],
+        },
+    )
+
+    enlarged = derive_character_sheet(sheet)
+    attack = enlarged["inventory"]["weapon_attacks"][0]
+    assert enlarged["size"] == "huge"
+    assert enlarged["ability_scores"]["strength"] == 25
+    assert enlarged["hit_points"]["value"] == 62
+    assert enlarged["hit_points"]["max"] == 80
+    assert attack["reach_ft"] == 10
+    assert attack["damage_formula"] == "3d8"
+    assert enlarged["unresolved_rules"] == []
+
+    restored = remove_effect(sheet, effect_id)
+    normal = derive_character_sheet(restored)
+    assert normal["size"] == "medium"
+    assert normal["ability_scores"]["strength"] == 16
+    assert normal["hit_points"]["value"] == 40
+    assert normal["hit_points"]["max"] == 40
+    assert normal["hit_points"]["temp"] == 22
+    assert normal["inventory"]["weapon_attacks"][0]["reach_ft"] == 5
+    assert normal["inventory"]["weapon_attacks"][0]["damage_formula"] == "1d8"
+
+    stronger_sheet = deepcopy(sheet)
+    stronger_sheet["abilities"]["strength"]["score"] = 27
+    stronger_sheet, _ = add_effect(
+        stronger_sheet,
+        {
+            "id": "source-owned-strength-minimum",
+            "name": "Source-owned Strength Minimum",
+            "kind": "custom",
+            "changes": [
+                {
+                    "path": "abilities.strength.score",
+                    "mode": "minimum",
+                    "value": 25,
+                }
+            ],
+        },
+    )
+    stronger = derive_character_sheet(stronger_sheet)
+    assert stronger["ability_scores"]["strength"] == 27
+    assert stronger["unresolved_rules"] == []
 
 
 def _caster_sheet() -> dict:

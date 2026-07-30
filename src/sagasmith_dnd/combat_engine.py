@@ -22,6 +22,7 @@ from sagasmith_dnd.character_schema import (
     active_effect_roll_bonus,
     effective_ability_scores,
     effective_hit_point_maximum,
+    effective_size,
     validate_character_sheet,
 )
 from sagasmith_dnd.conditions import (
@@ -1352,13 +1353,33 @@ def pay_attack_action(
     value = deepcopy(encounter)
     current = current_combatant(value)
     attacker_id = actor_id(attacker)
-    if current is None or current.get("actor_id") != attacker_id:
-        raise CombatEngineError("it is not this actor's turn")
     combatant = next(
         item for item in value.get("combatants", []) if item.get("actor_id") == attacker_id
     )
     budget = dict(combatant.get("turn_budget") or {})
     flags = dict(combatant.get("turn_flags") or {})
+    legendary_attack = dict(flags.get("legendary_weapon_attack") or {})
+    if current is None:
+        raise CombatEngineError("combat has no current actor")
+    if current.get("actor_id") != attacker_id:
+        if (
+            legendary_attack.get("turn_token") != _combat_turn_token(value)
+            or legendary_attack.get("weapon_id") != weapon_id
+            or legendary_attack.get("attack_mode") != attack_mode
+        ):
+            raise CombatEngineError("it is not this actor's turn")
+        flags.pop("legendary_weapon_attack", None)
+        if flags:
+            combatant["turn_flags"] = flags
+        else:
+            combatant.pop("turn_flags", None)
+        return value, {
+            "kind": "legendary_action_attack",
+            "activity_id": str(legendary_attack.get("activity_id") or ""),
+            "weapon_id": weapon_id,
+            "attack_mode": attack_mode,
+            "turn_token": str(legendary_attack["turn_token"]),
+        }
     active_multiattack = flags.get("multiattack")
     action_payment_key: str | None = None
 
@@ -2149,9 +2170,7 @@ def preflight_attack(
         for item in weapon.get("required_target_sizes", [])
         if str(item).strip()
     }
-    target_size = str(
-        dict(actor_sheet(target).get("traits") or {}).get("size") or ""
-    ).strip().casefold()
+    target_size = effective_size(actor_sheet(target))
     if required_target_sizes and target_size not in required_target_sizes:
         raise CombatEngineError(
             "weapon target size does not satisfy its recorded targeting restriction"
@@ -2686,11 +2705,7 @@ def _resolve_weapon_hit_contest_pull(
             "source_excerpt": expected["source_excerpt"],
             "mechanic_id": "dnd5e.core.attack.weapon_hit_contest_pull",
         }
-    target_size = (
-        str(dict(actor_sheet(target).get("traits") or {}).get("size") or "")
-        .strip()
-        .casefold()
-    )
+    target_size = effective_size(actor_sheet(target))
     if target_size not in size_order:
         raise CombatEngineError("contest-pull target size is not recorded")
     eligible = size_order.index(target_size) <= size_order.index(
@@ -4273,7 +4288,7 @@ def split_reaction_eligibility(
         if isinstance(part, dict) and int(part.get("amount", 0) or 0) > 0
     }.intersection({str(item).casefold() for item in trait["damage_types"]})
     size_order = ["tiny", "small", "medium", "large", "huge", "gargantuan"]
-    size = str(dict(sheet.get("traits") or {}).get("size") or "").casefold()
+    size = effective_size(sheet)
     minimum_size = str(trait["minimum_size"]).casefold()
     hit_points = int(
         dict(dict(sheet.get("combat") or {}).get("hp") or {}).get("value", 0)
@@ -4673,11 +4688,22 @@ def spend_movement(
     if distance < 0:
         raise CombatEngineError("movement distance cannot be negative")
     movement_mode = str(movement_mode).strip().lower().replace("-", "_")
-    if movement_mode not in {"voluntary", "aggressive", "forced", "teleport"}:
+    if movement_mode not in {
+        "voluntary",
+        "aggressive",
+        "forced",
+        "teleport",
+        "legendary_wing",
+    }:
         raise CombatEngineError(
-            "movement_mode must be voluntary, aggressive, forced, or teleport"
+            "movement_mode must be voluntary, aggressive, forced, teleport, "
+            "or legendary_wing"
         )
-    willing_movement = movement_mode in {"voluntary", "aggressive"}
+    willing_movement = movement_mode in {
+        "voluntary",
+        "aggressive",
+        "legendary_wing",
+    }
     combatant = next(
         (item for item in value.get("combatants", []) if item.get("actor_id") == actor_id_value),
         None,
@@ -4694,7 +4720,14 @@ def spend_movement(
     ):
         raise CombatEngineError("pending reaction must be resolved before this actor moves again")
     current = current_combatant(value)
-    if current is None or current.get("actor_id") != actor_id_value:
+    flags = dict(combatant.get("turn_flags") or {})
+    legendary_wing = dict(flags.get("legendary_wing_movement") or {})
+    if current is None:
+        raise CombatEngineError("combat has no current actor")
+    if current.get("actor_id") != actor_id_value and (
+        movement_mode != "legendary_wing"
+        or legendary_wing.get("turn_token") != _combat_turn_token(value)
+    ):
         raise CombatEngineError("it is not this actor's turn")
     conditions = _condition_set(combatant.get("conditions"))
     if conditions & {
@@ -4717,7 +4750,6 @@ def spend_movement(
     if combatant.get("surprised") and _normalize_ruleset(value.get("ruleset")) == "2014":
         raise CombatEngineError("surprised actor cannot move on its first turn")
     budget = dict(combatant.get("turn_budget") or {})
-    flags = dict(combatant.get("turn_flags") or {})
     aggressive = dict(flags.get("aggressive_movement") or {})
     if movement_mode == "aggressive" and not aggressive:
         raise CombatEngineError(
@@ -4726,6 +4758,8 @@ def spend_movement(
     available = (
         int(aggressive.get("remaining_ft", 0) or 0)
         if movement_mode == "aggressive"
+        else int(legendary_wing.get("remaining_ft", 0) or 0)
+        if movement_mode == "legendary_wing"
         else int(budget.get("movement", 0) or 0)
     )
     origin = _position(combatant.get("position"))
@@ -4922,6 +4956,22 @@ def spend_movement(
             }
         else:
             flags.pop("aggressive_movement", None)
+        if flags:
+            combatant["turn_flags"] = flags
+        else:
+            combatant.pop("turn_flags", None)
+    elif movement_mode == "legendary_wing":
+        remaining = max(
+            0,
+            int(legendary_wing.get("remaining_ft", 0) or 0) - movement_cost,
+        )
+        if remaining:
+            flags["legendary_wing_movement"] = {
+                **legendary_wing,
+                "remaining_ft": remaining,
+            }
+        else:
+            flags.pop("legendary_wing_movement", None)
         if flags:
             combatant["turn_flags"] = flags
         else:
@@ -5609,6 +5659,128 @@ def pay_activity_activation(
         {"type": "activity_activation", "actor_id": actor_id_value, "activation": activation},
     ][-100:]
     return value
+
+
+def pay_legendary_action(
+    encounter: dict[str, Any],
+    *,
+    actor_id_value: str,
+    activity_id: str,
+    spec: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Pay one standard 2014 legendary action at another creature's turn end."""
+
+    value = deepcopy(encounter)
+    if spec.get("kind") != "legendary_action_2014":
+        raise CombatEngineError("unsupported legendary-action contract")
+    pool = dict(spec.get("pool") or {})
+    if (
+        pool.get("kind") != "legendary_action_pool_2014"
+        or pool.get("trigger") != "end_of_another_creature_turn"
+        or pool.get("recovers_on") != "source_turn_start"
+        or pool.get("one_option_per_trigger") is not True
+    ):
+        raise CombatEngineError("legendary-action pool contract is malformed")
+    maximum = int(pool.get("maximum", 0) or 0)
+    cost = int(spec.get("cost", 0) or 0)
+    if maximum < 1 or not 1 <= cost <= maximum:
+        raise CombatEngineError("legendary-action cost or pool is invalid")
+    current = current_combatant(value)
+    if current is None:
+        raise CombatEngineError("combat has no current actor")
+    if str(current.get("actor_id") or "") == actor_id_value:
+        raise CombatEngineError(
+            "a legendary action can be used only at the end of another creature's turn"
+        )
+    current_budget = dict(current.get("turn_budget") or {})
+    for key in (
+        "main_action",
+        "extra_action",
+        "bonus_action",
+        "object_interaction",
+        "movement",
+        "attack_budget",
+    ):
+        if key in current_budget:
+            current_budget[key] = 0
+    current["turn_budget"] = current_budget
+    current_flags = dict(current.get("turn_flags") or {})
+    current_flags["turn_end_committed"] = True
+    current["turn_flags"] = current_flags
+    combatant = next(
+        (
+            item
+            for item in value.get("combatants", [])
+            if str(item.get("actor_id") or "") == actor_id_value
+        ),
+        None,
+    )
+    if combatant is None:
+        raise CombatEngineError("legendary-action actor is not a combatant")
+    if _condition_set(combatant.get("conditions")) & INCAPACITATING_STATE_IDS:
+        raise CombatEngineError(
+            "an incapacitated creature cannot take legendary actions"
+        )
+    if (
+        _normalize_ruleset(value.get("ruleset")) == "2014"
+        and bool(combatant.get("surprised"))
+        and int(combatant.get("turns_completed", 0) or 0) == 0
+    ):
+        raise CombatEngineError(
+            "a surprised creature cannot take legendary actions until after its first turn"
+        )
+    turn_token = _combat_turn_token(value)
+    state = dict(combatant.get("legendary_actions") or {})
+    if state and int(state.get("maximum", 0) or 0) != maximum:
+        raise CombatEngineError("legendary-action pool conflicts with the source card")
+    if state.get("last_used_turn_token") == turn_token:
+        raise CombatEngineError(
+            "only one legendary action option can be used after this creature's turn"
+        )
+    flags = dict(combatant.get("turn_flags") or {})
+    if any(
+        key in flags
+        for key in ("legendary_weapon_attack", "legendary_wing_movement")
+    ):
+        raise CombatEngineError(
+            "the previous legendary action must be completed before another is used"
+        )
+    remaining = int(state.get("remaining", maximum) or 0)
+    if remaining < cost:
+        raise CombatEngineError("not enough legendary actions remain")
+    state.update(
+        maximum=maximum,
+        remaining=remaining - cost,
+        last_used_turn_token=turn_token,
+        last_activity_id=str(activity_id),
+    )
+    combatant["legendary_actions"] = state
+    effect = dict(spec.get("effect") or {})
+    if effect.get("kind") == "weapon_attack":
+        flags["legendary_weapon_attack"] = {
+            "activity_id": str(activity_id),
+            "weapon_id": str(effect.get("weapon_id") or ""),
+            "attack_mode": str(effect.get("attack_mode") or ""),
+            "turn_token": turn_token,
+        }
+        combatant["turn_flags"] = flags
+    payment = {
+        "kind": "legendary_action",
+        "activity_id": str(activity_id),
+        "cost": cost,
+        "remaining": state["remaining"],
+        "maximum": maximum,
+        "turn_token": turn_token,
+    }
+    value["log"] = [
+        *list(value.get("log") or []),
+        {
+            "type": "legendary_action_payment",
+            "actor_id": actor_id_value,
+            **payment,
+        },
+    ][-100:]
+    return value, payment
 
 
 def settle_core_activity_effect(
@@ -6681,6 +6853,7 @@ def resolve_save_damage_to_sheets(
     disadvantage: bool = False,
     death_saves: bool = True,
     death_saves_by_actor_id: dict[str, bool] | None = None,
+    save_bonuses_by_actor_id: dict[str, int] | None = None,
     ruleset: str | None = None,
     rules: ResolutionContext | None = None,
     rng: Any = None,
@@ -6718,6 +6891,19 @@ def resolve_save_damage_to_sheets(
     target_ids = [actor_id(target) for target in target_actors]
     if len(target_ids) != len(set(target_ids)):
         raise CombatEngineError("save-damage targets must be unique")
+    normalized_save_bonuses = dict(save_bonuses_by_actor_id or {})
+    if normalized_save_bonuses and (
+        set(normalized_save_bonuses) != set(target_ids)
+        or any(
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or not -100 <= value <= 100
+            for value in normalized_save_bonuses.values()
+        )
+    ):
+        raise CombatEngineError(
+            "save-damage target bonuses must cover every target with bounded integers"
+        )
     damage_roll = asdict(roll(expression, rng=rng))
     sheets: dict[str, dict[str, Any]] = {}
     results: list[dict[str, Any]] = []
@@ -6732,6 +6918,7 @@ def resolve_save_damage_to_sheets(
             kind="save",
             ability=ability,
             dc=save_dc,
+            bonus=int(normalized_save_bonuses.get(target_id, 0)),
             advantage=advantage,
             disadvantage=disadvantage,
             save_effect_conditions=[],
@@ -6780,6 +6967,9 @@ def resolve_save_damage_to_sheets(
                 "target_id": target_id,
                 "save": saved,
                 "success": bool(saved["success"]),
+                "save_bonus": int(
+                    normalized_save_bonuses.get(target_id, 0)
+                ),
                 "damage_reduction": reduction,
                 "rule_receipts": list(
                     reduction_settlement.get("rule_receipts") or []
@@ -7000,9 +7190,7 @@ def resolve_random_save_effects(
             "source_excerpt": str(effect.get("source_excerpt") or ""),
         }
         if failure.get("kind") == "forced_movement":
-            target_size = str(
-                dict(actor_sheet(target_actor).get("traits") or {}).get("size") or ""
-            ).casefold()
+            target_size = effective_size(actor_sheet(target_actor))
             maximum_size = str(failure.get("maximum_size") or "").casefold()
             if target_size not in size_ranks or maximum_size not in size_ranks:
                 raise CombatEngineError("forced-movement size eligibility is not recorded")
@@ -7411,6 +7599,20 @@ def end_turn(encounter: dict[str, Any], *, actor_id_value: str | None = None) ->
         raise CombatEngineError("it is not this actor's turn")
     if any(item.get("status", "pending") == "pending" for item in value.get("pending", [])):
         raise CombatEngineError("pending choice or save must be resolved before ending the turn")
+    current_turn_token = _combat_turn_token(value)
+    if any(
+        dict(
+            dict(combatant.get("turn_flags") or {}).get(
+                "legendary_weapon_attack"
+            )
+            or {}
+        ).get("turn_token")
+        == current_turn_token
+        for combatant in value.get("combatants", [])
+    ):
+        raise CombatEngineError(
+            "a paid legendary weapon attack must be resolved before ending the turn"
+        )
     current_conditions = _condition_set(current.get("conditions"))
     current_flags = dict(current.get("turn_flags") or {})
     if (
@@ -7513,6 +7715,15 @@ def end_turn(encounter: dict[str, Any], *, actor_id_value: str | None = None) ->
     next_actor = current_combatant(value)
     if next_actor:
         next_actor_id = str(next_actor.get("actor_id") or "")
+        legendary_actions = dict(next_actor.get("legendary_actions") or {})
+        if legendary_actions:
+            legendary_actions["remaining"] = int(
+                legendary_actions.get("maximum", 0) or 0
+            )
+            legendary_actions["last_recovered_turn_token"] = (
+                _combat_turn_token(value)
+            )
+            next_actor["legendary_actions"] = legendary_actions
         for combatant in value.get("combatants", []):
             combatant_flags = dict(combatant.get("turn_flags") or {})
             battle_cry = dict(

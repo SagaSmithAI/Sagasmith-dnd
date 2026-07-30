@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.51.0"
+CORE_RULE_PACK_VERSION = "1.54.0"
 
 
 @dataclass(frozen=True)
@@ -114,6 +114,36 @@ BOUNDARIES = (
             "SagaSmith-dnd-mcp/tests/test_area_save_damage_mcp.py",
         ),
         "rulebook:mm2014/page-157/storm-giant#lightning-strike",
+    ),
+    CoreBoundary(
+        "dnd5e.core.activity.frightful_presence",
+        ("2014",),
+        (
+            "statblocks.frightful_presence_spec|"
+            "combat_engine.resolve_actor_check|conditions.apply_condition_change"
+        ),
+        (
+            "tests/test_statblocks.py::"
+            "test_ancient_blue_dragon_standard_actions_are_structured",
+            "SagaSmith-dnd-mcp/tests/test_dragon_standard_actions_mcp.py",
+        ),
+        "rulebook:mm2014/page-91/ancient-blue-dragon#frightful-presence",
+    ),
+    CoreBoundary(
+        "dnd5e.core.activity.legendary_action",
+        ("2014",),
+        (
+            "statblocks.legendary_action_spec|"
+            "combat_engine.pay_legendary_action|pay_attack_action|spend_movement"
+        ),
+        (
+            "tests/test_combat_engine.py::"
+            "test_legendary_action_pool_and_weapon_followup_follow_2014_timing",
+            "tests/test_statblocks.py::"
+            "test_ancient_blue_dragon_standard_actions_are_structured",
+            "SagaSmith-dnd-mcp/tests/test_dragon_standard_actions_mcp.py",
+        ),
+        "rulebook:mm2014/page-91/ancient-blue-dragon#legendary-actions",
     ),
     CoreBoundary(
         "dnd5e.core.activity.recharge",

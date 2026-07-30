@@ -2194,7 +2194,7 @@ def area_save_damage_spec(
     sheet: dict[str, Any],
     activity_id: str,
 ) -> dict[str, Any] | None:
-    """Return a strict source-derived point-radius save-damage contract."""
+    """Return a strict source-derived area save-damage contract."""
 
     activity = next(
         (
@@ -2211,8 +2211,63 @@ def area_save_damage_spec(
     )
     if not recorded:
         return None
-    if recorded.get("kind") != "visible_point_radius_save_damage":
+    if recorded.get("kind") not in {
+        "visible_point_radius_save_damage",
+        "self_line_save_damage",
+    }:
         raise StatblockImportError("unsupported area saving-throw damage contract")
+    return deepcopy(recorded)
+
+
+def frightful_presence_spec(
+    sheet: dict[str, Any],
+    activity_id: str,
+) -> dict[str, Any] | None:
+    """Return the exact standard Frightful Presence contract."""
+
+    activity = next(
+        (
+            item
+            for item in dict(sheet.get("content") or {}).get("activities", [])
+            if str(item.get("id") or "") == activity_id
+        ),
+        None,
+    )
+    if activity is None:
+        return None
+    recorded = dict(
+        dict(activity.get("choices") or {}).get("frightful_presence") or {}
+    )
+    if not recorded:
+        return None
+    if recorded.get("kind") != "frightful_presence_2014":
+        raise StatblockImportError("unsupported Frightful Presence contract")
+    return deepcopy(recorded)
+
+
+def legendary_action_spec(
+    sheet: dict[str, Any],
+    activity_id: str,
+) -> dict[str, Any] | None:
+    """Return one exact standard legendary-action option contract."""
+
+    activity = next(
+        (
+            item
+            for item in dict(sheet.get("content") or {}).get("activities", [])
+            if str(item.get("id") or "") == activity_id
+        ),
+        None,
+    )
+    if activity is None:
+        return None
+    recorded = dict(
+        dict(activity.get("choices") or {}).get("legendary_action") or {}
+    )
+    if not recorded:
+        return None
+    if recorded.get("kind") != "legendary_action_2014":
+        raise StatblockImportError("unsupported legendary-action contract")
     return deepcopy(recorded)
 
 
@@ -2270,6 +2325,245 @@ def _compile_area_save_damage(description: str) -> dict[str, Any] | None:
         "half_on_success": True,
         "save_source_kind": "magical_effect",
         "source_excerpt": source_excerpt,
+    }
+
+
+def _compile_self_line_save_damage(description: str) -> dict[str, Any] | None:
+    """Compile the standard breath-weapon line/save/half-damage grammar."""
+
+    source_excerpt = " ".join(str(description or "").split())
+    match = re.fullmatch(
+        (
+            r".+?\b(?:in|into) a (?P<length>\d+)-foot line that is "
+            r"(?P<width>\d+) feet wide\. Each creature in that line must make "
+            r"a DC (?P<dc>\d+) "
+            r"(?P<ability>Strength|Dexterity|Constitution|Intelligence|Wisdom|Charisma) "
+            r"saving throw, taking (?P<average>\d+) "
+            r"\((?P<damage>\d+d\d+(?:\s*[+\-]\s*\d+)?)\) "
+            r"(?P<damage_type>[A-Za-z]+) damage on a failed save, or half as "
+            r"much damage on a successful one\."
+        ),
+        source_excerpt,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    damage_type = match.group("damage_type").casefold()
+    if damage_type not in DAMAGE_TYPES:
+        return None
+    length = int(match.group("length"))
+    width = int(match.group("width"))
+    save_dc = int(match.group("dc"))
+    average = int(match.group("average"))
+    if (
+        not 1 <= length <= 5_000
+        or not 1 <= width <= 1_000
+        or not 1 <= save_dc <= 40
+        or average < 1
+    ):
+        return None
+    return {
+        "kind": "self_line_save_damage",
+        "origin": {"kind": "self"},
+        "area": {
+            "shape": "line",
+            "length_ft": length,
+            "width_ft": width,
+        },
+        "targets": "each_creature",
+        "save_ability": match.group("ability").casefold(),
+        "save_dc": save_dc,
+        "damage_formula": match.group("damage").replace(" ", "").casefold(),
+        "average_damage": average,
+        "damage_type": damage_type,
+        "half_on_success": True,
+        "save_source_kind": "nonmagical_effect",
+        "source_excerpt": source_excerpt,
+    }
+
+
+def _compile_frightful_presence(description: str) -> dict[str, Any] | None:
+    """Compile the 2014 dragon Frightful Presence action."""
+
+    source_excerpt = " ".join(str(description or "").split())
+    match = re.fullmatch(
+        (
+            r"Each creature of the [A-Za-z][A-Za-z '\-]*'s choice that is within "
+            r"(?P<range>\d+) feet of the [A-Za-z][A-Za-z '\-]* and aware of it "
+            r"must succeed on a DC (?P<dc>\d+) Wisdom saving throw or become "
+            r"frightened for (?P<duration>\d+) minute(?:s)?\. A creature can "
+            r"repeat the saving throw at the end of each of its turns, ending "
+            r"the effect on itself on a success\. If a creature's saving throw "
+            r"is successful or the effect ends for it, the creature is immune "
+            r"to the [A-Za-z][A-Za-z '\-]*'s Frightful Presence for the next "
+            r"(?P<immunity>\d+) hours\."
+        ),
+        source_excerpt,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    range_ft = int(match.group("range"))
+    save_dc = int(match.group("dc"))
+    duration_minutes = int(match.group("duration"))
+    immunity_hours = int(match.group("immunity"))
+    if (
+        not 1 <= range_ft <= 5_000
+        or not 1 <= save_dc <= 40
+        or not 1 <= duration_minutes <= 1_440
+        or not 1 <= immunity_hours <= 24 * 365
+    ):
+        return None
+    return {
+        "kind": "frightful_presence_2014",
+        "range_ft": range_ft,
+        "targets": "source_choice",
+        "requires_awareness": True,
+        "save_ability": "wisdom",
+        "save_dc": save_dc,
+        "save_source_kind": "nonmagical_effect",
+        "condition": "frightened",
+        "duration": {"period": "minute", "remaining": duration_minutes},
+        "repeat_save_timing": "turn_end",
+        "ends_on_repeat_save_success": True,
+        "immunity_on_success_or_end": {
+            "period": "hour",
+            "remaining": immunity_hours,
+            "source_scoped": True,
+        },
+        "source_excerpt": source_excerpt,
+    }
+
+
+def _legendary_action_pool(markdown: str) -> dict[str, Any] | None:
+    """Recover the standard 2014 legendary-action pool and timing text."""
+
+    normalized = " ".join(_base_statblock_markdown(markdown).split())
+    match = re.search(
+        (
+            r"The [A-Za-z][A-Za-z '\-]* can take (?P<count>\d+) legendary "
+            r"actions, choosing from the options below\. Only one legendary "
+            r"action option can be used at a time and only at the end of "
+            r"another creature's turn\s*\. The [A-Za-z][A-Za-z '\-]* regains "
+            r"spent legendary actions at the start of its turn\."
+        ),
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    maximum = int(match.group("count"))
+    if not 1 <= maximum <= 20:
+        return None
+    return {
+        "kind": "legendary_action_pool_2014",
+        "maximum": maximum,
+        "one_option_per_trigger": True,
+        "trigger": "end_of_another_creature_turn",
+        "recovers_on": "source_turn_start",
+        "source_excerpt": match.group(0),
+    }
+
+
+def _compile_legendary_action(
+    entry_name: str,
+    description: str,
+    *,
+    pool: dict[str, Any],
+    weapons: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Compile standard check, weapon, and wing legendary-action options."""
+
+    cost_match = re.search(
+        r"\(\s*Costs?\s+(?P<cost>\d+)\s+Actions?\s*\)",
+        entry_name,
+        flags=re.IGNORECASE,
+    )
+    cost = int(cost_match.group("cost")) if cost_match else 1
+    if not 1 <= cost <= int(pool["maximum"]):
+        return None
+    normalized = " ".join(description.split())
+    effect: dict[str, Any] | None = None
+    check = re.fullmatch(
+        r"The [A-Za-z][A-Za-z '\-]* makes a "
+        r"(?P<ability>Strength|Dexterity|Constitution|Intelligence|Wisdom|Charisma) "
+        r"\((?P<skill>[A-Za-z ]+)\) check\.",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if check is not None:
+        skill = _SKILL_NAMES.get(check.group("skill").strip().casefold())
+        if skill is not None:
+            effect = {
+                "kind": "skill_check",
+                "ability": check.group("ability").casefold(),
+                "skill": skill,
+            }
+    weapon_match = re.fullmatch(
+        r"The [A-Za-z][A-Za-z '\-]* makes an? "
+        r"(?P<weapon>[A-Za-z][A-Za-z '\-]*) attack\.",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if weapon_match is not None:
+        weapon_name = weapon_match.group("weapon").strip().casefold()
+        matches = [
+            item
+            for item in weapons
+            if str(item.get("name") or "").strip().casefold() == weapon_name
+        ]
+        if len(matches) == 1:
+            effect = {
+                "kind": "weapon_attack",
+                "weapon_id": str(matches[0]["id"]),
+                "attack_mode": str(
+                    dict(matches[0].get("mechanics") or {}).get(
+                        "attack_type"
+                    )
+                    or "melee"
+                ),
+            }
+    wing = re.fullmatch(
+        (
+            r"The [A-Za-z][A-Za-z '\-]* beats its wings\. Each creature within "
+            r"(?P<radius>\d+) feet of the [A-Za-z][A-Za-z '\-]* must succeed "
+            r"on a DC (?P<dc>\d+) Dexterity saving throw or take "
+            r"(?P<average>\d+) \((?P<damage>\d+d\d+(?:\s*[+\-]\s*\d+)?)\) "
+            r"(?P<damage_type>[A-Za-z]+) damage and be knocked prone\. The "
+            r"[A-Za-z][A-Za-z '\-]* can then fly up to half its flying speed\s*\."
+        ),
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if wing is not None and wing.group("damage_type").casefold() in DAMAGE_TYPES:
+        effect = {
+            "kind": "wing_attack_2014",
+            "area": {
+                "shape": "self_radius",
+                "radius_ft": int(wing.group("radius")),
+                "targets": "each_other_creature",
+            },
+            "save_ability": "dexterity",
+            "save_dc": int(wing.group("dc")),
+            "save_source_kind": "nonmagical_effect",
+            "damage_formula": wing.group("damage").replace(" ", "").casefold(),
+            "average_damage": int(wing.group("average")),
+            "damage_type": wing.group("damage_type").casefold(),
+            "damage_on_success": "none",
+            "condition_on_failure": "prone",
+            "movement_after": {
+                "mode": "fly",
+                "maximum": "half_fly_speed",
+            },
+        }
+    if effect is None:
+        return None
+    return {
+        "kind": "legendary_action_2014",
+        "pool": deepcopy(pool),
+        "cost": cost,
+        "effect": effect,
+        "source_excerpt": normalized,
     }
 
 
@@ -2702,6 +2996,7 @@ def parse_2014_statblock(
     unresolved_multiattacks: set[str] = set()
     warnings: list[str] = []
     normalization_notes: list[str] = []
+    legendary_pool = _legendary_action_pool(markdown)
     attack_marker_pattern = re.compile(
         r"(?i)\b(?:Melee|Ranged|Melee or Ranged)\s+"
         r"(?:Weapon|Spell)\s+Attack:\*?"
@@ -2951,11 +3246,12 @@ def parse_2014_statblock(
                 )
             entry["activation"]["trigger"] = "hit by a melee attack"
             entry["choices"] = {"reaction_defense": reaction_defense}
-        area_save_damage = (
-            _compile_area_save_damage(description)
-            if activation == "action"
-            else None
-        )
+        area_save_damage = None
+        if activation == "action":
+            area_save_damage = (
+                _compile_area_save_damage(description)
+                or _compile_self_line_save_damage(description)
+            )
         if area_save_damage is not None:
             choices = dict(entry.get("choices") or {})
             choices["area_save_damage"] = area_save_damage
@@ -2981,10 +3277,49 @@ def parse_2014_statblock(
                     ),
                 }
             )
+        frightful_presence = (
+            _compile_frightful_presence(description)
+            if activation == "action"
+            else None
+        )
+        if frightful_presence is not None:
+            choices = dict(entry.get("choices") or {})
+            choices["frightful_presence"] = frightful_presence
+            entry["choices"] = choices
+            entry["mechanic_refs"] = sorted(
+                {
+                    *list(entry.get("mechanic_refs") or []),
+                    "dnd5e.core.activity.frightful_presence",
+                }
+            )
+        legendary_action = (
+            _compile_legendary_action(
+                entry_name,
+                description,
+                pool=legendary_pool,
+                weapons=weapons,
+            )
+            if activation == "special" and legendary_pool is not None
+            else None
+        )
+        if legendary_action is not None:
+            entry["activation"]["cost"] = int(legendary_action["cost"])
+            entry["activation"]["trigger"] = "end of another creature's turn"
+            choices = dict(entry.get("choices") or {})
+            choices["legendary_action"] = legendary_action
+            entry["choices"] = choices
+            entry["mechanic_refs"] = sorted(
+                {
+                    *list(entry.get("mechanic_refs") or []),
+                    "dnd5e.core.activity.legendary_action",
+                }
+            )
         if (
             source_trait is None
             and reaction_defense is None
             and area_save_damage is None
+            and frightful_presence is None
+            and legendary_action is None
         ):
             entry["choices"] = {
                 "manual_ruling": {
@@ -3002,6 +3337,8 @@ def parse_2014_statblock(
             source_trait is None
             and reaction_defense is None
             and area_save_damage is None
+            and frightful_presence is None
+            and legendary_action is None
         ):
             warnings.append(
                 f"{entry_name}: Multiattack composition requires a DM ruling"

@@ -124,6 +124,14 @@ EFFECT_PERIODS = REST_TYPES | {
 # Compatibility names retained for callers that imported these from the card schema.
 EFFECT_VISIBILITY_SCOPES = GAMEPLAY_VISIBILITY_SCOPES
 PLAYER_EFFECT_VISIBILITY_SCOPES = PLAYER_GAMEPLAY_VISIBILITY_SCOPES
+ENGINE_SETTLED_NON_AC_EFFECT_PATHS = {
+    "combat.hp.maximum_multiplier",
+    "combat.hp.current_multiplier_on_apply",
+    "combat.hp.excess_on_end",
+    "combat.melee_reach.bonus_ft",
+    "rolls.weapon_damage.dice_multiplier",
+    "traits.size",
+}
 
 STANDARD_WEAPON_MATERIALS = {
     "club": ["wood"],
@@ -1975,6 +1983,51 @@ def _normalize_effect(value: Any, field: str) -> dict[str, Any]:
                 "value": item.get("value"),
             }
         )
+    for change in changes:
+        path = change["path"]
+        mode = change["mode"]
+        change_value = change["value"]
+        if path in {
+            "combat.hp.maximum_multiplier",
+            "combat.hp.current_multiplier_on_apply",
+            "rolls.weapon_damage.dice_multiplier",
+        } and (
+            mode != "multiply"
+            or isinstance(change_value, bool)
+            or not isinstance(change_value, int)
+            or change_value < 1
+        ):
+            raise ValueError(f"{field} {path} requires a positive integer multiplier")
+        if path == "combat.melee_reach.bonus_ft" and (
+            mode != "add"
+            or isinstance(change_value, bool)
+            or not isinstance(change_value, int)
+            or change_value < 0
+        ):
+            raise ValueError(f"{field} {path} requires a non-negative integer bonus")
+        if path == "traits.size" and (
+            mode != "override"
+            or not isinstance(change_value, str)
+            or change_value.casefold()
+            not in {"tiny", "small", "medium", "large", "huge", "gargantuan"}
+        ):
+            raise ValueError(f"{field} traits.size requires a supported size override")
+        if re.fullmatch(r"abilities\.([a-z_]+)\.score", path) and (
+            mode not in {"override", "minimum"}
+            or isinstance(change_value, bool)
+            or not isinstance(change_value, int)
+            or not 0 <= change_value <= 30
+        ):
+            raise ValueError(
+                f"{field} ability score effects require an override or minimum "
+                "between 0 and 30"
+            )
+        if path == "combat.hp.excess_on_end" and (
+            mode != "set" or change_value != "temporary_hit_points"
+        ):
+            raise ValueError(
+                f"{field} combat.hp.excess_on_end supports temporary_hit_points only"
+            )
     normalized = {
         "id": _text(effect.get("id"), f"{field}.id", default=_uuid(), maximum=100),
         "name": _text(effect.get("name"), f"{field}.name", maximum=300),
@@ -2223,21 +2276,11 @@ def validate_character_sheet(
     _reject_unknown(hp, "sheet.combat.hp", {"value", "max", "temp"})
     hp_max = _integer(hp["max"], "sheet.combat.hp.max", minimum=1)
     hp_value = _integer(hp["value"], "sheet.combat.hp.value", minimum=0)
-    if hp_value > hp_max:
-        raise ValueError("sheet.combat.hp.value cannot exceed max")
     exhaustion = _integer(
         combat["exhaustion"],
         "sheet.combat.exhaustion",
         minimum=0,
         maximum=6,
-    )
-    hp_value = min(
-        hp_value,
-        effective_hit_point_maximum_value(
-            edition=edition,
-            base_maximum=hp_max,
-            exhaustion=exhaustion,
-        ),
     )
     ac = _object(combat["ac"], "sheet.combat.ac")
     _reject_unknown(ac, "sheet.combat.ac", {"base", "override"})
@@ -2984,6 +3027,23 @@ def validate_character_sheet(
     ]
     if len(active_concentration) > 1:
         raise ValueError("a character can have only one active concentration effect")
+    hp_maximum_multiplier = 1
+    for effect in effects:
+        if not effect["active"]:
+            continue
+        for change in effect["changes"]:
+            if change["path"] == "combat.hp.maximum_multiplier":
+                hp_maximum_multiplier *= int(change["value"])
+    if hp_value > hp_max * hp_maximum_multiplier:
+        raise ValueError("sheet.combat.hp.value cannot exceed effective max")
+    hp_value = min(
+        hp_value,
+        effective_hit_point_maximum_value(
+            edition=edition,
+            base_maximum=hp_max * hp_maximum_multiplier,
+            exhaustion=exhaustion,
+        ),
+    )
     for effect in effects:
         source_spell_id = effect["source_spell_id"]
         if (
@@ -3704,11 +3764,13 @@ def _derive_armor_class(
                 continue
             if (
                 re.fullmatch(r"abilities\.[a-z_]+\.score", change["path"])
-                and change["mode"] == "override"
+                and change["mode"] in {"override", "minimum"}
                 and not isinstance(change["value"], bool)
                 and isinstance(change["value"], int)
                 and 0 <= change["value"] <= 30
             ):
+                continue
+            if change["path"] in ENGINE_SETTLED_NON_AC_EFFECT_PATHS:
                 continue
             if change["path"] in {
                 "combat.ac.unarmored_base",
@@ -3804,7 +3866,16 @@ def _weapon_attacks(
     ability_modifiers: dict[str, int],
     proficiency: int,
     spell_ability: str | None,
+    active_effects: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
+    melee_reach_bonus = 0
+    weapon_dice_multiplier = 1
+    for effect in active_effects or []:
+        for change in effect["changes"]:
+            if change["path"] == "combat.melee_reach.bonus_ft":
+                melee_reach_bonus += int(change["value"])
+            elif change["path"] == "rolls.weapon_damage.dice_multiplier":
+                weapon_dice_multiplier *= int(change["value"])
     attacks = []
     for item in inventory["items"]:
         if item["kind"] != "weapon" or item.get("condition") == "destroyed" or not (
@@ -3829,7 +3900,10 @@ def _weapon_attacks(
         if damage_bonus is None:
             damage_bonus = modifier + magic_bonus
         damage_bonus -= int(mechanics.get("corrosion_penalty", 0) or 0)
-        damage_formula = mechanics["damage_formula"]
+        damage_formula = _multiply_weapon_damage_dice(
+            mechanics["damage_formula"],
+            weapon_dice_multiplier,
+        )
         damage_expression = damage_formula
         if damage_formula and damage_bonus:
             damage_expression = (
@@ -3841,7 +3915,11 @@ def _weapon_attacks(
                 "name": item["name"],
                 "equipped_slot": item["equipped_slot"],
                 "attack_type": mechanics["attack_type"],
-                "reach_ft": mechanics.get("reach_ft", 5),
+                "reach_ft": (
+                    int(mechanics.get("reach_ft", 5) or 5) + melee_reach_bonus
+                    if mechanics["attack_type"] == "melee"
+                    else int(mechanics.get("reach_ft", 5) or 5)
+                ),
                 "attack_ability": ability,
                 "attack_bonus": attack_bonus,
                 "damage_formula": damage_formula,
@@ -3900,7 +3978,10 @@ def _weapon_attacks(
                         or bool(mechanics["on_hit_resolution"])
                     )
                 ),
-                "versatile_damage_formula": mechanics["versatile_damage_formula"],
+                "versatile_damage_formula": _multiply_weapon_damage_dice(
+                    mechanics["versatile_damage_formula"],
+                    weapon_dice_multiplier,
+                ),
                 "properties": mechanics["properties"],
                 "materials": mechanics["materials"],
                 "corrosion_penalty": int(
@@ -3922,15 +4003,49 @@ def _weapon_attacks(
     return attacks
 
 
+def _multiply_weapon_damage_dice(formula: str, multiplier: int) -> str:
+    normalized = str(formula or "")
+    if not normalized or multiplier == 1:
+        return normalized
+    match = re.fullmatch(r"(\d+)d(\d+)", normalized)
+    if match is None:
+        raise ValueError("weapon damage dice multiplier requires a pure dice formula")
+    return f"{int(match.group(1)) * multiplier}d{match.group(2)}"
+
+
 def effective_hit_point_maximum(sheet: dict[str, Any]) -> int:
     """Return the rules-effective maximum without overwriting the recorded base maximum."""
     combat = dict(sheet.get("combat") or {})
     hit_points = dict(combat.get("hp") or {})
+    maximum_multiplier = 1
+    for effect in sheet.get("effects", []):
+        if not isinstance(effect, dict) or not effect.get("active", False):
+            continue
+        for change in effect.get("changes", []):
+            if (
+                isinstance(change, dict)
+                and change.get("path") == "combat.hp.maximum_multiplier"
+            ):
+                maximum_multiplier *= int(change["value"])
     return effective_hit_point_maximum_value(
         edition=str(sheet.get("edition") or DEFAULT_CHARACTER_EDITION),
-        base_maximum=int(hit_points.get("max", 0) or 0),
+        base_maximum=int(hit_points.get("max", 0) or 0) * maximum_multiplier,
         exhaustion=int(combat.get("exhaustion", 0) or 0),
     )
+
+
+def effective_size(sheet: dict[str, Any]) -> str:
+    """Return creature size after active source-owned override effects."""
+
+    value = validate_character_sheet(sheet)
+    size = str(value["traits"]["size"]).casefold()
+    for effect in value["effects"]:
+        if not effect["active"]:
+            continue
+        for change in effect["changes"]:
+            if change["path"] == "traits.size":
+                size = str(change["value"]).casefold()
+    return size
 
 
 def effective_ability_scores(sheet: dict[str, Any]) -> dict[str, int]:
@@ -3949,13 +4064,17 @@ def effective_ability_scores(sheet: dict[str, Any]) -> dict[str, int]:
             score = change["value"]
             if (
                 ability not in scores
-                or change["mode"] != "override"
+                or change["mode"] not in {"override", "minimum"}
                 or isinstance(score, bool)
                 or not isinstance(score, int)
                 or not 0 <= score <= 30
             ):
-                raise ValueError("active ability-score override effect is malformed")
-            scores[ability] = score
+                raise ValueError("active ability-score effect is malformed")
+            scores[ability] = (
+                score
+                if change["mode"] == "override"
+                else max(scores[ability], score)
+            )
     return scores
 
 
@@ -4044,6 +4163,7 @@ def derive_character_sheet(
         equipped_armor
         and dict(equipped_armor.get("mechanics") or {}).get("stealth_disadvantage", False)
     )
+    effective_actor_size = effective_size(value)
     size_multiplier = {
         "tiny": 0.5,
         "small": 1,
@@ -4051,7 +4171,7 @@ def derive_character_sheet(
         "large": 2,
         "huge": 4,
         "gargantuan": 8,
-    }.get(value["traits"]["size"].lower(), 1)
+    }.get(effective_actor_size, 1)
     strength = ability_scores["strength"]
     maximum_weight = strength * 240 * size_multiplier
     encumbrance = inventory["encumbrance"]
@@ -4103,6 +4223,7 @@ def derive_character_sheet(
     effective_hp_max = effective_hit_point_maximum(value)
     derived = {
         "proficiency_bonus": proficiency,
+        "size": effective_actor_size,
         "ability_scores": ability_scores,
         "ability_modifiers": ability_modifiers,
         "saving_throws": saves,
@@ -4155,7 +4276,11 @@ def derive_character_sheet(
             "wallet_value_cp": wallet_cp,
             "encumbrance": encumbrance_summary,
             "weapon_attacks": _weapon_attacks(
-                inventory, ability_modifiers, proficiency, spell_ability
+                inventory,
+                ability_modifiers,
+                proficiency,
+                spell_ability,
+                active_effects,
             ),
         },
         "active_effects": [

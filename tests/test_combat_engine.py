@@ -36,6 +36,7 @@ from sagasmith_dnd.combat_engine import (
     force_move_directly_toward,
     pay_activity_activation,
     pay_attack_action,
+    pay_legendary_action,
     pay_multiattack_activity,
     preflight_attack,
     preflight_spell_attack,
@@ -139,6 +140,32 @@ def test_generic_save_damage_shares_one_roll_across_targets() -> None:
     ]
     assert settled["sheets"]["agile"]["combat"]["hp"]["value"] == 17
     assert settled["sheets"]["clumsy"]["combat"]["hp"]["value"] == 13
+
+
+def test_generic_save_damage_applies_audited_per_target_save_bonuses() -> None:
+    covered = _actor("covered", hp=20)
+    open_target = _actor("open", hp=20)
+
+    settled = resolve_save_damage_to_sheets(
+        [covered, open_target],
+        save_ability="dexterity",
+        save_dc=10,
+        damage_expression="2d6",
+        damage_type="fire",
+        half_on_success=True,
+        source="breath:line",
+        save_bonuses_by_actor_id={"covered": 5, "open": 0},
+        rng=_SequenceRng(3, 4, 5, 9),
+    )
+
+    assert [item["save_bonus"] for item in settled["result"]["targets"]] == [
+        5,
+        0,
+    ]
+    assert [item["success"] for item in settled["result"]["targets"]] == [
+        True,
+        False,
+    ]
 
 
 def test_magic_resistance_requires_source_kind_and_applies_advantage() -> None:
@@ -5516,6 +5543,109 @@ def test_activity_activation_pays_only_the_matching_action_economy() -> None:
 
     reacted = pay_activity_activation(paid, actor_id_value="second", activation_type="reaction")
     assert reacted["combatants"][1]["turn_budget"]["reaction"] == 0
+
+
+def test_legendary_action_pool_and_weapon_followup_follow_2014_timing() -> None:
+    hero = _actor("hero")
+    hero["initiative"] = 20
+    dragon = _actor("dragon")
+    dragon["initiative"] = 10
+    dragon["sheet"]["inventory"]["items"].append(
+        {
+            "id": "tail",
+            "name": "Tail",
+            "kind": "weapon",
+            "mechanics": {
+                "attack_type": "melee",
+                "attack_ability": "strength",
+                "damage_formula": "2d8+9",
+                "damage_type": "bludgeoning",
+                "attack_bonus_override": 16,
+                "reach_ft": 20,
+            },
+        }
+    )
+    dragon["derived"] = derive_character_sheet(dragon["sheet"])
+    encounter = start_encounter([hero, dragon])
+    spec = {
+        "kind": "legendary_action_2014",
+        "pool": {
+            "kind": "legendary_action_pool_2014",
+            "maximum": 3,
+            "one_option_per_trigger": True,
+            "trigger": "end_of_another_creature_turn",
+            "recovers_on": "source_turn_start",
+        },
+        "cost": 1,
+        "effect": {
+            "kind": "weapon_attack",
+            "weapon_id": "tail",
+            "attack_mode": "melee",
+        },
+    }
+
+    paid, payment = pay_legendary_action(
+        encounter,
+        actor_id_value="dragon",
+        activity_id="tail-attack-special",
+        spec=spec,
+    )
+    assert payment["remaining"] == 2
+    ended_hero = current_combatant(paid)
+    assert ended_hero is not None
+    assert ended_hero["turn_flags"]["turn_end_committed"] is True
+    assert ended_hero["turn_budget"]["main_action"] == 0
+    assert ended_hero["turn_budget"]["bonus_action"] == 0
+    assert ended_hero["turn_budget"]["movement"] == 0
+    with pytest.raises(CombatEngineError, match="must be resolved"):
+        end_turn(paid, actor_id_value="hero")
+    attacked, attack_payment = pay_attack_action(
+        paid,
+        dragon,
+        weapon_id="tail",
+        attack_mode="melee",
+    )
+    assert attack_payment["kind"] == "legendary_action_attack"
+    with pytest.raises(CombatEngineError, match="Only one|only one"):
+        pay_legendary_action(
+            attacked,
+            actor_id_value="dragon",
+            activity_id="tail-attack-special",
+            spec=spec,
+        )
+
+    dragon_turn = end_turn(attacked, actor_id_value="hero")
+    current = current_combatant(dragon_turn)
+    assert current is not None and current["actor_id"] == "dragon"
+    assert current["legendary_actions"]["remaining"] == 3
+
+
+def test_surprised_creature_cannot_take_legendary_actions_before_first_turn() -> None:
+    hero = _actor("hero")
+    hero["initiative"] = 20
+    dragon = _actor("dragon")
+    dragon.update(initiative=10, surprised=True)
+    encounter = start_encounter([hero, dragon], ruleset="2014")
+    spec = {
+        "kind": "legendary_action_2014",
+        "pool": {
+            "kind": "legendary_action_pool_2014",
+            "maximum": 3,
+            "one_option_per_trigger": True,
+            "trigger": "end_of_another_creature_turn",
+            "recovers_on": "source_turn_start",
+        },
+        "cost": 1,
+        "effect": {"kind": "skill_check"},
+    }
+
+    with pytest.raises(CombatEngineError, match="surprised creature"):
+        pay_legendary_action(
+            encounter,
+            actor_id_value="dragon",
+            activity_id="detect-special",
+            spec=spec,
+        )
 
 
 def test_incapacitated_actor_cannot_pay_reaction_activity() -> None:
