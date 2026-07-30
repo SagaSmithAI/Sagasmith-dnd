@@ -59,6 +59,8 @@ EDITION_BOUNDARIES = {
         "dnd5e.core.spell.pact_magic",
         "dnd5e.core.progression.hp_hit_dice",
         "dnd5e.core.progression.spellcasting",
+        "dnd5e.core.save.magic_resistance",
+        "dnd5e.core.save.evasion",
     },
     "2024": set(),
 }

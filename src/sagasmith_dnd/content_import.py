@@ -592,7 +592,10 @@ def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
             ("", "## Traits", "", _mark_statblock_entries(_normalize_statblock_ocr(traits)))
         )
     for section, parts in section_parts.items():
-        content = _trim_trailing_statblock_lore(" ".join(parts).strip())
+        content = _trim_trailing_statblock_lore(
+            " ".join(parts).strip(),
+            creature_name=name,
+        )
         if content:
             rendered.extend(
                 (
@@ -605,7 +608,11 @@ def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
     return "\n".join(rendered).strip() + "\n"
 
 
-def _trim_trailing_statblock_lore(content: str) -> str:
+def _trim_trailing_statblock_lore(
+    content: str,
+    *,
+    creature_name: str = "",
+) -> str:
     """Exclude adjacent creature lore from the final attack entry.
 
     Module appendices sometimes place general creature lore immediately after
@@ -615,6 +622,20 @@ def _trim_trailing_statblock_lore(content: str) -> str:
     restrained" therefore remain part of the action.
     """
 
+    canonical_name = " ".join(str(creature_name).split())
+    plural_name = (
+        rf"{re.escape(canonical_name)}(?:s|es)"
+        if canonical_name
+        else r"(?!x)x"
+    )
+    named_lore_boundary = re.search(
+        rf"(?is)\bdamage\.\s+(?={plural_name}\s+(?:are|were|have|often|typically)\b)",
+        content,
+    )
+    if named_lore_boundary is not None and re.search(
+        r"(?i)\bHit:\s*", content[: named_lore_boundary.start()]
+    ) is not None:
+        return content[: named_lore_boundary.start() + len("damage.")].rstrip()
     boundary = re.search(
         r"(?is)\bdamage\.\s+"
         r"(?=[A-Z][A-Za-z'’/-]*(?:\s+\([^.\n]{1,80}\))?"

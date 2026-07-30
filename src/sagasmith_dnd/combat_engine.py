@@ -85,6 +85,47 @@ def damage_amount_after_reduction(amount: int, outcome: str) -> int:
     return amount
 
 
+def standard_save_damage_reduction(
+    actor: dict[str, Any],
+    *,
+    ability: str,
+    success: bool,
+    ordinary_successful_save: str,
+    rules: ResolutionContext | None = None,
+) -> dict[str, Any]:
+    """Apply source-bound standard traits to one save-for-damage outcome."""
+
+    normalized_ability = _long_ability_name(ability)
+    normalized_success = str(ordinary_successful_save).strip().casefold()
+    if normalized_success not in DAMAGE_REDUCTION_OUTCOMES:
+        raise CombatEngineError(
+            "ordinary successful-save damage must be full, half, or none"
+        )
+    reduction = normalized_success if success else "full"
+    boundary_ids: list[str] = []
+    sheet = actor_sheet(actor)
+    evasion = _validated_standard_source_trait(sheet, "evasion")
+    if (
+        evasion is not None
+        and normalized_ability == "dexterity"
+        and normalized_success == "half"
+    ):
+        reduction = (
+            str(evasion["successful_save"])
+            if success
+            else str(evasion["failed_save"])
+        )
+        boundary_ids.append("dnd5e.core.save.evasion")
+    return {
+        "damage_reduction": reduction,
+        "rule_receipts": core_receipts(
+            rules,
+            boundary_ids,
+            "save.damage_reduction",
+        ),
+    }
+
+
 def d20_exhaustion_adjustment(
     *,
     ruleset: str,
@@ -3480,6 +3521,54 @@ def _source_trait(sheet: dict[str, Any], kind: str) -> dict[str, Any] | None:
     )
 
 
+def _validated_standard_source_trait(
+    sheet: dict[str, Any],
+    kind: str,
+) -> dict[str, Any] | None:
+    matches = [
+        dict(dict(feature.get("choices") or {}).get("source_trait") or {})
+        for feature in [
+            *dict(sheet.get("content") or {}).get("features", []),
+            *dict(sheet.get("content") or {}).get("activities", []),
+        ]
+        if isinstance(feature, dict)
+        and dict(dict(feature.get("choices") or {}).get("source_trait") or {}).get(
+            "kind"
+        )
+        == kind
+    ]
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise CombatEngineError(
+            f"actor card has more than one standard {kind.replace('_', ' ').title()} trait"
+        )
+    trait = matches[0]
+    validators = {
+        "magic_resistance": (
+            trait.get("trigger") == "saving_throw"
+            and trait.get("save_source_kinds") == ["spell", "magical_effect"]
+            and trait.get("grants") == "advantage"
+            and trait.get("automatic") is True
+            and bool(str(trait.get("source_excerpt") or "").strip())
+        ),
+        "evasion": (
+            trait.get("trigger") == "dexterity_save_for_half_damage"
+            and trait.get("save_ability") == "dexterity"
+            and trait.get("ordinary_successful_save") == "half"
+            and trait.get("successful_save") == "none"
+            and trait.get("failed_save") == "half"
+            and trait.get("automatic") is True
+            and bool(str(trait.get("source_excerpt") or "").strip())
+        ),
+    }
+    if kind not in validators or not validators[kind]:
+        raise CombatEngineError(
+            f"standard {kind.replace('_', ' ').title()} trait is malformed"
+        )
+    return trait
+
+
 def standard_death_trigger_for_sheet(
     sheet: dict[str, Any],
 ) -> dict[str, Any] | None:
@@ -5727,6 +5816,36 @@ def resolve_actor_check(
     if armor_stealth_disadvantage:
         disadvantage = True
     boundary_ids = []
+    magic_resistance = (
+        _validated_standard_source_trait(sheet, "magic_resistance")
+        if kind == "save"
+        else None
+    )
+    if magic_resistance is not None:
+        save_source_kind = (
+            str(dict(rules.facts).get("save_source_kind") or "")
+            .strip()
+            .casefold()
+            if rules is not None
+            else ""
+        )
+        if not save_source_kind and not advantage:
+            raise NeedsRulingError(
+                "Magic Resistance requires the saving throw's source kind",
+                missing=("save_source_kind",),
+                ruling_kind="agent_dm_adjudication",
+            )
+        if save_source_kind not in {
+            "spell",
+            "magical_effect",
+            "nonmagical_effect",
+        }:
+            raise CombatEngineError(
+                "save_source_kind must be spell, magical_effect, or nonmagical_effect"
+            )
+        if save_source_kind in set(magic_resistance["save_source_kinds"]):
+            advantage = True
+            boundary_ids.append("dnd5e.core.save.magic_resistance")
     keen_perception_traits = [
         dict(source_trait)
         for feature in dict(sheet.get("content") or {}).get("features", [])
@@ -6063,13 +6182,14 @@ def resolve_save_damage_to_sheets(
             rules=rules,
             rng=rng,
         )
-        reduction = (
-            "half"
-            if saved["success"] and half_on_success
-            else "none"
-            if saved["success"]
-            else "full"
+        reduction_settlement = standard_save_damage_reduction(
+            target_actor,
+            ability=ability,
+            success=bool(saved["success"]),
+            ordinary_successful_save="half" if half_on_success else "none",
+            rules=rules,
         )
+        reduction = str(reduction_settlement["damage_reduction"])
         damage_amount = damage_amount_after_reduction(
             int(damage_roll["total"]),
             reduction,
@@ -6101,6 +6221,9 @@ def resolve_save_damage_to_sheets(
                 "save": saved,
                 "success": bool(saved["success"]),
                 "damage_reduction": reduction,
+                "rule_receipts": list(
+                    reduction_settlement.get("rule_receipts") or []
+                ),
                 "damage_amount": damage_amount,
                 "damage": damaged_result,
             }

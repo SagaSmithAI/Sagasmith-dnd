@@ -140,6 +140,140 @@ def test_generic_save_damage_shares_one_roll_across_targets() -> None:
     assert settled["sheets"]["clumsy"]["combat"]["hp"]["value"] == 13
 
 
+def test_magic_resistance_requires_source_kind_and_applies_advantage() -> None:
+    actor = _actor("archmage")
+    actor["sheet"]["content"]["features"].append(
+        {
+            "id": "magic-resistance-passive",
+            "name": "Magic Resistance",
+            "choices": {
+                "source_trait": {
+                    "kind": "magic_resistance",
+                    "trigger": "saving_throw",
+                    "save_source_kinds": ["spell", "magical_effect"],
+                    "grants": "advantage",
+                    "automatic": True,
+                    "source_excerpt": (
+                        "The archmage has advantage on saving throws against "
+                        "spells and other magical effects."
+                    ),
+                }
+            },
+        }
+    )
+    actor["derived"] = derive_character_sheet(actor["sheet"])
+    effective = {
+        "edition": "2014",
+        "fingerprint": "",
+        "lock": [],
+        "mechanics": [],
+    }
+
+    with pytest.raises(NeedsRulingError, match="source kind"):
+        resolve_actor_check(
+            actor,
+            kind="save",
+            ability="wisdom",
+            dc=15,
+            rules=resolution_context(effective),
+            rng=_SequenceRng(20),
+        )
+
+    magical = resolve_actor_check(
+        actor,
+        kind="save",
+        ability="wisdom",
+        dc=15,
+        rules=resolution_context(
+            effective,
+            facts={"save_source_kind": "spell"},
+        ),
+        rng=_SequenceRng(3, 17),
+    )
+    assert magical["rolls"] == [3, 17]
+    assert magical["roll_mode"] == "advantage"
+    assert magical["success"] is True
+    assert [
+        receipt["mechanic_id"] for receipt in magical["rule_receipts"]
+    ] == ["dnd5e.core.save.magic_resistance"]
+
+    nonmagical = resolve_actor_check(
+        actor,
+        kind="save",
+        ability="wisdom",
+        dc=15,
+        rules=resolution_context(
+            effective,
+            facts={"save_source_kind": "nonmagical_effect"},
+        ),
+        rng=_SequenceRng(3),
+    )
+    assert nonmagical["rolls"] == [3]
+    assert nonmagical["roll_mode"] == "normal"
+    assert nonmagical["rule_receipts"] == []
+
+
+def test_evasion_rewrites_dexterity_save_for_half_damage() -> None:
+    trait = {
+        "kind": "evasion",
+        "trigger": "dexterity_save_for_half_damage",
+        "save_ability": "dexterity",
+        "ordinary_successful_save": "half",
+        "successful_save": "none",
+        "failed_save": "half",
+        "automatic": True,
+        "source_excerpt": (
+            "If the assassin is subjected to an effect that allows it to make "
+            "a Dexterity saving throw to take only half damage, the assassin "
+            "instead takes no damage if it succeeds on the saving throw, and "
+            "only half damage if it fails."
+        ),
+    }
+    agile = _actor("agile-assassin", hp=20)
+    agile["sheet"]["abilities"]["dexterity"]["score"] = 20
+    agile["sheet"]["content"]["features"].append(
+        {
+            "id": "evasion-passive",
+            "name": "Evasion",
+            "choices": {"source_trait": trait},
+        }
+    )
+    agile["derived"] = derive_character_sheet(agile["sheet"])
+    clumsy = deepcopy(agile)
+    clumsy["id"] = "clumsy-assassin"
+    clumsy["sheet"]["abilities"]["dexterity"]["score"] = 1
+    clumsy["derived"] = derive_character_sheet(clumsy["sheet"])
+    rules = resolution_context(
+        {"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []}
+    )
+
+    settled = resolve_save_damage_to_sheets(
+        [agile, clumsy],
+        save_ability="dexterity",
+        save_dc=10,
+        damage_expression="2d6",
+        damage_type="fire",
+        half_on_success=True,
+        source="spell:fireball",
+        rules=rules,
+        rng=_SequenceRng(3, 4, 10, 1),
+    )
+
+    assert [
+        item["damage_reduction"] for item in settled["result"]["targets"]
+    ] == ["none", "half"]
+    assert [
+        item["damage_amount"] for item in settled["result"]["targets"]
+    ] == [0, 3]
+    assert settled["sheets"]["agile-assassin"]["combat"]["hp"]["value"] == 20
+    assert settled["sheets"]["clumsy-assassin"]["combat"]["hp"]["value"] == 17
+    assert all(
+        [receipt["mechanic_id"] for receipt in item["rule_receipts"]]
+        == ["dnd5e.core.save.evasion"]
+        for item in settled["result"]["targets"]
+    )
+
+
 def test_generic_save_damage_rejects_conflicting_roll_states() -> None:
     with pytest.raises(
         CombatEngineError,

@@ -1,6 +1,7 @@
 import pytest
 
 from sagasmith_dnd.content_import import (
+    _trim_trailing_statblock_lore,
     compiled_artifacts_from_candidates,
     extract_content_candidates,
     module_statblock_review_candidates,
@@ -30,6 +31,26 @@ def test_extracts_review_required_catalog_candidates() -> None:
     assert [item["kind"] for item in candidates] == ["spell", "background"]
     assert all(item["review_status"] == "pending" for item in candidates)
     assert all(item["application_state"] == "catalog_only" for item in candidates)
+
+
+def test_named_statblock_lore_is_trimmed_only_after_a_complete_attack() -> None:
+    action = (
+        "Dagger. Melee or Ranged Weapon Attack: +6 to hit, reach 5 ft. or "
+        "range 20/60 ft., one target. Hit: 4 (1d4 + 2) piercing damage."
+    )
+    content = (
+        action
+        + " Archmages are powerful spellcasters who study throughout their lives."
+    )
+
+    assert (
+        _trim_trailing_statblock_lore(content, creature_name="Archmage")
+        == action
+    )
+    assert _trim_trailing_statblock_lore(
+        "Bite. Hit: 3 piercing damage. The target is poisoned.",
+        creature_name="Archmage",
+    ).endswith("The target is poisoned.")
 
 
 def test_extractor_aggregates_all_chunks_from_one_structural_entry() -> None:

@@ -1176,6 +1176,53 @@ def _keen_perception_source_trait(description: str) -> dict[str, Any] | None:
     }
 
 
+def _magic_resistance_source_trait(description: str) -> dict[str, Any] | None:
+    """Compile the complete standard Magic Resistance saving-throw rule."""
+
+    normalized = " ".join(description.split())
+    if not re.fullmatch(
+        r"The [A-Za-z][A-Za-z '\-]* has advantage on saving throws against "
+        r"spells and other magical effects\.",
+        normalized,
+        flags=re.IGNORECASE,
+    ):
+        return None
+    return {
+        "kind": "magic_resistance",
+        "trigger": "saving_throw",
+        "save_source_kinds": ["spell", "magical_effect"],
+        "grants": "advantage",
+        "automatic": True,
+        "source_excerpt": normalized,
+    }
+
+
+def _evasion_source_trait(description: str) -> dict[str, Any] | None:
+    """Compile the complete 2014 monster Evasion damage settlement."""
+
+    normalized = " ".join(description.split())
+    match = re.fullmatch(
+        r"If the (?P<subject>[A-Za-z][A-Za-z '\-]*) is subjected to an effect "
+        r"that allows it to make a Dexterity saving throw to take only half "
+        r"damage, the (?P=subject) instead takes no damage if it succeeds on "
+        r"the saving throw, and only half damage if it fails\.",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    return {
+        "kind": "evasion",
+        "trigger": "dexterity_save_for_half_damage",
+        "save_ability": "dexterity",
+        "ordinary_successful_save": "half",
+        "successful_save": "none",
+        "failed_save": "half",
+        "automatic": True,
+        "source_excerpt": normalized,
+    }
+
+
 def _aggressive_source_trait(description: str) -> dict[str, Any] | None:
     normalized = " ".join(description.split())
     if not re.fullmatch(
@@ -1526,6 +1573,8 @@ def _source_trait_from_description(description: str) -> dict[str, Any] | None:
             _pack_tactics_source_trait,
             _sunlight_sensitivity_source_trait,
             _keen_perception_source_trait,
+            _magic_resistance_source_trait,
+            _evasion_source_trait,
             _aggressive_source_trait,
             _cunning_action_source_trait,
             _included_weapon_damage_source_trait,
@@ -2468,6 +2517,8 @@ def parse_2014_statblock(
                 "pack_tactics": "attack roll",
                 "sunlight_sensitivity": "attack roll or sight-based Perception check",
                 "keen_perception": "hearing- or sight-based Perception check",
+                "magic_resistance": "saving throw against a spell or magical effect",
+                "evasion": "Dexterity saving throw for half damage",
                 "aggressive": "bonus action on its turn",
                 "cunning_action": "bonus action on its turn",
                 "included_weapon_damage": "weapon hit; included in weapon actions",

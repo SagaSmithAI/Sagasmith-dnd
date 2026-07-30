@@ -1859,6 +1859,57 @@ incapacitated and the commoner doesn't have disadvantage on the attack roll.
     assert parsed.warnings == ()
 
 
+def test_magic_resistance_and_evasion_are_structured_from_exact_text() -> None:
+    source = COMMONER.replace(
+        "###### Actions",
+        """***Magic Resistance.*** The arch mage has advantage on saving throws
+against spells and other magical effects.
+
+***Evasion.*** If the assassin is subjected to an effect that allows it to make
+a Dexterity saving throw to take only half damage, the assassin instead takes
+no damage if it succeeds on the saving throw, and only half damage if it fails.
+
+###### Actions""",
+    )
+
+    parsed = parse_2014_statblock(
+        source,
+        source_key="monster-manual-2014:standard-save-traits",
+    )
+    traits = {
+        item["name"]: item["choices"]["source_trait"]
+        for item in parsed.sheet["content"]["features"]
+    }
+
+    assert traits["Magic Resistance"] == {
+        "kind": "magic_resistance",
+        "trigger": "saving_throw",
+        "save_source_kinds": ["spell", "magical_effect"],
+        "grants": "advantage",
+        "automatic": True,
+        "source_excerpt": (
+            "The arch mage has advantage on saving throws against spells "
+            "and other magical effects."
+        ),
+    }
+    assert traits["Evasion"] == {
+        "kind": "evasion",
+        "trigger": "dexterity_save_for_half_damage",
+        "save_ability": "dexterity",
+        "ordinary_successful_save": "half",
+        "successful_save": "none",
+        "failed_save": "half",
+        "automatic": True,
+        "source_excerpt": (
+            "If the assassin is subjected to an effect that allows it to make "
+            "a Dexterity saving throw to take only half damage, the assassin "
+            "instead takes no damage if it succeeds on the saving throw, and "
+            "only half damage if it fails."
+        ),
+    }
+    assert parsed.warnings == ()
+
+
 def test_source_traits_are_compiled_from_complete_text_not_feature_names() -> None:
     parsed = parse_2014_statblock(
         KOBOLD.replace(

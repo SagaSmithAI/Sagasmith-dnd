@@ -749,6 +749,30 @@ BOUNDARIES = (
         "bundled:srd/restrained",
     ),
     CoreBoundary(
+        "dnd5e.core.save.magic_resistance",
+        ("2014",),
+        "combat_engine.resolve_actor_check",
+        (
+            "tests/test_combat_engine.py::"
+            "test_magic_resistance_requires_source_kind_and_applies_advantage",
+            "tests/test_statblocks.py::"
+            "test_magic_resistance_and_evasion_are_structured_from_exact_text",
+        ),
+        "source:monster-manual-2014:magic-resistance",
+    ),
+    CoreBoundary(
+        "dnd5e.core.save.evasion",
+        ("2014",),
+        "combat_engine.standard_save_damage_reduction",
+        (
+            "tests/test_combat_engine.py::"
+            "test_evasion_rewrites_dexterity_save_for_half_damage",
+            "tests/test_statblocks.py::"
+            "test_magic_resistance_and_evasion_are_structured_from_exact_text",
+        ),
+        "source:monster-manual-2014:evasion",
+    ),
+    CoreBoundary(
         "dnd5e.core.rest.hit_dice",
         ("2014", "2024"),
         "lifecycle.roll_rest_hit_dice|apply_rest",
