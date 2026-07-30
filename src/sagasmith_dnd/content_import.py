@@ -748,9 +748,54 @@ def _normalize_statblock_ocr(content: str) -> str:
 
 
 def _split_statblock_details(content: str) -> tuple[dict[str, str], str]:
+    value_starts = {
+        "Saving Throws": (
+            r"(?:Str|Dex|Con|Int|Wis|Cha)\s*[+\-鈭抅]\s*\d"
+        ),
+        "Skills": r"[A-Za-z][A-Za-z ]{1,40}\s*[+\-鈭抅]\s*\d",
+        "Damage Vulnerabilities": (
+            r"(?:acid|bludgeoning|cold|fire|force|lightning|necrotic|"
+            r"piercing|poison|psychic|radiant|slashing|thunder)\b"
+        ),
+        "Damage Resistances": (
+            r"(?:acid|bludgeoning|cold|fire|force|lightning|necrotic|"
+            r"piercing|poison|psychic|radiant|slashing|thunder)\b"
+        ),
+        "Damage Immunities": (
+            r"(?:acid|bludgeoning|cold|fire|force|lightning|necrotic|"
+            r"piercing|poison|psychic|radiant|slashing|thunder)\b"
+        ),
+        "Condition Immunities": (
+            r"(?:blinded|charmed|deafened|exhaustion|frightened|grappled|"
+            r"incapacitated|invisible|paralyzed|petrified|poisoned|prone|"
+            r"restrained|stunned|unconscious)\b"
+        ),
+        "Senses": (
+            r"(?:blindsight|darkvision|passive\s+Perception|tremorsense|"
+            r"truesight)\b"
+        ),
+        "Languages": (
+            r"(?:[-—]+|all\b|any\b|understands\b|telepathy\b|"
+            r"(?!it\b|the\b|this\b|that\b)[A-Z][A-Za-z' -]{1,40})"
+        ),
+        "Challenge": r"(?:\d+(?:/\d+)?|—|-)(?=\s|$)",
+    }
     matches: list[tuple[int, int, str]] = []
     for label in _STATBLOCK_FIELD_LABELS:
-        match = re.search(rf"(?i)(?<!\w){re.escape(label)}\s+", content)
+        match = next(
+            (
+                candidate
+                for candidate in re.finditer(
+                    rf"(?i)(?<!\w){re.escape(label)}\s+",
+                    content,
+                )
+                if re.match(
+                    rf"(?i){value_starts[label]}",
+                    content[candidate.end() :],
+                )
+            ),
+            None,
+        )
         if match:
             matches.append((match.start(), match.end(), label))
     matches.sort()

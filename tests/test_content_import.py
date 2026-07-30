@@ -371,6 +371,73 @@ def test_text_layout_recovery_scopes_split_guard_without_images() -> None:
         normalize_2014_statblock_candidate("CULT FANATIC", chunks)
 
 
+def test_text_layout_recovery_does_not_turn_trait_saves_into_a_field() -> None:
+    base = ["Appendix B: Nonplayer Characters", "CULTIST"]
+    chunks = [
+        {
+            "id": "cultist-core",
+            "ordinal": 1,
+            "heading_path": base,
+            "content": (
+                "Medium humanoid (any race), any non-good alignment "
+                "Armor Class 12 (leather armor) Hit Points 9 (2d8) "
+                "Speed 30ft."
+            ),
+        },
+        *[
+            {
+                "id": f"cultist-{ability.casefold()}",
+                "ordinal": index + 2,
+                "heading_path": [*base, ability],
+                "content": value,
+            }
+            for index, (ability, value) in enumerate(
+                {
+                    "STR": "11 (+0)",
+                    "DEX": "12 (+1) Skills Deception +2, Religion +2",
+                    "CON": "10 (+0) Senses passive Perception 10",
+                    "INT": "10 (+0)",
+                    "WIS": (
+                        "11 (+0) Languages any one language (usually Common) "
+                        "Challenge 1/8 (25 XP)"
+                    ),
+                    "CHA": (
+                        "10 (+0) Dark Devotion. The cultist has advantage on "
+                        "saving throws against being charmed or frightened ."
+                    ),
+                }.items()
+            )
+        ],
+        {
+            "id": "cultist-actions",
+            "ordinal": 8,
+            "heading_path": [*base, "ACTIONS"],
+            "content": (
+                "Scimitar. Melee Weapon Attack: +3 to hit, reach 5 ft., one "
+                "creature. Hit: 4 (1d6 + 1) slashing damage. Cultists swear "
+                "allegiance to dark powers."
+            ),
+        },
+    ]
+
+    candidate = normalize_2014_statblock_candidate("Cultist", chunks)
+    parsed = parse_2014_statblock(
+        candidate["normalized_content"],
+        source_key="rule-source:monster-manual",
+    )
+    dark_devotion = next(
+        item
+        for item in parsed.sheet["content"]["features"]
+        if item["name"] == "Dark Devotion"
+    )
+
+    assert "**Saving Throws**" not in candidate["normalized_content"]
+    assert dark_devotion["choices"]["source_trait"]["kind"] == (
+        "save_advantage_against_conditions"
+    )
+    assert parsed.warnings == ()
+
+
 def test_text_layout_recovery_moves_complete_noble_parry_out_of_traits() -> None:
     base = ["Appendix B: Nonplayer Characters", "CULT FANATIC"]
     chunks = [
