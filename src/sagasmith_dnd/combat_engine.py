@@ -5579,6 +5579,95 @@ def resolve_actor_check(
     )
 
 
+def resolve_actor_group_check(
+    actors: list[dict[str, Any]],
+    *,
+    ability: str,
+    dc: int,
+    proficient: bool = False,
+    bonus: int = 0,
+    advantage: bool = False,
+    disadvantage: bool = False,
+    rules_by_actor_id: dict[str, ResolutionContext] | None = None,
+    rng: Any = None,
+) -> dict[str, Any]:
+    """Resolve the 2014 group ability-check procedure.
+
+    Every participant makes the same ability or skill check.  The group
+    succeeds when at least half of its members succeed.  Individual actor-card
+    modifiers, conditions, armor, and rule-pack effects remain authoritative.
+    """
+
+    if len(actors) < 2:
+        raise CombatEngineError("a group ability check requires at least two actors")
+    actor_ids = [actor_id(actor) for actor in actors]
+    if len(actor_ids) != len(set(actor_ids)):
+        raise CombatEngineError("group ability-check actors must be unique")
+    if isinstance(dc, bool) or not isinstance(dc, int) or not 0 <= dc <= 40:
+        raise CombatEngineError("group ability-check DC must be an integer from 0 to 40")
+    if advantage and disadvantage:
+        raise CombatEngineError(
+            "group ability check cannot have both source advantage and disadvantage"
+        )
+    normalized_rules = dict(rules_by_actor_id or {})
+    unknown_rule_actor_ids = sorted(set(normalized_rules) - set(actor_ids))
+    if unknown_rule_actor_ids:
+        raise CombatEngineError(
+            "group ability-check rule contexts contain actors outside the group"
+        )
+
+    checks: list[dict[str, Any]] = []
+    for actor in actors:
+        participant_id = actor_id(actor)
+        check = resolve_actor_check(
+            actor,
+            kind="ability",
+            ability=ability,
+            dc=dc,
+            proficient=proficient,
+            bonus=bonus,
+            advantage=advantage,
+            disadvantage=disadvantage,
+            rules=normalized_rules.get(participant_id),
+            rng=rng,
+        )
+        checks.append(
+            {
+                "actor_id": participant_id,
+                "check": check,
+                "success": bool(check["success"]),
+            }
+        )
+
+    success_count = sum(1 for participant in checks if participant["success"])
+    required_successes = (len(checks) + 1) // 2
+    group_rules = next(
+        (
+            normalized_rules[participant_id]
+            for participant_id in actor_ids
+            if participant_id in normalized_rules
+        ),
+        None,
+    )
+    return {
+        "kind": "ability_group_check",
+        "ability": str(ability),
+        "dc": dc,
+        "participant_count": len(checks),
+        "success_count": success_count,
+        "failure_count": len(checks) - success_count,
+        "required_successes": required_successes,
+        "success": success_count >= required_successes,
+        "participants": checks,
+        "rule_receipts": core_receipts(
+            group_rules,
+            ["dnd5e.core.check.group"],
+            "check.group.resolve",
+        ),
+        "ruleset_fingerprint": group_rules.fingerprint if group_rules else "",
+    }
+
+
 def resolve_save_damage_to_sheets(
     target_actors: list[dict[str, Any]],
     *,

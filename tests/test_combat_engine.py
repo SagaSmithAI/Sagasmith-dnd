@@ -40,6 +40,7 @@ from sagasmith_dnd.combat_engine import (
     queue_combatant,
     resolve_actor_check,
     resolve_actor_contest,
+    resolve_actor_group_check,
     resolve_attack_action,
     resolve_attack_damage,
     resolve_choice_window,
@@ -816,6 +817,53 @@ def test_2014_jack_of_all_trades_applies_only_to_unproficient_ability_checks() -
     )
     assert revised_check["bonus"] == 0
     assert revised_check["total"] == 13
+
+
+def test_2014_group_check_succeeds_when_at_least_half_succeed() -> None:
+    actors = [_actor(f"scout-{index}") for index in range(1, 7)]
+    rules = resolution_context(
+        {
+            "edition": "2014",
+            "fingerprint": "group-check-pack",
+            "lock": [],
+            "mechanics": [],
+        }
+    )
+
+    result = resolve_actor_group_check(
+        actors,
+        ability="stealth",
+        dc=16,
+        advantage=True,
+        rules_by_actor_id={actor["id"]: rules for actor in actors},
+        rng=_SequenceRng(16, 4, 17, 3, 18, 2, 19, 1, 20, 5, 10, 6),
+    )
+
+    assert result["participant_count"] == 6
+    assert result["success_count"] == 5
+    assert result["failure_count"] == 1
+    assert result["required_successes"] == 3
+    assert result["success"] is True
+    assert [entry["success"] for entry in result["participants"]] == [
+        True,
+        True,
+        True,
+        True,
+        True,
+        False,
+    ]
+    assert [item["mechanic_id"] for item in result["rule_receipts"]] == [
+        "dnd5e.core.check.group"
+    ]
+
+
+def test_2014_group_check_rejects_duplicate_or_single_actor_groups() -> None:
+    actor = _actor("scout")
+
+    with pytest.raises(CombatEngineError, match="at least two actors"):
+        resolve_actor_group_check([actor], ability="stealth", dc=10)
+    with pytest.raises(CombatEngineError, match="must be unique"):
+        resolve_actor_group_check([actor, actor], ability="stealth", dc=10)
 
 
 def test_keen_perception_requires_and_uses_sensory_facts() -> None:

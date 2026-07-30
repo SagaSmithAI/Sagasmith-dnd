@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.45.0"
+CORE_RULE_PACK_VERSION = "1.46.0"
 
 
 @dataclass(frozen=True)
@@ -230,6 +230,16 @@ BOUNDARIES = (
             "tests/test_combat_engine.py::test_2014_jack_of_all_trades_applies_to_initiative",
         ),
         "bundled:srd2014/02_Classes/Bard.md",
+    ),
+    CoreBoundary(
+        "dnd5e.core.check.group",
+        ("2014",),
+        "combat_engine.resolve_actor_group_check",
+        (
+            "tests/test_combat_engine.py::"
+            "test_2014_group_check_succeeds_when_at_least_half_succeed",
+        ),
+        "bundled:srd2014/06_Gameplay/Using_Ability_Scores.md#group-checks",
     ),
     CoreBoundary(
         "dnd5e.core.weapon.reach",
