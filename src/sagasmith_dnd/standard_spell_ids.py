@@ -7,6 +7,8 @@ CORE_BLADE_WARD_MECHANIC_ID = "dnd5e.core.spell.blade_ward"
 CORE_BLADE_WARD_SPELL_ID = f"{STANDARD_2014_CONTENT_PACK_ID}.spell.blade-ward"
 CORE_FLY_MECHANIC_ID = "dnd5e.core.spell.fly"
 CORE_FLY_SPELL_ID = "dnd5e.content.srd2014.spell.fly"
+CORE_INVISIBILITY_MECHANIC_ID = "dnd5e.core.spell.invisibility"
+CORE_INVISIBILITY_SPELL_ID = "dnd5e.content.srd2014.spell.invisibility"
 CORE_HYPNOTIC_PATTERN_MECHANIC_ID = "dnd5e.core.spell.hypnotic_pattern"
 CORE_HYPNOTIC_PATTERN_SPELL_ID = "dnd5e.content.srd2014.spell.hypnotic-pattern"
 CORE_WITCH_BOLT_MECHANIC_ID = "dnd5e.core.spell.witch_bolt"
@@ -17,6 +19,8 @@ __all__ = [
     "CORE_BLADE_WARD_SPELL_ID",
     "CORE_FLY_MECHANIC_ID",
     "CORE_FLY_SPELL_ID",
+    "CORE_INVISIBILITY_MECHANIC_ID",
+    "CORE_INVISIBILITY_SPELL_ID",
     "CORE_HYPNOTIC_PATTERN_MECHANIC_ID",
     "CORE_HYPNOTIC_PATTERN_SPELL_ID",
     "CORE_WITCH_BOLT_MECHANIC_ID",

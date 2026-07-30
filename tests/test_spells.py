@@ -5,7 +5,11 @@ from sagasmith_dnd.character_schema import (
     derive_character_sheet,
     validate_character_sheet,
 )
-from sagasmith_dnd.combat_engine import CombatEngineError, NeedsRulingError
+from sagasmith_dnd.combat_engine import (
+    CombatEngineError,
+    NeedsRulingError,
+    _end_attack_broken_invisibility,
+)
 from sagasmith_dnd.lifecycle import advance_effect_durations
 from sagasmith_dnd.spells import (
     CORE_MAGE_ARMOR_SPELL_ID,
@@ -14,6 +18,7 @@ from sagasmith_dnd.spells import (
     CORE_SHIELD_MECHANIC_ID,
     CORE_SHIELD_SPELL_ID,
     apply_core_fly_effects,
+    apply_core_invisibility_effects,
     available_shield_attack_defenses,
     available_shield_magic_missile_defenses,
     consume_magic_item_spell_cast,
@@ -21,13 +26,17 @@ from sagasmith_dnd.spells import (
     consume_shield_reaction,
     consume_spell_cast,
     fly_target_limit,
+    invisibility_target_limit,
     recharge_magic_item_charges,
     reconcile_source_effect_dependencies,
     replace_prepared_spells,
     resolve_magic_item_last_charge,
     validate_magic_missile_allocations,
 )
-from sagasmith_dnd.standard_spell_ids import CORE_FLY_SPELL_ID
+from sagasmith_dnd.standard_spell_ids import (
+    CORE_FLY_SPELL_ID,
+    CORE_INVISIBILITY_SPELL_ID,
+)
 
 
 def _spell(spell_id: str, *, level: int, concentration: bool = False) -> dict:
@@ -202,6 +211,117 @@ def test_fly_upcast_target_limit_and_source_dependency_are_hard_settled() -> Non
         )["speed"]["fly"]
         == 0
         for target_id in reconciled["changed_actor_ids"]
+    )
+
+
+def test_invisibility_applies_to_explicit_targets_and_tracks_concentration() -> None:
+    caster = default_character_sheet()
+    caster["spellcasting"]["spell_slots"] = {
+        "2": {
+            "label": "2nd",
+            "value": 1,
+            "max": 1,
+            "recovers_on": "long_rest",
+            "source_key": "bard",
+        }
+    }
+    invisibility = _spell(
+        CORE_INVISIBILITY_SPELL_ID,
+        level=2,
+        concentration=True,
+    )
+    invisibility["definition"]["duration"] = {
+        "kind": "timed",
+        "value": 1,
+        "unit": "hour",
+        "concentration": True,
+    }
+    caster["content"]["spells"] = [invisibility]
+    paid = consume_spell_cast(
+        validate_character_sheet(caster),
+        spell_id=CORE_INVISIBILITY_SPELL_ID,
+        cast_level=2,
+    )
+    concentration = next(
+        effect
+        for effect in paid["sheet"]["effects"]
+        if effect["active"] and effect["concentration"]
+    )
+
+    applied = apply_core_invisibility_effects(
+        {
+            "caster": paid["sheet"],
+            "target": default_character_sheet(),
+        },
+        caster_id="caster",
+        target_ids=["target"],
+        spell_id=CORE_INVISIBILITY_SPELL_ID,
+        cast_level=2,
+        concentration_effect_id=concentration["id"],
+    )
+    target = validate_character_sheet(applied["sheets"]["target"])
+
+    assert invisibility_target_limit(2) == 1
+    assert "invisible" in target["conditions"]
+    effect = next(
+        item
+        for item in target["effects"]
+        if item["id"] == applied["effect_ids"]["target"]
+    )
+    assert effect["duration"] == {"period": "hour", "remaining": 1}
+    assert effect["dependency"] == "source_effect_active"
+    assert effect["source_effect_id"] == concentration["id"]
+
+
+def test_upcast_invisibility_targets_end_independently_and_with_the_source() -> None:
+    caster = default_character_sheet()
+    caster["effects"] = [
+        {
+            "id": "invisibility-concentration",
+            "name": "Concentrating: Invisibility",
+            "kind": "concentration",
+            "source": "spell.cast",
+            "source_spell_id": CORE_INVISIBILITY_SPELL_ID,
+            "active": True,
+            "concentration": True,
+            "duration": {"period": "hour", "remaining": 1},
+            "changes": [],
+            "description": "",
+        }
+    ]
+    sheets = {
+        "caster": validate_character_sheet(caster),
+        "target-1": default_character_sheet(),
+        "target-2": default_character_sheet(),
+    }
+    applied = apply_core_invisibility_effects(
+        sheets,
+        caster_id="caster",
+        target_ids=["target-1", "target-2"],
+        spell_id=CORE_INVISIBILITY_SPELL_ID,
+        cast_level=3,
+        concentration_effect_id="invisibility-concentration",
+    )
+
+    ended = _end_attack_broken_invisibility(
+        applied["sheets"]["target-1"]
+    )
+    assert ended == [applied["effect_ids"]["target-1"]]
+    assert "invisible" not in applied["sheets"]["target-1"]["conditions"]
+    assert "invisible" in applied["sheets"]["target-2"]["conditions"]
+    assert applied["sheets"]["caster"]["effects"][0]["active"] is True
+
+    applied["sheets"]["caster"]["effects"][0]["active"] = False
+    applied["sheets"]["caster"]["effects"][0][
+        "ended_reason"
+    ] = "failed_concentration_save"
+    reconciled = reconcile_source_effect_dependencies(applied["sheets"])
+
+    assert reconciled["changed_actor_ids"] == ["target-2"]
+    assert "invisible" not in reconciled["sheets"]["target-2"]["conditions"]
+    assert (
+        reconciled["sheets"]["target-2"]["effects"][0]["ended_reason"]
+        == "source_effect_ended"
     )
 
 

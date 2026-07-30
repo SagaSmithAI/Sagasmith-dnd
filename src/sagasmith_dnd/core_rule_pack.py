@@ -682,6 +682,24 @@ BOUNDARIES = (
         "bundled:srd2014/07_Spells/Spells_Each/Fly.md",
     ),
     CoreBoundary(
+        "dnd5e.core.spell.invisibility",
+        ("2014",),
+        (
+            "spells.invisibility_target_limit|"
+            "spells.apply_core_invisibility_effects|"
+            "spells.reconcile_source_effect_dependencies|"
+            "spells._end_spell_cast_broken_invisibility|"
+            "combat_engine._end_attack_broken_invisibility"
+        ),
+        (
+            "tests/test_spells.py::"
+            "test_invisibility_applies_to_explicit_targets_and_tracks_concentration",
+            "tests/test_spells.py::"
+            "test_upcast_invisibility_targets_end_independently_and_with_the_source",
+        ),
+        "bundled:srd2014/07_Spells/Spells_Each/Invisibility.md",
+    ),
+    CoreBoundary(
         "dnd5e.core.spell.blade_ward",
         ("2014",),
         (

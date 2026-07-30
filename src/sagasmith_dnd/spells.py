@@ -7,7 +7,10 @@ from typing import Any
 from uuid import uuid4
 
 from sagasmith_dnd.combat_engine import CombatEngineError, NeedsRulingError
-from sagasmith_dnd.conditions import reconcile_ended_effect_conditions
+from sagasmith_dnd.conditions import (
+    apply_effect_conditions,
+    reconcile_ended_effect_conditions,
+)
 from sagasmith_dnd.editions import normalize_dnd_edition
 from sagasmith_dnd.engine import ability_modifier
 from sagasmith_dnd.resources import mutate_bounded_resource
@@ -18,6 +21,8 @@ from sagasmith_dnd.standard_spell_ids import (
     CORE_FLY_MECHANIC_ID,
     CORE_FLY_SPELL_ID,
     CORE_HYPNOTIC_PATTERN_SPELL_ID,
+    CORE_INVISIBILITY_MECHANIC_ID,
+    CORE_INVISIBILITY_SPELL_ID,
     CORE_WITCH_BOLT_MECHANIC_ID,
     CORE_WITCH_BOLT_SPELL_ID,
 )
@@ -105,6 +110,116 @@ def is_core_fly_spell(spell: dict[str, Any]) -> bool:
         CORE_FLY_MECHANIC_ID
         in {str(item) for item in spell.get("mechanic_refs", [])}
     )
+
+
+def is_core_invisibility_spell(spell: dict[str, Any]) -> bool:
+    """Recognize only the source-bound SRD 2014 Invisibility mechanic."""
+
+    return str(spell.get("id") or "") == CORE_INVISIBILITY_SPELL_ID or (
+        CORE_INVISIBILITY_MECHANIC_ID
+        in {str(item) for item in spell.get("mechanic_refs", [])}
+    )
+
+
+def invisibility_target_limit(cast_level: int) -> int:
+    """Return Invisibility's exact creature target cap for one legal slot."""
+
+    level = int(cast_level)
+    if level < 2 or level > 9:
+        raise CombatEngineError(
+            "Invisibility cast_level must be between 2 and 9"
+        )
+    return level - 1
+
+
+def apply_core_invisibility_effects(
+    sheets: dict[str, dict[str, Any]],
+    *,
+    caster_id: str,
+    target_ids: list[str],
+    spell_id: str,
+    cast_level: int,
+    concentration_effect_id: str,
+) -> dict[str, Any]:
+    """Make the explicit touched creatures invisible under one concentration."""
+
+    if spell_id != CORE_INVISIBILITY_SPELL_ID:
+        raise CombatEngineError(
+            "Invisibility requires its exact source-bound SRD spell id"
+        )
+    if caster_id not in sheets:
+        raise CombatEngineError("Invisibility caster sheet is missing")
+    normalized_targets = [str(item).strip() for item in target_ids]
+    if (
+        not normalized_targets
+        or any(not item for item in normalized_targets)
+        or len(normalized_targets) != len(set(normalized_targets))
+    ):
+        raise CombatEngineError(
+            "Invisibility target_ids must be unique and non-empty"
+        )
+    if len(normalized_targets) > invisibility_target_limit(cast_level):
+        raise CombatEngineError(
+            "Invisibility target count exceeds the cast level"
+        )
+    missing = [item for item in normalized_targets if item not in sheets]
+    if missing:
+        raise CombatEngineError(
+            f"Invisibility target sheets are missing: {missing}"
+        )
+    source_effect = next(
+        (
+            effect
+            for effect in sheets[caster_id].get("effects", [])
+            if effect.get("active")
+            and effect.get("concentration")
+            and str(effect.get("id") or "") == concentration_effect_id
+            and str(effect.get("source_spell_id") or "")
+            == CORE_INVISIBILITY_SPELL_ID
+        ),
+        None,
+    )
+    if source_effect is None:
+        raise CombatEngineError(
+            "Invisibility requires its exact active concentration effect"
+        )
+
+    value = {actor_id: deepcopy(sheet) for actor_id, sheet in sheets.items()}
+    effect_ids: dict[str, str] = {}
+    for target_id in normalized_targets:
+        effect_id = f"invisibility-{uuid4().hex}"
+        effect = {
+            "id": effect_id,
+            "name": "Invisibility",
+            "kind": "timed_conditions",
+            "source": CORE_INVISIBILITY_MECHANIC_ID,
+            "source_spell_id": CORE_INVISIBILITY_SPELL_ID,
+            "dependency": "source_effect_active",
+            "source_actor_id": caster_id,
+            "source_effect_id": concentration_effect_id,
+            "active": True,
+            "concentration": False,
+            "duration": {"period": "hour", "remaining": 1},
+            "changes": [
+                {
+                    "path": "conditions",
+                    "mode": "add",
+                    "value": "invisible",
+                }
+            ],
+            "description": "",
+        }
+        value[target_id].setdefault("effects", []).append(effect)
+        apply_effect_conditions(value[target_id], effect)
+        effect_ids[target_id] = effect_id
+    return {
+        "sheets": value,
+        "target_ids": normalized_targets,
+        "effect_ids": effect_ids,
+        "concentration_effect_id": concentration_effect_id,
+        "cast_level": int(cast_level),
+        "target_limit": invisibility_target_limit(cast_level),
+    }
 
 
 def fly_target_limit(cast_level: int) -> int:
@@ -210,6 +325,7 @@ def reconcile_source_effect_dependencies(
 
     value = {actor_id: deepcopy(sheet) for actor_id, sheet in sheets.items()}
     ended: list[dict[str, str]] = []
+    ended_effects: dict[str, list[dict[str, Any]]] = {}
     for target_actor_id, sheet in value.items():
         for effect in sheet.get("effects", []):
             if (
@@ -234,6 +350,7 @@ def reconcile_source_effect_dependencies(
                 continue
             effect["active"] = False
             effect["ended_reason"] = "source_effect_ended"
+            ended_effects.setdefault(target_actor_id, []).append(effect)
             ended.append(
                 {
                     "target_actor_id": target_actor_id,
@@ -241,6 +358,11 @@ def reconcile_source_effect_dependencies(
                     "source_actor_id": source_actor_id,
                     "source_effect_id": source_effect_id,
                 }
+            )
+        if target_actor_id in ended_effects:
+            reconcile_ended_effect_conditions(
+                sheet,
+                ended_effects=ended_effects[target_actor_id],
             )
     return {
         "sheets": value,

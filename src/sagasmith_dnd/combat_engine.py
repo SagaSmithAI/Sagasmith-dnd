@@ -3123,7 +3123,6 @@ def _end_attack_broken_invisibility(sheet: dict[str, Any]) -> list[str]:
         spell_id = str(effect.get("source_spell_id") or "")
         if (
             effect.get("active")
-            and effect.get("concentration")
             and spell_id.rsplit(".", 1)[-1] == "invisibility"
         ):
             effect["active"] = False
