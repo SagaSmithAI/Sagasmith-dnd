@@ -1,6 +1,10 @@
 import pytest
 
-from sagasmith_dnd.activities import ActivityError, consume_activity
+from sagasmith_dnd.activities import (
+    ActivityError,
+    consume_activity,
+    recharge_activities_at_turn_start,
+)
 from sagasmith_dnd.character_schema import (
     default_character_sheet,
     validate_character_sheet,
@@ -116,3 +120,62 @@ def test_omitted_uses_remains_unlimited_after_card_validation() -> None:
     assert validated["content"]["activities"][0]["uses"]["unlimited"] is True
     assert result["status"] == "committed"
     assert result["payment"] is None
+
+
+class _SequenceRng:
+    def __init__(self, *values: int) -> None:
+        self.values = list(values)
+
+    def randint(self, minimum: int, maximum: int) -> int:
+        value = self.values.pop(0)
+        assert minimum <= value <= maximum
+        return value
+
+
+def test_recharge_activities_roll_only_while_unavailable() -> None:
+    sheet = default_character_sheet()
+    sheet["content"]["activities"] = [
+        {
+            "id": "lightning-strike-recharge-5-6-action",
+            "name": "Lightning Strike (Recharge 5-6)",
+            "source_key": "monster-manual-2014:p157",
+            "activation": {"type": "action", "cost": 1},
+            "uses": {
+                "label": "Lightning Strike (Recharge 5-6)",
+                "value": 0,
+                "max": 1,
+                "recovers_on": "manual",
+                "source_key": "monster-manual-2014:p157",
+            },
+            "choices": {
+                "recharge": {
+                    "kind": "d6_turn_start",
+                    "minimum": 5,
+                    "maximum": 6,
+                    "source_marker": "(Recharge 5-6)",
+                }
+            },
+        }
+    ]
+    validated = validate_character_sheet(sheet)
+
+    failed = recharge_activities_at_turn_start(
+        validated,
+        rng=_SequenceRng(4),
+    )
+    assert failed["sheet"]["content"]["activities"][0]["uses"]["value"] == 0
+    assert failed["results"][0]["recharged"] is False
+
+    recovered = recharge_activities_at_turn_start(
+        failed["sheet"],
+        rng=_SequenceRng(5),
+    )
+    assert recovered["sheet"]["content"]["activities"][0]["uses"]["value"] == 1
+    assert recovered["results"][0]["recharged"] is True
+
+    # An available action does not roll at all.
+    available = recharge_activities_at_turn_start(
+        recovered["sheet"],
+        rng=_SequenceRng(),
+    )
+    assert available["results"] == []

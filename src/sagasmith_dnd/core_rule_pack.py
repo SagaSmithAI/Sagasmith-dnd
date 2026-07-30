@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.50.0"
+CORE_RULE_PACK_VERSION = "1.51.0"
 
 
 @dataclass(frozen=True)
@@ -100,6 +100,31 @@ BOUNDARIES = (
             "SagaSmith-dnd-mcp/tests/test_gazer_eye_rays_mcp.py",
         ),
         "module-source:Waterdeep-Dragon-Heist/page-204/gazer-eye-rays",
+    ),
+    CoreBoundary(
+        "dnd5e.core.activity.area_save_damage",
+        ("2014",),
+        (
+            "statblocks.area_save_damage_spec|"
+            "combat_engine.resolve_save_damage_to_sheets"
+        ),
+        (
+            "tests/test_statblocks.py::"
+            "test_point_radius_save_damage_is_structured_from_exact_source",
+            "SagaSmith-dnd-mcp/tests/test_area_save_damage_mcp.py",
+        ),
+        "rulebook:mm2014/page-157/storm-giant#lightning-strike",
+    ),
+    CoreBoundary(
+        "dnd5e.core.activity.recharge",
+        ("2014",),
+        "activities.recharge_activities_at_turn_start",
+        (
+            "tests/test_activities.py::"
+            "test_recharge_activities_roll_only_while_unavailable",
+            "SagaSmith-dnd-mcp/tests/test_area_save_damage_mcp.py",
+        ),
+        "rulebook:mm2014/introduction/limited-usage#recharge-x-y",
     ),
     CoreBoundary(
         "dnd5e.core.activity.source_save_effect",

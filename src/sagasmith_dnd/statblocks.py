@@ -2190,6 +2190,109 @@ def source_save_effect_spec(
     return deepcopy(recorded)
 
 
+def area_save_damage_spec(
+    sheet: dict[str, Any],
+    activity_id: str,
+) -> dict[str, Any] | None:
+    """Return a strict source-derived point-radius save-damage contract."""
+
+    activity = next(
+        (
+            item
+            for item in dict(sheet.get("content") or {}).get("activities", [])
+            if str(item.get("id") or "") == activity_id
+        ),
+        None,
+    )
+    if activity is None:
+        return None
+    recorded = dict(
+        dict(activity.get("choices") or {}).get("area_save_damage") or {}
+    )
+    if not recorded:
+        return None
+    if recorded.get("kind") != "visible_point_radius_save_damage":
+        raise StatblockImportError("unsupported area saving-throw damage contract")
+    return deepcopy(recorded)
+
+
+def _compile_area_save_damage(description: str) -> dict[str, Any] | None:
+    """Compile the common 2014 point/radius saving-throw damage grammar."""
+
+    source_excerpt = " ".join(str(description or "").split())
+    match = re.fullmatch(
+        (
+            r".+?\bat a point (?:it|he|she|they) can see within "
+            r"(?P<range>\d+) feet of (?:it|him|her|them)\. "
+            r"Each creature within (?P<radius>\d+) feet of that point must "
+            r"make a DC (?P<dc>\d+) "
+            r"(?P<ability>Strength|Dexterity|Constitution|Intelligence|Wisdom|Charisma) "
+            r"saving throw, taking (?P<average>\d+) "
+            r"\((?P<damage>\d+d\d+(?:\s*[+\-]\s*\d+)?)\) "
+            r"(?P<damage_type>[A-Za-z]+) damage on a failed save, or half as "
+            r"much damage on a successful one\."
+        ),
+        source_excerpt,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    damage_type = match.group("damage_type").casefold()
+    if damage_type not in DAMAGE_TYPES:
+        return None
+    source_range = int(match.group("range"))
+    radius = int(match.group("radius"))
+    save_dc = int(match.group("dc"))
+    average = int(match.group("average"))
+    if (
+        not 1 <= source_range <= 5_000
+        or not 1 <= radius <= 1_000
+        or not 1 <= save_dc <= 40
+        or average < 1
+    ):
+        return None
+    return {
+        "kind": "visible_point_radius_save_damage",
+        "origin": {
+            "kind": "visible_point",
+            "range_ft": source_range,
+        },
+        "area": {
+            "shape": "radius",
+            "radius_ft": radius,
+        },
+        "targets": "each_creature",
+        "save_ability": match.group("ability").casefold(),
+        "save_dc": save_dc,
+        "damage_formula": match.group("damage").replace(" ", "").casefold(),
+        "average_damage": average,
+        "damage_type": damage_type,
+        "half_on_success": True,
+        "save_source_kind": "magical_effect",
+        "source_excerpt": source_excerpt,
+    }
+
+
+def _recharge_contract(entry_name: str) -> dict[str, Any] | None:
+    match = re.search(
+        r"\(\s*Recharge\s+(?P<minimum>[1-6])(?:\s*[-–]\s*(?P<maximum>[1-6]))?\s*\)",
+        entry_name,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    minimum = int(match.group("minimum"))
+    maximum = int(match.group("maximum") or minimum)
+    if minimum > maximum:
+        raise StatblockImportError("Recharge action has a descending d6 success range")
+    return {
+        "kind": "d6_turn_start",
+        "minimum": minimum,
+        "maximum": maximum,
+        "source_marker": match.group(0),
+    }
+
+
 def source_contest_effect_spec(
     sheet: dict[str, Any],
     activity_id: str,
@@ -2848,7 +2951,41 @@ def parse_2014_statblock(
                 )
             entry["activation"]["trigger"] = "hit by a melee attack"
             entry["choices"] = {"reaction_defense": reaction_defense}
-        if source_trait is None and reaction_defense is None:
+        area_save_damage = (
+            _compile_area_save_damage(description)
+            if activation == "action"
+            else None
+        )
+        if area_save_damage is not None:
+            choices = dict(entry.get("choices") or {})
+            choices["area_save_damage"] = area_save_damage
+            recharge = _recharge_contract(entry_name)
+            if recharge is not None:
+                choices["recharge"] = recharge
+                entry["uses"] = {
+                    "label": entry_name,
+                    "value": 1,
+                    "max": 1,
+                    "recovers_on": "manual",
+                    "source_key": source_key,
+                }
+            entry["choices"] = choices
+            entry["mechanic_refs"] = sorted(
+                {
+                    *list(entry.get("mechanic_refs") or []),
+                    "dnd5e.core.activity.area_save_damage",
+                    *(
+                        ["dnd5e.core.activity.recharge"]
+                        if recharge is not None
+                        else []
+                    ),
+                }
+            )
+        if (
+            source_trait is None
+            and reaction_defense is None
+            and area_save_damage is None
+        ):
             entry["choices"] = {
                 "manual_ruling": {
                     "kind": (
@@ -2861,7 +2998,11 @@ def parse_2014_statblock(
                 }
             }
         sheet["content"]["activities" if activation != "passive" else "features"].append(entry)
-        if source_trait is None and reaction_defense is None:
+        if (
+            source_trait is None
+            and reaction_defense is None
+            and area_save_damage is None
+        ):
             warnings.append(
                 f"{entry_name}: Multiattack composition requires a DM ruling"
                 if entry_name in unresolved_multiattacks

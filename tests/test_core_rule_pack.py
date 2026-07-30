@@ -52,7 +52,9 @@ REQUIRED_BOUNDARIES = {
 
 EDITION_BOUNDARIES = {
     "2014": {
+        "dnd5e.core.activity.area_save_damage",
         "dnd5e.core.activity.random_save_effects",
+        "dnd5e.core.activity.recharge",
         "dnd5e.core.check.jack_of_all_trades",
         "dnd5e.core.rest.natural_recovery",
         "dnd5e.core.rest.song_of_rest",

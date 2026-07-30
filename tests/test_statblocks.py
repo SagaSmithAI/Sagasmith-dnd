@@ -14,6 +14,7 @@ from sagasmith_dnd.statblocks import (
     _structure_intellect_devourer_actions,
     apply_reviewed_statblock_fill,
     apply_statblock_variant,
+    area_save_damage_spec,
     effective_statblock_rating,
     gazer_eye_ray_spec,
     parse_2014_statblock,
@@ -47,6 +48,66 @@ COMMONER = """### Commoner
 ***Club***. *Melee Weapon Attack:* +2 to hit, reach 5 ft., one target.
 *Hit:* 2 (1d4) bludgeoning damage.
 """
+
+
+def test_point_radius_save_damage_is_structured_from_exact_source() -> None:
+    source = COMMONER.replace(
+        '***Club***. *Melee Weapon Attack:* +2 to hit, reach 5 ft., one target.\n'
+        '*Hit:* 2 (1d4) bludgeoning damage.',
+        (
+            '***Club***. *Melee Weapon Attack:* +2 to hit, reach 5 ft., one target.\n'
+            '*Hit:* 2 (1d4) bludgeoning damage.\n\n'
+            '***Lightning Strike (Recharge 5-6)***. The giant hurls a magical '
+            'lightning bolt at a point it can see within 500 feet of it. Each '
+            'creature within 10 feet of that point must make a DC 17 Dexterity '
+            'saving throw, taking 54 (12d8) lightning damage on a failed save, '
+            'or half as much damage on a successful one.'
+        ),
+    )
+
+    parsed = parse_2014_statblock(
+        source,
+        source_key="monster-manual-2014:p157",
+        name="Storm Giant",
+    )
+    activity = next(
+        item
+        for item in parsed.sheet["content"]["activities"]
+        if item["name"] == "Lightning Strike (Recharge 5-6)"
+    )
+
+    assert parsed.warnings == ()
+    assert activity["uses"]["value"] == 1
+    assert activity["uses"]["max"] == 1
+    assert activity["choices"]["recharge"] == {
+        "kind": "d6_turn_start",
+        "minimum": 5,
+        "maximum": 6,
+        "source_marker": "(Recharge 5-6)",
+    }
+    assert set(activity["mechanic_refs"]) == {
+        "dnd5e.core.activity.area_save_damage",
+        "dnd5e.core.activity.recharge",
+    }
+    assert area_save_damage_spec(parsed.sheet, activity["id"]) == {
+        "kind": "visible_point_radius_save_damage",
+        "origin": {"kind": "visible_point", "range_ft": 500},
+        "area": {"shape": "radius", "radius_ft": 10},
+        "targets": "each_creature",
+        "save_ability": "dexterity",
+        "save_dc": 17,
+        "damage_formula": "12d8",
+        "average_damage": 54,
+        "damage_type": "lightning",
+        "half_on_success": True,
+        "save_source_kind": "magical_effect",
+        "source_excerpt": (
+            "The giant hurls a magical lightning bolt at a point it can see within "
+            "500 feet of it. Each creature within 10 feet of that point must make "
+            "a DC 17 Dexterity saving throw, taking 54 (12d8) lightning damage on "
+            "a failed save, or half as much damage on a successful one."
+        ),
+    }
 
 
 TROLL = """## Troll

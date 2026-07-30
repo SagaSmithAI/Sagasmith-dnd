@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import asdict
 from typing import Any
 
+from sagasmith_dnd.engine import roll
 from sagasmith_dnd.resources import mutate_bounded_resource
 from sagasmith_dnd.rule_engine import ResolutionContext, apply_rule_event, core_receipts
 
@@ -13,6 +15,78 @@ ACTIVITY_CONTENT_SECTIONS = ("activities", "features", "feats")
 
 class ActivityError(ValueError):
     """Raised when a declared activity cannot pay its structured cost."""
+
+
+def recharge_activities_at_turn_start(
+    sheet: dict[str, Any],
+    *,
+    rules: ResolutionContext | None = None,
+    rng: Any = None,
+) -> dict[str, Any]:
+    """Roll each unavailable source-authored Recharge activity once.
+
+    A monster's ``Recharge X-Y`` marker is a standard turn-start resource
+    rule, not an Agent/DM decision. Only cards carrying the strict importer
+    contract participate, and an available activity never consumes a random
+    draw.
+    """
+
+    value = deepcopy(sheet)
+    results: list[dict[str, Any]] = []
+    activities = list(dict(value.get("content") or {}).get("activities", []))
+    for activity in activities:
+        recharge = dict(dict(activity.get("choices") or {}).get("recharge") or {})
+        if recharge.get("kind") != "d6_turn_start":
+            continue
+        uses = dict(activity.get("uses") or {})
+        if (
+            int(uses.get("max", 0) or 0) != 1
+            or int(uses.get("value", 0) or 0) not in {0, 1}
+            or bool(uses.get("unlimited", False))
+        ):
+            raise ActivityError("Recharge activity must use one bounded card use")
+        if int(uses["value"]) == 1:
+            continue
+        minimum = recharge.get("minimum")
+        maximum = recharge.get("maximum")
+        if (
+            isinstance(minimum, bool)
+            or not isinstance(minimum, int)
+            or isinstance(maximum, bool)
+            or not isinstance(maximum, int)
+            or not 1 <= minimum <= maximum <= 6
+        ):
+            raise ActivityError("Recharge activity has an invalid d6 success range")
+        recharge_roll = asdict(roll("1d6", rng=rng))
+        recovered = minimum <= int(recharge_roll["total"]) <= maximum
+        if recovered:
+            uses["value"] = 1
+            activity["uses"] = uses
+        results.append(
+            {
+                "activity_id": str(activity.get("id") or ""),
+                "name": str(activity.get("name") or ""),
+                "roll": recharge_roll,
+                "minimum": minimum,
+                "maximum": maximum,
+                "recharged": recovered,
+            }
+        )
+    value.setdefault("content", {})["activities"] = activities
+    return {
+        "sheet": value,
+        "results": results,
+        "rule_receipts": (
+            core_receipts(
+                rules,
+                ["dnd5e.core.activity.recharge"],
+                "activity.recharge.turn_start",
+            )
+            if results
+            else []
+        ),
+        "ruleset_fingerprint": rules.fingerprint if rules else "",
+    }
 
 
 def consume_activity(
