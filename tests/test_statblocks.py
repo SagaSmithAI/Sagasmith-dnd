@@ -2955,6 +2955,7 @@ def test_source_bound_variant_can_apply_common_module_instance_changes() -> None
             "alignment": "chaotic evil",
             "darkvision_ft": 60,
             "languages": ["Common", "Elvish"],
+            "condition_immunities": ["Poisoned", "Exhaustion"],
             "relentless_endurance": {
                 "feature_id": "relentless-endurance",
                 "source_excerpt": (
@@ -2979,6 +2980,7 @@ def test_source_bound_variant_can_apply_common_module_instance_changes() -> None
     assert sheet["traits"]["alignment"] == "chaotic evil"
     assert sheet["traits"]["senses"]["darkvision"] == 60
     assert sheet["traits"]["languages"] == ["Common", "Elvish"]
+    assert sheet["traits"]["condition_immunities"] == ["poisoned", "exhaustion"]
     feature = next(
         item
         for item in sheet["content"]["features"]

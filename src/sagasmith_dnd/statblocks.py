@@ -2557,6 +2557,7 @@ def apply_statblock_variant(
         "damage_resistances",
         "damage_immunities",
         "damage_vulnerabilities",
+        "condition_immunities",
         "spell_replacements",
         "expend_all_spell_slots",
         "add_features",
@@ -2705,6 +2706,23 @@ def apply_statblock_variant(
                 f"{sorted(unsupported_damage_types)}"
             )
         result["traits"][trait_field] = normalized_damage_types
+
+    if "condition_immunities" in variant:
+        raw_condition_ids = variant["condition_immunities"]
+        if not isinstance(raw_condition_ids, list):
+            raise StatblockImportError("condition_immunities must be a list")
+        normalized_condition_ids = [
+            str(item).strip().casefold().replace("-", "_").replace(" ", "_")
+            for item in raw_condition_ids
+        ]
+        if (
+            any(not item for item in normalized_condition_ids)
+            or len(normalized_condition_ids) != len(set(normalized_condition_ids))
+        ):
+            raise StatblockImportError(
+                "condition_immunities must contain unique non-empty condition ids"
+            )
+        result["traits"]["condition_immunities"] = normalized_condition_ids
 
     if "spell_replacements" in variant:
         replacements = variant["spell_replacements"]

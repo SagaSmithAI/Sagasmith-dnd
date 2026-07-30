@@ -4190,6 +4190,15 @@ def set_exhaustion_level(sheet: dict[str, Any], value: int) -> dict[str, Any]:
         minimum=0,
         maximum=6,
     )
+    current_level = int(result["combat"]["exhaustion"])
+    exhaustion_immunities = condition_ids(
+        result["traits"].get("condition_immunities")
+    )
+    if (
+        level > current_level
+        and exhaustion_immunities.intersection({"exhaustion", "exhausted"})
+    ):
+        return result
     result["combat"]["exhaustion"] = level
     hit_points = result["combat"]["hp"]
     hit_points["value"] = min(

@@ -474,6 +474,17 @@ def test_exhaustion_level_setter_enforces_the_character_sheet_range() -> None:
         set_exhaustion_level(sheet, 7)
 
 
+def test_exhaustion_immunity_blocks_gain_but_allows_recovery() -> None:
+    sheet = default_character_sheet()
+    sheet["traits"]["condition_immunities"] = ["exhaustion"]
+    immune = set_exhaustion_level(sheet, 1)
+    assert immune["combat"]["exhaustion"] == 0
+
+    immune["combat"]["exhaustion"] = 2
+    recovered = set_exhaustion_level(immune, 1)
+    assert recovered["combat"]["exhaustion"] == 1
+
+
 def test_inventory_weight_supports_rule_book_fractional_ounce_units() -> None:
     sheet = validate_character_sheet(
         {
