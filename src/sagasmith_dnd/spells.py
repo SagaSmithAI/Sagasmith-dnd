@@ -15,6 +15,7 @@ from sagasmith_dnd.rule_engine import ResolutionContext, apply_rule_event, core_
 from sagasmith_dnd.standard_spell_ids import (
     CORE_BLADE_WARD_MECHANIC_ID,
     CORE_BLADE_WARD_SPELL_ID,
+    CORE_HYPNOTIC_PATTERN_SPELL_ID,
     CORE_WITCH_BOLT_MECHANIC_ID,
     CORE_WITCH_BOLT_SPELL_ID,
 )
@@ -87,6 +88,12 @@ def is_core_blade_ward_spell(spell: dict[str, Any]) -> bool:
         CORE_BLADE_WARD_MECHANIC_ID
         in {str(item) for item in spell.get("mechanic_refs", [])}
     )
+
+
+def is_core_hypnotic_pattern_spell(spell: dict[str, Any]) -> bool:
+    """Recognize only the source-bound SRD 2014 Hypnotic Pattern mechanic."""
+
+    return str(spell.get("id") or "") == CORE_HYPNOTIC_PATTERN_SPELL_ID
 
 
 def is_core_witch_bolt_spell(spell: dict[str, Any]) -> bool:

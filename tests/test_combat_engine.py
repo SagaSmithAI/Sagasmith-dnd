@@ -14,6 +14,7 @@ from sagasmith_dnd.character_schema import (
 from sagasmith_dnd.combat_engine import (
     CombatEngineError,
     NeedsRulingError,
+    active_hypnotic_pattern_effect_ids,
     add_choice_window,
     apply_attack_ac_bonus,
     apply_concentration_result,
@@ -38,6 +39,7 @@ from sagasmith_dnd.combat_engine import (
     preflight_attack,
     preflight_spell_attack,
     queue_combatant,
+    reconcile_effect_dependencies,
     resolve_actor_check,
     resolve_actor_contest,
     resolve_actor_group_check,
@@ -47,6 +49,7 @@ from sagasmith_dnd.combat_engine import (
     resolve_common_action,
     resolve_death_save_to_sheet,
     resolve_heated_body_melee_hit,
+    resolve_hypnotic_pattern_target,
     resolve_preserve_life_to_sheets,
     resolve_random_save_effects,
     resolve_readied_spell_window,
@@ -71,6 +74,7 @@ from sagasmith_dnd.engine import resolve_check, roll_d20
 from sagasmith_dnd.lifecycle import apply_rest
 from sagasmith_dnd.rule_engine import resolution_context
 from sagasmith_dnd.spatial import compile_battle_map
+from sagasmith_dnd.standard_spell_ids import CORE_HYPNOTIC_PATTERN_SPELL_ID
 
 
 def test_damage_reduction_uses_one_round_down_contract() -> None:
@@ -175,6 +179,145 @@ def _actor(identifier: str, *, hp: int = 12, ac: int = 10) -> dict:
         "sheet": sheet,
         "derived": derive_character_sheet(sheet),
     }
+
+
+def test_hypnotic_pattern_effect_lifecycle_preserves_other_condition_sources() -> None:
+    target = _actor("target", hp=20)
+    target["sheet"]["effects"] = [
+        {
+            "id": "other-charm",
+            "name": "Other charm",
+            "kind": "timed_conditions",
+            "source": "other-caster",
+            "active": True,
+            "concentration": False,
+            "duration": {"period": "manual", "remaining": 0},
+            "changes": [
+                {"path": "conditions", "mode": "add", "value": "charmed"},
+                {"path": "conditions", "mode": "add", "value": "incapacitated"},
+            ],
+            "description": "",
+        },
+        {
+            "id": "target-concentration",
+            "name": "Target concentration",
+            "kind": "concentration",
+            "source": "spell.cast",
+            "source_spell_id": "test.target-concentration",
+            "active": True,
+            "concentration": True,
+            "duration": {"period": "manual", "remaining": 0},
+            "changes": [],
+            "description": "",
+        },
+    ]
+    target["sheet"]["conditions"] = ["charmed", "incapacitated"]
+    target["derived"] = derive_character_sheet(target["sheet"])
+
+    resolved = resolve_hypnotic_pattern_target(
+        target,
+        caster_id="caster",
+        spell_id=CORE_HYPNOTIC_PATTERN_SPELL_ID,
+        save_dc=15,
+        rng=_SequenceRng(1),
+    )
+
+    assert resolved["result"]["outcome"] == "affected"
+    assert resolved["result"]["ended_concentration_effect_ids"] == [
+        "target-concentration"
+    ]
+    assert active_hypnotic_pattern_effect_ids(resolved["sheet"]) == [
+        resolved["result"]["effect_id"]
+    ]
+    assert source_speed_multiplier(resolved["sheet"]) == 0.0
+
+    no_damage = apply_damage_to_sheet(
+        resolved["sheet"],
+        amount=0,
+        damage_type="force",
+    )
+    assert active_hypnotic_pattern_effect_ids(no_damage["sheet"])
+
+    damaged = apply_damage_to_sheet(
+        no_damage["sheet"],
+        amount=1,
+        damage_type="force",
+    )
+    assert active_hypnotic_pattern_effect_ids(damaged["sheet"]) == []
+    assert {"charmed", "incapacitated"} <= set(damaged["sheet"]["conditions"])
+    assert source_speed_multiplier(damaged["sheet"]) == 1.0
+    assert resolved["result"]["effect_id"] in damaged["ended_effect_ids"]
+
+
+def test_hypnotic_pattern_immunity_and_effect_dependency_are_hard_settled() -> None:
+    immune = _actor("immune")
+    immune["sheet"]["traits"]["condition_immunities"] = ["charmed"]
+    immune["derived"] = derive_character_sheet(immune["sheet"])
+    ignored = resolve_hypnotic_pattern_target(
+        immune,
+        caster_id="caster",
+        spell_id=CORE_HYPNOTIC_PATTERN_SPELL_ID,
+        save_dc=15,
+        rng=_SequenceRng(1),
+    )
+    assert ignored["result"]["outcome"] == "immune_to_charmed"
+    assert ignored["result"]["save"] is None
+
+    target = _actor("target")
+    affected = resolve_hypnotic_pattern_target(
+        target,
+        caster_id="caster",
+        spell_id=CORE_HYPNOTIC_PATTERN_SPELL_ID,
+        save_dc=15,
+        rng=_SequenceRng(1),
+    )
+    target_effect_id = affected["result"]["effect_id"]
+    caster_sheet = default_character_sheet()
+    caster_sheet["effects"] = [
+        {
+            "id": "caster-concentration",
+            "name": "Concentrating: Hypnotic Pattern",
+            "kind": "concentration",
+            "source": "spell.cast",
+            "source_spell_id": CORE_HYPNOTIC_PATTERN_SPELL_ID,
+            "active": False,
+            "concentration": True,
+            "duration": {"period": "round", "remaining": 10},
+            "changes": [],
+            "description": "",
+            "ended_reason": "failed_save",
+        }
+    ]
+    encounter = {
+        "dependent_effects": [
+            {
+                "id": "link",
+                "mechanic_id": "dnd5e.core.spell.hypnotic_pattern",
+                "dependency": "source_effect_active",
+                "source_actor_id": "caster",
+                "source_effect_id": "caster-concentration",
+                "target_actor_id": "target",
+                "target_effect_id": target_effect_id,
+                "active": True,
+            }
+        ]
+    }
+
+    reconciled = reconcile_effect_dependencies(
+        encounter,
+        {
+            "caster": validate_character_sheet(caster_sheet),
+            "target": affected["sheet"],
+        },
+    )
+
+    assert reconciled["changed_actor_ids"] == ["target"]
+    assert reconciled["ended_links"][0]["ended_reason"] == "source_effect_ended"
+    assert active_hypnotic_pattern_effect_ids(
+        reconciled["sheets"]["target"]
+    ) == []
+    assert "charmed" not in reconciled["sheets"]["target"]["conditions"]
+    assert "incapacitated" not in reconciled["sheets"]["target"]["conditions"]
 
 
 def test_corrosive_form_damages_attacker_and_corrodes_mundane_weapon() -> None:

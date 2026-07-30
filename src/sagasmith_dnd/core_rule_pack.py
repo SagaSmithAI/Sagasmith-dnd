@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.47.0"
+CORE_RULE_PACK_VERSION = "1.48.0"
 
 
 @dataclass(frozen=True)
@@ -636,6 +636,20 @@ BOUNDARIES = (
             "test_blade_ward_resists_only_weapon_attack_bps_until_next_turn_end",
         ),
         "book:players-handbook-2014:p218-219",
+    ),
+    CoreBoundary(
+        "dnd5e.core.spell.hypnotic_pattern",
+        ("2014",),
+        (
+            "spells.is_core_hypnotic_pattern_spell|"
+            "combat_engine.resolve_hypnotic_pattern_target|"
+            "combat_engine.reconcile_effect_dependencies"
+        ),
+        (
+            "tests/test_combat_engine.py::"
+            "test_hypnotic_pattern_effect_lifecycle_preserves_other_condition_sources",
+        ),
+        "bundled:srd2014/07_Spells/Spells_Each/Hypnotic_Pattern.md",
     ),
     CoreBoundary(
         "dnd5e.core.spell.witch_bolt",

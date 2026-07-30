@@ -44,7 +44,7 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     manifest, artifacts = build_srd2014_content(workspace / "SagaSmith-dnd-skills")
     counts = Counter(item["kind"] for item in artifacts)
 
-    assert manifest["version"] == PACK_VERSION == "1.13.0"
+    assert manifest["version"] == PACK_VERSION == "1.14.0"
     assert "dnd5e.core.spell.structured_resolution" in manifest[
         "native_mechanic_refs"
     ]
@@ -99,6 +99,18 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     )
     assert magic_missile["mechanic_refs"] == ["dnd5e.core.spell.magic_missile"]
     assert magic_missile["card"]["mechanic_refs"] == ["dnd5e.core.spell.magic_missile"]
+    hypnotic_pattern = next(
+        item
+        for item in artifacts
+        if item["id"] == "dnd5e.content.srd2014.spell.hypnotic-pattern"
+    )
+    assert hypnotic_pattern["mechanic_refs"] == [
+        "dnd5e.core.spell.hypnotic_pattern"
+    ]
+    assert hypnotic_pattern["card"]["mechanic_refs"] == [
+        "dnd5e.core.spell.hypnotic_pattern"
+    ]
+    assert "ruling_requirements" not in hypnotic_pattern["card"]
     light = next(
         item for item in artifacts if item["id"] == "dnd5e.content.srd2014.spell.light"
     )

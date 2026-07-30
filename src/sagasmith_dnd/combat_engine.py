@@ -59,6 +59,7 @@ from sagasmith_dnd.spell_resolution import (
 )
 from sagasmith_dnd.standard_spell_ids import (
     CORE_BLADE_WARD_MECHANIC_ID,
+    CORE_HYPNOTIC_PATTERN_SPELL_ID,
     CORE_WITCH_BOLT_MECHANIC_ID,
 )
 from sagasmith_dnd.vocabulary import WEAPON_HAND_SLOTS
@@ -354,7 +355,225 @@ def source_speed_multiplier(sheet: dict[str, Any]) -> float:
             continue
         if str(effect.get("name") or "").strip().casefold() == "dazing ray":
             multiplier = min(multiplier, 0.5)
+        elif _is_hypnotic_pattern_target_effect(effect):
+            multiplier = 0.0
     return multiplier
+
+
+def _is_hypnotic_pattern_target_effect(effect: dict[str, Any]) -> bool:
+    """Recognize only target effects created by the Core Hypnotic Pattern path."""
+
+    return (
+        effect.get("kind") == "timed_conditions"
+        and str(effect.get("name") or "").strip().casefold() == "hypnotic pattern"
+        and str(effect.get("source_spell_id") or "") == CORE_HYPNOTIC_PATTERN_SPELL_ID
+    )
+
+
+def active_hypnotic_pattern_effect_ids(sheet: dict[str, Any]) -> list[str]:
+    """Return every active Hypnotic Pattern target effect on one actor."""
+
+    return [
+        str(effect.get("id") or "")
+        for effect in sheet.get("effects", [])
+        if effect.get("active") and _is_hypnotic_pattern_target_effect(effect)
+    ]
+
+
+def end_hypnotic_pattern_effects(
+    sheet: dict[str, Any],
+    *,
+    ended_reason: str,
+) -> dict[str, Any]:
+    """End all active Hypnotic Pattern effects without removing shared conditions."""
+
+    reason = str(ended_reason).strip()
+    if not reason:
+        raise CombatEngineError("Hypnotic Pattern ended_reason is required")
+    value = deepcopy(sheet)
+    ended_effects: list[dict[str, Any]] = []
+    for effect in value.get("effects", []):
+        if effect.get("active") and _is_hypnotic_pattern_target_effect(effect):
+            effect["active"] = False
+            effect["ended_reason"] = reason
+            ended_effects.append(effect)
+    if ended_effects:
+        reconcile_ended_effect_conditions(value, ended_effects=ended_effects)
+    return {
+        "sheet": validate_character_sheet(value),
+        "ended_effect_ids": [str(effect.get("id") or "") for effect in ended_effects],
+        "ended_reason": reason,
+    }
+
+
+def resolve_hypnotic_pattern_target(
+    target: dict[str, Any],
+    *,
+    caster_id: str,
+    spell_id: str,
+    save_dc: int,
+    rules: ResolutionContext | None = None,
+    rng: Any = None,
+) -> dict[str, Any]:
+    """Resolve one creature seeing the 2014 Hypnotic Pattern."""
+
+    target_id = actor_id(target)
+    source_actor_id = str(caster_id).strip()
+    if not source_actor_id:
+        raise CombatEngineError("Hypnotic Pattern caster_id is required")
+    if str(spell_id) != CORE_HYPNOTIC_PATTERN_SPELL_ID:
+        raise CombatEngineError("Hypnotic Pattern requires its source-bound SRD spell id")
+    if isinstance(save_dc, bool) or not isinstance(save_dc, int) or not 1 <= save_dc <= 40:
+        raise CombatEngineError("Hypnotic Pattern save DC must be an integer from 1 to 40")
+    sheet = actor_sheet(target)
+    conditions = condition_ids(sheet.get("conditions"))
+    if "blinded" in conditions:
+        return {
+            "sheet": sheet,
+            "result": {
+                "target_id": target_id,
+                "saw_pattern": False,
+                "outcome": "did_not_see_pattern",
+                "save": None,
+                "effect_id": "",
+                "ended_concentration_effect_ids": [],
+            },
+        }
+    immunities = condition_ids(dict(sheet.get("traits") or {}).get("condition_immunities"))
+    if "charmed" in immunities:
+        return {
+            "sheet": sheet,
+            "result": {
+                "target_id": target_id,
+                "saw_pattern": True,
+                "outcome": "immune_to_charmed",
+                "save": None,
+                "effect_id": "",
+                "ended_concentration_effect_ids": [],
+            },
+        }
+    save = resolve_actor_check(
+        target,
+        kind="save",
+        ability="wisdom",
+        dc=save_dc,
+        ruleset="2014",
+        rules=rules,
+        rng=rng,
+    )
+    if save["success"]:
+        return {
+            "sheet": sheet,
+            "result": {
+                "target_id": target_id,
+                "saw_pattern": True,
+                "outcome": "saved",
+                "save": save,
+                "effect_id": "",
+                "ended_concentration_effect_ids": [],
+            },
+        }
+    value = deepcopy(sheet)
+    effect_id = f"hypnotic-pattern-{uuid4().hex}"
+    effect = {
+        "id": effect_id,
+        "name": "Hypnotic Pattern",
+        "kind": "timed_conditions",
+        "source": source_actor_id,
+        "source_spell_id": CORE_HYPNOTIC_PATTERN_SPELL_ID,
+        "active": True,
+        "concentration": False,
+        "duration": {"period": "round", "remaining": 10},
+        "changes": [
+            {"path": "conditions", "mode": "add", "value": "charmed"},
+            {"path": "conditions", "mode": "add", "value": "incapacitated"},
+        ],
+        "description": "",
+    }
+    value.setdefault("effects", []).append(effect)
+    apply_effect_conditions(value, effect)
+    ended_concentration_effect_ids = end_concentration_for_incapacitating_conditions(
+        value,
+        ended_reason="incapacitated",
+    )
+    return {
+        "sheet": validate_character_sheet(value),
+        "result": {
+            "target_id": target_id,
+            "saw_pattern": True,
+            "outcome": "affected",
+            "save": save,
+            "effect_id": effect_id,
+            "ended_concentration_effect_ids": ended_concentration_effect_ids,
+        },
+    }
+
+
+def reconcile_effect_dependencies(
+    encounter: dict[str, Any],
+    sheets: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """End target effects when their recorded source effect is no longer active."""
+
+    value = deepcopy(encounter)
+    updated_sheets = {actor_id_value: deepcopy(sheet) for actor_id_value, sheet in sheets.items()}
+    changed_actor_ids: set[str] = set()
+    ended_links: list[dict[str, Any]] = []
+    links = value.get("dependent_effects", [])
+    if not isinstance(links, list):
+        raise CombatEngineError("encounter dependent_effects must be a list")
+    for link in links:
+        if not isinstance(link, dict) or not link.get("active", True):
+            continue
+        if link.get("dependency") != "source_effect_active":
+            raise CombatEngineError("unsupported encounter effect dependency")
+        source_actor_id = str(link.get("source_actor_id") or "")
+        source_effect_id = str(link.get("source_effect_id") or "")
+        target_actor_id = str(link.get("target_actor_id") or "")
+        target_effect_id = str(link.get("target_effect_id") or "")
+        if not all(
+            (source_actor_id, source_effect_id, target_actor_id, target_effect_id)
+        ):
+            raise CombatEngineError("encounter effect dependency is malformed")
+        if source_actor_id not in updated_sheets or target_actor_id not in updated_sheets:
+            raise CombatEngineError("encounter effect dependency actor sheet is missing")
+        source_active = any(
+            effect.get("active") and str(effect.get("id") or "") == source_effect_id
+            for effect in updated_sheets[source_actor_id].get("effects", [])
+        )
+        target_active = any(
+            effect.get("active") and str(effect.get("id") or "") == target_effect_id
+            for effect in updated_sheets[target_actor_id].get("effects", [])
+        )
+        if target_active and source_active:
+            continue
+        link["active"] = False
+        if not target_active:
+            link["ended_reason"] = "target_effect_ended"
+        else:
+            target_effect = next(
+                effect
+                for effect in updated_sheets[target_actor_id].get("effects", [])
+                if str(effect.get("id") or "") == target_effect_id
+            )
+            target_effect["active"] = False
+            target_effect["ended_reason"] = "source_effect_ended"
+            reconcile_ended_effect_conditions(
+                updated_sheets[target_actor_id],
+                ended_effects=[target_effect],
+            )
+            updated_sheets[target_actor_id] = validate_character_sheet(
+                updated_sheets[target_actor_id]
+            )
+            changed_actor_ids.add(target_actor_id)
+            link["ended_reason"] = "source_effect_ended"
+        ended_links.append(deepcopy(link))
+    return {
+        "encounter": value,
+        "sheets": updated_sheets,
+        "changed_actor_ids": sorted(changed_actor_ids),
+        "ended_links": ended_links,
+    }
 
 
 _SRD2014_JACK_OF_ALL_TRADES_ID = "dnd5e.content.srd2014.feature.bard-jack-of-all-trades"
@@ -961,6 +1180,7 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
                 "hide",
                 "ready",
                 "search",
+                "shake_hypnotic_pattern",
                 "stabilize",
             ]
         )
@@ -3041,7 +3261,10 @@ def _apply_adjusted_damage(
     ended_effect_ids: list[str] = []
     if adjusted > 0:
         for effect in value.get("effects", []):
-            if effect.get("active") and effect.get("kind") == "turn_undead":
+            if effect.get("active") and (
+                effect.get("kind") == "turn_undead"
+                or _is_hypnotic_pattern_target_effect(effect)
+            ):
                 effect["active"] = False
                 effect["ended_reason"] = "damaged"
                 ended_turn_effects.append(effect)
@@ -4415,6 +4638,7 @@ def resolve_common_action(
         "interact_object",
         "ready",
         "search",
+        "shake_hypnotic_pattern",
         "influence",
         "improvise",
         "study",
@@ -4528,6 +4752,7 @@ def resolve_common_action(
     elif action in {
         "hide",
         "search",
+        "shake_hypnotic_pattern",
         "influence",
         "improvise",
         "study",
