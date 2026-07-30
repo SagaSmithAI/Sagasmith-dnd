@@ -997,6 +997,7 @@ def test_gazer_eye_rays_are_structured_from_the_exact_source_action() -> None:
     spec = gazer_eye_ray_spec(reviewed_sheet, eye_rays["id"])
 
     assert spec is not None
+    assert spec["save_source_kind"] == "magical_effect"
     assert spec["draw_count"] == 2
     assert spec["reroll_duplicates"] is True
     assert spec["range_ft"] == 60

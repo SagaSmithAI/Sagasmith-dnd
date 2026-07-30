@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.48.0"
+CORE_RULE_PACK_VERSION = "1.49.0"
 
 
 @dataclass(frozen=True)
@@ -704,6 +704,8 @@ BOUNDARIES = (
         ),
         (
             "tests/test_combat_engine.py::"
+            "test_hypnotic_pattern_classifies_its_save_as_a_spell",
+            "tests/test_combat_engine.py::"
             "test_hypnotic_pattern_effect_lifecycle_preserves_other_condition_sources",
         ),
         "bundled:srd2014/07_Spells/Spells_Each/Hypnotic_Pattern.md",
@@ -814,6 +816,8 @@ BOUNDARIES = (
             "test_magic_resistance_requires_source_kind_and_applies_advantage",
             "tests/test_combat_engine.py::"
             "test_concentration_save_does_not_apply_magic_resistance",
+            "tests/test_combat_engine.py::"
+            "test_hypnotic_pattern_classifies_its_save_as_a_spell",
             "tests/test_statblocks.py::"
             "test_magic_resistance_and_evasion_are_structured_from_exact_text",
         ),

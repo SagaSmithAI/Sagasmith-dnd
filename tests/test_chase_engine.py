@@ -39,6 +39,29 @@ def _actor(
     }
 
 
+def _give_magic_resistance(actor: dict) -> None:
+    actor["sheet"]["content"]["features"].append(
+        {
+            "id": "magic-resistance",
+            "name": "Magic Resistance",
+            "choices": {
+                "source_trait": {
+                    "kind": "magic_resistance",
+                    "trigger": "saving_throw",
+                    "save_source_kinds": ["spell", "magical_effect"],
+                    "grants": "advantage",
+                    "automatic": True,
+                    "source_excerpt": (
+                        f"The {actor['name']} has advantage on saving throws "
+                        "against spells and other magical effects."
+                    ),
+                }
+            },
+        }
+    )
+    actor["derived"] = derive_character_sheet(actor["sheet"])
+
+
 def test_module_close_transition_ends_chase() -> None:
     pursuer = _actor("pursuer", initiative=20)
     quarry = _actor("quarry", initiative=10)
@@ -136,6 +159,7 @@ def test_urban_complication_affects_next_participant() -> None:
 def test_chase_prone_changes_share_immunity_and_effect_ownership() -> None:
     pursuer = _actor("pursuer", initiative=20)
     quarry = _actor("quarry", initiative=10)
+    _give_magic_resistance(quarry)
     quarry["sheet"]["traits"]["condition_immunities"] = ["prone"]
     quarry["derived"] = derive_character_sheet(quarry["sheet"])
     chase = start_chase(
@@ -160,6 +184,7 @@ def test_chase_prone_changes_share_immunity_and_effect_ownership() -> None:
     )
 
     assert immune["turn"]["complication"]["knocked_prone"] is False
+    assert immune["turn"]["complication"]["check"]["roll_mode"] == "normal"
     assert "prone" not in immune["sheet"]["conditions"]
 
     pursuer["sheet"]["conditions"] = ["prone"]

@@ -2124,6 +2124,7 @@ def _compile_gazer_eye_ray_spec(
     ]
     return {
         "kind": "gazer_eye_rays_2014",
+        "save_source_kind": "magical_effect",
         "draw_count": draw_count,
         "reroll_duplicates": True,
         "range_ft": int(parent_match.group(2)),

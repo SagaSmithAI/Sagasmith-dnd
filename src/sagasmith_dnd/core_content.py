@@ -20,7 +20,7 @@ from sagasmith_dnd.standard_spell_ids import (
 )
 
 PACK_ID = "dnd5e.content.srd2014"
-PACK_VERSION = "1.17.0"
+PACK_VERSION = "1.18.0"
 
 _SUBCLASS_LEVELS = {
     "barbarian": 3,

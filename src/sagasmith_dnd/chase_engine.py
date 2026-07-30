@@ -226,6 +226,8 @@ def _check(
         dc=dc,
         kind=kind,
         ability=ability,
+        save_source_kind=("nonmagical_effect" if kind == "save" else None),
+        save_effect_conditions=([] if kind == "save" else None),
         ruleset="2014",
         rules=rules,
         rng=rng,

@@ -498,9 +498,12 @@ def resolve_hypnotic_pattern_target(
         kind="save",
         ability="wisdom",
         dc=save_dc,
+        save_source_kind="spell",
+        save_effect_conditions=["charmed", "incapacitated"],
         ruleset="2014",
         rules=context_with_facts(
             rules,
+            save_source_kind="spell",
             save_effect_conditions=["charmed", "incapacitated"],
         ),
         rng=rng,
@@ -2577,6 +2580,8 @@ def _resolve_weapon_hit_save_damage(
         kind="save",
         ability=expected["save_ability"],
         dc=expected["save_dc"],
+        save_source_kind=expected["save_source_kind"],
+        save_effect_conditions=[],
         rules=context_with_facts(
             rules,
             save_source_kind=expected["save_source_kind"],
@@ -6178,8 +6183,11 @@ def resolve_turn_undead_to_sheets(
             kind="save",
             ability="wisdom",
             dc=save_dc,
+            save_source_kind="magical_effect",
+            save_effect_conditions=["turned"],
             rules=context_with_facts(
                 rules,
+                save_source_kind="magical_effect",
                 save_effect_conditions=["turned"],
             ),
             rng=rng,
@@ -6239,6 +6247,9 @@ def resolve_actor_check(
     bonus: int = 0,
     advantage: bool = False,
     disadvantage: bool = False,
+    save_source_kind: str | None = None,
+    save_effect_conditions: list[str] | None = None,
+    save_purpose: str | None = None,
     ruleset: str | None = None,
     rules: ResolutionContext | None = None,
     rng: Any = None,
@@ -6289,38 +6300,48 @@ def resolve_actor_check(
     if armor_stealth_disadvantage:
         disadvantage = True
     boundary_ids = []
-    save_purpose = (
-        str(dict(rules.facts).get("save_purpose") or "effect")
+    rule_facts = dict(rules.facts) if rules is not None else {}
+    normalized_save_purpose = (
+        str(
+            save_purpose
+            if save_purpose is not None
+            else rule_facts.get("save_purpose") or "effect"
+        )
         .strip()
         .casefold()
-        if rules is not None
-        else "effect"
     )
-    if kind == "save" and save_purpose not in {"effect", "concentration"}:
+    if kind == "save" and normalized_save_purpose not in {
+        "effect",
+        "concentration",
+    }:
         raise CombatEngineError(
             "save_purpose must be effect or concentration"
         )
-    source_conditioned_save = kind == "save" and save_purpose == "effect"
+    source_conditioned_save = (
+        kind == "save" and normalized_save_purpose == "effect"
+    )
     magic_resistance = (
         _validated_standard_source_trait(sheet, "magic_resistance")
         if source_conditioned_save
         else None
     )
     if magic_resistance is not None:
-        save_source_kind = (
-            str(dict(rules.facts).get("save_source_kind") or "")
+        normalized_save_source_kind = (
+            str(
+                save_source_kind
+                if save_source_kind is not None
+                else rule_facts.get("save_source_kind") or ""
+            )
             .strip()
             .casefold()
-            if rules is not None
-            else ""
         )
-        if not save_source_kind:
+        if not normalized_save_source_kind:
             raise NeedsRulingError(
                 "Magic Resistance requires the saving throw's source kind",
                 missing=("save_source_kind",),
                 ruling_kind="agent_dm_adjudication",
             )
-        if save_source_kind not in {
+        if normalized_save_source_kind not in {
             "spell",
             "magical_effect",
             "nonmagical_effect",
@@ -6328,7 +6349,9 @@ def resolve_actor_check(
             raise CombatEngineError(
                 "save_source_kind must be spell, magical_effect, or nonmagical_effect"
             )
-        if save_source_kind in set(magic_resistance["save_source_kinds"]):
+        if normalized_save_source_kind in set(
+            magic_resistance["save_source_kinds"]
+        ):
             advantage = True
             boundary_ids.append("dnd5e.core.save.magic_resistance")
     save_condition_advantage = (
@@ -6341,9 +6364,9 @@ def resolve_actor_check(
     )
     if save_condition_advantage is not None:
         raw_effect_conditions = (
-            dict(rules.facts).get("save_effect_conditions")
-            if rules is not None
-            else None
+            save_effect_conditions
+            if save_effect_conditions is not None
+            else rule_facts.get("save_effect_conditions")
         )
         if raw_effect_conditions is None:
             raise NeedsRulingError(
@@ -6912,6 +6935,10 @@ def resolve_random_save_effects(
     """Resolve a reviewed random set of saving-throw effects without DM inference."""
     if spec.get("kind") != "gazer_eye_rays_2014":
         raise CombatEngineError("unsupported random saving-throw effect contract")
+    if spec.get("save_source_kind") != "magical_effect":
+        raise CombatEngineError(
+            "Gazer Eye Rays require their source-reviewed magical effect kind"
+        )
     effects = list(spec.get("effects") or [])
     draw_count = int(spec.get("draw_count", 0) or 0)
     if draw_count < 1 or draw_count > len(effects):
@@ -6996,8 +7023,15 @@ def resolve_random_save_effects(
             kind="save",
             ability=str(save_spec.get("ability") or ""),
             dc=int(save_spec.get("dc", 0) or 0),
+            save_source_kind="magical_effect",
+            save_effect_conditions=(
+                [str(failure.get("condition") or "").strip().casefold()]
+                if failure.get("kind") == "timed_condition"
+                else []
+            ),
             rules=context_with_facts(
                 rules,
+                save_source_kind="magical_effect",
                 save_effect_conditions=(
                     [str(failure.get("condition") or "").strip().casefold()]
                     if failure.get("kind") == "timed_condition"
@@ -7138,8 +7172,11 @@ def resolve_source_save_effect(
         kind="save",
         ability="intelligence",
         dc=12,
+        save_source_kind="nonmagical_effect",
+        save_effect_conditions=["stunned"],
         rules=context_with_facts(
             rules,
+            save_source_kind="nonmagical_effect",
             save_effect_conditions=["stunned"],
         ),
         rng=rng,

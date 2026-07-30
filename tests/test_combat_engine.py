@@ -436,6 +436,53 @@ def _actor(identifier: str, *, hp: int = 12, ac: int = 10) -> dict:
     }
 
 
+def _give_magic_resistance(actor: dict) -> None:
+    actor["sheet"]["content"]["features"].append(
+        {
+            "id": f"{actor['id']}-magic-resistance",
+            "name": "Magic Resistance",
+            "choices": {
+                "source_trait": {
+                    "kind": "magic_resistance",
+                    "trigger": "saving_throw",
+                    "save_source_kinds": ["spell", "magical_effect"],
+                    "grants": "advantage",
+                    "automatic": True,
+                    "source_excerpt": (
+                        f"The {actor['name']} has advantage on saving throws "
+                        "against spells and other magical effects."
+                    ),
+                }
+            },
+        }
+    )
+    actor["derived"] = derive_character_sheet(actor["sheet"])
+
+
+def test_hypnotic_pattern_classifies_its_save_as_a_spell() -> None:
+    target = _actor("magic-resistant-target")
+    _give_magic_resistance(target)
+
+    resolved = resolve_hypnotic_pattern_target(
+        target,
+        caster_id="caster",
+        spell_id=CORE_HYPNOTIC_PATTERN_SPELL_ID,
+        save_dc=15,
+        rules=resolution_context(
+            {"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []}
+        ),
+        rng=_SequenceRng(3, 17),
+    )
+
+    assert resolved["result"]["outcome"] == "saved"
+    assert resolved["result"]["save"]["rolls"] == [3, 17]
+    assert resolved["result"]["save"]["roll_mode"] == "advantage"
+    assert [
+        receipt["mechanic_id"]
+        for receipt in resolved["result"]["save"]["rule_receipts"]
+    ] == ["dnd5e.core.save.magic_resistance"]
+
+
 def test_hypnotic_pattern_effect_lifecycle_preserves_other_condition_sources() -> None:
     target = _actor("target", hp=20)
     target["sheet"]["effects"] = [
@@ -1215,6 +1262,7 @@ def test_actor_check_rejects_attack_rolls_owned_by_the_attack_engine() -> None:
 def _gazer_eye_ray_spec() -> dict:
     return {
         "kind": "gazer_eye_rays_2014",
+        "save_source_kind": "magical_effect",
         "draw_count": 2,
         "reroll_duplicates": True,
         "range_ft": 60,
@@ -1308,12 +1356,13 @@ def test_gazer_eye_rays_reroll_duplicates_and_resolve_each_save() -> None:
     gazer = _actor("gazer")
     first = _actor("first", hp=20)
     second = _actor("second", hp=20)
+    _give_magic_resistance(first)
 
     result = resolve_random_save_effects(
         gazer,
         [first, second],
         spec=_gazer_eye_ray_spec(),
-        rng=_SequenceRng(1, 1, 3, 5, 5, 2, 3, 4),
+        rng=_SequenceRng(1, 1, 3, 5, 5, 2, 3, 4, 2),
     )
 
     assert result["selected_effect_ids"] == ["dazing-ray", "frost-ray"]
@@ -1324,6 +1373,7 @@ def test_gazer_eye_rays_reroll_duplicates_and_resolve_each_save() -> None:
     ]
     assert result["targets"][0]["target_id"] == "first"
     assert result["targets"][0]["outcome"] == "condition"
+    assert result["targets"][0]["save"]["roll_mode"] == "advantage"
     assert result["sheets"]["first"]["conditions"] == ["charmed"]
     assert source_speed_multiplier(result["sheets"]["first"]) == 0.5
     assert result["targets"][1]["target_id"] == "second"
@@ -2256,15 +2306,17 @@ def test_turn_undead_applies_and_enforces_turned() -> None:
     undead["sheet"]["edition"] = "2014"
     undead["sheet"]["progression"]["species"] = "undead"
     undead["derived"] = derive_character_sheet(undead["sheet"])
+    _give_magic_resistance(undead)
 
     resolved = resolve_turn_undead_to_sheets(
         cleric,
         {"undead": undead},
-        rng=_SequenceRng(1),
+        rng=_SequenceRng(1, 1),
     )
 
     assert resolved["save_dc"] == 13
     assert resolved["targets"][0]["turned"] is True
+    assert resolved["targets"][0]["save"]["roll_mode"] == "advantage"
     turned_sheet = resolved["sheets"]["undead"]
     assert "turned" in turned_sheet["conditions"]
     assert turned_sheet["effects"][-1]["kind"] == "turn_undead"
@@ -3003,6 +3055,7 @@ def test_devour_intellect_resolves_damage_score_reduction_and_stun() -> None:
     target = _actor("target", hp=30)
     target["sheet"]["abilities"]["intelligence"]["score"] = 10
     target["derived"] = derive_character_sheet(target["sheet"])
+    _give_magic_resistance(target)
     spec = {
         "kind": "intellect_devourer_devour_intellect_2014",
         "range_ft": 10,
@@ -3031,6 +3084,7 @@ def test_devour_intellect_resolves_damage_score_reduction_and_stun() -> None:
     result = settled["result"]
 
     assert result["save"]["success"] is False
+    assert result["save"]["roll_mode"] == "normal"
     assert result["damage_roll"]["total"] == 11
     assert result["secondary_roll"]["total"] == 12
     assert result["ability_reduced"] is True
