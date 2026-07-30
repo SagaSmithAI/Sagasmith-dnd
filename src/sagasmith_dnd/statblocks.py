@@ -1311,7 +1311,7 @@ def _save_advantage_against_conditions_source_trait(
     match = re.fullmatch(
         r"The [A-Za-z][A-Za-z '\-]* has advantage on saving throws against "
         r"being (?P<first>charmed|frightened)"
-        r"(?: or (?P<second>charmed|frightened))?\.",
+        r"(?: or (?P<second>charmed|frightened))?\s*\.",
         normalized,
         flags=re.IGNORECASE,
     )

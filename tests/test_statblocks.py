@@ -1913,7 +1913,7 @@ no damage if it succeeds on the saving throw, and only half damage if it fails.
 def test_dark_devotion_is_structured_from_exact_text() -> None:
     source_excerpt = (
         "The cultist has advantage on saving throws against being charmed or "
-        "frightened."
+        "frightened ."
     )
     parsed = parse_2014_statblock(
         COMMONER.replace(
