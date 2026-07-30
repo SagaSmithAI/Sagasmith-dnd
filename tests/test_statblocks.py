@@ -1474,6 +1474,40 @@ def test_magmin_illumination_heading_repairs_only_the_bounded_ocr_comma() -> Non
     )
 
 
+def test_magmin_standard_mechanics_accept_ocr_wrapped_source_wording() -> None:
+    parsed = parse_2014_statblock(
+        MAGMIN.replace("additional 10 ft.", "additional 10 feet.").replace(
+            "If the target is a creature or a flammable object,\n"
+            "it ignites. Until a creature takes an action to douse the fire, "
+            "the creature\n"
+            "takes 3 (1d6) fire damage at the end of each of its turns.",
+            "If the target is a creature or a\n\n"
+            "flammable object, it ignites. Until a creature takes an action to\n\n"
+            "douse the fire, the creature takes 3 (1d6) fire damage at the end\n\n"
+            "of each of its turns.",
+        ),
+        source_key="monster-manual-2014",
+    )
+
+    illumination = next(
+        item
+        for item in parsed.sheet["content"]["activities"]
+        if item["name"] == "Ignited Illumination"
+    )
+    touch = next(
+        item
+        for item in parsed.sheet["inventory"]["items"]
+        if item["name"] == "Touch"
+    )
+    assert illumination["choices"]["source_trait"]["kind"] == (
+        "ignited_illumination"
+    )
+    assert touch["mechanics"]["on_hit_resolution"]["kind"] == (
+        "ignition_ongoing_damage"
+    )
+    assert parsed.warnings == ()
+
+
 def test_keen_perception_trait_is_structured() -> None:
     parsed = parse_2014_statblock(
         COMMONER.replace(

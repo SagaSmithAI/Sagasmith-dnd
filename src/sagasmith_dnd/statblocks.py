@@ -299,6 +299,7 @@ def _parse_weapon(
         description,
     )
     additional_damage: list[dict[str, Any]] = []
+    complete_structured_on_hit: dict[str, Any] | None = None
     if hit:
         expression_parts = re.split(
             r"(?i)\s+plus\s+",
@@ -366,9 +367,17 @@ def _parse_weapon(
             )
             last_damage_end = hit.end() + extra.end()
         raw_on_hit_effect = description[last_damage_end:]
+        complete_structured_on_hit = (
+            _armor_corrosion_on_hit(
+                raw_on_hit_effect.strip().lstrip(". ,;").strip()
+            )
+            or _ignition_ongoing_damage_on_hit(
+                raw_on_hit_effect.strip().lstrip(". ,;").strip()
+            )
+        )
         trailing_paragraph_match = re.search(r"\n\s*\n", raw_on_hit_effect)
         trailing_paragraph_prose = ""
-        if trailing_paragraph_match:
+        if trailing_paragraph_match and complete_structured_on_hit is None:
             trailing_paragraph_prose = raw_on_hit_effect[
                 trailing_paragraph_match.end() :
             ].strip()
@@ -422,7 +431,7 @@ def _parse_weapon(
             )
             else f"{name}: trailing creature prose excluded from action settlement"
         )
-    elif paragraph_break:
+    elif paragraph_break and complete_structured_on_hit is None:
         trailing_prose = on_hit_effect[paragraph_break.end() :].strip()
         on_hit_effect = on_hit_effect[: paragraph_break.start()].strip()
         trailing_warning = f"{name}: trailing creature prose excluded from action settlement"
@@ -1163,7 +1172,7 @@ def _ignited_illumination_source_trait(
         r"As a bonus action, the (?P<subject>[A-Za-z][A-Za-z '\-]*) can set "
         r"itself ablaze or extinguish its flames\. While ablaze, the "
         r"(?P=subject) sheds bright light in a (?P<bright>\d+)-foot radius "
-        r"and dim light for an additional (?P<dim>\d+) (?:feet|ft\.)",
+        r"and dim light for an additional (?P<dim>\d+) (?:feet|ft)\.",
         normalized,
         flags=re.IGNORECASE,
     )
