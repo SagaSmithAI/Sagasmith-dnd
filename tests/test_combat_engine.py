@@ -3638,6 +3638,87 @@ def test_paralyzed_target_is_automatic_critical_within_five_feet() -> None:
     assert result["critical"] is True
 
 
+def test_assassinate_uses_authoritative_turn_and_surprise_state() -> None:
+    assassin = _actor("assassin")
+    assassin.update(initiative=20, disposition="hostile")
+    assassin["sheet"]["content"]["features"] = [
+        {
+            "id": "assassinate-passive",
+            "name": "Assassinate",
+            "activation": {"type": "passive"},
+            "choices": {
+                "source_trait": {
+                    "kind": "assassinate",
+                    "trigger": "attack_roll",
+                    "attacker_turn": "first",
+                    "advantage_if_target_has_not_taken_turn": True,
+                    "critical_on_hit_if_target_surprised": True,
+                    "automatic": True,
+                    "source_excerpt": (
+                        "During its first turn, the assassin has advantage on "
+                        "attack rolls against any creature that hasn't taken a "
+                        "turn. Any hit the assassin scores against a surprised "
+                        "creature is a critical hit."
+                    ),
+                }
+            },
+        }
+    ]
+    assassin["derived"] = derive_character_sheet(assassin["sheet"])
+    target = _actor("target")
+    target.update(initiative=10, disposition="friendly", surprised=True)
+    encounter = start_encounter([assassin, target], ruleset="2014")
+    rules = resolution_context(
+        {"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []}
+    )
+
+    opening = preflight_attack(
+        assassin,
+        target,
+        action={},
+        encounter=encounter,
+        rules=rules,
+    )
+
+    assert opening["advantage"] is True
+    assert "assassinate" in opening["advantage_sources"]
+    assert opening["automatic_critical_on_hit"] is True
+    assert opening["assassinate"] == {
+        "applied": ["opening_advantage", "surprised_critical"],
+        "automatic_critical_on_hit": True,
+    }
+    assert any(
+        item["mechanic_id"] == "dnd5e.core.attack.assassinate"
+        for item in opening["rule_receipts"]
+    )
+    attack = roll_attack_action(plan=opening, rng=_SequenceRng(10, 11))
+    assert attack["hit"] is True
+    assert attack["critical"] is True
+
+    encounter = end_turn(encounter, actor_id_value="assassin")
+    encounter = end_turn(encounter, actor_id_value="target")
+    assassin_state = next(
+        item for item in encounter["combatants"] if item["actor_id"] == "assassin"
+    )
+    target_state = next(
+        item for item in encounter["combatants"] if item["actor_id"] == "target"
+    )
+    assert assassin_state["turns_completed"] == 1
+    assert target_state["turns_completed"] == 1
+    assert target_state["surprised"] is False
+
+    later = preflight_attack(
+        assassin,
+        target,
+        action={},
+        encounter=encounter,
+        rules=rules,
+    )
+    assert "assassinate" not in later["advantage_sources"]
+    assert later["automatic_critical_on_hit"] is False
+    assert later["assassinate"] is None
+
+
 def test_unseen_attacker_and_target_apply_opposed_attack_modifiers() -> None:
     attacker = _actor("attacker")
     attacker.update(initiative=20, position={"x": 0, "y": 0}, hidden=True)

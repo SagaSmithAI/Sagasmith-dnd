@@ -744,6 +744,7 @@ def start_encounter(
                 "reach_ft": _nonnegative_int(actor.get("reach_ft"), default=5),
                 "can_share_space": bool(actor.get("can_share_space", False)),
                 "surprised": bool(actor.get("surprised", False)),
+                "turns_completed": 0,
                 "death_saves": bool(actor.get("death_saves", actor.get("character_type") == "pc")),
                 "zero_hp_recovery": bool(actor.get("zero_hp_recovery", False)),
                 "exhaustion": exhaustion,
@@ -1555,7 +1556,8 @@ def preflight_attack(
             source_trait := dict(dict(feature.get("choices") or {}).get("source_trait") or {}),
             dict,
         )
-        and str(source_trait.get("kind") or "") in {"pack_tactics", "sunlight_sensitivity"}
+        and str(source_trait.get("kind") or "")
+        in {"assassinate", "pack_tactics", "sunlight_sensitivity"}
     }
     relentless_endurance_feature = _automatic_relentless_endurance_feature(actor_sheet(target))
     attacker_unresolved = actor_derived(attacker).get("unresolved_rules") or []
@@ -1935,6 +1937,23 @@ def preflight_attack(
     helped_by = None
     next_attack_advantage_effect_id = None
     if encounter is not None:
+        combatants = list(encounter.get("combatants") or [])
+        attacker_state = next(
+            (
+                item
+                for item in combatants
+                if str(item.get("actor_id") or "") == actor_id(attacker)
+            ),
+            None,
+        )
+        target_state = next(
+            (
+                item
+                for item in combatants
+                if str(item.get("actor_id") or "") == actor_id(target)
+            ),
+            None,
+        )
         target_position = _position(target.get("position"))
         for helper in encounter.get("combatants", []):
             helping = dict(helper.get("turn_flags") or {}).get("helping")
@@ -1968,14 +1987,6 @@ def preflight_attack(
                     "Pack Tactics has an unsupported source contract",
                     missing=("pack_tactics",),
                 )
-            attacker_state = next(
-                (
-                    item
-                    for item in encounter.get("combatants", [])
-                    if str(item.get("actor_id") or "") == actor_id(attacker)
-                ),
-                None,
-            )
             pack_tactics_ally = next(
                 (
                     candidate
@@ -2001,6 +2012,80 @@ def preflight_attack(
                 pack_tactics_ally_id = None
         else:
             pack_tactics_ally_id = None
+        assassinate_trait = dict(
+            dict(attack_source_traits.get("assassinate") or {}).get("trait")
+            or {}
+        )
+        assassinate_applied: list[str] = []
+        if assassinate_trait:
+            if assassinate_trait != {
+                "kind": "assassinate",
+                "trigger": "attack_roll",
+                "attacker_turn": "first",
+                "advantage_if_target_has_not_taken_turn": True,
+                "critical_on_hit_if_target_surprised": True,
+                "automatic": True,
+                "source_excerpt": str(
+                    assassinate_trait.get("source_excerpt") or ""
+                ),
+            } or not str(assassinate_trait.get("source_excerpt") or "").strip():
+                raise NeedsRulingError(
+                    "Assassinate has an unsupported source contract",
+                    missing=("assassinate",),
+                )
+            attacker_index = next(
+                (
+                    index
+                    for index, candidate in enumerate(combatants)
+                    if str(candidate.get("actor_id") or "")
+                    == actor_id(attacker)
+                ),
+                None,
+            )
+            target_index = next(
+                (
+                    index
+                    for index, candidate in enumerate(combatants)
+                    if str(candidate.get("actor_id") or "") == actor_id(target)
+                ),
+                None,
+            )
+            if (
+                attacker_index is None
+                or target_index is None
+                or attacker_state is None
+                or target_state is None
+                or attacker_index != int(encounter.get("turn_index", 0) or 0)
+            ):
+                raise CombatEngineError(
+                    "Assassinate requires attacker and target in the current encounter turn"
+                )
+            encounter_round = int(encounter.get("round", 1) or 1)
+            attacker_turns = attacker_state.get("turns_completed")
+            attacker_first_turn = (
+                int(attacker_turns) == 0
+                if isinstance(attacker_turns, int)
+                and not isinstance(attacker_turns, bool)
+                else encounter_round == 1
+            )
+            target_turns = target_state.get("turns_completed")
+            target_has_taken_turn = (
+                int(target_turns) > 0
+                if isinstance(target_turns, int)
+                and not isinstance(target_turns, bool)
+                else (
+                    encounter_round > 1
+                    or target_index < int(encounter.get("turn_index", 0) or 0)
+                )
+            )
+            if attacker_first_turn and not target_has_taken_turn:
+                context["advantage"] = True
+                context.setdefault("advantage_sources", []).append("assassinate")
+                assassinate_applied.append("opening_advantage")
+            if bool(target_state.get("surprised")):
+                assassinate_applied.append("surprised_critical")
+        else:
+            assassinate_applied = []
         for effect in encounter.get("ongoing_effects", []):
             if (
                 isinstance(effect, dict)
@@ -2019,11 +2104,17 @@ def preflight_attack(
         )
     else:
         pack_tactics_ally_id = None
+        if "assassinate" in attack_source_traits:
+            raise NeedsRulingError(
+                "encounter turns are required to settle Assassinate",
+                missing=("assassinate_turn_state",),
+            )
+        assassinate_applied = []
     automatic_critical = bool(
         distance is not None
         and int(distance) <= 5
         and target_conditions & {"paralyzed", "unconscious"}
-    )
+    ) or "surprised_critical" in assassinate_applied
     extension = apply_rule_event(actor_sheet(attacker), "attack.preflight", rules)
     if extension.status != "committed":
         raise NeedsRulingError(
@@ -2078,6 +2169,8 @@ def preflight_attack(
         requested=bool(action.get("use_sneak_attack", False)),
     )
     core_boundary_ids: list[str] = []
+    if assassinate_applied:
+        core_boundary_ids.append("dnd5e.core.attack.assassinate")
     if weapon.get("item_id") == "unarmed-strike":
         core_boundary_ids.append("dnd5e.core.attack.unarmed_strike")
     if attack_mode == "ranged" and range_result.get("enforced"):
@@ -2162,6 +2255,14 @@ def preflight_attack(
         "pack_tactics_ally_id": pack_tactics_ally_id,
         "next_attack_advantage_effect_id": next_attack_advantage_effect_id,
         "sneak_attack": sneak_attack,
+        "assassinate": {
+            "applied": list(assassinate_applied),
+            "automatic_critical_on_hit": (
+                "surprised_critical" in assassinate_applied
+            ),
+        }
+        if assassinate_applied
+        else None,
         "halfling_lucky": _has_halfling_lucky(actor_sheet(attacker)),
         "rule_receipts": [
             *core_receipts(
@@ -6838,6 +6939,7 @@ def end_turn(encounter: dict[str, Any], *, actor_id_value: str | None = None) ->
         raise CombatEngineError("a required death save must be resolved before ending the turn")
     was_surprised = bool(current.get("surprised"))
     current["surprised"] = False
+    current["turns_completed"] = int(current.get("turns_completed", 0) or 0) + 1
     retained_flags = {
         key: deepcopy(item)
         for key, item in current_flags.items()

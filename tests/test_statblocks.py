@@ -1984,6 +1984,37 @@ def test_source_traits_are_compiled_from_complete_text_not_feature_names() -> No
     assert parsed.warnings == ()
 
 
+def test_assassinate_is_structured_from_exact_text() -> None:
+    source_text = (
+        "During its first turn, the assassin has advantage on attack rolls "
+        "against any creature that hasn't taken a turn. Any hit the assassin "
+        "scores against a surprised creature is a critical hit."
+    )
+    parsed = parse_2014_statblock(
+        COMMONER.replace(
+            "###### Actions",
+            f"***Assassinate***. {source_text}\n\n###### Actions",
+        ),
+        source_key="monster-manual-2014:assassin",
+    )
+    feature = next(
+        item
+        for item in parsed.sheet["content"]["features"]
+        if item["name"] == "Assassinate"
+    )
+
+    assert feature["choices"]["source_trait"] == {
+        "kind": "assassinate",
+        "trigger": "attack_roll",
+        "attacker_turn": "first",
+        "advantage_if_target_has_not_taken_turn": True,
+        "critical_on_hit_if_target_surprised": True,
+        "automatic": True,
+        "source_excerpt": source_text,
+    }
+    assert parsed.warnings == ()
+
+
 def test_source_trait_with_unparsed_clause_stays_an_agent_ruling() -> None:
     parsed = parse_2014_statblock(
         KOBOLD.replace(

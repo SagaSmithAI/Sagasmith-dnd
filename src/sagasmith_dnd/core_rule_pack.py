@@ -472,6 +472,18 @@ BOUNDARIES = (
         "bundled:srd/equipment/weapon-properties",
     ),
     CoreBoundary(
+        "dnd5e.core.attack.assassinate",
+        ("2014",),
+        "combat_engine.preflight_attack|roll_attack_action",
+        (
+            "tests/test_combat_engine.py::"
+            "test_assassinate_uses_authoritative_turn_and_surprise_state",
+            "tests/test_statblocks.py::"
+            "test_assassinate_is_structured_from_exact_text",
+        ),
+        "source:monster-manual-2014:assassin",
+    ),
+    CoreBoundary(
         "dnd5e.core.monster.aggressive",
         ("2014",),
         "combat_engine.settle_core_activity_effect",

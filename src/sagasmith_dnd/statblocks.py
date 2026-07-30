@@ -1234,6 +1234,31 @@ def _evasion_source_trait(description: str) -> dict[str, Any] | None:
     }
 
 
+def _assassinate_source_trait(description: str) -> dict[str, Any] | None:
+    """Compile the complete standard Assassin opening-turn rule."""
+
+    normalized = " ".join(description.split())
+    match = re.fullmatch(
+        r"During its first turn, the (?P<subject>[A-Za-z][A-Za-z '\-]*) has "
+        r"advantage on attack rolls against any creature that hasn't taken a "
+        r"turn\. Any hit the (?P=subject) scores against a surprised creature "
+        r"is a critical hit\.",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    return {
+        "kind": "assassinate",
+        "trigger": "attack_roll",
+        "attacker_turn": "first",
+        "advantage_if_target_has_not_taken_turn": True,
+        "critical_on_hit_if_target_surprised": True,
+        "automatic": True,
+        "source_excerpt": normalized,
+    }
+
+
 def _aggressive_source_trait(description: str) -> dict[str, Any] | None:
     normalized = " ".join(description.split())
     if not re.fullmatch(
@@ -1586,6 +1611,7 @@ def _source_trait_from_description(description: str) -> dict[str, Any] | None:
             _keen_perception_source_trait,
             _magic_resistance_source_trait,
             _evasion_source_trait,
+            _assassinate_source_trait,
             _aggressive_source_trait,
             _cunning_action_source_trait,
             _included_weapon_damage_source_trait,
@@ -2530,6 +2556,7 @@ def parse_2014_statblock(
                 "keen_perception": "hearing- or sight-based Perception check",
                 "magic_resistance": "saving throw against a spell or magical effect",
                 "evasion": "Dexterity saving throw for half damage",
+                "assassinate": "attack roll during its first turn",
                 "aggressive": "bonus action on its turn",
                 "cunning_action": "bonus action on its turn",
                 "included_weapon_damage": "weapon hit; included in weapon actions",
