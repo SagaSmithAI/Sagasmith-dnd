@@ -2653,6 +2653,117 @@ def test_source_parry_excludes_conflated_trailing_creature_lore() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "reaction",
+    [
+        (
+            "The noble adds 2 to its AC aga inst one melee attack that would hit it. "
+            "To do so, the noble mu st see the attacker and be wielding a melee weapon."
+        ),
+        (
+            "The veteran adds 3 to its AC against one melee attack that would hit it. "
+            "To do so, the veteran must se e the attacker and be wielding a melee weapon."
+        ),
+        (
+            "The hobgoblin adds 3 to its AC against one melee attack that would hit it. "
+            "To do so, the hobgoblin mus t see the attacker and be wielding a melee weapon."
+        ),
+        (
+            "Th e death kni ght add s 6 to its AC against one melee attack that wo uld "
+            "hit it. To do so, the dea th knight mu st see the attacker and be wield ing "
+            "a me lee wea pon."
+        ),
+    ],
+)
+def test_source_parry_repairs_rulebook_ocr_word_splits(reaction: str) -> None:
+    parsed = parse_2014_statblock(
+        BANDIT_CAPTAIN.replace(
+            "The captain adds 2 to its AC against one melee attack that would hit it.",
+            reaction,
+        ),
+        source_key="rulebook-ocr:parry",
+    )
+
+    parry = next(
+        item
+        for item in parsed.sheet["content"]["activities"]
+        if item["name"] == "Parry"
+    )
+    defense = parry["choices"]["reaction_defense"]
+    assert defense["kind"] == "armor_class_bonus"
+    assert defense["bonus"] in {2, 3, 6}
+    assert defense["attack_modes"] == ["melee"]
+    assert defense["requires_visible_attacker"] is True
+    assert defense["requires_wielded_melee_weapon"] is True
+    assert parsed.warnings == ()
+    assert parsed.normalization_notes == (
+        "Parry: standard reaction OCR word splits repaired",
+    )
+
+
+def test_source_parry_rejects_mismatched_requirement_subject() -> None:
+    parsed = parse_2014_statblock(
+        BANDIT_CAPTAIN.replace(
+            "The captain adds 2 to its AC against one melee attack that would hit it.",
+            (
+                "The captain adds 2 to its AC against one melee attack that would hit it. "
+                "To do so, the knight must see the attacker and be wielding a melee weapon."
+            ),
+        ),
+        source_key="module-review:mismatched-parry-subject",
+    )
+    parry = next(
+        item
+        for item in parsed.sheet["content"]["activities"]
+        if item["name"] == "Parry"
+    )
+
+    assert parry["choices"]["manual_ruling"]["default_resolver"] == "agent"
+    assert "Parry: descriptive reaction is not automatically settled" in parsed.warnings
+
+
+def test_source_parry_excludes_noble_lore_that_uses_wield_descriptively() -> None:
+    parsed = parse_2014_statblock(
+        BANDIT_CAPTAIN.replace(
+            "The captain adds 2 to its AC against one melee attack that would hit it.",
+            (
+                "The noble adds 2 to its AC aga inst one melee attack that would hit it. "
+                "To do so, the noble mu st see the attacker and be wielding a melee weapon. "
+                "Nobles wield great authority and influence as members of the upper class, "
+                "possessing wealth and connections that can make them as powerful as generals."
+            ),
+        ),
+        source_key="rulebook-ocr:noble-with-lore",
+    )
+    parry = next(
+        item
+        for item in parsed.sheet["content"]["activities"]
+        if item["name"] == "Parry"
+    )
+
+    assert parry["choices"]["reaction_defense"]["requires_wielded_melee_weapon"] is True
+    assert "great authority" not in parry["description"]
+    assert parsed.warnings == ()
+
+
+def test_source_parry_keeps_unparsed_wielded_shield_extension_for_agent() -> None:
+    parsed = parse_2014_statblock(
+        BANDIT_CAPTAIN.replace(
+            "one melee attack that would hit it.",
+            "one melee attack that would hit it. It wields a shield until its next turn.",
+        ),
+        source_key="module-review:extended-parry-shield",
+    )
+    parry = next(
+        item
+        for item in parsed.sheet["content"]["activities"]
+        if item["name"] == "Parry"
+    )
+
+    assert parry["choices"]["manual_ruling"]["default_resolver"] == "agent"
+    assert "Parry: descriptive reaction is not automatically settled" in parsed.warnings
+
+
 def test_reaction_defense_is_compiled_from_complete_text_not_activity_name() -> None:
     parsed = parse_2014_statblock(
         BANDIT_CAPTAIN.replace("***Parry***.", "***Deflect***."),

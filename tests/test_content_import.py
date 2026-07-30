@@ -350,6 +350,91 @@ def test_text_layout_recovery_scopes_split_guard_without_images() -> None:
         normalize_2014_statblock_candidate("CULT FANATIC", chunks)
 
 
+def test_text_layout_recovery_moves_complete_noble_parry_out_of_traits() -> None:
+    base = ["Appendix B: Nonplayer Characters", "CULT FANATIC"]
+    chunks = [
+        {
+            "id": "noble-core",
+            "ordinal": 3866,
+            "heading_path": [*base, "NOBLE"],
+            "content": (
+                "Medium humanoid (any race), any alignment Armor Class 15 "
+                "(breastplate) Hit Points 9 (2d8) Speed 30 ft."
+            ),
+        },
+        *[
+            {
+                "id": f"noble-{ability.casefold()}",
+                "ordinal": 3867 + index,
+                "heading_path": [*base, ability],
+                "content": value,
+            }
+            for index, (ability, value) in enumerate(
+                (
+                    ("STR", "11 (+0)"),
+                    ("DEX", "12 (+1)"),
+                    ("CON", "11 (+0)"),
+                    ("INT", "12 (+1)"),
+                    (
+                        "WIS",
+                        (
+                            "14 (+2) Skills Deception +5, Insight +4, Persuasion +5 "
+                            "Senses passive Perception 10 Languages any two languages "
+                            "Challenge 1/8 (25 XP)"
+                        ),
+                    ),
+                    (
+                        "CHA",
+                        (
+                            "16 (+3) Rapier. Melee Weapon Attack: +3 to hit, reach "
+                            "5 ft., one target. Hit: 5 (1d8 + 1) piercing damage."
+                        ),
+                    ),
+                )
+            )
+        ],
+        {
+            "id": "noble-actions",
+            "ordinal": 3873,
+            "heading_path": [*base, "ACTIONS"],
+            "content": "",
+        },
+        {
+            "id": "noble-parry",
+            "ordinal": 3874,
+            "heading_path": [*base, "NOBLE"],
+            "content": (
+                "Parry. The noble adds 2 to its AC aga inst one melee attack that "
+                "would hit it. To do so, the noble mu st see the attacker and be "
+                "wielding a melee weapon. Nobles wield great authority and influence "
+                "as members of the upper class."
+            ),
+        },
+    ]
+
+    recovered = normalize_2014_statblock_candidate("Noble", chunks)
+    parsed = parse_2014_statblock(
+        recovered["normalized_content"],
+        source_key="rulebook-ocr:noble-layout",
+    )
+    parry = next(
+        activity
+        for activity in parsed.sheet["content"]["activities"]
+        if activity["name"] == "Parry"
+    )
+
+    assert "## Reactions" in recovered["normalized_content"]
+    assert "great authority" not in recovered["normalized_content"]
+    assert parry["choices"]["reaction_defense"] == {
+        "kind": "armor_class_bonus",
+        "bonus": 2,
+        "attack_modes": ["melee"],
+        "requires_visible_attacker": True,
+        "requires_wielded_melee_weapon": True,
+    }
+    assert parsed.warnings == ()
+
+
 def test_text_layout_recovery_ignores_ocr_noise_inside_creature_heading() -> None:
     base = ["Appendix B: Nonplayer Characters", "CUSTOMIZING NPCS"]
     chunks = [

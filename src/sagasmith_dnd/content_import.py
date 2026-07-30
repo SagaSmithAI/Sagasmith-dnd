@@ -26,7 +26,11 @@ from sagasmith_dnd.spell_resolution import (
     SPELL_RESOLUTION_MECHANIC_ID,
     normalize_spell_resolution,
 )
-from sagasmith_dnd.statblocks import StatblockImportError, parse_2014_statblock
+from sagasmith_dnd.statblocks import (
+    StatblockImportError,
+    parry_reaction_settlement,
+    parse_2014_statblock,
+)
 
 _ITEM_HEADER_RE = re.compile(
     r"(?im)^(?:wondrous item|weapon|armor|potion|ring|rod|staff|wand)(?:\s*[,—-]|\s*$)"
@@ -545,6 +549,16 @@ def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
         )
 
     fields, traits = _split_statblock_details(" ".join(detail_parts))
+    parry_boundary = re.search(r"(?i)(?<![A-Za-z])Parry\.\s+", traits)
+    if parry_boundary is not None:
+        parry_settlement = parry_reaction_settlement(
+            traits[parry_boundary.end() :]
+        )
+        if parry_settlement is not None:
+            traits = traits[: parry_boundary.start()].strip()
+            section_parts["REACTIONS"].append(
+                f"Parry. {parry_settlement[1]}"
+            )
     # Some two-column PDFs flatten the decorated Actions divider into the
     # final trait column.  Recover only the distinctive OCR form so ordinary
     # prose that happens to mention actions cannot move between sections.

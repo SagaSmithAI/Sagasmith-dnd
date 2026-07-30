@@ -1545,31 +1545,79 @@ def _source_trait_from_description(description: str) -> dict[str, Any] | None:
     return matches[0] if len(matches) == 1 else None
 
 
-def _parry_reaction_settlement(
+def parry_reaction_settlement(
     description: str,
-) -> tuple[dict[str, Any], str, str] | None:
+) -> tuple[dict[str, Any], str, str, bool] | None:
     """Structure a complete standard post-hit reaction and isolate adjacent lore."""
 
     normalized = " ".join(description.split())
+    repaired = normalized
+    for word in (
+        "against",
+        "attacker",
+        "attack",
+        "melee",
+        "weapon",
+        "wielding",
+        "would",
+        "must",
+        "adds",
+        "see",
+        "the",
+    ):
+        fragmented_word = (
+            r"\b(?:"
+            + "|".join(
+                re.escape(word[:split_at])
+                + r"\s+"
+                + re.escape(word[split_at:])
+                for split_at in range(1, len(word))
+            )
+            + r")\b"
+        )
+        repaired = re.sub(
+            fragmented_word,
+            lambda match: word.capitalize() if match.group(0)[0].isupper() else word,
+            repaired,
+            flags=re.IGNORECASE,
+        )
+    ocr_repaired = repaired != normalized
+    normalized = repaired
     match = re.match(
-        r"The (?P<subject>[A-Za-z][A-Za-z '\-]*) adds? "
+        r"The (?P<subject>[A-Za-z][A-Za-z '\-]*?) adds? "
         r"(?P<bonus>\d+) to (?:its|his|her|their) AC against one melee attack "
         r"that would hit (?:it|him|her|them)\."
-        r"(?: To do so, the (?P=subject) must see the attacker and be wielding "
+        r"(?: To do so, the (?P<requirement_subject>[A-Za-z][A-Za-z '\-]*?) "
+        r"must see the attacker and be wielding "
         r"a melee weapon\.)?",
         normalized,
         flags=re.IGNORECASE,
     )
     if match is None:
         return None
+    requirement_subject = match.group("requirement_subject")
+    if requirement_subject is not None:
+        compact_subject = re.sub(r"[^a-z]", "", match.group("subject").casefold())
+        compact_requirement_subject = re.sub(
+            r"[^a-z]",
+            "",
+            requirement_subject.casefold(),
+        )
+        if compact_subject != compact_requirement_subject:
+            return None
     mechanics_text = normalized[: match.end()].strip()
     trailing_text = normalized[match.end() :].strip()
     trailing_lead = trailing_text.split(".", 1)[0]
-    if trailing_text and re.search(
+    subject_plural = re.compile(
+        rf"(?i)^{re.escape(match.group('subject').strip())}(?:s|es)\b"
+    )
+    trailing_is_subject_lore = subject_plural.match(trailing_lead) is not None
+    if trailing_text and not trailing_is_subject_lore and re.search(
         (
             r"(?i)\b(?:AC|action|advantage|attack|attacker|bonus|can|creature|"
             r"damage|DC|disadvantage|feet|ft|hit|may|move|movement|must|range|"
-            r"reach|reaction|roll|round|save|speed|target|turn|weapon|wield)\b"
+            r"reach|reaction|roll|round|save|speed|target|turn|weapon)\b"
+            r"|\bwield(?:s|ing)?\b.{0,40}\b(?:shield|weapon)\b"
             r"|\b\d+\b|\b\d*d\d+\b"
         ),
         trailing_lead,
@@ -1602,13 +1650,14 @@ def _parry_reaction_settlement(
         },
         mechanics_text,
         trailing_text,
+        ocr_repaired,
     )
 
 
 def _parry_reaction_defense(description: str) -> dict[str, Any] | None:
     """Return the engine contract for a complete standard Parry reaction."""
 
-    settlement = _parry_reaction_settlement(description)
+    settlement = parry_reaction_settlement(description)
     return settlement[0] if settlement is not None else None
 
 
@@ -2440,7 +2489,7 @@ def parse_2014_statblock(
             else description
         )
         reaction_settlement = (
-            _parry_reaction_settlement(reaction_description)
+            parry_reaction_settlement(reaction_description)
             if activation == "reaction"
             else None
         )
@@ -2450,8 +2499,17 @@ def parse_2014_statblock(
         if reaction_defense is not None:
             settled_description = reaction_settlement[1]
             trailing_reaction_prose = reaction_settlement[2]
-            if trailing_reaction_prose or reaction_description != description:
+            if reaction_settlement[3]:
+                normalization_notes.append(
+                    f"{entry_name}: standard reaction OCR word splits repaired"
+                )
+            if (
+                trailing_reaction_prose
+                or reaction_description != description
+                or reaction_settlement[3]
+            ):
                 entry["description"] = settled_description
+            if trailing_reaction_prose or reaction_description != description:
                 normalization_notes.append(
                     f"{entry_name}: trailing creature prose excluded from reaction settlement"
                 )
