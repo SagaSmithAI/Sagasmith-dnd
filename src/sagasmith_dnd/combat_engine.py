@@ -2610,6 +2610,135 @@ def _resolve_weapon_hit_save_damage(
     }
 
 
+def _resolve_weapon_hit_contest_pull(
+    attacker: dict[str, Any],
+    target: dict[str, Any],
+    resolution: dict[str, Any],
+    *,
+    rules: ResolutionContext | None,
+    rng: Any,
+) -> dict[str, Any]:
+    """Settle a size-limited ability contest and emit authoritative movement."""
+
+    expected = {
+        "kind": "contest_pull",
+        "trigger": "weapon_hit",
+        "required_target_kind": str(
+            resolution.get("required_target_kind") or ""
+        ),
+        "maximum_target_size": str(
+            resolution.get("maximum_target_size") or ""
+        ),
+        "source_ability": str(resolution.get("source_ability") or ""),
+        "target_ability": str(resolution.get("target_ability") or ""),
+        "ties": "no_movement",
+        "maximum_distance_ft": int(
+            resolution.get("maximum_distance_ft", 0) or 0
+        ),
+        "direction": "toward_source",
+        "automatic": True,
+        "source_excerpt": str(resolution.get("source_excerpt") or ""),
+    }
+    size_order = ["tiny", "small", "medium", "large", "huge", "gargantuan"]
+    if (
+        resolution != expected
+        or expected["required_target_kind"] != "creature"
+        or expected["maximum_target_size"] not in size_order
+        or expected["source_ability"]
+        not in {
+            "strength",
+            "dexterity",
+            "constitution",
+            "intelligence",
+            "wisdom",
+            "charisma",
+        }
+        or expected["target_ability"]
+        not in {
+            "strength",
+            "dexterity",
+            "constitution",
+            "intelligence",
+            "wisdom",
+            "charisma",
+        }
+        or expected["maximum_distance_ft"] < 5
+        or expected["maximum_distance_ft"] % 5
+        or not expected["source_excerpt"]
+    ):
+        raise CombatEngineError("unsupported weapon-hit contest-pull resolution")
+    target_kind = str(target.get("kind") or "creature").strip().casefold()
+    if target_kind != expected["required_target_kind"]:
+        return {
+            "kind": "contest_pull",
+            "eligible": False,
+            "target_kind": target_kind,
+            "required_target_kind": expected["required_target_kind"],
+            "target_size": None,
+            "maximum_target_size": expected["maximum_target_size"],
+            "contest": None,
+            "forced_movement": None,
+            "source_excerpt": expected["source_excerpt"],
+            "mechanic_id": "dnd5e.core.attack.weapon_hit_contest_pull",
+        }
+    target_size = (
+        str(dict(actor_sheet(target).get("traits") or {}).get("size") or "")
+        .strip()
+        .casefold()
+    )
+    if target_size not in size_order:
+        raise CombatEngineError("contest-pull target size is not recorded")
+    eligible = size_order.index(target_size) <= size_order.index(
+        expected["maximum_target_size"]
+    )
+    if not eligible:
+        return {
+            "kind": "contest_pull",
+            "eligible": False,
+            "target_kind": target_kind,
+            "required_target_kind": expected["required_target_kind"],
+            "target_size": target_size,
+            "maximum_target_size": expected["maximum_target_size"],
+            "contest": None,
+            "forced_movement": None,
+            "source_excerpt": expected["source_excerpt"],
+            "mechanic_id": "dnd5e.core.attack.weapon_hit_contest_pull",
+        }
+    contest = resolve_actor_contest(
+        attacker,
+        target,
+        source_ability=expected["source_ability"],
+        target_ability=expected["target_ability"],
+        source_rules=rules,
+        target_rules=rules,
+        rng=rng,
+    )
+    source_wins = (
+        str(contest.get("winner_actor_id") or "") == actor_id(attacker)
+    )
+    return {
+        "kind": "contest_pull",
+        "eligible": True,
+        "target_kind": target_kind,
+        "required_target_kind": expected["required_target_kind"],
+        "target_size": target_size,
+        "maximum_target_size": expected["maximum_target_size"],
+        "contest": contest,
+        "forced_movement": (
+            {
+                "source_actor_id": actor_id(attacker),
+                "target_actor_id": actor_id(target),
+                "distance_ft": expected["maximum_distance_ft"],
+                "direction": "toward_source",
+            }
+            if source_wins
+            else None
+        ),
+        "source_excerpt": expected["source_excerpt"],
+        "mechanic_id": "dnd5e.core.attack.weapon_hit_contest_pull",
+    }
+
+
 def resolve_attack_damage(
     attacker: dict[str, Any],
     target: dict[str, Any],
@@ -2691,6 +2820,7 @@ def resolve_attack_damage(
                 }
             )
         save_damage_on_hit: dict[str, Any] | None = None
+        contest_pull_on_hit: dict[str, Any] | None = None
         on_hit_resolution = dict(plan.get("on_hit_resolution") or {})
         if on_hit_resolution.get("kind") == "save_damage":
             save_damage_on_hit = _resolve_weapon_hit_save_damage(
@@ -2710,6 +2840,14 @@ def resolve_attack_damage(
                     "damage_type": str(save_damage_on_hit["damage_type"]),
                     "source": "weapon_hit_save_damage",
                 }
+            )
+        elif on_hit_resolution.get("kind") == "contest_pull":
+            contest_pull_on_hit = _resolve_weapon_hit_contest_pull(
+                attacker,
+                target,
+                on_hit_resolution,
+                rules=rules,
+                rng=rng,
             )
         if len(rolled_parts) == 1:
             damage = apply_damage_to_sheet(
@@ -2758,6 +2896,8 @@ def resolve_attack_damage(
         if plan.get("on_hit_resolution"):
             if save_damage_on_hit is not None:
                 result["structured_on_hit"] = save_damage_on_hit
+            elif contest_pull_on_hit is not None:
+                result["structured_on_hit"] = contest_pull_on_hit
             else:
                 structured_on_hit = resolve_standard_weapon_on_hit(
                     updated_target["sheet"],
@@ -2808,6 +2948,18 @@ def resolve_attack_damage(
                 "detail": str(save_damage_on_hit["damage_roll"]["detail"]),
             }
         result["structured_on_hit"] = save_damage_on_hit
+    elif (
+        attack["hit"]
+        and dict(plan.get("on_hit_resolution") or {}).get("kind")
+        == "contest_pull"
+    ):
+        result["structured_on_hit"] = _resolve_weapon_hit_contest_pull(
+            attacker,
+            target,
+            dict(plan["on_hit_resolution"]),
+            rules=rules,
+            rng=rng,
+        )
     elif attack["hit"] and plan.get("on_hit_effect"):
         result["on_hit_ruling"] = {
             "required": True,
@@ -2916,6 +3068,13 @@ def resolve_attack_damage(
     ):
         resolution_boundaries.append(
             "dnd5e.core.attack.weapon_hit_save_damage"
+        )
+    if (
+        isinstance(result.get("structured_on_hit"), dict)
+        and result["structured_on_hit"].get("kind") == "contest_pull"
+    ):
+        resolution_boundaries.append(
+            "dnd5e.core.attack.weapon_hit_contest_pull"
         )
     extension_receipts: list[dict[str, Any]] = [
         *list(plan.get("rule_receipts") or []),
@@ -4858,18 +5017,22 @@ def stand_up(encounter: dict[str, Any], actor_id_value: str) -> dict[str, Any]:
     return value
 
 
-def force_move_directly_away(
+def _force_move_directly(
     encounter: dict[str, Any],
     *,
     source_actor_id: str,
     target_actor_id: str,
     distance_ft: int,
+    direction: str,
 ) -> dict[str, Any]:
-    """Move a creature the farthest legal grid distance directly from a source."""
+    """Move a creature on the source-target ray without voluntary-move effects."""
+
     value = deepcopy(encounter)
     distance = int(distance_ft)
     if distance < 0 or distance % 5:
         raise CombatEngineError("forced movement distance must be five-foot increments")
+    if direction not in {"directly_away", "toward_source"}:
+        raise CombatEngineError("forced movement direction is unsupported")
     source = next(
         (
             item
@@ -4892,20 +5055,25 @@ def force_move_directly_away(
     target_position = _position(target.get("position"))
     if source_position is None or target_position is None:
         raise NeedsRulingError(
-            "directly-away movement requires recorded source and target positions",
+            "direct forced movement requires recorded source and target positions",
             missing=("forced_movement_positions",),
         )
-    delta_x = target_position[0] - source_position[0]
-    delta_y = target_position[1] - source_position[1]
+    if direction == "directly_away":
+        delta_x = target_position[0] - source_position[0]
+        delta_y = target_position[1] - source_position[1]
+    else:
+        delta_x = source_position[0] - target_position[0]
+        delta_y = source_position[1] - target_position[1]
     if delta_x == 0 and delta_y == 0:
         raise NeedsRulingError(
-            "directly-away movement is ambiguous for overlapping tokens",
+            "direct forced movement is ambiguous for overlapping tokens",
             missing=("forced_movement_direction",),
         )
     grid_span = max(abs(delta_x), abs(delta_y))
 
     def _grid_ray_offset(component: float, step: int) -> int:
-        """Round a continuous outward ray to the nearest standard grid cell."""
+        """Round the continuous source-target ray to the nearest grid cell."""
+
         scaled = (component * step) / grid_span
         return int(scaled + 0.5) if scaled >= 0 else int(scaled - 0.5)
 
@@ -4946,7 +5114,7 @@ def force_move_directly_away(
             "target_actor_id": str(target_actor_id),
             "requested_distance_ft": distance,
             "moved_distance_ft": moved_distance,
-            "direction": "directly_away",
+            "direction": direction,
             "opportunity_reactions": False,
         },
     ][-100:]
@@ -4958,10 +5126,47 @@ def force_move_directly_away(
         "requested_distance_ft": distance,
         "moved_distance_ft": moved_distance,
         "destination": deepcopy(target["position"]),
+        "direction": direction,
         "ended_witch_bolt_tether_ids": [
             str(item.get("id") or "") for item in reconciled["ended"]
         ],
     }
+
+
+def force_move_directly_away(
+    encounter: dict[str, Any],
+    *,
+    source_actor_id: str,
+    target_actor_id: str,
+    distance_ft: int,
+) -> dict[str, Any]:
+    """Move a creature the farthest legal grid distance directly from a source."""
+
+    return _force_move_directly(
+        encounter,
+        source_actor_id=source_actor_id,
+        target_actor_id=target_actor_id,
+        distance_ft=distance_ft,
+        direction="directly_away",
+    )
+
+
+def force_move_directly_toward(
+    encounter: dict[str, Any],
+    *,
+    source_actor_id: str,
+    target_actor_id: str,
+    distance_ft: int,
+) -> dict[str, Any]:
+    """Move a creature the farthest legal grid distance toward a source."""
+
+    return _force_move_directly(
+        encounter,
+        source_actor_id=source_actor_id,
+        target_actor_id=target_actor_id,
+        distance_ft=distance_ft,
+        direction="toward_source",
+    )
 
 
 def resolve_common_action(

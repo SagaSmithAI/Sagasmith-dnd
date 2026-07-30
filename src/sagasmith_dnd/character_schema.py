@@ -659,6 +659,95 @@ def _normalize_weapon_on_hit_resolution(value: Any, field: str) -> dict[str, Any
     trigger = _text(resolution.get("trigger"), f"{field}.trigger")
     if trigger != "weapon_hit":
         raise ValueError(f"{field}.trigger is unsupported")
+    if kind == "contest_pull":
+        _reject_unknown(
+            resolution,
+            field,
+            {
+                "kind",
+                "trigger",
+                "required_target_kind",
+                "maximum_target_size",
+                "source_ability",
+                "target_ability",
+                "ties",
+                "maximum_distance_ft",
+                "direction",
+                "automatic",
+                "source_excerpt",
+            },
+        )
+        if (
+            _text(
+                resolution.get("required_target_kind"),
+                f"{field}.required_target_kind",
+            )
+            != "creature"
+        ):
+            raise ValueError(f"{field}.required_target_kind is unsupported")
+        maximum_target_size = _text(
+            resolution.get("maximum_target_size"),
+            f"{field}.maximum_target_size",
+        ).casefold()
+        if maximum_target_size not in {
+            "tiny",
+            "small",
+            "medium",
+            "large",
+            "huge",
+            "gargantuan",
+        }:
+            raise ValueError(f"{field}.maximum_target_size is invalid")
+        source_ability = _text(
+            resolution.get("source_ability"),
+            f"{field}.source_ability",
+        ).casefold()
+        target_ability = _text(
+            resolution.get("target_ability"),
+            f"{field}.target_ability",
+        ).casefold()
+        if (
+            source_ability not in ABILITY_NAMES
+            or target_ability not in ABILITY_NAMES
+        ):
+            raise ValueError(f"{field} contest abilities are invalid")
+        if _text(resolution.get("ties"), f"{field}.ties") != "no_movement":
+            raise ValueError(f"{field}.ties is unsupported")
+        if (
+            _text(resolution.get("direction"), f"{field}.direction")
+            != "toward_source"
+        ):
+            raise ValueError(f"{field}.direction is unsupported")
+        maximum_distance_ft = _integer(
+            resolution.get("maximum_distance_ft"),
+            f"{field}.maximum_distance_ft",
+            minimum=5,
+            maximum=500,
+        )
+        if maximum_distance_ft % 5:
+            raise ValueError(
+                f"{field}.maximum_distance_ft must use five-foot increments"
+            )
+        return {
+            "kind": kind,
+            "trigger": trigger,
+            "required_target_kind": "creature",
+            "maximum_target_size": maximum_target_size,
+            "source_ability": source_ability,
+            "target_ability": target_ability,
+            "ties": "no_movement",
+            "maximum_distance_ft": maximum_distance_ft,
+            "direction": "toward_source",
+            "automatic": _boolean(
+                resolution.get("automatic"),
+                f"{field}.automatic",
+            ),
+            "source_excerpt": _text(
+                resolution.get("source_excerpt"),
+                f"{field}.source_excerpt",
+                maximum=1200,
+            ),
+        }
     if kind == "save_damage":
         _reject_unknown(
             resolution,

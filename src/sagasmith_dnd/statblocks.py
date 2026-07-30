@@ -499,6 +499,9 @@ def _parse_weapon(
         if (
             actor_lore_match is not None
             and carries_standard_ammunition is None
+            and not _looks_like_mechanical_on_hit_suffix(
+                raw_on_hit_effect[actor_lore_match.start() :]
+            )
         ):
             trailing_paragraph_prose = raw_on_hit_effect[
                 actor_lore_match.start() :
@@ -514,6 +517,9 @@ def _parse_weapon(
                 raw_on_hit_effect.strip().lstrip(". ,;").strip()
             )
             or _saving_throw_damage_on_hit(
+                raw_on_hit_effect.strip().lstrip(". ,;").strip()
+            )
+            or _contest_pull_on_hit(
                 raw_on_hit_effect.strip().lstrip(". ,;").strip()
             )
         )
@@ -598,7 +604,12 @@ def _parse_weapon(
         trailing_prose = on_hit_effect
         on_hit_effect = ""
         trailing_warning = f"{name}: trailing page furniture excluded from action settlement"
-    elif actor_lore_match:
+    elif (
+        actor_lore_match
+        and not _looks_like_mechanical_on_hit_suffix(
+            on_hit_effect[actor_lore_match.start() :]
+        )
+    ):
         trailing_prose = on_hit_effect[actor_lore_match.start() :].strip()
         on_hit_effect = on_hit_effect[: actor_lore_match.start()].strip()
         trailing_warning = f"{name}: trailing creature prose excluded from action settlement"
@@ -645,6 +656,7 @@ def _parse_weapon(
         _armor_corrosion_on_hit(on_hit_effect)
         or _ignition_ongoing_damage_on_hit(on_hit_effect)
         or _saving_throw_damage_on_hit(on_hit_effect)
+        or _contest_pull_on_hit(on_hit_effect)
     )
     if structured_on_hit is not None:
         mechanics["on_hit_resolution"] = structured_on_hit
@@ -699,6 +711,19 @@ def _parse_weapon(
     if ammunition_item is not None:
         result["_ammunition_item"] = ammunition_item
     return result
+
+
+def _looks_like_mechanical_on_hit_suffix(description: str) -> bool:
+    normalized = " ".join(description.split())
+    return (
+        re.search(
+            r"(?i)\b(?:the target|target|creature)\b.{0,160}\b"
+            r"(?:must|saving throw|contest|pulled|pushed|grappled|"
+            r"restrained|knocked|feet)\b",
+            normalized,
+        )
+        is not None
+    )
 
 
 def _armor_corrosion_on_hit(description: str) -> dict[str, Any] | None:
@@ -792,6 +817,36 @@ def _saving_throw_damage_on_hit(description: str) -> dict[str, Any] | None:
     }
 
 
+def _contest_pull_on_hit(description: str) -> dict[str, Any] | None:
+    """Compile a size-limited Strength contest that pulls toward the attacker."""
+
+    normalized = " ".join(description.split())
+    match = re.fullmatch(
+        r"If the target is a (?P<maximum_size>Tiny|Small|Medium|Large|Huge|Gargantuan) "
+        r"or smaller creature, it must succeed on a (?P<ability>Strength|Dexterity|"
+        r"Constitution|Intelligence|Wisdom|Charisma) contest against the "
+        r"[A-Za-z][A-Za-z '\-]* or be pulled up to (?P<distance>\d+) feet "
+        r"toward the [A-Za-z][A-Za-z '\-]*\.",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    return {
+        "kind": "contest_pull",
+        "trigger": "weapon_hit",
+        "required_target_kind": "creature",
+        "maximum_target_size": match.group("maximum_size").casefold(),
+        "source_ability": match.group("ability").casefold(),
+        "target_ability": match.group("ability").casefold(),
+        "ties": "no_movement",
+        "maximum_distance_ft": int(match.group("distance")),
+        "direction": "toward_source",
+        "automatic": True,
+        "source_excerpt": normalized,
+    }
+
+
 def _count(value: str) -> int | None:
     value = value.casefold().strip()
     if value.isdigit():
@@ -815,10 +870,84 @@ def _parse_multiattack(description: str, items: list[dict[str, Any]]) -> list[di
         re.sub(r"[^a-z0-9 ]", "", item["name"].casefold()).strip(): item["id"]
         for item in items
     }
+
+    def weapon_modes(weapon_id: str) -> list[str]:
+        weapon = next(item for item in items if item["id"] == weapon_id)
+        mechanics = dict(weapon.get("mechanics") or {})
+        modes = [str(mechanics.get("attack_type") or "melee")]
+        if "thrown" in {
+            str(value).casefold()
+            for value in mechanics.get("properties") or []
+        }:
+            modes.append("ranged")
+        return list(dict.fromkeys(modes))
+
     sentence_groups = re.split(r"(?i)\.\s*(?:Or\s+)?", description)
     options: list[dict[str, Any]] = []
     for group in sentence_groups:
         if "attack" not in group.casefold():
+            continue
+        required_plus_alternative = re.search(
+            r"(?i)\bmakes?\s+"
+            r"(?P<total>one|two|three|four|five|six|\d+)\s+attacks?\s*:\s*"
+            r"(?P<required_count>one|two|three|four|five|six|\d+)\s+with\s+"
+            r"(?:its|his|her|their)\s+(?P<required>[a-z][a-z '\-]+?)\s+and\s+"
+            r"(?P<alternative_count>one|two|three|four|five|six|\d+)\s+with\s+"
+            r"(?:its|his|her|their)\s+(?P<first>[a-z][a-z '\-]+?)\s+or\s+"
+            r"(?:(?:its|his|her|their)\s+)?(?P<second>[a-z][a-z '\-]+?)\s*$",
+            group,
+        )
+        if required_plus_alternative is not None:
+            total = _count(required_plus_alternative.group("total"))
+            required_count = _count(
+                required_plus_alternative.group("required_count")
+            )
+            alternative_count = _count(
+                required_plus_alternative.group("alternative_count")
+            )
+            required_id = _weapon_id(
+                required_plus_alternative.group("required"),
+                weapons,
+            )
+            alternative_ids = [
+                _weapon_id(required_plus_alternative.group("first"), weapons),
+                _weapon_id(required_plus_alternative.group("second"), weapons),
+            ]
+            if (
+                total is None
+                or required_count is None
+                or alternative_count is None
+                or total != required_count + alternative_count
+                or required_id is None
+                or any(weapon_id is None for weapon_id in alternative_ids)
+            ):
+                return []
+            for required_mode in weapon_modes(required_id):
+                for alternative_id in alternative_ids:
+                    assert alternative_id is not None
+                    for alternative_mode in weapon_modes(alternative_id):
+                        option_mode = (
+                            required_mode
+                            if required_mode == alternative_mode
+                            else "mixed"
+                        )
+                        options.append(
+                            {
+                                "id": option_mode,
+                                "attacks": [
+                                    {
+                                        "weapon_id": required_id,
+                                        "attack_mode": required_mode,
+                                        "count": required_count,
+                                    },
+                                    {
+                                        "weapon_id": alternative_id,
+                                        "attack_mode": alternative_mode,
+                                        "count": alternative_count,
+                                    },
+                                ],
+                            }
+                        )
             continue
         named_alternatives = re.search(
             r"(?i)\bmakes?\s+"
@@ -838,14 +967,6 @@ def _parse_multiattack(description: str, items: list[dict[str, Any]]) -> list[di
                 return []
             for weapon_id in alternatives:
                 assert weapon_id is not None
-                weapon = next(item for item in items if item["id"] == weapon_id)
-                mechanics = dict(weapon.get("mechanics") or {})
-                modes = [str(mechanics.get("attack_type") or "melee")]
-                if "thrown" in {
-                    str(value).casefold()
-                    for value in mechanics.get("properties") or []
-                }:
-                    modes.append("ranged")
                 options.extend(
                     {
                         "id": mode,
@@ -857,7 +978,7 @@ def _parse_multiattack(description: str, items: list[dict[str, Any]]) -> list[di
                             }
                         ],
                     }
-                    for mode in modes
+                    for mode in weapon_modes(weapon_id)
                 )
             continue
         alternative = re.search(
@@ -878,13 +999,6 @@ def _parse_multiattack(description: str, items: list[dict[str, Any]]) -> list[di
                 return []
             for weapon_id in alternatives:
                 assert weapon_id is not None
-                weapon = next(item for item in items if item["id"] == weapon_id)
-                mechanics = dict(weapon.get("mechanics") or {})
-                modes = [str(mechanics.get("attack_type") or "melee")]
-                if "thrown" in {
-                    str(value).casefold() for value in mechanics.get("properties") or []
-                }:
-                    modes.append("ranged")
                 options.extend(
                     {
                         "id": mode,
@@ -896,7 +1010,7 @@ def _parse_multiattack(description: str, items: list[dict[str, Any]]) -> list[di
                             }
                         ],
                     }
-                    for mode in modes
+                    for mode in weapon_modes(weapon_id)
                 )
             continue
         attack_mode = "ranged" if "ranged attack" in group.casefold() else "melee"
@@ -1335,6 +1449,28 @@ def _save_advantage_against_conditions_source_trait(
     }
 
 
+def _breathing_media_source_trait(description: str) -> dict[str, Any] | None:
+    """Compile an exact standard breathing capability for environment rulings."""
+
+    normalized = " ".join(description.split())
+    if (
+        re.fullmatch(
+            r"The [A-Za-z][A-Za-z '\-]* can breathe air and water\.",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        is None
+    ):
+        return None
+    return {
+        "kind": "breathing_media",
+        "trigger": "environmental_breathing",
+        "media": ["air", "water"],
+        "automatic": True,
+        "source_excerpt": normalized,
+    }
+
+
 def _assassinate_source_trait(description: str) -> dict[str, Any] | None:
     """Compile the complete standard Assassin opening-turn rule."""
 
@@ -1713,6 +1849,7 @@ def _source_trait_from_description(description: str) -> dict[str, Any] | None:
             _magic_resistance_source_trait,
             _evasion_source_trait,
             _save_advantage_against_conditions_source_trait,
+            _breathing_media_source_trait,
             _assassinate_source_trait,
             _aggressive_source_trait,
             _cunning_action_source_trait,
@@ -2661,6 +2798,7 @@ def parse_2014_statblock(
                 "save_advantage_against_conditions": (
                     "saving throw against a named condition"
                 ),
+                "breathing_media": "environmental breathing requirement",
                 "assassinate": "attack roll during its first turn",
                 "aggressive": "bonus action on its turn",
                 "cunning_action": "bonus action on its turn",

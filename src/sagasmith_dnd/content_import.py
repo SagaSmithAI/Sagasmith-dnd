@@ -515,10 +515,18 @@ def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
                     section_parts[active_section].append(tail)
             continue
         if title in ABILITY_LABELS:
-            score = re.match(r"^\s*(\d+)\s*\(([+\-−]?\d+)\)(?P<tail>.*)$", content, re.S)
+            score = re.match(
+                r"^\s*(\d+)\s*\(\s*(?P<sign>[+\-−]?)\s*"
+                r"(?P<modifier>\d+)\s*\)(?P<tail>.*)$",
+                content,
+                re.S,
+            )
             if score is None:
                 raise StatblockImportError(f"statblock {title} score is ambiguous")
-            ability_values[title] = f"{score.group(1)} ({score.group(2).replace('−', '-')})"
+            sign = score.group("sign").replace("−", "-")
+            ability_values[title] = (
+                f"{score.group(1)} ({sign}{score.group('modifier')})"
+            )
             tail = score.group("tail").strip()
             if tail:
                 if active_section is None:
@@ -689,6 +697,7 @@ def _normalize_statblock_ocr(content: str) -> str:
         normalize,
         content,
     )
+    normalized = re.sub(r"\s+([.,;:])", r"\1", normalized)
     normalized = re.sub(
         r"(?i)(?<![A-Za-z0-9])(\d+)dS(?![A-Za-z0-9])",
         r"\1d8",

@@ -744,6 +744,102 @@ def test_module_statblock_recovers_flattened_actions_and_ranged_distance() -> No
     assert "Improved Critical" in feature_names
 
 
+def test_named_statblock_recovery_repairs_merrow_layout_without_losing_rules() -> None:
+    path = ["Appendix A: Monsters", "MERROW"]
+    chunks = [
+        {
+            "id": "merrow-core",
+            "scene_id": "monster-manual-page-220",
+            "ordinal": 0,
+            "heading_path": path,
+            "content": (
+                "Large monstrosity, chaotic evil Armor Class 13 (natural armor) "
+                "Hit Points 45 (6d10 + 12) Speed 10 ft., swim 40 ft."
+            ),
+        }
+    ]
+    ability_values = {
+        "STR": "18 (+4)",
+        "DEX": "10 (+0)",
+        "CON": "15 (+2)",
+        "INT": "8 (- 1)",
+        "WIS": "10 (+0)",
+        "CHA": (
+            "9 (- 1) Senses darkvision 60 ft., passive Perception 10 "
+            "Languages Abyssal, Aquan Challenge 2 (450 XP) "
+            "Amphibious. The merrow can breathe air and water."
+        ),
+    }
+    chunks.extend(
+        {
+            "id": f"merrow-{ability.casefold()}",
+            "scene_id": "monster-manual-page-220",
+            "ordinal": ordinal,
+            "heading_path": [*path, ability],
+            "content": value,
+        }
+        for ordinal, (ability, value) in enumerate(
+            ability_values.items(),
+            start=1,
+        )
+    )
+    chunks.append(
+        {
+            "id": "merrow-actions",
+            "scene_id": "monster-manual-page-220",
+            "ordinal": 7,
+            "heading_path": [*path, "ACTIONS"],
+            "content": (
+                "Multiattack. The merrow makes two attacks: one with its bite "
+                "and one with its claws or harpoon . "
+                "Bite. Melee Weapon Attack: +6 to hit, reach 5 ft., one target. "
+                "Hit: 8 (1d8 + 4) piercing damage. "
+                "Claws. Melee Weapon Attack: +6 to hit, reach 5 ft., one target. "
+                "Hit: 9 (2d4 + 4) slashing damage. "
+                "Harpoon. Melee or Ranged Weapon Attack: +6 to hit, reach 5 ft. "
+                "or range 20/60 ft., one target. Hit: 11 (2d6 + 4) piercing "
+                "damage. If the target is a Huge or smaller creature, it must "
+                "succeed on a Strength contest against the merrow or be pulled "
+                "up to 20 feet toward the merrow."
+            ),
+        }
+    )
+
+    recovered = normalize_2014_statblock_candidate("Merrow", chunks)
+    parsed = parse_2014_statblock(
+        recovered["normalized_content"],
+        source_key="monster-manual-2014:p220",
+    )
+
+    assert "| 18 (+4) | 10 (+0) | 15 (+2) | 8 (-1)" in (
+        recovered["normalized_content"]
+    )
+    assert "harpoon." in recovered["normalized_content"].casefold()
+    assert recovered["source_chunk_ids"] == [
+        "merrow-core",
+        "merrow-str",
+        "merrow-dex",
+        "merrow-con",
+        "merrow-int",
+        "merrow-wis",
+        "merrow-cha",
+        "merrow-actions",
+    ]
+    assert parsed.warnings == ()
+    assert parsed.normalization_notes == ()
+    assert any(
+        item["name"] == "Multiattack"
+        and item["choices"].get("multiattack_options")
+        for item in parsed.sheet["content"]["activities"]
+    )
+    harpoon = next(
+        item
+        for item in parsed.sheet["inventory"]["items"]
+        if item["name"] == "Harpoon"
+    )
+    assert harpoon["mechanics"]["on_hit_resolution"]["kind"] == "contest_pull"
+
+
 def test_module_statblock_marks_named_actor_spellcasting_trait() -> None:
     base = ["Appendix B: Monsters", "MONSTER DESCRIPTIONS", "NEZZNAR"]
     chunks = [

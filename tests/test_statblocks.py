@@ -2091,6 +2091,111 @@ def test_weapon_hit_save_damage_is_structured_from_exact_text() -> None:
     )
 
 
+def test_merrow_standard_traits_and_harpoon_are_fully_structured() -> None:
+    parsed = parse_2014_statblock(
+        """# Merrow
+
+*Large monstrosity, chaotic evil*
+
+**Armor Class** 13 (natural armor)
+**Hit Points** 45 (6d10 + 12)
+**Speed** 10 ft., swim 40 ft.
+
+| STR | DEX | CON | INT | WIS | CHA |
+|---|---|---|---|---|---|
+| 18 (+4) | 10 (+0) | 15 (+2) | 8 (-1) | 10 (+0) | 9 (-1) |
+
+**Senses** darkvision 60 ft., passive Perception 10
+**Languages** Abyssal, Aquan
+**Challenge** 2 (450 XP)
+
+***Amphibious***. The merrow can breathe air and water.
+
+## Actions
+
+***Multiattack***. The merrow makes two attacks: one with its bite and one with
+its claws or harpoon.
+
+***Bite***. *Melee Weapon Attack:* +6 to hit, reach 5 ft., one target.
+*Hit:* 8 (1d8 + 4) piercing damage.
+
+***Claws***. *Melee Weapon Attack:* +6 to hit, reach 5 ft., one target.
+*Hit:* 9 (2d4 + 4) slashing damage.
+
+***Harpoon***. *Melee or Ranged Weapon Attack:* +6 to hit, reach 5 ft. or range
+20/60 ft., one target. *Hit:* 11 (2d6 + 4) piercing damage. If the target is a
+Huge or smaller creature, it must succeed on a Strength contest against the
+merrow or be pulled up to 20 feet toward the merrow.
+""",
+        source_key="monster-manual-2014:p220",
+    )
+
+    amphibious = next(
+        item
+        for item in parsed.sheet["content"]["features"]
+        if item["name"] == "Amphibious"
+    )
+    assert amphibious["choices"]["source_trait"] == {
+        "kind": "breathing_media",
+        "trigger": "environmental_breathing",
+        "media": ["air", "water"],
+        "automatic": True,
+        "source_excerpt": "The merrow can breathe air and water.",
+    }
+    multiattack = next(
+        item
+        for item in parsed.sheet["content"]["activities"]
+        if item["name"] == "Multiattack"
+    )
+    assert multiattack["choices"]["multiattack_options"] == [
+        {
+            "id": "melee",
+            "attacks": [
+                {"weapon_id": "bite", "attack_mode": "melee", "count": 1},
+                {"weapon_id": "claws", "attack_mode": "melee", "count": 1},
+            ],
+        },
+        {
+            "id": "melee-2",
+            "attacks": [
+                {"weapon_id": "bite", "attack_mode": "melee", "count": 1},
+                {"weapon_id": "harpoon", "attack_mode": "melee", "count": 1},
+            ],
+        },
+        {
+            "id": "mixed",
+            "attacks": [
+                {"weapon_id": "bite", "attack_mode": "melee", "count": 1},
+                {"weapon_id": "harpoon", "attack_mode": "ranged", "count": 1},
+            ],
+        },
+    ]
+    harpoon = next(
+        item
+        for item in parsed.sheet["inventory"]["items"]
+        if item["name"] == "Harpoon"
+    )
+    assert harpoon["mechanics"]["on_hit_effect"] == ""
+    assert harpoon["mechanics"]["on_hit_resolution"] == {
+        "kind": "contest_pull",
+        "trigger": "weapon_hit",
+        "required_target_kind": "creature",
+        "maximum_target_size": "huge",
+        "source_ability": "strength",
+        "target_ability": "strength",
+        "ties": "no_movement",
+        "maximum_distance_ft": 20,
+        "direction": "toward_source",
+        "automatic": True,
+        "source_excerpt": (
+            "If the target is a Huge or smaller creature, it must succeed on a "
+            "Strength contest against the merrow or be pulled up to 20 feet "
+            "toward the merrow."
+        ),
+    }
+    assert parsed.warnings == ()
+
+
 def test_source_trait_with_unparsed_clause_stays_an_agent_ruling() -> None:
     parsed = parse_2014_statblock(
         KOBOLD.replace(

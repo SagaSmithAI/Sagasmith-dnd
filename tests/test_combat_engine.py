@@ -33,6 +33,7 @@ from sagasmith_dnd.combat_engine import (
     end_turn,
     execute_split_reaction,
     force_move_directly_away,
+    force_move_directly_toward,
     pay_activity_activation,
     pay_attack_action,
     pay_multiattack_activity,
@@ -872,6 +873,185 @@ def test_weapon_hit_save_damage_is_settled_inside_one_attack() -> None:
     )
 
 
+def test_weapon_hit_contest_pull_is_settled_and_emits_forced_movement() -> None:
+    merrow = _actor("merrow")
+    merrow["sheet"]["abilities"]["strength"]["score"] = 18
+    merrow["sheet"]["inventory"]["items"] = [
+        {
+            "id": "harpoon",
+            "name": "Harpoon",
+            "kind": "weapon",
+            "mechanics": {
+                "attack_type": "melee",
+                "attack_ability": "strength",
+                "attack_bonus_override": 6,
+                "damage_formula": "2d6",
+                "damage_type": "piercing",
+                "damage_bonus_override": 4,
+                "always_available": True,
+                "on_hit_resolution": {
+                    "kind": "contest_pull",
+                    "trigger": "weapon_hit",
+                    "required_target_kind": "creature",
+                    "maximum_target_size": "huge",
+                    "source_ability": "strength",
+                    "target_ability": "strength",
+                    "ties": "no_movement",
+                    "maximum_distance_ft": 20,
+                    "direction": "toward_source",
+                    "automatic": True,
+                    "source_excerpt": (
+                        "If the target is a Huge or smaller creature, it must "
+                        "succeed on a Strength contest against the merrow or be "
+                        "pulled up to 20 feet toward the merrow."
+                    ),
+                },
+            },
+        }
+    ]
+    merrow["sheet"] = validate_character_sheet(merrow["sheet"])
+    merrow["derived"] = derive_character_sheet(merrow["sheet"])
+    target = _actor("target", hp=100, ac=10)
+    target["sheet"]["abilities"]["strength"]["score"] = 10
+    target["sheet"]["traits"]["size"] = "medium"
+    target["derived"] = derive_character_sheet(target["sheet"])
+    rules = resolution_context(
+        {"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []}
+    )
+    plan = preflight_attack(
+        merrow,
+        target,
+        action={"weapon_id": "harpoon"},
+        rules=rules,
+    )
+
+    _updated_merrow, updated_target, result = resolve_attack_action(
+        merrow,
+        target,
+        plan=plan,
+        rules=rules,
+        rng=_SequenceRng(10, 3, 4, 15, 10),
+    )
+
+    assert result["hit"] is True
+    assert updated_target["sheet"]["combat"]["hp"]["value"] == 89
+    settlement = result["structured_on_hit"]
+    assert settlement["kind"] == "contest_pull"
+    assert settlement["eligible"] is True
+    assert settlement["contest"]["source_check"]["total"] == 19
+    assert settlement["contest"]["target_check"]["total"] == 10
+    assert settlement["contest"]["outcome"] == "source_wins"
+    assert settlement["forced_movement"] == {
+        "source_actor_id": "merrow",
+        "target_actor_id": "target",
+        "distance_ft": 20,
+        "direction": "toward_source",
+    }
+    assert settlement["mechanic_id"] == (
+        "dnd5e.core.attack.weapon_hit_contest_pull"
+    )
+    assert "on_hit_ruling" not in result
+    assert any(
+        item["mechanic_id"] == "dnd5e.core.attack.weapon_hit_contest_pull"
+        for item in result["rule_receipts"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("source_roll", "target_roll", "outcome"),
+    ((7, 10, "tie_no_change"), (5, 20, "target_wins")),
+)
+def test_weapon_hit_contest_pull_tie_or_loss_emits_no_movement(
+    source_roll: int,
+    target_roll: int,
+    outcome: str,
+) -> None:
+    source = _actor("source")
+    target = _actor("target")
+    target["sheet"]["abilities"]["strength"]["score"] = 10
+    target["sheet"]["traits"]["size"] = "medium"
+    target["derived"] = derive_character_sheet(target["sheet"])
+    resolution = {
+        "kind": "contest_pull",
+        "trigger": "weapon_hit",
+        "required_target_kind": "creature",
+        "maximum_target_size": "huge",
+        "source_ability": "strength",
+        "target_ability": "strength",
+        "ties": "no_movement",
+        "maximum_distance_ft": 20,
+        "direction": "toward_source",
+        "automatic": True,
+        "source_excerpt": (
+            "If the target is a Huge or smaller creature, it must succeed on "
+            "a Strength contest against the source or be pulled up to 20 feet "
+            "toward the source."
+        ),
+    }
+
+    _, _, result = resolve_attack_damage(
+        source,
+        target,
+        plan={"on_hit_resolution": resolution},
+        attack={
+            "natural": 10,
+            "total": 10,
+            "armor_class": 10,
+            "hit": True,
+            "critical": False,
+            "fumble": False,
+        },
+        rng=_SequenceRng(source_roll, target_roll),
+    )
+
+    settlement = result["structured_on_hit"]
+    assert settlement["contest"]["outcome"] == outcome
+    assert settlement["forced_movement"] is None
+
+
+def test_weapon_hit_contest_pull_does_not_target_an_object() -> None:
+    target = _actor("target")
+    target["kind"] = "object"
+    resolution = {
+        "kind": "contest_pull",
+        "trigger": "weapon_hit",
+        "required_target_kind": "creature",
+        "maximum_target_size": "huge",
+        "source_ability": "strength",
+        "target_ability": "strength",
+        "ties": "no_movement",
+        "maximum_distance_ft": 20,
+        "direction": "toward_source",
+        "automatic": True,
+        "source_excerpt": (
+            "If the target is a Huge or smaller creature, it must succeed on "
+            "a Strength contest against the source or be pulled up to 20 feet "
+            "toward the source."
+        ),
+    }
+
+    _, _, result = resolve_attack_damage(
+        _actor("source"),
+        target,
+        plan={"on_hit_resolution": resolution},
+        attack={
+            "natural": 10,
+            "total": 10,
+            "armor_class": 10,
+            "hit": True,
+            "critical": False,
+            "fumble": False,
+        },
+        rng=_SequenceRng(),
+    )
+
+    settlement = result["structured_on_hit"]
+    assert settlement["eligible"] is False
+    assert settlement["target_kind"] == "object"
+    assert settlement["contest"] is None
+    assert settlement["forced_movement"] is None
+
+
 def test_magmin_touch_compiles_standard_ongoing_damage() -> None:
     target = _actor("target")
     source_excerpt = (
@@ -1199,6 +1379,47 @@ def test_telekinetic_ray_projects_noncardinal_bearings_onto_the_square_grid() ->
     # the following cell is outside the map, so "up to 30 feet" stops there.
     assert moved["moved_distance_ft"] == 10
     assert moved["destination"] == {"x": 0, "y": 6}
+
+
+def test_force_move_directly_toward_stops_before_the_source() -> None:
+    source = _actor("merrow")
+    source.update(
+        initiative=20,
+        position={"x": 1, "y": 1},
+        disposition="hostile",
+    )
+    target = _actor("target")
+    target.update(
+        initiative=10,
+        position={"x": 5, "y": 1},
+        disposition="friendly",
+    )
+    encounter = start_encounter([source, target])
+    encounter["battle_map"] = compile_battle_map(
+        {"scene_id": "merrow-harpoon", "spatial": {}},
+        {"width_cells": 7, "height_cells": 3},
+    )
+
+    moved = force_move_directly_toward(
+        encounter,
+        source_actor_id="merrow",
+        target_actor_id="target",
+        distance_ft=20,
+    )
+
+    assert moved["moved_distance_ft"] == 15
+    assert moved["destination"] == {"x": 2, "y": 1}
+    assert moved["direction"] == "toward_source"
+    assert moved["encounter"]["pending"] == []
+    assert moved["encounter"]["log"][-1] == {
+        "type": "forced_movement",
+        "source_actor_id": "merrow",
+        "target_actor_id": "target",
+        "requested_distance_ft": 20,
+        "moved_distance_ft": 15,
+        "direction": "toward_source",
+        "opportunity_reactions": False,
+    }
 
 
 def test_frightened_creature_cannot_willingly_move_closer_to_visible_source() -> None:

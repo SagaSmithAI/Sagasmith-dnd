@@ -496,6 +496,23 @@ BOUNDARIES = (
         "bundled:srd/combat/saving-throws-and-damage",
     ),
     CoreBoundary(
+        "dnd5e.core.attack.weapon_hit_contest_pull",
+        ("2014",),
+        (
+            "statblocks._contest_pull_on_hit|"
+            "combat_engine.resolve_attack_damage|force_move_directly_toward"
+        ),
+        (
+            "tests/test_combat_engine.py::"
+            "test_weapon_hit_contest_pull_is_settled_and_emits_forced_movement",
+            "tests/test_combat_engine.py::"
+            "test_force_move_directly_toward_stops_before_the_source",
+            "tests/test_statblocks.py::"
+            "test_merrow_standard_traits_and_harpoon_are_fully_structured",
+        ),
+        "source:monster-manual-2014:p220",
+    ),
+    CoreBoundary(
         "dnd5e.core.monster.aggressive",
         ("2014",),
         "combat_engine.settle_core_activity_effect",
