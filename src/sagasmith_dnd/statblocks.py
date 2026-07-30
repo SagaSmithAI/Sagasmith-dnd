@@ -3582,6 +3582,7 @@ def apply_statblock_variant(
             "damage_type",
             "damage_formula",
             "additional_damage",
+            "reach_ft",
             "normal_range_ft",
             "long_range_ft",
             "attack_bonus_override",
@@ -3665,6 +3666,24 @@ def apply_statblock_variant(
                     }
                 )
             mechanics["additional_damage"] = additional_damage
+        if "reach_ft" in raw_patch:
+            reach_ft = raw_patch["reach_ft"]
+            if (
+                not isinstance(reach_ft, int)
+                or isinstance(reach_ft, bool)
+                or not 1 <= reach_ft <= 10_000
+            ):
+                raise StatblockImportError(
+                    "action override reach_ft must be an integer from 1 through 10000"
+                )
+            if str(mechanics.get("attack_type") or "") not in {
+                "melee",
+                "melee_or_ranged",
+            }:
+                raise StatblockImportError(
+                    "action override reach_ft requires a melee weapon action"
+                )
+            mechanics["reach_ft"] = reach_ft
         for field in ("normal_range_ft", "long_range_ft"):
             if field not in raw_patch:
                 continue

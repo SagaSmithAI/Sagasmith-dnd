@@ -3514,6 +3514,7 @@ def test_source_bound_variant_can_apply_common_module_instance_changes() -> None
                     "id": "gauntlet-slam",
                     "name": "Gauntlet Slam",
                     "damage_type": "force",
+                    "reach_ft": 15,
                 }
             },
         },
@@ -3553,8 +3554,10 @@ def test_source_bound_variant_can_apply_common_module_instance_changes() -> None
     }
     assert derived["inventory"]["weapon_attacks"][0]["item_id"] == "gauntlet-slam"
     assert derived["inventory"]["weapon_attacks"][0]["damage_type"] == "force"
+    assert derived["inventory"]["weapon_attacks"][0]["reach_ft"] == 15
     attack = sheet["inventory"]["items"][0]
     assert "*Melee Weapon Attack:* +2 to hit" in attack["description"]
+    assert "reach 15 ft." in attack["description"]
     assert "1d4 bludgeoning damage" not in attack["description"]
     assert "1d4 force damage" in attack["description"]
     assert "Variant source: module-scene:d12" in attack["description"]
@@ -3924,6 +3927,14 @@ def test_statblock_variant_rejects_unbound_or_broad_sheet_patches() -> None:
                         "long_range_ft": 30,
                     }
                 },
+            },
+        )
+    with pytest.raises(StatblockImportError, match="requires a melee weapon action"):
+        apply_statblock_variant(
+            ranged_sheet,
+            {
+                "source_ref": "module-scene:d12",
+                "action_overrides": {"rock": {"reach_ft": 15}},
             },
         )
     with pytest.raises(StatblockImportError, match="D&D damage type"):
