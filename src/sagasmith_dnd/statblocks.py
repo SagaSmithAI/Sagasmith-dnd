@@ -2551,6 +2551,7 @@ def apply_statblock_variant(
         "current_hit_points",
         "maximum_hit_points",
         "armor_class",
+        "ability_scores",
         "alignment",
         "darkvision_ft",
         "languages",
@@ -2645,6 +2646,27 @@ def apply_statblock_variant(
         ):
             raise StatblockImportError("armor_class must be an integer between 0 and 99")
         result["combat"]["ac"] = {"base": armor_class, "override": armor_class}
+
+    if "ability_scores" in variant:
+        ability_scores = variant["ability_scores"]
+        if not isinstance(ability_scores, dict) or not ability_scores:
+            raise StatblockImportError("ability_scores must be a non-empty object")
+        unknown_abilities = set(ability_scores) - set(ABILITY_NAMES)
+        if unknown_abilities:
+            raise StatblockImportError(
+                "ability_scores contains unsupported abilities: "
+                f"{sorted(unknown_abilities)}"
+            )
+        for ability, score in ability_scores.items():
+            if (
+                not isinstance(score, int)
+                or isinstance(score, bool)
+                or not 1 <= score <= 30
+            ):
+                raise StatblockImportError(
+                    f"ability_scores.{ability} must be an integer between 1 and 30"
+                )
+            result["abilities"][ability]["score"] = score
 
     if "alignment" in variant:
         alignment = str(variant["alignment"] or "").strip()

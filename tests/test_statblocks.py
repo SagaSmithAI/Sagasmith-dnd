@@ -2952,6 +2952,10 @@ def test_source_bound_variant_can_apply_common_module_instance_changes() -> None
             "creature_type": "undead",
             "current_hit_points": 1,
             "armor_class": 12,
+            "ability_scores": {
+                "intelligence": 10,
+                "wisdom": 10,
+            },
             "alignment": "chaotic evil",
             "darkvision_ft": 60,
             "languages": ["Common", "Elvish"],
@@ -2977,6 +2981,9 @@ def test_source_bound_variant_can_apply_common_module_instance_changes() -> None
     assert sheet["combat"]["hp"] == {"value": 1, "max": 4, "temp": 0}
     assert sheet["progression"]["species"] == "undead"
     assert derived["armor_class"] == 12
+    assert derived["ability_scores"]["intelligence"] == 10
+    assert derived["ability_scores"]["wisdom"] == 10
+    assert derived["passive_perception"] == 10
     assert sheet["traits"]["alignment"] == "chaotic evil"
     assert sheet["traits"]["senses"]["darkvision"] == 60
     assert sheet["traits"]["languages"] == ["Common", "Elvish"]
@@ -3252,6 +3259,22 @@ def test_statblock_variant_rejects_unbound_or_broad_sheet_patches() -> None:
         apply_statblock_variant(
             parsed.sheet,
             {"source_ref": "module-scene:d12", "creature_type": ""},
+        )
+    with pytest.raises(StatblockImportError, match="unsupported abilities"):
+        apply_statblock_variant(
+            parsed.sheet,
+            {
+                "source_ref": "module-scene:d12",
+                "ability_scores": {"luck": 20},
+            },
+        )
+    with pytest.raises(StatblockImportError, match="integer between 1 and 30"):
+        apply_statblock_variant(
+            parsed.sheet,
+            {
+                "source_ref": "module-scene:d12",
+                "ability_scores": {"wisdom": 31},
+            },
         )
     with pytest.raises(StatblockImportError, match="overridden together"):
         apply_statblock_variant(
