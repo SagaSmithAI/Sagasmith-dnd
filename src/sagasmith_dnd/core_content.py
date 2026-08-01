@@ -622,6 +622,7 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
                 "recovers_on": "short_rest",
             },
             "choices": {"outcome": "roll 1d10 + fighter level, then apply healing"},
+            "mechanic_refs": ["dnd5e.core.activity.second_wind"],
         }
     if key == ("fighter", "action surge"):
         return {
@@ -633,6 +634,7 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
                 "recovers_on": "short_rest",
             },
             "choices": {"outcome": "take one additional action on the current turn"},
+            "mechanic_refs": ["dnd5e.core.activity.action_surge"],
         }
     if key == ("wizard", "arcane recovery"):
         reset_on_long_rest = bool(
@@ -655,6 +657,7 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
         return {
             "activation": {"type": "bonus_action", "cost": 1},
             "choices": {"options": ["Dash", "Disengage", "Hide"]},
+            "mechanic_refs": ["dnd5e.core.activity.cunning_action"],
         }
     if key == ("cleric", "channel divinity"):
         return {
@@ -672,6 +675,7 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
                 }
             },
             "choices": {"options": ["Turn Undead", "selected-domain option"]},
+            "mechanic_refs": ["dnd5e.core.activity.turn_undead"],
         }
     if key == ("paladin", "channel divinity"):
         return {
@@ -701,6 +705,28 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
                     "within 30 feet, never above half maximum hit points"
                 )
             },
+            "mechanic_refs": ["dnd5e.core.activity.preserve_life"],
+        }
+    if key == ("bard", "jack of all trades"):
+        return {"mechanic_refs": ["dnd5e.core.check.jack_of_all_trades"]}
+    if key == ("rogue", "sneak attack"):
+        return {"mechanic_refs": ["dnd5e.core.attack.sneak_attack"]}
+    if key == ("rogue", "evasion"):
+        return {
+            "choices": {
+                "source_trait": {
+                    "kind": "evasion",
+                    "trigger": "dexterity_save_for_half_damage",
+                    "save_ability": "dexterity",
+                    "ordinary_successful_save": "half",
+                    "successful_save": "none",
+                    "failed_save": "half",
+                    "unavailable_conditions": ["incapacitated"],
+                    "automatic": True,
+                    "source_excerpt": body[:4000],
+                }
+            },
+            "mechanic_refs": ["dnd5e.core.save.evasion"],
         }
     if key == ("barbarian", "unarmored defense"):
         return {

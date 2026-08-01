@@ -9,7 +9,16 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.54.0"
+CORE_RULE_PACK_VERSION = "1.63.0"
+
+
+@dataclass(frozen=True)
+class CoreBoundaryEvidence:
+    """Edition-specific proof for one built-in rules boundary."""
+
+    edition: str
+    citation: str
+    test_refs: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -19,6 +28,35 @@ class CoreBoundary:
     implementation: str
     test_refs: tuple[str, ...]
     citation: str
+    evidence: tuple[CoreBoundaryEvidence, ...] = ()
+
+    def evidence_for(self, edition: str) -> CoreBoundaryEvidence:
+        """Return exact evidence without borrowing another edition's source."""
+
+        normalized = normalize_dnd_edition(edition)
+        explicit = next(
+            (item for item in self.evidence if item.edition == normalized),
+            None,
+        )
+        if explicit is not None:
+            return explicit
+        if normalized not in self.editions:
+            raise KeyError(f"{self.id}:{normalized}")
+        if normalized == "2024":
+            citation = (
+                _2024_BOUNDARY_CITATIONS.get(self.id)
+                or _2024_CATEGORY_CITATIONS.get(_boundary_category(self.id))
+                or (self.citation if self.citation.startswith("runtime:") else "")
+            )
+        else:
+            citation = self.citation
+        if not citation:
+            raise KeyError(f"{self.id}:{normalized}:citation")
+        return CoreBoundaryEvidence(
+            edition=normalized,
+            citation=citation,
+            test_refs=self.test_refs,
+        )
 
 
 @dataclass(frozen=True)
@@ -37,12 +75,133 @@ class BuiltinCoreRulePack:
             "mechanic_id": boundary.id,
             "event": event,
             "operations": [{"op": "builtin.core_provider"}],
-            "citations": [{"source": boundary.citation}],
+            "citations": [
+                {
+                    "source": boundary.citation,
+                    "edition": self.edition,
+                }
+            ],
             "ruleset_fingerprint": self.fingerprint,
         }
 
 
+def _boundary_category(boundary_id: str) -> str:
+    parts = str(boundary_id).split(".")
+    return parts[2] if len(parts) > 2 else ""
+
+
+# The 2024 pack must never inherit a 2014 locator merely because the engine
+# implementation is shared. These locators point at the bundled SRD 5.2.1
+# Markdown that was used to verify each generic rules family.
+_2024_CATEGORY_CITATIONS = {
+    "ability_generation": "bundled:srd2024/DND5eSRD_019-035.md#creating-a-character",
+    "action": "bundled:srd2024/DND5eSRD_176-191.md#actions",
+    "activity": "bundled:srd2024/DND5eSRD_176-191.md#limited-use",
+    "armor_class": "bundled:srd2024/DND5eSRD_087-103.md#armor",
+    "attack": "bundled:srd2024/DND5eSRD_176-191.md#attack-roll",
+    "check": "bundled:srd2024/DND5eSRD_176-191.md#ability-check",
+    "damage": "bundled:srd2024/DND5eSRD_176-191.md#damage-and-healing",
+    "initiative": "bundled:srd2024/DND5eSRD_176-191.md#initiative",
+    "item": "bundled:srd2024/DND5eSRD_204-229.md#magic-items",
+    "magic_item": "bundled:srd2024/DND5eSRD_204-229.md#magic-items",
+    "movement": "bundled:srd2024/DND5eSRD_176-191.md#movement",
+    "progression": "bundled:srd2024/DND5eSRD_019-035.md#level-advancement",
+    "reaction": "bundled:srd2024/DND5eSRD_176-191.md#reaction",
+    "ready": "bundled:srd2024/DND5eSRD_176-191.md#ready-action",
+    "rest": "bundled:srd2024/DND5eSRD_176-191.md#resting",
+    "save": "bundled:srd2024/DND5eSRD_176-191.md#saving-throw",
+    "spell": "bundled:srd2024/DND5eSRD_104-120.md#casting-spells",
+    "weapon": "bundled:srd2024/DND5eSRD_087-103.md#weapons",
+}
+
+_2024_BOUNDARY_CITATIONS = {
+    "dnd5e.core.weapon.mastery": (
+        "bundled:srd2024/DND5eSRD_087-103.md#mastery-properties"
+    ),
+    "dnd5e.core.heroic_inspiration": (
+        "bundled:srd2024/DND5eSRD_176-191.md#heroic-inspiration"
+    ),
+    "dnd5e.core.activity.recharge": (
+        "bundled:srd2024/DND5eSRD_253-272.md#limited-usage"
+    ),
+    "dnd5e.core.rest.arcane_recovery": (
+        "bundled:srd2024/DND5eSRD_077-086.md#level-1-arcane-recovery"
+    ),
+    "dnd5e.core.rest.sorcerous_restoration": (
+        "bundled:srd2024/DND5eSRD_064-076.md#level-5-sorcerous-restoration"
+    ),
+    "dnd5e.core.progression.extra_attack": (
+        "bundled:srd2024/DND5eSRD_019-035.md#level-5-extra-attack"
+    ),
+    "dnd5e.core.activity.turn_undead": (
+        "bundled:srd2024/DND5eSRD_036-046.md#level-2-channel-divinity"
+    ),
+    "dnd5e.core.activity.divine_spark": (
+        "bundled:srd2024/DND5eSRD_036-046.md#level-2-channel-divinity"
+    ),
+    "dnd5e.core.activity.sear_undead": (
+        "bundled:srd2024/DND5eSRD_036-046.md#level-5-sear-undead"
+    ),
+    "dnd5e.core.activity.preserve_life": (
+        "bundled:srd2024/DND5eSRD_036-046.md#level-3-preserve-life"
+    ),
+    "dnd5e.core.activity.cunning_action": (
+        "bundled:srd2024/DND5eSRD_047-063.md#level-2-cunning-action"
+    ),
+    "dnd5e.core.check.jack_of_all_trades": (
+        "bundled:srd2024/DND5eSRD_019-035.md#level-2-jack-of-all-trades"
+    ),
+    "dnd5e.core.attack.sneak_attack": (
+        "bundled:srd2024/DND5eSRD_047-063.md#level-1-sneak-attack"
+    ),
+    "dnd5e.core.save.evasion": (
+        "bundled:srd2024/DND5eSRD_047-063.md#level-7-evasion"
+    ),
+    "dnd5e.core.spell.pact_magic": (
+        "bundled:srd2024/DND5eSRD_064-076.md#level-1-pact-magic"
+    ),
+    "dnd5e.core.spell.spellbook_copy": (
+        "bundled:srd2024/DND5eSRD_077-086.md#expanding-and-replacing-a-spellbook"
+    ),
+    "dnd5e.core.spell.fly": (
+        "bundled:srd2024/DND5eSRD_121-137.md#fly"
+    ),
+    "dnd5e.core.spell.invisibility": (
+        "bundled:srd2024/DND5eSRD_138-154.md#invisibility"
+    ),
+    "dnd5e.core.spell.hypnotic_pattern": (
+        "bundled:srd2024/DND5eSRD_138-154.md#hypnotic-pattern"
+    ),
+    "dnd5e.core.action.multiattack_choice": (
+        "bundled:srd2024/DND5eSRD_253-272.md#monster-actions"
+    ),
+    "dnd5e.core.spell.structured_resolution": (
+        "bundled:srd2024/DND5eSRD_104-120.md#casting-spells"
+    ),
+    "dnd5e.core.mcp.opportunity_melee_only": (
+        "bundled:srd2024/DND5eSRD_176-191.md#opportunity-attacks"
+    ),
+    "dnd5e.core.mcp.shield_attack_reaction_atomicity": (
+        "bundled:srd2024/DND5eSRD_155-175.md#shield"
+    ),
+    "dnd5e.core.mcp.magic_missile_atomicity": (
+        "bundled:srd2024/DND5eSRD_138-154.md#magic-missile"
+    ),
+}
+
+
 BOUNDARIES = (
+    CoreBoundary(
+        "dnd5e.core.heroic_inspiration",
+        ("2024",),
+        (
+            "heroic_inspiration.grant_heroic_inspiration|"
+            "heroic_inspiration.spend_heroic_inspiration_reroll|"
+            "lifecycle.apply_rest"
+        ),
+        ("tests/test_heroic_inspiration.py", "tests/test_lifecycle.py"),
+        "bundled:srd2024/DND5eSRD_176-191.md#heroic-inspiration",
+    ),
     CoreBoundary(
         "dnd5e.core.chase.sequence",
         ("2014",),
@@ -80,10 +239,30 @@ BOUNDARIES = (
     ),
     CoreBoundary(
         "dnd5e.core.activity.turn_undead",
-        ("2014",),
+        ("2014", "2024"),
         "combat_engine.resolve_turn_undead_to_sheets|spend_movement|available_actions",
         ("tests/test_combat_engine.py::test_turn_undead_applies_and_enforces_turned",),
         "bundled:srd2014/02_Classes/Cleric.md#channel-divinity-turn-undead",
+    ),
+    CoreBoundary(
+        "dnd5e.core.activity.divine_spark",
+        ("2024",),
+        "combat_engine.resolve_divine_spark_to_sheet",
+        (
+            "tests/test_combat_engine.py::"
+            "test_2024_divine_spark_heals_or_deals_save_for_half_damage",
+        ),
+        "bundled:srd2024/DND5eSRD_036-046.md#level-2-channel-divinity",
+    ),
+    CoreBoundary(
+        "dnd5e.core.activity.sear_undead",
+        ("2024",),
+        "combat_engine.resolve_turn_undead_to_sheets",
+        (
+            "tests/test_combat_engine.py::"
+            "test_2024_sear_undead_shares_one_roll_without_ending_the_turn_effect",
+        ),
+        "bundled:srd2024/DND5eSRD_036-046.md#level-5-sear-undead",
     ),
     CoreBoundary(
         "dnd5e.core.activity.random_save_effects",
@@ -147,7 +326,7 @@ BOUNDARIES = (
     ),
     CoreBoundary(
         "dnd5e.core.activity.recharge",
-        ("2014",),
+        ("2014", "2024"),
         "activities.recharge_activities_at_turn_start",
         (
             "tests/test_activities.py::"
@@ -192,21 +371,21 @@ BOUNDARIES = (
     ),
     CoreBoundary(
         "dnd5e.core.activity.action_surge",
-        ("2014",),
+        ("2014", "2024"),
         "combat_engine.settle_core_activity_effect",
         ("tests/test_combat_engine.py",),
         "bundled:srd2014/02_Classes/Fighter.md#action-surge",
     ),
     CoreBoundary(
         "dnd5e.core.activity.second_wind",
-        ("2014",),
+        ("2014", "2024"),
         "combat_engine.resolve_second_wind_to_sheet",
         ("tests/test_combat_engine.py",),
         "bundled:srd2014/02_Classes/Fighter.md#second-wind",
     ),
     CoreBoundary(
         "dnd5e.core.activity.cunning_action",
-        ("2014",),
+        ("2014", "2024"),
         "combat_engine.settle_core_activity_effect",
         ("tests/test_combat_engine.py",),
         "bundled:srd2014/02_Classes/Rogue.md#cunning-action",
@@ -225,7 +404,7 @@ BOUNDARIES = (
     ),
     CoreBoundary(
         "dnd5e.core.activity.preserve_life",
-        ("2014",),
+        ("2014", "2024"),
         "combat_engine.resolve_preserve_life_to_sheets",
         ("tests/test_combat_engine.py",),
         "bundled:srd2014/02_Classes/Cleric.md#preserve-life",
@@ -239,17 +418,27 @@ BOUNDARIES = (
     ),
     CoreBoundary(
         "dnd5e.core.progression.hp_hit_dice",
-        ("2014",),
+        ("2014", "2024"),
         "progression.advance_single_class_level",
         ("tests/test_progression.py",),
         "bundled:srd2014/03_Characterization/Beyond_1st_Level.md",
     ),
     CoreBoundary(
         "dnd5e.core.progression.spellcasting",
-        ("2014",),
+        ("2014", "2024"),
         "progression.advance_single_class_level",
         ("tests/test_progression.py",),
         "bundled:srd2014/02_Classes",
+    ),
+    CoreBoundary(
+        "dnd5e.core.progression.extra_attack",
+        ("2014", "2024"),
+        "progression.advance_single_class_level",
+        (
+            "tests/test_progression.py::"
+            "test_extra_attack_scaling_uses_the_highest_class_feature_without_stacking",
+        ),
+        "bundled:srd2014/02_Classes#extra-attack",
     ),
     CoreBoundary(
         "dnd5e.core.progression.experience",
@@ -278,7 +467,7 @@ BOUNDARIES = (
     ),
     CoreBoundary(
         "dnd5e.core.check.jack_of_all_trades",
-        ("2014",),
+        ("2014", "2024"),
         "combat_engine.resolve_actor_check|start_encounter",
         (
             "tests/test_combat_engine.py::test_2014_jack_of_all_trades_applies_only_to_unproficient_ability_checks",
@@ -416,7 +605,7 @@ BOUNDARIES = (
     ),
     CoreBoundary(
         "dnd5e.core.attack.sneak_attack",
-        ("2014",),
+        ("2014", "2024"),
         "combat_engine._sneak_attack_plan|combat_engine.resolve_attack_action",
         (
             "tests/test_combat_engine.py::"
@@ -525,6 +714,17 @@ BOUNDARIES = (
             "test_versatile_weapon_grip_uses_exact_alternate_damage_once",
         ),
         "bundled:srd/equipment/weapon-properties",
+    ),
+    CoreBoundary(
+        "dnd5e.core.weapon.mastery",
+        ("2024",),
+        (
+            "character_schema._normalize_item_mechanics|"
+            "combat_engine.preflight_attack|combat_engine.resolve_attack_damage|"
+            "combat_engine.apply_weapon_mastery_to_encounter"
+        ),
+        ("tests/test_combat_engine.py", "tests/test_core_content_2024.py"),
+        "bundled:srd2024/DND5eSRD_087-103.md#mastery-properties",
     ),
     CoreBoundary(
         "dnd5e.core.attack.assassinate",
@@ -722,7 +922,7 @@ BOUNDARIES = (
     ),
     CoreBoundary(
         "dnd5e.core.spell.fly",
-        ("2014",),
+        ("2014", "2024"),
         (
             "spells.fly_target_limit|spells.apply_core_fly_effects|"
             "spells.reconcile_source_effect_dependencies|"
@@ -738,7 +938,7 @@ BOUNDARIES = (
     ),
     CoreBoundary(
         "dnd5e.core.spell.invisibility",
-        ("2014",),
+        ("2014", "2024"),
         (
             "spells.invisibility_target_limit|"
             "spells.apply_core_invisibility_effects|"
@@ -769,7 +969,7 @@ BOUNDARIES = (
     ),
     CoreBoundary(
         "dnd5e.core.spell.hypnotic_pattern",
-        ("2014",),
+        ("2014", "2024"),
         (
             "spells.is_core_hypnotic_pattern_spell|"
             "combat_engine.resolve_hypnotic_pattern_target|"
@@ -913,7 +1113,7 @@ BOUNDARIES = (
     ),
     CoreBoundary(
         "dnd5e.core.save.evasion",
-        ("2014",),
+        ("2014", "2024"),
         "combat_engine.standard_save_damage_reduction",
         (
             "tests/test_combat_engine.py::"
@@ -932,7 +1132,7 @@ BOUNDARIES = (
     ),
     CoreBoundary(
         "dnd5e.core.rest.arcane_recovery",
-        ("2014",),
+        ("2014", "2024"),
         "lifecycle.validate_arcane_recovery_choice|apply_arcane_recovery_choice",
         ("tests/test_lifecycle.py",),
         "bundled:srd2014/02_Classes/Wizard.md",
@@ -953,9 +1153,16 @@ BOUNDARIES = (
     ),
     CoreBoundary(
         "dnd5e.core.rest.sorcerous_restoration",
-        ("2014",),
-        "lifecycle.apply_sorcerous_restoration",
-        ("tests/test_lifecycle.py::test_sorcerous_restoration_recovers_four_points",),
+        ("2014", "2024"),
+        (
+            "lifecycle.validate_sorcerous_restoration_choice|"
+            "apply_sorcerous_restoration"
+        ),
+        (
+            "tests/test_lifecycle.py::test_sorcerous_restoration_recovers_four_points",
+            "tests/test_lifecycle.py::"
+            "test_2024_sorcerous_restoration_uses_declared_points_once_per_long_rest",
+        ),
         "bundled:srd2014/02_Classes/Sorcerer.md",
     ),
     CoreBoundary(
@@ -984,7 +1191,7 @@ BOUNDARIES = (
     ),
     CoreBoundary(
         "dnd5e.core.spell.pact_magic",
-        ("2014",),
+        ("2014", "2024"),
         "spells.consume_spell_cast",
         ("tests/test_spells.py::test_pact_magic_uses_its_recorded_slot_level",),
         "bundled:srd/pact-magic",
@@ -1008,7 +1215,7 @@ BOUNDARIES = (
     ),
     CoreBoundary(
         "dnd5e.core.spell.spellbook_copy",
-        ("2014",),
+        ("2014", "2024"),
         "sagasmith_dnd_mcp.server.settle_spellbook_copy",
         ("SagaSmith-dnd-mcp/tests/test_spellbook_copy_mcp.py",),
         "bundled:srd/wizard-spellbook-copying",
@@ -1102,7 +1309,18 @@ def get_core_rule_pack(edition: str | None) -> BuiltinCoreRulePack:
         raise ValueError(f"unsupported D&D core edition: {raw or '<empty>'}") from exc
     if normalized not in SUPPORTED_DND_EDITIONS:
         raise ValueError(f"unsupported D&D core edition: {normalized}")
-    boundaries = tuple(item for item in BOUNDARIES if normalized in item.editions)
+    boundaries = tuple(
+        CoreBoundary(
+            id=item.id,
+            editions=(normalized,),
+            implementation=item.implementation,
+            test_refs=item.evidence_for(normalized).test_refs,
+            citation=item.evidence_for(normalized).citation,
+            evidence=(item.evidence_for(normalized),),
+        )
+        for item in BOUNDARIES
+        if normalized in item.editions
+    )
     payload = {
         "id": f"dnd5e.core.{normalized}",
         "version": CORE_RULE_PACK_VERSION,
@@ -1113,6 +1331,14 @@ def get_core_rule_pack(edition: str | None) -> BuiltinCoreRulePack:
                 "implementation": item.implementation,
                 "test_refs": item.test_refs,
                 "citation": item.citation,
+                "evidence": [
+                    {
+                        "edition": evidence.edition,
+                        "test_refs": evidence.test_refs,
+                        "citation": evidence.citation,
+                    }
+                    for evidence in item.evidence
+                ],
             }
             for item in boundaries
         ],

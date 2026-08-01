@@ -12,7 +12,9 @@ from sagasmith_dnd.abilities import ABILITY_IDS
 from sagasmith_dnd.standard_spell_ids import (
     CORE_BLADE_WARD_MECHANIC_ID,
     CORE_FLY_MECHANIC_ID,
-    CORE_FLY_SPELL_ID,
+    CORE_FLY_SPELL_IDS,
+    CORE_HYPNOTIC_PATTERN_MECHANIC_ID,
+    CORE_INVISIBILITY_MECHANIC_ID,
     CORE_WITCH_BOLT_MECHANIC_ID,
 )
 from sagasmith_dnd.vocabulary import ATTACK_MODES
@@ -26,6 +28,8 @@ ENGINE_SETTLED_SPELL_MECHANIC_IDS = frozenset(
         "dnd5e.core.spell.shield",
         CORE_BLADE_WARD_MECHANIC_ID,
         CORE_FLY_MECHANIC_ID,
+        CORE_HYPNOTIC_PATTERN_MECHANIC_ID,
+        CORE_INVISIBILITY_MECHANIC_ID,
         CORE_WITCH_BOLT_MECHANIC_ID,
     }
 )
@@ -41,6 +45,7 @@ SPELL_RESOLUTION_PATHS = frozenset(
 
 _DICE = re.compile(r"(?i)^([1-9]\d*)d([1-9]\d*)$")
 _SRD2014_SPELL_PREFIX = "dnd5e.content.srd2014.spell."
+_SRD2024_SPELL_PREFIX = "dnd5e.content.srd2024.spell."
 
 
 def _object(value: Any, field: str) -> dict[str, Any]:
@@ -582,6 +587,150 @@ def known_spell_resolution(name: str) -> dict[str, Any] | None:
     return normalize_spell_resolution(deepcopy(value)) if value is not None else None
 
 
+def known_2024_spell_resolution(name: str) -> dict[str, Any] | None:
+    """Return only resolutions re-reviewed against SRD 5.2.1 spell text.
+
+    This is deliberately separate from the 2014 catalog.  Several spells kept
+    their names while changing dice, range, attack mode, creature exclusions, or
+    secondary effects.  Falling back by name across editions would therefore be
+    a silent rules corruption rather than a harmless compatibility shortcut.
+    """
+
+    key = ascii_slug(name)
+    values: dict[str, dict[str, Any]] = {
+        "healing-word": {
+            "kind": "healing",
+            "targeting": {
+                "mode": "creature",
+                "requires_sight": True,
+                "max_targets": 1,
+            },
+            "healing": {
+                "base_dice": "2d4",
+                "per_slot_dice": "2d4",
+                "slot_base_level": 1,
+                "add_spellcasting_modifier": True,
+            },
+        },
+        "cure-wounds": {
+            "kind": "healing",
+            "targeting": {"mode": "creature", "max_targets": 1},
+            "healing": {
+                "base_dice": "2d8",
+                "per_slot_dice": "2d8",
+                "slot_base_level": 1,
+                "add_spellcasting_modifier": True,
+            },
+        },
+        "scorching-ray": {
+            "kind": "spell_attack",
+            "targeting": {"mode": "creature", "max_targets": 100},
+            "attack": {
+                "mode": "ranged",
+                "count": {"base": 3, "per_slot_above": 1, "slot_base_level": 2},
+                "damage": {"base_dice": "2d6", "damage_type": "fire"},
+            },
+        },
+        "guiding-bolt": {
+            "kind": "spell_attack",
+            "targeting": {"mode": "creature", "max_targets": 1},
+            "attack": {
+                "mode": "ranged",
+                "count": {"base": 1},
+                "damage": {
+                    "base_dice": "4d6",
+                    "damage_type": "radiant",
+                    "per_slot_dice": "1d6",
+                    "slot_base_level": 1,
+                },
+                "on_hit_ruling": (
+                    "The next attack roll against the target before the end of the "
+                    "caster's next turn has Advantage."
+                ),
+            },
+        },
+        "chill-touch": {
+            "kind": "spell_attack",
+            "targeting": {"mode": "creature", "max_targets": 1},
+            "attack": {
+                "mode": "melee",
+                "count": {"base": 1},
+                "damage": {
+                    "base_dice": "1d10",
+                    "damage_type": "necrotic",
+                    "cantrip_dice": {
+                        "1": "1d10",
+                        "5": "2d10",
+                        "11": "3d10",
+                        "17": "4d10",
+                    },
+                },
+                "on_hit_ruling": (
+                    "The target can't regain Hit Points until the end of the "
+                    "caster's next turn."
+                ),
+            },
+        },
+        "sacred-flame": {
+            "kind": "saving_throw",
+            "targeting": {"mode": "creature", "requires_sight": True, "max_targets": 1},
+            "save": {
+                "ability": "dexterity",
+                "success": "none",
+                "ignores_cover": True,
+                "damage": {
+                    "base_dice": "1d8",
+                    "damage_type": "radiant",
+                    "cantrip_dice": {
+                        "1": "1d8",
+                        "5": "2d8",
+                        "11": "3d8",
+                        "17": "4d8",
+                    },
+                },
+            },
+        },
+        "fireball": {
+            "kind": "saving_throw",
+            "targeting": {
+                "mode": "area",
+                "max_targets": 100,
+                "area": {"shape": "sphere", "radius_ft": 20},
+            },
+            "save": {
+                "ability": "dexterity",
+                "success": "half",
+                "damage": {
+                    "base_dice": "8d6",
+                    "damage_type": "fire",
+                    "per_slot_dice": "1d6",
+                    "slot_base_level": 3,
+                },
+            },
+        },
+        "lightning-bolt": {
+            "kind": "saving_throw",
+            "targeting": {
+                "mode": "area",
+                "max_targets": 100,
+                "area": {"shape": "line", "length_ft": 100, "width_ft": 5},
+            },
+            "save": {
+                "ability": "dexterity",
+                "success": "half",
+                "damage": {
+                    "base_dice": "8d6",
+                    "damage_type": "lightning",
+                    "per_slot_dice": "1d6",
+                    "slot_base_level": 3,
+                },
+            },
+        },
+    }
+    value = values.get(key)
+    return normalize_spell_resolution(deepcopy(value)) if value is not None else None
+
+
 def effective_spell_resolution(spell: dict[str, Any]) -> dict[str, Any] | None:
     """Return a stored contract or the built-in contract for one exact SRD spell id."""
 
@@ -591,9 +740,13 @@ def effective_spell_resolution(spell: dict[str, Any]) -> dict[str, Any] | None:
     if isinstance(stored, dict):
         return normalize_spell_resolution(deepcopy(stored))
     spell_id = str(spell.get("id") or "")
-    if not spell_id.startswith(_SRD2014_SPELL_PREFIX):
-        return None
-    return known_spell_resolution(spell_id.removeprefix(_SRD2014_SPELL_PREFIX))
+    if spell_id.startswith(_SRD2014_SPELL_PREFIX):
+        return known_spell_resolution(spell_id.removeprefix(_SRD2014_SPELL_PREFIX))
+    if spell_id.startswith(_SRD2024_SPELL_PREFIX):
+        return known_2024_spell_resolution(
+            spell_id.removeprefix(_SRD2024_SPELL_PREFIX)
+        )
+    return None
 
 
 def spell_resolution_path(spell: dict[str, Any]) -> str:
@@ -605,7 +758,7 @@ def spell_resolution_path(spell: dict[str, Any]) -> str:
         return "semantic_plan"
     if effective_spell_resolution(spell) is not None:
         return "structured_resolution"
-    if str(spell.get("id") or "") == CORE_FLY_SPELL_ID:
+    if str(spell.get("id") or "") in CORE_FLY_SPELL_IDS:
         return "engine_mechanic"
     mechanic_refs = {
         str(item).strip()
@@ -768,6 +921,7 @@ __all__ = [
     "SPELL_RESOLUTION_PATHS",
     "audit_spell_resolution_paths",
     "effective_spell_resolution",
+    "known_2024_spell_resolution",
     "known_spell_resolution",
     "normalize_spell_resolution",
     "overlay_spell_attack_action",

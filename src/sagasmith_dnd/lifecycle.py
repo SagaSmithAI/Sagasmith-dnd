@@ -27,6 +27,7 @@ from sagasmith_dnd.game_time import (
     TICKS_PER_HOUR,
     TICKS_PER_MINUTE,
 )
+from sagasmith_dnd.heroic_inspiration import grant_heroic_inspiration
 from sagasmith_dnd.hit_points import apply_basic_healing_to_sheet
 from sagasmith_dnd.resources import mutate_bounded_resource
 from sagasmith_dnd.rule_engine import ResolutionContext, apply_rule_event, core_receipts
@@ -803,6 +804,7 @@ def apply_rest(
     hit_dice_recovery: dict[str, int] | None = None,
     arcane_recovery: dict[str, int] | None = None,
     natural_recovery: dict[str, int] | None = None,
+    sorcerous_restoration_points: int | None = None,
     rest_activity_minutes: dict[str, int] | None = None,
     food_and_drink: bool = False,
     song_of_rest_source_sheet: dict[str, Any] | None = None,
@@ -825,6 +827,10 @@ def apply_rest(
         raise CombatEngineError("Arcane Recovery can be used only when finishing a short rest")
     if rest_type != "short_rest" and natural_recovery:
         raise CombatEngineError("Natural Recovery can be used only during a short rest")
+    if rest_type != "short_rest" and sorcerous_restoration_points is not None:
+        raise CombatEngineError(
+            "Sorcerous Restoration can be used only when finishing a short rest"
+        )
     if rest_type != "short_rest" and song_of_rest_source_sheet is not None:
         raise CombatEngineError("Song of Rest applies only when finishing a short rest")
     normalized_rest_activities = validate_rest_activity_minutes(rest_activity_minutes)
@@ -845,6 +851,10 @@ def apply_rest(
             sheet,
             natural_recovery,
             rest_activity_minutes=normalized_rest_activities,
+        )
+        validate_sorcerous_restoration_choice(
+            sheet,
+            sorcerous_restoration_points,
         )
     before_rules = apply_rule_event(sheet, "rest.before", rules)
     if before_rules.status != "committed":
@@ -872,6 +882,7 @@ def apply_rest(
     natural_recovery_result: dict[str, Any] | None = None
     song_of_rest_result: dict[str, Any] | None = None
     sorcerous_restoration_result: dict[str, Any] | None = None
+    heroic_inspiration_result: dict[str, Any] | None = None
     if rest_type == "long_rest":
         exhaustion = int(combat.get("exhaustion", 0) or 0)
         if edition == "2024" or food_and_drink:
@@ -934,7 +945,10 @@ def apply_rest(
             )
             for level, amount in natural_recovery_result["recovered"].items():
                 recovered[f"spell_slot:{level}"] = recovered.get(f"spell_slot:{level}", 0) + amount
-        sorcerous_restoration_result = apply_sorcerous_restoration(value)
+        sorcerous_restoration_result = apply_sorcerous_restoration(
+            value,
+            points=sorcerous_restoration_points,
+        )
         if sorcerous_restoration_result is not None:
             recovered["sorcery_points"] = sorcerous_restoration_result["recovered"]
 
@@ -959,9 +973,16 @@ def apply_rest(
             return
         if bool(resource.get("unlimited", False)):
             return
+        recovery_amounts = dict(resource.get("recovery_amounts") or {})
+        recovery_amount = recovery_amounts.get(rest_type, "all")
+        amount = (
+            int(resource.get("max", 0) or 0)
+            if recovery_amount == "all"
+            else int(recovery_amount)
+        )
         mutation = mutate_bounded_resource(
             resource,
-            amount=int(resource.get("max", 0) or 0),
+            amount=amount,
             direction="recover",
         )
         recovered[key] = recovered.get(key, 0) + mutation["amount"]
@@ -1052,6 +1073,14 @@ def apply_rest(
         recover_resource(item.get("uses"), f"inventory:{index}:uses")
         recover_resource(item.get("charges"), f"inventory:{index}:charges")
     value["combat"] = combat | {"hp": hp}
+    if rest_type == "long_rest" and edition == "2024" and any(
+        str(dict(feature.get("choices") or {}).get("grant_heroic_inspiration_on") or "")
+        == "long_rest"
+        for feature in value.get("content", {}).get("features", [])
+        if isinstance(feature, dict)
+    ):
+        heroic_inspiration_result = grant_heroic_inspiration(value)
+        value = heroic_inspiration_result["sheet"]
     revival_ordeals = {"sheet": value, "reduced": []}
     if rest_type == "long_rest":
         revival_ordeals = reduce_revival_ordeal_after_long_rest(value)
@@ -1086,6 +1115,15 @@ def apply_rest(
         "natural_recovery": natural_recovery_result,
         "song_of_rest": song_of_rest_result,
         "sorcerous_restoration": sorcerous_restoration_result,
+        "heroic_inspiration": (
+            {
+                key: item
+                for key, item in heroic_inspiration_result.items()
+                if key not in {"sheet", "recipient_sheet"}
+            }
+            if heroic_inspiration_result is not None
+            else None
+        ),
         "revival_ordeals": revival_ordeals["reduced"],
         "effects_expired": duration["expired"],
         "status": "committed",
@@ -1109,6 +1147,11 @@ def apply_rest(
                     *(
                         ["dnd5e.core.rest.sorcerous_restoration"]
                         if sorcerous_restoration_result is not None
+                        else []
+                    ),
+                    *(
+                        ["dnd5e.core.heroic_inspiration"]
+                        if heroic_inspiration_result is not None
                         else []
                     ),
                 ],
@@ -1399,30 +1442,101 @@ def apply_natural_recovery_choice(
     return result
 
 
-def apply_sorcerous_restoration(sheet: dict[str, Any]) -> dict[str, Any] | None:
-    """Apply the 2014 level-20 Sorcerer's automatic short-rest recovery."""
-    if _sorcerous_restoration_feature(sheet) is None:
+def validate_sorcerous_restoration_choice(
+    sheet: dict[str, Any], points: int | None
+) -> None:
+    """Preflight the optional SRD 5.2.1 short-rest Sorcery Point recovery."""
+
+    if points is None:
+        return
+    if isinstance(points, bool) or not isinstance(points, int) or points < 1:
+        raise CombatEngineError(
+            "Sorcerous Restoration points must be a positive integer"
+        )
+    if _sheet_edition(sheet) != "2024":
+        raise CombatEngineError(
+            "declared Sorcerous Restoration points require the 2024 feature"
+        )
+    feature = _sorcerous_restoration_feature(sheet)
+    if feature is None:
+        raise CombatEngineError("Sorcerous Restoration is not on the actor card")
+    sorcerer_level = sum(
+        int(item.get("level", 0) or 0)
+        for item in sheet.get("progression", {}).get("classes", [])
+        if isinstance(item, dict)
+        and str(item.get("name") or "").strip().casefold() == "sorcerer"
+    )
+    if sorcerer_level < 5:
+        raise CombatEngineError("Sorcerous Restoration requires 5 Sorcerer levels")
+    allowance = sorcerer_level // 2
+    if points > allowance:
+        raise CombatEngineError(
+            "Sorcerous Restoration exceeds half the Sorcerer level rounded down"
+        )
+    uses = feature.get("uses")
+    if not isinstance(uses, dict) or int(uses.get("value", 0) or 0) < 1:
+        raise CombatEngineError("Sorcerous Restoration has already been used")
+    resource = sheet.get("resources", {}).get("sorcery_points")
+    if not isinstance(resource, dict):
+        raise CombatEngineError("Sorcerous Restoration requires the Sorcery Points resource")
+    missing = int(resource.get("max", 0) or 0) - int(resource.get("value", 0) or 0)
+    if points > missing:
+        raise CombatEngineError(
+            "Sorcerous Restoration cannot recover more Sorcery Points than are expended"
+        )
+
+
+def apply_sorcerous_restoration(
+    sheet: dict[str, Any], *, points: int | None = None
+) -> dict[str, Any] | None:
+    """Apply the edition-specific Sorcerous Restoration short-rest rule."""
+    feature = _sorcerous_restoration_feature(sheet)
+    if feature is None:
+        if points is not None:
+            raise CombatEngineError("Sorcerous Restoration is not on the actor card")
         return None
-    if _sheet_edition(sheet) != "2014":
-        raise CombatEngineError("Sorcerous Restoration requires the 2014 Sorcerer feature")
+    edition = _sheet_edition(sheet)
+    if edition == "2024" and points is None:
+        return None
+    if edition == "2014" and points is not None:
+        raise CombatEngineError(
+            "the 2014 Sorcerous Restoration recovery is automatic"
+        )
     sorcerer_level = sum(
         int(item.get("level", 0) or 0)
         for item in sheet.get("progression", {}).get("classes", [])
         if isinstance(item, dict) and str(item.get("name") or "").strip().casefold() == "sorcerer"
     )
-    if sorcerer_level < 20:
-        raise CombatEngineError("Sorcerous Restoration requires 20 Sorcerer levels")
+    required_level = 20 if edition == "2014" else 5
+    if sorcerer_level < required_level:
+        raise CombatEngineError(
+            f"Sorcerous Restoration requires {required_level} Sorcerer levels"
+        )
     resource = sheet.get("resources", {}).get("sorcery_points")
     if not isinstance(resource, dict):
         raise CombatEngineError("Sorcerous Restoration requires the Sorcery Points resource")
-    mutation = mutate_bounded_resource(resource, amount=4, direction="recover")
-    return {
+    if edition == "2024":
+        validate_sorcerous_restoration_choice(sheet, points)
+        mutate_bounded_resource(feature["uses"], amount=1, direction="spend")
+        recovery_amount = int(points or 0)
+    else:
+        recovery_amount = 4
+    mutation = mutate_bounded_resource(
+        resource,
+        amount=recovery_amount,
+        direction="recover",
+    )
+    result = {
         "sorcerer_level": sorcerer_level,
         "before": mutation["before"],
         "recovered": mutation["amount"],
         "after": mutation["after"],
         "maximum": int(resource.get("max", 0) or 0),
     }
+    if edition == "2024":
+        result["edition"] = edition
+        result["feature_uses_remaining"] = int(feature["uses"]["value"])
+    return result
 
 
 def _validate_recovered_spell_slots(
@@ -1494,6 +1608,8 @@ def _natural_recovery_feature(sheet: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _sorcerous_restoration_feature(sheet: dict[str, Any]) -> dict[str, Any] | None:
+    edition = _sheet_edition(sheet)
+    source_prefix = f"bundled:srd{edition}/"
     return next(
         (
             item
@@ -1504,10 +1620,7 @@ def _sorcerous_restoration_feature(sheet: dict[str, Any]) -> dict[str, Any] | No
                 or str(item.get("name") or "").strip().casefold() == "sorcerous restoration"
             )
             and str(item.get("source_key") or "").strip().casefold() == "sorcerer"
-            and any(
-                str(ref).startswith("bundled:srd2014/02_Classes/Sorcerer")
-                for ref in item.get("rule_refs", [])
-            )
+            and any(str(ref).startswith(source_prefix) for ref in item.get("rule_refs", []))
         ),
         None,
     )

@@ -423,6 +423,33 @@ def test_ruling_requirement_rejects_a_resolver_that_disagrees_with_its_kind() ->
         validate_character_sheet(sheet)
 
 
+def test_feature_card_preserves_bounded_agent_ruling_context() -> None:
+    sheet = default_character_sheet()
+    sheet["content"]["features"] = [
+        {
+            "id": "source-feature",
+            "name": "Source Feature",
+            "source_key": "Test Class",
+            "description": "x" * 4000,
+            "ruling_requirements": [
+                {
+                    "kind": "feature_semantics",
+                    "reason": "Settle the exact source feature through public primitives.",
+                    "source_excerpt": "The source-defined effect applies.",
+                    "default_resolver": "agent",
+                    "ruling_kind": "source_or_scene_fact",
+                }
+            ],
+        }
+    ]
+
+    normalized = validate_character_sheet(sheet)
+
+    requirement = normalized["content"]["features"][0]["ruling_requirements"][0]
+    assert requirement["default_resolver"] == "agent"
+    assert requirement["source_excerpt"] == "The source-defined effect applies."
+
+
 def test_class_prepared_spell_does_not_have_to_be_known() -> None:
     sheet = {
         "progression": {

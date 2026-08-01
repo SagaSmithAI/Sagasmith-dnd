@@ -1,4 +1,4 @@
-"""Audited D&D 5e (2014) single-class level advancement."""
+"""Audited D&D 5e 2014/2024 single-class level advancement."""
 
 from __future__ import annotations
 
@@ -10,7 +10,11 @@ from sagasmith_dnd.combat_engine import CombatEngineError
 from sagasmith_dnd.editions import normalize_dnd_edition
 from sagasmith_dnd.engine import ability_modifier, roll
 from sagasmith_dnd.resources import resize_bounded_resource
-from sagasmith_dnd.spells import prepared_spell_limit, synchronize_prepared_spell_limit
+from sagasmith_dnd.spells import (
+    PREPARED_SPELL_LIMITS_2024,
+    prepared_spell_limit,
+    synchronize_prepared_spell_limit,
+)
 from sagasmith_dnd.vocabulary import PREPARED_SELECTION_MODES
 
 FULL_CASTER_SLOTS: dict[int, tuple[int, ...]] = {
@@ -57,6 +61,13 @@ HALF_CASTER_SLOTS: dict[int, tuple[int, ...]] = {
     18: (4, 3, 3, 3, 1),
     19: (4, 3, 3, 3, 2),
     20: (4, 3, 3, 3, 2),
+}
+
+# The 2024 Paladin and Ranger receive Spellcasting at level 1. Later slot
+# progression is identical to the 2014 half-caster table.
+HALF_CASTER_SLOTS_2024: dict[int, tuple[int, ...]] = {
+    **HALF_CASTER_SLOTS,
+    1: (2,),
 }
 
 PACT_MAGIC: dict[int, tuple[int, int]] = {
@@ -320,7 +331,7 @@ def advance_single_class_level(
     reason: str = "",
     rng: Any = None,
 ) -> dict[str, Any]:
-    """Advance an existing 2014 class exactly one level.
+    """Advance an existing 2014 or 2024 class exactly one level.
 
     This transaction settles deterministic card state only. Class features,
     subclass choices, feats, and selected spells remain catalog operations and
@@ -331,8 +342,6 @@ def advance_single_class_level(
         edition = normalize_dnd_edition(value.get("edition"))
     except ValueError as exc:
         raise CombatEngineError(str(exc)) from exc
-    if edition != "2014":
-        raise CombatEngineError("level advancement currently supports D&D 5e 2014 cards only")
     progression = value.setdefault("progression", {})
     classes = list(progression.get("classes") or [])
     if len(classes) != 1:
@@ -396,7 +405,13 @@ def advance_single_class_level(
     target["level"] = new_level
     progression["classes"] = [target]
     progression["level"] = new_level
-    spellcasting = _advance_spellcasting(value, class_name, old_level, new_level)
+    spellcasting = _advance_spellcasting(
+        value,
+        class_name,
+        old_level,
+        new_level,
+        edition=edition,
+    )
     resource_sync = synchronize_class_feature_resources(value)
     value = resource_sync["sheet"]
     return {
@@ -424,7 +439,12 @@ def advance_single_class_level(
             "max": hit_die_resource["max"],
         },
         "spellcasting": spellcasting,
-        "spell_choices": _spell_choice_delta(class_name, old_level, new_level),
+        "spell_choices": _spell_choice_delta(
+            class_name,
+            old_level,
+            new_level,
+            edition=edition,
+        ),
         "feature_resource_changes": resource_sync["changes"],
     }
 
@@ -469,6 +489,11 @@ def synchronize_class_feature_resources(sheet: dict[str, Any]) -> dict[str, Any]
         recovery_requirements = dict(
             old_resource.get("recovery_requirements") or {}
         )
+        recovery_amounts = dict(
+            scaling.get("recovery_amounts")
+            or old_resource.get("recovery_amounts")
+            or {}
+        )
         updated = {
             "label": str(scaling.get("label") or old_resource.get("label") or target),
             "value": old_value,
@@ -479,6 +504,8 @@ def synchronize_class_feature_resources(sheet: dict[str, Any]) -> dict[str, Any]
         }
         if recovery_requirements:
             updated["recovery_requirements"] = recovery_requirements
+        if recovery_amounts:
+            updated["recovery_amounts"] = recovery_amounts
         resize_bounded_resource(
             updated,
             maximum=new_maximum,
@@ -652,13 +679,25 @@ def _scaled_resource_capacity(
 
 
 def _advance_spellcasting(
-    sheet: dict[str, Any], class_name: str, old_level: int, new_level: int
+    sheet: dict[str, Any],
+    class_name: str,
+    old_level: int,
+    new_level: int,
+    *,
+    edition: str,
 ) -> dict[str, Any]:
     key = class_name.casefold()
     config = CASTER_CONFIG.get(key)
     if config is None:
         return {"kind": "none", "slot_changes": {}}
-    ability, mode, kind = config
+    ability, legacy_mode, kind = config
+    mode = (
+        "spellbook"
+        if key == "wizard"
+        else "prepared"
+        if edition == "2024"
+        else legacy_mode
+    )
     spellcasting = sheet.setdefault("spellcasting", {})
     spellcasting["ability"] = spellcasting.get("ability") or ability
     preparation = spellcasting.setdefault("preparation", {})
@@ -692,7 +731,13 @@ def _advance_spellcasting(
             "new_slot_level": new_slot_level,
         }
     else:
-        table = FULL_CASTER_SLOTS if kind == "full" else HALF_CASTER_SLOTS
+        table = (
+            FULL_CASTER_SLOTS
+            if kind == "full"
+            else HALF_CASTER_SLOTS_2024
+            if edition == "2024"
+            else HALF_CASTER_SLOTS
+        )
         old_slots = table[old_level]
         new_slots = table[new_level]
         resources = spellcasting.setdefault("spell_slots", {})
@@ -732,12 +777,28 @@ def _advance_spellcasting(
     }
 
 
-def _spell_choice_delta(class_name: str, old_level: int, new_level: int) -> dict[str, int]:
+def _spell_choice_delta(
+    class_name: str,
+    old_level: int,
+    new_level: int,
+    *,
+    edition: str = "2014",
+) -> dict[str, int]:
     key = class_name.casefold()
     result = {"cantrips_to_add": 0, "leveled_spells_to_add": 0}
     cantrips = CANTRIPS_KNOWN.get(key)
     if cantrips:
         result["cantrips_to_add"] = max(0, cantrips[new_level - 1] - cantrips[old_level - 1])
+    if edition == "2024":
+        prepared = PREPARED_SPELL_LIMITS_2024.get(key)
+        if prepared:
+            result["leveled_spells_to_add"] = max(
+                0,
+                prepared[new_level - 1] - prepared[old_level - 1],
+            )
+        if key == "wizard":
+            result["spellbook_spells_to_add"] = 2
+        return result
     known = KNOWN_SPELLS.get(key)
     if known:
         result["leveled_spells_to_add"] = max(0, known[new_level - 1] - known[old_level - 1])

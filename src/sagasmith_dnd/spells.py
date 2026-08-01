@@ -19,10 +19,11 @@ from sagasmith_dnd.standard_spell_ids import (
     CORE_BLADE_WARD_MECHANIC_ID,
     CORE_BLADE_WARD_SPELL_ID,
     CORE_FLY_MECHANIC_ID,
-    CORE_FLY_SPELL_ID,
-    CORE_HYPNOTIC_PATTERN_SPELL_ID,
+    CORE_FLY_SPELL_IDS,
+    CORE_HYPNOTIC_PATTERN_MECHANIC_ID,
+    CORE_HYPNOTIC_PATTERN_SPELL_IDS,
     CORE_INVISIBILITY_MECHANIC_ID,
-    CORE_INVISIBILITY_SPELL_ID,
+    CORE_INVISIBILITY_SPELL_IDS,
     CORE_WITCH_BOLT_MECHANIC_ID,
     CORE_WITCH_BOLT_SPELL_ID,
 )
@@ -36,6 +37,10 @@ CORE_SHIELD_ITEM_BOUNDARY_ID = "dnd5e.core.spell.shield_item_ac"
 CORE_SHIELD_SPELL_ID = "dnd5e.content.srd2014.spell.shield"
 CORE_MAGE_ARMOR_MECHANIC_ID = "dnd5e.core.spell.mage_armor"
 CORE_MAGE_ARMOR_SPELL_ID = "dnd5e.content.srd2014.spell.mage-armor"
+CORE_2024_MAGE_ARMOR_SPELL_ID = "dnd5e.content.srd2024.spell.mage-armor"
+CORE_MAGE_ARMOR_SPELL_IDS = frozenset(
+    {CORE_MAGE_ARMOR_SPELL_ID, CORE_2024_MAGE_ARMOR_SPELL_ID}
+)
 CORE_MAGIC_ITEM_LAST_CHARGE_MECHANIC_ID = "dnd5e.core.magic_item.last_charge"
 CORE_MAGIC_ITEM_RECHARGE_MECHANIC_ID = "dnd5e.core.magic_item.charge_recovery"
 CORE_MAGIC_ITEM_SPELL_MECHANIC_ID = "dnd5e.core.spell.magic_item_charges"
@@ -58,7 +63,7 @@ def _agent_ruling_requirements(kinds: list[str]) -> list[dict[str, str]]:
     ]
 
 
-_PREPARED_2024 = {
+PREPARED_SPELL_LIMITS_2024 = {
     "bard": (4, 5, 6, 7, 9, 10, 11, 12, 14, 15, 16, 16, 17, 17, 18, 18, 19, 20, 21, 22),
     "cleric": (4, 5, 6, 7, 9, 10, 11, 12, 14, 15, 16, 16, 17, 17, 18, 18, 19, 20, 21, 22),
     "druid": (4, 5, 6, 7, 9, 10, 11, 12, 14, 15, 16, 16, 17, 17, 18, 18, 19, 20, 21, 22),
@@ -68,6 +73,7 @@ _PREPARED_2024 = {
     "warlock": (2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 11, 11, 12, 12, 13, 13, 14, 14, 15, 15),
     "wizard": (4, 5, 6, 7, 9, 10, 11, 12, 14, 15, 16, 16, 17, 18, 19, 21, 22, 23, 24, 25),
 }
+_PREPARED_2024 = PREPARED_SPELL_LIMITS_2024
 _LONG_REST_ANY_2024 = {"cleric", "druid", "wizard"}
 _LONG_REST_ONE_2024 = {"paladin", "ranger"}
 _LEVEL_UP_ONE_2024 = {"bard", "sorcerer", "warlock"}
@@ -88,6 +94,15 @@ def is_core_magic_missile_spell(spell: dict[str, Any]) -> bool:
     )
 
 
+def is_core_mage_armor_spell(spell: dict[str, Any]) -> bool:
+    """Recognize either edition's source-bound Mage Armor card."""
+
+    return str(spell.get("id") or "") in CORE_MAGE_ARMOR_SPELL_IDS or (
+        CORE_MAGE_ARMOR_MECHANIC_ID
+        in {str(item) for item in spell.get("mechanic_refs", [])}
+    )
+
+
 def is_core_blade_ward_spell(spell: dict[str, Any]) -> bool:
     """Recognize only the source-bound standard 2014 Blade Ward mechanic."""
 
@@ -98,24 +113,27 @@ def is_core_blade_ward_spell(spell: dict[str, Any]) -> bool:
 
 
 def is_core_hypnotic_pattern_spell(spell: dict[str, Any]) -> bool:
-    """Recognize only the source-bound SRD 2014 Hypnotic Pattern mechanic."""
+    """Recognize only a source-bound SRD Hypnotic Pattern mechanic."""
 
-    return str(spell.get("id") or "") == CORE_HYPNOTIC_PATTERN_SPELL_ID
+    return str(spell.get("id") or "") in CORE_HYPNOTIC_PATTERN_SPELL_IDS or (
+        CORE_HYPNOTIC_PATTERN_MECHANIC_ID
+        in {str(item) for item in spell.get("mechanic_refs", [])}
+    )
 
 
 def is_core_fly_spell(spell: dict[str, Any]) -> bool:
-    """Recognize only the source-bound SRD 2014 Fly mechanic."""
+    """Recognize only a source-bound SRD Fly mechanic."""
 
-    return str(spell.get("id") or "") == CORE_FLY_SPELL_ID or (
+    return str(spell.get("id") or "") in CORE_FLY_SPELL_IDS or (
         CORE_FLY_MECHANIC_ID
         in {str(item) for item in spell.get("mechanic_refs", [])}
     )
 
 
 def is_core_invisibility_spell(spell: dict[str, Any]) -> bool:
-    """Recognize only the source-bound SRD 2014 Invisibility mechanic."""
+    """Recognize only a source-bound SRD Invisibility mechanic."""
 
-    return str(spell.get("id") or "") == CORE_INVISIBILITY_SPELL_ID or (
+    return str(spell.get("id") or "") in CORE_INVISIBILITY_SPELL_IDS or (
         CORE_INVISIBILITY_MECHANIC_ID
         in {str(item) for item in spell.get("mechanic_refs", [])}
     )
@@ -143,7 +161,7 @@ def apply_core_invisibility_effects(
 ) -> dict[str, Any]:
     """Make the explicit touched creatures invisible under one concentration."""
 
-    if spell_id != CORE_INVISIBILITY_SPELL_ID:
+    if spell_id not in CORE_INVISIBILITY_SPELL_IDS:
         raise CombatEngineError(
             "Invisibility requires its exact source-bound SRD spell id"
         )
@@ -175,7 +193,7 @@ def apply_core_invisibility_effects(
             and effect.get("concentration")
             and str(effect.get("id") or "") == concentration_effect_id
             and str(effect.get("source_spell_id") or "")
-            == CORE_INVISIBILITY_SPELL_ID
+            == spell_id
         ),
         None,
     )
@@ -193,7 +211,7 @@ def apply_core_invisibility_effects(
             "name": "Invisibility",
             "kind": "timed_conditions",
             "source": CORE_INVISIBILITY_MECHANIC_ID,
-            "source_spell_id": CORE_INVISIBILITY_SPELL_ID,
+            "source_spell_id": spell_id,
             "dependency": "source_effect_active",
             "source_actor_id": caster_id,
             "source_effect_id": concentration_effect_id,
@@ -243,7 +261,7 @@ def apply_core_fly_effects(
 ) -> dict[str, Any]:
     """Apply Fly's 60-foot speed to its explicit willing targets."""
 
-    if spell_id != CORE_FLY_SPELL_ID:
+    if spell_id not in CORE_FLY_SPELL_IDS:
         raise CombatEngineError("Fly requires its exact source-bound SRD spell id")
     if caster_id not in sheets:
         raise CombatEngineError("Fly caster sheet is missing")
@@ -273,7 +291,7 @@ def apply_core_fly_effects(
             if effect.get("active")
             and effect.get("concentration")
             and str(effect.get("id") or "") == concentration_effect_id
-            and str(effect.get("source_spell_id") or "") == CORE_FLY_SPELL_ID
+            and str(effect.get("source_spell_id") or "") == spell_id
         ),
         None,
     )
@@ -290,7 +308,7 @@ def apply_core_fly_effects(
                 "name": "Fly",
                 "kind": "spell_fly",
                 "source": CORE_FLY_MECHANIC_ID,
-                "source_spell_id": CORE_FLY_SPELL_ID,
+                "source_spell_id": spell_id,
                 "dependency": "source_effect_active",
                 "source_actor_id": caster_id,
                 "source_effect_id": concentration_effect_id,
@@ -476,7 +494,7 @@ def consume_magic_item_spell_cast(
     effect_id = None
     automatic_effect = None
     mechanic_ids = [CORE_MAGIC_ITEM_SPELL_MECHANIC_ID]
-    if spell_id == CORE_MAGE_ARMOR_SPELL_ID:
+    if is_core_mage_armor_spell(card):
         effect_id = _apply_mage_armor_effect(
             value,
             spell_id=spell_id,
@@ -1235,7 +1253,7 @@ def consume_spell_cast(
         )
     automatic_effect = None
     effect_id = None
-    if spell_id == CORE_MAGE_ARMOR_SPELL_ID:
+    if is_core_mage_armor_spell(spell):
         effect_id = _apply_mage_armor_effect(
             value,
             spell_id=spell_id,

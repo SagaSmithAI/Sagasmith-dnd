@@ -58,7 +58,7 @@ def active_effect_condition_additions(sheet: dict[str, Any]) -> set[str]:
 def effect_condition_additions(effect: dict[str, Any]) -> set[str]:
     """Return canonical conditions explicitly granted by one timed effect."""
 
-    if effect.get("kind") != "timed_conditions":
+    if effect.get("kind") not in {"timed_conditions", "turn_undead"}:
         return set()
     result: set[str] = set()
     for change in effect.get("changes", []):

@@ -22,10 +22,12 @@ from sagasmith_dnd.combat_engine import (
     apply_damage_to_sheet,
     apply_healing_to_sheet,
     apply_hit_point_loss_to_sheet,
+    apply_weapon_mastery_to_encounter,
     arm_readied_spell,
     available_actions,
     available_attack_defenses,
     available_reactions,
+    consume_weapon_mastery_attack_effects,
     current_combatant,
     damage_amount_after_reduction,
     detach_attachment,
@@ -50,6 +52,7 @@ from sagasmith_dnd.combat_engine import (
     resolve_choice_window,
     resolve_common_action,
     resolve_death_save_to_sheet,
+    resolve_divine_spark_to_sheet,
     resolve_heated_body_melee_hit,
     resolve_hypnotic_pattern_target,
     resolve_preserve_life_to_sheets,
@@ -68,6 +71,7 @@ from sagasmith_dnd.combat_engine import (
     source_speed_multiplier,
     spend_movement,
     stabilize_sheet,
+    standard_save_damage_reduction,
     start_encounter,
     structured_critical_followup,
     trigger_readied_spell,
@@ -76,7 +80,10 @@ from sagasmith_dnd.engine import resolve_check, roll_d20
 from sagasmith_dnd.lifecycle import apply_rest
 from sagasmith_dnd.rule_engine import resolution_context
 from sagasmith_dnd.spatial import compile_battle_map
-from sagasmith_dnd.standard_spell_ids import CORE_HYPNOTIC_PATTERN_SPELL_ID
+from sagasmith_dnd.standard_spell_ids import (
+    CORE_2024_HYPNOTIC_PATTERN_SPELL_ID,
+    CORE_HYPNOTIC_PATTERN_SPELL_ID,
+)
 
 
 def test_damage_reduction_uses_one_round_down_contract() -> None:
@@ -433,6 +440,20 @@ def test_evasion_rewrites_dexterity_save_for_half_damage() -> None:
         for item in settled["result"]["targets"]
     )
 
+    incapacitated = deepcopy(agile)
+    incapacitated["sheet"]["conditions"] = ["incapacitated"]
+    incapacitated["sheet"]["content"]["features"][0]["choices"]["source_trait"][
+        "unavailable_conditions"
+    ] = ["incapacitated"]
+    denied = standard_save_damage_reduction(
+        incapacitated,
+        ability="dexterity",
+        success=True,
+        ordinary_successful_save="half",
+    )
+    assert denied["damage_reduction"] == "half"
+    assert denied["rule_receipts"] == []
+
 
 def test_generic_save_damage_rejects_conflicting_roll_states() -> None:
     with pytest.raises(
@@ -473,6 +494,440 @@ def _actor(identifier: str, *, hp: int = 12, ac: int = 10) -> dict:
         "sheet": sheet,
         "derived": derive_character_sheet(sheet),
     }
+
+
+def _mastery_actor(identifier: str, mastery: str) -> dict:
+    actor = _actor(identifier, hp=30)
+    sheet = actor["sheet"]
+    sheet["edition"] = "2024"
+    sheet["progression"].update(
+        level=1,
+        classes=[{"name": "Fighter", "level": 1, "subclass": "", "hit_die": 10}],
+    )
+    feature_id = "dnd5e.content.srd2024.feature.fighter-weapon-mastery"
+    sheet["content"]["features"].append(
+        {
+            "id": feature_id,
+            "name": "Weapon Mastery",
+            "source_key": "Fighter",
+            "mechanic_refs": ["dnd5e.core.weapon.mastery"],
+        }
+    )
+    sheet["content"]["selections"].append(
+        {
+            "artifact_id": feature_id,
+            "kind": "feature",
+            "name": "Weapon Mastery",
+            "pack_id": "dnd5e.content.srd2024",
+            "pack_version": "1.0.0",
+            "rule_refs": ["bundled:srd2024/DND5eSRD_087-103.md#mastery-properties"],
+            "mechanic_refs": ["dnd5e.core.weapon.mastery"],
+            "selection": {
+                "weapon_ids": ["mastery-weapon"],
+                "mastery_by_weapon_id": {"mastery-weapon": mastery},
+            },
+        }
+    )
+    properties = ["light"] if mastery == "nick" else []
+    sheet["inventory"]["items"] = [
+        {
+            "id": "mastery-weapon",
+            "name": "Mastery Weapon",
+            "kind": "weapon",
+            "equipped": True,
+            "equipped_slot": "main_hand",
+            "mechanics": {
+                "attack_type": "melee",
+                "attack_ability": "strength",
+                "damage_formula": "1d8",
+                "damage_type": "slashing",
+                "properties": properties,
+                "mastery": mastery,
+            },
+        }
+    ]
+    sheet["inventory"]["equipment_slots"]["main_hand"] = "mastery-weapon"
+    actor["sheet"] = validate_character_sheet(sheet)
+    actor["derived"] = derive_character_sheet(actor["sheet"])
+    return actor
+
+
+def _add_light_weapon(actor: dict, *, item_id: str = "other-light-weapon") -> dict:
+    actor = deepcopy(actor)
+    actor["sheet"]["inventory"]["items"].append(
+        {
+            "id": item_id,
+            "name": "Other Light Weapon",
+            "kind": "weapon",
+            "equipped": True,
+            "equipped_slot": "off_hand",
+            "mechanics": {
+                "attack_type": "melee",
+                "attack_ability": "strength",
+                "damage_formula": "1d6",
+                "damage_type": "piercing",
+                "properties": ["light"],
+            },
+        }
+    )
+    actor["sheet"]["inventory"]["equipment_slots"]["off_hand"] = item_id
+    actor["sheet"] = validate_character_sheet(actor["sheet"])
+    actor["derived"] = derive_character_sheet(actor["sheet"])
+    return actor
+
+
+def test_2024_graze_deals_only_attack_ability_modifier_on_a_miss() -> None:
+    attacker = _mastery_actor("fighter", "graze")
+    target = _actor("target", hp=20, ac=30)
+    plan = preflight_attack(
+        attacker,
+        target,
+        action={"weapon_id": "mastery-weapon", "use_weapon_mastery": True},
+        rules=resolution_context({"edition": "2024", "fingerprint": "", "lock": []}),
+    )
+
+    _, updated_target, result = resolve_attack_action(
+        attacker,
+        target,
+        plan=plan,
+        rules=resolution_context({"edition": "2024", "fingerprint": "", "lock": []}),
+        rng=_SequenceRng(2),
+    )
+
+    assert result["hit"] is False
+    assert result["weapon_mastery"] == {
+        "id": "graze",
+        "weapon_id": "mastery-weapon",
+        "applied": True,
+        "amount": 3,
+        "damage_type": "slashing",
+        "cannot_be_increased": True,
+    }
+    assert updated_target["sheet"]["combat"]["hp"]["value"] == 17
+
+
+def test_2024_topple_rolls_the_target_save_and_applies_prone() -> None:
+    attacker = _mastery_actor("fighter", "topple")
+    target = _actor("target", hp=20, ac=1)
+    target["sheet"]["abilities"]["constitution"]["score"] = 1
+    target["derived"] = derive_character_sheet(target["sheet"])
+    rules = resolution_context({"edition": "2024", "fingerprint": "", "lock": []})
+    plan = preflight_attack(
+        attacker,
+        target,
+        action={"weapon_id": "mastery-weapon", "use_weapon_mastery": True},
+        rules=rules,
+    )
+
+    _, updated_target, result = resolve_attack_action(
+        attacker,
+        target,
+        plan=plan,
+        rules=rules,
+        rng=_SequenceRng(10, 1, 1),
+    )
+
+    assert result["weapon_mastery"]["id"] == "topple"
+    assert result["weapon_mastery"]["save"]["success"] is False
+    assert "prone" in updated_target["sheet"]["conditions"]
+
+
+def test_2024_push_and_slow_masteries_update_encounter_state() -> None:
+    pusher = _mastery_actor("pusher", "push")
+    target = _actor("target", hp=20, ac=1)
+    pusher.update(initiative=20, position={"x": 0, "y": 0}, disposition="friendly")
+    target.update(initiative=10, position={"x": 1, "y": 0}, disposition="hostile")
+    encounter = start_encounter([pusher, target], ruleset="2024")
+    rules = resolution_context({"edition": "2024", "fingerprint": "", "lock": []})
+    plan = preflight_attack(
+        pusher,
+        target,
+        action={"weapon_id": "mastery-weapon", "use_weapon_mastery": True},
+        encounter=encounter,
+        rules=rules,
+    )
+    _, _, attack = resolve_attack_action(
+        pusher, target, plan=plan, rules=rules, rng=_SequenceRng(10, 1)
+    )
+    pushed = apply_weapon_mastery_to_encounter(
+        encounter,
+        attack,
+        attacker_id="pusher",
+        target_id="target",
+    )
+    moved_target = next(
+        item for item in pushed["encounter"]["combatants"] if item["actor_id"] == "target"
+    )
+    assert moved_target["position"] == {"x": 3, "y": 0}
+
+    slower = _mastery_actor("slower", "slow")
+    slow_target = _actor("slow-target", hp=20, ac=1)
+    slower.update(initiative=20, position={"x": 0, "y": 0}, disposition="friendly")
+    slow_target.update(initiative=10, position={"x": 1, "y": 0}, disposition="hostile")
+    slow_encounter = start_encounter([slower, slow_target], ruleset="2024")
+    slow_plan = preflight_attack(
+        slower,
+        slow_target,
+        action={"weapon_id": "mastery-weapon", "use_weapon_mastery": True},
+        encounter=slow_encounter,
+        rules=rules,
+    )
+    _, _, slow_attack = resolve_attack_action(
+        slower, slow_target, plan=slow_plan, rules=rules, rng=_SequenceRng(10, 1)
+    )
+    slowed = apply_weapon_mastery_to_encounter(
+        slow_encounter,
+        slow_attack,
+        attacker_id="slower",
+        target_id="slow-target",
+    )["encounter"]
+    target_turn = end_turn(slowed, actor_id_value="slower")
+    current = current_combatant(target_turn)
+    assert current["actor_id"] == "slow-target"
+    assert current["turn_budget"]["speed"] == 20
+    assert current["turn_budget"]["movement"] == 20
+
+
+def test_2024_sap_and_vex_apply_only_to_the_next_eligible_attack_roll() -> None:
+    rules = resolution_context({"edition": "2024", "fingerprint": "", "lock": []})
+    sapper = _mastery_actor("sapper", "sap")
+    target = _actor("target", hp=20, ac=1)
+    third = _actor("third", hp=20, ac=10)
+    sapper.update(initiative=20, position={"x": 0, "y": 0}, disposition="friendly")
+    target.update(initiative=10, position={"x": 1, "y": 0}, disposition="hostile")
+    third.update(initiative=5, position={"x": 2, "y": 0}, disposition="friendly")
+    encounter = start_encounter([sapper, target, third], ruleset="2024")
+    sap_plan = preflight_attack(
+        sapper,
+        target,
+        action={"weapon_id": "mastery-weapon", "use_weapon_mastery": True},
+        encounter=encounter,
+        rules=rules,
+    )
+    _, _, sap_attack = resolve_attack_action(
+        sapper, target, plan=sap_plan, rules=rules, rng=_SequenceRng(10, 1)
+    )
+    sapped = apply_weapon_mastery_to_encounter(
+        encounter, sap_attack, attacker_id="sapper", target_id="target"
+    )["encounter"]
+    reply = preflight_attack(
+        target,
+        third,
+        action={"weapon_id": "unarmed-strike"},
+        encounter=sapped,
+        allow_out_of_turn=True,
+        require_attack_action=False,
+        rules=rules,
+    )
+    assert reply["disadvantage"] is True
+    assert reply["next_attack_disadvantage_effect_id"]
+    consumed = consume_weapon_mastery_attack_effects(sapped, reply)
+    assert consumed["consumed_effect_ids"] == [reply["next_attack_disadvantage_effect_id"]]
+
+    vexer = _mastery_actor("vexer", "vex")
+    vex_target = _actor("vex-target", hp=20, ac=1)
+    vexer.update(initiative=20, position={"x": 0, "y": 0}, disposition="friendly")
+    vex_target.update(initiative=10, position={"x": 1, "y": 0}, disposition="hostile")
+    vex_encounter = start_encounter([vexer, vex_target], ruleset="2024")
+    vex_plan = preflight_attack(
+        vexer,
+        vex_target,
+        action={"weapon_id": "mastery-weapon", "use_weapon_mastery": True},
+        encounter=vex_encounter,
+        rules=rules,
+    )
+    _, _, vex_attack = resolve_attack_action(
+        vexer, vex_target, plan=vex_plan, rules=rules, rng=_SequenceRng(10, 1)
+    )
+    vexed = apply_weapon_mastery_to_encounter(
+        vex_encounter, vex_attack, attacker_id="vexer", target_id="vex-target"
+    )["encounter"]
+    followup = preflight_attack(
+        vexer,
+        vex_target,
+        action={"weapon_id": "mastery-weapon"},
+        encounter=vexed,
+        allow_out_of_turn=True,
+        require_attack_action=False,
+        rules=rules,
+    )
+    assert followup["advantage"] is True
+    assert followup["next_attack_advantage_effect_id"]
+
+
+def test_2024_cleave_grants_one_restricted_attack_only_after_a_hit() -> None:
+    rules = resolution_context({"edition": "2024", "fingerprint": "", "lock": []})
+    attacker = _mastery_actor("cleaver", "cleave")
+    primary = _actor("primary", hp=20, ac=1)
+    secondary = _actor("secondary", hp=20, ac=1)
+    attacker.update(initiative=20, position={"x": 0, "y": 0}, disposition="friendly")
+    primary.update(initiative=10, position={"x": 1, "y": 0}, disposition="hostile")
+    secondary.update(initiative=5, position={"x": 1, "y": 1}, disposition="hostile")
+    encounter = start_encounter([attacker, primary, secondary], ruleset="2024")
+    plan = preflight_attack(
+        attacker,
+        primary,
+        action={
+            "weapon_id": "mastery-weapon",
+            "use_weapon_mastery": True,
+            "mastery_secondary_target_id": "secondary",
+        },
+        encounter=encounter,
+        rules=rules,
+    )
+    encounter, payment = pay_attack_action(
+        encounter,
+        attacker,
+        weapon_id="mastery-weapon",
+        attack_mode="melee",
+        target_id="primary",
+    )
+    assert payment["kind"] == "attack_action"
+    _, _, result = resolve_attack_action(
+        attacker, primary, plan=plan, rules=rules, rng=_SequenceRng(10, 1)
+    )
+    cleave = apply_weapon_mastery_to_encounter(
+        encounter,
+        result,
+        attacker_id="cleaver",
+        target_id="primary",
+    )["encounter"]
+    combatant = next(item for item in cleave["combatants"] if item["actor_id"] == "cleaver")
+    assert combatant["turn_flags"]["weapon_mastery_followup"]["target_id"] == "secondary"
+
+    with pytest.raises(CombatEngineError, match="recorded second target"):
+        pay_attack_action(
+            cleave,
+            attacker,
+            weapon_id="mastery-weapon",
+            attack_mode="melee",
+            target_id="primary",
+            weapon_mastery_followup="cleave",
+        )
+    followup = preflight_attack(
+        attacker,
+        secondary,
+        action={
+            "weapon_id": "mastery-weapon",
+            "weapon_mastery_followup": "cleave",
+        },
+        encounter=cleave,
+        rules=rules,
+    )
+    assert followup["damage_expression"] == "1d8"
+    paid, followup_payment = pay_attack_action(
+        cleave,
+        attacker,
+        weapon_id="mastery-weapon",
+        attack_mode="melee",
+        target_id="secondary",
+        weapon_mastery_followup="cleave",
+    )
+    assert followup_payment["mastery"] == "cleave"
+    consumed = consume_weapon_mastery_attack_effects(paid, followup)["encounter"]
+    flags = next(
+        item for item in consumed["combatants"] if item["actor_id"] == "cleaver"
+    )["turn_flags"]
+    assert "pending_weapon_attack_modifier" not in flags
+    with pytest.raises(CombatEngineError, match="only once per turn"):
+        preflight_attack(
+            attacker,
+            primary,
+            action={
+                "weapon_id": "mastery-weapon",
+                "use_weapon_mastery": True,
+                "mastery_secondary_target_id": "secondary",
+            },
+            encounter=consumed,
+            require_attack_action=False,
+            rules=rules,
+        )
+
+
+def test_2024_nick_moves_the_light_extra_attack_into_the_attack_action() -> None:
+    rules = resolution_context({"edition": "2024", "fingerprint": "", "lock": []})
+    attacker = _add_light_weapon(_mastery_actor("duelist", "nick"))
+    target = _actor("target", hp=20, ac=1)
+    attacker.update(initiative=20, position={"x": 0, "y": 0}, disposition="friendly")
+    target.update(initiative=10, position={"x": 1, "y": 0}, disposition="hostile")
+    encounter = start_encounter([attacker, target], ruleset="2024")
+    encounter, _ = pay_attack_action(
+        encounter,
+        attacker,
+        weapon_id="other-light-weapon",
+        attack_mode="melee",
+        target_id="target",
+    )
+    before_bonus = current_combatant(encounter)["turn_budget"]["bonus_action"]
+    plan = preflight_attack(
+        attacker,
+        target,
+        action={"weapon_id": "mastery-weapon", "light_extra_attack": "nick"},
+        encounter=encounter,
+        rules=rules,
+    )
+    assert plan["damage_expression"] == "1d8"
+    encounter, payment = pay_attack_action(
+        encounter,
+        attacker,
+        weapon_id="mastery-weapon",
+        attack_mode="melee",
+        target_id="target",
+        light_extra_attack="nick",
+    )
+    assert payment == {
+        "kind": "weapon_mastery_followup",
+        "mastery": "nick",
+        "weapon_id": "mastery-weapon",
+        "payment": "attack_action",
+    }
+    assert current_combatant(encounter)["turn_budget"]["bonus_action"] == before_bonus
+    with pytest.raises(CombatEngineError, match="only once per turn"):
+        pay_attack_action(
+            encounter,
+            attacker,
+            weapon_id="mastery-weapon",
+            attack_mode="melee",
+            target_id="target",
+            light_extra_attack="nick",
+        )
+
+
+def test_two_weapon_fighting_retains_the_light_extra_attack_modifier() -> None:
+    rules = resolution_context({"edition": "2024", "fingerprint": "", "lock": []})
+    attacker = _add_light_weapon(_mastery_actor("duelist", "nick"))
+    attacker["sheet"]["content"]["features"].append(
+        {"id": "two-weapon-fighting", "name": "Two-Weapon Fighting"}
+    )
+    attacker["sheet"] = validate_character_sheet(attacker["sheet"])
+    attacker["derived"] = derive_character_sheet(attacker["sheet"])
+    target = _actor("target", hp=20, ac=1)
+    attacker.update(initiative=20, position={"x": 0, "y": 0}, disposition="friendly")
+    target.update(initiative=10, position={"x": 1, "y": 0}, disposition="hostile")
+    encounter = start_encounter([attacker, target], ruleset="2024")
+    encounter, _ = pay_attack_action(
+        encounter,
+        attacker,
+        weapon_id="other-light-weapon",
+        attack_mode="melee",
+        target_id="target",
+    )
+    plan = preflight_attack(
+        attacker,
+        target,
+        action={"weapon_id": "mastery-weapon", "light_extra_attack": "nick"},
+        encounter=encounter,
+        rules=rules,
+    )
+    assert plan["damage_expression"] == "1d8 + 3"
+    encounter, _ = pay_attack_action(
+        encounter,
+        attacker,
+        weapon_id="mastery-weapon",
+        attack_mode="melee",
+        target_id="target",
+        light_extra_attack="nick",
+    )
 
 
 def _give_magic_resistance(actor: dict) -> None:
@@ -520,6 +975,31 @@ def test_hypnotic_pattern_classifies_its_save_as_a_spell() -> None:
         receipt["mechanic_id"]
         for receipt in resolved["result"]["save"]["rule_receipts"]
     ] == ["dnd5e.core.save.magic_resistance"]
+
+
+def test_2024_hypnotic_pattern_preserves_its_exact_source_spell_id() -> None:
+    target = _actor("target")
+    target["sheet"]["edition"] = "2024"
+    target["derived"] = derive_character_sheet(target["sheet"])
+
+    resolved = resolve_hypnotic_pattern_target(
+        target,
+        caster_id="caster",
+        spell_id=CORE_2024_HYPNOTIC_PATTERN_SPELL_ID,
+        save_dc=15,
+        rules=resolution_context(
+            {"edition": "2024", "fingerprint": "", "lock": [], "mechanics": []}
+        ),
+        rng=_SequenceRng(1),
+    )
+
+    assert resolved["result"]["outcome"] == "affected"
+    effect = next(
+        item
+        for item in resolved["sheet"]["effects"]
+        if item["id"] == resolved["result"]["effect_id"]
+    )
+    assert effect["source_spell_id"] == CORE_2024_HYPNOTIC_PATTERN_SPELL_ID
 
 
 def test_hypnotic_pattern_effect_lifecycle_preserves_other_condition_sources() -> None:
@@ -659,6 +1139,57 @@ def test_hypnotic_pattern_immunity_and_effect_dependency_are_hard_settled() -> N
     ) == []
     assert "charmed" not in reconciled["sheets"]["target"]["conditions"]
     assert "incapacitated" not in reconciled["sheets"]["target"]["conditions"]
+
+
+def test_source_actor_capability_dependency_uses_all_incapacitating_states() -> None:
+    source = default_character_sheet()
+    source["edition"] = "2024"
+    source["conditions"] = ["unconscious"]
+    target = default_character_sheet()
+    target["edition"] = "2024"
+    turn_effect = {
+        "id": "turn-effect",
+        "name": "Turn Undead",
+        "kind": "turn_undead",
+        "source": "cleric",
+        "active": True,
+        "concentration": False,
+        "duration": {"period": "minute", "remaining": 1},
+        "changes": [
+            {"path": "conditions", "mode": "add", "value": "frightened"},
+            {"path": "conditions", "mode": "add", "value": "incapacitated"},
+        ],
+        "description": "",
+    }
+    target["effects"] = [turn_effect]
+    target["conditions"] = ["frightened", "incapacitated"]
+    encounter = {
+        "dependent_effects": [
+            {
+                "id": "turn-dependency",
+                "mechanic_id": "dnd5e.core.activity.turn_undead",
+                "dependency": "source_actor_capable",
+                "source_actor_id": "cleric",
+                "target_actor_id": "undead",
+                "target_effect_id": "turn-effect",
+                "active": True,
+            }
+        ]
+    }
+
+    reconciled = reconcile_effect_dependencies(
+        encounter,
+        {
+            "cleric": validate_character_sheet(source),
+            "undead": validate_character_sheet(target),
+        },
+    )
+
+    assert reconciled["changed_actor_ids"] == ["undead"]
+    assert reconciled["ended_links"][0]["ended_reason"] == (
+        "source_incapacitated_or_dead"
+    )
+    assert reconciled["sheets"]["undead"]["conditions"] == []
 
 
 def test_corrosive_form_damages_attacker_and_corrodes_mundane_weapon() -> None:
@@ -1696,6 +2227,54 @@ def test_2014_jack_of_all_trades_applies_only_to_unproficient_ability_checks() -
     assert revised_check["total"] == 13
 
 
+def test_2024_jack_of_all_trades_uses_skill_proficiency_but_not_initiative() -> None:
+    bard = _actor("bard-2024")
+    bard["sheet"]["edition"] = "2024"
+    bard["sheet"]["progression"] = {
+        "level": 2,
+        "classes": [{"name": "Bard", "level": 2, "hit_die": 8}],
+    }
+    bard["sheet"]["abilities"]["charisma"]["score"] = 16
+    bard["sheet"]["abilities"]["dexterity"]["score"] = 14
+    bard["sheet"]["content"]["features"] = [
+        {
+            "id": "dnd5e.content.srd2024.feature.bard-jack-of-all-trades",
+            "name": "Jack of All Trades",
+            "source_key": "Bard",
+            "mechanic_refs": ["dnd5e.core.check.jack_of_all_trades"],
+        }
+    ]
+    bard["derived"] = derive_character_sheet(bard["sheet"])
+    rules = resolution_context(
+        {"edition": "2024", "fingerprint": "", "lock": [], "mechanics": []}
+    )
+
+    skill = resolve_actor_check(
+        bard,
+        kind="check",
+        ability="intimidation",
+        dc=14,
+        rules=rules,
+        rng=_SequenceRng(10),
+    )
+    raw_ability = resolve_actor_check(
+        bard,
+        kind="check",
+        ability="dexterity",
+        dc=13,
+        rules=rules,
+        rng=_SequenceRng(10),
+    )
+    encounter = start_encounter([bard], ruleset="2024", rng=_SequenceRng(10))
+
+    assert skill["bonus"] == 1
+    assert skill["total"] == 14
+    assert raw_ability["bonus"] == 0
+    assert raw_ability["total"] == 12
+    assert encounter["combatants"][0]["initiative_bonus"] == 2
+    assert encounter["rule_boundary_ids"] == []
+
+
 def test_2014_group_check_succeeds_when_at_least_half_succeed() -> None:
     actors = [_actor(f"scout-{index}") for index in range(1, 7)]
     rules = resolution_context(
@@ -1741,6 +2320,26 @@ def test_2014_group_check_rejects_duplicate_or_single_actor_groups() -> None:
         resolve_actor_group_check([actor], ability="stealth", dc=10)
     with pytest.raises(CombatEngineError, match="must be unique"):
         resolve_actor_group_check([actor, actor], ability="stealth", dc=10)
+
+
+def test_2024_group_check_fails_at_the_public_rules_boundary() -> None:
+    actors = [_actor("scout-1"), _actor("scout-2")]
+    rules = resolution_context(
+        {
+            "edition": "2024",
+            "fingerprint": "group-check-pack",
+            "lock": [],
+            "mechanics": [],
+        }
+    )
+
+    with pytest.raises(CombatEngineError, match="2014 rules procedure"):
+        resolve_actor_group_check(
+            actors,
+            ability="stealth",
+            dc=10,
+            rules_by_actor_id={actor["id"]: rules for actor in actors},
+        )
 
 
 def test_keen_perception_requires_and_uses_sensory_facts() -> None:
@@ -2321,6 +2920,48 @@ def test_preserve_life_enforces_pool_half_hp_and_creature_type() -> None:
         )
 
 
+def test_2024_preserve_life_starts_at_level_three_and_can_target_undead() -> None:
+    cleric = _actor("cleric-2024", hp=24)["sheet"]
+    cleric["edition"] = "2024"
+    cleric["progression"] = {
+        "level": 3,
+        "classes": [{"name": "Cleric", "level": 3, "hit_die": 8}],
+    }
+    cleric["content"]["features"] = [
+        {
+            "id": "dnd5e.content.srd2024.feature.life-domain-preserve-life",
+            "name": "Preserve Life",
+            "source_key": "Life Domain",
+            "mechanic_refs": ["dnd5e.core.activity.preserve_life"],
+        }
+    ]
+    undead = _actor("undead-2024", hp=20)["sheet"]
+    undead["edition"] = "2024"
+    undead["progression"]["species"] = "undead"
+    undead["combat"]["hp"]["value"] = 1
+
+    result = resolve_preserve_life_to_sheets(
+        cleric,
+        {"undead": undead},
+        allocations=[{"target_id": "undead", "amount": 9}],
+    )
+
+    assert result["edition"] == "2024"
+    assert result["pool"] == 15
+    assert result["sheets"]["undead"]["combat"]["hp"]["value"] == 10
+
+    cleric["progression"] = {
+        "level": 2,
+        "classes": [{"name": "Cleric", "level": 2, "hit_die": 8}],
+    }
+    with pytest.raises(CombatEngineError, match="at least 3 Cleric levels"):
+        resolve_preserve_life_to_sheets(
+            cleric,
+            {"undead": undead},
+            allocations=[{"target_id": "undead", "amount": 1}],
+        )
+
+
 def test_turn_undead_applies_and_enforces_turned() -> None:
     cleric = _actor("cleric")
     cleric["sheet"]["edition"] = "2014"
@@ -2405,6 +3046,166 @@ def test_turn_undead_applies_and_enforces_turned() -> None:
     damaged = apply_damage_to_sheet(turned_sheet, amount=1, damage_type="radiant")
     assert "turned" not in damaged["sheet"]["conditions"]
     assert damaged["ended_effect_ids"] == [resolved["targets"][0]["effect_id"]]
+
+
+def test_2024_turn_undead_applies_frightened_and_incapacitated_until_damaged() -> None:
+    cleric = _actor("cleric-2024")
+    cleric["sheet"]["edition"] = "2024"
+    cleric["sheet"]["progression"] = {
+        "level": 2,
+        "classes": [{"name": "Cleric", "level": 2, "hit_die": 8}],
+    }
+    cleric["sheet"]["abilities"]["wisdom"]["score"] = 16
+    cleric["sheet"]["spellcasting"]["ability"] = "wisdom"
+    cleric["sheet"]["content"]["features"] = [
+        {
+            "id": "dnd5e.content.srd2024.feature.cleric-channel-divinity",
+            "name": "Channel Divinity",
+            "source_key": "Cleric",
+            "activation": {"type": "action", "cost": 1},
+            "resource_key": "channel_divinity",
+            "choices": {"options": ["Divine Spark", "Turn Undead"]},
+            "mechanic_refs": ["dnd5e.core.activity.turn_undead"],
+        }
+    ]
+    cleric["derived"] = derive_character_sheet(cleric["sheet"])
+    undead = _actor("undead-2024")
+    undead["sheet"]["edition"] = "2024"
+    undead["sheet"]["progression"]["species"] = "undead"
+    undead["derived"] = derive_character_sheet(undead["sheet"])
+
+    resolved = resolve_turn_undead_to_sheets(
+        cleric,
+        {"undead": undead},
+        rng=_SequenceRng(1),
+    )
+
+    target = resolved["sheets"]["undead"]
+    assert resolved["edition"] == "2024"
+    assert resolved["targets"][0]["conditions"] == [
+        "frightened",
+        "incapacitated",
+    ]
+    assert {"frightened", "incapacitated"} <= set(target["conditions"])
+    damaged = apply_damage_to_sheet(target, amount=1, damage_type="radiant")
+    assert "frightened" not in damaged["sheet"]["conditions"]
+    assert "incapacitated" not in damaged["sheet"]["conditions"]
+
+
+def test_2024_sear_undead_shares_one_roll_without_ending_the_turn_effect() -> None:
+    cleric = _actor("cleric-2024")
+    cleric["sheet"]["edition"] = "2024"
+    cleric["sheet"]["progression"] = {
+        "level": 5,
+        "classes": [{"name": "Cleric", "level": 5, "hit_die": 8}],
+    }
+    cleric["sheet"]["abilities"]["wisdom"]["score"] = 16
+    cleric["sheet"]["spellcasting"]["ability"] = "wisdom"
+    cleric["sheet"]["content"]["features"] = [
+        {
+            "id": "dnd5e.content.srd2024.feature.cleric-channel-divinity",
+            "name": "Channel Divinity",
+            "choices": {"options": ["Divine Spark", "Turn Undead"]},
+            "mechanic_refs": ["dnd5e.core.activity.turn_undead"],
+        },
+        {
+            "id": "dnd5e.content.srd2024.feature.cleric-sear-undead",
+            "name": "Sear Undead",
+            "mechanic_refs": ["dnd5e.core.activity.sear_undead"],
+        },
+    ]
+    cleric["derived"] = derive_character_sheet(cleric["sheet"])
+    undead = _actor("undead-2024", hp=100)
+    undead["sheet"]["edition"] = "2024"
+    undead["sheet"]["progression"]["species"] = "undead"
+    undead["derived"] = derive_character_sheet(undead["sheet"])
+
+    resolved = resolve_turn_undead_to_sheets(
+        cleric,
+        {"undead": undead},
+        sear_undead=True,
+        rng=_SequenceRng(2, 3, 4, 1),
+    )
+
+    assert resolved["sear_undead"] == {
+        "expression": "3d8",
+        "rolls": [2, 3, 4],
+        "total": 9,
+        "damage_type": "radiant",
+        "does_not_end_turn_undead": True,
+    }
+    target_result = resolved["targets"][0]
+    assert target_result["sear_damage"]["applied_amount"] == 9
+    assert target_result["turned"] is True
+    target = resolved["sheets"]["undead"]
+    assert target["combat"]["hp"]["value"] == 91
+    assert {"frightened", "incapacitated"} <= set(target["conditions"])
+    assert next(
+        effect
+        for effect in target["effects"]
+        if effect["id"] == target_result["effect_id"]
+    )["active"] is True
+
+
+def test_2024_divine_spark_heals_or_deals_save_for_half_damage() -> None:
+    cleric = _actor("cleric-2024", hp=30)
+    cleric["sheet"]["edition"] = "2024"
+    cleric["sheet"]["progression"] = {
+        "level": 7,
+        "classes": [{"name": "Cleric", "level": 7, "hit_die": 8}],
+    }
+    cleric["sheet"]["abilities"]["wisdom"]["score"] = 16
+    cleric["sheet"]["spellcasting"]["ability"] = "wisdom"
+    cleric["sheet"]["content"]["features"] = [
+        {
+            "id": "dnd5e.content.srd2024.feature.cleric-channel-divinity",
+            "name": "Channel Divinity",
+            "source_key": "Cleric",
+            "choices": {"options": ["Divine Spark", "Turn Undead"]},
+            "mechanic_refs": [
+                "dnd5e.core.activity.divine_spark",
+                "dnd5e.core.activity.turn_undead",
+            ],
+        }
+    ]
+    cleric["derived"] = derive_character_sheet(cleric["sheet"])
+    target = _actor("target", hp=30)
+    target["sheet"]["combat"]["hp"]["value"] = 4
+    target["sheet"]["abilities"]["constitution"]["score"] = 10
+    target["derived"] = derive_character_sheet(target["sheet"])
+
+    healed = resolve_divine_spark_to_sheet(
+        cleric,
+        target,
+        mode="heal",
+        rng=_SequenceRng(4, 5),
+    )
+    assert healed["expression"] == "2d8 + 3"
+    assert healed["total"] == 12
+    assert healed["healing"]["amount"] == 12
+    assert healed["sheet"]["combat"]["hp"]["value"] == 16
+
+    target["sheet"]["combat"]["hp"]["value"] = 30
+    damaged = resolve_divine_spark_to_sheet(
+        cleric,
+        target,
+        mode="damage",
+        damage_type="radiant",
+        rng=_SequenceRng(4, 5, 20),
+    )
+    assert damaged["total"] == 12
+    assert damaged["save"]["success"] is True
+    assert damaged["damage"]["applied_amount"] == 6
+    assert damaged["sheet"]["combat"]["hp"]["value"] == 24
+
+    target["sheet"]["conditions"] = ["dead"]
+    with pytest.raises(CombatEngineError, match="dead creature"):
+        resolve_divine_spark_to_sheet(
+            cleric,
+            target,
+            mode="heal",
+            rng=_SequenceRng(8, 8),
+        )
 
 
 def test_damage_condition_cleanup_preserves_other_active_effect_owners() -> None:
@@ -4745,6 +5546,63 @@ def test_action_surge_grants_one_current_turn_action_and_never_carries_forward()
     assert returned_actor["turn_budget"]["extra_action"] == 0
 
 
+def test_2024_action_surge_extra_action_cannot_take_the_magic_action() -> None:
+    encounter = start_encounter(
+        [_actor("a"), _actor("b")],
+        ruleset="2024",
+        rng=random.Random(1),
+    )
+    actor_id = encounter["combatants"][encounter["turn_index"]]["actor_id"]
+    spent = resolve_common_action(
+        encounter,
+        actor_id_value=actor_id,
+        action="dash",
+    )
+    surged, _effect = settle_core_activity_effect(
+        spent,
+        actor_id_value=actor_id,
+        activity_id="dnd5e.content.srd2024.feature.fighter-action-surge",
+    )
+
+    assert "attack" in available_actions(surged, actor_id)
+    assert "cast" not in available_actions(surged, actor_id)
+    with pytest.raises(CombatEngineError, match="extra action cannot be used to cast"):
+        resolve_common_action(
+            surged,
+            actor_id_value=actor_id,
+            action="cast",
+            payment="extra_action",
+        )
+
+    with pytest.raises(CombatEngineError, match="extra action cannot be used"):
+        pay_activity_activation(
+            surged,
+            actor_id_value=actor_id,
+            activation_type="action",
+            action_kind="magic",
+        )
+
+    fresh = start_encounter(
+        [_actor("a"), _actor("b")],
+        ruleset="2024",
+        rng=random.Random(1),
+    )
+    fresh_actor_id = fresh["combatants"][fresh["turn_index"]]["actor_id"]
+    fresh_surge, _ = settle_core_activity_effect(
+        fresh,
+        actor_id_value=fresh_actor_id,
+        activity_id="dnd5e.content.srd2024.feature.fighter-action-surge",
+    )
+    magic_activity = pay_activity_activation(
+        fresh_surge,
+        actor_id_value=fresh_actor_id,
+        activation_type="action",
+        action_kind="magic",
+    )
+    assert current_combatant(magic_activity)["turn_budget"]["main_action"] == 0
+    assert current_combatant(magic_activity)["turn_budget"]["extra_action"] == 1
+
+
 def test_cunning_action_settles_dash_and_disengage_but_not_hide_outcome() -> None:
     rogue = _actor("rogue")
     rogue["initiative"] = 20
@@ -4806,6 +5664,19 @@ def test_cunning_action_settles_dash_and_disengage_but_not_hide_outcome() -> Non
         "source_activity_id": "dnd5e.content.srd2014.feature.rogue-cunning-action",
         "declaration": {"action": "hide", "cover": "larger ally"},
     }
+
+    encounter = start_encounter([rogue, threat], ruleset="2024")
+    paid_2024 = pay_activity_activation(
+        encounter, actor_id_value="rogue", activation_type="bonus_action"
+    )
+    dashed_2024, effect_2024 = settle_core_activity_effect(
+        paid_2024,
+        actor_id_value="rogue",
+        activity_id="dnd5e.content.srd2024.feature.rogue-cunning-action",
+        declaration={"action": "dash"},
+    )
+    assert effect_2024["kind"] == "cunning_action"
+    assert dashed_2024["combatants"][0]["turn_budget"]["movement"] == 60
 
 
 def test_aggressive_grants_only_separately_paid_movement_toward_visible_hostile() -> None:

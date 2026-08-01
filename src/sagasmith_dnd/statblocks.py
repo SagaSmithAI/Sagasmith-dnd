@@ -387,7 +387,8 @@ def _parse_weapon(
     actor_name: str = "",
 ) -> dict[str, Any] | None:
     attack = re.search(
-        r"(?i)\*?(Melee|Ranged|Melee or Ranged)\s+(Weapon|Spell)\s+Attack:\*?\s*"
+        r"(?i)\*?(Melee|Ranged|Melee or Ranged)\s+"
+        r"(?:(Weapon|Spell)\s+)?Attack(?:\s+Roll)?:\*?\s*"
         r"([+\-−]\s*\d+)\s+to hit",
         description,
     )
@@ -634,7 +635,7 @@ def _parse_weapon(
         "attack_type": "ranged" if mode == "ranged" else "melee",
         "attack_ability": (
             "spell"
-            if attack.group(2).casefold() == "spell"
+            if str(attack.group(2) or "").casefold() == "spell"
             else "dexterity"
             if mode == "ranged"
             else "strength"
@@ -2823,14 +2824,15 @@ def _structure_intellect_devourer_actions(
     ]
 
 
-def parse_2014_statblock(
+def _parse_srd_statblock(
     markdown: str,
     *,
     source_key: str,
     rule_refs: list[str] | tuple[str, ...] = (),
     name: str | None = None,
+    edition: str,
 ) -> ParsedStatblock:
-    """Parse an English 2014 SRD-style creature block into a validated v2 sheet.
+    """Parse one normalized English SRD creature block into a validated v2 sheet.
 
     The importer intentionally rejects missing core combat facts. Descriptive traits and
     unsupported action semantics remain source-cited content entries and are reported as
@@ -2879,7 +2881,7 @@ def parse_2014_statblock(
     ability_scores = _parse_ability_scores(markdown)
 
     sheet = default_character_sheet()
-    sheet["edition"] = "2014"
+    sheet["edition"] = edition
     sheet["progression"]["species"] = size_match.group(2).strip()
     sheet["traits"]["size"] = size_match.group(1).casefold()
     sheet["traits"]["alignment"] = alignment
@@ -2999,7 +3001,7 @@ def parse_2014_statblock(
     legendary_pool = _legendary_action_pool(markdown)
     attack_marker_pattern = re.compile(
         r"(?i)\b(?:Melee|Ranged|Melee or Ranged)\s+"
-        r"(?:Weapon|Spell)\s+Attack:\*?"
+        r"(?:(?:Weapon|Spell)\s+)?Attack(?:\s+Roll)?:\*?"
     )
     structured_spell_attack_markers = 0
     for section, entry_name, description in entries:
@@ -3056,12 +3058,16 @@ def parse_2014_statblock(
         raise StatblockImportError(
             "statblock contains unparsed weapon action markers"
         )
-    if not weapons:
+    if not weapons and edition == "2014":
         raise StatblockImportError("statblock has no supported weapon action")
     ids = [item["id"] for item in weapons]
     if len(ids) != len(set(ids)):
         raise StatblockImportError("statblock contains duplicate weapon action names")
-    armor_items, armor_slots = _parse_armor_equipment(ac_text, source_key)
+    armor_items, armor_slots = (
+        _parse_armor_equipment(ac_text, source_key)
+        if edition == "2014"
+        else ([], {})
+    )
     sheet["inventory"]["items"] = [
         *armor_items,
         *ammunition_items.values(),
@@ -3143,7 +3149,11 @@ def parse_2014_statblock(
             if activation == "reaction"
             else description
         )
-        source_trait = _source_trait_from_description(source_trait_description)
+        source_trait = (
+            _source_trait_from_description(source_trait_description)
+            if edition == "2014"
+            else None
+        )
         if source_trait is not None:
             if source_trait_description != description:
                 entry["description"] = source_trait_description
@@ -3221,7 +3231,7 @@ def parse_2014_statblock(
         )
         reaction_settlement = (
             parry_reaction_settlement(reaction_description)
-            if activation == "reaction"
+            if activation == "reaction" and edition == "2014"
             else None
         )
         reaction_defense = (
@@ -3247,7 +3257,7 @@ def parse_2014_statblock(
             entry["activation"]["trigger"] = "hit by a melee attack"
             entry["choices"] = {"reaction_defense": reaction_defense}
         area_save_damage = None
-        if activation == "action":
+        if activation == "action" and edition == "2014":
             area_save_damage = (
                 _compile_area_save_damage(description)
                 or _compile_self_line_save_damage(description)
@@ -3279,7 +3289,7 @@ def parse_2014_statblock(
             )
         frightful_presence = (
             _compile_frightful_presence(description)
-            if activation == "action"
+            if activation == "action" and edition == "2014"
             else None
         )
         if frightful_presence is not None:
@@ -3299,7 +3309,11 @@ def parse_2014_statblock(
                 pool=legendary_pool,
                 weapons=weapons,
             )
-            if activation == "special" and legendary_pool is not None
+            if (
+                activation == "special"
+                and legendary_pool is not None
+                and edition == "2014"
+            )
             else None
         )
         if legendary_action is not None:
@@ -3426,6 +3440,190 @@ def parse_2014_statblock(
         warnings=tuple(warnings),
         normalization_notes=tuple(normalization_notes),
         spellcasting=deepcopy(spellcasting),
+    )
+
+
+def parse_2014_statblock(
+    markdown: str,
+    *,
+    source_key: str,
+    rule_refs: list[str] | tuple[str, ...] = (),
+    name: str | None = None,
+) -> ParsedStatblock:
+    """Parse an English 2014 SRD-style creature block."""
+
+    return _parse_srd_statblock(
+        markdown,
+        source_key=source_key,
+        rule_refs=rule_refs,
+        name=name,
+        edition="2014",
+    )
+
+
+def _normalize_2024_statblock(markdown: str) -> str:
+    """Translate SRD 5.2.1 presentation markup into the shared fact grammar."""
+
+    source_lines = markdown.replace("\r\n", "\n").replace("\r", "\n").splitlines()
+    lines: list[str] = []
+    for raw_line in source_lines:
+        line = re.sub(r"^> ?", "", raw_line)
+        stripped = line.strip()
+        if stripped in {"```", "```markdown", "___"}:
+            continue
+        if re.match(r"^\*\*(?:Initiative)\*\*", stripped, re.IGNORECASE):
+            continue
+        lines.append(line)
+
+    normalized = "\n".join(lines)
+    ability_scores: dict[str, int] = {}
+    saving_throws: dict[str, int] = {}
+    signed = r"[+\-\u2212]?\d+"
+    code_ability = re.compile(
+        rf"\b(STR|DEX|CON|INT|WIS|CHA)\s+(\d+)\s+"
+        rf"\({signed}\)\s*\|\s*({signed})"
+    )
+    for abbreviation, score, save in code_ability.findall(normalized):
+        ability_scores[abbreviation] = int(score)
+        saving_throws[abbreviation] = int(save.replace("\u2212", "-"))
+    compact_ability = re.compile(
+        rf"\|\s*\*\*(STR|DEX|CON|INT|WIS|CHA)\*\*\s+(\d+)\s*\|"
+        rf"\s*{signed}\s*\|\s*({signed})\s*\|"
+    )
+    for abbreviation, score, save in compact_ability.findall(normalized):
+        ability_scores[abbreviation] = int(score)
+        saving_throws[abbreviation] = int(save.replace("\u2212", "-"))
+    table = re.search(
+        r"(?ms)^\|\s*STR\s*\|\s*DEX\s*\|\s*CON\s*\|\s*INT\s*\|"
+        r"\s*WIS\s*\|\s*CHA\s*\|\s*\n"
+        r"\|[^\n]+\|\s*\n(?P<scores>\|[^\n]+\|)\s*\n"
+        r"(?P<saves>\|[^\n]+\|)",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if table:
+        scores = [int(item) for item in re.findall(r"(\d+)\s*\(", table.group("scores"))]
+        saves = [
+            int(item.replace("\u2212", "-"))
+            for item in re.findall(rf"\*\*Save\*\*\s*({signed})", table.group("saves"))
+        ]
+        if len(scores) == 6 and len(saves) == 6:
+            for abbreviation, score, save in zip(
+                ("STR", "DEX", "CON", "INT", "WIS", "CHA"),
+                scores,
+                saves,
+                strict=True,
+            ):
+                ability_scores[abbreviation] = score
+                saving_throws[abbreviation] = save
+    normalized = re.sub(r"(?m)^\*\*AC\*\*\s+", "**Armor Class** ", normalized)
+    normalized = re.sub(r"(?m)^\*\*HP\*\*\s+", "**Hit Points** ", normalized)
+    normalized = re.sub(
+        r"(?m)^\*\*Resistances\*\*\s+",
+        "**Damage Resistances** ",
+        normalized,
+    )
+    normalized = re.sub(
+        r"(?m)^\*\*Vulnerabilities\*\*\s+",
+        "**Damage Vulnerabilities** ",
+        normalized,
+    )
+
+    immunity = re.search(r"(?m)^\*\*Immunities\*\*\s+(.+?)\s*$", normalized)
+    if immunity:
+        damage_text, separator, condition_text = immunity.group(1).partition(";")
+        replacement = f"**Damage Immunities** {damage_text.strip()}"
+        if separator and condition_text.strip():
+            replacement += f"\n**Condition Immunities** {condition_text.strip()}"
+        normalized = normalized[: immunity.start()] + replacement + normalized[immunity.end() :]
+
+    def normalize_challenge(match: re.Match[str]) -> str:
+        value = match.group(1).strip()
+        challenge = value.split("(", 1)[0].strip()
+        experience = re.search(r"\bXP\s+([\d,]+)", value, re.IGNORECASE)
+        return (
+            f"**Challenge** {challenge} ({experience.group(1)} XP)"
+            if experience
+            else f"**Challenge** {challenge}"
+        )
+
+    normalized = re.sub(
+        r"(?m)^\*\*CR\*\*\s+(.+?)\s*$",
+        normalize_challenge,
+        normalized,
+    )
+    normalized = re.sub(
+        r"(?m)^\*\*Languages\*\*\s+None\s*$",
+        "**Languages** -",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    normalized = re.sub(
+        r"(?m)^\*\*([^*\n]+?)\.\*\*\s*",
+        r"***\1.*** ",
+        normalized,
+    )
+    normalized = re.sub(
+        r"\*(Melee|Ranged|Melee or Ranged) Attack Roll:\*\s*"
+        r"([+\-]\d+)(\s*\([^)]*\))?(?=,)",
+        r"*\1 Weapon Attack:* \2 to hit\3",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+
+    if len(ability_scores) != 6 or len(saving_throws) != 6:
+        raise StatblockImportError(
+            "2024 statblock must contain six ability scores and saving throws"
+        )
+    ability_table = (
+        "| STR | DEX | CON | INT | WIS | CHA |\n"
+        "|---|---|---|---|---|---|\n"
+        "| "
+        + " | ".join(
+            f"{ability_scores[abbreviation]} (+0)"
+            for abbreviation in ("STR", "DEX", "CON", "INT", "WIS", "CHA")
+        )
+        + " |\n"
+        + "**Saving Throws** "
+        + ", ".join(
+            f"{abbreviation.title()} {saving_throws[abbreviation]:+d}"
+            for abbreviation in ("STR", "DEX", "CON", "INT", "WIS", "CHA")
+        )
+    )
+    speed = re.search(r"(?m)^\*\*Speed\*\*\s+.+?$", normalized)
+    if speed is None:
+        raise StatblockImportError("2024 statblock is missing Speed")
+    return normalized[: speed.end()] + "\n" + ability_table + normalized[speed.end() :]
+
+
+def parse_2024_statblock(
+    markdown: str,
+    *,
+    source_key: str,
+    rule_refs: list[str] | tuple[str, ...] = (),
+    name: str | None = None,
+) -> ParsedStatblock:
+    """Parse an SRD 5.2.1 statblock without borrowing 2014 unique semantics."""
+
+    parsed = _parse_srd_statblock(
+        _normalize_2024_statblock(markdown),
+        source_key=source_key,
+        rule_refs=rule_refs,
+        name=name,
+        edition="2024",
+    )
+    return ParsedStatblock(
+        name=parsed.name,
+        summary=parsed.summary,
+        sheet=parsed.sheet,
+        challenge_rating=parsed.challenge_rating,
+        experience_points=parsed.experience_points,
+        warnings=parsed.warnings,
+        normalization_notes=(
+            *parsed.normalization_notes,
+            "SRD 5.2.1 presentation fields normalized without 2014 unique-trait inference",
+        ),
+        spellcasting=parsed.spellcasting,
     )
 
 
@@ -5255,5 +5453,6 @@ __all__ = [
     "apply_statblock_variant",
     "effective_statblock_rating",
     "parse_2014_statblock",
+    "parse_2024_statblock",
     "recover_2014_statblock_from_ocr",
 ]

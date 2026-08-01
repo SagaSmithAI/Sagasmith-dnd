@@ -77,6 +77,92 @@ def test_fixed_level_advancement_updates_max_hp_and_hit_die_without_healing() ->
     assert sheet["progression"]["level"] == 1
 
 
+def test_2024_ranger_advancement_uses_level_one_slots_and_prepared_table() -> None:
+    sheet = _single_class_sheet("Ranger", hit_die=10, constitution=14, hp=(12, 12))
+    sheet["edition"] = "2024"
+    sheet["spellcasting"]["ability"] = "wisdom"
+    sheet["spellcasting"]["preparation"].update(
+        {
+            "mode": "prepared",
+            "max_prepared": 2,
+            "selected_spell_ids": [],
+            "changes_on": "long_rest",
+        }
+    )
+    sheet["spellcasting"]["spell_slots"] = {
+        "1": {
+            "label": "Level 1 spell slots",
+            "value": 1,
+            "max": 2,
+            "recovers_on": "long_rest",
+            "source_key": "Ranger",
+            "slot_level": 1,
+        }
+    }
+
+    result = advance_single_class_level(
+        sheet,
+        class_name="Ranger",
+        hp_method="fixed",
+        source_ref="bundled:srd2024/DND5eSRD_019-035.md#level-advancement",
+    )
+
+    updated = validate_character_sheet(result["sheet"])
+    assert updated["progression"]["level"] == 2
+    assert updated["spellcasting"]["preparation"]["mode"] == "prepared"
+    assert updated["spellcasting"]["preparation"]["max_prepared"] == 3
+    ranger_slots = updated["spellcasting"]["spell_slots"]["1"]
+    assert ranger_slots["value"] == 1
+    assert ranger_slots["max"] == 2
+    assert ranger_slots["recovers_on"] == "long_rest"
+    assert ranger_slots["source_key"] == "Ranger"
+    assert ranger_slots["slot_level"] == 1
+    assert result["spell_choices"] == {
+        "cantrips_to_add": 0,
+        "leveled_spells_to_add": 1,
+    }
+
+
+def test_2024_wizard_advancement_reports_spellbook_and_prepared_growth() -> None:
+    sheet = _single_class_sheet("Wizard", hit_die=6, constitution=12, hp=(7, 7))
+    sheet["edition"] = "2024"
+    sheet["spellcasting"]["ability"] = "intelligence"
+    sheet["spellcasting"]["spellbook"] = {"enabled": True, "spell_ids": []}
+    sheet["spellcasting"]["preparation"].update(
+        {
+            "mode": "spellbook",
+            "max_prepared": 4,
+            "selected_spell_ids": [],
+            "changes_on": "long_rest",
+        }
+    )
+    sheet["spellcasting"]["spell_slots"] = {
+        "1": {
+            "label": "Level 1 spell slots",
+            "value": 1,
+            "max": 2,
+            "recovers_on": "long_rest",
+            "source_key": "Wizard",
+            "slot_level": 1,
+        }
+    }
+
+    result = advance_single_class_level(
+        sheet,
+        class_name="Wizard",
+        hp_method="fixed",
+    )
+
+    assert result["sheet"]["spellcasting"]["preparation"]["max_prepared"] == 5
+    assert result["sheet"]["spellcasting"]["spell_slots"]["1"]["max"] == 3
+    assert result["sheet"]["spellcasting"]["spell_slots"]["1"]["value"] == 2
+    assert result["spell_choices"] == {
+        "cantrips_to_add": 0,
+        "leveled_spells_to_add": 1,
+        "spellbook_spells_to_add": 2,
+    }
+
+
 def test_level_advancement_keeps_machine_source_separate_from_display_source() -> None:
     sheet = _single_class_sheet("Rogue", hit_die=8, constitution=14, hp=(10, 10))
     source_ref = '{"content_sha256":"' + ("a" * 64) + '","heading_path":[' + (

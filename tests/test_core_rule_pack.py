@@ -68,7 +68,16 @@ EDITION_BOUNDARIES = {
         "dnd5e.core.save.magic_resistance",
         "dnd5e.core.save.evasion",
     },
-    "2024": set(),
+    "2024": {
+        "dnd5e.core.activity.action_surge",
+        "dnd5e.core.activity.divine_spark",
+        "dnd5e.core.activity.recharge",
+        "dnd5e.core.activity.second_wind",
+        "dnd5e.core.progression.hp_hit_dice",
+        "dnd5e.core.progression.spellcasting",
+        "dnd5e.core.rest.arcane_recovery",
+        "dnd5e.core.rest.sorcerous_restoration",
+    },
 }
 
 
@@ -82,6 +91,29 @@ def test_builtin_core_pack_wraps_every_preserved_boundary() -> None:
             item.implementation and item.test_refs and item.citation
             for item in pack.boundaries
         )
+        assert all(item.editions == (edition,) for item in pack.boundaries)
+        assert all(
+            item.evidence
+            and item.evidence[0].edition == edition
+            and item.evidence[0].citation == item.citation
+            and item.evidence[0].test_refs == item.test_refs
+            for item in pack.boundaries
+        )
+
+
+def test_2024_core_pack_never_borrows_a_2014_rulebook_citation() -> None:
+    pack = get_core_rule_pack("2024")
+
+    assert all("2014" not in item.citation for item in pack.boundaries)
+    assert all(
+        item.citation.startswith(("bundled:srd2024/", "runtime:"))
+        for item in pack.boundaries
+    )
+    assert {
+        "dnd5e.core.activity.recharge",
+        "dnd5e.core.rest.arcane_recovery",
+        "dnd5e.core.rest.sorcerous_restoration",
+    } <= {item.id for item in pack.boundaries}
 
 
 def test_dnd_runtime_never_emits_an_unregistered_core_boundary() -> None:

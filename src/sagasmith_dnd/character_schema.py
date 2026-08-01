@@ -471,6 +471,7 @@ def _normalize_resource(value: Any, field: str) -> dict[str, Any]:
             "max",
             "unlimited",
             "recovers_on",
+            "recovery_amounts",
             "recovery_requirements",
             "source_key",
             "slot_level",
@@ -490,6 +491,25 @@ def _normalize_resource(value: Any, field: str) -> dict[str, Any]:
     recovery = _text(item.get("recovers_on"), f"{field}.recovers_on", default="none")
     if recovery not in RECOVERY_PERIODS:
         raise ValueError(f"{field}.recovers_on is invalid")
+    raw_recovery_amounts = _object(
+        item.get("recovery_amounts") or {},
+        f"{field}.recovery_amounts",
+    )
+    _reject_unknown(
+        raw_recovery_amounts,
+        f"{field}.recovery_amounts",
+        {"short_rest", "long_rest"},
+    )
+    recovery_amounts: dict[str, int | str] = {}
+    for rest_type, raw_amount in raw_recovery_amounts.items():
+        if raw_amount == "all":
+            recovery_amounts[rest_type] = "all"
+        else:
+            recovery_amounts[rest_type] = _integer(
+                raw_amount,
+                f"{field}.recovery_amounts.{rest_type}",
+                minimum=1,
+            )
     raw_requirements = _object(
         item.get("recovery_requirements") or {},
         f"{field}.recovery_requirements",
@@ -527,6 +547,8 @@ def _normalize_resource(value: Any, field: str) -> dict[str, Any]:
     }
     if "unlimited" in item:
         normalized["unlimited"] = unlimited
+    if recovery_amounts:
+        normalized["recovery_amounts"] = recovery_amounts
     if activity_minutes:
         normalized["recovery_requirements"] = {"activity_minutes": activity_minutes}
     return normalized
@@ -547,6 +569,7 @@ def _normalize_resource_scaling(value: Any, field: str) -> dict[str, Any]:
             "maximum_formula",
             "recovers_on",
             "recovery_by_level",
+            "recovery_amounts",
             "unlimited_at_level",
         },
     )
@@ -639,6 +662,25 @@ def _normalize_resource_scaling(value: Any, field: str) -> dict[str, Any]:
         if level_recovery not in RECOVERY_PERIODS:
             raise ValueError(f"{field}.recovery_by_level.{level} is invalid")
         normalized_recoveries[str(level)] = level_recovery
+    raw_recovery_amounts = _object(
+        item.get("recovery_amounts") or {},
+        f"{field}.recovery_amounts",
+    )
+    _reject_unknown(
+        raw_recovery_amounts,
+        f"{field}.recovery_amounts",
+        {"short_rest", "long_rest"},
+    )
+    recovery_amounts: dict[str, int | str] = {}
+    for rest_type, raw_amount in raw_recovery_amounts.items():
+        if raw_amount == "all":
+            recovery_amounts[rest_type] = "all"
+        else:
+            recovery_amounts[rest_type] = _integer(
+                raw_amount,
+                f"{field}.recovery_amounts.{rest_type}",
+                minimum=1,
+            )
     unlimited_at_level = _integer(
         item.get("unlimited_at_level"),
         f"{field}.unlimited_at_level",
@@ -655,6 +697,7 @@ def _normalize_resource_scaling(value: Any, field: str) -> dict[str, Any]:
         "maximum_formula": normalized_formula,
         "recovers_on": recovery,
         "recovery_by_level": normalized_recoveries,
+        "recovery_amounts": recovery_amounts,
         "unlimited_at_level": unlimited_at_level,
     }
 
@@ -996,6 +1039,7 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
                 "always_available",
                 "required_target_sizes",
                 "requires_attack_advantage",
+                "mastery",
             },
         )
         category = _text(mechanics.get("category"), f"{field}.category", default="other")
@@ -1023,6 +1067,9 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
             or any(item not in valid_sizes for item in required_target_sizes)
         ):
             raise ValueError(f"{field}.required_target_sizes is invalid")
+        mastery = _text(mechanics.get("mastery"), f"{field}.mastery").casefold()
+        if mastery not in {"", "cleave", "graze", "nick", "push", "sap", "slow", "topple", "vex"}:
+            raise ValueError(f"{field}.mastery is invalid")
         return {
             "category": category,
             "attack_type": attack_type,
@@ -1112,6 +1159,7 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
                 mechanics.get("requires_attack_advantage"),
                 f"{field}.requires_attack_advantage",
             ),
+            "mastery": mastery,
         }
     if kind == "container":
         _reject_unknown(
@@ -2660,6 +2708,7 @@ def validate_character_sheet(
                     "pack_version",
                     "rule_refs",
                     "mechanic_refs",
+                    "ruling_requirements",
                     "resolution_plan",
                     "resolution_solution",
                 },
@@ -2843,7 +2892,7 @@ def validate_character_sheet(
                     "description": _text(
                         entry.get("description"),
                         f"sheet.content.{name}[{index}].description",
-                        maximum=2000,
+                        maximum=4000,
                     ),
                     "uses": _normalize_resource(
                         (entry.get("uses") or {} if "uses" in entry else {"unlimited": True}),
@@ -2894,6 +2943,10 @@ def validate_character_sheet(
                     "mechanic_refs": _string_list(
                         entry.get("mechanic_refs") or [],
                         f"sheet.content.{name}[{index}].mechanic_refs",
+                    ),
+                    "ruling_requirements": _normalize_ruling_requirements(
+                        entry.get("ruling_requirements") or [],
+                        f"sheet.content.{name}[{index}].ruling_requirements",
                     ),
                 }
             if entry.get("resolution_plan") is not None:
@@ -3998,6 +4051,8 @@ def _weapon_attacks(
                 "ammunition_item_id": mechanics["ammunition_item_id"],
                 "required_target_sizes": list(mechanics["required_target_sizes"]),
                 "requires_attack_advantage": mechanics["requires_attack_advantage"],
+                "mastery": mechanics["mastery"],
+                "attack_ability_modifier": modifier,
             }
         )
     return attacks

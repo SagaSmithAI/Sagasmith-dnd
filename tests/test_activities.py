@@ -9,6 +9,7 @@ from sagasmith_dnd.character_schema import (
     default_character_sheet,
     validate_character_sheet,
 )
+from sagasmith_dnd.rule_engine import resolution_context
 
 
 def test_activity_consumes_its_shared_resource_without_inventing_an_effect() -> None:
@@ -179,3 +180,54 @@ def test_recharge_activities_roll_only_while_unavailable() -> None:
         rng=_SequenceRng(),
     )
     assert available["results"] == []
+
+
+def test_2024_recharge_uses_the_same_source_defined_d6_contract() -> None:
+    sheet = default_character_sheet()
+    sheet["edition"] = "2024"
+    sheet["content"]["activities"] = [
+        {
+            "id": "breath-recharge-5-6-action",
+            "name": "Breath (Recharge 5-6)",
+            "source_key": "bundled:srd2024/dragon",
+            "activation": {"type": "action", "cost": 1},
+            "uses": {
+                "label": "Breath (Recharge 5-6)",
+                "value": 0,
+                "max": 1,
+                "recovers_on": "manual",
+                "source_key": "bundled:srd2024/dragon",
+            },
+            "choices": {
+                "recharge": {
+                    "kind": "d6_turn_start",
+                    "minimum": 5,
+                    "maximum": 6,
+                    "source_marker": "(Recharge 5-6)",
+                }
+            },
+        }
+    ]
+    rules = resolution_context(
+        {
+            "edition": "2024",
+            "fingerprint": "recharge-pack",
+            "lock": [],
+            "mechanics": [],
+        }
+    )
+
+    result = recharge_activities_at_turn_start(
+        validate_character_sheet(sheet), rules=rules, rng=_SequenceRng(6)
+    )
+
+    assert result["results"][0]["recharged"] is True
+    assert result["rule_receipts"][0]["mechanic_id"] == (
+        "dnd5e.core.activity.recharge"
+    )
+    assert result["rule_receipts"][0]["citations"] == [
+        {
+            "source": "bundled:srd2024/DND5eSRD_253-272.md#limited-usage",
+            "edition": "2024",
+        }
+    ]

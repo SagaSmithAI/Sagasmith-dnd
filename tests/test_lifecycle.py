@@ -30,6 +30,28 @@ def test_rest_minimums_have_one_runtime_authority() -> None:
     assert minimum_rest_minutes("long_rest", allows_trance=True) == 240
 
 
+def test_2024_partial_short_rest_resource_recovery_and_full_long_rest() -> None:
+    sheet = default_character_sheet()
+    sheet["edition"] = "2024"
+    sheet["combat"]["hp"] = {"value": 5, "max": 10, "temp": 0}
+    sheet["resources"]["second_wind"] = {
+        "label": "Second Wind",
+        "value": 0,
+        "max": 3,
+        "recovers_on": "short_rest",
+        "recovery_amounts": {"short_rest": 1, "long_rest": "all"},
+        "source_key": "Fighter",
+    }
+
+    short = apply_rest(sheet, rest_type="short_rest")
+    assert short["sheet"]["resources"]["second_wind"]["value"] == 1
+    assert short["recovered"]["second_wind"] == 1
+
+    long = apply_rest(short["sheet"], rest_type="long_rest")
+    assert long["sheet"]["resources"]["second_wind"]["value"] == 3
+    assert long["recovered"]["second_wind"] == 2
+
+
 def test_raise_dead_restores_one_hp_and_reduces_its_ordeal_each_long_rest() -> None:
     sheet = default_character_sheet()
     sheet["edition"] = "2014"
@@ -1115,10 +1137,19 @@ def test_2024_arcane_recovery_resets_only_on_a_long_rest() -> None:
         }
     ]
 
+    rules = resolution_context(
+        {
+            "edition": "2024",
+            "fingerprint": "arcane-recovery-pack",
+            "lock": [],
+            "mechanics": [],
+        }
+    )
     recovered = apply_rest(
         sheet,
         rest_type="short_rest",
         arcane_recovery={"1": 1},
+        rules=rules,
     )
     assert recovered["arcane_recovery"]["reset_on"] == "long_rest"
     assert "game_day" not in recovered["arcane_recovery"]
@@ -1127,16 +1158,23 @@ def test_2024_arcane_recovery_resets_only_on_a_long_rest() -> None:
             recovered["sheet"],
             rest_type="short_rest",
             arcane_recovery={"1": 1},
+            rules=rules,
         )
 
-    long_rested = apply_rest(recovered["sheet"], rest_type="long_rest")
+    long_rested = apply_rest(
+        recovered["sheet"], rest_type="long_rest", rules=rules
+    )
     long_rested["sheet"]["spellcasting"]["spell_slots"]["1"]["value"] = 0
     used_again = apply_rest(
         long_rested["sheet"],
         rest_type="short_rest",
         arcane_recovery={"1": 1},
+        rules=rules,
     )
     assert used_again["sheet"]["content"]["features"][0]["uses"]["value"] == 0
+    assert {
+        receipt["mechanic_id"] for receipt in recovered["rule_receipts"]
+    } >= {"dnd5e.core.rest.arcane_recovery"}
 
 
 def test_natural_recovery_is_once_per_long_rest() -> None:
@@ -1275,6 +1313,74 @@ def test_sorcerous_restoration_recovers_four_points() -> None:
     assert "dnd5e.core.rest.sorcerous_restoration" in {
         receipt["mechanic_id"] for receipt in rested["rule_receipts"]
     }
+
+
+def test_2024_sorcerous_restoration_uses_declared_points_once_per_long_rest() -> None:
+    sheet = default_character_sheet()
+    sheet["edition"] = "2024"
+    sheet["progression"] = {
+        "level": 9,
+        "classes": [{"name": "Sorcerer", "level": 9, "hit_die": 6}],
+    }
+    sheet["resources"]["sorcery_points"] = {
+        "label": "Sorcery Points",
+        "value": 2,
+        "max": 9,
+        "recovers_on": "long_rest",
+        "source_key": "Sorcerer",
+    }
+    sheet["content"]["features"] = [
+        {
+            "id": "dnd5e.content.srd2024.feature.sorcerer-sorcerous-restoration",
+            "name": "Sorcerous Restoration",
+            "source_key": "Sorcerer",
+            "uses": {
+                "label": "Sorcerous Restoration",
+                "value": 1,
+                "max": 1,
+                "recovers_on": "long_rest",
+                "source_key": "Sorcerer",
+            },
+            "rule_refs": [
+                "bundled:srd2024/DND5eSRD_064-076.md#level-5-sorcerous-restoration"
+            ],
+            "mechanic_refs": ["dnd5e.core.rest.sorcerous_restoration"],
+        }
+    ]
+
+    rested = apply_rest(
+        sheet,
+        rest_type="short_rest",
+        sorcerous_restoration_points=4,
+        rules=resolution_context({"edition": "2024"}),
+    )
+
+    assert rested["sorcerous_restoration"] == {
+        "sorcerer_level": 9,
+        "before": 2,
+        "recovered": 4,
+        "after": 6,
+        "maximum": 9,
+        "edition": "2024",
+        "feature_uses_remaining": 0,
+    }
+    assert rested["sheet"]["resources"]["sorcery_points"]["value"] == 6
+    assert rested["sheet"]["content"]["features"][0]["uses"]["value"] == 0
+    with pytest.raises(CombatEngineError, match="already been used"):
+        apply_rest(
+            rested["sheet"],
+            rest_type="short_rest",
+            sorcerous_restoration_points=1,
+        )
+    with pytest.raises(CombatEngineError, match="half the Sorcerer level"):
+        apply_rest(
+            sheet,
+            rest_type="short_rest",
+            sorcerous_restoration_points=5,
+        )
+
+    refreshed = apply_rest(rested["sheet"], rest_type="long_rest")
+    assert refreshed["sheet"]["content"]["features"][0]["uses"]["value"] == 1
 
 
 def test_stable_creature_recovers_one_hp_after_rolled_hours() -> None:
@@ -1437,3 +1543,28 @@ def test_short_rest_removes_all_and_only_chase_exhaustion() -> None:
     }
     assert result["sheet"]["effects"][0]["active"] is False
     assert result["sheet"]["effects"][0]["ended_reason"] == "short_or_long_rest"
+
+
+def test_2024_human_resourceful_grants_heroic_inspiration_on_long_rest() -> None:
+    sheet = default_character_sheet()
+    sheet["edition"] = "2024"
+    sheet["content"]["features"].append(
+        {
+            "id": "dnd5e.content.srd2024.species-feature.human-resourceful",
+            "name": "Resourceful",
+            "source_key": "Human",
+            "choices": {"grant_heroic_inspiration_on": "long_rest"},
+            "rule_refs": [
+                "bundled:srd2024/DND5eSRD_077-086.md#human-resourceful"
+            ],
+        }
+    )
+    rules = resolution_context({"edition": "2024", "fingerprint": "", "lock": []})
+
+    result = apply_rest(sheet, rest_type="long_rest", rules=rules)
+
+    assert result["sheet"]["combat"]["inspiration"] is True
+    assert result["heroic_inspiration"] == {"outcome": "granted"}
+    assert "dnd5e.core.heroic_inspiration" in {
+        receipt["mechanic_id"] for receipt in result["rule_receipts"]
+    }

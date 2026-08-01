@@ -12,6 +12,7 @@ from sagasmith_dnd.combat_engine import (
 )
 from sagasmith_dnd.lifecycle import advance_effect_durations
 from sagasmith_dnd.spells import (
+    CORE_2024_MAGE_ARMOR_SPELL_ID,
     CORE_MAGE_ARMOR_SPELL_ID,
     CORE_MAGIC_MISSILE_MECHANIC_ID,
     CORE_MAGIC_MISSILE_SPELL_ID,
@@ -34,6 +35,8 @@ from sagasmith_dnd.spells import (
     validate_magic_missile_allocations,
 )
 from sagasmith_dnd.standard_spell_ids import (
+    CORE_2024_FLY_SPELL_ID,
+    CORE_2024_INVISIBILITY_SPELL_ID,
     CORE_FLY_SPELL_ID,
     CORE_INVISIBILITY_SPELL_ID,
 )
@@ -96,6 +99,34 @@ def test_ordinary_mage_armor_cast_applies_its_engine_owned_effect() -> None:
     )
 
 
+def test_2024_mage_armor_uses_the_same_mechanic_without_borrowing_its_card_id() -> None:
+    sheet = default_character_sheet()
+    sheet["edition"] = "2024"
+    sheet["spellcasting"]["spell_slots"] = {
+        "1": {
+            "label": "1st",
+            "value": 1,
+            "max": 1,
+            "recovers_on": "long_rest",
+            "source_key": "wizard",
+        }
+    }
+    spell = _spell(CORE_2024_MAGE_ARMOR_SPELL_ID, level=1)
+    spell["mechanic_refs"] = ["dnd5e.core.spell.mage_armor"]
+    sheet["content"]["spells"] = [spell]
+
+    result = consume_spell_cast(
+        validate_character_sheet(sheet),
+        spell_id=CORE_2024_MAGE_ARMOR_SPELL_ID,
+    )
+
+    assert result["automatic_effect"] == "mage_armor"
+    effect = next(
+        item for item in result["sheet"]["effects"] if item["id"] == result["effect_id"]
+    )
+    assert effect["source_spell_id"] == CORE_2024_MAGE_ARMOR_SPELL_ID
+
+
 def test_fly_applies_willing_target_speed_and_tracks_concentration() -> None:
     caster = default_character_sheet()
     caster["spellcasting"]["spell_slots"] = {
@@ -143,6 +174,74 @@ def test_fly_applies_willing_target_speed_and_tracks_concentration() -> None:
     assert fly_effect["dependency"] == "source_effect_active"
     assert fly_effect["source_actor_id"] == "caster"
     assert fly_effect["source_effect_id"] == concentration["id"]
+
+
+def test_2024_fly_and_invisibility_preserve_the_exact_source_spell_ids() -> None:
+    fly_caster = default_character_sheet()
+    fly_caster["edition"] = "2024"
+    fly_caster["effects"] = [
+        {
+            "id": "fly-source",
+            "name": "Concentrating: Fly",
+            "kind": "concentration",
+            "source": "spell.cast",
+            "source_spell_id": CORE_2024_FLY_SPELL_ID,
+            "active": True,
+            "concentration": True,
+            "duration": {"period": "minute", "remaining": 10},
+            "changes": [],
+            "description": "",
+        }
+    ]
+    invisibility_caster = default_character_sheet()
+    invisibility_caster["edition"] = "2024"
+    invisibility_caster["effects"] = [
+        {
+            "id": "invisibility-source",
+            "name": "Concentrating: Invisibility",
+            "kind": "concentration",
+            "source": "spell.cast",
+            "source_spell_id": CORE_2024_INVISIBILITY_SPELL_ID,
+            "active": True,
+            "concentration": True,
+            "duration": {"period": "hour", "remaining": 1},
+            "changes": [],
+            "description": "",
+        },
+    ]
+    fly_caster = validate_character_sheet(fly_caster)
+    invisibility_caster = validate_character_sheet(invisibility_caster)
+    target = default_character_sheet()
+    target["edition"] = "2024"
+
+    flew = apply_core_fly_effects(
+        {"caster": fly_caster, "target": target},
+        caster_id="caster",
+        target_ids=["target"],
+        willing_target_ids=["target"],
+        spell_id=CORE_2024_FLY_SPELL_ID,
+        cast_level=3,
+        concentration_effect_id="fly-source",
+    )
+    invisible = apply_core_invisibility_effects(
+        {"caster": invisibility_caster, "target": target},
+        caster_id="caster",
+        target_ids=["target"],
+        spell_id=CORE_2024_INVISIBILITY_SPELL_ID,
+        cast_level=2,
+        concentration_effect_id="invisibility-source",
+    )
+
+    assert next(
+        effect
+        for effect in flew["sheets"]["target"]["effects"]
+        if effect["id"] == flew["effect_ids"]["target"]
+    )["source_spell_id"] == CORE_2024_FLY_SPELL_ID
+    assert next(
+        effect
+        for effect in invisible["sheets"]["target"]["effects"]
+        if effect["id"] == invisible["effect_ids"]["target"]
+    )["source_spell_id"] == CORE_2024_INVISIBILITY_SPELL_ID
 
 
 def test_fly_upcast_target_limit_and_source_dependency_are_hard_settled() -> None:

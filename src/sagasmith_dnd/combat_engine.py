@@ -60,7 +60,7 @@ from sagasmith_dnd.spell_resolution import (
 )
 from sagasmith_dnd.standard_spell_ids import (
     CORE_BLADE_WARD_MECHANIC_ID,
-    CORE_HYPNOTIC_PATTERN_SPELL_ID,
+    CORE_HYPNOTIC_PATTERN_SPELL_IDS,
     CORE_WITCH_BOLT_MECHANIC_ID,
 )
 from sagasmith_dnd.vocabulary import WEAPON_HAND_SLOTS
@@ -69,6 +69,9 @@ ABILITY_CHECK_KINDS = frozenset({"ability", "check"})
 SAVING_THROW_KINDS = frozenset({"save", "death_save"})
 ACTOR_CHECK_KINDS = ABILITY_CHECK_KINDS | SAVING_THROW_KINDS
 DAMAGE_REDUCTION_OUTCOMES = frozenset({"full", "half", "none"})
+WEAPON_MASTERY_IDS = frozenset(
+    {"cleave", "graze", "nick", "push", "sap", "slow", "topple", "vex"}
+)
 
 
 def damage_amount_after_reduction(amount: int, outcome: str) -> int:
@@ -110,6 +113,10 @@ def standard_save_damage_reduction(
         evasion is not None
         and normalized_ability == "dexterity"
         and normalized_success == "half"
+        and not (
+            _condition_set(sheet.get("conditions"))
+            & set(evasion.get("unavailable_conditions") or [])
+        )
     ):
         reduction = (
             str(evasion["successful_save"])
@@ -408,7 +415,8 @@ def _is_hypnotic_pattern_target_effect(effect: dict[str, Any]) -> bool:
     return (
         effect.get("kind") == "timed_conditions"
         and str(effect.get("name") or "").strip().casefold() == "hypnotic pattern"
-        and str(effect.get("source_spell_id") or "") == CORE_HYPNOTIC_PATTERN_SPELL_ID
+        and str(effect.get("source_spell_id") or "")
+        in CORE_HYPNOTIC_PATTERN_SPELL_IDS
     )
 
 
@@ -457,13 +465,13 @@ def resolve_hypnotic_pattern_target(
     rules: ResolutionContext | None = None,
     rng: Any = None,
 ) -> dict[str, Any]:
-    """Resolve one creature seeing the 2014 Hypnotic Pattern."""
+    """Resolve one creature seeing the source-bound 2014/2024 Hypnotic Pattern."""
 
     target_id = actor_id(target)
     source_actor_id = str(caster_id).strip()
     if not source_actor_id:
         raise CombatEngineError("Hypnotic Pattern caster_id is required")
-    if str(spell_id) != CORE_HYPNOTIC_PATTERN_SPELL_ID:
+    if str(spell_id) not in CORE_HYPNOTIC_PATTERN_SPELL_IDS:
         raise CombatEngineError("Hypnotic Pattern requires its source-bound SRD spell id")
     if isinstance(save_dc, bool) or not isinstance(save_dc, int) or not 1 <= save_dc <= 40:
         raise CombatEngineError("Hypnotic Pattern save DC must be an integer from 1 to 40")
@@ -501,7 +509,7 @@ def resolve_hypnotic_pattern_target(
         dc=save_dc,
         save_source_kind="spell",
         save_effect_conditions=["charmed", "incapacitated"],
-        ruleset="2014",
+        ruleset=str(sheet.get("edition") or DEFAULT_CHARACTER_EDITION),
         rules=context_with_facts(
             rules,
             save_source_kind="spell",
@@ -528,7 +536,7 @@ def resolve_hypnotic_pattern_target(
         "name": "Hypnotic Pattern",
         "kind": "timed_conditions",
         "source": source_actor_id,
-        "source_spell_id": CORE_HYPNOTIC_PATTERN_SPELL_ID,
+        "source_spell_id": str(spell_id),
         "active": True,
         "concentration": False,
         "duration": {"period": "round", "remaining": 10},
@@ -561,7 +569,7 @@ def reconcile_effect_dependencies(
     encounter: dict[str, Any],
     sheets: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
-    """End target effects when their recorded source effect is no longer active."""
+    """End target effects when their exact recorded dependency is no longer true."""
 
     value = deepcopy(encounter)
     updated_sheets = {actor_id_value: deepcopy(sheet) for actor_id_value, sheet in sheets.items()}
@@ -573,22 +581,35 @@ def reconcile_effect_dependencies(
     for link in links:
         if not isinstance(link, dict) or not link.get("active", True):
             continue
-        if link.get("dependency") != "source_effect_active":
+        dependency = str(link.get("dependency") or "")
+        if dependency not in {
+            "source_effect_active",
+            "source_actor_capable",
+        }:
             raise CombatEngineError("unsupported encounter effect dependency")
         source_actor_id = str(link.get("source_actor_id") or "")
         source_effect_id = str(link.get("source_effect_id") or "")
         target_actor_id = str(link.get("target_actor_id") or "")
         target_effect_id = str(link.get("target_effect_id") or "")
-        if not all(
-            (source_actor_id, source_effect_id, target_actor_id, target_effect_id)
+        if not all((source_actor_id, target_actor_id, target_effect_id)) or (
+            dependency == "source_effect_active" and not source_effect_id
         ):
             raise CombatEngineError("encounter effect dependency is malformed")
         if source_actor_id not in updated_sheets or target_actor_id not in updated_sheets:
             raise CombatEngineError("encounter effect dependency actor sheet is missing")
-        source_active = any(
-            effect.get("active") and str(effect.get("id") or "") == source_effect_id
-            for effect in updated_sheets[source_actor_id].get("effects", [])
-        )
+        if dependency == "source_effect_active":
+            source_active = any(
+                effect.get("active")
+                and str(effect.get("id") or "") == source_effect_id
+                for effect in updated_sheets[source_actor_id].get("effects", [])
+            )
+            ended_reason = "source_effect_ended"
+        else:
+            source_active = not bool(
+                condition_ids(updated_sheets[source_actor_id].get("conditions"))
+                & INCAPACITATING_STATE_IDS
+            )
+            ended_reason = "source_incapacitated_or_dead"
         target_active = any(
             effect.get("active") and str(effect.get("id") or "") == target_effect_id
             for effect in updated_sheets[target_actor_id].get("effects", [])
@@ -605,7 +626,7 @@ def reconcile_effect_dependencies(
                 if str(effect.get("id") or "") == target_effect_id
             )
             target_effect["active"] = False
-            target_effect["ended_reason"] = "source_effect_ended"
+            target_effect["ended_reason"] = ended_reason
             reconcile_ended_effect_conditions(
                 updated_sheets[target_actor_id],
                 ended_effects=[target_effect],
@@ -614,7 +635,7 @@ def reconcile_effect_dependencies(
                 updated_sheets[target_actor_id]
             )
             changed_actor_ids.add(target_actor_id)
-            link["ended_reason"] = "source_effect_ended"
+            link["ended_reason"] = ended_reason
         ended_links.append(deepcopy(link))
     return {
         "encounter": value,
@@ -628,12 +649,25 @@ _SRD2014_JACK_OF_ALL_TRADES_ID = "dnd5e.content.srd2014.feature.bard-jack-of-all
 _JACK_OF_ALL_TRADES_BOUNDARY_ID = "dnd5e.core.check.jack_of_all_trades"
 
 
+def _has_content_mechanic(sheet: dict[str, Any], mechanic_id: str) -> bool:
+    """Recognize a standard mechanic by its stable contract, not an edition card id."""
+
+    return any(
+        isinstance(entry, dict)
+        and mechanic_id in {str(item) for item in entry.get("mechanic_refs", [])}
+        for section in ("features", "activities")
+        for entry in dict(sheet.get("content") or {}).get(section, [])
+    )
+
+
 def _jack_of_all_trades_bonus(sheet: dict[str, Any]) -> int:
-    if str(sheet.get("edition") or "") != "2014":
-        return 0
-    has_feature = any(
+    edition = str(sheet.get("edition") or "")
+    has_legacy_feature = edition == "2014" and any(
         isinstance(feature, dict) and str(feature.get("id") or "") == _SRD2014_JACK_OF_ALL_TRADES_ID
         for feature in dict(sheet.get("content") or {}).get("features", [])
+    )
+    has_feature = has_legacy_feature or _has_content_mechanic(
+        sheet, _JACK_OF_ALL_TRADES_BOUNDARY_ID
     )
     if not has_feature:
         return 0
@@ -680,7 +714,11 @@ def start_encounter(
     for index, actor, identifier, derived, sheet, conditions, exhaustion in validated_participants:
         initiative_bonus = int(derived.get("initiative", 0))
         participant_boundary_ids: list[str] = []
-        jack_of_all_trades_bonus = _jack_of_all_trades_bonus(sheet)
+        jack_of_all_trades_bonus = (
+            _jack_of_all_trades_bonus(sheet)
+            if normalized_ruleset == "2014"
+            else 0
+        )
         if jack_of_all_trades_bonus:
             initiative_bonus += jack_of_all_trades_bonus
             rule_boundary_ids.add(_JACK_OF_ALL_TRADES_BOUNDARY_ID)
@@ -744,6 +782,7 @@ def start_encounter(
                 "conditions": list(sheet.get("conditions") or []),
                 "condition_sources": timed_condition_sources(sheet),
                 "speed_multiplier": speed_multiplier,
+                "base_speed": speed,
                 "position": deepcopy(actor.get("position")),
                 "hidden": bool(actor.get("hidden", False)),
                 "visible_to_actor_ids": deepcopy(actor.get("visible_to_actor_ids")),
@@ -1241,6 +1280,16 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
             actions.extend(["improvise", "use_object"])
         if conditions & {"grappled", "restrained"}:
             actions.append("escape")
+        if (
+            int(budget.get("main_action", 0) or 0) <= 0
+            and int(budget.get("extra_action", 0) or 0) > 0
+            and "cast" in set(
+                dict(combatant.get("turn_flags") or {}).get(
+                    "extra_action_forbidden_actions", []
+                )
+            )
+        ):
+            actions = [item for item in actions if item != "cast"]
     if budget.get("bonus_action", 0) > 0:
         actions.append("bonus_action")
     if budget.get("object_interaction", 0) > 0:
@@ -1348,6 +1397,9 @@ def pay_attack_action(
     weapon_id: str,
     attack_mode: str,
     multiattack_option_id: str | None = None,
+    target_id: str | None = None,
+    light_extra_attack: str | None = None,
+    weapon_mastery_followup: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Pay one attack while preserving a recorded monster Multiattack composition."""
     value = deepcopy(encounter)
@@ -1382,8 +1434,121 @@ def pay_attack_action(
         }
     active_multiattack = flags.get("multiattack")
     action_payment_key: str | None = None
+    normalized_mastery_followup = str(weapon_mastery_followup or "").strip().casefold()
+    if normalized_mastery_followup not in {"", "cleave"}:
+        raise CombatEngineError("weapon_mastery_followup must be cleave or omitted")
+    mastery_followup = (
+        dict(flags.get("weapon_mastery_followup") or {})
+        if normalized_mastery_followup == "cleave"
+        else {}
+    )
+    normalized_light_payment = str(light_extra_attack or "").strip().casefold()
+    if normalized_light_payment not in {"", "bonus_action", "nick"}:
+        raise CombatEngineError(
+            "light_extra_attack must be bonus_action, nick, or omitted"
+        )
+    if mastery_followup and normalized_light_payment:
+        raise CombatEngineError(
+            "a Cleave follow-up cannot also be a Light extra attack"
+        )
 
-    if int(budget.get("attack_budget", 0) or 0) > 0:
+    attacks = list(actor_derived(attacker).get("inventory", {}).get("weapon_attacks", []))
+    selected_weapon = next(
+        (item for item in attacks if str(item.get("item_id") or "") == weapon_id),
+        None,
+    )
+    selected_properties = {
+        str(item).strip().casefold()
+        for item in dict(selected_weapon or {}).get("properties", [])
+    }
+
+    if mastery_followup:
+        if active_multiattack or multiattack_option_id:
+            raise CombatEngineError("Cleave cannot be folded into Multiattack")
+        if int(budget.get("attack_budget", 0) or 0) < 1:
+            raise CombatEngineError("Cleave follow-up attack is no longer available")
+        if str(mastery_followup.get("weapon_id") or "") != weapon_id:
+            raise CombatEngineError("Cleave follow-up requires its recorded weapon")
+        restricted_target = str(mastery_followup.get("target_id") or "")
+        if not target_id or restricted_target != target_id:
+            raise CombatEngineError("Cleave follow-up requires its recorded second target")
+        budget["attack_budget"] = int(budget["attack_budget"]) - 1
+        flags.pop("weapon_mastery_followup", None)
+        flags["pending_weapon_attack_modifier"] = deepcopy(mastery_followup)
+        payment = {
+            "kind": "weapon_mastery_followup",
+            "mastery": "cleave",
+            "weapon_id": weapon_id,
+            "target_id": target_id,
+        }
+    elif normalized_light_payment:
+        if active_multiattack or multiattack_option_id:
+            raise CombatEngineError("the Light extra attack cannot be folded into Multiattack")
+        if selected_weapon is None or "light" not in selected_properties:
+            raise CombatEngineError("the Light extra attack requires a Light weapon")
+        if flags.get("light_extra_attack_used"):
+            raise CombatEngineError("the Light extra attack is available only once per turn")
+        prior_light_attacks = [
+            item
+            for item in list(flags.get("weapon_attacks_this_turn") or [])
+            if item.get("attack_action")
+            and item.get("light")
+            and str(item.get("weapon_id") or "") != weapon_id
+        ]
+        if not prior_light_attacks:
+            raise CombatEngineError(
+                "the Light extra attack requires an earlier Attack-action attack "
+                "with a different Light weapon"
+            )
+        if normalized_light_payment == "nick":
+            if str(selected_weapon.get("mastery") or "").strip().casefold() != "nick":
+                raise CombatEngineError("Nick requires a weapon with the Nick Mastery property")
+            _require_selected_weapon_mastery(
+                actor_sheet(attacker),
+                weapon_id=weapon_id,
+                mastery="nick",
+            )
+            payment = {
+                "kind": "weapon_mastery_followup",
+                "mastery": "nick",
+                "weapon_id": weapon_id,
+                "payment": "attack_action",
+            }
+            flags["weapon_mastery_nick_used"] = True
+        else:
+            if int(budget.get("bonus_action", 0) or 0) < 1:
+                raise CombatEngineError("the Light extra attack requires a Bonus Action")
+            budget["bonus_action"] = int(budget["bonus_action"]) - 1
+            payment = {
+                "kind": "light_extra_attack",
+                "weapon_id": weapon_id,
+                "payment": "bonus_action",
+            }
+            _record_action_payment(
+                value,
+                combatant,
+                action="light_extra_attack",
+                payment="bonus_action",
+            )
+        content = dict(actor_sheet(attacker).get("content") or {})
+        features = [
+            *list(content.get("features") or []),
+            *list(content.get("feats") or []),
+        ]
+        has_two_weapon_fighting = any(
+            str(feature.get("name") or "").strip().casefold() == "two-weapon fighting"
+            for feature in features
+            if isinstance(feature, dict)
+        )
+        flags["light_extra_attack_used"] = True
+        flags["pending_weapon_attack_modifier"] = {
+            "kind": normalized_light_payment,
+            "weapon_id": weapon_id,
+            "target_id": "",
+            "include_attack_ability_modifier": has_two_weapon_fighting,
+        }
+
+    elif int(budget.get("attack_budget", 0) or 0) > 0:
         if active_multiattack:
             if multiattack_option_id and multiattack_option_id != active_multiattack.get(
                 "option_id"
@@ -1410,7 +1575,7 @@ def pay_attack_action(
                 )
             payment = {"kind": "extra_attack"}
         budget["attack_budget"] -= 1
-    else:
+    elif not mastery_followup:
         if (
             flags.get("battle_cry_bonus_attack")
             and int(budget.get("bonus_action", 0) or 0) > 0
@@ -1467,6 +1632,17 @@ def pay_attack_action(
                 "attack_count": count,
             }
         budget[payment_key] -= 1
+
+    weapon_attacks = list(flags.get("weapon_attacks_this_turn") or [])
+    weapon_attacks.append(
+        {
+            "weapon_id": weapon_id,
+            "light": "light" in selected_properties,
+            "attack_action": str(payment.get("kind") or "") == "attack_action",
+            "payment_kind": str(payment.get("kind") or ""),
+        }
+    )
+    flags["weapon_attacks_this_turn"] = weapon_attacks[-20:]
 
     combatant["turn_budget"] = budget
     if flags:
@@ -1527,6 +1703,61 @@ def pay_multiattack_activity(
     }
 
 
+def _require_selected_weapon_mastery(
+    sheet: dict[str, Any],
+    *,
+    weapon_id: str,
+    mastery: str,
+) -> None:
+    """Prove a 2024 actor selected this exact weapon for its printed mastery."""
+
+    if _normalize_ruleset(sheet.get("edition")) != "2024":
+        raise CombatEngineError("Weapon Mastery is available only under the 2024 rules")
+    features = list(dict(sheet.get("content") or {}).get("features") or [])
+    mastery_features = [
+        feature
+        for feature in features
+        if "dnd5e.core.weapon.mastery" in set(feature.get("mechanic_refs") or [])
+        or (
+            str(feature.get("name") or "").strip().casefold() == "weapon mastery"
+            and str(feature.get("class_name") or feature.get("source_key") or "")
+            .strip()
+            .casefold()
+            in {"barbarian", "fighter", "paladin", "ranger", "rogue"}
+        )
+    ]
+    if not mastery_features:
+        raise CombatEngineError("Weapon Mastery is not recorded on this actor card")
+    feature_ids = {str(feature.get("id") or "") for feature in mastery_features}
+    selections = list(dict(sheet.get("content") or {}).get("selections") or [])
+    selected_ids: set[str] = set()
+    selected_properties: dict[str, str] = {}
+    for selection in selections:
+        if str(selection.get("artifact_id") or "") not in feature_ids:
+            continue
+        choice = dict(selection.get("selection") or {})
+        raw_ids = choice.get("weapon_ids", [])
+        if not isinstance(raw_ids, list) or any(not isinstance(item, str) for item in raw_ids):
+            raise CombatEngineError("Weapon Mastery selection.weapon_ids must be a list")
+        selected_ids.update(str(item) for item in raw_ids)
+        raw_properties = choice.get("mastery_by_weapon_id", {})
+        if not isinstance(raw_properties, dict) or any(
+            not isinstance(key, str) or not isinstance(value, str)
+            for key, value in raw_properties.items()
+        ):
+            raise CombatEngineError(
+                "Weapon Mastery selection.mastery_by_weapon_id must be an object"
+            )
+        selected_properties.update(
+            {str(key): str(value).strip().casefold() for key, value in raw_properties.items()}
+        )
+    if weapon_id not in selected_ids:
+        raise CombatEngineError("this weapon was not selected for Weapon Mastery")
+    recorded = selected_properties.get(weapon_id)
+    if recorded is not None and recorded != mastery:
+        raise CombatEngineError("selected Weapon Mastery conflicts with the weapon card")
+
+
 def preflight_attack(
     attacker: dict[str, Any],
     target: dict[str, Any],
@@ -1548,6 +1779,10 @@ def preflight_attack(
             require_attack_action
             and not allow_out_of_turn
             and "attack" not in available_actions(encounter, actor_id(attacker))
+            and not dict(current.get("turn_flags") or {}).get(
+                "pending_weapon_attack_modifier"
+            )
+            and not str(action.get("light_extra_attack") or "").strip()
         ):
             raise CombatEngineError("actor has no legal attack action")
         attacker = deepcopy(attacker)
@@ -1630,6 +1865,27 @@ def preflight_attack(
             }
         else:
             raise CombatEngineError("weapon_id is required when actor has multiple attacks")
+    attack_flags = dict(attacker.get("turn_flags") or {})
+    mastery_followup = dict(attack_flags.get("pending_weapon_attack_modifier") or {})
+    declared_mastery_followup = str(
+        action.get("weapon_mastery_followup") or ""
+    ).strip().casefold()
+    if declared_mastery_followup not in {"", "cleave"}:
+        raise CombatEngineError("weapon_mastery_followup must be cleave or omitted")
+    if declared_mastery_followup:
+        if mastery_followup:
+            raise CombatEngineError("a paid weapon attack modifier is already pending")
+        mastery_followup = dict(attack_flags.get("weapon_mastery_followup") or {})
+        if str(mastery_followup.get("kind") or "") != "cleave":
+            raise CombatEngineError("no Cleave follow-up attack is pending")
+    if mastery_followup:
+        if str(mastery_followup.get("weapon_id") or "") != str(
+            weapon.get("item_id") or ""
+        ):
+            raise CombatEngineError("Weapon Mastery follow-up requires its recorded weapon")
+        restricted_target = str(mastery_followup.get("target_id") or "")
+        if restricted_target and restricted_target != actor_id(target):
+            raise CombatEngineError("Cleave follow-up requires its recorded second target")
     ammunition_item_id = action.get("ammunition_item_id") or weapon.get("ammunition_item_id")
     ammunition_slaying: dict[str, Any] | None = None
     if ammunition_item_id:
@@ -1702,6 +1958,72 @@ def preflight_attack(
     properties = {
         str(item).strip().casefold() for item in weapon.get("properties", [])
     }
+    light_extra_attack = str(action.get("light_extra_attack") or "").strip().casefold()
+    if light_extra_attack not in {"", "bonus_action", "nick"}:
+        raise CombatEngineError(
+            "light_extra_attack must be bonus_action, nick, or omitted"
+        )
+    if light_extra_attack:
+        if _normalize_ruleset(actor_sheet(attacker).get("edition")) != "2024":
+            raise CombatEngineError("this Light extra-attack contract requires 2024 rules")
+        if mastery_followup:
+            raise CombatEngineError(
+                "a Light extra attack cannot also be a Cleave follow-up"
+            )
+        if "light" not in properties:
+            raise CombatEngineError("the Light extra attack requires a Light weapon")
+        if attack_flags.get("light_extra_attack_used"):
+            raise CombatEngineError("the Light extra attack is available only once per turn")
+        if not any(
+            item.get("attack_action")
+            and item.get("light")
+            and str(item.get("weapon_id") or "") != str(weapon.get("item_id") or "")
+            for item in list(attack_flags.get("weapon_attacks_this_turn") or [])
+        ):
+            raise CombatEngineError(
+                "the Light extra attack requires an earlier Attack-action attack "
+                "with a different Light weapon"
+            )
+        if light_extra_attack == "nick":
+            if str(weapon.get("mastery") or "").strip().casefold() != "nick":
+                raise CombatEngineError("Nick requires a weapon with the Nick Mastery property")
+            _require_selected_weapon_mastery(
+                actor_sheet(attacker),
+                weapon_id=str(weapon.get("item_id") or ""),
+                mastery="nick",
+            )
+        elif encounter is not None:
+            current_attacker = next(
+                (
+                    item
+                    for item in encounter.get("combatants", [])
+                    if str(item.get("actor_id") or "") == actor_id(attacker)
+                ),
+                None,
+            )
+            bonus_action = int(
+                dict(current_attacker or {})
+                .get("turn_budget", {})
+                .get("bonus_action", 0)
+                or 0
+            )
+            if bonus_action < 1:
+                raise CombatEngineError("the Light extra attack requires a Bonus Action")
+        content = dict(actor_sheet(attacker).get("content") or {})
+        has_two_weapon_fighting = any(
+            str(feature.get("name") or "").strip().casefold() == "two-weapon fighting"
+            for feature in [
+                *list(content.get("features") or []),
+                *list(content.get("feats") or []),
+            ]
+            if isinstance(feature, dict)
+        )
+        mastery_followup = {
+            "kind": light_extra_attack,
+            "weapon_id": str(weapon.get("item_id") or ""),
+            "target_id": "",
+            "include_attack_ability_modifier": has_two_weapon_fighting,
+        }
     supplied_grip = str(action.get("weapon_grip") or "").strip().casefold()
     if supplied_grip and supplied_grip not in {"one_handed", "two_handed"}:
         raise CombatEngineError("weapon_grip must be one_handed or two_handed")
@@ -1743,6 +2065,93 @@ def preflight_attack(
         additional_damage = deepcopy(
             list(weapon.get("versatile_additional_damage") or [])
         )
+    use_weapon_mastery = action.get("use_weapon_mastery", False)
+    if not isinstance(use_weapon_mastery, bool):
+        raise CombatEngineError("use_weapon_mastery must be boolean")
+    weapon_mastery: dict[str, Any] | None = None
+    if use_weapon_mastery:
+        mastery = str(weapon.get("mastery") or "").strip().casefold()
+        if mastery not in WEAPON_MASTERY_IDS:
+            raise CombatEngineError("weapon has no supported Mastery property")
+        _require_selected_weapon_mastery(
+            actor_sheet(attacker),
+            weapon_id=str(weapon.get("item_id") or ""),
+            mastery=mastery,
+        )
+        target_size = effective_size(actor_sheet(target))
+        if mastery == "push" and target_size not in {"tiny", "small", "medium", "large"}:
+            raise CombatEngineError("Push mastery requires a Large or smaller target")
+        if mastery == "cleave" and attack_mode != "melee":
+            raise CombatEngineError("Cleave mastery requires a melee attack")
+        if mastery == "cleave" and dict(attacker.get("turn_flags") or {}).get(
+            "weapon_mastery_cleave_used"
+        ):
+            raise CombatEngineError("Cleave can grant an extra attack only once per turn")
+        if mastery == "nick" and "light" not in properties:
+            raise CombatEngineError("Nick mastery requires the Light property")
+        if mastery == "nick":
+            raise CombatEngineError(
+                "Nick mastery is declared through the Light extra-attack entitlement"
+            )
+        attacker_modifier = int(weapon.get("attack_ability_modifier", 0) or 0)
+        weapon_mastery = {
+            "id": mastery,
+            "weapon_id": str(weapon.get("item_id") or ""),
+            "attack_ability_modifier": attacker_modifier,
+            "save_dc": (
+                8
+                + attacker_modifier
+                + int(actor_derived(attacker).get("proficiency_bonus", 2) or 2)
+                if mastery == "topple"
+                else None
+            ),
+            "target_size": target_size,
+        }
+        if mastery == "cleave":
+            secondary_target_id = str(action.get("mastery_secondary_target_id") or "")
+            if encounter is None or not secondary_target_id:
+                raise CombatEngineError(
+                    "Cleave mastery requires mastery_secondary_target_id in an encounter"
+                )
+            secondary = next(
+                (
+                    item
+                    for item in encounter.get("combatants", [])
+                    if str(item.get("actor_id") or "") == secondary_target_id
+                ),
+                None,
+            )
+            primary_position = _position(target.get("position"))
+            secondary_position = _position((secondary or {}).get("position"))
+            attacker_position = _position(attacker.get("position"))
+            reach = int(weapon.get("reach_ft", 5) or 5)
+            if (
+                secondary is None
+                or secondary_target_id in {actor_id(attacker), actor_id(target)}
+                or primary_position is None
+                or secondary_position is None
+                or attacker_position is None
+                or _grid_distance(primary_position, secondary_position) > 5
+                or _grid_distance(attacker_position, secondary_position) > reach
+            ):
+                raise CombatEngineError(
+                    "Cleave second target must be another creature within 5 feet of "
+                    "the first target and within weapon reach"
+                )
+            weapon_mastery["secondary_target_id"] = secondary_target_id
+            weapon_mastery["weapon_reach_ft"] = reach
+    if mastery_followup:
+        damage_bonus = int(weapon.get("damage_bonus", 0) or 0)
+        ability_bonus = int(weapon.get("attack_ability_modifier", 0) or 0)
+        if not bool(mastery_followup.get("include_attack_ability_modifier", False)):
+            adjusted_bonus = damage_bonus - max(0, ability_bonus)
+            damage_formula = str(weapon.get("damage_formula") or "")
+            expression = (
+                f"{damage_formula} {'+' if adjusted_bonus > 0 else '-'} "
+                f"{abs(adjusted_bonus)}"
+                if adjusted_bonus
+                else damage_formula
+            )
     dueling_bonus = _dueling_damage_bonus(
         attacker,
         weapon,
@@ -1963,6 +2372,7 @@ def preflight_attack(
         context.setdefault("disadvantage_sources", []).append("target_dodging")
     helped_by = None
     next_attack_advantage_effect_id = None
+    next_attack_disadvantage_effect_id = None
     if encounter is not None:
         combatants = list(encounter.get("combatants") or [])
         attacker_state = next(
@@ -2119,10 +2529,27 @@ def preflight_attack(
                 and effect.get("active", True)
                 and effect.get("kind") == "next_attack_advantage"
                 and str(effect.get("target_id") or "") == actor_id(target)
+                and (
+                    not str(effect.get("eligible_actor_id") or "")
+                    or str(effect.get("eligible_actor_id") or "") == actor_id(attacker)
+                )
             ):
                 next_attack_advantage_effect_id = str(effect.get("id") or "")
                 context["advantage"] = True
                 context.setdefault("advantage_sources", []).append(next_attack_advantage_effect_id)
+                break
+        for effect in encounter.get("ongoing_effects", []):
+            if (
+                isinstance(effect, dict)
+                and effect.get("active", True)
+                and effect.get("kind") == "next_attack_disadvantage"
+                and str(effect.get("target_id") or "") == actor_id(attacker)
+            ):
+                next_attack_disadvantage_effect_id = str(effect.get("id") or "")
+                context["disadvantage"] = True
+                context.setdefault("disadvantage_sources", []).append(
+                    next_attack_disadvantage_effect_id
+                )
                 break
     elif "pack_tactics" in attack_source_traits:
         raise NeedsRulingError(
@@ -2222,6 +2649,10 @@ def preflight_attack(
         core_boundary_ids.append("dnd5e.core.attack.weapon_grip")
     if required_target_sizes or weapon.get("requires_attack_advantage", False):
         core_boundary_ids.append("dnd5e.core.attack.source_targeting")
+    if weapon_mastery is not None:
+        core_boundary_ids.append("dnd5e.core.weapon.mastery")
+    if mastery_followup:
+        core_boundary_ids.append("dnd5e.core.weapon.mastery")
     return {
         "status": "ready",
         "kind": "attack",
@@ -2279,7 +2710,10 @@ def preflight_attack(
         "helped_by": helped_by,
         "pack_tactics_ally_id": pack_tactics_ally_id,
         "next_attack_advantage_effect_id": next_attack_advantage_effect_id,
+        "next_attack_disadvantage_effect_id": next_attack_disadvantage_effect_id,
         "sneak_attack": sneak_attack,
+        "weapon_mastery": weapon_mastery,
+        "weapon_mastery_followup": mastery_followup or None,
         "assassinate": {
             "applied": list(assassinate_applied),
             "automatic_critical_on_hit": (
@@ -2998,6 +3432,121 @@ def resolve_attack_damage(
         }
     elif plan.get("sneak_attack"):
         result["sneak_attack"] = {**dict(plan["sneak_attack"]), "used": False}
+    mastery = dict(plan.get("weapon_mastery") or {})
+    if mastery:
+        mastery_id = str(mastery.get("id") or "")
+        mastery_result: dict[str, Any] = {
+            "id": mastery_id,
+            "weapon_id": str(mastery.get("weapon_id") or ""),
+            "applied": False,
+        }
+        if mastery_id == "graze" and not attack["hit"]:
+            graze_amount = max(0, int(mastery.get("attack_ability_modifier", 0) or 0))
+            if graze_amount:
+                graze_damage = apply_damage_to_sheet(
+                    actor_sheet(updated_target),
+                    amount=graze_amount,
+                    damage_type=str(plan.get("damage_type") or ""),
+                    source=actor_id(attacker),
+                    critical=False,
+                    ruleset=str(plan.get("ruleset") or "2024"),
+                    death_saves=bool(plan.get("target_uses_death_saves", True)),
+                    weapon_attack=True,
+                )
+                updated_target["sheet"] = graze_damage["sheet"]
+                result["damage"] = {
+                    **graze_damage,
+                    "expression": str(graze_amount),
+                    "rolled_expression": str(graze_amount),
+                    "rolls": [],
+                    "detail": "Graze: attack ability modifier only",
+                    "roll_parts": [
+                        {
+                            "expression": str(graze_amount),
+                            "rolled_expression": str(graze_amount),
+                            "rolls": [],
+                            "detail": "Graze: attack ability modifier only",
+                            "amount": graze_amount,
+                            "damage_type": str(plan.get("damage_type") or ""),
+                            "source": "weapon_mastery_graze",
+                        }
+                    ],
+                }
+            mastery_result.update(
+                applied=graze_amount > 0,
+                amount=graze_amount,
+                damage_type=str(plan.get("damage_type") or ""),
+                cannot_be_increased=True,
+            )
+        elif attack["hit"] and mastery_id == "topple":
+            save_dc = int(mastery.get("save_dc", 0) or 0)
+            save = resolve_actor_check(
+                updated_target,
+                kind="save",
+                ability="constitution",
+                dc=save_dc,
+                save_source_kind="nonmagical_effect",
+                save_effect_conditions=["prone"],
+                ruleset="2024",
+                rules=context_with_facts(
+                    rules,
+                    save_source_kind="nonmagical_effect",
+                    save_effect_conditions=["prone"],
+                    subject="target",
+                ),
+                rng=rng,
+            )
+            if not save["success"]:
+                target_sheet = actor_sheet(updated_target)
+                apply_condition_change(target_sheet, condition_id="prone", add=True)
+                updated_target["sheet"] = validate_character_sheet(target_sheet)
+            mastery_result.update(
+                applied=not bool(save["success"]),
+                save=save,
+                condition="prone",
+            )
+        elif attack["hit"] and mastery_id in {"push", "sap"}:
+            mastery_result.update(
+                applied=True,
+                encounter_effect=(
+                    {
+                        "kind": "forced_movement",
+                        "distance_ft": 10,
+                        "direction": "directly_away",
+                    }
+                    if mastery_id == "push"
+                    else {"kind": "next_attack_disadvantage"}
+                ),
+            )
+        elif attack["hit"] and mastery_id in {"slow", "vex"}:
+            damage_dealt = (
+                int(dict(result.get("damage") or {}).get("applied_amount", 0) or 0)
+                > 0
+            )
+            mastery_result.update(
+                applied=damage_dealt,
+                encounter_effect=(
+                    {"kind": "speed_penalty", "penalty_ft": 10}
+                    if mastery_id == "slow"
+                    else {
+                        "kind": "next_attack_advantage",
+                        "eligible_actor_id": actor_id(attacker),
+                    }
+                )
+                if damage_dealt
+                else None,
+            )
+        elif attack["hit"] and mastery_id == "cleave":
+            mastery_result.update(
+                applied=True,
+                encounter_effect={
+                    "kind": "cleave_attack_entitlement",
+                    "weapon_id": str(mastery.get("weapon_id") or ""),
+                    "target_id": str(mastery.get("secondary_target_id") or ""),
+                    "include_attack_ability_modifier": False,
+                },
+            )
+        result["weapon_mastery"] = mastery_result
     if attack["hit"]:
         heated_body = resolve_heated_body_melee_hit(
             updated_attacker["sheet"],
@@ -3096,6 +3645,8 @@ def resolve_attack_damage(
         resolution_boundaries.append(
             "dnd5e.core.attack.weapon_hit_contest_pull"
         )
+    if mastery:
+        resolution_boundaries.append("dnd5e.core.weapon.mastery")
     extension_receipts: list[dict[str, Any]] = [
         *list(plan.get("rule_receipts") or []),
         *core_receipts(
@@ -3184,7 +3735,7 @@ def _sneak_attack_plan(
     encounter: dict[str, Any] | None,
     requested: bool,
 ) -> dict[str, Any] | None:
-    """Validate the 2014 Rogue Sneak Attack boundary without inventing eligibility."""
+    """Validate the shared 2014/2024 Sneak Attack eligibility boundary."""
     if not requested:
         return None
     sheet = actor_sheet(attacker)
@@ -3987,6 +4538,8 @@ def _validated_standard_source_trait(
             and trait.get("ordinary_successful_save") == "half"
             and trait.get("successful_save") == "none"
             and trait.get("failed_save") == "half"
+            and set(trait.get("unavailable_conditions") or [])
+            <= {"incapacitated"}
             and trait.get("automatic") is True
             and bool(str(trait.get("source_excerpt") or "").strip())
         ),
@@ -5223,6 +5776,203 @@ def force_move_directly_toward(
     )
 
 
+def apply_weapon_mastery_to_encounter(
+    encounter: dict[str, Any],
+    result: dict[str, Any],
+    *,
+    attacker_id: str,
+    target_id: str,
+) -> dict[str, Any]:
+    """Commit the encounter-scoped portion of one resolved 2024 mastery effect."""
+
+    value = deepcopy(encounter)
+    mastery = dict(result.get("weapon_mastery") or {})
+    if not mastery or not mastery.get("applied"):
+        return {"encounter": value, "effect": None}
+    if _normalize_ruleset(value.get("ruleset")) != "2024":
+        raise CombatEngineError("Weapon Mastery requires a 2024 encounter")
+    combatants = {
+        str(item.get("actor_id") or ""): item for item in value.get("combatants", [])
+    }
+    attacker = combatants.get(attacker_id)
+    target = combatants.get(target_id)
+    if attacker is None or target is None:
+        raise CombatEngineError("Weapon Mastery source and target must be combatants")
+    mastery_id = str(mastery.get("id") or "")
+    encounter_effect = dict(mastery.get("encounter_effect") or {})
+    if mastery_id == "push":
+        moved = force_move_directly_away(
+            value,
+            source_actor_id=attacker_id,
+            target_actor_id=target_id,
+            distance_ft=int(encounter_effect.get("distance_ft", 10) or 10),
+        )
+        moved_value = moved["encounter"]
+        effect = {
+            "kind": "weapon_mastery_push",
+            **{key: item for key, item in moved.items() if key != "encounter"},
+        }
+        moved_value["log"] = [
+            *list(moved_value.get("log") or []),
+            {
+                "type": "weapon_mastery",
+                "attacker_id": attacker_id,
+                "target_id": target_id,
+                "effect": deepcopy(effect),
+            },
+        ][-100:]
+        return {
+            "encounter": moved_value,
+            "effect": effect,
+        }
+    if mastery_id == "topple":
+        conditions = _condition_set(target.get("conditions"))
+        if "prone" not in conditions:
+            target["conditions"] = sorted({*conditions, "prone"})
+        effect = {
+            "kind": "weapon_mastery_topple",
+            "target_id": target_id,
+            "condition": "prone",
+        }
+    elif mastery_id in {"sap", "slow", "vex"}:
+        kind = str(encounter_effect.get("kind") or "")
+        expected_kind = {
+            "sap": "next_attack_disadvantage",
+            "slow": "speed_penalty",
+            "vex": "next_attack_advantage",
+        }[mastery_id]
+        if kind != expected_kind:
+            raise CombatEngineError("resolved Weapon Mastery encounter effect is malformed")
+        source_turns = int(attacker.get("turns_completed", 0) or 0)
+        effect = {
+            "id": f"weapon-mastery-{mastery_id}-{uuid4().hex}",
+            "kind": kind,
+            "mechanic_id": "dnd5e.core.weapon.mastery",
+            "mastery": mastery_id,
+            "active": True,
+            "source_actor_id": attacker_id,
+            "target_id": target_id,
+            "created_source_turns_completed": source_turns,
+            "expires_on": "source_turn_end" if mastery_id == "vex" else "source_turn_start",
+            "expires_after_source_turns_completed": source_turns
+            + (2 if mastery_id == "vex" else 1),
+        }
+        if mastery_id == "slow":
+            effect["penalty_ft"] = 10
+        if mastery_id == "vex":
+            effect["eligible_actor_id"] = attacker_id
+        if mastery_id == "slow":
+            for existing in value.get("ongoing_effects", []):
+                if (
+                    isinstance(existing, dict)
+                    and existing.get("active", True)
+                    and existing.get("kind") == "speed_penalty"
+                    and existing.get("mastery") == "slow"
+                    and str(existing.get("target_id") or "") == target_id
+                ):
+                    existing["active"] = False
+                    existing["ended_reason"] = "replaced_by_slow_mastery"
+        value["ongoing_effects"] = [*list(value.get("ongoing_effects") or []), effect]
+    elif mastery_id == "cleave":
+        if attacker.get("turn_flags", {}).get("weapon_mastery_cleave_used"):
+            raise CombatEngineError("Cleave can grant an extra attack only once per turn")
+        if attacker.get("turn_flags", {}).get("weapon_mastery_followup"):
+            raise CombatEngineError("a Weapon Mastery follow-up is already pending")
+        if encounter_effect.get("kind") != "cleave_attack_entitlement":
+            raise CombatEngineError("resolved Cleave entitlement is malformed")
+        weapon_id = str(encounter_effect.get("weapon_id") or "")
+        secondary_target_id = str(encounter_effect.get("target_id") or "")
+        if not weapon_id or not secondary_target_id:
+            raise CombatEngineError("resolved Cleave entitlement is incomplete")
+        flags = dict(attacker.get("turn_flags") or {})
+        flags["weapon_mastery_cleave_used"] = True
+        flags["weapon_mastery_followup"] = {
+            "kind": "cleave",
+            "weapon_id": weapon_id,
+            "target_id": secondary_target_id,
+            "include_attack_ability_modifier": False,
+        }
+        attacker["turn_flags"] = flags
+        budget = dict(attacker.get("turn_budget") or {})
+        budget["attack_budget"] = int(budget.get("attack_budget", 0) or 0) + 1
+        attacker["turn_budget"] = budget
+        effect = {
+            "kind": "weapon_mastery_cleave",
+            "source_actor_id": attacker_id,
+            "target_id": secondary_target_id,
+            "weapon_id": weapon_id,
+            "settlement": deepcopy(mastery),
+        }
+    elif mastery_id in {"graze", "nick"}:
+        effect = {
+            "kind": f"weapon_mastery_{mastery_id}",
+            "source_actor_id": attacker_id,
+            "target_id": target_id,
+            "settlement": deepcopy(mastery),
+        }
+    else:
+        raise CombatEngineError("unsupported Weapon Mastery result")
+    value["log"] = [
+        *list(value.get("log") or []),
+        {
+            "type": "weapon_mastery",
+            "attacker_id": attacker_id,
+            "target_id": target_id,
+            "effect": deepcopy(effect),
+        },
+    ][-100:]
+    return {"encounter": value, "effect": deepcopy(effect)}
+
+
+def consume_weapon_mastery_attack_effects(
+    encounter: dict[str, Any],
+    plan: dict[str, Any],
+) -> dict[str, Any]:
+    """Consume Vex or Sap after the attack roll for which it supplied a modifier."""
+
+    value = deepcopy(encounter)
+    consumed: list[str] = []
+    requested = {
+        str(plan.get("next_attack_advantage_effect_id") or ""),
+        str(plan.get("next_attack_disadvantage_effect_id") or ""),
+    }
+    requested.discard("")
+    for effect in value.get("ongoing_effects", []):
+        if (
+            isinstance(effect, dict)
+            and str(effect.get("id") or "") in requested
+            and effect.get("mechanic_id") == "dnd5e.core.weapon.mastery"
+            and effect.get("active", True)
+        ):
+            effect["active"] = False
+            effect["ended_reason"] = "consumed_by_attack_roll"
+            consumed.append(str(effect["id"]))
+    attacker_id = str(plan.get("attacker_id") or "")
+    weapon_id = str(plan.get("weapon_id") or "")
+    target_id = str(plan.get("target_id") or "")
+    for combatant in value.get("combatants", []):
+        if str(combatant.get("actor_id") or "") != attacker_id:
+            continue
+        flags = dict(combatant.get("turn_flags") or {})
+        pending = dict(flags.get("pending_weapon_attack_modifier") or {})
+        if not pending:
+            break
+        restricted_target = str(pending.get("target_id") or "")
+        if str(pending.get("weapon_id") or "") != weapon_id or (
+            restricted_target and restricted_target != target_id
+        ):
+            raise CombatEngineError(
+                "pending weapon attack modifier does not match the resolved attack"
+            )
+        flags.pop("pending_weapon_attack_modifier", None)
+        if flags:
+            combatant["turn_flags"] = flags
+        else:
+            combatant.pop("turn_flags", None)
+        break
+    return {"encounter": value, "consumed_effect_ids": consumed}
+
+
 def resolve_common_action(
     encounter: dict[str, Any],
     *,
@@ -5273,6 +6023,26 @@ def resolve_common_action(
     out_of_turn_reaction = action == "cast" and payment == "reaction"
     if not out_of_turn_reaction and (current is None or current.get("actor_id") != actor_id_value):
         raise CombatEngineError("it is not this actor's turn")
+    initial_budget = dict(combatant.get("turn_budget") or {})
+    initial_forbidden_extra_actions = set(
+        dict(combatant.get("turn_flags") or {}).get(
+            "extra_action_forbidden_actions", []
+        )
+    )
+    if (
+        action in initial_forbidden_extra_actions
+        and (
+            payment == "extra_action"
+            or (
+                payment is None
+                and int(initial_budget.get("main_action", 0) or 0) <= 0
+                and int(initial_budget.get("extra_action", 0) or 0) > 0
+            )
+        )
+    ):
+        raise CombatEngineError(
+            f"the extra action cannot be used to {action} under its source rule"
+        )
     available_action = action
     if action == "cast" and payment in {"bonus_action", "reaction"}:
         available_action = payment
@@ -5303,6 +6073,15 @@ def resolve_common_action(
         "object_interaction",
     }:
         raise CombatEngineError("invalid action payment")
+    forbidden_extra_actions = set(
+        dict(acting.get("turn_flags") or {}).get(
+            "extra_action_forbidden_actions", []
+        )
+    )
+    if payment == "extra_action" and action in forbidden_extra_actions:
+        raise CombatEngineError(
+            f"the extra action cannot be used to {action} under its source rule"
+        )
     if int(budget.get(payment, 0) or 0) <= 0:
         raise CombatEngineError("actor has no action payment available")
     budget[payment] = int(budget[payment]) - 1
@@ -5604,7 +6383,11 @@ def resolve_readied_spell_window(
 
 
 def pay_activity_activation(
-    encounter: dict[str, Any], *, actor_id_value: str, activation_type: str
+    encounter: dict[str, Any],
+    *,
+    actor_id_value: str,
+    activation_type: str,
+    action_kind: str | None = None,
 ) -> dict[str, Any]:
     """Pay only the action-economy portion of a structured activity card.
 
@@ -5638,7 +6421,28 @@ def pay_activity_activation(
             raise CombatEngineError("it is not this actor's turn")
     budget = dict(combatant.get("turn_budget") or {})
     if activation == "action":
-        payment = "extra_action" if int(budget.get("extra_action", 0) or 0) > 0 else "main_action"
+        normalized_action_kind = str(action_kind or "activity").strip().casefold()
+        forbidden = set(
+            dict(combatant.get("turn_flags") or {}).get(
+                "extra_action_forbidden_actions", []
+            )
+        )
+        extra_is_forbidden = (
+            normalized_action_kind in forbidden
+            or (normalized_action_kind == "magic" and "cast" in forbidden)
+        )
+        if extra_is_forbidden and int(budget.get("main_action", 0) or 0) > 0:
+            payment = "main_action"
+        else:
+            payment = (
+                "extra_action"
+                if int(budget.get("extra_action", 0) or 0) > 0
+                else "main_action"
+            )
+        if payment == "extra_action" and extra_is_forbidden:
+            raise CombatEngineError(
+                "the extra action cannot be used for this activity under its source rule"
+            )
     elif activation in {"bonus_action", "reaction"}:
         payment = activation
     else:
@@ -5651,7 +6455,7 @@ def pay_activity_activation(
         _record_action_payment(
             value,
             combatant,
-            action=f"activity:{activation}",
+            action=f"activity:{str(action_kind or activation).strip().casefold()}",
             payment=payment,
         )
     value["log"] = [
@@ -5792,14 +6596,20 @@ def settle_core_activity_effect(
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Settle narrow engine-owned effects for canonical Core activity cards."""
     value = deepcopy(encounter)
-    action_surge_id = "dnd5e.content.srd2014.feature.fighter-action-surge"
-    cunning_action_id = "dnd5e.content.srd2014.feature.rogue-cunning-action"
+    action_surge_ids = {
+        "dnd5e.content.srd2014.feature.fighter-action-surge",
+        "dnd5e.content.srd2024.feature.fighter-action-surge",
+    }
+    cunning_action_ids = {
+        "dnd5e.content.srd2014.feature.rogue-cunning-action",
+        "dnd5e.content.srd2024.feature.rogue-cunning-action",
+    }
     aggressive_id = "dnd5e.core.monster.aggressive"
     battle_cry_id = "dnd5e.core.monster.battle-cry"
     ignited_illumination_id = "dnd5e.core.monster.ignited-illumination"
     if activity_id not in {
-        action_surge_id,
-        cunning_action_id,
+        *action_surge_ids,
+        *cunning_action_ids,
         aggressive_id,
         battle_cry_id,
         ignited_illumination_id,
@@ -5945,7 +6755,7 @@ def settle_core_activity_effect(
             "target_ids": target_ids,
             "bonus_attack_available": bonus_attack_available,
         }
-    elif activity_id == cunning_action_id:
+    elif activity_id in cunning_action_ids:
         selected = str(dict(declaration or {}).get("action") or "")
         selected = selected.strip().lower().replace("-", "_").replace(" ", "_")
         if selected not in {"dash", "disengage", "hide"}:
@@ -6008,6 +6818,8 @@ def settle_core_activity_effect(
     budget["extra_action"] = int(budget.get("extra_action", 0) or 0) + 1
     combatant["turn_budget"] = budget
     flags["action_surge_used"] = True
+    if activity_id.endswith("srd2024.feature.fighter-action-surge"):
+        flags["extra_action_forbidden_actions"] = ["cast"]
     combatant["turn_flags"] = flags
     effect = {
         "kind": "action_surge",
@@ -6022,7 +6834,7 @@ def settle_core_activity_effect(
 
 
 def resolve_second_wind_to_sheet(sheet: dict[str, Any], *, rng: Any = None) -> dict[str, Any]:
-    """Roll and apply the 2014 Fighter's canonical Second Wind healing."""
+    """Roll and apply the 2014/2024 Fighter's canonical Second Wind healing."""
     value = deepcopy(sheet)
     fighter_level = sum(
         int(item.get("level", 0) or 0)
@@ -6224,13 +7036,20 @@ def resolve_preserve_life_to_sheets(
     *,
     allocations: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Settle the Life Domain's deterministic Channel Divinity allocation."""
+    """Settle the edition-specific Life Domain Channel Divinity allocation."""
+    edition = _normalize_ruleset(source_sheet.get("edition"))
     feature = next(
         (
             item
             for item in source_sheet.get("content", {}).get("features", [])
-            if str(item.get("id") or "").endswith("life-domain-channel-divinity-preserve-life")
-            or str(item.get("name") or "").casefold() == "channel divinity: preserve life"
+            if str(item.get("id") or "").endswith(
+                "life-domain-channel-divinity-preserve-life"
+            )
+            or str(item.get("id") or "").endswith("life-domain-preserve-life")
+            or str(item.get("name") or "").casefold()
+            in {"channel divinity: preserve life", "preserve life"}
+            or "dnd5e.core.activity.preserve_life"
+            in {str(ref) for ref in item.get("mechanic_refs", [])}
         ),
         None,
     )
@@ -6244,8 +7063,11 @@ def resolve_preserve_life_to_sheets(
         ),
         0,
     )
-    if cleric_level < 2:
-        raise CombatEngineError("Preserve Life requires at least two Cleric levels")
+    minimum_level = 3 if edition == "2024" else 2
+    if cleric_level < minimum_level:
+        raise CombatEngineError(
+            f"Preserve Life requires at least {minimum_level} Cleric levels"
+        )
     pool = cleric_level * 5
     if not isinstance(allocations, list) or not allocations:
         raise CombatEngineError("Preserve Life requires at least one healing allocation")
@@ -6264,8 +7086,12 @@ def resolve_preserve_life_to_sheets(
         target = target_sheets.get(target_id)
         if target is None:
             raise CombatEngineError(f"Preserve Life target sheet is missing: {target_id}")
-        creature_type = str(target.get("progression", {}).get("species") or "").casefold()
-        if "undead" in creature_type or "construct" in creature_type:
+        creature_type = str(
+            target.get("progression", {}).get("species") or ""
+        ).casefold()
+        if edition == "2014" and (
+            "undead" in creature_type or "construct" in creature_type
+        ):
             raise CombatEngineError("Preserve Life has no effect on Undead or Constructs")
         hp = dict(target.get("combat", {}).get("hp") or {})
         current = int(hp.get("value", 0) or 0)
@@ -6296,10 +7122,139 @@ def resolve_preserve_life_to_sheets(
         )
     return {
         "sheets": updated,
+        "edition": edition,
         "pool": pool,
         "allocated": total,
         "remaining_unallocated": pool - total,
         "targets": results,
+    }
+
+
+def resolve_divine_spark_to_sheet(
+    source_actor: dict[str, Any],
+    target_actor: dict[str, Any],
+    *,
+    mode: str,
+    damage_type: str | None = None,
+    rules: ResolutionContext | None = None,
+    rng: Any = None,
+) -> dict[str, Any]:
+    """Resolve the source-bound 2024 Cleric Divine Spark option."""
+    source_sheet = actor_sheet(source_actor)
+    if _normalize_ruleset(source_sheet.get("edition")) != "2024":
+        raise CombatEngineError("Divine Spark is available only under the 2024 rules")
+    feature = next(
+        (
+            item
+            for item in source_sheet.get("content", {}).get("features", [])
+            if (
+                item.get("id")
+                == "dnd5e.content.srd2024.feature.cleric-channel-divinity"
+                or "dnd5e.core.activity.divine_spark"
+                in {str(ref) for ref in item.get("mechanic_refs", [])}
+            )
+            and "divine spark"
+            in {
+                str(option).strip().casefold()
+                for option in dict(item.get("choices") or {}).get("options", [])
+            }
+        ),
+        None,
+    )
+    if feature is None:
+        raise CombatEngineError("source actor does not have source-bound Divine Spark")
+    cleric_level = sum(
+        int(item.get("level", 0) or 0)
+        for item in source_sheet.get("progression", {}).get("classes", [])
+        if str(item.get("name") or "").casefold() == "cleric"
+    )
+    if cleric_level < 2:
+        raise CombatEngineError("Divine Spark requires at least two Cleric levels")
+    if actor_id(source_actor) == actor_id(target_actor):
+        raise CombatEngineError("Divine Spark targets another creature")
+    if "dead" in condition_ids(actor_sheet(target_actor).get("conditions")):
+        raise CombatEngineError("Divine Spark cannot target a dead creature")
+    normalized_mode = str(mode or "").strip().casefold()
+    if normalized_mode not in {"heal", "damage"}:
+        raise CombatEngineError("Divine Spark mode must be heal or damage")
+    normalized_damage_type = str(damage_type or "").strip().casefold()
+    if normalized_mode == "heal" and normalized_damage_type:
+        raise CombatEngineError("healing Divine Spark does not accept a damage type")
+    if normalized_mode == "damage" and normalized_damage_type not in {
+        "necrotic",
+        "radiant",
+    }:
+        raise CombatEngineError(
+            "damaging Divine Spark requires necrotic or radiant damage"
+        )
+    save_dc = 0
+    if normalized_mode == "damage":
+        save_dc = int(
+            dict(actor_derived(source_actor).get("spellcasting") or {}).get(
+                "save_dc", 0
+            )
+            or 0
+        )
+        if save_dc < 1:
+            raise CombatEngineError("Divine Spark requires the Cleric spell save DC")
+    wisdom_score = effective_ability_scores(source_sheet)["wisdom"]
+    wisdom_modifier = ability_modifier(wisdom_score)
+    dice = 1 + sum(cleric_level >= threshold for threshold in (7, 13, 18))
+    spark_roll = roll(f"{dice}d8", rng=rng)
+    total = max(0, spark_roll.total + wisdom_modifier)
+    base = {
+        "kind": "divine_spark",
+        "mode": normalized_mode,
+        "target_id": actor_id(target_actor),
+        "expression": f"{dice}d8 {'+' if wisdom_modifier >= 0 else '-'} "
+        f"{abs(wisdom_modifier)}",
+        "rolls": list(spark_roll.rolls),
+        "rolled_total": spark_roll.total,
+        "wisdom_modifier": wisdom_modifier,
+        "total": total,
+    }
+    if normalized_mode == "heal":
+        healed = apply_healing_to_sheet(actor_sheet(target_actor), amount=total)
+        return {
+            **base,
+            "sheet": healed["sheet"],
+            "healing": {key: value for key, value in healed.items() if key != "sheet"},
+            "save": None,
+            "damage": None,
+            "damage_type": None,
+        }
+    saved = resolve_actor_check(
+        target_actor,
+        kind="save",
+        ability="constitution",
+        dc=save_dc,
+        save_source_kind="magical_effect",
+        rules=context_with_facts(
+            rules,
+            save_source_kind="magical_effect",
+            save_effect_conditions=[],
+        ),
+        rng=rng,
+    )
+    amount = total // 2 if saved["success"] else total
+    damaged = apply_damage_to_sheet(
+        actor_sheet(target_actor),
+        amount=amount,
+        damage_type=normalized_damage_type,
+        source="Divine Spark",
+        ruleset="2024",
+        death_saves=bool(
+            target_actor.get("death_saves", False)
+            or target_actor.get("zero_hp_recovery", False)
+        ),
+    )
+    return {
+        **base,
+        "sheet": damaged["sheet"],
+        "healing": None,
+        "save": saved,
+        "damage": {key: value for key, value in damaged.items() if key != "sheet"},
+        "damage_type": normalized_damage_type,
     }
 
 
@@ -6309,14 +7264,24 @@ def resolve_turn_undead_to_sheets(
     *,
     rules: ResolutionContext | None = None,
     rng: Any = None,
+    sear_undead: bool = False,
 ) -> dict[str, Any]:
-    """Resolve 2014 Turn Undead saves and apply its damage-ended minute effect."""
+    """Resolve Turn Undead using the exact 2014 or 2024 condition contract."""
     source_sheet = actor_sheet(source_actor)
+    edition = _normalize_ruleset(source_sheet.get("edition"))
     feature = next(
         (
             item
             for item in source_sheet.get("content", {}).get("features", [])
-            if item.get("id") == "dnd5e.content.srd2014.feature.cleric-channel-divinity"
+            if (
+                item.get("id")
+                in {
+                    "dnd5e.content.srd2014.feature.cleric-channel-divinity",
+                    "dnd5e.content.srd2024.feature.cleric-channel-divinity",
+                }
+                or "dnd5e.core.activity.turn_undead"
+                in {str(ref) for ref in item.get("mechanic_refs", [])}
+            )
             and "turn undead"
             in {
                 str(option).strip().casefold()
@@ -6341,6 +7306,27 @@ def resolve_turn_undead_to_sheets(
         raise CombatEngineError("Turn Undead requires the cleric's canonical spell save DC")
     if not target_actors:
         raise CombatEngineError("Turn Undead requires at least one perceiving undead target")
+    sear_feature = next(
+        (
+            item
+            for item in source_sheet.get("content", {}).get("features", [])
+            if str(item.get("name") or "").strip().casefold() == "sear undead"
+            or "dnd5e.core.activity.sear_undead"
+            in {str(ref) for ref in item.get("mechanic_refs", [])}
+        ),
+        None,
+    )
+    if sear_undead and (
+        edition != "2024" or cleric_level < 5 or sear_feature is None
+    ):
+        raise CombatEngineError(
+            "Sear Undead requires its source-bound 2024 level 5 Cleric feature"
+        )
+    sear_roll = None
+    if sear_undead:
+        wisdom_score = effective_ability_scores(source_sheet)["wisdom"]
+        sear_dice = max(1, ability_modifier(wisdom_score))
+        sear_roll = roll(f"{sear_dice}d8", rng=rng)
 
     updated: dict[str, dict[str, Any]] = {}
     results: list[dict[str, Any]] = []
@@ -6349,46 +7335,81 @@ def resolve_turn_undead_to_sheets(
         creature_type = str(target_sheet.get("progression", {}).get("species") or "").casefold()
         if "undead" not in creature_type:
             raise CombatEngineError(f"Turn Undead target is not Undead: {target_id}")
+        effect_conditions = (
+            ["frightened", "incapacitated"]
+            if edition == "2024"
+            else ["turned"]
+        )
         save = resolve_actor_check(
             target_actor,
             kind="save",
             ability="wisdom",
             dc=save_dc,
             save_source_kind="magical_effect",
-            save_effect_conditions=["turned"],
+            save_effect_conditions=effect_conditions,
             rules=context_with_facts(
                 rules,
                 save_source_kind="magical_effect",
-                save_effect_conditions=["turned"],
+                save_effect_conditions=effect_conditions,
             ),
             rng=rng,
         )
         effect_id = None
+        sear_damage = None
         if not save["success"]:
             value = deepcopy(target_sheet)
+            if sear_roll is not None:
+                sear_damage = apply_damage_to_sheet(
+                    value,
+                    amount=sear_roll.total,
+                    damage_type="radiant",
+                    source="Sear Undead",
+                    ruleset=edition,
+                    death_saves=bool(
+                        target_actor.get("death_saves", False)
+                        or target_actor.get("zero_hp_recovery", False)
+                    ),
+                )
+                value = sear_damage["sheet"]
+            replaced: list[dict[str, Any]] = []
             for effect in value.get("effects", []):
                 if effect.get("active") and effect.get("kind") == "turn_undead":
                     effect["active"] = False
                     effect["ended_reason"] = "replaced_by_turn_undead"
-            effect_id = f"turn-undead-{uuid4().hex}"
-            value.setdefault("effects", []).append(
-                {
-                    "id": effect_id,
-                    "name": "Turn Undead",
-                    "kind": "turn_undead",
-                    "source": actor_id(source_actor),
-                    "active": True,
-                    "concentration": False,
-                    "duration": {"period": "minute", "remaining": 1},
-                    "changes": [],
-                    "description": (
+                    replaced.append(effect)
+            if replaced:
+                reconcile_ended_effect_conditions(value, ended_effects=replaced)
+            target_dead = "dead" in condition_ids(value.get("conditions"))
+            effect_id = None if target_dead else f"turn-undead-{uuid4().hex}"
+            effect = {
+                "id": effect_id,
+                "name": "Turn Undead",
+                "kind": "turn_undead",
+                "source": actor_id(source_actor),
+                "active": True,
+                "concentration": False,
+                "duration": {"period": "minute", "remaining": 1},
+                "changes": [
+                    {"path": "conditions", "mode": "add", "value": condition}
+                    for condition in effect_conditions
+                ],
+                "description": (
+                    (
+                        "Frightened and Incapacitated; on its turns it tries to move "
+                        "as far from the turning source as it can. Ends on any damage, "
+                        "or if the source is Incapacitated or dies."
+                    )
+                    if edition == "2024"
+                    else (
                         "Must move as far from the turning source as possible; cannot "
                         "willingly approach within 30 feet; cannot react; action is Dash, "
                         "escape, or Dodge only if nowhere to move. Ends on any damage."
-                    ),
-                }
-            )
-            apply_condition_change(value, condition_id="turned", add=True)
+                    )
+                ),
+            }
+            if not target_dead:
+                value.setdefault("effects", []).append(effect)
+                apply_effect_conditions(value, effect)
             updated[target_id] = value
         else:
             updated[target_id] = target_sheet
@@ -6396,14 +7417,37 @@ def resolve_turn_undead_to_sheets(
             {
                 "target_id": target_id,
                 "save": save,
-                "turned": not save["success"],
+                "save_failed": not save["success"],
+                "turned": not save["success"] and effect_id is not None,
                 "effect_id": effect_id,
+                "conditions": effect_conditions if effect_id is not None else [],
+                "sear_damage": (
+                    {
+                        key: value
+                        for key, value in sear_damage.items()
+                        if key != "sheet"
+                    }
+                    if sear_damage is not None
+                    else None
+                ),
             }
         )
     return {
         "sheets": updated,
+        "edition": edition,
         "save_dc": save_dc,
         "duration": {"period": "minute", "remaining": 1},
+        "sear_undead": (
+            {
+                "expression": sear_roll.expression,
+                "rolls": list(sear_roll.rolls),
+                "total": sear_roll.total,
+                "damage_type": "radiant",
+                "does_not_end_turn_undead": True,
+            }
+            if sear_roll is not None
+            else None
+        ),
         "targets": results,
     }
 
@@ -6457,8 +7501,15 @@ def resolve_actor_check(
         kind in ABILITY_CHECK_KINDS
         and _jack_of_all_trades_bonus(sheet)
         and (
-            (normalized_ability in SKILL_ABILITIES and skill_proficiency == "none")
-            or (normalized_ability not in SKILL_ABILITIES and not proficient)
+            (
+                normalized_ability in SKILL_ABILITIES
+                and skill_proficiency == "none"
+            )
+            or (
+                normalized_ruleset == "2014"
+                and normalized_ability not in SKILL_ABILITIES
+                and not proficient
+            )
         )
     ):
         jack_of_all_trades_bonus = _jack_of_all_trades_bonus(sheet)
@@ -6786,6 +7837,16 @@ def resolve_actor_group_check(
     if unknown_rule_actor_ids:
         raise CombatEngineError(
             "group ability-check rule contexts contain actors outside the group"
+        )
+    incompatible_rule_actor_ids = sorted(
+        actor_id_value
+        for actor_id_value, context in normalized_rules.items()
+        if context.core_pack.edition != "2014"
+    )
+    if incompatible_rule_actor_ids:
+        raise CombatEngineError(
+            "group ability checks are a 2014 rules procedure; incompatible rule "
+            "contexts: " + ", ".join(incompatible_rule_actor_ids)
         )
 
     checks: list[dict[str, Any]] = []
@@ -7625,6 +8686,19 @@ def end_turn(encounter: dict[str, Any], *, actor_id_value: str | None = None) ->
     was_surprised = bool(current.get("surprised"))
     current["surprised"] = False
     current["turns_completed"] = int(current.get("turns_completed", 0) or 0) + 1
+    for effect in value.get("ongoing_effects", []):
+        if (
+            isinstance(effect, dict)
+            and effect.get("active", True)
+            and effect.get("mechanic_id") == "dnd5e.core.weapon.mastery"
+            and effect.get("expires_on") == "source_turn_end"
+            and str(effect.get("source_actor_id") or "")
+            == str(current.get("actor_id") or "")
+            and int(current["turns_completed"])
+            >= int(effect.get("expires_after_source_turns_completed", 0) or 0)
+        ):
+            effect["active"] = False
+            effect["ended_reason"] = "source_turn_end"
     retained_flags = {
         key: deepcopy(item)
         for key, item in current_flags.items()
@@ -7715,6 +8789,18 @@ def end_turn(encounter: dict[str, Any], *, actor_id_value: str | None = None) ->
     next_actor = current_combatant(value)
     if next_actor:
         next_actor_id = str(next_actor.get("actor_id") or "")
+        for effect in value.get("ongoing_effects", []):
+            if (
+                isinstance(effect, dict)
+                and effect.get("active", True)
+                and effect.get("mechanic_id") == "dnd5e.core.weapon.mastery"
+                and effect.get("expires_on") == "source_turn_start"
+                and str(effect.get("source_actor_id") or "") == next_actor_id
+                and int(next_actor.get("turns_completed", 0) or 0)
+                >= int(effect.get("expires_after_source_turns_completed", 0) or 0)
+            ):
+                effect["active"] = False
+                effect["ended_reason"] = "source_turn_start"
         legendary_actions = dict(next_actor.get("legendary_actions") or {})
         if legendary_actions:
             legendary_actions["remaining"] = int(
@@ -7750,12 +8836,29 @@ def end_turn(encounter: dict[str, Any], *, actor_id_value: str | None = None) ->
             if item.get("actor_id") != next_actor.get("actor_id")
         ]
         budget = dict(next_actor.get("turn_budget") or {})
+        slow_penalty = max(
+            [
+                int(effect.get("penalty_ft", 0) or 0)
+                for effect in value.get("ongoing_effects", [])
+                if isinstance(effect, dict)
+                and effect.get("active", True)
+                and effect.get("mechanic_id") == "dnd5e.core.weapon.mastery"
+                and effect.get("kind") == "speed_penalty"
+                and str(effect.get("target_id") or "") == next_actor_id
+            ]
+            or [0]
+        )
+        base_turn_speed = int(
+            next_actor.get("base_speed", budget.get("speed", 30)) or 30
+        )
+        effective_turn_speed = max(0, base_turn_speed - slow_penalty)
         budget.update(
             main_action=1,
             bonus_action=1,
             reaction=1,
+            speed=effective_turn_speed,
             movement=int(
-                int(budget.get("speed", 30) or 30)
+                effective_turn_speed
                 * float(next_actor.get("speed_multiplier", 1.0) or 1.0)
             ),
             object_interaction=1,
