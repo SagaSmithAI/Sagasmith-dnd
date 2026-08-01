@@ -16,7 +16,7 @@ from sagasmith_dnd.spell_resolution import (
 )
 
 PACK_ID = "dnd5e.content.srd2024"
-PACK_VERSION = "1.0.0"
+PACK_VERSION = "1.1.0"
 
 _CLASS_NAMES = {
     "Barbarian",
@@ -1964,7 +1964,7 @@ def _monsters(root: Path) -> list[dict[str, Any]]:
     matches = list(
         re.finditer(
             (
-                r"(?m)^(?:> )?#{2,3} (?P<name>[^\n]+)\n(?:> )?\*"
+                r"(?m)^(?:> )?#{1,3} (?P<name>[^\n]+)\n(?:> )?\*"
                 r"(?P<identity>(?:Tiny|Small|Medium|Large|Huge|Gargantuan)"
                 r"\s+[^\n]+)\*"
             ),

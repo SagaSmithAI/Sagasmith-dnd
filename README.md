@@ -28,6 +28,25 @@ flowchart LR
 - **空间语义** — 模组房间/地点证据，战斗开始时生成临时 map，移动、距离、触及和机会攻击。
 - **非战斗活动** — 检定、休息、资源与常见角色活动；战斗中禁止绕过战斗状态机修改同一状态。
 - **内容导入** — D&D 模组 profile、结构化规则内容、扩展规则书草稿与校验路径。
+- **可移植角色内容** — PC/NPC/怪物共用 actor-card validator；SRD 2014/2024 怪物与 NPC 生成默认 preset pack。
+
+## 统一角色卡与默认怪物包
+
+`build_dnd_actor_card` / `validate_dnd_actor_card` 在 Core portable envelope
+之上执行 D&D sheet v2 与 edition 校验。PC、NPC 和怪物没有三套分享格式；
+它们都是完整角色卡，只由 `actor_type`、来源和卡内 mechanics 区分。
+
+`build_srd2014_preset_pack` 从随附 SRD 5.1 Markdown 生成 317 张卡，
+`build_srd2024_preset_pack` 从 SRD 5.2.1 生成 330 张卡。每张卡保留规范化
+statblock、原始来源文本/checksum、source ref、parser warning、license 与
+attribution。2014 无 Action 生物与速度 0 的 statblock 仍是合法卡；2024
+MOD/SAVE-only 表只保存能够严格保留印刷 modifier/save 的规范代表值，并把
+该规范化写入 provenance，不伪造不可证明的奇偶分数。
+
+“取消怪物硬编码”指怪物身份、数值、攻击、特性和来源不再由名称表或专属
+构造器产生。标准规则的通用结算函数仍属于引擎，例如动作经济、攻击、豁免、
+伤害、抗性与来源卡声明的通用 trait；运行时从卡片读取输入，不按怪物名字
+选择结果。自设内容首次使用时仍走来源绑定的 Agent 语义理解/方案保存边界。
 
 ## 长期记忆边界
 
@@ -79,6 +98,11 @@ sagasmith-dnd database upgrade --json
 扩展书不会通过散落的条件判断直接覆盖核心逻辑。导入流程将内容转成带 provenance 的 draft rule pack，验证 schema、依赖、edition 与 mechanic IR，随后绑定到 campaign rule profile。战役锁定核心包与扩展版本，Snapshot 恢复时必须能解析同一套精确依赖。
 
 这允许 Xanathar 等用户合法持有的扩展内容添加子职、背景、法术和可结算 mechanics，同时保留 2014/2024 核心边界与既有修复。商业书内容不随仓库分发。
+
+扩展书也适合发布为组合包：规则内容继续使用带 edition/dependency/source
+lock 的 rule pack；其中预设 PC、NPC、怪物或召唤物使用 portable
+`preset_pack`；若附带冒险、地图或场景则另用 `module_pack`。不要把三者压成
+一个可绕过规则安装审批的巨型包；用显式 dependency 将它们组合即可。
 
 ## 开发
 

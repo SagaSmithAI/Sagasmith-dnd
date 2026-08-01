@@ -1,8 +1,6 @@
 from collections import Counter
 from pathlib import Path
 
-import pytest
-
 from sagasmith_dnd.character_schema import add_inventory_item, default_character_sheet
 from sagasmith_dnd.core_content_2024 import (
     PACK_ID,
@@ -11,7 +9,6 @@ from sagasmith_dnd.core_content_2024 import (
     parse_srd2024_monster_artifact,
 )
 from sagasmith_dnd.spell_resolution import effective_spell_resolution
-from sagasmith_dnd.statblocks import StatblockImportError
 
 
 def test_srd2024_content_covers_every_core_catalog_kind_with_exact_sources() -> None:
@@ -20,7 +17,7 @@ def test_srd2024_content_covers_every_core_catalog_kind_with_exact_sources() -> 
     counts = Counter(item["kind"] for item in artifacts)
 
     assert manifest["id"] == PACK_ID
-    assert manifest["version"] == PACK_VERSION == "1.0.0"
+    assert manifest["version"] == PACK_VERSION == "1.1.0"
     assert manifest["editions"] == ["2024"]
     assert counts["class"] == 12
     assert counts["subclass"] == 12
@@ -492,7 +489,7 @@ def test_srd2024_unstructured_rules_retain_agent_context_not_fake_mechanics() ->
     assert aboleth["card"]["ruling_requirements"][0]["default_resolver"] == "agent"
 
 
-def test_srd2024_monsters_cross_file_boundaries_and_fail_closed_on_lost_scores() -> None:
+def test_srd2024_monsters_cross_file_boundaries_and_preserve_modifier_only_blocks() -> None:
     workspace = Path(__file__).resolve().parents[2]
     _, artifacts = build_srd2024_content(workspace / "SagaSmith-dnd-skills")
     monsters = {
@@ -513,8 +510,10 @@ def test_srd2024_monsters_cross_file_boundaries_and_fail_closed_on_lost_scores()
     assert len(monsters["Chain Devil"]["rule_refs"]) == 2
     assert chain_devil.sheet["abilities"]["constitution"]["score"] == 18
 
-    with pytest.raises(
-        StatblockImportError,
-        match="six ability scores and saving throws",
-    ):
-        parse_srd2024_monster_artifact(monsters["Otyugh"])
+    otyugh = parse_srd2024_monster_artifact(monsters["Otyugh"])
+    assert otyugh.sheet["abilities"]["strength"]["score"] == 16
+    assert otyugh.sheet["abilities"]["constitution"]["bonus"] == 3
+    assert any(
+        "canonical representatives" in note
+        for note in otyugh.normalization_notes
+    )

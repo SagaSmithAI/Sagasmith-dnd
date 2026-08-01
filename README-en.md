@@ -28,6 +28,29 @@ Agents should normally connect through [SagaSmith-dnd-mcp](https://github.com/Sa
 - **Spatial semantics** — module location evidence, temporary maps created when combat starts, movement, distance, reach, and opportunity attacks.
 - **Non-combat activities** — checks, rests, resources, and common activities with guards against bypassing the combat state machine.
 - **Content ingestion** — D&D module profiles, structured core content, and extension rulebook draft/validation flows.
+- **Portable actors** — one D&D actor-card validator for PCs/NPCs/monsters, plus bundled SRD 2014/2024 creature preset packs.
+
+## Unified actor cards and bundled creature packs
+
+`build_dnd_actor_card` / `validate_dnd_actor_card` apply D&D sheet-v2 and
+edition validation on top of the Core portable envelope. PCs, NPCs, and monsters
+do not have separate sharing formats: each is a complete actor card, separated
+only by `actor_type`, provenance, and card mechanics.
+
+`build_srd2014_preset_pack` produces 317 cards from the bundled SRD 5.1
+Markdown; `build_srd2024_preset_pack` produces 330 from SRD 5.2.1. Every card
+retains the normalized statblock, source text/checksum/reference, parser
+warnings, license, and attribution. Actionless 2014 creatures and speed 0 are
+valid. A 2024 MOD/SAVE-only table uses a canonical representative score that
+preserves the printed modifier/save exactly and records that normalization in
+provenance instead of inventing an unsupported odd/even score.
+
+Removing monster hardcoding means identities, statistics, attacks, traits, and
+sources no longer come from creature-name tables or constructors. Generic
+standard-rule implementations remain engine code—action economy, attacks,
+saves, damage, defenses, and card-declared generic traits—but read their inputs
+from cards rather than branching on monster names. Homebrew semantics still use
+the source-bound first-use Agent interpretation and saved-solution boundary.
 
 ## Long-term memory boundary
 
@@ -67,6 +90,12 @@ sagasmith-dnd --help
 Extensions do not override the core through scattered conditionals. Ingestion produces a provenance-bearing draft pack, validates schema, dependencies, edition, and mechanic IR, then binds the pack to a campaign profile. Campaigns lock exact core/extension versions, and snapshot restoration requires the same dependency set.
 
 This allows legally owned supplements to add subclasses, backgrounds, spells, and executable mechanics without losing the 2014/2024 core boundaries and regression fixes. Commercial book content is not distributed with this repository.
+
+Supplements can also ship as a composed package family: keep rules in an
+edition/dependency/source-locked rule pack; distribute pregenerated PCs, NPCs,
+monsters, and summons in a portable `preset_pack`; place adventures, maps, and
+scenes in a separate `module_pack`. Link them with explicit dependencies instead
+of one giant package that bypasses rule-install approval.
 
 ## Development
 

@@ -4626,7 +4626,7 @@ def resolve_corrosive_form_melee_hit(
     plan: dict[str, Any],
     rng: Any = None,
 ) -> dict[str, Any]:
-    """Apply Black Pudding Corrosive Form after a qualifying melee hit."""
+    """Apply a card-defined Corrosive Form after a qualifying melee hit."""
 
     trait = _source_trait(target_sheet, "corrosive_form")
     if trait is None or str(plan.get("attack_mode") or "") != "melee":
@@ -4752,7 +4752,7 @@ def resolve_heated_body_melee_hit(
     plan: dict[str, Any],
     rng: Any = None,
 ) -> dict[str, Any]:
-    """Apply the Salamander's Heated Body after a qualifying melee hit."""
+    """Apply a card-defined Heated Body after a qualifying melee hit."""
 
     trait = _source_trait(target_sheet, "heated_body")
     if trait is None or str(plan.get("attack_mode") or "") != "melee":

@@ -196,11 +196,13 @@ def _parse_armor_equipment(
 
 def _parse_speed(value: str) -> dict[str, int]:
     speeds = {"walk": 0, "fly": 0, "swim": 0, "climb": 0, "burrow": 0}
+    matched_distance = False
     for part in _split_list(value):
         match = re.search(r"(?i)(?:(fly|swim|climb|burrow)\s+)?(\d+)\s*ft", part)
         if match:
+            matched_distance = True
             speeds[(match.group(1) or "walk").casefold()] = int(match.group(2))
-    if not any(speeds.values()):
+    if not matched_distance:
         raise StatblockImportError("statblock Speed has no supported movement distance")
     return speeds
 
@@ -1552,7 +1554,7 @@ def _included_weapon_damage_source_trait(description: str) -> dict[str, Any] | N
 
 
 def _heated_body_source_trait(description: str) -> dict[str, Any] | None:
-    """Compile the Salamander's standard contact retaliation."""
+    """Compile a complete standard contact-retaliation trait from its card."""
 
     normalized = " ".join(description.split())
     match = re.fullmatch(
@@ -1578,7 +1580,7 @@ def _heated_body_source_trait(description: str) -> dict[str, Any] | None:
 
 
 def _heated_weapons_source_trait(description: str) -> dict[str, Any] | None:
-    """Compile damage already printed into the Salamander's weapon action."""
+    """Compile extra damage already printed into a card's weapon action."""
 
     normalized = " ".join(description.split())
     match = re.fullmatch(
@@ -3058,8 +3060,15 @@ def _parse_srd_statblock(
         raise StatblockImportError(
             "statblock contains unparsed weapon action markers"
         )
-    if not weapons and edition == "2014":
-        raise StatblockImportError("statblock has no supported weapon action")
+    if not weapons:
+        if not entries:
+            raise StatblockImportError(
+                "statblock has neither a supported weapon attack nor source-bound entries"
+            )
+        warnings.append(
+            "statblock has no weapon attack; the actor remains valid with its "
+            "source-bound traits, actions, and reactions"
+        )
     ids = [item["id"] for item in weapons]
     if len(ids) != len(set(ids)):
         raise StatblockImportError("statblock contains duplicate weapon action names")
@@ -3461,7 +3470,7 @@ def parse_2014_statblock(
     )
 
 
-def _normalize_2024_statblock(markdown: str) -> str:
+def _normalize_2024_statblock(markdown: str) -> tuple[str, bool]:
     """Translate SRD 5.2.1 presentation markup into the shared fact grammar."""
 
     source_lines = markdown.replace("\r\n", "\n").replace("\r", "\n").splitlines()
@@ -3493,6 +3502,55 @@ def _normalize_2024_statblock(markdown: str) -> str:
     for abbreviation, score, save in compact_ability.findall(normalized):
         ability_scores[abbreviation] = int(score)
         saving_throws[abbreviation] = int(save.replace("\u2212", "-"))
+    wide_ability = re.compile(
+        rf"\*\*(STR|DEX|CON|INT|WIS|CHA)\*\*\s+(\d+)\s*\|"
+        rf"\s*{signed}\s*\|\s*({signed})",
+        re.IGNORECASE,
+    )
+    for abbreviation, score, save in wide_ability.findall(normalized):
+        ability_scores[abbreviation.upper()] = int(score)
+        saving_throws[abbreviation.upper()] = int(save.replace("\u2212", "-"))
+    modifiers_only = False
+    modifier_table = re.search(
+        rf"(?ms)^\|\s*STR\s*\|\s*DEX\s*\|\s*CON\s*\|\s*INT\s*\|"
+        rf"\s*WIS\s*\|\s*CHA\s*\|.*?"
+        rf"^\|\s*\*\*MOD\*\*\s*\|\s*\*\*SAVE\*\*.*?\|\s*$\n"
+        rf"(?P<first>^\|(?:\s*{signed}\s*\|){{6}}\s*$).*?"
+        rf"^\|\s*\*\*MOD\*\*\s*\|\s*\*\*SAVE\*\*.*?\|\s*$\n"
+        rf"(?P<second>^\|(?:\s*{signed}\s*\|){{6}}\s*$)",
+        normalized,
+        re.IGNORECASE,
+    )
+    if modifier_table and not ability_scores:
+        values = [
+            int(value.replace("\u2212", "-"))
+            for value in re.findall(
+                signed,
+                modifier_table.group("first") + modifier_table.group("second"),
+            )
+        ]
+        if len(values) == 12:
+            for abbreviation, modifier, save in zip(
+                ("STR", "DEX", "CON", "INT", "WIS", "CHA"),
+                values[::2],
+                values[1::2],
+                strict=True,
+            ):
+                if not -5 <= modifier <= 10:
+                    raise StatblockImportError(
+                        "2024 statblock ability modifier cannot be represented by a "
+                        "D&D ability score"
+                    )
+                # Some SRD 5.2.1 statblocks publish only MOD and SAVE.  The
+                # shared v2 actor schema still requires a score, so retain the
+                # exact modifier with the lowest even representative score
+                # (and score 1 for -5). No mechanic may infer an omitted odd
+                # score from this representation.
+                ability_scores[abbreviation] = (
+                    1 if modifier == -5 else 10 + 2 * modifier
+                )
+                saving_throws[abbreviation] = save
+            modifiers_only = True
     table = re.search(
         r"(?ms)^\|\s*STR\s*\|\s*DEX\s*\|\s*CON\s*\|\s*INT\s*\|"
         r"\s*WIS\s*\|\s*CHA\s*\|\s*\n"
@@ -3593,7 +3651,10 @@ def _normalize_2024_statblock(markdown: str) -> str:
     speed = re.search(r"(?m)^\*\*Speed\*\*\s+.+?$", normalized)
     if speed is None:
         raise StatblockImportError("2024 statblock is missing Speed")
-    return normalized[: speed.end()] + "\n" + ability_table + normalized[speed.end() :]
+    return (
+        normalized[: speed.end()] + "\n" + ability_table + normalized[speed.end() :],
+        modifiers_only,
+    )
 
 
 def parse_2024_statblock(
@@ -3605,8 +3666,9 @@ def parse_2024_statblock(
 ) -> ParsedStatblock:
     """Parse an SRD 5.2.1 statblock without borrowing 2014 unique semantics."""
 
+    normalized, modifiers_only = _normalize_2024_statblock(markdown)
     parsed = _parse_srd_statblock(
-        _normalize_2024_statblock(markdown),
+        normalized,
         source_key=source_key,
         rule_refs=rule_refs,
         name=name,
@@ -3622,6 +3684,14 @@ def parse_2024_statblock(
         normalization_notes=(
             *parsed.normalization_notes,
             "SRD 5.2.1 presentation fields normalized without 2014 unique-trait inference",
+            *(
+                (
+                    "SRD 5.2.1 supplied ability modifiers and saves without raw scores; "
+                    "stored scores are canonical representatives of the exact modifiers",
+                )
+                if modifiers_only
+                else ()
+            ),
         ),
         spellcasting=parsed.spellcasting,
     )
