@@ -59,6 +59,7 @@ from sagasmith_dnd.character_schema import (
     validate_character_sheet,
     validate_party_state,
 )
+from sagasmith_dnd.document_layout import DND5E_DOCUMENT_LAYOUT_PROFILE
 from sagasmith_dnd.editions import (
     DEFAULT_CAMPAIGN_EDITION,
     DEFAULT_CHARACTER_EDITION,
@@ -1003,7 +1004,10 @@ def _dispatch(args) -> Any:
                     else []
                 )
                 for item in paths:
-                    document = converter_for(item).convert(item)
+                    document = converter_for(
+                        item,
+                        layout_profile=DND5E_DOCUMENT_LAYOUT_PROFILE,
+                    ).convert(item)
                     relative = item.relative_to(path).as_posix() if path.is_dir() else item.name
                     suffix = "/".join(Path(relative).parts[-2:])
                     canonical_source = args.canonical_source or next(
@@ -1071,7 +1075,10 @@ def _dispatch(args) -> Any:
             parser = MarkdownModuleParser(profile=DndModuleProfile())
             if args.action == "inspect":
                 path = Path(_require(args.path, "path")).expanduser().resolve()
-                document = converter_for(path).convert(path)
+                document = converter_for(
+                    path,
+                    layout_profile=DND5E_DOCUMENT_LAYOUT_PROFILE,
+                ).convert(path)
                 parsed = parser.parse(document.content)
                 return {
                     "source_path": str(path),
@@ -1084,7 +1091,10 @@ def _dispatch(args) -> Any:
             if args.action == "convert":
                 path = Path(_require(args.path, "path")).expanduser().resolve()
                 output = Path(_require(args.output, "output")).expanduser().resolve()
-                document = converter_for(path).convert(path)
+                document = converter_for(
+                    path,
+                    layout_profile=DND5E_DOCUMENT_LAYOUT_PROFILE,
+                ).convert(path)
                 output.parent.mkdir(parents=True, exist_ok=True)
                 output.write_text(document.content, encoding="utf-8")
                 return {"output": str(output), "warnings": list(document.warnings)}
@@ -1098,6 +1108,7 @@ def _dispatch(args) -> Any:
                         parser=parser,
                         embedder=embedder,
                         vector_store=vectors,
+                        layout_profile=DND5E_DOCUMENT_LAYOUT_PROFILE,
                     )
                 )
             if args.action == "list":
@@ -1327,10 +1338,10 @@ def _dispatch(args) -> Any:
                         campaign_id,
                         fact_key=_require(args.fact_key, "fact-key"),
                         content=_require(args.content, "content"),
-                        kind=args.type or "fact",
-                        subject=args.subject or "",
-                        subject_ref=args.subject_ref or "",
-                        predicate=args.predicate or "",
+                        kind=args.type,
+                        subject=args.subject,
+                        subject_ref=args.subject_ref,
+                        predicate=args.predicate,
                         metadata=_dict(args.metadata),
                         branch_id=args.branch,
                         expected_revision_id=args.expected_revision,
