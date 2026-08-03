@@ -434,6 +434,35 @@ def test_layout_discovery_finds_each_column_without_prose_guesses() -> None:
     ]
 
 
+def test_layout_discovery_rejects_size_word_lore_and_repairs_identity_separator() -> None:
+    def block(text: str, y: int) -> dict:
+        return {
+            "text": text,
+            "confidence": 0.99,
+            "bbox": [40, y, 440, y + 14],
+        }
+
+    layout = {
+        "page_number": 302,
+        "width": 1000,
+        "height": 1400,
+        "blocks": [
+            block("FASTIETH", 40),
+            block("Large eyes, brightly colored and patterned scales, and", 58),
+            block("MORDAKHESH", 120),
+            block("Medium.fiend, lawful evil", 138),
+            block("Armor Class 18 (plate)", 156),
+            block("Hit Points 170 (20d8 + 80)", 174),
+            block("Speed 40 ft.", 192),
+        ],
+    }
+
+    discovered = discover_2014_statblock_names_from_layout(layout)
+
+    assert [item["name"] for item in discovered] == ["MORDAKHESH"]
+    assert discovered[0]["identity"] == "Medium.fiend, lawful evil"
+
+
 def test_point_radius_save_damage_is_structured_from_exact_source() -> None:
     source = COMMONER.replace(
         '***Club***. *Melee Weapon Attack:* +2 to hit, reach 5 ft., one target.\n'

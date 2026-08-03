@@ -5359,10 +5359,24 @@ def apply_reviewed_statblock_fill(
     }
 
 
-_OCR_IDENTITY_RE = re.compile(
-    r"(?i)^(Tiny|Small|Medium|Large|Huge|Gargantuan)\s*"
-    r"([A-Za-z][A-Za-z0-9 '/()\-]{0,120}?)(?:,\s*(.+))?$"
+_OCR_CREATURE_TYPE_PATTERN = (
+    r"(?:aberration|beast|celestial|construct|dragon|elemental|fey|fiend|"
+    r"giant|humanoid|monstrosity|ooze|plant|undead)"
 )
+_OCR_IDENTITY_RE = re.compile(
+    rf"(?i)^(Tiny|Small|Medium|Large|Huge|Gargantuan)[.\s]*"
+    rf"("
+    rf"(?:{_OCR_CREATURE_TYPE_PATTERN})(?:\s*\([^)]{{1,120}}\))?"
+    rf"|swarm\s+of\s+(?:Tiny|Small|Medium|Large|Huge|Gargantuan)\s+"
+    rf"(?:{_OCR_CREATURE_TYPE_PATTERN})s?"
+    rf")(?:,\s*(.+))?$"
+)
+
+
+def is_2014_statblock_identity_line(text: str) -> bool:
+    """Return whether one OCR line is a bounded 2014 size/type identity."""
+
+    return _OCR_IDENTITY_RE.fullmatch(" ".join(str(text).split())) is not None
 _OCR_FIELD_LABELS = (
     "Armor Class",
     "Hit Points",
