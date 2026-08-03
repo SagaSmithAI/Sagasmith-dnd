@@ -64,6 +64,7 @@ _SELECTION_FIELDS = {
         "replace_existing",
         "study_started_elapsed_minutes",
         "study_started_elapsed_ticks",
+        "tool_replacements",
     ),
     "item": (),
     "species": (

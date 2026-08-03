@@ -609,6 +609,7 @@ def test_subclass_spell_grants_keep_known_and_prepared_semantics_distinct() -> N
                 "study_started_elapsed_minutes",
                 "study_started_elapsed_ticks",
                 "style",
+                "tool_replacements",
             ],
         ),
         (
