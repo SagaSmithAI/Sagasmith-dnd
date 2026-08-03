@@ -26,10 +26,13 @@ def test_initialize_reviewed_addon_base_class_applies_only_common_level_one_rule
             "armor_proficiencies": ["light armor", "medium armor", "shields"],
             "weapon_proficiencies": ["simple weapons"],
             "tool_proficiencies": ["thieves' tools", "tinker's tools"],
+            "tool_choice_count": 1,
+            "tool_options": ["smith's tools", "weaver's tools"],
             "skill_choice_count": 2,
             "skill_options": ["arcana", "history", "investigation", "medicine"],
         },
         skill_choices=["Arcana", "Investigation"],
+        tool_choices=["Smith's Tools"],
         source="reviewed Artificer card",
     )
 
@@ -47,6 +50,12 @@ def test_initialize_reviewed_addon_base_class_applies_only_common_level_one_rule
         "medium armor",
         "shields",
     ]
+    assert updated["traits"]["proficiencies"]["tools"] == [
+        "thieves' tools",
+        "tinker's tools",
+        "Smith's Tools",
+    ]
+    assert result["tool_proficiency_choices"] == ["Smith's Tools"]
     assert updated["content"]["features"] == []
 
 

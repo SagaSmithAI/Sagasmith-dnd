@@ -326,6 +326,7 @@ def initialize_base_class(
     class_name: str,
     class_definition: dict[str, Any],
     skill_choices: list[str],
+    tool_choices: list[str] | None = None,
     source: str = "",
 ) -> dict[str, Any]:
     """Materialize the source-reviewed, system-neutral portion of a level-1 class.
@@ -356,7 +357,11 @@ def initialize_base_class(
         "tool_proficiencies",
         "weapon_proficiencies",
     }
-    if set(definition) != expected_fields:
+    optional_fields = {"tool_choice_count", "tool_options"}
+    if (
+        not expected_fields.issubset(definition)
+        or set(definition) - expected_fields - optional_fields
+    ):
         raise CombatEngineError("class_definition has missing or unsupported fields")
     hit_die = definition.get("hit_die")
     if isinstance(hit_die, bool) or not isinstance(hit_die, int) or hit_die not in {6, 8, 10, 12}:
@@ -386,6 +391,24 @@ def initialize_base_class(
         raise CombatEngineError("class skill choice is not one of the reviewed options")
     if any(value["skills"][item].get("proficiency") != "none" for item in selected_skills):
         raise CombatEngineError("class skill choice is already proficient")
+    tool_options = _display_distinct_names(
+        definition.get("tool_options", []), field="tool_options"
+    )
+    tool_choice_count = definition.get("tool_choice_count", 0)
+    if (
+        isinstance(tool_choice_count, bool)
+        or not isinstance(tool_choice_count, int)
+        or not 0 <= tool_choice_count <= len(tool_options)
+    ):
+        raise CombatEngineError("class tool_choice_count is invalid")
+    selected_tools = _display_distinct_names(tool_choices or [], field="tool_choices")
+    if len(selected_tools) != tool_choice_count:
+        raise CombatEngineError(
+            f"class requires exactly {tool_choice_count} distinct tool choices"
+        )
+    tool_option_keys = {item.casefold(): item for item in tool_options}
+    if any(item.casefold() not in tool_option_keys for item in selected_tools):
+        raise CombatEngineError("class tool choice is not one of the reviewed options")
 
     proficiency_fields = {
         "armor": "armor_proficiencies",
@@ -396,6 +419,18 @@ def initialize_base_class(
         target: _display_distinct_names(definition.get(field), field=field)
         for target, field in proficiency_fields.items()
     }
+    fixed_tool_keys = {
+        item.casefold() for item in normalized_proficiencies["tools"]
+    }
+    if any(item.casefold() in fixed_tool_keys for item in selected_tools):
+        raise CombatEngineError("class tool choice duplicates a fixed tool proficiency")
+    existing_tool_keys = {
+        str(item).casefold()
+        for item in value.get("traits", {}).get("proficiencies", {}).get("tools", [])
+    }
+    if any(item.casefold() in existing_tool_keys for item in selected_tools):
+        raise CombatEngineError("class tool choice is already proficient")
+    normalized_proficiencies["tools"].extend(selected_tools)
 
     combat = value.setdefault("combat", {})
     hp = combat.setdefault("hp", {})
@@ -444,6 +479,7 @@ def initialize_base_class(
         "hit_points": {"class_base": class_hp, "prior_bonus": prior_bonus},
         "saving_throw_proficiencies": saving_throws,
         "skill_proficiencies": selected_skills,
+        "tool_proficiency_choices": selected_tools,
         "proficiencies": normalized_proficiencies,
     }
 

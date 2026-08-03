@@ -567,7 +567,7 @@ def test_subclass_spell_grants_keep_known_and_prepared_semantics_distinct() -> N
                     "skill_options": ["arcana", "investigation", "medicine"],
                 },
             },
-            ["skills"],
+            ["skills", "tools"],
         ),
         (
             "feature",

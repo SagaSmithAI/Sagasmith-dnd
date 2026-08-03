@@ -56,7 +56,7 @@ _SELECTION_FIELDS = {
         "skills",
         "tools",
     ),
-    "class": ("skills",),
+    "class": ("skills", "tools"),
     "feat": (),
     "feature": (
         "grant_level",
@@ -1260,7 +1260,8 @@ def _validate_materializer_card(kind: str, binding: Mapping[str, Any]) -> None:
             "tool_proficiencies",
             "weapon_proficiencies",
         }
-        if set(definition) != expected:
+        optional = {"tool_choice_count", "tool_options"}
+        if not expected.issubset(definition) or set(definition) - expected - optional:
             raise ValueError("class_definition has missing or unsupported fields")
         hit_die = definition.get("hit_die")
         if isinstance(hit_die, bool) or not isinstance(hit_die, int) or hit_die not in {
@@ -1292,6 +1293,22 @@ def _validate_materializer_card(kind: str, binding: Mapping[str, Any]) -> None:
             raise ValueError("class skill_options must contain known skills")
         if isinstance(count, bool) or not isinstance(count, int) or not 0 <= count <= len(options):
             raise ValueError("class skill_choice_count is invalid")
+        tool_options = definition.get("tool_options", [])
+        tool_count = definition.get("tool_choice_count", 0)
+        if not isinstance(tool_options, list) or any(
+            not isinstance(item, str) or not item.strip() for item in tool_options
+        ):
+            raise ValueError("class tool_options must be an array of names")
+        if (
+            isinstance(tool_count, bool)
+            or not isinstance(tool_count, int)
+            or not 0 <= tool_count <= len(tool_options)
+        ):
+            raise ValueError("class tool_choice_count is invalid")
+        if len({str(item).strip().casefold() for item in tool_options}) != len(
+            tool_options
+        ):
+            raise ValueError("class tool_options must be distinct")
         for field in (
             "armor_proficiencies",
             "weapon_proficiencies",
