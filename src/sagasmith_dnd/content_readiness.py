@@ -618,6 +618,10 @@ def species_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
             errors.append("species ability_score_increases contains an unknown ability")
         if isinstance(amount, bool) or not isinstance(amount, int) or amount < 0:
             errors.append("species ability_score_increases must use nonnegative integers")
+    for field in ("walk_speed", "swim_speed", "darkvision_ft"):
+        value = grants.get(field, 0)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            errors.append(f"species {field} must be a nonnegative integer")
     raw_ability_choice = grants.get("ability_choice", {})
     if not isinstance(raw_ability_choice, Mapping):
         errors.append("species ability_choice must be an object")
@@ -1001,7 +1005,7 @@ def feat_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
         if raw_grant.get("method") not in {"known", "limited_use"}:
             errors.append(f"{prefix}.method must be known or limited_use")
         ability = str(raw_grant.get("spellcasting_ability") or "").casefold()
-        if ability not in ability_names:
+        if ability not in {*ability_names, "none"}:
             errors.append(f"{prefix}.spellcasting_ability is invalid")
         free_casts = raw_grant.get("free_casts")
         if (

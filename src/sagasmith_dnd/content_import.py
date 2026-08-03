@@ -2931,6 +2931,7 @@ def _species_grants(description: str) -> dict[str, Any] | None:
         "size": size_match.group(1).casefold() if size_match else "",
         "size_options": [],
         "walk_speed": int(speed_match.group(1)) if speed_match else 0,
+        "swim_speed": 0,
         "darkvision_ft": int(darkvision_match.group(1)) if darkvision_match else 0,
         "languages": list(dict.fromkeys(languages)),
         "language_choice_count": language_choice_count,

@@ -395,6 +395,7 @@ def _species_grants(name: str, traits: list[tuple[str, str]]) -> dict[str, Any]:
         "size": "",
         "size_options": [],
         "walk_speed": 0,
+        "swim_speed": 0,
         "darkvision_ft": 0,
         "languages": [],
         "language_choice_count": 0,

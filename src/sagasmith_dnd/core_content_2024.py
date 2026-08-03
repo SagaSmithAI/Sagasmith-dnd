@@ -1463,6 +1463,7 @@ def _species(path: Path) -> list[dict[str, Any]]:
             "size_choices": sizes,
             "size_options": sizes if len(sizes) > 1 else [],
             "walk_speed": int(speed.group(1)) if speed else 0,
+            "swim_speed": 0,
             "darkvision_ft": 0,
             "languages": [],
             "language_choice_count": 0,

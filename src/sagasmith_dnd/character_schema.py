@@ -1899,7 +1899,7 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
             f"{source_field}.spellcasting_ability",
             maximum=30,
         ).casefold()
-        if ability not in ABILITY_NAMES:
+        if ability not in {*ABILITY_NAMES, "none"}:
             raise ValueError(f"{source_field}.spellcasting_ability is invalid")
         feature_casting_sources.append(
             {
