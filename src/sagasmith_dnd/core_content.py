@@ -391,7 +391,7 @@ def _species_artifact(
 def _species_grants(name: str, traits: list[tuple[str, str]]) -> dict[str, Any]:
     grants: dict[str, Any] = {
         "ability_score_increases": {},
-        "ability_choice": {"count": 0, "amount": 0, "exclude": []},
+        "ability_choice": {"count": 0, "amount": 0, "exclude": [], "options": []},
         "size": "",
         "size_options": [],
         "walk_speed": 0,
@@ -409,6 +409,10 @@ def _species_grants(name: str, traits: list[tuple[str, str]]) -> dict[str, Any]:
         "tool_choices": [],
         "tool_choice_count": 0,
         "tool_options": [],
+        "proficiency_choice_groups": [],
+        "tool_expertise_choice_count": 0,
+        "tool_expertise_options": [],
+        "allow_any_proficient_tool_expertise": False,
         "cantrip_choice": None,
         "resistances": [],
         "hp_per_level": 0,
@@ -1515,7 +1519,7 @@ def _ability_increases(body: str) -> tuple[dict[str, int], dict[str, Any]]:
             re.IGNORECASE,
         ):
             fixed[ability.casefold()] = int(amount)
-    choice = {"count": 0, "amount": 0, "exclude": sorted(fixed)}
+    choice = {"count": 0, "amount": 0, "exclude": sorted(fixed), "options": []}
     choice_match = re.search(
         r"(one|two|three|\d+) other ability scores? of your choice increase by\s+(\d+)",
         body,

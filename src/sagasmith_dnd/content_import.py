@@ -2926,6 +2926,7 @@ def _species_grants(description: str) -> dict[str, Any] | None:
     ]
     return {
         "ability_score_increases": increases,
+        "ability_choice": {"count": 0, "amount": 0, "exclude": [], "options": []},
         "size": size_match.group(1).casefold() if size_match else "",
         "size_options": [],
         "walk_speed": int(speed_match.group(1)) if speed_match else 0,
@@ -2942,6 +2943,10 @@ def _species_grants(description: str) -> dict[str, Any] | None:
         "tool_choices": [],
         "tool_choice_count": 0,
         "tool_options": [],
+        "proficiency_choice_groups": [],
+        "tool_expertise_choice_count": 0,
+        "tool_expertise_options": [],
+        "allow_any_proficient_tool_expertise": False,
         "weapon_proficiencies": [],
         "resistances": list(dict.fromkeys(resistances)),
         "features": _species_feature_cards(description),

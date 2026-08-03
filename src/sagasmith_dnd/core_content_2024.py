@@ -1458,7 +1458,7 @@ def _species(path: Path) -> list[dict[str, Any]]:
         traits = _bold_traits(body)
         grants: dict[str, Any] = {
             "ability_score_increases": {},
-            "ability_choice": {"count": 0, "amount": 0, "exclude": []},
+            "ability_choice": {"count": 0, "amount": 0, "exclude": [], "options": []},
             "size": sizes[0] if len(sizes) == 1 else "",
             "size_choices": sizes,
             "size_options": sizes if len(sizes) > 1 else [],
@@ -1477,6 +1477,10 @@ def _species(path: Path) -> list[dict[str, Any]]:
             "tool_choices": [],
             "tool_choice_count": 0,
             "tool_options": [],
+            "proficiency_choice_groups": [],
+            "tool_expertise_choice_count": 0,
+            "tool_expertise_options": [],
+            "allow_any_proficient_tool_expertise": False,
             "cantrip_choice": None,
             "resistances": [],
             "hp_per_level": 0,

@@ -265,6 +265,79 @@ def test_species_materializer_rejects_ocr_counts_and_unbounded_choices() -> None
     assert species_materializer_errors(card) == []
 
 
+def test_species_materializer_bounds_ability_choices_to_reviewed_options() -> None:
+    card = {
+        "name": "Changeling",
+        "grants": {
+            "ability_score_increases": {"charisma": 2},
+            "ability_choice": {
+                "count": 1,
+                "amount": 1,
+                "exclude": ["charisma"],
+                "options": ["dexterity", "intelligence"],
+            },
+            "size": "medium",
+            "size_options": [],
+            "languages": ["Common"],
+            "language_choice_count": 0,
+            "language_options": [],
+            "allow_any_language": False,
+            "skill_proficiencies": [],
+            "skill_choice_count": 0,
+            "skill_options": [],
+            "allow_any_skill": False,
+            "tool_proficiencies": [],
+            "tool_choice_count": 0,
+            "tool_options": [],
+        },
+    }
+
+    assert species_materializer_errors(card) == []
+    card["grants"]["ability_choice"]["options"] = ["dexterity", "luck"]
+    assert "species ability_choice contains an unknown ability" in (
+        species_materializer_errors(card)
+    )
+
+
+def test_species_materializer_accepts_cross_kind_proficiency_and_tool_expertise() -> None:
+    card = {
+        "name": "Shadowmarked Elf",
+        "grants": {
+            "ability_score_increases": {"charisma": 1},
+            "ability_choice": {"count": 0, "amount": 0, "exclude": [], "options": []},
+            "size": "medium",
+            "size_options": [],
+            "languages": ["Common", "Elvish"],
+            "language_choice_count": 0,
+            "language_options": [],
+            "allow_any_language": False,
+            "skill_proficiencies": [],
+            "skill_choice_count": 0,
+            "skill_options": [],
+            "allow_any_skill": False,
+            "tool_proficiencies": [],
+            "tool_choice_count": 0,
+            "tool_options": [],
+            "weapon_proficiencies": [],
+            "proficiency_choice_groups": [
+                {
+                    "id": "natural_talent",
+                    "count": 1,
+                    "options": [
+                        {"kind": "skill", "name": "Performance"},
+                        {"kind": "tool", "name": "Lute"},
+                    ],
+                }
+            ],
+            "tool_expertise_choice_count": 1,
+            "tool_expertise_options": [],
+            "allow_any_proficient_tool_expertise": True,
+        },
+    }
+
+    assert species_materializer_errors(card) == []
+
+
 def test_subclass_spell_grants_keep_known_and_prepared_semantics_distinct() -> None:
     card = {
         "name": "Circle of Spores",
@@ -366,12 +439,14 @@ def test_subclass_spell_grants_keep_known_and_prepared_semantics_distinct() -> N
         ("species", {"name": "Elf", "grants": {}}, [
             "abilities",
             "ability_scores_include_species_grants",
-            "cantrip_artifact_id",
+                "cantrip_artifact_id",
                 "hit_points_include_species_grants",
                 "languages",
+                "proficiency_choices",
                 "size",
                 "skills",
-            "tools",
+                "tool_expertise",
+                "tools",
             "values_include_species_grants",
         ]),
         (

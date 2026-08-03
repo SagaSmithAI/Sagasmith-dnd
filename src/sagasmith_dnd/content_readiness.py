@@ -72,8 +72,10 @@ _SELECTION_FIELDS = {
         "cantrip_artifact_id",
         "hit_points_include_species_grants",
         "languages",
+        "proficiency_choices",
         "size",
         "skills",
+        "tool_expertise",
         "tools",
         "values_include_species_grants",
     ),
@@ -592,6 +594,143 @@ def species_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
     fixed_tools = string_list(
         grants.get("tool_proficiencies", []), "tool_proficiencies"
     )
+    ability_names = {
+        "strength",
+        "dexterity",
+        "constitution",
+        "intelligence",
+        "wisdom",
+        "charisma",
+    }
+    fixed_increases = grants.get("ability_score_increases", {})
+    if not isinstance(fixed_increases, Mapping):
+        errors.append("species ability_score_increases must be an object")
+        fixed_increases = {}
+    for ability, amount in fixed_increases.items():
+        if str(ability).casefold() not in ability_names:
+            errors.append("species ability_score_increases contains an unknown ability")
+        if isinstance(amount, bool) or not isinstance(amount, int) or amount < 0:
+            errors.append("species ability_score_increases must use nonnegative integers")
+    raw_ability_choice = grants.get("ability_choice", {})
+    if not isinstance(raw_ability_choice, Mapping):
+        errors.append("species ability_choice must be an object")
+        raw_ability_choice = {}
+    unsupported_ability_choice = set(raw_ability_choice) - {
+        "count",
+        "amount",
+        "exclude",
+        "options",
+    }
+    if unsupported_ability_choice:
+        errors.append(
+            "species ability_choice has unsupported fields: "
+            f"{sorted(unsupported_ability_choice)}"
+        )
+    ability_choice_count = raw_ability_choice.get("count", 0)
+    if (
+        isinstance(ability_choice_count, bool)
+        or not isinstance(ability_choice_count, int)
+        or not 0 <= ability_choice_count <= len(ability_names)
+    ):
+        errors.append("species ability_choice.count must be an integer from 0 to 6")
+        ability_choice_count = 0
+    ability_choice_amount = raw_ability_choice.get("amount", 0)
+    if (
+        isinstance(ability_choice_amount, bool)
+        or not isinstance(ability_choice_amount, int)
+        or ability_choice_amount < 0
+        or (ability_choice_count > 0 and ability_choice_amount < 1)
+    ):
+        errors.append(
+            "species ability_choice.amount must be a positive integer when choices exist"
+        )
+    excluded_abilities = [
+        item.casefold()
+        for item in string_list(raw_ability_choice.get("exclude", []), "ability_choice.exclude")
+    ]
+    ability_options = [
+        item.casefold()
+        for item in string_list(raw_ability_choice.get("options", []), "ability_choice.options")
+    ]
+    if any(item not in ability_names for item in [*excluded_abilities, *ability_options]):
+        errors.append("species ability_choice contains an unknown ability")
+    if ability_options and len(ability_options) < ability_choice_count:
+        errors.append("species ability_choice.options cannot satisfy ability_choice.count")
+    if set(excluded_abilities).intersection(ability_options):
+        errors.append("species ability_choice.options cannot include an excluded ability")
+    raw_groups = grants.get("proficiency_choice_groups", [])
+    if not isinstance(raw_groups, list):
+        errors.append("species proficiency_choice_groups must be an array")
+        raw_groups = []
+    group_ids: list[str] = []
+    fixed_proficiencies = {
+        "language": {item.casefold() for item in fixed_languages},
+        "skill": {item.casefold().replace(" ", "_") for item in fixed_skills},
+        "tool": {item.casefold() for item in fixed_tools},
+        "weapon": {
+            item.casefold()
+            for item in string_list(
+                grants.get("weapon_proficiencies", []), "weapon_proficiencies"
+            )
+        },
+    }
+    known_skills = set(default_character_sheet()["skills"])
+    for index, raw_group in enumerate(raw_groups):
+        prefix = f"species proficiency_choice_groups[{index}]"
+        if not isinstance(raw_group, Mapping):
+            errors.append(f"{prefix} must be an object")
+            continue
+        unsupported = set(raw_group) - {"id", "count", "options"}
+        if unsupported:
+            errors.append(f"{prefix} has unsupported fields: {sorted(unsupported)}")
+        group_id = str(raw_group.get("id") or "").strip()
+        if not group_id:
+            errors.append(f"{prefix}.id must not be empty")
+        group_ids.append(group_id.casefold())
+        group_count = raw_group.get("count", 0)
+        if (
+            isinstance(group_count, bool)
+            or not isinstance(group_count, int)
+            or not 1 <= group_count <= 5
+        ):
+            errors.append(f"{prefix}.count must be an integer from 1 to 5")
+            group_count = 0
+        raw_options = raw_group.get("options", [])
+        if not isinstance(raw_options, list):
+            errors.append(f"{prefix}.options must be an array")
+            raw_options = []
+        option_keys: list[tuple[str, str]] = []
+        for option_index, raw_option in enumerate(raw_options):
+            option_prefix = f"{prefix}.options[{option_index}]"
+            if not isinstance(raw_option, Mapping):
+                errors.append(f"{option_prefix} must be an object")
+                continue
+            unsupported_option = set(raw_option) - {"kind", "name"}
+            if unsupported_option:
+                errors.append(
+                    f"{option_prefix} has unsupported fields: {sorted(unsupported_option)}"
+                )
+            option_kind = str(raw_option.get("kind") or "").strip().casefold()
+            option_name = str(raw_option.get("name") or "").strip()
+            if option_kind not in {"language", "skill", "tool", "weapon"}:
+                errors.append(f"{option_prefix}.kind is unsupported")
+            if not option_name:
+                errors.append(f"{option_prefix}.name must not be empty")
+            normalized_name = option_name.casefold()
+            if option_kind == "skill":
+                normalized_name = normalized_name.replace(" ", "_")
+                if normalized_name not in known_skills:
+                    errors.append(f"{option_prefix} references an unknown skill")
+            key = (option_kind, normalized_name)
+            option_keys.append(key)
+            if normalized_name in fixed_proficiencies.get(option_kind, set()):
+                errors.append(f"{option_prefix} repeats a fixed proficiency")
+        if len(option_keys) != len(set(option_keys)):
+            errors.append(f"{prefix}.options must be distinct")
+        if len(option_keys) < group_count:
+            errors.append(f"{prefix}.options cannot satisfy count")
+    if len(group_ids) != len(set(group_ids)):
+        errors.append("species proficiency_choice_groups ids must be distinct")
     language_options = string_list(
         grants.get("language_options", []), "language_options"
     )
@@ -623,6 +762,28 @@ def species_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
     language_count = count("language_choice_count")
     skill_count = count("skill_choice_count")
     tool_count = count("tool_choice_count")
+    tool_expertise_count = count("tool_expertise_choice_count")
+    tool_expertise_options = string_list(
+        grants.get("tool_expertise_options", []), "tool_expertise_options"
+    )
+    allow_any_tool_expertise = grants.get(
+        "allow_any_proficient_tool_expertise", False
+    )
+    if not isinstance(allow_any_tool_expertise, bool):
+        errors.append("species allow_any_proficient_tool_expertise must be a boolean")
+        allow_any_tool_expertise = False
+    if (
+        tool_expertise_count
+        and not tool_expertise_options
+        and not allow_any_tool_expertise
+    ):
+        errors.append(
+            "species tool expertise choices need options or an explicit proficient-tool choice"
+        )
+    if tool_expertise_options and len(tool_expertise_options) < tool_expertise_count:
+        errors.append(
+            "species tool_expertise_options cannot satisfy tool_expertise_choice_count"
+        )
     for flag in ("allow_any_language", "allow_any_skill"):
         if flag in grants and not isinstance(grants.get(flag), bool):
             errors.append(f"species {flag} must be a boolean")
