@@ -5086,6 +5086,18 @@ def test_layout_ocr_repairs_only_bounded_weapon_entry_underscore() -> None:
     assert _repair_layout_ocr_text("\u2013 creature can move") == "\u2013 creature can move"
     assert _repair_layout_ocr_text("8 (-1") == "8 (-1)"
     assert _repair_layout_ocr_text("8 (-1 point") == "8 (-1 point"
+    assert _repair_layout_ocr_text("Hit Points 1 9 (3d8 + 6)") == (
+        "Hit Points 19 (3d8 + 6)"
+    )
+    assert _repair_layout_ocr_text(
+        "Senses truesight 1 20 ft., passive Perception 1 5"
+    ) == "Senses truesight 120 ft., passive Perception 15"
+    assert _repair_layout_ocr_text("Hit: 19 (3d 1 2) radiant damage") == (
+        "Hit: 19 (3d12) radiant damage"
+    )
+    assert _repair_layout_ocr_text("Melee Weapon Attack: + 5 to hit") == (
+        "Melee Weapon Attack: +5 to hit"
+    )
 
 
 @pytest.mark.parametrize(
@@ -5169,6 +5181,22 @@ def test_layout_recovery_does_not_guess_an_ability_score(
     source_value: str,
 ) -> None:
     assert _ocr_ability_score_matches(source_value) is None
+
+
+def test_layout_recovery_joins_spaced_digits_inside_explicit_ability_cells() -> None:
+    parsed = _ocr_ability_score_matches(
+        "1 7 (+3) 1 5 (+2) 14 (+2) 1 0 (+O) 1 5 (+2) 11 (+O)"
+    )
+
+    assert parsed is not None
+    assert [value for value, _source in parsed[0]] == [
+        "17 (+3)",
+        "15 (+2)",
+        "14 (+2)",
+        "10 (+0)",
+        "15 (+2)",
+        "11 (+0)",
+    ]
 
 
 def test_layout_recovery_joins_split_weapon_attack_marker() -> None:
@@ -5540,7 +5568,7 @@ def test_layout_recovery_ignores_lore_heading_above_cross_column_continuation() 
         "height": 1700,
         "blocks": [
             block("BELASHYRRA", 80, 460, 360, 490),
-            block("Medium aberration, chaotic evil", 80, 492, 420, 516),
+            block("Mediumaberration, chaotic evil", 80, 492, 420, 516),
             block("Armor Class 19 (natural armor)", 80, 540, 380, 565),
             block("Hit Points 304 (32d8 + 160)", 80, 568, 390, 593),
             block("Speed 40 ft., fly 40 ft. (hover)", 80, 596, 410, 621),
@@ -5574,6 +5602,11 @@ def test_layout_recovery_ignores_lore_heading_above_cross_column_continuation() 
     recovered = recover_2014_statblock_from_ocr(layout, name="Belashyrra")
 
     assert "***Eye Ray.***" in recovered["normalized_content"]
+    assert "*Medium aberration, chaotic evil*" in recovered["normalized_content"]
     assert "## Legendary Actions" in recovered["normalized_content"]
     assert "MADNESS OF BELASHYRRA" not in recovered["normalized_content"]
     assert recovered["evidence"]["cross_column_continuation_block_count"] == 3
+    assert recovered["evidence"]["identity_spacing_repair"] == {
+        "source_text": "Mediumaberration, chaotic evil",
+        "normalized_text": "Medium aberration, chaotic evil",
+    }

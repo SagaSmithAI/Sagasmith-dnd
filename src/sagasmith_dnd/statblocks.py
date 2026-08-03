@@ -5420,9 +5420,34 @@ def _repair_layout_ocr_text(text: str) -> str:
     """Repair only mechanically bounded OCR substitutions before statblock parsing."""
 
     normalized = re.sub(
+        r"(?i)(?<![A-Za-z0-9])(?P<count>[0-9lI]+)\s*d\s*"
+        r"(?P<size>[0-9lIOS](?:\s*[0-9lIOS]){0,2})(?![A-Za-z0-9])",
+        lambda match: (
+            re.sub(r"\s+", "", match.group("count")).translate(
+                _OCR_ABILITY_DIGITS
+            )
+            + "d"
+            + re.sub(r"\s+", "", match.group("size")).translate(
+                _OCR_ABILITY_DIGITS
+            )
+        ),
+        text,
+    )
+    normalized = re.sub(
+        r"(?<![A-Za-z0-9])(?P<digits>[0-9](?:\s+[0-9]{1,2}){1,2})"
+        r"(?=\s*(?:ft\.|feet\b|miles?\b|points?\b|XP\b|[(,.;]|$))",
+        lambda match: re.sub(r"\s+", "", match.group("digits")),
+        normalized,
+    )
+    normalized = re.sub(
+        r"(?i)(\bAttack:\s*)([+\-])\s+(?=\d)",
+        r"\1\2",
+        normalized,
+    )
+    normalized = re.sub(
         r"(?i)(?<![A-Za-z0-9])[lI]d(?=\d)",
         "1d",
-        text,
+        normalized,
     )
     normalized = re.sub(
         r"(?i)(\bhalf\s+as\s+much\s+)darmage(?=\s+on\b)",
@@ -5700,12 +5725,12 @@ _OCR_ABILITY_DIGITS = str.maketrans(
     {"l": "1", "I": "1", "O": "0", "S": "5"}
 )
 _OCR_ABILITY_SCORE_RE = re.compile(
-    r"(?<![A-Za-z0-9])(?P<score>[0-9lIOS]{1,3})\s*[({]\s*"
-    r"(?P<sign>[+\-])\s*(?P<modifier>[0-9lIOS]{1,2})\s*[)}]"
+    r"(?<![A-Za-z0-9])(?P<score>[0-9lIOS](?:\s*[0-9lIOS]){0,2})\s*[({]\s*"
+    r"(?P<sign>[+\-])\s*(?P<modifier>[0-9lIOS](?:\s*[0-9lIOS])?)\s*[)}]"
     r"(?![A-Za-z0-9])"
 )
 _OCR_ABILITY_SCORE_REDUNDANT_MODIFIER_RE = re.compile(
-    r"(?<![A-Za-z0-9])(?P<score>[0-9lIOS]{1,3})\s*"
+    r"(?<![A-Za-z0-9])(?P<score>[0-9lIOS](?:\s*[0-9lIOS]){0,2})\s*"
     r"(?:"
     r"[({]\s*[.,:;·]?\s*[+\-]?\s*[0-9lIOS]{1,2}\s*[)}]"
     r"|"
@@ -5739,7 +5764,11 @@ def _ocr_ability_score_matches(
             continue
         values: list[tuple[str, str]] = []
         for match in matches:
-            score = int(match.group("score").translate(_OCR_ABILITY_DIGITS))
+            score = int(
+                re.sub(r"\s+", "", match.group("score")).translate(
+                    _OCR_ABILITY_DIGITS
+                )
+            )
             if preserve_source and not 1 <= score <= 30:
                 return None
             normalized_value = f"{score} ({(score - 10) // 2:+d})"
@@ -5750,7 +5779,9 @@ def _ocr_ability_score_matches(
                     str(score)
                     + " ("
                     + match.group("sign")
-                    + match.group("modifier").translate(_OCR_ABILITY_DIGITS)
+                    + re.sub(r"\s+", "", match.group("modifier")).translate(
+                        _OCR_ABILITY_DIGITS
+                    )
                     + ")"
                 )
             values.append((normalized_value, source_value))
@@ -6162,7 +6193,6 @@ def recover_2014_statblock_from_ocr(
             peer_before_section = any(
                 _ocr_probable_peer_heading(right_ordered, index)
                 for index in range(section_index)
-                if right_ordered[index]["y0"] >= heading["y0"] - 10
             )
             if not peer_before_section:
                 continuation_start = section_index
@@ -6276,6 +6306,18 @@ def recover_2014_statblock_from_ocr(
     )
     if identity is None:
         raise StatblockImportError("OCR statblock has no unambiguous size/type line")
+    identity_source_text = str(identity["text"])
+    identity_match = _OCR_IDENTITY_RE.fullmatch(identity_source_text)
+    assert identity_match is not None
+    normalized_identity = (
+        f"{identity_match.group(1)} {identity_match.group(2).strip()}"
+        + (
+            f", {identity_match.group(3).strip()}"
+            if identity_match.group(3) is not None
+            else ""
+        )
+    )
+    identity = {**identity, "text": normalized_identity}
 
     core_fields: dict[str, dict[str, Any]] = {}
     for label in _OCR_FIELD_LABELS[:3]:
@@ -6488,6 +6530,14 @@ def recover_2014_statblock_from_ocr(
                 "exact" if heading in headings else "bounded_structural_fuzzy"
             ),
             "heading_confidence": heading["confidence"],
+            "identity_spacing_repair": (
+                {
+                    "source_text": identity_source_text,
+                    "normalized_text": normalized_identity,
+                }
+                if identity_source_text != normalized_identity
+                else None
+            ),
             "matching_heading_count": len(headings),
             "structural_heading_count": len(structural_headings),
             "fuzzy_heading_count": len(fuzzy_headings),
