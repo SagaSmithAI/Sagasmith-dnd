@@ -272,10 +272,10 @@ def test_descriptive_parent_does_not_inherit_nested_level_feature() -> None:
             "class",
             "Artificer",
             (
-                "Hit Dice: 1d8 per artificer level. Armor: Light armor, medium "
+                "Hit Dice: 1d8per artificer level. Armor: Light armor, medium "
                 "armor, shields Weapons: Simple weapons Tools: Thieves' tools, "
                 "tinker's tools Saving Throws: Constitution, Intelligence "
-                "Skills: Choose two from Arcana, History, Investigation, Medicine, "
+                "Skills: Choose twofrom Arcana, History, Investigation, Medicine, "
                 "Nature, Perception, and Sleight of Hand. You start with equipment."
             ),
             "class_definition",

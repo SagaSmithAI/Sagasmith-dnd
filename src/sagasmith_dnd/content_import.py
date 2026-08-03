@@ -654,6 +654,7 @@ def _embedded_spell_candidates(
             )
             name = " ".join(match.group("name").split()).strip(" .")
             name = re.sub(r"(?i)^spells?\s+", "", name).strip()
+            name = _normalize_candidate_display_name(name)
             level_text = match.group("level").casefold()
             school = next(
                 school for school in _SPELL_SCHOOLS if school in level_text
@@ -2426,7 +2427,10 @@ def _candidate_minimum_level(description: str) -> int | None:
 
 
 def _class_selection_definition(description: str) -> dict[str, Any] | None:
-    hit_die_match = re.search(r"(?i)\bHit\s+Dice?\s*:\s*1?d\s*(6|8|10|12)\b", description)
+    hit_die_match = re.search(
+        r"(?i)\bHit\s+Dice?\s*:\s*1?d\s*(6|8|10|12)(?=\s|per\b)",
+        description,
+    )
     if hit_die_match is None:
         return None
     segments = {
@@ -2460,7 +2464,10 @@ def _class_selection_definition(description: str) -> dict[str, Any] | None:
             skills_text,
         )
     ]
-    choice_match = re.search(r"(?i)\bChoose\s+(\w+|\d+)\b", skills_text)
+    choice_match = re.search(
+        r"(?i)\bChoose\s*(one|two|three|four|\d+)(?=\s|from\b)",
+        skills_text,
+    )
     skill_choice_count = _word_number(choice_match.group(1)) if choice_match else 0
     if len(saving_throws) != 2 or not skill_options or not 0 < skill_choice_count <= len(
         skill_options
