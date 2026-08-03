@@ -194,6 +194,20 @@ def test_background_materializer_accepts_only_reviewed_embedded_equipment() -> N
             "languages": [],
             "tools": [],
             "equipment_item_ids": [],
+            "equipment": {
+                "items": [
+                    {
+                        "inventory_template": {
+                            "name": "Identification Papers",
+                            "kind": "equipment",
+                            "quantity": 1,
+                            "description": "Source-reviewed identification papers.",
+                            "mechanics": {},
+                        }
+                    }
+                ],
+                "wallet": {"gp": 2},
+            },
             "choices": {
                 "language_count": 0,
                 "tool_choice_count": 0,
@@ -219,6 +233,12 @@ def test_background_materializer_accepts_only_reviewed_embedded_equipment() -> N
     }
 
     assert background_materializer_errors(card) == []
+
+    card["background_grants"]["equipment"]["wallet"]["gp"] = -1
+    assert background_materializer_errors(card) == [
+        "background equipment package fixed wallet amounts must be non-negative integers"
+    ]
+    card["background_grants"]["equipment"]["wallet"]["gp"] = 2
 
     item = card["background_grants"]["choices"]["equipment_packages"]["A"][
         "items"

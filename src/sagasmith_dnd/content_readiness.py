@@ -496,17 +496,13 @@ def background_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
     ):
         errors.append("background tool_options cannot repeat fixed tools")
 
-    equipment_packages = choices.get("equipment_packages", {})
-    if not isinstance(equipment_packages, Mapping):
-        errors.append("background equipment_packages must be an object")
-        return errors
-    for package_name, raw_package in equipment_packages.items():
+    def validate_equipment_package(package_name: str, raw_package: Any) -> None:
         prefix = f"background equipment package {package_name}"
         if not str(package_name).strip():
             errors.append("background equipment package names must not be empty")
         if not isinstance(raw_package, Mapping):
             errors.append(f"{prefix} must be an object")
-            continue
+            return
         unsupported_package = set(raw_package) - {"items", "wallet"}
         if unsupported_package:
             errors.append(
@@ -572,6 +568,19 @@ def background_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
                     errors.append(f"{prefix} wallet has an unknown denomination")
                 if isinstance(amount, bool) or not isinstance(amount, int) or amount < 0:
                     errors.append(f"{prefix} wallet amounts must be non-negative integers")
+
+    fixed_equipment = grants.get("equipment", {})
+    if not isinstance(fixed_equipment, Mapping):
+        errors.append("background equipment must be an object")
+    elif fixed_equipment:
+        validate_equipment_package("fixed", fixed_equipment)
+
+    equipment_packages = choices.get("equipment_packages", {})
+    if not isinstance(equipment_packages, Mapping):
+        errors.append("background equipment_packages must be an object")
+        return errors
+    for package_name, raw_package in equipment_packages.items():
+        validate_equipment_package(str(package_name), raw_package)
     return errors
 
 
