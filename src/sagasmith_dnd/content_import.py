@@ -78,6 +78,39 @@ _GENERIC_TITLES = {
     "spells",
     "subclass",
 }
+_GENERIC_SUBCLASS_PARENT_TITLES = {
+    "arcane tradition",
+    "artificer specialists",
+    "bard college",
+    "divine domain",
+    "druid circle",
+    "martial archetype",
+    "monastic tradition",
+    "otherworldly patron",
+    "primal path",
+    "ranger archetype",
+    "ranger conclave",
+    "roguish archetype",
+    "sacred oath",
+    "sorcerous origin",
+}
+_SUBCLASS_PARENT_CLASS_NAMES = {
+    "arcane tradition": "Wizard",
+    "artificer specialists": "Artificer",
+    "bard college": "Bard",
+    "divine domain": "Cleric",
+    "druid circle": "Druid",
+    "martial archetype": "Fighter",
+    "monastic tradition": "Monk",
+    "otherworldly patron": "Warlock",
+    "primal path": "Barbarian",
+    "ranger archetype": "Ranger",
+    "ranger conclave": "Ranger",
+    "roguish archetype": "Rogue",
+    "sacred oath": "Paladin",
+    "sorcerous origin": "Sorcerer",
+}
+_GENERIC_TITLES.update(_GENERIC_SUBCLASS_PARENT_TITLES)
 _GENERIC_FEATURE_TITLES = {
     "class features",
     "equipment",
@@ -85,6 +118,7 @@ _GENERIC_FEATURE_TITLES = {
     "proficiencies",
     "quick build",
 }
+_GENERIC_FEATURE_TITLES.update(_GENERIC_SUBCLASS_PARENT_TITLES)
 _STATBLOCK_PLACEHOLDER_TITLES = {
     "character name",
     "creature name",
@@ -185,6 +219,14 @@ def _canonical_source_heading(value: str) -> str:
     return "".join(character for character in value.casefold() if character.isalnum())
 
 
+def _normalize_candidate_display_name(value: str) -> str:
+    """Repair bounded OCR spacing mistakes without rewriting source semantics."""
+
+    normalized = " ".join(str(value).strip().strip(" .:;").split())
+    normalized = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", normalized)
+    return re.sub(r"([’'][sS])(?=[A-Z])", r"\1 ", normalized)
+
+
 def extract_content_candidates(
     chunks: list[dict[str, Any]],
     *,
@@ -248,28 +290,58 @@ def extract_content_candidates(
             page_start = _minimum_page(page_start, descendant.get("page_start"))
             page_end = _maximum_page(page_end, descendant.get("page_end"))
         content = "\n\n".join(content_parts)
-        classification = _classify(
-            str(section["title"]),
-            list(section["heading_path"]),
-            content,
-            source_title=source_title,
-        )
+        classification = own_classifications[key]
+        if classification is None:
+            aggregate_classification = _classify(
+                str(section["title"]),
+                list(section["heading_path"]),
+                content,
+                source_title=source_title,
+            )
+            # Entity headings should normally classify from their own body.
+            # Restrict descendant aggregation to container-shaped entities;
+            # otherwise prose introductions inherit nested level features and
+            # become bogus selectable options.
+            if aggregate_classification is not None and aggregate_classification[0] in {
+                "background",
+                "class",
+                "item",
+                "species",
+                "statblock",
+            }:
+                classification = aggregate_classification
         if classification is None:
             continue
         kind, signals = classification
-        candidate_name = (
+        candidate_name: str = (
             source_class_name
             if kind == "class"
             and source_class_name
             and str(section["title"]).casefold() == "class features"
             else section["title"]
         )
+        heading_path = list(section["heading_path"])
+        if (
+            kind == "spell"
+            and _SPELL_LEVEL_RE.match(str(candidate_name).strip())
+            and len(heading_path) >= 2
+        ):
+            candidate_name = heading_path[-2]
+        if kind == "subclass" and str(candidate_name).casefold().endswith(" features"):
+            candidate_name = str(candidate_name)[: -len(" Features")]
+        candidate_name = _normalize_candidate_display_name(str(candidate_name))
         if kind == "class" and source_class_name:
             source_chunk_ids = [
                 chunk_id
                 for value in sections.values()
                 for chunk_id in value["source_chunk_ids"]
             ]
+            content = "\n\n".join(
+                body
+                for value in sections.values()
+                for body in value["content"]
+                if body
+            )
         if own_classifications[key] is None and any(
             candidate_key[: len(key)] == key
             and len(candidate_key) > len(key)
@@ -304,7 +376,10 @@ def extract_content_candidates(
                 "artifact": {
                     "kind": kind,
                     "application_state": "catalog_only",
-                    "card": {"name": candidate_name, "description": content[:12000]},
+                    "card": {
+                        "name": candidate_name,
+                        "description": content[: (24000 if kind == "class" else 12000)],
+                    },
                 },
             }
         )
@@ -1064,13 +1139,15 @@ def _merge_extracted_candidates(
         ):
             continue
         kind = str(candidate.get("kind") or "").casefold()
-        candidate_name = " ".join(str(candidate.get("name") or "").split())
+        candidate_name = _normalize_candidate_display_name(
+            str(candidate.get("name") or "")
+        )
+        candidate["name"] = candidate_name
+        candidate_card = dict(dict(candidate.get("artifact") or {}).get("card") or {})
+        candidate_card["name"] = candidate_name
+        candidate["artifact"]["card"] = candidate_card
         if kind == "spell":
             candidate_name = candidate_name.rstrip(" .:;")
-            candidate["name"] = candidate_name
-            card = dict(dict(candidate.get("artifact") or {}).get("card") or {})
-            card["name"] = candidate_name
-            candidate["artifact"]["card"] = card
         key = (kind, _canonical_source_heading(candidate_name))
         existing = merged.get(key)
         if existing is None:
@@ -2136,6 +2213,13 @@ def author_selection_card_from_candidate(candidate: dict[str, Any]) -> dict[str,
             value["application_state"] = "selection_ready"
         return value
 
+    if kind == "class":
+        definition = _class_selection_definition(description)
+        if definition is not None:
+            card["class_definition"] = definition
+            value["application_state"] = "selection_ready"
+        return value
+
     if kind in {"activity", "feat", "feature"}:
         if kind == "feat":
             card.setdefault("prerequisites", [])
@@ -2192,6 +2276,10 @@ def author_selection_card_from_candidate(candidate: dict[str, Any]) -> dict[str,
 
 
 def _candidate_class_name(candidate: dict[str, Any], description: str) -> str:
+    for heading in reversed(candidate.get("source_heading_path") or []):
+        parent_class = _SUBCLASS_PARENT_CLASS_NAMES.get(str(heading).casefold().strip())
+        if parent_class:
+            return parent_class
     values = [
         *[str(item) for item in candidate.get("source_heading_path") or []],
         str(candidate.get("name") or ""),
@@ -2210,12 +2298,78 @@ def _candidate_minimum_level(description: str) -> int | None:
     matches = [
         int(match.group(1))
         for match in re.finditer(
-            r"(?i)\b(?:at\s+)?(\d{1,2})(?:st|nd|rd|th)[ -]level\b",
+            r"(?i)\b(?:at\s*)?(\d{1,2})(?:st|nd|rd|th)\s*[- ]?\s*level\b",
             description,
         )
         if 1 <= int(match.group(1)) <= 20
     ]
     return min(matches) if matches else None
+
+
+def _class_selection_definition(description: str) -> dict[str, Any] | None:
+    hit_die_match = re.search(r"(?i)\bHit\s+Dice?\s*:\s*1?d\s*(6|8|10|12)\b", description)
+    if hit_die_match is None:
+        return None
+    segments = {
+        label.casefold(): body
+        for label, body in re.findall(
+            r"(?is)\b(Armor|Weapons|Tools|Saving\s+Throws|Skills)\s*:\s*(.+?)"
+            r"(?=\s+(?:Armor|Weapons|Tools|Saving\s+Throws|Skills)\s*:|"
+            r"\s+You\s+start\s+with\b|\s+The\s+\w+\s+Proficiency\b|$)",
+            description,
+        )
+    }
+    saves_text = segments.get("saving throws", "")
+    saving_throws = [
+        ability
+        for ability in (
+            "strength",
+            "dexterity",
+            "constitution",
+            "intelligence",
+            "wisdom",
+            "charisma",
+        )
+        if re.search(rf"(?i)\b{ability}\b", saves_text)
+    ]
+    skills_text = segments.get("skills", "")
+    skill_options = [
+        skill
+        for skill in SKILL_ABILITIES
+        if re.search(
+            rf"(?i)\b{re.escape(skill.replace('_', ' '))}\b",
+            skills_text,
+        )
+    ]
+    choice_match = re.search(r"(?i)\bChoose\s+(\w+|\d+)\b", skills_text)
+    skill_choice_count = _word_number(choice_match.group(1)) if choice_match else 0
+    if len(saving_throws) != 2 or not skill_options or not 0 < skill_choice_count <= len(
+        skill_options
+    ):
+        return None
+
+    def proficiencies(label: str) -> list[str]:
+        text = segments.get(label, "")
+        if not text or text.strip().casefold() == "none":
+            return []
+        text = re.sub(r"(?i)\blightarmor\b", "light armor", text)
+        text = re.sub(r"(?i)\bmediumarmor\b", "medium armor", text)
+        text = re.sub(r"(?i)\bheavyarmor\b", "heavy armor", text)
+        values = [
+            " ".join(item.strip(" .;").split())
+            for item in re.split(r",|\band\b", text, flags=re.IGNORECASE)
+        ]
+        return list(dict.fromkeys(item for item in values if item))
+
+    return {
+        "hit_die": int(hit_die_match.group(1)),
+        "saving_throw_proficiencies": saving_throws,
+        "armor_proficiencies": proficiencies("armor"),
+        "weapon_proficiencies": proficiencies("weapons"),
+        "tool_proficiencies": proficiencies("tools"),
+        "skill_choice_count": skill_choice_count,
+        "skill_options": skill_options,
+    }
 
 
 def _background_selection_card(description: str) -> dict[str, Any]:
@@ -2918,6 +3072,21 @@ def _require_candidate_clause_evidence(
             )
 
 
+def _has_level_feature_marker(content: str) -> bool:
+    return bool(
+        re.search(
+            r"(?i)\b(?:at|starting\s+at|beginning\s+at)\s*"
+            r"\d{1,2}(?:st|nd|rd|th)\s*[- ]?\s*level\b",
+            content,
+        )
+        or re.search(
+            r"(?i)\b\d{1,2}(?:st|nd|rd|th)\s*[- ]\s*level\b"
+            r".{0,100}\bfeature\b",
+            content,
+        )
+    )
+
+
 def _classify(
     title: str,
     heading_path: list[str],
@@ -2927,6 +3096,9 @@ def _classify(
 ) -> tuple[str, tuple[str, ...]] | None:
     title_folded = title.casefold().strip()
     ancestors = " ".join(heading_path[:-1]).casefold()
+    direct_parent = (
+        str(heading_path[-2]).casefold().strip() if len(heading_path) >= 2 else ""
+    )
     sample = content[:2400]
     folded = sample.casefold()
 
@@ -2985,13 +3157,31 @@ def _classify(
         )
     )
     subclass_section = "subclass" in ancestors or "subclasses" in ancestors
+    explicit_feature_grant = _has_level_feature_marker(folded)
+    subclass_identity_shape = (
+        len(re.findall(r"[A-Za-z][A-Za-z'’\-]*", title)) >= 2
+        or title_folded in folded
+    )
+    subclass_parent = (
+        direct_parent in _GENERIC_SUBCLASS_PARENT_TITLES
+        and not explicit_feature_grant
+        and len(folded) >= 40
+        and subclass_identity_shape
+    )
     subclass_features = "subclass features" in folded
     if title_folded not in _GENERIC_TITLES and (
-        subclass_features or (subclass_title and (subclass_section or "level" in folded))
+        subclass_features
+        or subclass_parent
+        or (
+            subclass_title
+            and not title_folded.endswith(" spells")
+            and (subclass_section or "level" in folded or len(folded) >= 80)
+        )
     ):
         signals = [
             *(["subclass title"] if subclass_title else []),
             *(["subclass section"] if subclass_section else []),
+            *(["subclass parent"] if subclass_parent else []),
             *(["subclass features"] if subclass_features else []),
         ]
         return "subclass", tuple(signals)
@@ -3041,11 +3231,22 @@ def _classify(
         or "subclass features" in ancestors
         or known_source_class
     )
-    level_grant = bool(re.search(r"(?i)\bat\s+\d+(?:st|nd|rd|th)\s+level\b", folded))
+    level_grant = explicit_feature_grant
+    subclass_gateway = bool(
+        re.search(
+            r"(?i)\bat\s*\d{1,2}(?:st|nd|rd|th)\s*[- ]?\s*level\s*,?\s*"
+            r"(?:an?\s+)?(?:artificer|barbarian|bard|blood hunter|cleric|druid|"
+            r"fighter|monk|paladin|ranger|rogue|sorcerer|warlock|wizard)\s+"
+            r"gains?\s+the\s+.{1,80}\bfeature\b",
+            folded,
+        )
+        and bool(re.search(r"(?i)\b(?:option|available|presented here)\b", folded))
+    )
     if (
         title_folded not in _GENERIC_FEATURE_TITLES
-        and feature_section
+        and (feature_section or len(folded) >= 80)
         and level_grant
+        and not subclass_gateway
     ):
         return "feature", ("feature section", "level grant")
     return None

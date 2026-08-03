@@ -320,6 +320,154 @@ def _append_hit_point_adjustment(
     entry["adjustments"] = adjustments
 
 
+def initialize_base_class(
+    sheet: dict[str, Any],
+    *,
+    class_name: str,
+    class_definition: dict[str, Any],
+    skill_choices: list[str],
+    source: str = "",
+) -> dict[str, Any]:
+    """Materialize the source-reviewed, system-neutral portion of a level-1 class.
+
+    Addon-specific features, equipment bundles, and spellcasting exceptions remain
+    separate catalog selections or Agent rulings.  This function owns only the D&D
+    invariants common to every base class: hit die/HP, saving throws, proficiencies,
+    and the class skill choice.
+    """
+
+    value = deepcopy(sheet)
+    progression = value.setdefault("progression", {})
+    if progression.get("classes"):
+        raise CombatEngineError("base-class selection requires an actor with no class")
+    if int(progression.get("level", 0) or 0) != 1:
+        raise CombatEngineError("base-class selection is available only at level 1")
+    normalized_name = str(class_name).strip()
+    if not normalized_name:
+        raise CombatEngineError("base class needs a name")
+
+    definition = dict(class_definition)
+    expected_fields = {
+        "armor_proficiencies",
+        "hit_die",
+        "saving_throw_proficiencies",
+        "skill_choice_count",
+        "skill_options",
+        "tool_proficiencies",
+        "weapon_proficiencies",
+    }
+    if set(definition) != expected_fields:
+        raise CombatEngineError("class_definition has missing or unsupported fields")
+    hit_die = definition.get("hit_die")
+    if isinstance(hit_die, bool) or not isinstance(hit_die, int) or hit_die not in {6, 8, 10, 12}:
+        raise CombatEngineError("class hit_die must be one of 6, 8, 10, or 12")
+
+    ability_names = set(value.get("abilities") or {})
+    saving_throws = _normalized_distinct_names(
+        definition.get("saving_throw_proficiencies"),
+        field="saving_throw_proficiencies",
+    )
+    if len(saving_throws) != 2 or any(item not in ability_names for item in saving_throws):
+        raise CombatEngineError("class needs exactly two valid saving throw proficiencies")
+    skill_options = _normalized_distinct_names(
+        definition.get("skill_options"), field="skill_options"
+    )
+    if any(item not in value.get("skills", {}) for item in skill_options):
+        raise CombatEngineError("class skill_options contains an unknown skill")
+    choice_count = definition.get("skill_choice_count")
+    if isinstance(choice_count, bool) or not isinstance(choice_count, int) or choice_count < 0:
+        raise CombatEngineError("class skill_choice_count must be a non-negative integer")
+    selected_skills = _normalized_distinct_names(skill_choices, field="skill_choices")
+    if len(selected_skills) != choice_count:
+        raise CombatEngineError(
+            f"class requires exactly {choice_count} distinct skill choices"
+        )
+    if any(item not in skill_options for item in selected_skills):
+        raise CombatEngineError("class skill choice is not one of the reviewed options")
+    if any(value["skills"][item].get("proficiency") != "none" for item in selected_skills):
+        raise CombatEngineError("class skill choice is already proficient")
+
+    proficiency_fields = {
+        "armor": "armor_proficiencies",
+        "weapons": "weapon_proficiencies",
+        "tools": "tool_proficiencies",
+    }
+    normalized_proficiencies = {
+        target: _display_distinct_names(definition.get(field), field=field)
+        for target, field in proficiency_fields.items()
+    }
+
+    combat = value.setdefault("combat", {})
+    hp = combat.setdefault("hp", {})
+    old_max = int(hp.get("max", 0) or 0)
+    old_value = int(hp.get("value", 0) or 0)
+    if old_max < 1 or old_value != old_max:
+        raise CombatEngineError("base-class setup requires full lobby hit points")
+    constitution_modifier = _ability_modifier(value, "constitution")
+    class_hp = max(1, hit_die + constitution_modifier)
+    prior_bonus = old_max - 1
+    hp["max"] = class_hp + prior_bonus
+    hp["value"] = hp["max"]
+    combat.setdefault("hp_progression", []).append(
+        {
+            "level": 1,
+            "method": "manual",
+            "value": class_hp,
+            "source": source or f"{normalized_name} level 1",
+        }
+    )
+    hit_dice = combat.setdefault("hit_dice", {})
+    hit_die_key, hit_die_resource = _class_hit_die_resource(
+        hit_dice, normalized_name, hit_die
+    )
+    hit_die_resource["max"] = int(hit_die_resource.get("max", 0) or 0) + 1
+    hit_die_resource["value"] = int(hit_die_resource.get("value", 0) or 0) + 1
+    hit_dice[hit_die_key] = hit_die_resource
+
+    progression["classes"] = [
+        {"name": normalized_name, "level": 1, "subclass": "", "hit_die": hit_die}
+    ]
+    for ability in saving_throws:
+        value["abilities"][ability]["save_proficient"] = True
+    for skill in selected_skills:
+        value["skills"][skill]["proficiency"] = "proficient"
+    proficiencies = value.setdefault("traits", {}).setdefault("proficiencies", {})
+    for target, additions in normalized_proficiencies.items():
+        proficiencies[target] = list(
+            dict.fromkeys([*list(proficiencies.get(target) or []), *additions])
+        )
+    return {
+        "sheet": value,
+        "class_name": normalized_name,
+        "hit_die": hit_die,
+        "hit_die_key": hit_die_key,
+        "hit_points": {"class_base": class_hp, "prior_bonus": prior_bonus},
+        "saving_throw_proficiencies": saving_throws,
+        "skill_proficiencies": selected_skills,
+        "proficiencies": normalized_proficiencies,
+    }
+
+
+def _normalized_distinct_names(value: Any, *, field: str) -> list[str]:
+    if not isinstance(value, list):
+        raise CombatEngineError(f"class {field} must be an array")
+    normalized = [str(item).strip().casefold().replace(" ", "_") for item in value]
+    if any(not item for item in normalized) or len(set(normalized)) != len(normalized):
+        raise CombatEngineError(f"class {field} must contain distinct non-empty names")
+    return normalized
+
+
+def _display_distinct_names(value: Any, *, field: str) -> list[str]:
+    if not isinstance(value, list):
+        raise CombatEngineError(f"class {field} must be an array")
+    normalized = [" ".join(str(item).split()) for item in value]
+    if any(not item for item in normalized) or len({item.casefold() for item in normalized}) != len(
+        normalized
+    ):
+        raise CombatEngineError(f"class {field} must contain distinct non-empty names")
+    return normalized
+
+
 def advance_single_class_level(
     sheet: dict[str, Any],
     *,

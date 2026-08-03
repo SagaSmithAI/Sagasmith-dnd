@@ -9,8 +9,63 @@ from sagasmith_dnd.progression import (
     apply_per_level_hit_point_bonus,
     award_experience,
     experience_status,
+    initialize_base_class,
     synchronize_class_feature_resources,
 )
+
+
+def test_initialize_reviewed_addon_base_class_applies_only_common_level_one_rules() -> None:
+    sheet = default_character_sheet()
+    sheet["abilities"]["constitution"]["score"] = 14
+    result = initialize_base_class(
+        sheet,
+        class_name="Artificer",
+        class_definition={
+            "hit_die": 8,
+            "saving_throw_proficiencies": ["Constitution", "Intelligence"],
+            "armor_proficiencies": ["light armor", "medium armor", "shields"],
+            "weapon_proficiencies": ["simple weapons"],
+            "tool_proficiencies": ["thieves' tools", "tinker's tools"],
+            "skill_choice_count": 2,
+            "skill_options": ["arcana", "history", "investigation", "medicine"],
+        },
+        skill_choices=["Arcana", "Investigation"],
+        source="reviewed Artificer card",
+    )
+
+    updated = validate_character_sheet(result["sheet"])
+    assert updated["progression"]["classes"] == [
+        {"name": "Artificer", "level": 1, "subclass": "", "hit_die": 8}
+    ]
+    assert updated["combat"]["hp"] == {"value": 10, "max": 10, "temp": 0}
+    assert updated["combat"]["hit_dice"]["d8"]["value"] == 1
+    assert updated["abilities"]["constitution"]["save_proficient"] is True
+    assert updated["abilities"]["intelligence"]["save_proficient"] is True
+    assert updated["skills"]["arcana"]["proficiency"] == "proficient"
+    assert updated["traits"]["proficiencies"]["armor"] == [
+        "light armor",
+        "medium armor",
+        "shields",
+    ]
+    assert updated["content"]["features"] == []
+
+
+def test_initialize_reviewed_addon_base_class_rejects_unreviewed_choices() -> None:
+    with pytest.raises(CombatEngineError, match="reviewed options"):
+        initialize_base_class(
+            default_character_sheet(),
+            class_name="Artificer",
+            class_definition={
+                "hit_die": 8,
+                "saving_throw_proficiencies": ["constitution", "intelligence"],
+                "armor_proficiencies": [],
+                "weapon_proficiencies": [],
+                "tool_proficiencies": [],
+                "skill_choice_count": 1,
+                "skill_options": ["arcana"],
+            },
+            skill_choices=["stealth"],
+        )
 
 
 class _SequenceRng:

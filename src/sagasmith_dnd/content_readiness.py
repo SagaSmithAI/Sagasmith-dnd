@@ -35,6 +35,7 @@ SELECTION_STATUSES = frozenset({"ready", "not_applicable", "blocked"})
 DND_SELECTION_MATERIALIZERS = {
     "activity": "dnd5e.character.activity.v1",
     "background": "dnd5e.character.background.v1",
+    "class": "dnd5e.character.base_class.v1",
     "feat": "dnd5e.character.feat.v1",
     "feature": "dnd5e.character.feature.v1",
     "item": "dnd5e.character.inventory_item.v1",
@@ -55,6 +56,7 @@ _SELECTION_FIELDS = {
         "skills",
         "tools",
     ),
+    "class": ("skills",),
     "feat": (),
     "feature": (
         "grant_level",
@@ -81,6 +83,7 @@ _SELECTION_FIELDS = {
 _CARD_BINDINGS = {
     "activity": ("name",),
     "background": ("name", "background_grants"),
+    "class": ("name", "class_definition"),
     "feat": ("name", "prerequisites", "repeatable", "selection_requirements"),
     "feature": (
         "name",
@@ -443,6 +446,61 @@ def _validate_materializer_card(kind: str, binding: Mapping[str, Any]) -> None:
     elif kind == "background":
         if not isinstance(binding.get("background_grants"), Mapping):
             raise ValueError("background card needs background_grants")
+    elif kind == "class":
+        definition = binding.get("class_definition")
+        if not isinstance(definition, Mapping):
+            raise ValueError("class card needs class_definition")
+        expected = {
+            "armor_proficiencies",
+            "hit_die",
+            "saving_throw_proficiencies",
+            "skill_choice_count",
+            "skill_options",
+            "tool_proficiencies",
+            "weapon_proficiencies",
+        }
+        if set(definition) != expected:
+            raise ValueError("class_definition has missing or unsupported fields")
+        hit_die = definition.get("hit_die")
+        if isinstance(hit_die, bool) or not isinstance(hit_die, int) or hit_die not in {
+            6,
+            8,
+            10,
+            12,
+        }:
+            raise ValueError("class hit_die must be one of 6, 8, 10, or 12")
+        sheet = default_character_sheet()
+        saves = definition.get("saving_throw_proficiencies")
+        if (
+            not isinstance(saves, list)
+            or len(saves) != 2
+            or len({str(item).casefold() for item in saves}) != 2
+            or any(str(item).casefold() not in sheet["abilities"] for item in saves)
+        ):
+            raise ValueError("class needs exactly two valid saving throw proficiencies")
+        options = definition.get("skill_options")
+        count = definition.get("skill_choice_count")
+        if (
+            not isinstance(options, list)
+            or not options
+            or any(
+                str(item).casefold().replace(" ", "_") not in sheet["skills"]
+                for item in options
+            )
+        ):
+            raise ValueError("class skill_options must contain known skills")
+        if isinstance(count, bool) or not isinstance(count, int) or not 0 <= count <= len(options):
+            raise ValueError("class skill_choice_count is invalid")
+        for field in (
+            "armor_proficiencies",
+            "weapon_proficiencies",
+            "tool_proficiencies",
+        ):
+            values = definition.get(field)
+            if not isinstance(values, list) or any(
+                not isinstance(item, str) or not item.strip() for item in values
+            ):
+                raise ValueError(f"class {field} must be an array of names")
     elif kind == "species":
         if not isinstance(binding.get("grants"), Mapping):
             raise ValueError("species card needs grants")

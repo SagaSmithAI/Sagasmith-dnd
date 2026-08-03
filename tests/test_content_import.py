@@ -43,6 +43,147 @@ def test_extracts_review_required_catalog_candidates() -> None:
     assert all(item["application_state"] == "catalog_only" for item in candidates)
 
 
+def test_ocr_spacing_and_nested_headers_keep_entity_identity() -> None:
+    candidates = extract_content_candidates(
+        [
+            {
+                "id": "geometry-table",
+                "heading_path": ["SCHOOL OF GEOMETRY FEATURES"],
+                "content": "Wizard Level Features 2nd Spell Map 6th Spell Link",
+            },
+            {
+                "id": "geometry-feature",
+                "heading_path": ["ArcaneTopography"],
+                "content": (
+                    "Beginning at2nd level, the layout of your spell map grants you "
+                    "insight into the fabric of reality and a bonus to initiative."
+                ),
+            },
+            {
+                "id": "spell",
+                "heading_path": ["New Spell", "Mind Sliver", "Enchantment cantrip"],
+                "content": (
+                    "Casting Time: 1 action Range: 60 feet Components: V "
+                    "Duration: 1 round. The target makes a saving throw."
+                ),
+            },
+        ]
+    )
+
+    assert {(item["kind"], item["name"]) for item in candidates} == {
+        ("subclass", "SCHOOL OF GEOMETRY"),
+        ("feature", "Arcane Topography"),
+        ("spell", "Mind Sliver"),
+    }
+
+
+def test_nested_subclass_headers_do_not_promote_the_generic_parent() -> None:
+    candidates = extract_content_candidates(
+        [
+            {
+                "id": "parent",
+                "heading_path": ["Sorcerous Origin"],
+                "content": "Here is a playtest option for the sorcerer.",
+            },
+            {
+                "id": "subclass",
+                "heading_path": ["Sorcerous Origin", "Aberrant Mind"],
+                "content": "An alien influence has altered your mind and body.",
+            },
+            {
+                "id": "feature",
+                "heading_path": ["Sorcerous Origin", "Aberrant Mind", "Invasive Thoughts"],
+                "content": (
+                    "1st-level Aberrant Mind feature. At1st level, you can use a "
+                    "bonus action to create a telepathic link with one creature."
+                ),
+            },
+        ]
+    )
+
+    assert {(item["kind"], item["name"]) for item in candidates} == {
+        ("subclass", "Aberrant Mind"),
+        ("feature", "Invasive Thoughts"),
+    }
+    subclass = next(item for item in candidates if item["kind"] == "subclass")
+    authored = author_selection_card_from_candidate(subclass)
+    assert authored["card"]["class_name"] == "Sorcerer"
+    assert authored["card"]["minimum_level"] == 1
+
+
+def test_subclass_parent_siblings_keep_features_and_rule_tips_out_of_subclass_catalog() -> None:
+    candidates = extract_content_candidates(
+        [
+            {
+                "id": "gateway",
+                "heading_path": ["Divine Domain"],
+                "content": (
+                    "At 1st level, a cleric gains the Divine Domain feature. "
+                    "Here is a playtest option for that feature."
+                ),
+            },
+            {
+                "id": "domain",
+                "heading_path": ["Divine Domain", "Twilight Domain"],
+                "content": (
+                    "The Twilight Domain governs the transition from light into "
+                    "darkness and offers comfort at the threshold of the unknown."
+                ),
+            },
+            {
+                "id": "feature",
+                "heading_path": ["Divine Domain", "Eyes of Night"],
+                "content": (
+                    "1st-level Twilight Domain feature. Your eyes are blessed, "
+                    "allowing you to see through the deepest gloom."
+                ),
+            },
+            {
+                "id": "tip",
+                "heading_path": ["Divine Domain", "Stack"],
+                "content": "Temporary hit points do not add together.",
+            },
+            {
+                "id": "wildfire",
+                "heading_path": ["Circle of Wildfire"],
+                "content": (
+                    "Druids of the Circle of Wildfire understand that destruction "
+                    "and creation are bound together in a cycle of renewal."
+                ),
+            },
+        ]
+    )
+
+    assert {(item["kind"], item["name"]) for item in candidates} == {
+        ("subclass", "Twilight Domain"),
+        ("feature", "Eyes of Night"),
+        ("subclass", "Circle of Wildfire"),
+    }
+
+
+def test_descriptive_parent_does_not_inherit_nested_level_feature() -> None:
+    candidates = extract_content_candidates(
+        [
+            {
+                "id": "intro",
+                "heading_path": ["Intense Rivalries"],
+                "content": "Artificers compete for prestige and recognition.",
+            },
+            {
+                "id": "feature",
+                "heading_path": ["Intense Rivalries", "Magic Item Analysis"],
+                "content": (
+                    "At 1st level, you learn detect magic and identify and can cast "
+                    "them as rituals."
+                ),
+            },
+        ],
+        source_title="UA Artificer",
+    )
+
+    assert [item["name"] for item in candidates] == ["Magic Item Analysis"]
+
+
 @pytest.mark.parametrize(
     ("kind", "name", "description", "expected"),
     [
@@ -87,6 +228,18 @@ def test_extracts_review_required_catalog_candidates() -> None:
             "Durable Adept",
             "You have practiced a durable technique.",
             "prerequisites",
+        ),
+        (
+            "class",
+            "Artificer",
+            (
+                "Hit Dice: 1d8 per artificer level. Armor: Light armor, medium "
+                "armor, shields Weapons: Simple weapons Tools: Thieves' tools, "
+                "tinker's tools Saving Throws: Constitution, Intelligence "
+                "Skills: Choose two from Arcana, History, Investigation, Medicine, "
+                "Nature, Perception, and Sleight of Hand. You start with equipment."
+            ),
+            "class_definition",
         ),
     ],
 )
@@ -140,6 +293,23 @@ def test_primary_review_authors_safe_typed_selection_cards(
     elif kind == "subclass":
         assert artifact["card"]["class_name"] == "Wizard"
         assert artifact["card"]["minimum_level"] == 2
+    elif kind == "class":
+        definition = artifact["card"]["class_definition"]
+        assert definition["hit_die"] == 8
+        assert definition["saving_throw_proficiencies"] == [
+            "constitution",
+            "intelligence",
+        ]
+        assert definition["skill_choice_count"] == 2
+        assert definition["skill_options"] == [
+            "arcana",
+            "history",
+            "investigation",
+            "medicine",
+            "nature",
+            "perception",
+            "sleight_of_hand",
+        ]
 
 
 def test_source_coverage_fragment_is_runtime_context_not_character_feature() -> None:

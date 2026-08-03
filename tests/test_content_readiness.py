@@ -176,6 +176,22 @@ def test_selection_contract_fails_closed_for_missing_or_stale_materialization() 
             ["chosen_skill"],
         ),
         (
+            "class",
+            {
+                "name": "Artificer",
+                "class_definition": {
+                    "hit_die": 8,
+                    "saving_throw_proficiencies": ["constitution", "intelligence"],
+                    "armor_proficiencies": ["light armor"],
+                    "weapon_proficiencies": ["simple weapons"],
+                    "tool_proficiencies": ["thieves' tools"],
+                    "skill_choice_count": 2,
+                    "skill_options": ["arcana", "investigation", "medicine"],
+                },
+            },
+            ["skills"],
+        ),
+        (
             "feature",
             {
                 "name": "Training",
@@ -249,8 +265,8 @@ def test_selection_schema_is_typed_and_card_bound(
 
 def test_unsupported_kind_cannot_claim_a_safe_materializer() -> None:
     artifact = {
-        "id": "example.class",
-        "kind": "class",
+        "id": "example.monster",
+        "kind": "monster",
         "card": {"name": "Inventor"},
     }
     with pytest.raises(ValueError, match="no safe character materializer"):
