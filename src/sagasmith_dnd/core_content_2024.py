@@ -1473,6 +1473,7 @@ def _species(path: Path) -> list[dict[str, Any]]:
             "skill_choice_count": 0,
             "skill_options": [],
             "allow_any_skill": False,
+            "armor_proficiencies": [],
             "weapon_proficiencies": [],
             "tool_proficiencies": [],
             "tool_choices": [],

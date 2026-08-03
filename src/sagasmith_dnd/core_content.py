@@ -405,6 +405,7 @@ def _species_grants(name: str, traits: list[tuple[str, str]]) -> dict[str, Any]:
         "skill_choice_count": 0,
         "skill_options": [],
         "allow_any_skill": False,
+        "armor_proficiencies": [],
         "weapon_proficiencies": [],
         "tool_proficiencies": [],
         "tool_choices": [],
@@ -505,6 +506,7 @@ def _species_grants(name: str, traits: list[tuple[str, str]]) -> dict[str, Any]:
             )
     for list_key in (
         "skill_proficiencies",
+        "armor_proficiencies",
         "weapon_proficiencies",
         "tool_proficiencies",
         "resistances",

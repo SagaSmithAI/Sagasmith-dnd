@@ -271,6 +271,7 @@ def test_species_materializer_rejects_ocr_counts_and_unbounded_choices() -> None
             "skill_choice_count": 1,
             "skill_options": [],
             "allow_any_skill": False,
+            "armor_proficiencies": ["Light Armor"],
             "tool_proficiencies": [],
             "tool_choice_count": 1,
             "tool_options": [],
@@ -291,7 +292,12 @@ def test_species_materializer_rejects_ocr_counts_and_unbounded_choices() -> None
         }
     )
     assert species_materializer_errors(card) == []
+    card["grants"]["armor_proficiencies"] = ["Light Armor", "light armor"]
+    assert species_materializer_errors(card) == [
+        "species armor_proficiencies must be distinct"
+    ]
 
+    card["grants"]["armor_proficiencies"] = ["Light Armor"]
     card["grants"]["spell_list_expansion"] = ["Aid", "aid"]
     assert species_materializer_errors(card) == [
         "species spell_list_expansion must be distinct"

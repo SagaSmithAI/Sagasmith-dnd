@@ -2941,6 +2941,7 @@ def _species_grants(description: str) -> dict[str, Any] | None:
         "skill_choice_count": 0,
         "skill_options": [],
         "allow_any_skill": False,
+        "armor_proficiencies": [],
         "tool_proficiencies": [],
         "tool_choices": [],
         "tool_choice_count": 0,
