@@ -1852,7 +1852,12 @@ def normalize_feature_casting_overrides(
     _reject_unknown(
         overrides,
         field,
-        {"duration", "fixed_cast_level", "ignore_material_components"},
+        {
+            "duration",
+            "fixed_cast_level",
+            "ignore_components",
+            "ignore_material_components",
+        },
     )
     result: dict[str, Any] = {}
     if "duration" in overrides:
@@ -1864,6 +1869,11 @@ def normalize_feature_casting_overrides(
         result["ignore_material_components"] = _boolean(
             overrides["ignore_material_components"],
             f"{field}.ignore_material_components",
+        )
+    if "ignore_components" in overrides:
+        result["ignore_components"] = _boolean(
+            overrides["ignore_components"],
+            f"{field}.ignore_components",
         )
     if "fixed_cast_level" in overrides:
         result["fixed_cast_level"] = _integer(

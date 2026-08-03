@@ -1,3 +1,5 @@
+from copy import deepcopy
+
 import pytest
 
 from sagasmith_dnd.character_schema import (
@@ -1573,6 +1575,35 @@ def test_feature_spell_supports_fixed_upcast_and_at_will_sources() -> None:
     assert at_will["payment"]["resource_key"] is None
     assert at_will["casting_overrides_applied"] == {
         "ignore_material_components": True
+    }
+
+    componentless = deepcopy(nondetection)
+    componentless["id"] = "gith-jump"
+    componentless["access"]["feature_casting_sources"][0]["source_key"] = (
+        "Githyanki Psionics"
+    )
+    componentless["access"]["feature_casting_sources"][0]["casting_overrides"] = {
+        "ignore_components": True
+    }
+    componentless["definition"]["components"] = {
+        "verbal": True,
+        "somatic": True,
+        "material": True,
+        "material_description": "a grasshopper's hind leg",
+        "material_cost_cp": 0,
+        "consumed": False,
+    }
+    componentless_sheet = deepcopy(sheet)
+    componentless_sheet["content"]["spells"] = [componentless]
+    componentless_sheet = validate_character_sheet(componentless_sheet)
+    no_components = consume_spell_cast(
+        componentless_sheet,
+        spell_id="gith-jump",
+        feature_cast_source="Githyanki Psionics",
+    )
+    assert no_components["ruling_required"] == ["targets_and_effect"]
+    assert no_components["casting_overrides_applied"] == {
+        "ignore_components": True
     }
 
 

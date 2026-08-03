@@ -1144,6 +1144,15 @@ def consume_spell_cast(
         if level != base_level:
             raise CombatEngineError("ritual casting does not allow an upcast spell level")
     components = dict(spell.get("definition", {}).get("components") or {})
+    if casting_overrides.get("ignore_components") is True:
+        components.update(
+            verbal=False,
+            somatic=False,
+            material=False,
+            material_description="",
+            material_cost_cp=0,
+            consumed=False,
+        )
     if casting_overrides.get("ignore_material_components") is True:
         components.update(
             material=False,
