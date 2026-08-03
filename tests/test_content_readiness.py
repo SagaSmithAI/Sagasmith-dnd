@@ -405,12 +405,26 @@ def test_species_materializer_accepts_narrative_choices_and_fixed_spells() -> No
                     "allow_slot_cast": False,
                     "minimum_level": 1,
                     "ritual_only": True,
+                    "casting_overrides": {
+                        "ignore_material_components": True,
+                        "duration": {
+                            "kind": "timed",
+                            "value": 1,
+                            "unit": "hour",
+                            "concentration": False,
+                        },
+                    },
                 }
             ],
         },
     }
 
     assert species_materializer_errors(card) == []
+    card["grants"]["spell_grants"][0]["casting_overrides"]["effect"] = "changed"
+    assert any(
+        "casting_overrides has unsupported fields: effect" in error
+        for error in species_materializer_errors(card)
+    )
 
 
 def test_feat_materializer_accepts_fixed_and_selected_spell_grants() -> None:

@@ -17,6 +17,7 @@ from typing import Any, Mapping, Sequence
 from sagasmith_dnd.character_schema import (
     add_inventory_item,
     default_character_sheet,
+    normalize_feature_casting_overrides,
     normalize_spell_definition,
 )
 
@@ -992,11 +993,14 @@ def feat_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
             "minimum_level",
             "ritual_only",
         }
+        supported = {*required, "casting_overrides"}
         if choice_group:
             required.update({"id", "count"})
+            supported.update({"id", "count"})
         else:
             required.add("name")
-        unsupported = set(raw_grant) - required
+            supported.add("name")
+        unsupported = set(raw_grant) - supported
         missing = required - set(raw_grant)
         if unsupported:
             errors.append(f"{prefix} has unsupported fields: {sorted(unsupported)}")
@@ -1052,6 +1056,17 @@ def feat_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
             errors.append(f"{prefix}.ritual_only must be a boolean")
         if raw_grant.get("ritual_only") is True and free_casts:
             errors.append(f"{prefix} cannot combine ritual_only with free casts")
+        try:
+            normalize_feature_casting_overrides(
+                (
+                    raw_grant["casting_overrides"]
+                    if "casting_overrides" in raw_grant
+                    else {}
+                ),
+                f"{prefix}.casting_overrides",
+            )
+        except ValueError as error:
+            errors.append(str(error))
 
     prerequisites = binding.get("prerequisites")
     if prerequisites is not None and not isinstance(prerequisites, list):

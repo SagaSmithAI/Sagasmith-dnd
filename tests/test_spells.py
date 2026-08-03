@@ -1439,6 +1439,77 @@ def test_reviewed_feature_spell_uses_its_own_ability_and_resource() -> None:
         )
 
 
+def test_feature_spell_casting_overrides_do_not_mutate_ordinary_spell_rules() -> None:
+    sheet = default_character_sheet()
+    sheet["progression"]["level"] = 1
+    sheet["spellcasting"]["spell_slots"] = {
+        "1": {
+            "label": "1st",
+            "value": 1,
+            "max": 1,
+            "recovers_on": "long_rest",
+            "source_key": "wizard",
+        }
+    }
+    spell = _spell("marked-weapon", level=1, concentration=True)
+    spell["definition"]["components"] = {
+        "verbal": True,
+        "somatic": True,
+        "material": True,
+        "material_description": "a costly source focus",
+        "material_cost_cp": 100,
+        "consumed": False,
+    }
+    spell["access"]["feature_casting_sources"] = [
+        {
+            "source_key": "Mark of Making",
+            "method": "limited_use",
+            "spellcasting_ability": "intelligence",
+            "resource_key": "mark-of-making:marked-weapon",
+            "allow_slot_cast": True,
+            "minimum_level": 1,
+            "ritual_only": False,
+            "casting_overrides": {
+                "ignore_material_components": True,
+                "duration": {
+                    "kind": "timed",
+                    "value": 1,
+                    "unit": "hour",
+                    "concentration": False,
+                },
+            },
+        }
+    ]
+    sheet["content"]["spells"] = [spell]
+    sheet["resources"]["mark-of-making:marked-weapon"] = {
+        "label": "Mark of Making: Marked Weapon",
+        "value": 1,
+        "max": 1,
+        "recovers_on": "long_rest",
+        "source_key": "Mark of Making",
+    }
+    sheet = validate_character_sheet(sheet)
+
+    feature_cast = consume_spell_cast(
+        sheet,
+        spell_id="marked-weapon",
+        feature_cast_source="Mark of Making",
+    )
+
+    assert feature_cast["concentration_started"] is False
+    assert feature_cast["casting_overrides_applied"] == {
+        "ignore_material_components": True,
+        "duration": {
+            "kind": "timed",
+            "value": 1,
+            "unit": "hour",
+            "concentration": False,
+        },
+    }
+    with pytest.raises(NeedsRulingError, match="material component"):
+        consume_spell_cast(sheet, spell_id="marked-weapon")
+
+
 def test_2024_ranger_long_rest_replaces_only_one_spell() -> None:
     sheet = default_character_sheet()
     sheet["edition"] = "2024"

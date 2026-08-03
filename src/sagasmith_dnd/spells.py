@@ -1170,7 +1170,17 @@ def consume_spell_cast(
             raise CombatEngineError("spell cannot be cast as a ritual")
         if level != base_level:
             raise CombatEngineError("ritual casting does not allow an upcast spell level")
+    casting_overrides = dict(
+        (selected_feature_source or {}).get("casting_overrides") or {}
+    )
     components = dict(spell.get("definition", {}).get("components") or {})
+    if casting_overrides.get("ignore_material_components") is True:
+        components.update(
+            material=False,
+            material_description="",
+            material_cost_cp=0,
+            consumed=False,
+        )
     ruling = dict(component_ruling or {})
     custom_definition = dict(spell.get("custom_definition") or {})
     source_components_unknown = (
@@ -1312,7 +1322,11 @@ def consume_spell_cast(
                 level = pact_level
                 paid = {"economy": "pact_magic", "level": level, "ritual": False}
     ended_invisibility_effect_ids = _end_spell_cast_broken_invisibility(value)
-    duration = dict(spell.get("definition", {}).get("duration") or {})
+    duration = dict(
+        casting_overrides.get("duration")
+        or spell.get("definition", {}).get("duration")
+        or {}
+    )
     concentration = bool(duration.get("concentration"))
     if concentration:
         _apply_concentration_effect(
@@ -1363,6 +1377,7 @@ def consume_spell_cast(
         "spell_id": spell_id,
         "cast_level": level,
         "payment": paid,
+        "casting_overrides_applied": casting_overrides,
         "concentration_started": concentration,
         "automatic_effect": automatic_effect,
         "effect_id": effect_id,

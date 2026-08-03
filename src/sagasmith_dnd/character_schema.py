@@ -1847,6 +1847,37 @@ def normalize_spell_definition(value: Any, field: str = "spell.definition") -> d
     }
 
 
+def normalize_feature_casting_overrides(
+    value: Any,
+    field: str = "feature_casting_source.casting_overrides",
+) -> dict[str, Any]:
+    """Validate the narrow source-specific spell overrides an addon may grant.
+
+    These overrides belong to one feature casting source.  They never mutate
+    the canonical spell definition used by ordinary class, item, or other
+    feature casts.
+    """
+
+    overrides = _object(value or {}, field)
+    _reject_unknown(
+        overrides,
+        field,
+        {"duration", "ignore_material_components"},
+    )
+    result: dict[str, Any] = {}
+    if "duration" in overrides:
+        result["duration"] = normalize_spell_definition(
+            {"duration": overrides["duration"]},
+            f"{field}.spell_definition",
+        )["duration"]
+    if "ignore_material_components" in overrides:
+        result["ignore_material_components"] = _boolean(
+            overrides["ignore_material_components"],
+            f"{field}.ignore_material_components",
+        )
+    return result
+
+
 CHARACTER_SPELL_CARD_FIELDS = frozenset(
     {
         "id",
@@ -1919,6 +1950,7 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
                 "allow_slot_cast",
                 "minimum_level",
                 "ritual_only",
+                "casting_overrides",
             },
         )
         method = _text(source.get("method"), f"{source_field}.method", maximum=100)
@@ -1931,8 +1963,7 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
         ).casefold()
         if ability not in {*ABILITY_NAMES, "none"}:
             raise ValueError(f"{source_field}.spellcasting_ability is invalid")
-        feature_casting_sources.append(
-            {
+        normalized_source = {
                 "source_key": _text(
                     source.get("source_key"),
                     f"{source_field}.source_key",
@@ -1964,7 +1995,13 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
                     f"{source_field}.ritual_only",
                 ),
             }
+        casting_overrides = normalize_feature_casting_overrides(
+            source["casting_overrides"] if "casting_overrides" in source else {},
+            f"{source_field}.casting_overrides",
         )
+        if casting_overrides:
+            normalized_source["casting_overrides"] = casting_overrides
+        feature_casting_sources.append(normalized_source)
     feature_source_keys = [
         item["source_key"].casefold() for item in feature_casting_sources
     ]
