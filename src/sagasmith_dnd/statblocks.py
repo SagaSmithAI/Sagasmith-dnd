@@ -6657,7 +6657,20 @@ def parameterized_statblock_requirements(source_text: str) -> dict[str, Any] | N
     parameter_markers = (
         (r"\byour\s+[a-z]+\s+level\b|\byour level\b", "owner_class_level"),
         (r"\byour proficiency bonus\b|\bequals your bonus\b", "owner_proficiency_bonus"),
-        (r"\byour intelligence modifier\b", "owner_intelligence_modifier"),
+        *(
+            (
+                rf"\byour {ability} modifier\b",
+                f"owner_{ability}_modifier",
+            )
+            for ability in (
+                "strength",
+                "dexterity",
+                "constitution",
+                "intelligence",
+                "wisdom",
+                "charisma",
+            )
+        ),
         (
             r"\byour spellcasting ability modifier\b",
             "owner_spellcasting_ability_modifier",
@@ -6687,18 +6700,7 @@ def parameterized_statblock_requirements(source_text: str) -> dict[str, Any] | N
     # single chunk before the Markdown normalizer has inserted emphasis.  Keep
     # the fallback bounded by printed core-field labels so ordinary prose that
     # happens to mention hit points never becomes an actor template.
-    plain_fields = [] if markdown_fields else list(
-        re.finditer(
-            r"(?is)(?<![A-Za-z])"
-            r"(?P<label>Armor Class|Hit Points|Proficiency Bonus)(?:\s*\(PB\))?\s+"
-            r"(?P<expression>.+?)"
-            r"(?=\s+(?:Armor Class|Hit Points|Speed|STR\s+DEX\s+CON\s+INT\s+WIS\s+CHA|"
-            r"Saving Throws|Skills|Damage Immunities|Condition Immunities|Senses|"
-            r"Languages|Challenge|Traits|Actions|Reactions)\b|$)",
-            text,
-        )
-    )
-    for match in [*markdown_fields, *plain_fields]:
+    for match in markdown_fields:
         excerpt = " ".join(match.group(0).split())
         if any(re.search(pattern, excerpt.casefold()) for pattern, _ in parameter_markers):
             target_path = {
@@ -6713,6 +6715,30 @@ def parameterized_statblock_requirements(source_text: str) -> dict[str, Any] | N
                     "source_excerpt": excerpt,
                 }
             )
+    if not markdown_fields:
+        flat_core = re.search(
+            r"(?s)(?<![A-Za-z])Armor Class\s+(?P<armor_class>.+?)\s+"
+            r"Hit Points\s+(?P<hit_points>.+?)\s+Speed\b",
+            text,
+        )
+        if flat_core is not None:
+            for label, group, target_path in (
+                ("Armor Class", "armor_class", "combat.armor_class"),
+                ("Hit Points", "hit_points", "combat.hp.max"),
+            ):
+                expression = " ".join(flat_core.group(group).split())
+                excerpt = f"{label} {expression}"
+                if any(
+                    re.search(pattern, excerpt.casefold())
+                    for pattern, _ in parameter_markers
+                ):
+                    source_expressions.append(
+                        {
+                            "target_path": target_path,
+                            "source_expression": expression,
+                            "source_excerpt": excerpt,
+                        }
+                    )
     if not source_expressions:
         # A spell effect that scales with the expended slot or spell level is
         # runtime effect semantics, not an actor-template parameter.  Only a

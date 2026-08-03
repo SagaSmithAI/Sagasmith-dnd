@@ -81,7 +81,7 @@ def test_parameterized_statblock_requirements_cover_numeric_owner_and_spell_form
     owner = parameterized_statblock_requirements(
         "# Wildfire Spirit\n\n"
         "**Armor Class** 13 (natural armor)\n"
-        "**Hit Points** 5 + five times your druid level\n"
+        "**Hit Points** 5 + your Wisdom modifier + five times your druid level\n"
         "***Flame Seed.*** Ranged Weapon Attack: your spell attack modifier to hit.\n"
     )
     summoned = parameterized_statblock_requirements(
@@ -95,11 +95,12 @@ def test_parameterized_statblock_requirements_cover_numeric_owner_and_spell_form
     assert owner is not None
     assert owner["parameters"] == [
         "owner_class_level",
+        "owner_wisdom_modifier",
         "owner_spell_attack_modifier",
     ]
     assert owner["target_path"] == "combat.hp.max"
     assert owner["source_expressions"][0]["source_expression"] == (
-        "5 + five times your druid level"
+        "5 + your Wisdom modifier + five times your druid level"
     )
     assert summoned is not None
     assert summoned["parameters"] == [
@@ -130,6 +131,30 @@ def test_parameterized_statblock_requirements_accept_bounded_flat_pdf_fields() -
     assert requirement["parameters"] == [
         "owner_class_level",
         "owner_intelligence_modifier",
+    ]
+
+
+def test_parameterized_statblock_ignores_narrative_hit_point_phrases() -> None:
+    requirement = parameterized_statblock_requirements(
+        "Tiny construct Armor Class 13 (natural armor) "
+        "Hit Points equal to five times your artificer level + your "
+        "Intelligence modifier Speed 20 ft. STR DEX CON INT WIS CHA "
+        "A salve grants hit points equal to 2d6 + your Intelligence modifier. "
+        "Another effect restores hit points or deals acid damage."
+    )
+
+    assert requirement is not None
+    assert requirement["source_expressions"] == [
+        {
+            "target_path": "combat.hp.max",
+            "source_expression": (
+                "equal to five times your artificer level + your Intelligence modifier"
+            ),
+            "source_excerpt": (
+                "Hit Points equal to five times your artificer level + your "
+                "Intelligence modifier"
+            ),
+        }
     ]
 
 
