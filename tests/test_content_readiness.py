@@ -179,6 +179,11 @@ def test_background_materializer_requires_bounded_choice_semantics() -> None:
     )
     assert background_materializer_errors(card) == []
 
+    card["background_grants"]["spell_list_expansion"] = ["Aid", "aid"]
+    assert background_materializer_errors(card) == [
+        "background spell_list_expansion must be distinct"
+    ]
+
 
 def test_background_materializer_accepts_only_reviewed_embedded_equipment() -> None:
     card = {

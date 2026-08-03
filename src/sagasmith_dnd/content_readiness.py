@@ -439,6 +439,7 @@ def background_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
 
     fixed_languages = string_list(grants.get("languages", []), "languages")
     fixed_tools = string_list(grants.get("tools", []), "tools")
+    string_list(grants.get("spell_list_expansion", []), "spell_list_expansion")
     if not isinstance(grants.get("equipment_item_ids", []), list):
         errors.append("background equipment_item_ids must be an array")
     choices = grants.get("choices", {})

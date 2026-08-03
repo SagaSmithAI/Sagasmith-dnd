@@ -316,6 +316,7 @@ def default_character_sheet() -> dict[str, Any]:
                 "feature": "",
                 "equipment_item_ids": [],
                 "languages": [],
+                "spell_list_expansion": [],
                 "tools": [],
                 "choices": {},
             },
@@ -2291,7 +2292,14 @@ def validate_character_sheet(
     _reject_unknown(
         background_grants,
         "sheet.progression.background_grants",
-        {"feature", "equipment_item_ids", "languages", "tools", "choices"},
+        {
+            "feature",
+            "equipment_item_ids",
+            "languages",
+            "spell_list_expansion",
+            "tools",
+            "choices",
+        },
     )
 
     abilities = _object(value["abilities"], "sheet.abilities")
@@ -3125,6 +3133,35 @@ def validate_character_sheet(
         background_grants["equipment_item_ids"],
         "sheet.progression.background_grants.equipment_item_ids",
     )
+    spell_list_expansion: list[dict[str, str]] = []
+    for index, raw_grant in enumerate(
+        _array(
+            background_grants["spell_list_expansion"],
+            "sheet.progression.background_grants.spell_list_expansion",
+        )
+    ):
+        field = f"sheet.progression.background_grants.spell_list_expansion[{index}]"
+        grant = _object(raw_grant, field)
+        _reject_unknown(
+            grant,
+            field,
+            {"artifact_id", "name", "pack_id", "pack_version"},
+        )
+        spell_list_expansion.append(
+            {
+                key: _text(grant.get(key), f"{field}.{key}", maximum=500)
+                for key in ("artifact_id", "name", "pack_id", "pack_version")
+            }
+        )
+    expansion_ids = [item["artifact_id"] for item in spell_list_expansion]
+    if any(
+        not grant[field]
+        for grant in spell_list_expansion
+        for field in ("artifact_id", "name", "pack_id", "pack_version")
+    ):
+        raise ValueError("background spell-list expansion needs exact artifact provenance")
+    if len(expansion_ids) != len(set(expansion_ids)):
+        raise ValueError("background spell-list expansion contains duplicate artifacts")
     inventory_item_ids = {item["id"] for item in inventory["items"]}
     if not set(background_item_ids).issubset(inventory_item_ids):
         raise ValueError("background equipment references an unknown inventory item")
@@ -3172,6 +3209,7 @@ def validate_character_sheet(
                 "languages": _string_list(
                     background_grants["languages"], "sheet.progression.background_grants.languages"
                 ),
+                "spell_list_expansion": spell_list_expansion,
                 "tools": _string_list(
                     background_grants["tools"], "sheet.progression.background_grants.tools"
                 ),

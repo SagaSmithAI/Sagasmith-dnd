@@ -1579,6 +1579,7 @@ def validate_spell_grant(
     spell: dict[str, Any],
     *,
     source_class: str | None = None,
+    artifact_id: str | None = None,
 ) -> str:
     """Validate a catalog spell against recorded class ownership and spell level."""
     classes = {
@@ -1597,8 +1598,20 @@ def validate_spell_grant(
     allowed = {_class_key(item) for item in spell.get("classes", []) if str(item).strip()}
     if not allowed:
         raise CombatEngineError("spell artifact has no structured class-list eligibility")
-    if source not in allowed:
+    background_expansion = {
+        str(item.get("artifact_id") or "")
+        for item in sheet.get("progression", {})
+        .get("background_grants", {})
+        .get("spell_list_expansion", [])
+        if isinstance(item, dict)
+    }
+    expanded = bool(artifact_id and artifact_id in background_expansion)
+    if source not in allowed and not expanded:
         raise CombatEngineError(f"{spell.get('name') or spell.get('id')} is not a {source} spell")
+    if expanded and not _class_has_spell_list(sheet, source, classes[source]):
+        raise CombatEngineError(
+            f"background spell-list expansion requires {source} spellcasting access"
+        )
     maximum = _maximum_spell_level(_edition(sheet), source, classes[source])
     level = int(spell.get("level", 0) or 0)
     if level > maximum:
@@ -1606,6 +1619,45 @@ def validate_spell_grant(
             f"{source} level {classes[source]} cannot select spell level {level}"
         )
     return source
+
+
+def _class_has_spell_list(sheet: dict[str, Any], source: str, level: int) -> bool:
+    declared_lists = {
+        _class_key(item)
+        for item in sheet.get("spellcasting", {}).get("class_lists", [])
+        if str(item).strip()
+    }
+    if source in declared_lists:
+        return True
+    edition = _edition(sheet)
+    if source in {"bard", "cleric", "druid", "sorcerer", "warlock", "wizard", "artificer"}:
+        return True
+    if source in {"paladin", "ranger"}:
+        return edition == "2024" or level >= 2
+    target = next(
+        (
+            item
+            for item in sheet.get("progression", {}).get("classes", [])
+            if _class_key(item.get("name")) == source
+        ),
+        {},
+    )
+    subclass = str(target.get("subclass") or "").strip().casefold()
+    if level >= 3 and (
+        (source == "fighter" and subclass == "eldritch knight")
+        or (source == "rogue" and subclass == "arcane trickster")
+    ):
+        return True
+    # A reviewed custom class can declare its list on the actor card without
+    # teaching the shared engine another class name.
+    return bool(
+        len(sheet.get("progression", {}).get("classes", [])) == 1
+        and sheet.get("spellcasting", {}).get("ability")
+        and (
+            sheet.get("spellcasting", {}).get("spell_slots")
+            or sheet.get("spellcasting", {}).get("pact_magic")
+        )
+    )
 
 
 def _class_key(value: Any) -> str:

@@ -1306,6 +1306,14 @@ def test_complete_card_supports_identity_weapons_spells_encumbrance_and_adventur
                     "feature": "Military Rank",
                     "equipment_item_ids": ["longbow"],
                     "languages": ["Common"],
+                    "spell_list_expansion": [
+                        {
+                            "artifact_id": "dnd5e.content.example.spell.command",
+                            "name": "Command",
+                            "pack_id": "dnd5e.content.example",
+                            "pack_version": "1.0.0",
+                        }
+                    ],
                     "tools": ["Dice set"],
                 },
             },
@@ -1426,6 +1434,14 @@ def test_complete_card_supports_identity_weapons_spells_encumbrance_and_adventur
             },
         }
     )
+    assert sheet["progression"]["background_grants"]["spell_list_expansion"] == [
+        {
+            "artifact_id": "dnd5e.content.example.spell.command",
+            "name": "Command",
+            "pack_id": "dnd5e.content.example",
+            "pack_version": "1.0.0",
+        }
+    ]
     assert sheet["identity"]["deity"] == "Tyr"
     assert sheet["content"]["spells"][0]["definition"]["components"]["material"] is True
     assert sheet["effects"][0]["concentration"] is True

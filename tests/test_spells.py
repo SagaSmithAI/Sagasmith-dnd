@@ -33,6 +33,7 @@ from sagasmith_dnd.spells import (
     replace_prepared_spells,
     resolve_magic_item_last_charge,
     validate_magic_missile_allocations,
+    validate_spell_grant,
 )
 from sagasmith_dnd.standard_spell_ids import (
     CORE_2024_FLY_SPELL_ID,
@@ -1475,6 +1476,62 @@ def test_2014_ranger_uses_spells_known_instead_of_preparation() -> None:
             validate_character_sheet(sheet),
             spell_ids=["cure-wounds"],
             event="setup",
+        )
+
+
+def test_background_spell_list_expansion_is_exact_and_requires_a_caster() -> None:
+    spell = {"id": "aid-card", "name": "Aid", "level": 1, "classes": ["Cleric"]}
+    wizard = default_character_sheet()
+    wizard["edition"] = "2014"
+    wizard["progression"]["level"] = 3
+    wizard["progression"]["classes"] = [
+        {"name": "Wizard", "level": 3, "subclass": "", "hit_die": 6}
+    ]
+    wizard["progression"]["background_grants"]["spell_list_expansion"] = [
+        {
+            "artifact_id": "spell-aid",
+            "name": "Aid",
+            "pack_id": "dnd5e.content.srd2014",
+            "pack_version": "1.0.0",
+        }
+    ]
+    assert (
+        validate_spell_grant(
+            wizard,
+            spell,
+            source_class="Wizard",
+            artifact_id="spell-aid",
+        )
+        == "wizard"
+    )
+    with pytest.raises(CombatEngineError, match="not a wizard spell"):
+        validate_spell_grant(
+            wizard,
+            spell,
+            source_class="Wizard",
+            artifact_id="different-spell",
+        )
+
+    fighter = default_character_sheet()
+    fighter["edition"] = "2014"
+    fighter["progression"]["level"] = 3
+    fighter["progression"]["classes"] = [
+        {"name": "Fighter", "level": 3, "subclass": "Champion", "hit_die": 10}
+    ]
+    fighter["progression"]["background_grants"]["spell_list_expansion"] = [
+        {
+            "artifact_id": "spell-aid",
+            "name": "Aid",
+            "pack_id": "dnd5e.content.srd2014",
+            "pack_version": "1.0.0",
+        }
+    ]
+    with pytest.raises(CombatEngineError, match="requires fighter spellcasting access"):
+        validate_spell_grant(
+            fighter,
+            spell,
+            source_class="Fighter",
+            artifact_id="spell-aid",
         )
 
 
