@@ -1056,6 +1056,7 @@ def consume_spell_cast(
     cast_level: int | None = None,
     ritual: bool = False,
     signature_free_cast: bool = False,
+    feature_cast_source: str | None = None,
     component_ruling: dict[str, Any] | None = None,
     rules: ResolutionContext | None = None,
 ) -> dict[str, Any]:
@@ -1077,6 +1078,28 @@ def consume_spell_cast(
     if spell is None:
         raise CombatEngineError("spell is not on this actor card")
     access = dict(spell.get("access") or {})
+    feature_sources = [
+        dict(item)
+        for item in access.get("feature_casting_sources", [])
+        if isinstance(item, dict)
+    ]
+    selected_feature_source = None
+    if feature_cast_source:
+        selected_feature_source = next(
+            (
+                item
+                for item in feature_sources
+                if str(item.get("source_key") or "").casefold()
+                == feature_cast_source.casefold()
+            ),
+            None,
+        )
+        if selected_feature_source is None:
+            raise CombatEngineError("feature_cast_source is not available for this spell")
+    elif len(feature_sources) == 1 and not bool(
+        feature_sources[0].get("allow_slot_cast")
+    ):
+        selected_feature_source = feature_sources[0]
     mode = str(value.get("spellcasting", {}).get("preparation", {}).get("mode") or "known")
     spell_mastery = _is_spell_mastery_choice(value, spell_id)
     signature_spell = _is_signature_spell_choice(value, spell_id)
@@ -1084,7 +1107,12 @@ def consume_spell_cast(
         not spell_mastery or bool(access.get("prepared"))
     )
     ordinary_available = bool(access.get("always_prepared"))
-    available = bool(at_will_available or ordinary_available)
+    available = bool(
+        at_will_available
+        or ordinary_available
+        or selected_feature_source is not None
+        or any(bool(item.get("allow_slot_cast")) for item in feature_sources)
+    )
     if base_level := int(spell.get("level", 0) or 0):
         if mode in PREPARED_SELECTION_MODES:
             ordinary_available = ordinary_available or bool(access.get("prepared"))
@@ -1117,6 +1145,10 @@ def consume_spell_cast(
         raise CombatEngineError("an at-will spell must be cast at its lowest level")
     if signature_free_cast and not signature_spell:
         raise CombatEngineError("signature_free_cast requires a selected Signature Spell")
+    if signature_free_cast and selected_feature_source is not None:
+        raise CombatEngineError(
+            "signature_free_cast cannot be combined with feature_cast_source"
+        )
     if signature_free_cast and (base_level != 3 or level != 3 or ritual):
         raise CombatEngineError(
             "a Signature Spell free cast must be cast at 3rd level and cannot be a ritual"
@@ -1151,7 +1183,32 @@ def consume_spell_cast(
         )
     paid: dict[str, Any] = {"economy": "none", "level": level, "ritual": ritual}
     free_at_will = bool(at_will_available and level == base_level)
-    if signature_free_cast:
+    if selected_feature_source is not None:
+        if ritual:
+            raise CombatEngineError("a feature spell use cannot be cast as a ritual")
+        if level != base_level:
+            raise CombatEngineError(
+                "a feature spell use must be cast at its recorded spell level"
+            )
+        resource_key = str(selected_feature_source.get("resource_key") or "")
+        if resource_key:
+            resource = value.setdefault("resources", {}).get(resource_key)
+            if not isinstance(resource, dict) or int(resource.get("value", 0) or 0) <= 0:
+                raise CombatEngineError("feature spell use is unavailable")
+            mutate_bounded_resource(resource, amount=1, direction="spend")
+        elif base_level > 0:
+            raise CombatEngineError("a leveled feature spell needs its reviewed use resource")
+        paid = {
+            "economy": "feature_spell",
+            "resource_key": resource_key or None,
+            "source_key": str(selected_feature_source.get("source_key") or ""),
+            "spellcasting_ability": str(
+                selected_feature_source.get("spellcasting_ability") or ""
+            ),
+            "level": level,
+            "ritual": False,
+        }
+    elif signature_free_cast:
         resource_key = f"signature_spell:{spell_id}"
         resource = value.setdefault("resources", {}).get(resource_key)
         if not isinstance(resource, dict) or int(resource.get("value", 0) or 0) <= 0:

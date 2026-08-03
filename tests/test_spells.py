@@ -1382,6 +1382,60 @@ def test_signature_spell_free_use_is_explicit_and_limited_to_third_level() -> No
         )
 
 
+def test_reviewed_feature_spell_uses_its_own_ability_and_resource() -> None:
+    sheet = default_character_sheet()
+    spell = _spell("burning-hands", level=1)
+    spell["access"].update(
+        {
+            "known": False,
+            "prepared": False,
+            "feature_casting_sources": [
+                {
+                    "source_key": "Aberrant Dragonmark",
+                    "method": "limited_use",
+                    "spellcasting_ability": "constitution",
+                    "resource_key": "feat_spell:aberrant:burning-hands",
+                    "allow_slot_cast": False,
+                }
+            ],
+        }
+    )
+    sheet["content"]["spells"] = [spell]
+    sheet["resources"]["feat_spell:aberrant:burning-hands"] = {
+        "label": "Aberrant Dragonmark: Burning Hands",
+        "value": 1,
+        "max": 1,
+        "recovers_on": "long_rest",
+        "source_key": "Aberrant Dragonmark",
+    }
+    sheet = validate_character_sheet(sheet)
+
+    result = consume_spell_cast(
+        sheet,
+        spell_id="burning-hands",
+        feature_cast_source="Aberrant Dragonmark",
+    )
+
+    assert result["payment"] == {
+        "economy": "feature_spell",
+        "resource_key": "feat_spell:aberrant:burning-hands",
+        "source_key": "Aberrant Dragonmark",
+        "spellcasting_ability": "constitution",
+        "level": 1,
+        "ritual": False,
+    }
+    assert (
+        result["sheet"]["resources"]["feat_spell:aberrant:burning-hands"]["value"]
+        == 0
+    )
+    with pytest.raises(ValueError, match="unavailable"):
+        consume_spell_cast(
+            result["sheet"],
+            spell_id="burning-hands",
+            feature_cast_source="Aberrant Dragonmark",
+        )
+
+
 def test_2024_ranger_long_rest_replaces_only_one_spell() -> None:
     sheet = default_character_sheet()
     sheet["edition"] = "2024"

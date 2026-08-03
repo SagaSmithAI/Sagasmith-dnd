@@ -2544,6 +2544,7 @@ def author_selection_card_from_candidate(
             card.setdefault("prerequisites", [])
             card.setdefault("repeatable", False)
             card.setdefault("selection_requirements", None)
+            card.setdefault("mechanical_grants", {})
         elif kind == "feature":
             class_name = _candidate_class_name(candidate, description)
             subclass_name = _candidate_subclass_name(candidate, description)

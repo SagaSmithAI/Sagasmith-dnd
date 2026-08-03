@@ -1858,6 +1858,7 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
             "ritual_available",
             "at_will",
             "at_will_sources",
+            "feature_casting_sources",
         },
     )
     definition = normalize_spell_definition(
@@ -1870,6 +1871,63 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
     )
     if len(at_will_sources) != len(set(at_will_sources)):
         raise ValueError(f"{field}.access.at_will_sources contains duplicates")
+    raw_feature_sources = access.get("feature_casting_sources") or []
+    if not isinstance(raw_feature_sources, list):
+        raise ValueError(f"{field}.access.feature_casting_sources must be an array")
+    feature_casting_sources = []
+    for index, raw_source in enumerate(raw_feature_sources):
+        source_field = f"{field}.access.feature_casting_sources[{index}]"
+        source = _object(raw_source, source_field)
+        _reject_unknown(
+            source,
+            source_field,
+            {
+                "source_key",
+                "method",
+                "spellcasting_ability",
+                "resource_key",
+                "allow_slot_cast",
+            },
+        )
+        method = _text(source.get("method"), f"{source_field}.method", maximum=100)
+        if method not in {"known", "limited_use"}:
+            raise ValueError(f"{source_field}.method must be known or limited_use")
+        ability = _text(
+            source.get("spellcasting_ability"),
+            f"{source_field}.spellcasting_ability",
+            maximum=30,
+        ).casefold()
+        if ability not in ABILITY_NAMES:
+            raise ValueError(f"{source_field}.spellcasting_ability is invalid")
+        feature_casting_sources.append(
+            {
+                "source_key": _text(
+                    source.get("source_key"),
+                    f"{source_field}.source_key",
+                    maximum=300,
+                ),
+                "method": method,
+                "spellcasting_ability": ability,
+                "resource_key": (
+                    _text(
+                        source.get("resource_key"),
+                        f"{source_field}.resource_key",
+                        maximum=300,
+                    )
+                    if source.get("resource_key") is not None
+                    else None
+                ),
+                "allow_slot_cast": _boolean(
+                    source.get("allow_slot_cast"),
+                    f"{source_field}.allow_slot_cast",
+                ),
+            }
+        )
+    feature_source_keys = [
+        item["source_key"].casefold() for item in feature_casting_sources
+    ]
+    if len(feature_source_keys) != len(set(feature_source_keys)):
+        raise ValueError(f"{field}.access.feature_casting_sources contains duplicates")
     spell_id = _text(spell.get("id"), f"{field}.id", default=_uuid(), maximum=100)
     result = {
         "id": spell_id,
@@ -1899,6 +1957,7 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
                 _boolean(access.get("at_will"), f"{field}.access.at_will") or bool(at_will_sources)
             ),
             "at_will_sources": at_will_sources,
+            "feature_casting_sources": feature_casting_sources,
         },
         "definition": definition,
         "point_cost": _integer(spell.get("point_cost"), f"{field}.point_cost", minimum=0),

@@ -11,6 +11,7 @@ from sagasmith_dnd.content_readiness import (
     build_selection_contract,
     catalog_review_errors,
     content_fingerprint,
+    feat_materializer_errors,
     selection_contract_errors,
     selection_input_errors,
     selection_schema_for_artifact,
@@ -336,6 +337,98 @@ def test_species_materializer_accepts_cross_kind_proficiency_and_tool_expertise(
     }
 
     assert species_materializer_errors(card) == []
+
+
+def test_feat_materializer_accepts_fixed_and_selected_spell_grants() -> None:
+    card = {
+        "name": "Aberrant Dragonmark",
+        "prerequisites": [{"kind": "feature_forbidden", "feature": "dragonmark"}],
+        "repeatable": False,
+        "mechanical_grants": {
+            "ability_score_increases": {"constitution": 1},
+            "maximum_ability_score": 20,
+            "languages": [],
+            "tool_proficiencies": [],
+            "weapon_proficiencies": [],
+            "spell_grants": [],
+        },
+        "selection_requirements": {
+            "field": "spell_choices",
+            "kind": "spell_grants",
+            "groups": [
+                {
+                    "id": "cantrip",
+                    "count": 1,
+                    "level": 0,
+                    "eligible_classes": ["Sorcerer"],
+                    "method": "known",
+                    "spellcasting_ability": "constitution",
+                    "free_casts": 0,
+                    "recovers_on": None,
+                    "allow_slot_cast": False,
+                },
+                {
+                    "id": "level_1_spell",
+                    "count": 1,
+                    "level": 1,
+                    "eligible_classes": ["Sorcerer"],
+                    "method": "limited_use",
+                    "spellcasting_ability": "constitution",
+                    "free_casts": 1,
+                    "recovers_on": "long_rest",
+                    "allow_slot_cast": False,
+                },
+            ],
+        },
+    }
+
+    assert feat_materializer_errors(card) == []
+
+    invalid = copy.deepcopy(card)
+    invalid["selection_requirements"]["groups"][1]["eligible_classes"] = []
+    assert any(
+        "eligible_classes must not be empty" in error
+        for error in feat_materializer_errors(invalid)
+    )
+
+
+def test_feat_materializer_accepts_reviewed_fixed_spell_grants() -> None:
+    card = {
+        "name": "Greater Dragonmark (Detection)",
+        "prerequisites": [
+            {"kind": "level_minimum", "minimum": 8},
+            {"kind": "feature_required", "feature": "Mark of Detection"},
+        ],
+        "repeatable": False,
+        "selection_requirements": {
+            "field": "ability_score_increases",
+            "kind": "ability_score_increase",
+            "allowed_distributions": [[1]],
+            "ability_options": ["charisma", "intelligence"],
+            "maximum_score": 20,
+        },
+        "mechanical_grants": {
+            "ability_score_increases": {},
+            "maximum_ability_score": 20,
+            "languages": [],
+            "tool_proficiencies": [],
+            "weapon_proficiencies": [],
+            "spell_grants": [
+                {
+                    "name": "See Invisibility",
+                    "level": 2,
+                    "eligible_classes": ["Bard", "Sorcerer", "Wizard"],
+                    "method": "limited_use",
+                    "spellcasting_ability": "intelligence",
+                    "free_casts": 1,
+                    "recovers_on": "long_rest",
+                    "allow_slot_cast": False,
+                }
+            ],
+        },
+    }
+
+    assert feat_materializer_errors(card) == []
 
 
 def test_subclass_spell_grants_keep_known_and_prepared_semantics_distinct() -> None:

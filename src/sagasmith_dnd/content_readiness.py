@@ -21,7 +21,7 @@ from sagasmith_dnd.character_schema import (
 )
 
 CATALOG_REVIEW_SCHEMA_VERSION = 1
-SELECTION_CONTRACT_SCHEMA_VERSION = 1
+SELECTION_CONTRACT_SCHEMA_VERSION = 2
 CATALOG_REVIEW_CHECKS = frozenset(
     {"identity", "classification", "entry_boundary", "references"}
 )
@@ -87,7 +87,13 @@ _CARD_BINDINGS = {
     "activity": ("name",),
     "background": ("name", "background_grants"),
     "class": ("name", "class_definition"),
-    "feat": ("name", "prerequisites", "repeatable", "selection_requirements"),
+    "feat": (
+        "name",
+        "prerequisites",
+        "repeatable",
+        "selection_requirements",
+        "mechanical_grants",
+    ),
     "feature": (
         "name",
         "class_name",
@@ -811,6 +817,199 @@ def species_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
     return errors
 
 
+def feat_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
+    """Validate bounded feat grants and source-constrained spell choices."""
+
+    errors: list[str] = []
+    ability_names = {
+        "strength",
+        "dexterity",
+        "constitution",
+        "intelligence",
+        "wisdom",
+        "charisma",
+    }
+
+    def string_list(value: Any, label: str) -> list[str]:
+        if not isinstance(value, list) or any(
+            not isinstance(item, str) or not item.strip() for item in value
+        ):
+            errors.append(f"feat {label} must be an array of non-empty strings")
+            return []
+        normalized = [item.strip() for item in value]
+        if len({item.casefold() for item in normalized}) != len(normalized):
+            errors.append(f"feat {label} must be distinct")
+        return normalized
+
+    def validate_spell_grant(
+        raw_grant: Any,
+        *,
+        prefix: str,
+        choice_group: bool,
+    ) -> None:
+        if not isinstance(raw_grant, Mapping):
+            errors.append(f"{prefix} must be an object")
+            return
+        required = {
+            "level",
+            "eligible_classes",
+            "method",
+            "spellcasting_ability",
+            "free_casts",
+            "recovers_on",
+            "allow_slot_cast",
+        }
+        if choice_group:
+            required.update({"id", "count"})
+        else:
+            required.add("name")
+        unsupported = set(raw_grant) - required
+        missing = required - set(raw_grant)
+        if unsupported:
+            errors.append(f"{prefix} has unsupported fields: {sorted(unsupported)}")
+        if missing:
+            errors.append(f"{prefix} has missing fields: {sorted(missing)}")
+        if choice_group:
+            if not str(raw_grant.get("id") or "").strip():
+                errors.append(f"{prefix}.id must not be empty")
+            count = raw_grant.get("count")
+            if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 5:
+                errors.append(f"{prefix}.count must be an integer from 1 to 5")
+        elif not str(raw_grant.get("name") or "").strip():
+            errors.append(f"{prefix}.name must not be empty")
+        level = raw_grant.get("level")
+        if isinstance(level, bool) or not isinstance(level, int) or not 0 <= level <= 9:
+            errors.append(f"{prefix}.level must be an integer from 0 to 9")
+        eligible_classes = string_list(
+            raw_grant.get("eligible_classes"),
+            f"{prefix.removeprefix('feat ')}.eligible_classes",
+        )
+        if not eligible_classes:
+            errors.append(f"{prefix}.eligible_classes must not be empty")
+        if raw_grant.get("method") not in {"known", "limited_use"}:
+            errors.append(f"{prefix}.method must be known or limited_use")
+        ability = str(raw_grant.get("spellcasting_ability") or "").casefold()
+        if ability not in ability_names:
+            errors.append(f"{prefix}.spellcasting_ability is invalid")
+        free_casts = raw_grant.get("free_casts")
+        if (
+            isinstance(free_casts, bool)
+            or not isinstance(free_casts, int)
+            or not 0 <= free_casts <= 9
+        ):
+            errors.append(f"{prefix}.free_casts must be an integer from 0 to 9")
+            free_casts = 0
+        recovers_on = raw_grant.get("recovers_on")
+        if free_casts and recovers_on not in {"short_rest", "long_rest"}:
+            errors.append(
+                f"{prefix}.recovers_on must be short_rest or long_rest for free casts"
+            )
+        if not free_casts and recovers_on is not None:
+            errors.append(f"{prefix}.recovers_on must be null without free casts")
+        if not isinstance(raw_grant.get("allow_slot_cast"), bool):
+            errors.append(f"{prefix}.allow_slot_cast must be a boolean")
+
+    prerequisites = binding.get("prerequisites")
+    if prerequisites is not None and not isinstance(prerequisites, list):
+        errors.append("feat prerequisites must be an array")
+    elif isinstance(prerequisites, list):
+        supported_prerequisites = {
+            "ability_any_minimum",
+            "ability_minimum",
+            "feature_forbidden",
+            "feature_required",
+            "level_minimum",
+            "species_required",
+        }
+        for index, prerequisite in enumerate(prerequisites):
+            prefix = f"feat prerequisites[{index}]"
+            if not isinstance(prerequisite, Mapping):
+                errors.append(f"{prefix} must be an object")
+                continue
+            kind = str(prerequisite.get("kind") or "")
+            if kind not in supported_prerequisites:
+                errors.append(f"{prefix}.kind is unsupported")
+
+    grants = binding.get("mechanical_grants")
+    if grants is None:
+        grants = {}
+    if not isinstance(grants, Mapping):
+        errors.append("feat mechanical_grants must be an object")
+        grants = {}
+    supported_grants = {
+        "ability_score_increases",
+        "maximum_ability_score",
+        "languages",
+        "tool_proficiencies",
+        "weapon_proficiencies",
+        "spell_grants",
+    }
+    unsupported_grants = set(grants) - supported_grants
+    if unsupported_grants:
+        errors.append(
+            f"feat mechanical_grants has unsupported fields: {sorted(unsupported_grants)}"
+        )
+    increases = grants.get("ability_score_increases", {})
+    if not isinstance(increases, Mapping):
+        errors.append("feat ability_score_increases must be an object")
+        increases = {}
+    for ability, amount in increases.items():
+        if str(ability).casefold() not in ability_names:
+            errors.append("feat ability_score_increases contains an unknown ability")
+        if isinstance(amount, bool) or not isinstance(amount, int) or amount <= 0:
+            errors.append("feat ability_score_increases must use positive integers")
+    maximum = grants.get("maximum_ability_score", 20)
+    if isinstance(maximum, bool) or not isinstance(maximum, int) or not 1 <= maximum <= 30:
+        errors.append("feat maximum_ability_score must be an integer from 1 to 30")
+    for field in ("languages", "tool_proficiencies", "weapon_proficiencies"):
+        string_list(grants.get(field, []), field)
+    raw_spell_grants = grants.get("spell_grants", [])
+    if not isinstance(raw_spell_grants, list):
+        errors.append("feat spell_grants must be an array")
+        raw_spell_grants = []
+    fixed_spell_names: list[str] = []
+    for index, raw_grant in enumerate(raw_spell_grants):
+        validate_spell_grant(
+            raw_grant,
+            prefix=f"feat spell_grants[{index}]",
+            choice_group=False,
+        )
+        if isinstance(raw_grant, Mapping):
+            fixed_spell_names.append(str(raw_grant.get("name") or "").casefold())
+    if len(fixed_spell_names) != len(set(fixed_spell_names)):
+        errors.append("feat spell_grants must not repeat a spell")
+
+    requirements = binding.get("selection_requirements")
+    if requirements is not None and not isinstance(requirements, Mapping):
+        errors.append("feat selection_requirements must be an object")
+    elif isinstance(requirements, Mapping) and requirements.get("kind") == "spell_grants":
+        supported_requirement_fields = {"field", "kind", "groups"}
+        unsupported = set(requirements) - supported_requirement_fields
+        if unsupported:
+            errors.append(
+                "feat spell selection requirements have unsupported fields: "
+                f"{sorted(unsupported)}"
+            )
+        if not str(requirements.get("field") or "").strip():
+            errors.append("feat spell selection requirements need a field")
+        groups = requirements.get("groups")
+        if not isinstance(groups, list) or not groups:
+            errors.append("feat spell selection requirements need non-empty groups")
+            groups = []
+        group_ids: list[str] = []
+        for index, raw_group in enumerate(groups):
+            validate_spell_grant(
+                raw_group,
+                prefix=f"feat spell selection groups[{index}]",
+                choice_group=True,
+            )
+            if isinstance(raw_group, Mapping):
+                group_ids.append(str(raw_group.get("id") or "").casefold())
+        if len(group_ids) != len(set(group_ids)):
+            errors.append("feat spell selection group ids must be distinct")
+    return errors
+
+
 def subclass_spell_grant_errors(binding: Mapping[str, Any]) -> list[str]:
     """Validate source-reviewed subclass grants without conflating access modes."""
 
@@ -964,12 +1163,11 @@ def _validate_materializer_card(kind: str, binding: Mapping[str, Any]) -> None:
         if not isinstance(binding.get("grants"), Mapping):
             raise ValueError("species card needs grants")
     elif kind == "feat":
-        if not isinstance(binding.get("prerequisites"), (list, type(None))):
-            raise ValueError("feat prerequisites must be an array")
         if not isinstance(binding.get("repeatable"), (bool, type(None))):
             raise ValueError("feat repeatable must be a boolean")
-        if not isinstance(binding.get("selection_requirements"), (Mapping, type(None))):
-            raise ValueError("feat selection_requirements must be an object")
+        errors = feat_materializer_errors(binding)
+        if errors:
+            raise ValueError(errors[0])
     elif kind == "feature":
         minimum = binding.get("minimum_level")
         if minimum is not None and (
@@ -1020,6 +1218,7 @@ __all__ = [
     "build_selection_contract",
     "catalog_review_errors",
     "content_fingerprint",
+    "feat_materializer_errors",
     "selection_contract_errors",
     "selection_input_errors",
     "selection_schema_for_artifact",
