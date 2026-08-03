@@ -15,6 +15,7 @@ from sagasmith_dnd.content_readiness import (
     selection_input_errors,
     selection_schema_for_artifact,
     species_materializer_errors,
+    subclass_spell_grant_errors,
 )
 
 
@@ -262,6 +263,26 @@ def test_species_materializer_rejects_ocr_counts_and_unbounded_choices() -> None
         }
     )
     assert species_materializer_errors(card) == []
+
+
+def test_subclass_spell_grants_keep_known_and_prepared_semantics_distinct() -> None:
+    card = {
+        "name": "Circle of Spores",
+        "class_name": "Druid",
+        "minimum_level": 2,
+        "always_prepared_spells": [
+            {"name": "Blindness/Deafness", "minimum_level": 3}
+        ],
+        "spell_grants": [
+            {"name": "Chill Touch", "minimum_level": 2, "method": "known"}
+        ],
+    }
+    assert subclass_spell_grant_errors(card) == []
+
+    card["spell_grants"][0]["method"] = "prepared"
+    assert subclass_spell_grant_errors(card) == [
+        "subclass spell_grants[0].method must be always_prepared, known, or spellbook"
+    ]
 
 
 @pytest.mark.parametrize(

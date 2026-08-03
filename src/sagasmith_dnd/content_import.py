@@ -2640,6 +2640,7 @@ def author_selection_card_from_candidate(
                 or _SUBCLASS_MINIMUM_LEVELS_2014.get(class_name.casefold(), 3)
             )
             card.setdefault("always_prepared_spells", [])
+            card.setdefault("spell_grants", [])
             value["application_state"] = "selection_ready"
         return value
     return value

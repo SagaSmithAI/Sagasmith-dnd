@@ -100,7 +100,13 @@ _CARD_BINDINGS = {
     "item": ("name", "inventory_template"),
     "species": ("name", "base_species", "grants"),
     "spell": ("name", "classes", "level", "definition"),
-    "subclass": ("name", "class_name", "minimum_level", "always_prepared_spells"),
+    "subclass": (
+        "name",
+        "class_name",
+        "minimum_level",
+        "always_prepared_spells",
+        "spell_grants",
+    ),
 }
 
 
@@ -644,6 +650,64 @@ def species_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
     return errors
 
 
+def subclass_spell_grant_errors(binding: Mapping[str, Any]) -> list[str]:
+    """Validate source-reviewed subclass grants without conflating access modes."""
+
+    errors: list[str] = []
+    normalized_names: list[str] = []
+    legacy = binding.get("always_prepared_spells")
+    if legacy is None:
+        legacy = []
+    if not isinstance(legacy, list):
+        return ["subclass always_prepared_spells must be an array"]
+    grants = binding.get("spell_grants")
+    if grants is None:
+        grants = []
+    if not isinstance(grants, list):
+        return ["subclass spell_grants must be an array"]
+    for label, entries, legacy_mode in (
+        ("always_prepared_spells", legacy, True),
+        ("spell_grants", grants, False),
+    ):
+        for index, raw_grant in enumerate(entries):
+            prefix = f"subclass {label}[{index}]"
+            if not isinstance(raw_grant, Mapping):
+                errors.append(f"{prefix} must be an object")
+                continue
+            expected = {"minimum_level", "name"}
+            if not legacy_mode:
+                expected.add("method")
+            unsupported = set(raw_grant) - expected
+            missing = expected - set(raw_grant)
+            if unsupported:
+                errors.append(f"{prefix} has unsupported fields: {sorted(unsupported)}")
+            if missing:
+                errors.append(f"{prefix} has missing fields: {sorted(missing)}")
+            name = str(raw_grant.get("name") or "").strip()
+            if not name:
+                errors.append(f"{prefix}.name must not be empty")
+            else:
+                normalized_names.append(name.casefold())
+            minimum_level = raw_grant.get("minimum_level")
+            if (
+                isinstance(minimum_level, bool)
+                or not isinstance(minimum_level, int)
+                or not 1 <= minimum_level <= 20
+            ):
+                errors.append(f"{prefix}.minimum_level must be an integer from 1 to 20")
+            if not legacy_mode and raw_grant.get("method") not in {
+                "always_prepared",
+                "known",
+                "spellbook",
+            }:
+                errors.append(
+                    f"{prefix}.method must be always_prepared, known, or spellbook"
+                )
+    if len(normalized_names) != len(set(normalized_names)):
+        errors.append("subclass spell grants must not repeat a spell")
+    return errors
+
+
 def _validate_materializer_card(kind: str, binding: Mapping[str, Any]) -> None:
     name = str(binding.get("name") or "").strip()
     if not name:
@@ -669,8 +733,9 @@ def _validate_materializer_card(kind: str, binding: Mapping[str, Any]) -> None:
         minimum = binding.get("minimum_level")
         if isinstance(minimum, bool) or not isinstance(minimum, int) or minimum < 1:
             raise ValueError("subclass card needs minimum_level >= 1")
-        if not isinstance(binding.get("always_prepared_spells"), (list, type(None))):
-            raise ValueError("subclass always_prepared_spells must be an array")
+        errors = subclass_spell_grant_errors(binding)
+        if errors:
+            raise ValueError(errors[0])
     elif kind == "background":
         errors = background_materializer_errors(binding)
         if errors:
