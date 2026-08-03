@@ -393,6 +393,100 @@ def test_primary_review_authors_safe_typed_selection_cards(
         ]
 
 
+def test_primary_review_preserves_agent_authored_background_semantics() -> None:
+    artifact = author_selection_card_from_candidate(
+        {
+            "id": "candidate:izzet-engineer",
+            "kind": "background",
+            "name": "Izzet Engineer",
+            "artifact": {
+                "kind": "background",
+                "application_state": "catalog_only",
+                "card": {
+                    "name": "Izzet Engineer",
+                    "description": (
+                        "Skill Proficiencies: Arcana, Investigation "
+                        "Languages: One of your choice Equipment: artisan tools."
+                    ),
+                    "background_grants": {
+                        "feature": "Urban Infrastructure",
+                        "tools": ["Artisan's tools"],
+                        "choices": {
+                            "language_options": ["Draconic", "Goblin", "Vedalken"],
+                        },
+                    },
+                },
+            },
+        }
+    )
+
+    grants = artifact["card"]["background_grants"]
+    assert artifact["application_state"] == "selection_ready"
+    assert grants["feature"] == "Urban Infrastructure"
+    assert grants["tools"] == ["Artisan's tools"]
+    assert grants["choices"]["language_count"] == 1
+    assert grants["choices"]["language_options"] == [
+        "Draconic",
+        "Goblin",
+        "Vedalken",
+    ]
+
+
+def test_primary_review_preserves_agent_authored_species_and_item_cards() -> None:
+    species = author_selection_card_from_candidate(
+        {
+            "id": "candidate:species",
+            "kind": "species",
+            "name": "Reviewed Species",
+            "artifact": {
+                "kind": "species",
+                "card": {
+                    "name": "Reviewed Species",
+                    "description": (
+                        "Ability Score Increase. Your Strength score increases by 2. "
+                        "Size. Your size is Medium. Speed. Your walking speed is 30 feet."
+                    ),
+                    "grants": {
+                        "ability_score_increases": {"wisdom": 2},
+                        "size": "Small",
+                        "walk_speed": 25,
+                        "features": [],
+                    },
+                },
+            },
+        }
+    )
+    item = author_selection_card_from_candidate(
+        {
+            "id": "candidate:item",
+            "kind": "item",
+            "name": "Reviewed Focus",
+            "artifact": {
+                "kind": "item",
+                "card": {
+                    "name": "Reviewed Focus",
+                    "description": "Wondrous item, rare.",
+                    "inventory_template": {
+                        "name": "Reviewed Focus",
+                        "kind": "magic_item",
+                        "quantity": 1,
+                        "description": "Reviewer-normalized description.",
+                        "attunement": "required",
+                        "mechanics": {"reviewed": True},
+                    },
+                },
+            },
+        }
+    )
+
+    assert species["card"]["grants"]["ability_score_increases"] == {"wisdom": 2}
+    assert species["card"]["grants"]["walk_speed"] == 25
+    assert item["card"]["inventory_template"]["mechanics"] == {"reviewed": True}
+    assert item["card"]["inventory_template"]["description"] == (
+        "Reviewer-normalized description."
+    )
+
+
 def test_source_coverage_fragment_is_runtime_context_not_character_feature() -> None:
     artifact = author_selection_card_from_candidate(
         {

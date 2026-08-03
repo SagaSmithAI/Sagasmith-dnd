@@ -2533,7 +2533,7 @@ def author_selection_card_from_candidate(
     if kind == "class":
         definition = _class_selection_definition(description)
         if definition is not None:
-            card["class_definition"] = definition
+            card.setdefault("class_definition", definition)
             value["application_state"] = "selection_ready"
         return value
 
@@ -2575,28 +2575,40 @@ def author_selection_card_from_candidate(
 
     if kind == "item":
         item_kind = "magic_item" if _ITEM_HEADER_RE.search(description[:500]) else "equipment"
-        card["inventory_template"] = {
-            "name": name,
-            "kind": item_kind,
-            "quantity": 1,
-            "description": description[:1200],
-            "attunement": (
-                "required" if "requires attunement" in description.casefold() else "none"
-            ),
-            "mechanics": {},
-        }
+        card.setdefault(
+            "inventory_template",
+            {
+                "name": name,
+                "kind": item_kind,
+                "quantity": 1,
+                "description": description[:1200],
+                "attunement": (
+                    "required" if "requires attunement" in description.casefold() else "none"
+                ),
+                "mechanics": {},
+            },
+        )
         value["application_state"] = "selection_ready"
         return value
 
     if kind == "background":
-        card.update(_background_selection_card(description))
+        inferred = _background_selection_card(description)
+        for field, inferred_value in inferred.items():
+            reviewed_value = card.get(field)
+            if isinstance(inferred_value, dict) and isinstance(reviewed_value, dict):
+                card[field] = _merge_inferred_defaults(
+                    inferred_value,
+                    reviewed_value,
+                )
+            else:
+                card.setdefault(field, inferred_value)
         value["application_state"] = "selection_ready"
         return value
 
     if kind == "species":
         grants = _species_grants(description)
         if grants is not None:
-            card["grants"] = grants
+            card.setdefault("grants", grants)
             value["application_state"] = "selection_ready"
         return value
 
@@ -2614,6 +2626,22 @@ def author_selection_card_from_candidate(
             value["application_state"] = "selection_ready"
         return value
     return value
+
+
+def _merge_inferred_defaults(
+    inferred: dict[str, Any],
+    reviewed: dict[str, Any],
+) -> dict[str, Any]:
+    """Fill absent nested fields while preserving explicit reviewer semantics."""
+
+    merged = deepcopy(inferred)
+    for field, reviewed_value in reviewed.items():
+        inferred_value = merged.get(field)
+        if isinstance(inferred_value, dict) and isinstance(reviewed_value, dict):
+            merged[field] = _merge_inferred_defaults(inferred_value, reviewed_value)
+        else:
+            merged[field] = deepcopy(reviewed_value)
+    return merged
 
 
 def _candidate_class_name(candidate: dict[str, Any], description: str) -> str:
