@@ -304,7 +304,7 @@ def extract_content_candidates(
                 "artifact": {
                     "kind": kind,
                     "application_state": "catalog_only",
-                    "card": {"name": candidate_name, "description": content[:2000]},
+                    "card": {"name": candidate_name, "description": content[:12000]},
                 },
             }
         )
@@ -667,7 +667,7 @@ def _embedded_species_candidates(
                         "kind": "species",
                         "application_state": "catalog_only",
                         "mechanical_scope": "review_required",
-                        "card": {"name": name, "description": body[:2000]},
+                        "card": {"name": name, "description": body[:12000]},
                     },
                 }
             )
@@ -2109,6 +2109,12 @@ def author_selection_card_from_candidate(candidate: dict[str, Any]) -> dict[str,
     value["card"] = card
     if value.get("application_state") == "selection_ready":
         return value
+    if card.get("source_fragment") is True:
+        # Coverage fallbacks are runtime context for the Agent-as-DM. They are
+        # not character options merely because their storage kind is feature.
+        value["selection_applicability"] = "not_applicable"
+        value["application_state"] = "catalog_only"
+        return value
 
     if kind == "spell":
         classes = [
@@ -2359,8 +2365,10 @@ def _species_feature_cards(description: str) -> list[dict[str, Any]]:
             description,
         )
         if len(match.group("name").split()) <= 6
+        and _looks_like_species_trait_heading(match.group("name"))
     ]
-    features = []
+    features: list[dict[str, Any]] = []
+    positions: dict[str, int] = {}
     ignored = {"ability score increase", "age", "alignment", "size", "speed", "languages"}
     for index, match in enumerate(starts):
         name = " ".join(match.group("name").split())
@@ -2370,8 +2378,28 @@ def _species_feature_cards(description: str) -> list[dict[str, Any]]:
         body = description[match.end() : end].strip()
         if not body:
             continue
-        features.append({"name": name, "description": body[:4000]})
+        feature = {"name": name, "description": body[:4000]}
+        key = name.casefold()
+        previous = positions.get(key)
+        if previous is None:
+            positions[key] = len(features)
+            features.append(feature)
+        elif len(body) > len(str(features[previous]["description"])):
+            # A page/column boundary can repeat the heading with a short
+            # leading fragment. Keep the complete reviewed occurrence.
+            features[previous] = feature
     return features
+
+
+def _looks_like_species_trait_heading(value: str) -> bool:
+    connectors = {"a", "an", "and", "of", "or", "the"}
+    words = [word.strip("()") for word in value.split() if word.strip("()")]
+    return bool(words) and all(
+        word.casefold() in connectors
+        or word.isupper()
+        or (word[0].isupper() and (len(word) == 1 or word[1:].islower()))
+        for word in words
+    )
 
 
 def _word_number(value: str) -> int:

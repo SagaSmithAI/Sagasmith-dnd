@@ -52,8 +52,11 @@ def test_extracts_review_required_catalog_candidates() -> None:
             (
                 "Ability Score Increase. Your Strength score increases by 2, and your "
                 "Wisdom score increases by 1. Size. Your size is Medium. Speed. Your "
-                "base walking speed is 30 feet. Natural Armor. Your shell gives you "
-                "a base AC of 17. Survival Instinct. You gain proficiency in the "
+                "base walking speed is 30 feet. Alignment. Most are lawful good. A "
+                "few can be selfish. Natural Armor. Your shell gives you a base AC "
+                "of 17. Shell Defense. You gain +4 AC while withdrawn. normal. Shell "
+                "Defense. You gain +4 AC while withdrawn, are prone, have speed 0, "
+                "and cannot take reactions. Survival Instinct. You gain proficiency in the "
                 "Survival skill. Languages. You can speak, read, and write Aquan and Common."
             ),
             "grants",
@@ -117,8 +120,13 @@ def test_primary_review_authors_safe_typed_selection_cards(
         assert grants["skill_proficiencies"] == ["survival"]
         assert [item["name"] for item in grants["features"]] == [
             "Natural Armor",
+            "Shell Defense",
             "Survival Instinct",
         ]
+        shell = next(
+            item for item in grants["features"] if item["name"] == "Shell Defense"
+        )
+        assert "cannot take reactions" in shell["description"]
     elif kind == "background":
         assert artifact["card"]["skill_proficiencies"] == [
             "investigation",
@@ -132,6 +140,28 @@ def test_primary_review_authors_safe_typed_selection_cards(
     elif kind == "subclass":
         assert artifact["card"]["class_name"] == "Wizard"
         assert artifact["card"]["minimum_level"] == 2
+
+
+def test_source_coverage_fragment_is_runtime_context_not_character_feature() -> None:
+    artifact = author_selection_card_from_candidate(
+        {
+            "id": "candidate:source-fragment",
+            "kind": "feature",
+            "name": "Source fragment: Random Encounters (p. 5)",
+            "artifact": {
+                "kind": "feature",
+                "application_state": "catalog_only",
+                "card": {
+                    "name": "Source fragment: Random Encounters (p. 5)",
+                    "description": "Roll three encounter checks per day.",
+                    "source_fragment": True,
+                },
+            },
+        }
+    )
+
+    assert artifact["application_state"] == "catalog_only"
+    assert artifact["selection_applicability"] == "not_applicable"
 
 
 def test_inventory_splits_flattened_spell_descriptions_and_class_lists() -> None:

@@ -23,6 +23,7 @@ from sagasmith_dnd.character_schema import (
     validate_character_notes,
     validate_character_sheet,
 )
+from sagasmith_dnd.content_readiness import build_catalog_review
 from sagasmith_dnd.core_content import PACK_ID as SRD2014_CONTENT_PACK_ID
 from sagasmith_dnd.core_content import PACK_VERSION as SRD2014_CONTENT_PACK_VERSION
 from sagasmith_dnd.core_content_2024 import PACK_ID as SRD2024_CONTENT_PACK_ID
@@ -107,6 +108,60 @@ def validate_dnd_actor_card(card: Mapping[str, Any]) -> dict[str, Any]:
     if notes != payload["notes"]:
         raise PortableContentError("D&D actor card notes must use the canonical v2 form")
     return value
+
+
+def actor_catalog_artifact(card: Mapping[str, Any]) -> dict[str, Any]:
+    """Project a portable actor card into its review-bound catalog subject."""
+
+    value = validate_dnd_actor_card(card)
+    payload = copy.deepcopy(dict(value["payload"]))
+    provenance = copy.deepcopy(dict(payload.get("provenance") or {}))
+    review = provenance.pop("catalog_review", None)
+    payload["provenance"] = provenance
+    return {
+        "id": str(value["id"]),
+        "kind": f"actor_card:{str(payload.get('actor_type') or 'unknown')}",
+        "card": payload,
+        "catalog_review": review,
+    }
+
+
+def bind_actor_catalog_review(
+    card: Mapping[str, Any],
+    *,
+    decisions: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Attach an approved dual review to the exact portable actor payload.
+
+    The review is stored inside provenance so it travels with the actor card,
+    while the fingerprint excludes only that attestation. Rebuilding the card
+    refreshes its package checksum after the review is attached.
+    """
+
+    value = validate_dnd_actor_card(card)
+    payload = copy.deepcopy(dict(value["payload"]))
+    provenance = copy.deepcopy(dict(payload.get("provenance") or {}))
+    provenance.pop("catalog_review", None)
+    subject = actor_catalog_artifact(value)
+    provenance["catalog_review"] = build_catalog_review(
+        subject,
+        decisions=decisions,
+        status="approved",
+    )
+    return build_dnd_actor_card(
+        portable_id=str(value["id"]),
+        version=str(value["version"]),
+        actor_type=str(payload["actor_type"]),
+        name=str(payload["name"]),
+        player_name=payload.get("player_name"),
+        summary=str(payload.get("summary") or ""),
+        sheet=dict(payload["sheet"]),
+        notes=dict(payload["notes"]),
+        provenance=provenance,
+        bindings=list(payload.get("bindings") or []),
+        metadata=dict(value.get("metadata") or {}),
+        dependencies=list(value.get("dependencies") or []),
+    )
 
 
 def actor_card_from_statblock(
@@ -378,7 +433,9 @@ __all__ = [
     "SRD2014_PRESET_PACK_VERSION",
     "SRD2024_PRESET_PACK_ID",
     "SRD2024_PRESET_PACK_VERSION",
+    "actor_catalog_artifact",
     "actor_card_from_statblock",
+    "bind_actor_catalog_review",
     "build_dnd_actor_card",
     "build_srd2014_preset_pack",
     "build_srd2024_preset_pack",
