@@ -17,6 +17,7 @@ from sagasmith_dnd.content_readiness import (
     build_catalog_review,
     build_selection_contract,
     selection_contract_errors,
+    selection_schema_for_artifact,
     species_materializer_errors,
 )
 from sagasmith_dnd.resolution_plan import (
@@ -2533,6 +2534,14 @@ def author_selection_card_from_candidate(
         return value
 
     if kind == "class":
+        if isinstance(card.get("class_definition"), dict):
+            try:
+                selection_schema_for_artifact({"kind": kind, "card": card})
+            except ValueError:
+                pass
+            else:
+                value["application_state"] = "selection_ready"
+                return value
         definition = _class_selection_definition(description)
         if definition is not None:
             card.setdefault("class_definition", definition)

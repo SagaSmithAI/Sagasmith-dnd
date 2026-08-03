@@ -522,6 +522,38 @@ def test_primary_review_preserves_agent_authored_species_and_item_cards() -> Non
     )
 
 
+def test_primary_review_preserves_valid_agent_authored_base_class_card() -> None:
+    artifact = author_selection_card_from_candidate(
+        {
+            "id": "candidate:artificer",
+            "kind": "class",
+            "name": "Artificer",
+            "artifact": {
+                "kind": "class",
+                "application_state": "catalog_only",
+                "card": {
+                    "name": "Artificer",
+                    "description": "A reviewed class whose OCR text is not re-parsed here.",
+                    "class_definition": {
+                        "hit_die": 8,
+                        "saving_throw_proficiencies": ["constitution", "intelligence"],
+                        "armor_proficiencies": ["light armor", "medium armor", "shields"],
+                        "weapon_proficiencies": ["simple weapons"],
+                        "tool_proficiencies": ["Thieves' Tools", "Tinker's Tools"],
+                        "tool_choice_count": 1,
+                        "tool_options": ["Smith's Tools", "Weaver's Tools"],
+                        "skill_choice_count": 2,
+                        "skill_options": ["arcana", "investigation", "medicine"],
+                    },
+                },
+            },
+        }
+    )
+
+    assert artifact["application_state"] == "selection_ready"
+    assert artifact["card"]["class_definition"]["tool_choice_count"] == 1
+
+
 def test_primary_review_blocks_implausible_ocr_species_choices() -> None:
     artifact = author_selection_card_from_candidate(
         {
