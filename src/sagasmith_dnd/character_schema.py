@@ -385,6 +385,7 @@ def default_character_sheet() -> dict[str, Any]:
                 "weapons": [],
                 "tools": [],
                 "tool_expertise": [],
+                "tool_expertise_all": False,
             },
             "resistances": [],
             "immunities": [],
@@ -2814,7 +2815,7 @@ def validate_character_sheet(
     _reject_unknown(
         proficiencies,
         "sheet.traits.proficiencies",
-        {"armor", "weapons", "tools", "tool_expertise"},
+        {"armor", "weapons", "tools", "tool_expertise", "tool_expertise_all"},
     )
     senses = _object(traits["senses"], "sheet.traits.senses")
     _reject_unknown(senses, "sheet.traits.senses", {*SENSE_NAMES, "passive_perception_bonus"})
@@ -3499,6 +3500,12 @@ def validate_character_sheet(
             "proficiencies": {
                 key: _string_list(proficiencies[key], f"sheet.traits.proficiencies.{key}")
                 for key in ("armor", "weapons", "tools", "tool_expertise")
+            }
+            | {
+                "tool_expertise_all": _boolean(
+                    proficiencies.get("tool_expertise_all", False),
+                    "sheet.traits.proficiencies.tool_expertise_all",
+                )
             },
             "resistances": _string_list(traits["resistances"], "sheet.traits.resistances"),
             "immunities": _string_list(traits["immunities"], "sheet.traits.immunities"),
