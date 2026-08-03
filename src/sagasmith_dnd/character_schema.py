@@ -582,6 +582,20 @@ def _normalize_resource(value: Any, field: str) -> dict[str, Any]:
     return normalized
 
 
+def normalize_character_resource(
+    value: Any,
+    field: str = "resource",
+) -> dict[str, Any]:
+    """Validate one portable bounded-resource definition.
+
+    Addon authoring uses the same resource schema as a live character sheet so
+    a reviewed species or feature cannot defer malformed recovery semantics to
+    first use.
+    """
+
+    return _normalize_resource(value, field)
+
+
 def _normalize_resource_scaling(value: Any, field: str) -> dict[str, Any]:
     item = _object(value or {}, field)
     if not item:
@@ -1838,7 +1852,7 @@ def normalize_feature_casting_overrides(
     _reject_unknown(
         overrides,
         field,
-        {"duration", "ignore_material_components"},
+        {"duration", "fixed_cast_level", "ignore_material_components"},
     )
     result: dict[str, Any] = {}
     if "duration" in overrides:
@@ -1850,6 +1864,13 @@ def normalize_feature_casting_overrides(
         result["ignore_material_components"] = _boolean(
             overrides["ignore_material_components"],
             f"{field}.ignore_material_components",
+        )
+    if "fixed_cast_level" in overrides:
+        result["fixed_cast_level"] = _integer(
+            overrides["fixed_cast_level"],
+            f"{field}.fixed_cast_level",
+            minimum=1,
+            maximum=9,
         )
     return result
 
@@ -2057,8 +2078,10 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
             },
         )
         method = _text(source.get("method"), f"{source_field}.method", maximum=100)
-        if method not in {"known", "limited_use"}:
-            raise ValueError(f"{source_field}.method must be known or limited_use")
+        if method not in {"at_will", "known", "limited_use"}:
+            raise ValueError(
+                f"{source_field}.method must be at_will, known, or limited_use"
+            )
         ability = _text(
             source.get("spellcasting_ability"),
             f"{source_field}.spellcasting_ability",

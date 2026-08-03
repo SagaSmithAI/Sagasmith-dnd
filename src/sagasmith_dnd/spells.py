@@ -1099,7 +1099,19 @@ def consume_spell_cast(
         available = available or bool(access.get("known") or access.get("prepared"))
     if not available:
         raise CombatEngineError("spell is not available to cast")
-    level = base_level if cast_level is None else int(cast_level)
+    casting_overrides = dict((selected_feature_source or {}).get("casting_overrides") or {})
+    fixed_cast_level = casting_overrides.get("fixed_cast_level")
+    if fixed_cast_level is not None:
+        fixed_cast_level = int(fixed_cast_level)
+        if fixed_cast_level < base_level:
+            raise CombatEngineError("feature spell fixed cast level is below its spell level")
+        if cast_level is not None and int(cast_level) != fixed_cast_level:
+            raise CombatEngineError(
+                "feature spell cast_level must match its recorded fixed cast level"
+            )
+        level = fixed_cast_level
+    else:
+        level = base_level if cast_level is None else int(cast_level)
     if base_level == 0 and level != 0:
         raise CombatEngineError("cantrips cannot be cast with a spell slot")
     if level < base_level or level > 9:
@@ -1131,7 +1143,6 @@ def consume_spell_cast(
             raise CombatEngineError("spell cannot be cast as a ritual")
         if level != base_level:
             raise CombatEngineError("ritual casting does not allow an upcast spell level")
-    casting_overrides = dict((selected_feature_source or {}).get("casting_overrides") or {})
     components = dict(spell.get("definition", {}).get("components") or {})
     if casting_overrides.get("ignore_material_components") is True:
         components.update(
@@ -1169,18 +1180,22 @@ def consume_spell_cast(
             raise CombatEngineError(
                 "feature spell ritual declaration does not match its reviewed source"
             )
-        if level != base_level:
+        expected_feature_level = int(fixed_cast_level or base_level)
+        if level != expected_feature_level:
             raise CombatEngineError("a feature spell use must be cast at its recorded spell level")
         resource_key = str(selected_feature_source.get("resource_key") or "")
+        feature_at_will = str(selected_feature_source.get("method") or "") == "at_will"
+        if feature_at_will and resource_key:
+            raise CombatEngineError("an at-will feature spell cannot use a resource")
         if resource_key:
             resource = value.setdefault("resources", {}).get(resource_key)
             if not isinstance(resource, dict) or int(resource.get("value", 0) or 0) <= 0:
                 raise CombatEngineError("feature spell use is unavailable")
             mutate_bounded_resource(resource, amount=1, direction="spend")
-        elif base_level > 0 and not ritual_only:
+        elif base_level > 0 and not ritual_only and not feature_at_will:
             raise CombatEngineError("a leveled feature spell needs its reviewed use resource")
         paid = {
-            "economy": "feature_spell",
+            "economy": "feature_spell_at_will" if feature_at_will else "feature_spell",
             "resource_key": resource_key or None,
             "source_key": str(selected_feature_source.get("source_key") or ""),
             "spellcasting_ability": str(selected_feature_source.get("spellcasting_ability") or ""),

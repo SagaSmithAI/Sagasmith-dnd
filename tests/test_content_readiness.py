@@ -427,6 +427,51 @@ def test_species_materializer_accepts_narrative_choices_and_fixed_spells() -> No
     )
 
 
+def test_species_materializer_validates_resources_and_fixed_spell_levels() -> None:
+    card = {
+        "name": "Eladrin",
+        "grants": {
+            "resources": {
+                "species:eladrin:fey_step": {
+                    "label": "Fey Step",
+                    "value": 1,
+                    "max": 1,
+                    "recovers_on": "short_rest",
+                    "source_key": "Eladrin",
+                }
+            },
+            "spell_grants": [
+                {
+                    "name": "Ray of Sickness",
+                    "level": 1,
+                    "eligible_classes": ["Wizard"],
+                    "method": "limited_use",
+                    "spellcasting_ability": "charisma",
+                    "free_casts": 1,
+                    "recovers_on": "long_rest",
+                    "allow_slot_cast": False,
+                    "minimum_level": 3,
+                    "ritual_only": False,
+                    "casting_overrides": {"fixed_cast_level": 2},
+                }
+            ],
+        },
+    }
+
+    assert species_materializer_errors(card) == []
+    card["grants"]["resources"]["species:eladrin:fey_step"]["value"] = 2
+    assert any(
+        "value cannot exceed max" in error
+        for error in species_materializer_errors(card)
+    )
+    card["grants"]["resources"]["species:eladrin:fey_step"]["value"] = 1
+    card["grants"]["spell_grants"][0]["casting_overrides"]["fixed_cast_level"] = 0
+    assert any(
+        "fixed_cast_level must be at least 1" in error
+        for error in species_materializer_errors(card)
+    )
+
+
 def test_feat_materializer_accepts_fixed_and_selected_spell_grants() -> None:
     card = {
         "name": "Aberrant Dragonmark",

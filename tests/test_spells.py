@@ -1510,6 +1510,72 @@ def test_feature_spell_casting_overrides_do_not_mutate_ordinary_spell_rules() ->
         consume_spell_cast(sheet, spell_id="marked-weapon")
 
 
+def test_feature_spell_supports_fixed_upcast_and_at_will_sources() -> None:
+    sheet = default_character_sheet()
+    sheet["progression"]["level"] = 5
+    sickness = _spell("ray-of-sickness", level=1)
+    sickness["access"]["feature_casting_sources"] = [
+        {
+            "source_key": "Legacy of Maladomini",
+            "method": "limited_use",
+            "spellcasting_ability": "charisma",
+            "resource_key": "legacy:ray-of-sickness",
+            "allow_slot_cast": False,
+            "minimum_level": 3,
+            "ritual_only": False,
+            "casting_overrides": {"fixed_cast_level": 2},
+        }
+    ]
+    nondetection = _spell("nondetection", level=3)
+    nondetection["access"]["feature_casting_sources"] = [
+        {
+            "source_key": "Svirfneblin Magic",
+            "method": "at_will",
+            "spellcasting_ability": "intelligence",
+            "resource_key": None,
+            "allow_slot_cast": False,
+            "minimum_level": 1,
+            "ritual_only": False,
+            "casting_overrides": {"ignore_material_components": True},
+        }
+    ]
+    sheet["content"]["spells"] = [sickness, nondetection]
+    sheet["resources"]["legacy:ray-of-sickness"] = {
+        "label": "Legacy of Maladomini: Ray of Sickness",
+        "value": 1,
+        "max": 1,
+        "recovers_on": "long_rest",
+        "source_key": "Legacy of Maladomini",
+    }
+    sheet = validate_character_sheet(sheet)
+
+    fixed = consume_spell_cast(
+        sheet,
+        spell_id="ray-of-sickness",
+        feature_cast_source="Legacy of Maladomini",
+    )
+    assert fixed["cast_level"] == 2
+    assert fixed["payment"]["level"] == 2
+    with pytest.raises(CombatEngineError, match="fixed cast level"):
+        consume_spell_cast(
+            sheet,
+            spell_id="ray-of-sickness",
+            cast_level=1,
+            feature_cast_source="Legacy of Maladomini",
+        )
+
+    at_will = consume_spell_cast(
+        sheet,
+        spell_id="nondetection",
+        feature_cast_source="Svirfneblin Magic",
+    )
+    assert at_will["payment"]["economy"] == "feature_spell_at_will"
+    assert at_will["payment"]["resource_key"] is None
+    assert at_will["casting_overrides_applied"] == {
+        "ignore_material_components": True
+    }
+
+
 def test_2024_ranger_long_rest_replaces_only_one_spell() -> None:
     sheet = default_character_sheet()
     sheet["edition"] = "2024"

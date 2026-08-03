@@ -17,6 +17,7 @@ from typing import Any, Mapping, Sequence
 from sagasmith_dnd.character_schema import (
     add_inventory_item,
     default_character_sheet,
+    normalize_character_resource,
     normalize_class_spellcasting_profile,
     normalize_feature_casting_overrides,
     normalize_spell_definition,
@@ -892,6 +893,22 @@ def species_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
             }
         )
         errors.extend(error.replace("feat ", "species ", 1) for error in shared_errors)
+    raw_resources = grants.get("resources", {})
+    if not isinstance(raw_resources, Mapping):
+        errors.append("species resources must be an object")
+    else:
+        for raw_key, raw_resource in raw_resources.items():
+            resource_key = str(raw_key).strip()
+            if not resource_key:
+                errors.append("species resources must not contain an empty key")
+                continue
+            try:
+                normalize_character_resource(
+                    raw_resource,
+                    f"species resources.{resource_key}",
+                )
+            except ValueError as error:
+                errors.append(str(error))
     return errors
 
 
@@ -969,8 +986,9 @@ def feat_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
         )
         if not eligible_classes:
             errors.append(f"{prefix}.eligible_classes must not be empty")
-        if raw_grant.get("method") not in {"known", "limited_use"}:
-            errors.append(f"{prefix}.method must be known or limited_use")
+        method = raw_grant.get("method")
+        if method not in {"at_will", "known", "limited_use"}:
+            errors.append(f"{prefix}.method must be at_will, known, or limited_use")
         ability = str(raw_grant.get("spellcasting_ability") or "").casefold()
         if ability not in {*ability_names, "none"}:
             errors.append(f"{prefix}.spellcasting_ability is invalid")
@@ -987,6 +1005,8 @@ def feat_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
             errors.append(f"{prefix}.recovers_on must be short_rest or long_rest for free casts")
         if not free_casts and recovers_on is not None:
             errors.append(f"{prefix}.recovers_on must be null without free casts")
+        if method == "at_will" and free_casts:
+            errors.append(f"{prefix}.method at_will cannot have free casts")
         if not isinstance(raw_grant.get("allow_slot_cast"), bool):
             errors.append(f"{prefix}.allow_slot_cast must be a boolean")
         minimum_level = raw_grant.get("minimum_level")
@@ -1001,10 +1021,20 @@ def feat_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
         if raw_grant.get("ritual_only") is True and free_casts:
             errors.append(f"{prefix} cannot combine ritual_only with free casts")
         try:
-            normalize_feature_casting_overrides(
+            casting_overrides = normalize_feature_casting_overrides(
                 (raw_grant["casting_overrides"] if "casting_overrides" in raw_grant else {}),
                 f"{prefix}.casting_overrides",
             )
+            fixed_cast_level = casting_overrides.get("fixed_cast_level")
+            if (
+                fixed_cast_level is not None
+                and isinstance(level, int)
+                and not isinstance(level, bool)
+                and fixed_cast_level < level
+            ):
+                errors.append(
+                    f"{prefix}.casting_overrides.fixed_cast_level cannot be below spell level"
+                )
         except ValueError as error:
             errors.append(str(error))
 
