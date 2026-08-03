@@ -34,6 +34,7 @@ from sagasmith_dnd.spell_resolution import (
 )
 from sagasmith_dnd.statblocks import (
     StatblockImportError,
+    parameterized_statblock_requirements,
     parry_reaction_settlement,
     parse_2014_statblock,
 )
@@ -2296,7 +2297,11 @@ def compiled_artifacts_from_candidates(
     return artifacts
 
 
-def author_selection_card_from_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+def author_selection_card_from_candidate(
+    candidate: dict[str, Any],
+    *,
+    source_chunks_by_id: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """Prepare a conservative typed card for the primary build-time reviewer.
 
     This is an authoring aid, not an approval.  The returned artifact is still
@@ -2323,6 +2328,23 @@ def author_selection_card_from_candidate(candidate: dict[str, Any]) -> dict[str,
         # not character options merely because their storage kind is feature.
         value["selection_applicability"] = "not_applicable"
         value["application_state"] = "catalog_only"
+        return value
+
+    if kind == "statblock":
+        source_text = str(card.get("normalized_content") or "").strip()
+        if not source_text and source_chunks_by_id:
+            source_text = "\n\n".join(
+                str(source_chunks_by_id.get(str(chunk_id)) or "").strip()
+                for chunk_id in candidate.get("source_chunk_ids") or []
+                if str(source_chunks_by_id.get(str(chunk_id)) or "").strip()
+            )
+            if source_text:
+                source_text = f"# {name}\n\n{source_text}"
+        requirement = parameterized_statblock_requirements(source_text)
+        if requirement is not None:
+            card["dependent_actor_template"] = requirement
+            value["selection_applicability"] = "not_applicable"
+            value["application_state"] = "catalog_only"
         return value
 
     if kind == "spell":

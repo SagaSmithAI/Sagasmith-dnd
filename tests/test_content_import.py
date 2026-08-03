@@ -441,6 +441,39 @@ def test_agent_added_subclass_keeps_its_reviewed_parent_class() -> None:
     assert artifact["card"]["minimum_level"] == 1
 
 
+def test_parameterized_statblock_persists_its_lobby_template_contract() -> None:
+    artifact = author_selection_card_from_candidate(
+        {
+            "id": "candidate:homunculus",
+            "kind": "statblock",
+            "name": "Alchemical Homunculus",
+            "source_chunk_ids": ["core"],
+            "artifact": {
+                "kind": "statblock",
+                "application_state": "catalog_only",
+                "card": {"name": "Alchemical Homunculus"},
+            },
+        },
+        source_chunks_by_id={
+            "core": (
+                "Tiny construct, neutral Armor Class 13 (natural armor) "
+                "Hit Points equal to five times your level in this class + your "
+                "Intelligence modifier Speed 20 ft., fly 30 ft. "
+                "STR DEX CON INT WIS CHA"
+            )
+        },
+    )
+
+    requirement = artifact["card"]["dependent_actor_template"]
+    assert requirement["kind"] == "dependent_actor_template"
+    assert requirement["parameters"] == [
+        "owner_class_level",
+        "owner_intelligence_modifier",
+    ]
+    assert artifact["selection_applicability"] == "not_applicable"
+    assert artifact["application_state"] == "catalog_only"
+
+
 def test_inventory_splits_flattened_spell_descriptions_and_class_lists() -> None:
     inventory = extract_content_inventory(
         [

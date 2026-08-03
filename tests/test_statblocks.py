@@ -114,6 +114,25 @@ def test_parameterized_statblock_requirements_cover_numeric_owner_and_spell_form
     ]
 
 
+def test_parameterized_statblock_requirements_accept_bounded_flat_pdf_fields() -> None:
+    requirement = parameterized_statblock_requirements(
+        "Tiny construct, neutral Armor Class 13 (natural armor) "
+        "Hit Points equal to five times your level in this class + your "
+        "Intelligence modifier Speed 20 ft., fly 30 ft. "
+        "STR DEX CON INT WIS CHA"
+    )
+
+    assert requirement is not None
+    assert requirement["target_path"] == "combat.hp.max"
+    assert requirement["source_expression"] == (
+        "equal to five times your level in this class + your Intelligence modifier"
+    )
+    assert requirement["parameters"] == [
+        "owner_class_level",
+        "owner_intelligence_modifier",
+    ]
+
+
 def test_runtime_spell_level_effect_is_not_a_dependent_actor_template() -> None:
     assert parameterized_statblock_requirements(
         "# Abjurer\n\n"

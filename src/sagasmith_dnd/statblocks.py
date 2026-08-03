@@ -6678,11 +6678,27 @@ def parameterized_statblock_requirements(source_text: str) -> dict[str, Any] | N
     if not parameters:
         return None
     source_expressions = []
-    for match in re.finditer(
+    markdown_fields = list(re.finditer(
         r"(?im)^\s*\*\*(?P<label>Armor Class|Hit Points|Proficiency Bonus)\*\*\s+"
         r"(?P<expression>[^\r\n]+?)\s*$",
         text,
-    ):
+    ))
+    # PDF layout extraction can legitimately flatten one statblock row into a
+    # single chunk before the Markdown normalizer has inserted emphasis.  Keep
+    # the fallback bounded by printed core-field labels so ordinary prose that
+    # happens to mention hit points never becomes an actor template.
+    plain_fields = [] if markdown_fields else list(
+        re.finditer(
+            r"(?is)(?<![A-Za-z])"
+            r"(?P<label>Armor Class|Hit Points|Proficiency Bonus)(?:\s*\(PB\))?\s+"
+            r"(?P<expression>.+?)"
+            r"(?=\s+(?:Armor Class|Hit Points|Speed|STR\s+DEX\s+CON\s+INT\s+WIS\s+CHA|"
+            r"Saving Throws|Skills|Damage Immunities|Condition Immunities|Senses|"
+            r"Languages|Challenge|Traits|Actions|Reactions)\b|$)",
+            text,
+        )
+    )
+    for match in [*markdown_fields, *plain_fields]:
         excerpt = " ".join(match.group(0).split())
         if any(re.search(pattern, excerpt.casefold()) for pattern, _ in parameter_markers):
             target_path = {
