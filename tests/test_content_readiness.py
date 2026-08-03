@@ -6,6 +6,7 @@ import pytest
 
 from sagasmith_dnd.content_readiness import (
     DND_SELECTION_MATERIALIZERS,
+    background_materializer_errors,
     build_catalog_review,
     build_selection_contract,
     catalog_review_errors,
@@ -145,6 +146,37 @@ def test_selection_contract_fails_closed_for_missing_or_stale_materialization() 
     )
     artifact["card"]["name"] = "Changed"
     assert any("stale" in error for error in selection_contract_errors(artifact))
+
+
+def test_background_materializer_requires_bounded_choice_semantics() -> None:
+    card = {
+        "name": "Guild Agent",
+        "background_grants": {
+            "languages": ["Common"],
+            "tools": [],
+            "equipment_item_ids": [],
+            "choices": {
+                "language_count": 1,
+                "language_options": [],
+                "allow_any_language": False,
+                "tool_choice_count": 1,
+                "tool_options": [],
+            },
+        },
+    }
+
+    assert background_materializer_errors(card) == [
+        "background language choices need language_options or allow_any_language",
+        "background tool_options cannot satisfy tool_choice_count",
+    ]
+
+    card["background_grants"]["choices"].update(
+        {
+            "language_options": ["Draconic", "Goblin"],
+            "tool_options": ["Alchemist's Supplies", "Tinker's Tools"],
+        }
+    )
+    assert background_materializer_errors(card) == []
 
 
 @pytest.mark.parametrize(

@@ -13,6 +13,7 @@ from sagasmith_core.text import ascii_slug
 from sagasmith_dnd.abilities import ABILITY_LABELS, ABILITY_NAMES, SKILL_ABILITIES
 from sagasmith_dnd.character_schema import normalize_spell_definition
 from sagasmith_dnd.content_readiness import (
+    background_materializer_errors,
     build_catalog_review,
     build_selection_contract,
     selection_contract_errors,
@@ -2602,7 +2603,11 @@ def author_selection_card_from_candidate(
                 )
             else:
                 card.setdefault(field, inferred_value)
-        value["application_state"] = "selection_ready"
+        value["application_state"] = (
+            "selection_ready"
+            if not background_materializer_errors(card)
+            else "catalog_only"
+        )
         return value
 
     if kind == "species":
@@ -2793,8 +2798,9 @@ def _background_selection_card(description: str) -> dict[str, Any]:
         r"(?i)\bLanguages?\s*:\s*(.+?)(?=\s+(?:Tool Proficienc|Equipment|Feature)\w*\s*:|$)",
         description,
     )
-    if language_match and "choice" in language_match.group(1).casefold():
-        language_count = _word_number(language_match.group(1))
+    language_text = language_match.group(1) if language_match else ""
+    if language_match and "choice" in language_text.casefold():
+        language_count = _word_number(language_text)
     tool_count = 0
     tool_match = re.search(
         r"(?i)\bTool Proficienc(?:y|ies)\s*:\s*(.+?)"
@@ -2807,10 +2813,16 @@ def _background_selection_card(description: str) -> dict[str, Any]:
         "skill_proficiencies": list(dict.fromkeys(skills)),
         "background_grants": {
             "skills": list(dict.fromkeys(skills)),
+            "feature": "",
             "tools": [],
             "languages": [],
+            "equipment_item_ids": [],
             "choices": {
                 "language_count": language_count,
+                "language_options": [],
+                "allow_any_language": bool(
+                    language_count and "your choice" in language_text.casefold()
+                ),
                 "tool_choice_count": tool_count,
                 "tool_options": [],
             },
@@ -3280,8 +3292,9 @@ def validate_selection_ready_artifacts(artifacts: list[dict[str, Any]]) -> list[
             if not isinstance(card.get("minimum_level"), int) or card["minimum_level"] < 1:
                 errors.append(f"{prefix} subclass needs minimum_level >= 1")
         elif kind == "background":
-            if not isinstance(card.get("background_grants"), dict):
-                errors.append(f"{prefix} background needs background_grants")
+            errors.extend(
+                f"{prefix} {error}" for error in background_materializer_errors(card)
+            )
         elif (
             kind == "feat"
             and "prerequisites" in card

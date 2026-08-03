@@ -416,6 +416,70 @@ def _dynamic_selection_fields(kind: str, card: Mapping[str, Any]) -> list[str]:
     return values
 
 
+def background_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
+    """Return failures that would make a background choice ambiguous at runtime."""
+
+    grants = binding.get("background_grants")
+    if not isinstance(grants, Mapping):
+        return ["background card needs background_grants"]
+    errors: list[str] = []
+
+    def string_list(value: Any, label: str) -> list[str]:
+        if not isinstance(value, list) or any(
+            not isinstance(item, str) or not item.strip() for item in value
+        ):
+            errors.append(f"background {label} must be an array of non-empty strings")
+            return []
+        normalized = [item.strip() for item in value]
+        if len({item.casefold() for item in normalized}) != len(normalized):
+            errors.append(f"background {label} must be distinct")
+        return normalized
+
+    fixed_languages = string_list(grants.get("languages", []), "languages")
+    fixed_tools = string_list(grants.get("tools", []), "tools")
+    if not isinstance(grants.get("equipment_item_ids", []), list):
+        errors.append("background equipment_item_ids must be an array")
+    choices = grants.get("choices", {})
+    if not isinstance(choices, Mapping):
+        errors.append("background choices must be an object")
+        return errors
+
+    def choice_count(field: str) -> int:
+        raw = choices.get(field, 0)
+        if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+            errors.append(f"background {field} must be a non-negative integer")
+            return 0
+        return raw
+
+    language_count = choice_count("language_count")
+    tool_count = choice_count("tool_choice_count")
+    language_options = string_list(
+        choices.get("language_options", []), "language_options"
+    )
+    tool_options = string_list(choices.get("tool_options", []), "tool_options")
+    allow_any_language = choices.get("allow_any_language", False)
+    if not isinstance(allow_any_language, bool):
+        errors.append("background allow_any_language must be a boolean")
+        allow_any_language = False
+    if language_count and not language_options and not allow_any_language:
+        errors.append(
+            "background language choices need language_options or allow_any_language"
+        )
+    if language_options and len(language_options) < language_count:
+        errors.append("background language_options cannot satisfy language_count")
+    if tool_count and len(tool_options) < tool_count:
+        errors.append("background tool_options cannot satisfy tool_choice_count")
+    if {item.casefold() for item in fixed_languages}.intersection(
+        item.casefold() for item in language_options
+    ):
+        errors.append("background language_options cannot repeat fixed languages")
+    if {item.casefold() for item in fixed_tools}.intersection(
+        item.casefold() for item in tool_options
+    ):
+        errors.append("background tool_options cannot repeat fixed tools")
+    return errors
+
+
 def _validate_materializer_card(kind: str, binding: Mapping[str, Any]) -> None:
     name = str(binding.get("name") or "").strip()
     if not name:
@@ -444,8 +508,9 @@ def _validate_materializer_card(kind: str, binding: Mapping[str, Any]) -> None:
         if not isinstance(binding.get("always_prepared_spells"), (list, type(None))):
             raise ValueError("subclass always_prepared_spells must be an array")
     elif kind == "background":
-        if not isinstance(binding.get("background_grants"), Mapping):
-            raise ValueError("background card needs background_grants")
+        errors = background_materializer_errors(binding)
+        if errors:
+            raise ValueError(errors[0])
     elif kind == "class":
         definition = binding.get("class_definition")
         if not isinstance(definition, Mapping):

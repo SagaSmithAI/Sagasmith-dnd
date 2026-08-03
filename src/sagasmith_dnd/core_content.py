@@ -1663,6 +1663,12 @@ def _background_fields(body: str) -> dict[str, Any]:
             "tools": tools,
             "choices": {
                 "language_count": language_count,
+                "language_options": [],
+                "allow_any_language": bool(
+                    language_count and "choice" in language_text.casefold()
+                ),
+                "tool_choice_count": 0,
+                "tool_options": [],
                 "equipment_description": equipment,
             },
         },

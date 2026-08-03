@@ -369,6 +369,9 @@ def test_primary_review_authors_safe_typed_selection_cards(
         assert artifact["card"]["background_grants"]["choices"][
             "language_count"
         ] == 2
+        assert artifact["card"]["background_grants"]["choices"][
+            "allow_any_language"
+        ] is True
     elif kind == "item":
         assert artifact["card"]["inventory_template"]["attunement"] == "required"
     elif kind == "subclass":
@@ -430,6 +433,37 @@ def test_primary_review_preserves_agent_authored_background_semantics() -> None:
         "Goblin",
         "Vedalken",
     ]
+
+
+def test_primary_review_blocks_unbounded_tool_choice_until_agent_authors_options() -> None:
+    candidate = {
+        "id": "candidate:guild-artisan",
+        "kind": "background",
+        "name": "Guild Artisan",
+        "artifact": {
+            "kind": "background",
+            "application_state": "catalog_only",
+            "card": {
+                "name": "Guild Artisan",
+                "description": (
+                    "Skill Proficiencies: Insight, Persuasion "
+                    "Tool Proficiencies: One type of artisan's tools of your choice."
+                ),
+            },
+        },
+    }
+
+    blocked = author_selection_card_from_candidate(candidate)
+    assert blocked["application_state"] == "catalog_only"
+
+    reviewed = deepcopy(candidate)
+    reviewed["artifact"]["card"]["background_grants"] = {
+        "choices": {
+            "tool_options": ["Smith's Tools", "Weaver's Tools"],
+        }
+    }
+    ready = author_selection_card_from_candidate(reviewed)
+    assert ready["application_state"] == "selection_ready"
 
 
 def test_primary_review_preserves_agent_authored_species_and_item_cards() -> None:
