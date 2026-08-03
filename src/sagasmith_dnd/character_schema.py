@@ -132,6 +132,7 @@ ENGINE_SETTLED_NON_AC_EFFECT_PATHS = {
     "rolls.weapon_damage.dice_multiplier",
     "traits.size",
 }
+CONTENT_ARTIFACT_ID_MAX_LENGTH = 300
 
 STANDARD_WEAPON_MATERIALS = {
     "club": ["wood"],
@@ -1944,7 +1945,12 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
     ]
     if len(feature_source_keys) != len(set(feature_source_keys)):
         raise ValueError(f"{field}.access.feature_casting_sources contains duplicates")
-    spell_id = _text(spell.get("id"), f"{field}.id", default=_uuid(), maximum=100)
+    spell_id = _text(
+        spell.get("id"),
+        f"{field}.id",
+        default=_uuid(),
+        maximum=CONTENT_ARTIFACT_ID_MAX_LENGTH,
+    )
     result = {
         "id": spell_id,
         "source_key": _text(spell.get("source_key"), f"{field}.source_key", maximum=300),
@@ -2163,7 +2169,9 @@ def _normalize_effect(value: Any, field: str) -> dict[str, Any]:
         "kind": _text(effect.get("kind"), f"{field}.kind", default="custom", maximum=100),
         "source": _text(effect.get("source"), f"{field}.source", maximum=300),
         "source_spell_id": _text(
-            effect.get("source_spell_id"), f"{field}.source_spell_id", maximum=100
+            effect.get("source_spell_id"),
+            f"{field}.source_spell_id",
+            maximum=CONTENT_ARTIFACT_ID_MAX_LENGTH,
         ),
         "active": _boolean(effect.get("active"), f"{field}.active", default=True),
         "concentration": _boolean(effect.get("concentration"), f"{field}.concentration"),
@@ -2965,7 +2973,7 @@ def validate_character_sheet(
                 entry.get("id"),
                 f"sheet.content.{name}[{index}].id",
                 default=_uuid(),
-                maximum=100,
+                maximum=CONTENT_ARTIFACT_ID_MAX_LENGTH,
             )
             normalized_entry = {
                     "id": entry_id,

@@ -450,6 +450,32 @@ def test_feature_card_preserves_bounded_agent_ruling_context() -> None:
     assert requirement["source_excerpt"] == "The source-defined effect applies."
 
 
+def test_character_content_preserves_full_addon_artifact_identifiers() -> None:
+    feature_id = "f" * 300
+    spell_id = "s" * 300
+    sheet = default_character_sheet()
+    sheet["content"]["features"] = [{"id": feature_id, "name": "Addon Feature"}]
+    sheet["content"]["spells"] = [
+        {"id": spell_id, "name": "Addon Spell", "level": 1}
+    ]
+    sheet["effects"] = [
+        {
+            "name": "Addon Spell Effect",
+            "source_spell_id": spell_id,
+        }
+    ]
+
+    normalized = validate_character_sheet(sheet)
+
+    assert normalized["content"]["features"][0]["id"] == feature_id
+    assert normalized["content"]["spells"][0]["id"] == spell_id
+    assert normalized["effects"][0]["source_spell_id"] == spell_id
+
+    sheet["content"]["features"][0]["id"] += "x"
+    with pytest.raises(ValueError, match="exceeds 300 characters"):
+        validate_character_sheet(sheet)
+
+
 def test_class_prepared_spell_does_not_have_to_be_known() -> None:
     sheet = {
         "progression": {
