@@ -234,6 +234,10 @@ def test_subclass_parent_siblings_keep_features_and_rule_tips_out_of_subclass_ca
         ("feature", "Eyes of Night"),
         ("subclass", "Circle of Wildfire"),
     }
+    eyes = next(item for item in candidates if item["name"] == "Eyes of Night")
+    authored_eyes = author_selection_card_from_candidate(eyes)
+    assert authored_eyes["card"]["class_name"] == "Cleric"
+    assert authored_eyes["card"]["subclass_name"] == "Twilight Domain"
 
 
 def test_descriptive_parent_does_not_inherit_nested_level_feature() -> None:

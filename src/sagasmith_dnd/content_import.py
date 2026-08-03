@@ -2358,9 +2358,12 @@ def author_selection_card_from_candidate(candidate: dict[str, Any]) -> dict[str,
             card.setdefault("selection_requirements", None)
         elif kind == "feature":
             class_name = _candidate_class_name(candidate, description)
+            subclass_name = _candidate_subclass_name(candidate, description)
             minimum_level = _candidate_minimum_level(description)
             if class_name:
                 card.setdefault("class_name", class_name)
+            if subclass_name:
+                card.setdefault("subclass_name", subclass_name)
             if minimum_level is not None:
                 card.setdefault("minimum_level", minimum_level)
         value["application_state"] = "selection_ready"
@@ -2422,6 +2425,31 @@ def _candidate_class_name(candidate: dict[str, Any], description: str) -> str:
             return class_name.title()
     if "revised ranger" in combined:
         return "Revised Ranger"
+    return ""
+
+
+def _candidate_subclass_name(
+    candidate: dict[str, Any],
+    description: str,
+) -> str:
+    match = re.search(
+        r"(?i)\b\d{1,2}(?:st|nd|rd|th)\s*[- ]?\s*level\s+"
+        r"(?P<owner>[A-Z][A-Za-z'鈥橽 -]{1,70}?)\s+feature\b",
+        description[:2400],
+    )
+    if match is not None:
+        owner = _normalize_candidate_display_name(match.group("owner"))
+        folded_owner = owner.casefold()
+        if folded_owner not in _CLASS_NAMES and folded_owner != "revised ranger":
+            return owner
+    headings = [
+        " ".join(str(value).split())
+        for value in candidate.get("source_heading_path") or []
+        if str(value).strip()
+    ]
+    for index, heading in enumerate(headings[:-1]):
+        if heading.casefold() in _GENERIC_SUBCLASS_PARENT_TITLES:
+            return headings[index + 1]
     return ""
 
 
