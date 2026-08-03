@@ -454,6 +454,12 @@ def background_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
 
     fixed_languages = string_list(grants.get("languages", []), "languages")
     fixed_tools = string_list(grants.get("tools", []), "tools")
+    grant_skills = string_list(grants.get("skills", []), "skills")
+    card_skills = string_list(binding.get("skill_proficiencies", []), "skill_proficiencies")
+    if grant_skills and card_skills and {
+        item.casefold() for item in grant_skills
+    } != {item.casefold() for item in card_skills}:
+        errors.append("background skill_proficiencies conflict with background_grants.skills")
     string_list(grants.get("spell_list_expansion", []), "spell_list_expansion")
     if not isinstance(grants.get("equipment_item_ids", []), list):
         errors.append("background equipment_item_ids must be an array")

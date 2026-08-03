@@ -186,6 +186,13 @@ def test_background_materializer_requires_bounded_choice_semantics() -> None:
         "background spell_list_expansion must be distinct"
     ]
 
+    card["background_grants"]["spell_list_expansion"] = []
+    card["skill_proficiencies"] = ["Investigation"]
+    card["background_grants"]["skills"] = ["Persuasion"]
+    assert background_materializer_errors(card) == [
+        "background skill_proficiencies conflict with background_grants.skills"
+    ]
+
 
 def test_background_materializer_accepts_only_reviewed_embedded_equipment() -> None:
     card = {
