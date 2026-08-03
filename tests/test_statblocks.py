@@ -2878,6 +2878,7 @@ def test_statblock_entries_accept_period_inside_emphasis() -> None:
 
 def test_effect_only_weapon_attack_preserves_web_ruling_without_fake_damage() -> None:
     parsed = parse_2014_statblock(GIANT_SPIDER, source_key="module-review:giant-spider")
+    assert parsed.sheet["traits"]["languages"] == []
     attacks = {
         attack["item_id"]: attack
         for attack in derive_character_sheet(parsed.sheet)["inventory"]["weapon_attacks"]

@@ -133,7 +133,12 @@ def _signed(value: str) -> int:
 
 
 def _split_list(value: str) -> list[str]:
-    return [item.strip() for item in re.split(r"[,;]", value) if item.strip() and item != "-"]
+    empty_markers = {"-", "–", "—", "none"}
+    return [
+        item.strip()
+        for item in re.split(r"[,;]", value)
+        if item.strip() and item.strip().casefold() not in empty_markers
+    ]
 
 
 def _parse_armor_equipment(
