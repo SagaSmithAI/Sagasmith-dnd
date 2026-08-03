@@ -43,6 +43,42 @@ def test_extracts_review_required_catalog_candidates() -> None:
     assert all(item["application_state"] == "catalog_only" for item in candidates)
 
 
+def test_same_named_features_under_different_subclasses_do_not_merge() -> None:
+    candidates = extract_content_candidates(
+        [
+            {
+                "id": "alchemist-tools",
+                "heading_path": ["Artificer Specialists", "Alchemist", "Tools of the Trade"],
+                "content": (
+                    "By the time you adopt this specialty at 3rd level, your work "
+                    "grants proficiency with alchemist's supplies."
+                ),
+            },
+            {
+                "id": "artillerist-tools",
+                "heading_path": [
+                    "Artificer Specialists",
+                    "Artillerist",
+                    "Tools of the Trade",
+                ],
+                "content": (
+                    "By the time you adopt this specialty at 3rd level, your work "
+                    "grants proficiency with smith's tools."
+                ),
+            },
+        ],
+        source_title="Artificer",
+    )
+
+    tools = [item for item in candidates if item["name"] == "Tools of the Trade"]
+
+    assert len(tools) == 2
+    assert {tuple(item["source_heading_path"][:-1]) for item in tools} == {
+        ("Artificer Specialists", "Alchemist"),
+        ("Artificer Specialists", "Artillerist"),
+    }
+
+
 def test_ocr_spacing_and_nested_headers_keep_entity_identity() -> None:
     candidates = extract_content_candidates(
         [

@@ -1185,7 +1185,7 @@ def _rulebook_statblock_candidates(
 def _merge_extracted_candidates(
     candidates: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    merged: dict[tuple[str, str], dict[str, Any]] = {}
+    merged: dict[tuple[str, ...], dict[str, Any]] = {}
     generic_spell_titles = {"spell", "spells", "spell descriptions", "optional spells"}
     embedded_spell_chunks = {
         chunk_id
@@ -1251,7 +1251,18 @@ def _merge_extracted_candidates(
         candidate["artifact"]["card"] = candidate_card
         if kind == "spell":
             candidate_name = candidate_name.rstrip(" .:;")
-        key = (kind, _canonical_source_heading(candidate_name))
+        identity_context: tuple[str, ...] = ()
+        if kind in {"feat", "feature", "subclass"}:
+            # Same-named features commonly belong to different classes or
+            # subclasses (for example two Artificer specialists each grant
+            # "Tools of the Trade"). Keep those source-defined identities
+            # separate; the compiler already gives them stable disambiguated
+            # artifact ids. Candidates from the same heading path still merge.
+            identity_context = tuple(
+                _canonical_source_heading(value)
+                for value in candidate.get("source_heading_path") or []
+            )[:-1]
+        key = (kind, _canonical_source_heading(candidate_name), *identity_context)
         existing = merged.get(key)
         if existing is None:
             merged[key] = candidate
