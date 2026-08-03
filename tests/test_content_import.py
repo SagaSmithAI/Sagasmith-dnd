@@ -488,7 +488,8 @@ def test_inventory_splits_flattened_spell_descriptions_and_class_lists() -> None
                 "heading_path": ["Spells", "Spell Lists"],
                 "content": (
                     "Wizard Spells 1st Level Absorb Elements (abjuration) "
-                    "Catapult (transmutation)"
+                    "Catapult (transmutation) 2nd Level "
+                    "Skywrite (transmutation, ritual)"
                 ),
                 "page_start": 1,
                 "page_end": 1,
@@ -503,7 +504,10 @@ def test_inventory_splits_flattened_spell_descriptions_and_class_lists() -> None
                     "Range: Self Components: S Duration: 1 round You resist energy. "
                     "Catapult 1st-level transmutation Casting Time: 1 action "
                     "Range: 150 feet Components: S Duration: Instantaneous "
-                    "You launch an object."
+                    "You launch an object. "
+                    "Skywrite 2nd-level transmutation (ritual) Casting Time: 1 action "
+                    "Range: Sight Components: V, S Duration: Concentration, up to 1 hour "
+                    "You form words in the sky."
                 ),
                 "page_start": 2,
                 "page_end": 2,
@@ -513,9 +517,19 @@ def test_inventory_splits_flattened_spell_descriptions_and_class_lists() -> None
     )
 
     spells = [item for item in inventory["candidates"] if item["kind"] == "spell"]
-    assert [item["name"] for item in spells] == ["Absorb Elements", "Catapult"]
+    assert [item["name"] for item in spells] == [
+        "Absorb Elements",
+        "Catapult",
+        "Skywrite",
+    ]
     assert all(item["artifact"]["card"]["classes"] == ["wizard"] for item in spells)
     assert spells[1]["artifact"]["card"]["definition"]["range"]["normal_ft"] == 150
+    assert spells[2]["artifact"]["card"]["definition"]["duration"] == {
+        "kind": "timed",
+        "value": 1,
+        "unit": "hour",
+        "concentration": True,
+    }
     assert inventory["unresolved_mechanical_count"] == 0
 
 
@@ -1080,6 +1094,40 @@ def test_extractor_aggregates_all_chunks_from_one_structural_entry() -> None:
     assert candidates[0]["page_start"] == 10
     assert candidates[0]["page_end"] == 11
     assert "bright streak" in candidates[0]["artifact"]["card"]["description"]
+
+
+def test_extractor_recovers_species_traits_split_across_same_section() -> None:
+    candidates = extract_content_candidates(
+        [
+            {
+                "id": "birdfolk-a",
+                "heading_path": ["Races", "Birdfolk Lore"],
+                "content": (
+                    "Aarakocra Traits As an aarakocra, you have these traits. "
+                    "Ability Score Increase. Your Dexterity score increases by 2. "
+                    "Age. Aarakocra reach maturity by age 3. "
+                    "Alignment. Most aarakocra are good."
+                ),
+                "page_start": 4,
+                "page_end": 4,
+            },
+            {
+                "id": "birdfolk-b",
+                "heading_path": ["Races", "Birdfolk Lore"],
+                "content": (
+                    "Size. Your size is Medium. Speed. Your base walking speed is "
+                    "25 feet. Languages. You can speak Common and Auran."
+                ),
+                "page_start": 5,
+                "page_end": 5,
+            },
+        ]
+    )
+
+    aarakocra = next(item for item in candidates if item["name"] == "Aarakocra")
+    assert aarakocra["source_chunk_ids"] == ["birdfolk-a", "birdfolk-b"]
+    assert aarakocra["page_start"] == 4
+    assert aarakocra["page_end"] == 5
 
 
 def test_extractor_requires_structural_signals_instead_of_loose_keywords() -> None:

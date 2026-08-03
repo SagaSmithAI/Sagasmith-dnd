@@ -182,7 +182,8 @@ _EMBEDDED_SPELL_START_RE = re.compile(
     r"(?:\s+(?:[A-Z][A-Za-z0-9'’\-]+|of|the|and|or|from|with)){0,8})\s+"
     r"(?P<level>(?:[1-9](?:st|nd|rd|th)-level\s+"
     r"(?:" + "|".join(_SPELL_SCHOOLS) + r")|"
-    r"(?:" + "|".join(_SPELL_SCHOOLS) + r")\s+cantrip))\s+"
+    r"(?:" + "|".join(_SPELL_SCHOOLS) + r")\s+cantrip))"
+    r"(?:\s+\(ritual\))?\s+"
     r"Casting\s+Time:\s*",
     re.IGNORECASE,
 )
@@ -768,12 +769,42 @@ def _clean_species_name(value: str) -> str:
 def _embedded_species_candidates(
     chunks: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    candidates = []
+    sections: dict[tuple[str, ...], dict[str, Any]] = {}
     for chunk in chunks:
         content = " ".join(str(chunk.get("content") or "").split())
         chunk_id = str(chunk.get("id") or "").strip()
         if not content or not chunk_id:
             continue
+        heading_path = [
+            str(value).strip()
+            for value in chunk.get("heading_path") or []
+            if str(value).strip()
+        ]
+        key = tuple(value.casefold() for value in heading_path)
+        section = sections.setdefault(
+            key,
+            {
+                "heading_path": heading_path,
+                "content": "",
+                "spans": [],
+            },
+        )
+        separator = " " if section["content"] else ""
+        start = len(section["content"]) + len(separator)
+        section["content"] += separator + content
+        section["spans"].append(
+            {
+                "start": start,
+                "end": start + len(content),
+                "chunk_id": chunk_id,
+                "page_start": chunk.get("page_start"),
+                "page_end": chunk.get("page_end"),
+            }
+        )
+
+    candidates = []
+    for section in sections.values():
+        content = str(section["content"])
         starts = list(_EMBEDDED_SPECIES_START_RE.finditer(content))
         for index, match in enumerate(starts):
             end = starts[index + 1].start() if index + 1 < len(starts) else len(content)
@@ -793,17 +824,30 @@ def _embedded_species_candidates(
             ]
             if len(signals) < 4:
                 continue
-            identity = "\x1f".join(("species", name.casefold(), chunk_id))
+            evidence = [
+                item
+                for item in section["spans"]
+                if int(item["end"]) > match.start() and int(item["start"]) < end
+            ]
+            chunk_ids = [str(item["chunk_id"]) for item in evidence]
+            if not chunk_ids:
+                continue
+            page_start = None
+            page_end = None
+            for item in evidence:
+                page_start = _minimum_page(page_start, item.get("page_start"))
+                page_end = _maximum_page(page_end, item.get("page_end"))
+            identity = "\x1f".join(("species", name.casefold(), *chunk_ids))
             candidates.append(
                 {
                     "id": "candidate:"
                     + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20],
                     "kind": "species",
                     "name": name,
-                    "source_chunk_ids": [chunk_id],
-                    "source_heading_path": list(chunk.get("heading_path") or []),
-                    "page_start": chunk.get("page_start"),
-                    "page_end": chunk.get("page_end"),
+                    "source_chunk_ids": chunk_ids,
+                    "source_heading_path": list(section["heading_path"]),
+                    "page_start": page_start,
+                    "page_end": page_end,
                     "extraction_confidence": "high",
                     "extraction_signals": ["embedded species traits", *signals],
                     "review_status": "pending",
