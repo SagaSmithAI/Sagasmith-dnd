@@ -6521,7 +6521,7 @@ def recover_2014_statblock_from_ocr(
         ]
     )
     try:
-        parsed = parse_2014_statblock(
+        parsed = parse_2014_statblock_template_preview(
             content,
             source_key="ocr-layout-recovery",
             name=name,
@@ -7407,6 +7407,74 @@ def materialize_parameterized_statblock_source(
     return rendered, resolved
 
 
+def parse_2014_statblock_template_preview(
+    source_text: str,
+    *,
+    source_key: str,
+    rule_refs: list[str] | tuple[str, ...] = (),
+    name: str | None = None,
+) -> ParsedStatblock:
+    """Validate an ordinary or dependent 2014 statblock without erasing formulas.
+
+    Dependent companion cards cannot be parsed until their owner or casting
+    parameters are known.  Build-time OCR and review still need to prove that
+    the complete card is structurally executable.  Materialize only a bounded
+    in-memory preview, then return its parsed shape while callers retain the
+    original source text and reviewed expressions.
+    """
+
+    requirement = parameterized_statblock_requirements(source_text)
+    if requirement is None:
+        return parse_2014_statblock(
+            source_text,
+            source_key=source_key,
+            rule_refs=rule_refs,
+            name=name,
+        )
+    errors = dependent_actor_template_solution_errors(requirement)
+    if errors:
+        raise StatblockImportError(
+            "dependent statblock template is not runtime-ready: " + "; ".join(errors)
+        )
+    preview_values = {
+        "owner_class_level": 10,
+        "owner_proficiency_bonus": 4,
+        "owner_spell_attack_modifier": 8,
+        "owner_spell_save_dc": 16,
+        "owner_spellcasting_ability_modifier": 4,
+        "owner_strength_modifier": 4,
+        "owner_dexterity_modifier": 4,
+        "owner_constitution_modifier": 4,
+        "owner_intelligence_modifier": 4,
+        "owner_wisdom_modifier": 4,
+        "owner_charisma_modifier": 4,
+        "casting_slot_level": 9,
+    }
+    required_parameters = set(
+        dict(requirement.get("solution") or {}).get("numeric_parameters") or []
+    )
+    rendered, _resolved = materialize_parameterized_statblock_source(
+        source_text,
+        requirement,
+        numeric_parameters={
+            parameter: preview_values[parameter] for parameter in required_parameters
+        },
+        self_ability_modifiers={},
+        template_variant=(
+            str(dict(requirement["solution"])["variant_options"][0])
+            if dict(requirement["solution"]).get("variant_options")
+            else None
+        ),
+        allow_self_modifier_placeholders=True,
+    )
+    return parse_2014_statblock(
+        rendered,
+        source_key=source_key,
+        rule_refs=rule_refs,
+        name=name,
+    )
+
+
 def apply_dependent_actor_template_variant(
     sheet: Mapping[str, Any],
     requirement: Mapping[str, Any],
@@ -7466,6 +7534,7 @@ __all__ = [
     "dependent_actor_template_solution_errors",
     "materialize_parameterized_statblock_source",
     "parameterized_statblock_requirements",
+    "parse_2014_statblock_template_preview",
     "discover_2014_statblock_names_from_layout",
     "parse_2014_statblock",
     "parse_2024_statblock",

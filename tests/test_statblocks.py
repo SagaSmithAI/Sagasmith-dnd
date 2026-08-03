@@ -5116,6 +5116,49 @@ def test_layout_recovery_accepts_unaligned_cards_and_grouped_ability_cells() -> 
     }
 
 
+def test_layout_recovery_preserves_and_validates_dependent_hit_point_formula() -> None:
+    def block(text: str, y0: int) -> dict[str, object]:
+        return {
+            "text": text,
+            "confidence": 0.99,
+            "bbox": [80, y0, 650, y0 + 22],
+        }
+
+    layout = {
+        "page_number": 62,
+        "width": 1000,
+        "height": 1400,
+        "blocks": [
+            block("STEEL DEFENDER", 100),
+            block("Medium construct, neutral", 130),
+            block("Armor Class 1 5 (natural armor)", 165),
+            block(
+                "Hit Points equal the steel defender's Constitution modifier + "
+                "your Intelligence modifier + five times your level in this class",
+                195,
+            ),
+            block("Speed 40 ft.", 225),
+            block("STR DEX CON INT WIS CHA", 265),
+            block("14 (+2) 12 (+1) 14 (+2) 4 (-3) 10 (+0) 6 (-2)", 295),
+            block("Senses darkvision 60 ft., passive Perception 14", 335),
+            block("Languages understands the languages you speak", 365),
+            block("ACTIONS", 410),
+            block(
+                "Force-Empowered Rend. Melee Weapon Attack: +4 to hit, reach 5 ft., "
+                "one target. Hit: 8 (1d8 + 4) force damage.",
+                445,
+            ),
+        ],
+    }
+
+    recovered = recover_2014_statblock_from_ocr(layout, name="Steel Defender")
+
+    assert recovered["critical_facts"]["armor_class"] == "15 (natural armor)"
+    assert recovered["critical_facts"]["hit_points"].startswith("equal the steel")
+    assert "**Hit Points** equal the steel" in recovered["normalized_content"]
+    assert recovered["validation"]["name"] == "Steel Defender"
+
+
 def test_layout_ocr_repairs_only_bounded_weapon_entry_underscore() -> None:
     assert _repair_layout_ocr_text(
         "Slam_ Melee Weapon Attack: +5 to hit, reach 5 ft., one target."
