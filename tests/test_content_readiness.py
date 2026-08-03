@@ -180,6 +180,49 @@ def test_background_materializer_requires_bounded_choice_semantics() -> None:
     assert background_materializer_errors(card) == []
 
 
+def test_background_materializer_accepts_only_reviewed_embedded_equipment() -> None:
+    card = {
+        "name": "Guild Agent",
+        "background_grants": {
+            "languages": [],
+            "tools": [],
+            "equipment_item_ids": [],
+            "choices": {
+                "language_count": 0,
+                "tool_choice_count": 0,
+                "equipment_packages": {
+                    "A": {
+                        "items": [
+                            {
+                                "inventory_template": {
+                                    "name": "Guild Signet",
+                                    "kind": "equipment",
+                                    "quantity": 1,
+                                    "description": "A source-reviewed guild signet.",
+                                    "mechanics": {},
+                                },
+                                "quantity": 1,
+                            }
+                        ],
+                        "wallet": {"gp": 10},
+                    }
+                },
+            },
+        },
+    }
+
+    assert background_materializer_errors(card) == []
+
+    item = card["background_grants"]["choices"]["equipment_packages"]["A"][
+        "items"
+    ][0]
+    item["artifact_id"] = "dnd5e.content.srd2014.item.guild-signet"
+    assert background_materializer_errors(card) == [
+        "background equipment package A items[0] needs exactly one of artifact_id, "
+        "selected_tool, or inventory_template"
+    ]
+
+
 def test_species_materializer_rejects_ocr_counts_and_unbounded_choices() -> None:
     card = {
         "name": "Simic Hybrid",

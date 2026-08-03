@@ -479,6 +479,83 @@ def background_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
         item.casefold() for item in tool_options
     ):
         errors.append("background tool_options cannot repeat fixed tools")
+
+    equipment_packages = choices.get("equipment_packages", {})
+    if not isinstance(equipment_packages, Mapping):
+        errors.append("background equipment_packages must be an object")
+        return errors
+    for package_name, raw_package in equipment_packages.items():
+        prefix = f"background equipment package {package_name}"
+        if not str(package_name).strip():
+            errors.append("background equipment package names must not be empty")
+        if not isinstance(raw_package, Mapping):
+            errors.append(f"{prefix} must be an object")
+            continue
+        unsupported_package = set(raw_package) - {"items", "wallet"}
+        if unsupported_package:
+            errors.append(
+                f"{prefix} has unsupported fields: {sorted(unsupported_package)}"
+            )
+        items = raw_package.get("items", [])
+        if not isinstance(items, list):
+            errors.append(f"{prefix} items must be an array")
+            items = []
+        for index, raw_item in enumerate(items):
+            item_prefix = f"{prefix} items[{index}]"
+            if not isinstance(raw_item, Mapping):
+                errors.append(f"{item_prefix} must be an object")
+                continue
+            unsupported_item = set(raw_item) - {
+                "artifact_id",
+                "display_name",
+                "inventory_template",
+                "quantity",
+                "selected_tool",
+            }
+            if unsupported_item:
+                errors.append(
+                    f"{item_prefix} has unsupported fields: {sorted(unsupported_item)}"
+                )
+            sources = [
+                bool(str(raw_item.get("artifact_id") or "").strip()),
+                raw_item.get("selected_tool") is True,
+                isinstance(raw_item.get("inventory_template"), Mapping),
+            ]
+            if sum(sources) != 1:
+                errors.append(
+                    f"{item_prefix} needs exactly one of artifact_id, selected_tool, "
+                    "or inventory_template"
+                )
+            if "selected_tool" in raw_item and raw_item.get("selected_tool") is not True:
+                errors.append(f"{item_prefix} selected_tool must be true when present")
+            if raw_item.get("selected_tool") is True and tool_count != 1:
+                errors.append(
+                    f"{item_prefix} selected_tool requires exactly one background tool choice"
+                )
+            quantity = raw_item.get("quantity", 1)
+            if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity < 1:
+                errors.append(f"{item_prefix} quantity must be a positive integer")
+            display_name = raw_item.get("display_name", "")
+            if not isinstance(display_name, str):
+                errors.append(f"{item_prefix} display_name must be a string")
+            template = raw_item.get("inventory_template")
+            if isinstance(template, Mapping):
+                try:
+                    add_inventory_item(
+                        default_character_sheet(),
+                        {**copy.deepcopy(dict(template)), "quantity": quantity},
+                    )
+                except ValueError as error:
+                    errors.append(f"{item_prefix} inventory_template is invalid: {error}")
+        wallet = raw_package.get("wallet", {})
+        if not isinstance(wallet, Mapping):
+            errors.append(f"{prefix} wallet must be an object")
+        else:
+            for denomination, amount in wallet.items():
+                if str(denomination).casefold() not in {"cp", "sp", "ep", "gp", "pp"}:
+                    errors.append(f"{prefix} wallet has an unknown denomination")
+                if isinstance(amount, bool) or not isinstance(amount, int) or amount < 0:
+                    errors.append(f"{prefix} wallet amounts must be non-negative integers")
     return errors
 
 
