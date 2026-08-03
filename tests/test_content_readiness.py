@@ -14,6 +14,7 @@ from sagasmith_dnd.content_readiness import (
     selection_contract_errors,
     selection_input_errors,
     selection_schema_for_artifact,
+    species_materializer_errors,
 )
 
 
@@ -179,6 +180,42 @@ def test_background_materializer_requires_bounded_choice_semantics() -> None:
     assert background_materializer_errors(card) == []
 
 
+def test_species_materializer_rejects_ocr_counts_and_unbounded_choices() -> None:
+    card = {
+        "name": "Simic Hybrid",
+        "grants": {
+            "size": "",
+            "size_options": ["Medium"],
+            "languages": ["Common"],
+            "language_choice_count": 100,
+            "language_options": [],
+            "allow_any_language": False,
+            "skill_proficiencies": [],
+            "skill_choice_count": 1,
+            "skill_options": [],
+            "allow_any_skill": False,
+            "tool_proficiencies": [],
+            "tool_choice_count": 1,
+            "tool_options": [],
+        },
+    }
+
+    errors = species_materializer_errors(card)
+    assert "species language_choice_count must be an integer from 0 to 5" in errors
+    assert "species skill choices need skill_options or allow_any_skill" in errors
+    assert "species tool_options cannot satisfy tool_choice_count" in errors
+
+    card["grants"].update(
+        {
+            "language_choice_count": 1,
+            "language_options": ["Elvish", "Vedalken"],
+            "skill_options": ["Arcana", "Medicine"],
+            "tool_options": ["Alchemist's Supplies", "Tinker's Tools"],
+        }
+    )
+    assert species_materializer_errors(card) == []
+
+
 @pytest.mark.parametrize(
     ("kind", "card", "selection_fields"),
     [
@@ -261,9 +298,10 @@ def test_background_materializer_requires_bounded_choice_semantics() -> None:
             "abilities",
             "ability_scores_include_species_grants",
             "cantrip_artifact_id",
-            "hit_points_include_species_grants",
-            "languages",
-            "skills",
+                "hit_points_include_species_grants",
+                "languages",
+                "size",
+                "skills",
             "tools",
             "values_include_species_grants",
         ]),

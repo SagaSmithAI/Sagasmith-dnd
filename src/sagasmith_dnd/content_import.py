@@ -17,6 +17,7 @@ from sagasmith_dnd.content_readiness import (
     build_catalog_review,
     build_selection_contract,
     selection_contract_errors,
+    species_materializer_errors,
 )
 from sagasmith_dnd.resolution_plan import (
     ResolutionPlanCompilationError,
@@ -2614,7 +2615,11 @@ def author_selection_card_from_candidate(
         grants = _species_grants(description)
         if grants is not None:
             card.setdefault("grants", grants)
-            value["application_state"] = "selection_ready"
+            value["application_state"] = (
+                "selection_ready"
+                if not species_materializer_errors(card)
+                else "catalog_only"
+            )
         return value
 
     if kind == "subclass":
@@ -2914,14 +2919,21 @@ def _species_grants(description: str) -> dict[str, Any] | None:
     return {
         "ability_score_increases": increases,
         "size": size_match.group(1).casefold() if size_match else "",
+        "size_options": [],
         "walk_speed": int(speed_match.group(1)) if speed_match else 0,
         "darkvision_ft": int(darkvision_match.group(1)) if darkvision_match else 0,
         "languages": list(dict.fromkeys(languages)),
         "language_choice_count": language_choice_count,
+        "language_options": [],
+        "allow_any_language": language_choice_count > 0,
         "skill_proficiencies": list(dict.fromkeys(skill_proficiencies)),
         "skill_choice_count": 0,
+        "skill_options": [],
+        "allow_any_skill": False,
         "tool_proficiencies": [],
         "tool_choices": [],
+        "tool_choice_count": 0,
+        "tool_options": [],
         "weapon_proficiencies": [],
         "resistances": list(dict.fromkeys(resistances)),
         "features": _species_feature_cards(description),
@@ -3294,6 +3306,10 @@ def validate_selection_ready_artifacts(artifacts: list[dict[str, Any]]) -> list[
         elif kind == "background":
             errors.extend(
                 f"{prefix} {error}" for error in background_materializer_errors(card)
+            )
+        elif kind == "species":
+            errors.extend(
+                f"{prefix} {error}" for error in species_materializer_errors(card)
             )
         elif (
             kind == "feat"

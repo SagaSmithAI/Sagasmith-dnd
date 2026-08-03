@@ -393,15 +393,22 @@ def _species_grants(name: str, traits: list[tuple[str, str]]) -> dict[str, Any]:
         "ability_score_increases": {},
         "ability_choice": {"count": 0, "amount": 0, "exclude": []},
         "size": "",
+        "size_options": [],
         "walk_speed": 0,
         "darkvision_ft": 0,
         "languages": [],
         "language_choice_count": 0,
+        "language_options": [],
+        "allow_any_language": False,
         "skill_proficiencies": [],
         "skill_choice_count": 0,
+        "skill_options": [],
+        "allow_any_skill": False,
         "weapon_proficiencies": [],
         "tool_proficiencies": [],
         "tool_choices": [],
+        "tool_choice_count": 0,
+        "tool_options": [],
         "cantrip_choice": None,
         "resistances": [],
         "hp_per_level": 0,
@@ -436,16 +443,21 @@ def _species_grants(name: str, traits: list[tuple[str, str]]) -> dict[str, Any]:
             languages, choices = _language_grants(body)
             grants["languages"] = list(dict.fromkeys([*grants["languages"], *languages]))
             grants["language_choice_count"] += choices
+            if choices:
+                grants["allow_any_language"] = True
             continue
         if key in {"keen senses", "menacing"}:
             skill = "perception" if key == "keen senses" else "intimidation"
             grants["skill_proficiencies"].append(skill)
         elif key == "skill versatility":
             grants["skill_choice_count"] = 2
+            grants["allow_any_skill"] = True
         elif "weapon training" in key or key == "dwarven combat training":
             grants["weapon_proficiencies"].extend(_listed_proficiencies(body))
         elif key == "tool proficiency":
             grants["tool_choices"] = _tool_options(body)
+            grants["tool_options"] = list(grants["tool_choices"])
+            grants["tool_choice_count"] = 1 if grants["tool_choices"] else 0
         elif key == "tinker":
             grants["tool_proficiencies"].append("tinker's tools")
         elif key == "dwarven resilience":

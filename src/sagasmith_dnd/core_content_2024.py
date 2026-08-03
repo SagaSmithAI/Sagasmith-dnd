@@ -1461,15 +1461,22 @@ def _species(path: Path) -> list[dict[str, Any]]:
             "ability_choice": {"count": 0, "amount": 0, "exclude": []},
             "size": sizes[0] if len(sizes) == 1 else "",
             "size_choices": sizes,
+            "size_options": sizes if len(sizes) > 1 else [],
             "walk_speed": int(speed.group(1)) if speed else 0,
             "darkvision_ft": 0,
             "languages": [],
             "language_choice_count": 0,
+            "language_options": [],
+            "allow_any_language": False,
             "skill_proficiencies": [],
             "skill_choice_count": 0,
+            "skill_options": [],
+            "allow_any_skill": False,
             "weapon_proficiencies": [],
             "tool_proficiencies": [],
             "tool_choices": [],
+            "tool_choice_count": 0,
+            "tool_options": [],
             "cantrip_choice": None,
             "resistances": [],
             "hp_per_level": 0,
@@ -1487,6 +1494,7 @@ def _species(path: Path) -> list[dict[str, Any]]:
                 grants["hp_per_level"] = 1
             elif folded == "skillful":
                 grants["skill_choice_count"] = 1
+                grants["allow_any_skill"] = True
             grants["features"].append(
                 {
                     "id": f"{PACK_ID}.species-feature.{_slug(name)}-{_slug(trait_name)}",

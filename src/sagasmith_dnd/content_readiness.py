@@ -72,6 +72,7 @@ _SELECTION_FIELDS = {
         "cantrip_artifact_id",
         "hit_points_include_species_grants",
         "languages",
+        "size",
         "skills",
         "tools",
         "values_include_species_grants",
@@ -89,6 +90,7 @@ _CARD_BINDINGS = {
         "name",
         "class_name",
         "subclass_name",
+        "species_name",
         "minimum_level",
         "repeatable_selection_levels",
         "selection_requirements",
@@ -446,8 +448,8 @@ def background_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
 
     def choice_count(field: str) -> int:
         raw = choices.get(field, 0)
-        if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
-            errors.append(f"background {field} must be a non-negative integer")
+        if isinstance(raw, bool) or not isinstance(raw, int) or not 0 <= raw <= 5:
+            errors.append(f"background {field} must be an integer from 0 to 5")
             return 0
         return raw
 
@@ -480,6 +482,90 @@ def background_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
     return errors
 
 
+def species_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
+    """Return failures for unbounded or internally inconsistent species grants."""
+
+    grants = binding.get("grants")
+    if not isinstance(grants, Mapping):
+        return ["species card needs grants"]
+    errors: list[str] = []
+
+    def string_list(value: Any, label: str) -> list[str]:
+        if not isinstance(value, list) or any(
+            not isinstance(item, str) or not item.strip() for item in value
+        ):
+            errors.append(f"species {label} must be an array of non-empty strings")
+            return []
+        normalized = [item.strip() for item in value]
+        if len({item.casefold() for item in normalized}) != len(normalized):
+            errors.append(f"species {label} must be distinct")
+        return normalized
+
+    fixed_languages = string_list(grants.get("languages", []), "languages")
+    fixed_skills = string_list(
+        grants.get("skill_proficiencies", []), "skill_proficiencies"
+    )
+    fixed_tools = string_list(
+        grants.get("tool_proficiencies", []), "tool_proficiencies"
+    )
+    language_options = string_list(
+        grants.get("language_options", []), "language_options"
+    )
+    skill_options = string_list(grants.get("skill_options", []), "skill_options")
+    tool_options = string_list(
+        grants.get("tool_options", grants.get("tool_choices", [])),
+        "tool_options",
+    )
+    size_options = [
+        item.casefold()
+        for item in string_list(grants.get("size_options", []), "size_options")
+    ]
+    fixed_size = str(grants.get("size") or "").strip().casefold()
+    valid_sizes = {"tiny", "small", "medium", "large"}
+    if fixed_size and fixed_size not in valid_sizes:
+        errors.append("species size must be Tiny, Small, Medium, or Large")
+    if any(item not in valid_sizes for item in size_options):
+        errors.append("species size_options contain an unsupported size")
+    if fixed_size and size_options:
+        errors.append("species cannot declare both fixed size and size_options")
+
+    def count(field: str) -> int:
+        raw = grants.get(field, 0)
+        if isinstance(raw, bool) or not isinstance(raw, int) or not 0 <= raw <= 5:
+            errors.append(f"species {field} must be an integer from 0 to 5")
+            return 0
+        return raw
+
+    language_count = count("language_choice_count")
+    skill_count = count("skill_choice_count")
+    tool_count = count("tool_choice_count")
+    for flag in ("allow_any_language", "allow_any_skill"):
+        if flag in grants and not isinstance(grants.get(flag), bool):
+            errors.append(f"species {flag} must be a boolean")
+    if language_count and not language_options and grants.get("allow_any_language") is not True:
+        errors.append(
+            "species language choices need language_options or allow_any_language"
+        )
+    if skill_count and not skill_options and grants.get("allow_any_skill") is not True:
+        errors.append("species skill choices need skill_options or allow_any_skill")
+    if language_options and len(language_options) < language_count:
+        errors.append("species language_options cannot satisfy language_choice_count")
+    if skill_options and len(skill_options) < skill_count:
+        errors.append("species skill_options cannot satisfy skill_choice_count")
+    if tool_count and len(tool_options) < tool_count:
+        errors.append("species tool_options cannot satisfy tool_choice_count")
+    for fixed, options, label in (
+        (fixed_languages, language_options, "language"),
+        (fixed_skills, skill_options, "skill"),
+        (fixed_tools, tool_options, "tool"),
+    ):
+        if {item.casefold() for item in fixed}.intersection(
+            item.casefold() for item in options
+        ):
+            errors.append(f"species {label}_options cannot repeat fixed {label}s")
+    return errors
+
+
 def _validate_materializer_card(kind: str, binding: Mapping[str, Any]) -> None:
     name = str(binding.get("name") or "").strip()
     if not name:
@@ -509,6 +595,10 @@ def _validate_materializer_card(kind: str, binding: Mapping[str, Any]) -> None:
             raise ValueError("subclass always_prepared_spells must be an array")
     elif kind == "background":
         errors = background_materializer_errors(binding)
+        if errors:
+            raise ValueError(errors[0])
+    elif kind == "species":
+        errors = species_materializer_errors(binding)
         if errors:
             raise ValueError(errors[0])
     elif kind == "class":

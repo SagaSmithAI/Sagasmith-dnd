@@ -521,6 +521,30 @@ def test_primary_review_preserves_agent_authored_species_and_item_cards() -> Non
     )
 
 
+def test_primary_review_blocks_implausible_ocr_species_choices() -> None:
+    artifact = author_selection_card_from_candidate(
+        {
+            "id": "candidate:simic-hybrid",
+            "kind": "species",
+            "name": "Simic Hybrid",
+            "artifact": {
+                "kind": "species",
+                "card": {
+                    "name": "Simic Hybrid",
+                    "description": (
+                        "Size. Your size is Medium. Speed. Your walking speed is 30 feet. "
+                        "Languages. You can speak Common and your choice of Elvish or "
+                        "Vedalken. You can glide up to 100 feet."
+                    ),
+                },
+            },
+        }
+    )
+
+    assert artifact["application_state"] == "catalog_only"
+    assert artifact["card"]["grants"]["language_choice_count"] == 100
+
+
 def test_source_coverage_fragment_is_runtime_context_not_character_feature() -> None:
     artifact = author_selection_card_from_candidate(
         {
