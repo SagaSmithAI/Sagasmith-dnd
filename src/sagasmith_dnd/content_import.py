@@ -2614,7 +2614,14 @@ def author_selection_card_from_candidate(
     if kind == "species":
         grants = _species_grants(description)
         if grants is not None:
-            card.setdefault("grants", grants)
+            reviewed_grants = card.get("grants")
+            if isinstance(reviewed_grants, dict):
+                card["grants"] = {
+                    **deepcopy(grants),
+                    **deepcopy(reviewed_grants),
+                }
+            else:
+                card["grants"] = grants
             value["application_state"] = (
                 "selection_ready"
                 if not species_materializer_errors(card)

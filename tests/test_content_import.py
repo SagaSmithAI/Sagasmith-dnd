@@ -515,6 +515,7 @@ def test_primary_review_preserves_agent_authored_species_and_item_cards() -> Non
 
     assert species["card"]["grants"]["ability_score_increases"] == {"wisdom": 2}
     assert species["card"]["grants"]["walk_speed"] == 25
+    assert species["card"]["grants"]["language_options"] == []
     assert item["card"]["inventory_template"]["mechanics"] == {"reviewed": True}
     assert item["card"]["inventory_template"]["description"] == (
         "Reviewer-normalized description."
