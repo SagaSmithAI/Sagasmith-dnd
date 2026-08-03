@@ -10,13 +10,15 @@ from typing import Any, Iterable
 
 from sagasmith_core.text import ascii_slug
 
+from sagasmith_dnd.content_import import audit_release_resolution_readiness
+from sagasmith_dnd.content_resolution import finalize_bundled_artifact_resolutions
 from sagasmith_dnd.spell_resolution import (
     SPELL_RESOLUTION_MECHANIC_ID,
     known_2024_spell_resolution,
 )
 
 PACK_ID = "dnd5e.content.srd2024"
-PACK_VERSION = "1.1.0"
+PACK_VERSION = "1.2.0"
 
 _CLASS_NAMES = {
     "Barbarian",
@@ -106,7 +108,11 @@ def _cached_srd2024_content(skill_root: str) -> tuple[dict[str, Any], list[dict[
     artifacts.extend(_spells(root))
     artifacts.extend(_magic_items(root))
     artifacts.extend(_monsters(root))
-    artifacts = _deduplicate(artifacts)
+    artifacts = finalize_bundled_artifact_resolutions(
+        _deduplicate(artifacts),
+        source_root=root,
+        source_prefix="bundled:srd2024/",
+    )
     native_mechanic_refs = sorted(
         {
             str(ref)
@@ -115,6 +121,7 @@ def _cached_srd2024_content(skill_root: str) -> tuple[dict[str, Any], list[dict[
             if str(ref)
         }
     )
+    resolution_readiness = audit_release_resolution_readiness(artifacts)
     return (
         {
             "id": PACK_ID,
@@ -136,6 +143,8 @@ def _cached_srd2024_content(skill_root: str) -> tuple[dict[str, Any], list[dict[
                 "item",
                 "monster",
             ],
+            "resolution_policy": "build_time_complete",
+            "resolution_readiness": resolution_readiness,
         },
         artifacts,
     )
@@ -1888,13 +1897,13 @@ def _spells(root: Path) -> list[dict[str, Any]]:
                 {
                     "kind": "effect_semantics",
                     "reason": (
-                        "Interpret the SRD 5.2.1 spell and settle it through "
-                        "public engine primitives."
+                        "Apply the SRD 5.2.1 spell through its persisted "
+                        "Agent-as-DM clause and public engine operations."
                     ),
                     "source_excerpt": effect,
                     "default_resolver": "agent",
                     "ruling_kind": "generic_spell_effect",
-                    "policy_ref": "resolution_plan.v1",
+                    "policy_ref": "rule_clause.v1",
                     "requires_external_input_only_for": [
                         "player_owned_choice",
                         "owner_approval",

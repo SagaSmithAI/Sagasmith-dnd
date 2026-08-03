@@ -9,19 +9,193 @@ from sagasmith_dnd.activity_identity import (
 from sagasmith_dnd.character_schema import derive_character_sheet, validate_character_sheet
 from sagasmith_dnd.statblocks import (
     StatblockImportError,
+    _ocr_ability_score_matches,
+    _ocr_column_split,
+    _ocr_probable_peer_heading,
     _repair_layout_ocr_text,
     _structure_gazer_eye_rays,
     _structure_intellect_devourer_actions,
     apply_reviewed_statblock_fill,
     apply_statblock_variant,
     area_save_damage_spec,
+    discover_2014_statblock_names_from_layout,
     effective_statblock_rating,
+    finalize_imported_actor_rulings,
     gazer_eye_ray_spec,
+    parameterized_statblock_requirements,
     parse_2014_statblock,
     recover_2014_statblock_from_ocr,
     source_contest_effect_spec,
     source_save_effect_spec,
 )
+
+
+def test_parameterized_statblock_requirements_keep_companion_hp_source_bound() -> None:
+    source = (
+        "# Steel Defender\n\n"
+        "**Armor Class** 15 (natural armor)\n"
+        "**Hit Points** equal the steel defender's Constitution modifier + "
+        "your Intelligence modifier + five times your level in this class\n"
+    )
+
+    requirement = parameterized_statblock_requirements(source)
+
+    assert requirement == {
+        "schema_version": 1,
+        "kind": "dependent_actor_template",
+        "target_path": "combat.hp.max",
+        "source_expression": (
+            "equal the steel defender's Constitution modifier + your Intelligence "
+            "modifier + five times your level in this class"
+        ),
+        "source_excerpt": (
+            "**Hit Points** equal the steel defender's Constitution modifier + "
+            "your Intelligence modifier + five times your level in this class"
+        ),
+        "source_expressions": [
+            {
+                "target_path": "combat.hp.max",
+                "source_expression": (
+                    "equal the steel defender's Constitution modifier + your "
+                    "Intelligence modifier + five times your level in this class"
+                ),
+                "source_excerpt": (
+                    "**Hit Points** equal the steel defender's Constitution modifier + "
+                    "your Intelligence modifier + five times your level in this class"
+                ),
+            }
+        ],
+        "parameters": ["owner_class_level", "owner_intelligence_modifier"],
+        "instantiation_phase": "lobby",
+        "runtime_ready": False,
+    }
+    assert parameterized_statblock_requirements(
+        "**Hit Points** 45 (6d10 + 12)"
+    ) is None
+    assert parameterized_statblock_requirements(
+        "**Hit Points** unreadable OCR"
+    ) is None
+
+
+def test_parameterized_statblock_requirements_cover_numeric_owner_and_spell_formulas() -> None:
+    owner = parameterized_statblock_requirements(
+        "# Wildfire Spirit\n\n"
+        "**Armor Class** 13 (natural armor)\n"
+        "**Hit Points** 5 + five times your druid level\n"
+        "***Flame Seed.*** Ranged Weapon Attack: your spell attack modifier to hit.\n"
+    )
+    summoned = parameterized_statblock_requirements(
+        "# Aberrant Spirit\n\n"
+        "**Armor Class** 11 + the level of the spell (natural armor)\n"
+        "**Hit Points** 40 + 10 for each spell level above 4th\n"
+        "**Proficiency Bonus** equals your bonus\n"
+        "***Claws.*** Melee Weapon Attack: your spell attack modifier to hit.\n"
+    )
+
+    assert owner is not None
+    assert owner["parameters"] == [
+        "owner_class_level",
+        "owner_spell_attack_modifier",
+    ]
+    assert owner["target_path"] == "combat.hp.max"
+    assert owner["source_expressions"][0]["source_expression"] == (
+        "5 + five times your druid level"
+    )
+    assert summoned is not None
+    assert summoned["parameters"] == [
+        "owner_proficiency_bonus",
+        "owner_spell_attack_modifier",
+        "casting_slot_level",
+    ]
+    assert [item["target_path"] for item in summoned["source_expressions"]] == [
+        "combat.armor_class",
+        "combat.hp.max",
+        "combat.proficiency_bonus",
+    ]
+
+
+def test_runtime_spell_level_effect_is_not_a_dependent_actor_template() -> None:
+    assert parameterized_statblock_requirements(
+        "# Abjurer\n\n"
+        "**Armor Class** 12\n"
+        "**Hit Points** 84 (13d8 + 26)\n"
+        "***Arcane Ward.*** When the abjurer casts an abjuration spell of "
+        "1st level or higher, the ward regains hit points equal to twice the "
+        "level of the spell."
+    ) is None
+
+
+def test_finalize_imported_actor_rulings_eliminates_lazy_semantic_fill() -> None:
+    parsed_sheet = parse_2014_statblock(COMMONER, source_key="test").sheet
+    sheet = validate_character_sheet(
+        {
+            **parsed_sheet,
+            "content": {
+                **parsed_sheet["content"],
+                "features": [
+                    {
+                        "id": "strange-aura",
+                        "name": "Strange Aura",
+                        "description": (
+                            "Creatures in the source-defined aura suffer its unusual effect."
+                        ),
+                        "activation": {"type": "passive", "cost": 0},
+                        # Accounting or other partial mechanics do not settle
+                        # the source-authored outcome by themselves.
+                        "mechanic_refs": [
+                            "dnd5e.core.activity.resource_accounting"
+                        ],
+                    }
+                ],
+            },
+            "inventory": {
+                **parsed_sheet["inventory"],
+                "items": [
+                    *parsed_sheet["inventory"]["items"],
+                    {
+                        "id": "strange-blade",
+                        "name": "Strange Blade",
+                        "kind": "weapon",
+                        "mechanics": {
+                            "damage_formula": "1d8",
+                            "damage_type": "slashing",
+                            "on_hit_effect": (
+                                "On a hit, the blade applies its source-defined mark."
+                            ),
+                        },
+                    },
+                ],
+            },
+        }
+    )
+
+    finalized = finalize_imported_actor_rulings(sheet)
+
+    requirement = finalized["content"]["features"][0]["ruling_requirements"][0]
+    assert requirement["policy_ref"] == "actor_card.import.v1"
+    assert requirement["default_resolver"] == "agent"
+    assert requirement["source_excerpt"].startswith("Creatures in the source-defined")
+    item = next(
+        entry
+        for entry in finalized["inventory"]["items"]
+        if entry["id"] == "strange-blade"
+    )
+    assert item["ruling_requirements"][0]["ruling_kind"] == (
+        "attack_on_hit_effect"
+    )
+
+    engine_settled = finalize_imported_actor_rulings(
+        sheet,
+        settled_mechanic_ids={"dnd5e.core.activity.resource_accounting"},
+        settled_card_ids={"strange-blade"},
+    )
+    assert not engine_settled["content"]["features"][0]["ruling_requirements"]
+    settled_item = next(
+        entry
+        for entry in engine_settled["inventory"]["items"]
+        if entry["id"] == "strange-blade"
+    )
+    assert not settled_item["ruling_requirements"]
 
 COMMONER = """### Commoner
 
@@ -48,6 +222,41 @@ COMMONER = """### Commoner
 ***Club***. *Melee Weapon Attack:* +2 to hit, reach 5 ft., one target.
 *Hit:* 2 (1d4) bludgeoning damage.
 """
+
+
+def test_layout_discovery_finds_each_column_without_prose_guesses() -> None:
+    def block(text: str, x: int, y: int) -> dict:
+        return {
+            "text": text,
+            "confidence": 0.99,
+            "bbox": [x, y, x + 220, y + 14],
+        }
+
+    layout = {
+        "page_number": 23,
+        "width": 1000,
+        "height": 1400,
+        "blocks": [
+            block("Tortle Druid", 40, 100),
+            block("Medium humanoid (tortle), lawful neutral", 40, 118),
+            block("Armor Class 17 (natural)", 40, 136),
+            block("Hit Points 33 (6d8 + 6)", 40, 154),
+            block("Speed 30 ft.", 40, 172),
+            block("Tortle", 560, 100),
+            block("Medium humanoid (tortle), lawful good", 560, 118),
+            block("Armor Class 17 (natural)", 560, 136),
+            block("Hit Points 22 (4d8 + 4)", 560, 154),
+            block("Speed 30 ft.", 560, 172),
+            block("Tortles prefer quiet lives.", 560, 230),
+        ],
+    }
+
+    discovered = discover_2014_statblock_names_from_layout(layout)
+
+    assert [(item["name"], item["column"]) for item in discovered] == [
+        ("Tortle Druid", 0),
+        ("Tortle", 1),
+    ]
 
 
 def test_point_radius_save_damage_is_structured_from_exact_source() -> None:
@@ -1292,6 +1501,39 @@ def test_descriptive_statblock_action_is_marked_for_agent_ruling() -> None:
     assert parsed.warnings == (
         "Lightning Breath (Recharge 5-6): descriptive action is not automatically settled",
     )
+
+
+def test_choice_container_with_nested_attack_is_not_misparsed_as_a_weapon() -> None:
+    source_excerpt = (
+        "The kobold randomly chooses one of its inventions. 1. Acid. "
+        "Ranged Weapon Attack: +4 to hit, range 5/20 ft., one target. "
+        "Hit: 7 (2d6) acid damage. 2. Basket of Centipedes. The target "
+        "must succeed on a DC 12 Constitution saving throw."
+    )
+    parsed = parse_2014_statblock(
+        COMMONER.replace(
+            "***Club***. *Melee Weapon Attack:* +2 to hit, reach 5 ft., one target.\n"
+            "*Hit:* 2 (1d4) bludgeoning damage.",
+            f"***Weapon Invention***. {source_excerpt}",
+        ),
+        source_key="volo-2016:p167",
+        name="Kobold Inventor",
+    )
+
+    assert not any(
+        item["name"] == "Weapon Invention"
+        for item in parsed.sheet["inventory"]["items"]
+    )
+    activity = next(
+        item
+        for item in parsed.sheet["content"]["activities"]
+        if item["name"] == "Weapon Invention"
+    )
+    assert activity["choices"]["manual_ruling"] == {
+        "kind": "descriptive_activity",
+        "default_resolver": "agent",
+        "source_excerpt": source_excerpt,
+    }
 
 
 def test_agent_can_compile_a_custom_statblock_action_without_a_python_branch() -> None:
@@ -2625,6 +2867,113 @@ def test_multiattack_parses_once_with_each_weapon_composition() -> None:
                 {"weapon_id": "tail", "attack_mode": "melee", "count": 1},
             ],
         }
+    ]
+    assert parsed.warnings == ()
+
+
+def test_multiattack_quantity_does_not_match_inside_creature_name() -> None:
+    parsed = parse_2014_statblock(
+        COMMONER.replace("### Commoner", "### Pentadrone")
+        .replace(
+            "###### Actions",
+            (
+                "###### Actions\n\n"
+                "***Multiattack.*** The pentadrone makes five arm attacks."
+            ),
+        )
+        .replace("***Club***", "***Arm***"),
+        source_key="monster-manual-2014:pentadrone",
+    )
+
+    assert derive_character_sheet(parsed.sheet)["multiattack_options"] == [
+        {
+            "id": "melee",
+            "attacks": [{"weapon_id": "arm", "attack_mode": "melee", "count": 5}],
+        }
+    ]
+    assert parsed.warnings == ()
+
+
+def test_multiattack_parses_complete_melee_or_ranged_compositions() -> None:
+    source = COMMONER.replace(
+        "###### Actions",
+        (
+            "###### Actions\n\n"
+            "***Multiattack.*** The centaur makes two attacks: one with its pike "
+            "and one with its hooves or two with its longbow.\n\n"
+            "***Pike.*** Melee Weapon Attack: +6 to hit, reach 10 ft., one target. "
+            "Hit: 9 (1d10 + 4) piercing damage.\n\n"
+            "***Hooves.*** Melee Weapon Attack: +6 to hit, reach 5 ft., one target. "
+            "Hit: 11 (2d6 + 4) bludgeoning damage.\n\n"
+            "***Longbow.*** Ranged Weapon Attack: +4 to hit, range 150/600 ft., "
+            "one target. Hit: 6 (1d8 + 2) piercing damage."
+        ),
+    )
+    parsed = parse_2014_statblock(
+        source,
+        source_key="monster-manual-2014:centaur",
+    )
+
+    assert derive_character_sheet(parsed.sheet)["multiattack_options"] == [
+        {
+            "id": "melee",
+            "attacks": [
+                {"weapon_id": "pike", "attack_mode": "melee", "count": 1},
+                {"weapon_id": "hooves", "attack_mode": "melee", "count": 1},
+            ],
+        },
+        {
+            "id": "ranged",
+            "attacks": [
+                {"weapon_id": "longbow", "attack_mode": "ranged", "count": 2}
+            ],
+        },
+    ]
+    assert parsed.warnings == ()
+
+
+def test_multiattack_matches_qualified_and_singularized_weapon_names() -> None:
+    source = COMMONER.replace(
+        "###### Actions",
+        (
+            "###### Actions\n\n"
+            "***Multiattack.*** The slaad makes three attacks: one with its bite "
+            "and two with its claws or greatsword.\n\n"
+            "***Bite (Slaad Form Only).*** Melee Weapon Attack: +7 to hit, reach "
+            "5 ft., one target. Hit: 6 (1d6 + 3) piercing damage.\n\n"
+            "***Claws (Slaad Form Only).*** Melee Weapon Attack: +7 to hit, reach "
+            "5 ft., one target. Hit: 8 (1d10 + 3) slashing damage.\n\n"
+            "***Greatsword.*** Melee Weapon Attack: +7 to hit, reach 5 ft., one "
+            "target. Hit: 10 (2d6 + 3) slashing damage."
+        ),
+    )
+    parsed = parse_2014_statblock(
+        source,
+        source_key="monster-manual-2014:slaad",
+    )
+
+    options = derive_character_sheet(parsed.sheet)["multiattack_options"]
+    assert [item["attacks"] for item in options] == [
+        [
+            {
+                "weapon_id": "bite-slaad-form-only",
+                "attack_mode": "melee",
+                "count": 1,
+            },
+            {
+                "weapon_id": "claws-slaad-form-only",
+                "attack_mode": "melee",
+                "count": 2,
+            },
+        ],
+        [
+            {
+                "weapon_id": "bite-slaad-form-only",
+                "attack_mode": "melee",
+                "count": 1,
+            },
+            {"weapon_id": "greatsword", "attack_mode": "melee", "count": 2},
+        ],
     ]
     assert parsed.warnings == ()
 
@@ -4388,6 +4737,17 @@ def test_layout_ocr_recovers_one_statblock_without_image_reasoning() -> None:
     assert "ADULT BLUE DRAGONS" not in recovered["normalized_content"]
     assert "\n\n291" not in recovered["normalized_content"]
 
+    constitution = next(
+        item for item in layout["blocks"] if item["text"] == "23 (+6)"
+    )
+    constitution["text"] = "233 (+6)"
+    with pytest.raises(
+        StatblockImportError,
+        match=r"failed D&D sheet validation: .*constitution\.score must be at most 30",
+    ):
+        recover_2014_statblock_from_ocr(layout, name="Adult Blue Dragon")
+    constitution["text"] = "23 (+6)"
+
     next(
         item for item in layout["blocks"] if item["text"].startswith("Challenge ")
     )["confidence"] = 0.5
@@ -4396,3 +4756,521 @@ def test_layout_ocr_recovers_one_statblock_without_image_reasoning() -> None:
         match="low-confidence identity or core combat fields",
     ):
         recover_2014_statblock_from_ocr(layout, name="Adult Blue Dragon")
+
+
+def test_layout_recovery_accepts_unaligned_cards_and_grouped_ability_cells() -> None:
+    def block(text: str, x0: int, y0: int, x1: int, y1: int) -> dict[str, object]:
+        return {
+            "text": text,
+            "confidence": 0.99,
+            "bbox": [x0, y0, x1, y1],
+        }
+
+    layout = {
+        "page_number": 170,
+        "width": 1000,
+        "height": 1400,
+        "blocks": [
+            block("TINY SERVANT", 80, 100, 280, 125),
+            block("Tiny construct", 80, 126, 220, 145),
+            block("Armor Class 15 (natural armor)", 80, 160, 330, 180),
+            block("Hit Points", 80, 181, 170, 201),
+            block("10 (4d4)", 80, 199, 170, 219),
+            block("Speed 30 ft., climb 30 ft.", 80, 220, 310, 240),
+            block("STR", 90, 260, 130, 280),
+            block("DEX CON", 160, 260, 270, 280),
+            block("INT WIS CHA", 310, 260, 470, 280),
+            block("4 (-3)", 90, 285, 140, 305),
+            block("16 (+3) 10 (+0)", 160, 285, 285, 305),
+            block("2 (-4) 10 (+0) 1 (-5)", 310, 285, 480, 305),
+            block("Damage Immunities poison, psychic", 80, 325, 350, 345),
+            block("Senses blindsight 60 ft., passive Perception 10", 80, 350, 430, 370),
+            block("Languages -", 80, 375, 180, 395),
+            block("ACTIONS", 80, 420, 180, 445),
+            block(
+                "Slam. Melee Weapon Attack: +5 to hit, reach 5 ft., one target.",
+                80,
+                455,
+                550,
+                475,
+            ),
+            block("Hit: 5 (1d4 + 3) bludgeoning damage.", 80, 478, 390, 498),
+        ],
+    }
+
+    assert [
+        item["name"] for item in discover_2014_statblock_names_from_layout(layout)
+    ] == ["TINY SERVANT"]
+
+    recovered = recover_2014_statblock_from_ocr(layout, name="Tiny Servant")
+
+    assert recovered["validation"]["name"] == "Tiny Servant"
+    assert recovered["critical_facts"]["hit_points"] == "10 (4d4)"
+    assert recovered["critical_facts"]["challenge"] is None
+    assert recovered["critical_facts"]["abilities"] == {
+        "str": "4 (-3)",
+        "dex": "16 (+3)",
+        "con": "10 (+0)",
+        "int": "2 (-4)",
+        "wis": "10 (+0)",
+        "cha": "1 (-5)",
+    }
+
+
+def test_layout_ocr_repairs_only_bounded_weapon_entry_underscore() -> None:
+    assert _repair_layout_ocr_text(
+        "Slam_ Melee Weapon Attack: +5 to hit, reach 5 ft., one target."
+    ) == "Slam. Melee Weapon Attack: +5 to hit, reach 5 ft., one target."
+    assert _repair_layout_ocr_text("A line_with an underscore") == (
+        "A line_with an underscore"
+    )
+    assert _repair_layout_ocr_text("Smallf ey") == "Small fey"
+    assert _repair_layout_ocr_text("Smallest objects") == "Smallest objects"
+    assert _repair_layout_ocr_text("Languagesбк") == "Languages -"
+    assert _repair_layout_ocr_text("Languages бк") == "Languages -"
+    assert _repair_layout_ocr_text("Me/ee Weapon") == "Melee Weapon"
+    assert _repair_layout_ocr_text("open/close") == "open/close"
+    assert _repair_layout_ocr_text("Hit: 2 (1d6 \u2013 1) bludgeoning damage") == (
+        "Hit: 2 (1d6 - 1) bludgeoning damage"
+    )
+    assert _repair_layout_ocr_text("\u2013 creature can move") == "\u2013 creature can move"
+    assert _repair_layout_ocr_text("8 (-1") == "8 (-1)"
+    assert _repair_layout_ocr_text("8 (-1 point") == "8 (-1 point"
+
+
+@pytest.mark.parametrize(
+    ("source_value", "expected"),
+    [
+        ("5(3)", "5 (-3)"),
+        ("17 (.+3)", "17 (+3)"),
+        ("8 (1)", "8 (-1)"),
+        ("8 1)", "8 (-1)"),
+    ],
+)
+def test_layout_recovery_repairs_only_redundant_ability_modifier_ocr(
+    source_value: str,
+    expected: str,
+) -> None:
+    def block(text: str, x0: int, y0: int, x1: int, y1: int) -> dict[str, object]:
+        return {
+            "text": text,
+            "confidence": 0.99,
+            "bbox": [x0, y0, x1, y1],
+        }
+
+    scores = ["11 (+0)", "16 (+3)", "11 (+0)", "2 (-4)", "14 (+2)", source_value]
+    layout = {
+        "page_number": 322,
+        "width": 600,
+        "height": 800,
+        "blocks": [
+            block("DEER", 40, 60, 160, 80),
+            block("Medium beast, unaligned", 40, 82, 260, 100),
+            block("Armor Class 13", 40, 115, 180, 135),
+            block("Hit Points 4 (1d8)", 40, 138, 210, 158),
+            block("Speed 50 ft.", 40, 161, 160, 181),
+            *[
+                block(label, 45 + index * 80, 200, 85 + index * 80, 220)
+                for index, label in enumerate(("STR", "DEX", "CON", "INT", "WIS", "CHA"))
+            ],
+            *[
+                block(value, 40 + index * 80, 225, 100 + index * 80, 245)
+                for index, value in enumerate(scores)
+            ],
+            block("Senses passive Perception 12", 40, 265, 280, 285),
+            block("Languages -", 40, 288, 180, 308),
+            block("Challenge 0 (10 XP)", 40, 311, 240, 331),
+            block("ACTIONS", 40, 350, 150, 370),
+            block(
+                "Bite. Melee Weapon Attack: +2 to hit, reach 5 ft., one target.",
+                40,
+                385,
+                540,
+                405,
+            ),
+            block("Hit: 2 (1d4) piercing damage.", 40, 408, 330, 428),
+        ],
+    }
+
+    recovered = recover_2014_statblock_from_ocr(layout, name="Deer")
+
+    assert recovered["critical_facts"]["abilities"]["cha"] == expected
+    assert recovered["evidence"]["ability_modifier_repairs"][-1] == {
+        "ability": "CHA",
+        "source_text": source_value,
+        "normalized_text": expected,
+    }
+    if source_value == "5(3)":
+        layout["blocks"] = [
+            item for item in layout["blocks"] if item["text"] != "INT"
+        ]
+        repaired_label = recover_2014_statblock_from_ocr(layout, name="Deer")
+        assert repaired_label["critical_facts"]["abilities"]["int"] == "2 (-4)"
+        assert repaired_label["evidence"]["ability_label_repairs"] == [
+            {
+                "ability": "INT",
+                "basis": "canonical_six_column_ability_table",
+            }
+        ]
+
+
+@pytest.mark.parametrize("source_value", ["8 unknown", "8 1"])
+def test_layout_recovery_does_not_guess_an_ability_score(
+    source_value: str,
+) -> None:
+    assert _ocr_ability_score_matches(source_value) is None
+
+
+def test_layout_recovery_joins_split_weapon_attack_marker() -> None:
+    def block(text: str, x0: int, y0: int, x1: int, y1: int) -> dict[str, object]:
+        return {
+            "text": text,
+            "confidence": 0.99,
+            "bbox": [x0, y0, x1, y1],
+        }
+
+    layout = {
+        "page_number": 183,
+        "width": 600,
+        "height": 800,
+        "blocks": [
+            block("DROW SCOUT", 40, 60, 200, 80),
+            block("Medium humanoid (elf), chaotic evil", 40, 82, 280, 100),
+            block("Armor Class 15", 40, 115, 180, 135),
+            block("Hit Points 22 (5d8)", 40, 138, 210, 158),
+            block("Speed 30 ft.", 40, 161, 160, 181),
+            block("STR DEX CON INT WIS CHA", 40, 200, 330, 220),
+            block(
+                "10 (+0) 16 (+3) 10 (+0) 12 (+1) 12 (+1) 14 (+7)",
+                40,
+                225,
+                430,
+                245,
+            ),
+            block(
+                "Senses darkvision 120 ft., passive Perception 11",
+                40,
+                265,
+                390,
+                285,
+            ),
+            block("Languages Elvish, Undercommon", 40, 288, 300, 308),
+            block("Challenge 1 (200 XP)", 40, 311, 240, 331),
+            block("ACTIONS", 40, 350, 150, 370),
+            block("Shortsword. Me/ee Weapon", 40, 385, 250, 405),
+            block("Attack: +5 to hit, reach 5 ft., one target.", 40, 408, 390, 428),
+            block("Hit: 6 (1d6 + 3) piercing damage.", 40, 431, 340, 451),
+            block(
+                "Web (Scout Form Only; Recharge 5-6). Ranged Weapon Attack: "
+                "+5 to hit, range 30/60 ft., one target.",
+                40,
+                454,
+                540,
+                474,
+            ),
+            block("Hit: The target is restrained.", 40, 477, 300, 497),
+        ],
+    }
+
+    recovered = recover_2014_statblock_from_ocr(layout, name="Drow Scout")
+
+    assert "***Shortsword.*** Melee Weapon Attack:" in recovered["normalized_content"]
+    assert "***Web (Scout Form Only; Recharge 5-6).***" in recovered[
+        "normalized_content"
+    ]
+    assert recovered["critical_facts"]["abilities"]["cha"] == "14 (+2)"
+    assert recovered["evidence"]["ability_modifier_repairs"] == [
+        {
+            "ability": "CHA",
+            "source_text": "14 (+7)",
+            "normalized_text": "14 (+2)",
+        }
+    ]
+    assert recovered["validation"]["name"] == "Drow Scout"
+
+
+def test_layout_column_split_uses_parallel_statblock_identities_as_fallback() -> None:
+    blocks = [
+        {
+            "text": "Medium fiend (demon), chaotic evil",
+            "x0": 50.0,
+            "x1": 250.0,
+            "y0": 300.0,
+            "y1": 320.0,
+            "cx": 150.0,
+        },
+        {
+            "text": "Medium fiend (demon), chaotic evil",
+            "x0": 620.0,
+            "x1": 850.0,
+            "y0": 500.0,
+            "y1": 520.0,
+            "cx": 735.0,
+        },
+    ]
+
+    assert _ocr_column_split(blocks, width=1000.0) == 500.0
+
+
+def test_layout_column_split_does_not_cut_one_six_ability_row() -> None:
+    blocks = [
+        {
+            "text": text,
+            "x0": x0,
+            "x1": x1,
+            "y0": y0,
+            "y1": y0 + 20.0,
+            "cx": (x0 + x1) / 2,
+        }
+        for text, x0, x1, y0 in [
+            ("COMMONER", 30.0, 180.0, 20.0),
+            ("Medium humanoid, any alignment", 30.0, 250.0, 45.0),
+            ("Armor Class 10", 30.0, 160.0, 75.0),
+            ("Hit Points 4 (1d8)", 30.0, 190.0, 95.0),
+            ("Speed 30 ft.", 30.0, 150.0, 115.0),
+            *[
+                (label, 30.0 + index * 70, 70.0 + index * 70, 145.0)
+                for index, label in enumerate(("STR", "DEX", "CON", "INT", "WIS", "CHA"))
+            ],
+            *[
+                ("10 (+0)", 25.0 + index * 70, 80.0 + index * 70, 165.0)
+                for index in range(6)
+            ],
+            ("Senses passive Perception 10", 30.0, 250.0, 200.0),
+            ("Languages Common", 30.0, 180.0, 220.0),
+            ("Challenge 0 (10 XP)", 30.0, 200.0, 240.0),
+            ("ACTIONS", 30.0, 130.0, 275.0),
+            (
+                "Club. Melee Weapon Attack: +2 to hit, reach 5 ft., one target.",
+                30.0,
+                480.0,
+                305.0,
+            ),
+            ("Hit: 2 (1d4) bludgeoning damage.", 30.0, 310.0, 325.0),
+        ]
+    ]
+
+    assert _ocr_column_split(blocks, width=600.0) is None
+
+
+def test_layout_column_split_detects_one_card_flowing_across_columns() -> None:
+    blocks = [
+        {
+            "text": text,
+            "x0": x0,
+            "x1": x1,
+            "y0": y0,
+            "y1": y0 + 20.0,
+            "cx": (x0 + x1) / 2,
+        }
+        for text, x0, x1, y0 in [
+            ("Small humanoid (kobold), lawful evil", 50.0, 430.0, 100.0),
+            ("Armor Class 15", 50.0, 250.0, 140.0),
+            ("Hit Points 27 (5d6 + 10)", 50.0, 300.0, 170.0),
+            ("Speed 30 ft.", 50.0, 210.0, 200.0),
+            ("Sorcery Points. The kobold has 3 sorcery points.", 570.0, 950.0, 100.0),
+            ("Pack Tactics. The kobold has advantage.", 570.0, 930.0, 180.0),
+            ("ACTIONS", 570.0, 700.0, 260.0),
+            ("Dagger. Melee Weapon Attack: +4 to hit.", 570.0, 950.0, 300.0),
+            ("Hit: 4 (1d4 + 2) piercing damage.", 570.0, 900.0, 330.0),
+        ]
+    ]
+
+    assert _ocr_column_split(blocks, width=1000.0) == 500.0
+
+
+def test_layout_column_split_detects_numbered_action_continuation() -> None:
+    blocks = [
+        {
+            "text": text,
+            "x0": x0,
+            "x1": x1,
+            "y0": y0,
+            "y1": y0 + 20.0,
+            "cx": (x0 + x1) / 2,
+        }
+        for text, x0, x1, y0 in [
+            ("Small humanoid (kobold), lawful evil", 50.0, 430.0, 100.0),
+            ("Armor Class 12", 50.0, 250.0, 140.0),
+            ("Hit Points 13 (3d6 + 3)", 50.0, 300.0, 170.0),
+            ("Speed 30 ft.", 50.0, 210.0, 200.0),
+            ("1. Acid. The kobold throws acid.", 50.0, 430.0, 300.0),
+            ("2. Alchemist's Fire. The kobold throws a flask.", 50.0, 470.0, 340.0),
+            ("3. Basket of Centipedes. The kobold throws it.", 50.0, 470.0, 380.0),
+            ("4. Green Slime Pot. The kobold throws it.", 50.0, 450.0, 420.0),
+            ("5. Rot Grub Pot. The kobold throws it.", 570.0, 950.0, 300.0),
+            ("6. Scorpion on a Stick. The kobold attacks.", 570.0, 950.0, 340.0),
+            ("7. Skunk in a Cage. The kobold releases it.", 570.0, 950.0, 380.0),
+            ("8. Wasp Nest in a Bag. The kobold throws it.", 570.0, 950.0, 420.0),
+        ]
+    ]
+
+    assert _ocr_column_split(blocks, width=1000.0) == 500.0
+
+
+def test_layout_recovery_bounds_probable_peer_with_corrupt_identity() -> None:
+    ordered = [
+        {
+            "text": text,
+            "x0": 600.0,
+            "x1": 900.0,
+            "y0": y0,
+            "y1": y0 + 20.0,
+            "cx": 750.0,
+        }
+        for text, y0 in [
+            ("BLACKGUARD", 100.0),
+            ("Mmed -o ( ( ( ment", 130.0),
+            ("Armor Class 18 (plate)", 180.0),
+            ("Hit Points 153 (18d8 + 72)", 210.0),
+            ("Speed 30 ft.", 240.0),
+            ("ACTIONS", 400.0),
+        ]
+    ]
+
+    assert _ocr_probable_peer_heading(ordered, 0) is True
+    assert _ocr_probable_peer_heading(ordered, 1) is False
+
+
+def test_layout_recovery_rejects_bottom_border_text_interleaving() -> None:
+    def block(text: str, y0: int, y1: int) -> dict[str, object]:
+        return {
+            "text": text,
+            "confidence": 0.99,
+            "bbox": [40, y0, 560, y1],
+        }
+
+    layout = {
+        "page_number": 183,
+        "width": 600,
+        "height": 800,
+        "blocks": [
+            block("DROW SCOUT", 60, 80),
+            block("Medium humanoid (elf), chaotic evil", 82, 100),
+            block("Armor Class 15", 115, 135),
+            block("Hit Points 22 (5d8)", 138, 158),
+            block("Speed 30 ft.", 161, 181),
+            block("STR DEX CON INT WIS CHA", 200, 220),
+            block("10 (+0) 16 (+3) 10 (+0) 12 (+1) 12 (+1) 14 (+2)", 225, 245),
+            block("Senses darkvision 120 ft., passive Perception 11", 265, 285),
+            block("Languages Elvish, Undercommon", 288, 308),
+            block("Challenge 1 (200 XP)", 311, 331),
+            block("ACTIONS", 350, 370),
+            block(
+                "Shortsword. Melee Weapon Attack: +5 to hit, one target. "
+                "Hit: 6 (1d6 + 3) piercing damage.",
+                385,
+                405,
+            ),
+            block("=an=d:::::p=sy=c=hi=c=d=a=m=a=g=e=)", 721, 729),
+        ],
+    }
+
+    with pytest.raises(StatblockImportError, match="decorative glyph interleaving"):
+        recover_2014_statblock_from_ocr(layout, name="Drow Scout")
+
+
+def test_layout_recovery_uses_one_structural_near_heading_and_numeric_s() -> None:
+    def block(text: str, x0: int, y0: int, x1: int, y1: int) -> dict[str, object]:
+        return {
+            "text": text,
+            "confidence": 0.99,
+            "bbox": [x0, y0, x1, y1],
+        }
+
+    layout = {
+        "page_number": 236,
+        "width": 1200,
+        "height": 700,
+        "blocks": [
+            block("JARAD VOD SAVO", 80, 100, 320, 125),
+            block("Medium undead, neutral evil", 80, 126, 330, 146),
+            block("Armor Class 17 (natural armor)", 80, 160, 360, 180),
+            block("Hit Points 180 (24d8 + 72)", 80, 181, 350, 201),
+            block("Speed 30 ft.", 80, 202, 230, 222),
+            block("STR DEX CON", 90, 250, 280, 270),
+            block("INT WIS CHA", 310, 250, 480, 270),
+            block("16 (+3) 12 (+1) 16 (+3)", 90, 275, 300, 295),
+            block("20 (+S) 16 (+3) 15 (+2)", 310, 275, 520, 295),
+            block("Damage Resistances necrotic; bludgeoning, piercing, and", 80, 315, 560, 335),
+            block("slashing from nonmagical attacks", 100, 335, 400, 355),
+            block("Senses darkvision 60 ft., passive Perception 13", 80, 360, 500, 380),
+            block("Languages Common, Elvish", 80, 385, 340, 405),
+            block("Challenge 10 (5,900 XP)", 80, 410, 340, 430),
+            block(
+                "Spellcasting. Jarad is a 10th-level spellcaster. His "
+                "spellcasting ability is Intelligence",
+                700,
+                150,
+                1160,
+                180,
+            ),
+            block("ACTIONS", 700, 290, 800, 310),
+            block("Multiattack. Jarad makes two attacks.", 700, 320, 1030, 340),
+            block(
+                "Sticky Leg. Melee Weapon Attack: +8 to hit, reach 5 ft., one",
+                700,
+                350,
+                1160,
+                370,
+            ),
+            block(
+                "Medium or smaller creature. Hit: The target is grappled "
+                "until it escapes (escape DC 12).",
+                700,
+                380,
+                1180,
+                400,
+            ),
+            block("LEGENDARY ACTIONS", 700, 410, 930, 430),
+            block("Cantrip. Jarad casts a cantrip.", 700, 440, 1020, 460),
+            block("REACTIONS", 700, 470, 900, 490),
+            block(
+                "Instinctive Charm (Recharges after the Enchanter Casts an",
+                700,
+                500,
+                1120,
+                520,
+            ),
+            block(
+                "Enchantment Spell of 1st Level or Higher). Jarad diverts an attack.",
+                700,
+                525,
+                1160,
+                545,
+            ),
+            block(
+                "The attacker must make a DC 14 Wisdom saving throw. On a "
+                "failed save, it changes targets.",
+                700,
+                550,
+                1180,
+                570,
+            ),
+            block("236", 700, 650, 750, 675),
+        ],
+    }
+
+    recovered = recover_2014_statblock_from_ocr(layout, name="Jarad Von Savo")
+
+    assert recovered["validation"]["name"] == "Jarad Von Savo"
+    assert recovered["critical_facts"]["abilities"]["int"] == "20 (+5)"
+    assert recovered["critical_facts"]["fields"]["Damage Resistances"] == (
+        "necrotic; bludgeoning, piercing, and slashing from nonmagical attacks"
+    )
+    assert "## Actions" in recovered["normalized_content"]
+    assert "Spellcasting.*** Jarad is a 10th-level spellcaster" in recovered[
+        "normalized_content"
+    ]
+    assert "Multiattack" in recovered["normalized_content"]
+    assert "one Medium or smaller creature. Hit:" in recovered["normalized_content"]
+    assert "## Legendary Actions" in recovered["normalized_content"]
+    assert "***Instinctive Charm (Recharges after the Enchanter Casts an " in recovered[
+        "normalized_content"
+    ]
+    assert "***The attacker must make" not in recovered["normalized_content"]
+    assert recovered["evidence"]["heading"] == "JARAD VOD SAVO"
+    assert recovered["evidence"]["heading_match_mode"] == "bounded_structural_fuzzy"
+    assert recovered["evidence"]["matching_heading_count"] == 0
+    assert recovered["evidence"]["fuzzy_heading_count"] == 1
+    assert recovered["evidence"]["cross_column_continuation_block_count"] == 12

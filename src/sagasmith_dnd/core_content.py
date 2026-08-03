@@ -10,6 +10,8 @@ from typing import Any, Iterable
 
 from sagasmith_core.text import ascii_slug
 
+from sagasmith_dnd.content_import import audit_release_resolution_readiness
+from sagasmith_dnd.content_resolution import finalize_bundled_artifact_resolutions
 from sagasmith_dnd.spell_resolution import (
     SPELL_RESOLUTION_MECHANIC_ID,
     known_spell_resolution,
@@ -21,7 +23,7 @@ from sagasmith_dnd.standard_spell_ids import (
 )
 
 PACK_ID = "dnd5e.content.srd2014"
-PACK_VERSION = "1.19.0"
+PACK_VERSION = "1.20.0"
 
 _SUBCLASS_LEVELS = {
     "barbarian": 3,
@@ -67,7 +69,11 @@ def _cached_srd2014_content(skill_root: str) -> tuple[dict[str, Any], list[dict[
     artifacts.extend(_sections(root / "05_Feats", "feat", _h2_sections))
     artifacts.extend(_equipment_items(root / "04_Equipment"))
     artifacts.extend(_simple_files(root / "09_Magic_Items" / "Magic_Items_Each", "item"))
-    artifacts = _deduplicate(artifacts)
+    artifacts = finalize_bundled_artifact_resolutions(
+        _deduplicate(artifacts),
+        source_root=root,
+        source_prefix="bundled:srd2014/",
+    )
     native_mechanic_refs = sorted(
         {
             str(mechanic_ref)
@@ -76,6 +82,7 @@ def _cached_srd2014_content(skill_root: str) -> tuple[dict[str, Any], list[dict[
             if str(mechanic_ref)
         }
     )
+    resolution_readiness = audit_release_resolution_readiness(artifacts)
     return (
         {
             "id": PACK_ID,
@@ -96,6 +103,8 @@ def _cached_srd2014_content(skill_root: str) -> tuple[dict[str, Any], list[dict[
                 "spell",
                 "item",
             ],
+            "resolution_policy": "build_time_complete",
+            "resolution_readiness": resolution_readiness,
         },
         artifacts,
     )
@@ -156,13 +165,13 @@ def _spells(folder: Path, spell_classes: dict[str, list[str]]) -> list[dict[str,
                 {
                     "kind": "effect_semantics",
                     "reason": (
-                        "Interpret this source-bound spell and express its concrete "
-                        "outcome through reviewed semantic primitives."
+                        "Apply this exact source-bound spell through the persisted "
+                        "Agent-as-DM clause and public engine operations."
                     ),
                     "source_excerpt": str(card["definition"]["effect"])[:4000],
                     "default_resolver": "agent",
                     "ruling_kind": "generic_spell_effect",
-                    "policy_ref": "resolution_plan.v1",
+                    "policy_ref": "rule_clause.v1",
                     "requires_external_input_only_for": [
                         "player_owned_choice",
                         "owner_approval",

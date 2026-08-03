@@ -2,6 +2,7 @@ from collections import Counter
 from pathlib import Path
 
 from sagasmith_dnd.character_schema import add_inventory_item, default_character_sheet
+from sagasmith_dnd.content_import import audit_release_resolution_readiness
 from sagasmith_dnd.core_content_2024 import (
     PACK_ID,
     PACK_VERSION,
@@ -17,23 +18,37 @@ def test_srd2024_content_covers_every_core_catalog_kind_with_exact_sources() -> 
     counts = Counter(item["kind"] for item in artifacts)
 
     assert manifest["id"] == PACK_ID
-    assert manifest["version"] == PACK_VERSION == "1.1.0"
+    assert manifest["version"] == PACK_VERSION == "1.2.0"
     assert manifest["editions"] == ["2024"]
-    assert counts["class"] == 12
-    assert counts["subclass"] == 12
-    assert counts["species"] == 9
-    assert counts["background"] == 4
-    assert counts["feat"] >= 15
-    assert counts["feature"] >= 220
-    assert counts["spell"] >= 330
-    assert counts["item"] >= 460
-    assert counts["monster"] >= 320
+    assert len(artifacts) == 1463
+    assert counts == {
+        "background": 4,
+        "class": 12,
+        "feat": 17,
+        "feature": 269,
+        "item": 471,
+        "monster": 330,
+        "species": 9,
+        "spell": 339,
+        "subclass": 12,
+    }
+    assert len({item["id"] for item in artifacts}) == len(artifacts)
     assert all(
         ref.startswith("bundled:srd2024/")
         for artifact in artifacts
         for ref in artifact["rule_refs"]
     )
     assert all(artifact["source_citations"] for artifact in artifacts)
+    readiness = audit_release_resolution_readiness(artifacts)
+    assert manifest["resolution_policy"] == "build_time_complete"
+    assert manifest["resolution_readiness"] == readiness
+    assert readiness["complete"] is True
+    assert readiness["first_use_compilation_required"] is False
+    assert readiness["resolved_count"] == len(artifacts)
+    assert all(
+        artifact["semantic_resolution"]["first_use_compilation_required"] is False
+        for artifact in artifacts
+    )
 
     items = {
         item["card"]["name"]: item

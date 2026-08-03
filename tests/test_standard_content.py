@@ -15,6 +15,7 @@ from sagasmith_dnd.combat_engine import (
     start_encounter,
     start_witch_bolt_tether,
 )
+from sagasmith_dnd.content_import import audit_release_resolution_readiness
 from sagasmith_dnd.core_rule_pack import get_core_rule_pack
 from sagasmith_dnd.lifecycle import advance_effect_durations
 from sagasmith_dnd.spell_resolution import scaled_roll_expression, spell_resolution_path
@@ -26,6 +27,7 @@ from sagasmith_dnd.standard_spell_ids import (
     CORE_WITCH_BOLT_MECHANIC_ID,
     CORE_WITCH_BOLT_SPELL_ID,
     STANDARD_2014_CONTENT_PACK_ID,
+    STANDARD_2014_CONTENT_PACK_VERSION,
 )
 
 
@@ -37,7 +39,7 @@ def _spell_card(spell_id: str) -> dict:
     card.update(
         id=artifact["id"],
         pack_id=STANDARD_2014_CONTENT_PACK_ID,
-        pack_version="1.0.0",
+        pack_version=STANDARD_2014_CONTENT_PACK_VERSION,
         rule_refs=list(artifact["rule_refs"]),
         mechanic_refs=list(artifact["mechanic_refs"]),
     )
@@ -79,6 +81,7 @@ def test_standard_2014_mechanics_pack_is_separate_from_srd_and_native() -> None:
     manifest, artifacts = build_standard2014_content()
 
     assert manifest["id"] == STANDARD_2014_CONTENT_PACK_ID
+    assert manifest["version"] == STANDARD_2014_CONTENT_PACK_VERSION == "1.1.0"
     assert {item["id"] for item in artifacts} == {
         CORE_BLADE_WARD_SPELL_ID,
         CORE_WITCH_BOLT_SPELL_ID,
@@ -91,6 +94,18 @@ def test_standard_2014_mechanics_pack_is_separate_from_srd_and_native() -> None:
     assert spell_resolution_path(artifacts[1]["card"]) == "structured_resolution"
     registered = {item.id for item in get_core_rule_pack("2014").boundaries}
     assert set(manifest["native_mechanic_refs"]) <= registered
+    readiness = audit_release_resolution_readiness(artifacts)
+    assert manifest["resolution_policy"] == "build_time_complete"
+    assert manifest["resolution_readiness"] == readiness
+    assert readiness == {
+        "schema_version": 1,
+        "complete": True,
+        "artifact_count": 2,
+        "resolved_count": 2,
+        "modes": {"kernel_mechanic": 2, "static_grant": 2},
+        "unresolved": [],
+        "first_use_compilation_required": False,
+    }
 
 
 def test_blade_ward_resists_only_weapon_attack_bps_until_next_turn_end() -> None:

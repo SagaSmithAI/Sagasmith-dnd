@@ -43,10 +43,32 @@ attribution。2014 无 Action 生物与速度 0 的 statblock 仍是合法卡；
 MOD/SAVE-only 表只保存能够严格保留印刷 modifier/save 的规范代表值，并把
 该规范化写入 provenance，不伪造不可证明的奇偶分数。
 
+商业 2014 规则书的私有构建同样不得把版式差异变成运行时补义：显式
+`Actions for Type …` 小节会拆成各自只携带对应动作组的独立 actor card；一个
+缺失的能力标签仅能在六列分数完整、其余五个标签顺序唯一时按列位恢复，印刷
+modifier 损坏也只在分数本身清晰时由分数重算。Monster Manual 只有在
+`edition=2014`、`publication_id=mm2014` 且名称唯一匹配时，才能复用同一身份的
+内置 SRD 卡，并在新包中记录原卡 checksum；其他书、同名变体或数值差异不得
+按名称替换。明显受损的标题也只能被同页唯一、已审核的身份取代。
+
+内置结构化目录使用精确覆盖门禁：2014 SRD 为 1,014 个条目（含 319
+法术、474 物品和 182 特性），2024 SRD 为 1,463 个条目（含 339 法术、
+471 物品、269 特性和 330 怪物）。随附中英文来源索引共覆盖 2,032 个
+Markdown 文件、42 个 source partition；任何文件遗漏、重复、条目数量漂移、
+重复 ID 或缺失来源引用都会使测试失败。三本商业核心书的非 SRD 原文不会随
+Apache-2.0 仓库发布；合法持有者可把本地 PHB/DMG/MM 编译为 private core addon。
+两版内置目录的每个条目还必须在构建时写入完整 clause set：结构化选择与授予、
+已注册内核机制、纯描述和带精确来源摘录的 Agent-DM 裁定分别标注；发布审计要求
+`first_use_compilation_required=false`，运行时不得再补写 resolution。
+未匹配专用 schema 的掷骰流程、编号随机效果表和裁定指导也不能降级为纯描述；
+它们按 chunk 保留精确来源并在构建期写成 direct Agent-DM clause。只有经信号审计
+确认不含机械过程的上下文才可标记为 descriptive。
+
 “取消怪物硬编码”指怪物身份、数值、攻击、特性和来源不再由名称表或专属
 构造器产生。标准规则的通用结算函数仍属于引擎，例如动作经济、攻击、豁免、
 伤害、抗性与来源卡声明的通用 trait；运行时从卡片读取输入，不按怪物名字
-选择结果。自设内容首次使用时仍走来源绑定的 Agent 语义理解/方案保存边界。
+选择结果。自设内容在导入、审核或导出时即保存来源绑定的 typed plan 或
+Agent-DM 裁定边界；运行时只裁定当前事实，不再首次触发时补方案。
 
 ## 长期记忆边界
 
@@ -103,6 +125,15 @@ sagasmith-dnd database upgrade --json
 lock 的 rule pack；其中预设 PC、NPC、怪物或召唤物使用 portable
 `preset_pack`；若附带冒险、地图或场景则另用 `module_pack`。不要把三者压成
 一个可绕过规则安装审批的巨型包；用显式 dependency 将它们组合即可。
+
+跨安装迁移时，rule pack 会同时携带完整的已索引来源，并把本地
+`source_id`/`chunk_id` 改写为稳定 locator。接收端验证 checksum、system、edition
+与精确依赖后，以新本地 id 重建来源和引用；规则依赖使用不受本地 UUID 影响的
+definition checksum。独立 rule pack 也必须携带与接收端复算结果完全相同的
+`build_time_complete` resolution audit；缺失、过期或仍有 deferred 内容时拒绝导出、
+导入和安装。结果只是 validated inactive draft，仍需分别 install 和由战役
+Owner/DM activation。薄 `release_manifest` 则锁定各完整组件 envelope 的精确版本与
+checksum，不赋予任何安装或启用权限。
 
 ## 开发
 

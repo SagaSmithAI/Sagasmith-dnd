@@ -96,7 +96,7 @@ def build_content_solution(
     solution_version: int = 1,
     replaces_plan_fingerprint: str = "",
 ) -> dict[str, Any]:
-    """Build normalized metadata for one first-use Agent compilation."""
+    """Build normalized metadata for one pre-play Agent authoring pass."""
 
     return normalize_content_solution(
         {

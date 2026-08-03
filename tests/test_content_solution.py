@@ -86,7 +86,7 @@ def _card() -> dict:
     }
 
 
-def test_first_use_solution_locks_plan_identity_evidence_and_agent_reason() -> None:
+def test_build_time_solution_locks_plan_identity_evidence_and_agent_reason() -> None:
     plan = _plan()
     card = _card()
 

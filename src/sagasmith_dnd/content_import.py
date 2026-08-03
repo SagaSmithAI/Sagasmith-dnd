@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from copy import deepcopy
 from typing import Any
@@ -72,6 +73,11 @@ _GENERIC_FEATURE_TITLES = {
     "proficiencies",
     "quick build",
 }
+_STATBLOCK_PLACEHOLDER_TITLES = {
+    "character name",
+    "creature name",
+    "monster name",
+}
 _PAGE_HEADER_RE = re.compile(r"(?i)^(?:chapter|part|appendix)\b")
 _STATBLOCK_FIELD_LABELS = (
     "Saving Throws",
@@ -102,6 +108,62 @@ _MECHANICAL_ENTRY_START_RE = re.compile(
     r"(?=(?:\*?)(?:Melee|Ranged|Melee or Ranged)\s+"
     r"(?:Weapon|Spell)\s+Attack:)",
     re.IGNORECASE,
+)
+_SPELL_CLASSES = (
+    "artificer",
+    "bard",
+    "cleric",
+    "druid",
+    "paladin",
+    "ranger",
+    "sorcerer",
+    "warlock",
+    "wizard",
+)
+_SPELL_SCHOOLS = (
+    "abjuration",
+    "conjuration",
+    "divination",
+    "enchantment",
+    "evocation",
+    "illusion",
+    "necromancy",
+    "transmutation",
+)
+_EMBEDDED_SPELL_START_RE = re.compile(
+    r"(?P<name>[A-Z][A-Za-z0-9'’\-]+"
+    r"(?:\s+(?:[A-Z][A-Za-z0-9'’\-]+|of|the|and|or|from|with)){0,8})\s+"
+    r"(?P<level>(?:[1-9](?:st|nd|rd|th)-level\s+"
+    r"(?:" + "|".join(_SPELL_SCHOOLS) + r")|"
+    r"(?:" + "|".join(_SPELL_SCHOOLS) + r")\s+cantrip))\s+"
+    r"Casting\s+Time:\s*",
+    re.IGNORECASE,
+)
+_SPELL_FIELDS_RE = re.compile(
+    r"(?is)(?P<casting_time>.+?)\s+Range:\s*(?P<range>.+?)\s+"
+    r"Components:\s*(?P<components>.+?)\s+Duration:\s*"
+    r"(?P<duration>Instantaneous|Concentration,\s*up to\s+"
+    r"\d+\s+(?:rounds?|minutes?|hours?|days?)|"
+    r"\d+\s+(?:rounds?|minutes?|hours?|days?)|Until dispelled|Special)"
+    r"(?:\s+(?P<effect>.*))?$"
+)
+_SPELL_LIST_SECTION_RE = re.compile(
+    r"(?i)\b(?P<class>" + "|".join(_SPELL_CLASSES) + r")\s+Spells\b"
+)
+_SPELL_LIST_ENTRY_RE = re.compile(
+    r"(?P<name>[A-Z][A-Za-z0-9'’\-]+"
+    r"(?:\s+(?:[A-Z][A-Za-z0-9'’\-]+|of|the|and|or|from|with)){0,8})\s+"
+    r"\((?P<school>" + "|".join(_SPELL_SCHOOLS) + r")"
+    r"(?P<ritual>,\s*ritual)?\)",
+    re.IGNORECASE,
+)
+_EMBEDDED_SPECIES_START_RE = re.compile(
+    r"(?P<name>[A-Z][A-Za-z'’\-]+"
+    r"(?:\s+[A-Z][A-Za-z'’\-]+){0,2})\s+Traits\s+"
+    r"(?=.{0,500}?Ability Score Increase\s*[.:])",
+)
+_OCR_ABILITY_DIGITS = str.maketrans(
+    {"l": "1", "I": "1", "O": "0", "S": "5"}
 )
 
 
@@ -234,7 +296,865 @@ def extract_content_candidates(
                 },
             }
         )
+    candidates.extend(
+        _embedded_spell_candidates(chunks, source_title=source_title)
+    )
+    candidates.extend(_embedded_species_candidates(chunks))
+    candidates.extend(_rulebook_statblock_candidates(chunks))
+    merged = _merge_extracted_candidates(candidates)
+    claimed_chunks = {
+        str(chunk_id)
+        for candidate in merged
+        for chunk_id in candidate.get("source_chunk_ids") or []
+    }
+    merged.extend(
+        _mechanical_source_fragment_candidates(
+            chunks,
+            claimed_chunk_ids=claimed_chunks,
+        )
+    )
+    return merged
+
+
+def extract_content_inventory(
+    chunks: list[dict[str, Any]],
+    *,
+    source_title: str = "",
+) -> dict[str, Any]:
+    """Return exhaustive chunk disposition plus the structured entity catalog.
+
+    Completeness is not inferred from entity counts. Every indexed chunk is
+    represented in the ledger; mechanically suggestive chunks that were not
+    claimed by any candidate are surfaced as a blocking review queue.
+    """
+
+    candidates = extract_content_candidates(chunks, source_title=source_title)
+    claims: dict[str, list[str]] = {}
+    fallback_ids = {
+        str(candidate["id"])
+        for candidate in candidates
+        if candidate.get("coverage_fallback") is True
+    }
+    for candidate in candidates:
+        for chunk_id in candidate.get("source_chunk_ids") or []:
+            claims.setdefault(str(chunk_id), []).append(str(candidate["id"]))
+    ledger = []
+    unresolved = []
+    for chunk in chunks:
+        chunk_id = str(chunk.get("id") or "").strip()
+        if not chunk_id:
+            continue
+        content = str(chunk.get("content") or "")
+        entity_ids = sorted(set(claims.get(chunk_id, [])))
+        signals = _unclaimed_mechanical_signals(content)
+        disposition = "structured_entity" if entity_ids else "descriptive_context"
+        if signals and (not entity_ids or all(item in fallback_ids for item in entity_ids)):
+            disposition = "mechanical_review_required"
+            unresolved.append(
+                {
+                    "chunk_id": chunk_id,
+                    "heading_path": list(chunk.get("heading_path") or []),
+                    "page_start": chunk.get("page_start"),
+                    "page_end": chunk.get("page_end"),
+                    "signals": signals,
+                    "candidate_ids": entity_ids,
+                }
+            )
+        ledger.append(
+            {
+                "chunk_id": chunk_id,
+                "disposition": disposition,
+                "entity_ids": entity_ids,
+                "signals": signals,
+            }
+        )
+    counts: dict[str, int] = {}
+    for candidate in candidates:
+        kind = str(candidate["kind"])
+        counts[kind] = counts.get(kind, 0) + 1
+    return {
+        "schema_version": 1,
+        "source_title": source_title,
+        "chunk_count": len(ledger),
+        "candidate_count": len(candidates),
+        "candidate_counts": dict(sorted(counts.items())),
+        "claimed_chunk_count": sum(
+            1 for item in ledger if item["disposition"] == "structured_entity"
+        ),
+        "descriptive_chunk_count": sum(
+            1 for item in ledger if item["disposition"] == "descriptive_context"
+        ),
+        "unresolved_mechanical_count": len(unresolved),
+        "unresolved_mechanical_chunks": unresolved,
+        "ledger": ledger,
+        "candidates": candidates,
+    }
+
+
+def _mechanical_source_fragment_candidates(
+    chunks: list[dict[str, Any]],
+    *,
+    claimed_chunk_ids: set[str],
+) -> list[dict[str, Any]]:
+    """Retain every unclaimed mechanical fragment for build-time Agent resolution."""
+
+    candidates = []
+    for index, chunk in enumerate(chunks):
+        chunk_id = str(chunk.get("id") or "").strip()
+        content = str(chunk.get("content") or "").strip()
+        signals = _unclaimed_mechanical_signals(content)
+        if not chunk_id or chunk_id in claimed_chunk_ids or not signals:
+            continue
+        heading_path = [
+            str(item).strip()
+            for item in chunk.get("heading_path") or []
+            if str(item).strip()
+        ]
+        heading = heading_path[-1] if heading_path else "Unheaded rule fragment"
+        page = chunk.get("page_start")
+        name = f"Source fragment: {heading}"
+        if page is not None:
+            name += f" (p. {page})"
+        identity = "\x1f".join(("source-fragment", chunk_id, str(index)))
+        candidate_id = (
+            "candidate:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20]
+        )
+        candidates.append(
+            {
+                "id": candidate_id,
+                "kind": "feature",
+                "name": name,
+                "source_chunk_ids": [chunk_id],
+                "source_heading_path": heading_path,
+                "page_start": chunk.get("page_start"),
+                "page_end": chunk.get("page_end"),
+                "extraction_confidence": "review_required",
+                "extraction_signals": ["mechanical source fragment", *signals],
+                "review_status": "pending",
+                "mechanical_scope": "review_required",
+                "application_state": "catalog_only",
+                "execution_state": "agent_resolution_required",
+                "coverage_fallback": True,
+                "ruling_requirement": {
+                    "reason": (
+                        "This exact source fragment contains mechanical signals but "
+                        "does not match a safely structured entity schema."
+                    ),
+                    "default_resolver": "agent",
+                    "ruling_kind": "source_or_scene_fact",
+                },
+                "artifact": {
+                    "kind": "feature",
+                    "application_state": "catalog_only",
+                    "mechanical_scope": "review_required",
+                    "card": {
+                        "name": name,
+                        "description": content[:4000],
+                        "source_fragment": True,
+                    },
+                },
+            }
+        )
     return candidates
+
+
+def _embedded_spell_candidates(
+    chunks: list[dict[str, Any]],
+    *,
+    source_title: str,
+) -> list[dict[str, Any]]:
+    class_index = _spell_class_index(chunks)
+    candidates = []
+    for chunk in chunks:
+        content = " ".join(str(chunk.get("content") or "").split())
+        chunk_id = str(chunk.get("id") or "").strip()
+        if not content or not chunk_id:
+            continue
+        # Document layout normally promotes the first spell name to the section
+        # heading, so the chunk itself begins with ``2nd-level conjuration``.
+        # Reattach only that exact heading for scanning; otherwise the first
+        # spell in every section is systematically downgraded to a name-only
+        # catalog card while later spells in the same chunk are structured.
+        scan_content = content
+        heading_path = [
+            " ".join(str(item).split())
+            for item in chunk.get("heading_path") or []
+            if str(item).strip()
+        ]
+        heading_name = heading_path[-1] if heading_path else ""
+        if (
+            heading_name
+            and heading_name.casefold() not in _GENERIC_TITLES
+            and not _PAGE_HEADER_RE.match(heading_name)
+            and re.match(
+                r"(?i)^(?:[1-9](?:st|nd|rd|th)-level\s+"
+                r"(?:" + "|".join(_SPELL_SCHOOLS) + r")|"
+                r"(?:" + "|".join(_SPELL_SCHOOLS) + r")\s+cantrip)\b",
+                content,
+            )
+        ):
+            scan_content = f"{heading_name} {content}"
+        starts = list(_EMBEDDED_SPELL_START_RE.finditer(scan_content))
+        for index, match in enumerate(starts):
+            end = (
+                starts[index + 1].start()
+                if index + 1 < len(starts)
+                else len(scan_content)
+            )
+            name = " ".join(match.group("name").split()).strip(" .")
+            name = re.sub(r"(?i)^spells?\s+", "", name).strip()
+            level_text = match.group("level").casefold()
+            school = next(
+                school for school in _SPELL_SCHOOLS if school in level_text
+            )
+            level = 0 if "cantrip" in level_text else int(level_text[0])
+            fields = _SPELL_FIELDS_RE.match(
+                scan_content[match.end() : end].strip()
+            )
+            if fields is None:
+                continue
+            classes = sorted(class_index.get(name.casefold(), {}).get("classes", []))
+            list_chunks = sorted(
+                class_index.get(name.casefold(), {}).get("source_chunk_ids", [])
+            )
+            duration = _spell_duration(fields.group("duration"))
+            components = _spell_components(fields.group("components"))
+            spell_range = _spell_range(fields.group("range"))
+            identity = "\x1f".join(("spell", name.casefold(), chunk_id))
+            source_chunk_ids = list(dict.fromkeys([chunk_id, *list_chunks]))
+            candidates.append(
+                {
+                    "id": "candidate:"
+                    + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20],
+                    "kind": "spell",
+                    "name": name,
+                    "source_chunk_ids": source_chunk_ids,
+                    "source_heading_path": list(chunk.get("heading_path") or []),
+                    "page_start": chunk.get("page_start"),
+                    "page_end": chunk.get("page_end"),
+                    "extraction_confidence": "high" if classes else "medium",
+                    "extraction_signals": [
+                        "embedded spell header",
+                        "casting time",
+                        "range",
+                        "components",
+                        "duration",
+                        *(["spell list association"] if classes else []),
+                    ],
+                    "review_status": "pending",
+                    "mechanical_scope": "review_required",
+                    "application_state": "catalog_only",
+                    "execution_state": "agent_resolution_required",
+                    "artifact": {
+                        "kind": "spell",
+                        "application_state": "catalog_only",
+                        "mechanical_scope": "review_required",
+                        "card": {
+                            "name": name,
+                            "level": level,
+                            "classes": classes,
+                            "definition": {
+                                "school": school,
+                                "casting_time": fields.group("casting_time").strip(),
+                                "range": spell_range,
+                                "duration": duration,
+                                "components": components,
+                                "effect": (fields.group("effect") or "").strip()[:4000],
+                            },
+                            "source_title": source_title,
+                        },
+                    },
+                }
+            )
+    return candidates
+
+
+def _clean_species_name(value: str) -> str:
+    words = " ".join(value.split()).strip(" .").split()
+    while words and words[0].casefold() in {"chapter", "race", "races", "traits"}:
+        words.pop(0)
+    compound_modifiers = {
+        "air",
+        "dark",
+        "deep",
+        "earth",
+        "eladrin",
+        "fallen",
+        "feral",
+        "fire",
+        "forest",
+        "ghostwise",
+        "gray",
+        "half",
+        "high",
+        "hill",
+        "lightfoot",
+        "mountain",
+        "protector",
+        "rock",
+        "scourge",
+        "sea",
+        "shadar-kai",
+        "simic",
+        "stout",
+        "variant",
+        "water",
+        "wood",
+    }
+    if len(words) >= 2 and words[-2].casefold() in compound_modifiers:
+        return " ".join(words[-2:])
+    return words[-1] if words else "Unknown Species"
+
+
+def _embedded_species_candidates(
+    chunks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    candidates = []
+    for chunk in chunks:
+        content = " ".join(str(chunk.get("content") or "").split())
+        chunk_id = str(chunk.get("id") or "").strip()
+        if not content or not chunk_id:
+            continue
+        starts = list(_EMBEDDED_SPECIES_START_RE.finditer(content))
+        for index, match in enumerate(starts):
+            end = starts[index + 1].start() if index + 1 < len(starts) else len(content)
+            name = _clean_species_name(match.group("name"))
+            body = content[match.end() : end].strip()
+            signals = [
+                label
+                for label in (
+                    "ability score increase",
+                    "age",
+                    "alignment",
+                    "size",
+                    "speed",
+                    "languages",
+                )
+                if re.search(rf"(?i)\b{re.escape(label)}\s*[.:]", body)
+            ]
+            if len(signals) < 4:
+                continue
+            identity = "\x1f".join(("species", name.casefold(), chunk_id))
+            candidates.append(
+                {
+                    "id": "candidate:"
+                    + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20],
+                    "kind": "species",
+                    "name": name,
+                    "source_chunk_ids": [chunk_id],
+                    "source_heading_path": list(chunk.get("heading_path") or []),
+                    "page_start": chunk.get("page_start"),
+                    "page_end": chunk.get("page_end"),
+                    "extraction_confidence": "high",
+                    "extraction_signals": ["embedded species traits", *signals],
+                    "review_status": "pending",
+                    "mechanical_scope": "review_required",
+                    "application_state": "catalog_only",
+                    "execution_state": "agent_resolution_required",
+                    "artifact": {
+                        "kind": "species",
+                        "application_state": "catalog_only",
+                        "mechanical_scope": "review_required",
+                        "card": {"name": name, "description": body[:2000]},
+                    },
+                }
+            )
+    return candidates
+
+
+def _spell_class_index(chunks: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    for chunk in chunks:
+        content = " ".join(str(chunk.get("content") or "").split())
+        chunk_id = str(chunk.get("id") or "").strip()
+        sections = list(_SPELL_LIST_SECTION_RE.finditer(content))
+        for index, section in enumerate(sections):
+            end = sections[index + 1].start() if index + 1 < len(sections) else len(content)
+            class_name = section.group("class").casefold()
+            for entry in _SPELL_LIST_ENTRY_RE.finditer(content[section.end() : end]):
+                key = " ".join(entry.group("name").split()).casefold()
+                key = re.sub(
+                    r"(?i)^(?:(?:st|nd|rd|th)\s+level|cantrips?\s*\(0\s+level\))\s+",
+                    "",
+                    key,
+                )
+                item = result.setdefault(
+                    key,
+                    {"classes": set(), "source_chunk_ids": set(), "ritual": False},
+                )
+                item["classes"].add(class_name)
+                if chunk_id:
+                    item["source_chunk_ids"].add(chunk_id)
+                item["ritual"] = bool(item["ritual"] or entry.group("ritual"))
+    return result
+
+
+def _spell_range(value: str) -> dict[str, Any]:
+    text = " ".join(value.split())
+    folded = text.casefold()
+    if folded.startswith("self"):
+        kind = "self"
+    elif folded == "touch":
+        kind = "touch"
+    elif folded == "sight":
+        kind = "sight"
+    elif folded == "unlimited":
+        kind = "unlimited"
+    else:
+        kind = (
+            "distance"
+            if re.search(r"\b\d+\s*(?:feet|foot|ft\.?|miles?)\b", folded)
+            else "special"
+        )
+    distance = re.search(r"\b(\d+)\s*(feet|foot|ft\.?|miles?)\b", folded)
+    normal_ft = 0
+    if distance:
+        normal_ft = int(distance.group(1)) * (5280 if "mile" in distance.group(2) else 1)
+    area = ""
+    if kind == "self" and "(" in text and ")" in text:
+        area = text[text.find("(") + 1 : text.rfind(")")].strip()
+    return {"kind": kind, "normal_ft": normal_ft, "long_ft": 0, "area": area}
+
+
+def _spell_duration(value: str) -> dict[str, Any]:
+    text = " ".join(value.split())
+    folded = text.casefold()
+    concentration = folded.startswith("concentration")
+    if folded == "instantaneous":
+        return {
+            "kind": "instantaneous",
+            "value": 0,
+            "unit": "round",
+            "concentration": False,
+        }
+    if folded in {"until dispelled", "special"}:
+        return {
+            "kind": "until_dispelled" if folded == "until dispelled" else "special",
+            "value": 0,
+            "unit": "special",
+            "concentration": concentration,
+        }
+    duration = re.search(r"(\d+)\s+(round|minute|hour|day)s?", folded)
+    return {
+        "kind": "timed" if duration else "special",
+        "value": int(duration.group(1)) if duration else 0,
+        "unit": duration.group(2) if duration else "special",
+        "concentration": concentration,
+    }
+
+
+def _spell_components(value: str) -> dict[str, Any]:
+    text = " ".join(value.split())
+    tokens = {item.strip().upper() for item in text.split(",")[:3]}
+    material_match = re.search(r"(?i)\bM\s*\((.+)\)\s*$", text)
+    material_description = material_match.group(1).strip() if material_match else ""
+    return {
+        "verbal": "V" in tokens or bool(re.search(r"(?i)(?:^|,\s*)V(?:,|$)", text)),
+        "somatic": "S" in tokens or bool(re.search(r"(?i)(?:^|,\s*)S(?:,|$)", text)),
+        "material": bool(material_match or re.search(r"(?i)(?:^|,\s*)M(?:,|$)", text)),
+        "material_description": material_description,
+        "material_cost_cp": 0,
+        "consumed": "consume" in material_description.casefold(),
+    }
+
+
+def _rulebook_statblock_candidates(
+    chunks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    indexed = list(enumerate(chunks))
+    ordered = [
+        chunk
+        for _index, chunk in sorted(
+            indexed,
+            key=lambda item: (
+                item[1].get("section_ordinal", 0),
+                item[1].get("ordinal", 0),
+                item[1].get("page_start", 0),
+                item[0],
+            ),
+        )
+    ]
+    roots = [
+        index
+        for index, chunk in enumerate(ordered)
+        if _CREATURE_CORE_RE.match(str(chunk.get("content") or "").strip())
+    ]
+    candidates = []
+    ignored_titles = {
+        *{item.casefold() for item in ABILITY_LABELS},
+        "actions",
+        "reactions",
+        "legendary actions",
+        "traits",
+    }
+
+    def ignored_heading(value: str) -> bool:
+        folded = value.casefold()
+        canonical = _canonical_source_heading(value)
+        return (
+            folded in ignored_titles
+            or canonical.isdecimal()
+            or bool(re.match(r"^(?:chapter|appendix)\d+", canonical))
+            or bool(re.search(r"(?:chapter|appendix)\d+", canonical))
+        )
+
+    def preceding_statblock_name(start: int, *, page_number: int | None) -> str | None:
+        lower_bound = max(0, start - 20)
+        matches: list[str] = []
+        for chunk in reversed(ordered[lower_bound:start]):
+            chunk_start = chunk.get("page_start")
+            chunk_end = chunk.get("page_end")
+            if (
+                page_number is not None
+                and isinstance(chunk_start, int)
+                and isinstance(chunk_end, int)
+                and not chunk_start <= page_number <= chunk_end
+            ):
+                continue
+            content = " ".join(str(chunk.get("content") or "").split())
+            for match in re.finditer(
+                r"(?i)\buses\s+the\s+"
+                r"(?P<name>[A-Z][A-Za-z0-9 '/()\-]{1,100}?)\s+stat\s+block\b",
+                content,
+            ):
+                matches.append(" ".join(match.group("name").split()))
+            if matches:
+                break
+        unique = list(dict.fromkeys(item.casefold() for item in matches))
+        if len(unique) != 1:
+            return None
+        return next(item for item in matches if item.casefold() == unique[0])
+
+    for root_number, start in enumerate(roots):
+        end = roots[root_number + 1] if root_number + 1 < len(roots) else len(ordered)
+        root = ordered[start]
+        path = [str(item).strip() for item in root.get("heading_path") or [] if str(item).strip()]
+        name_index = next(
+            (
+                index
+                for index in range(len(path) - 1, -1, -1)
+                if not ignored_heading(path[index])
+            ),
+            None,
+        )
+        while (
+            name_index is not None
+            and name_index > 0
+            and _canonical_source_heading(path[name_index - 1])
+            == _canonical_source_heading(path[name_index])
+        ):
+            name_index -= 1
+        scoped_path = path[: name_index + 1] if name_index is not None else path
+        name = (
+            path[name_index]
+            if name_index is not None
+            else f"Creature on page {root.get('page_start') or '?'}"
+        )
+        if name.casefold() in _STATBLOCK_PLACEHOLDER_TITLES:
+            continue
+        ignored_suffix = name_index is not None and name_index < len(path) - 1
+        if (
+            name_index is None
+            or ignored_suffix
+            or ignored_heading(name)
+            or name.casefold() in _GENERIC_TITLES
+        ):
+            inferred_name = preceding_statblock_name(
+                start,
+                page_number=(
+                    root.get("page_start")
+                    if isinstance(root.get("page_start"), int)
+                    else None
+                ),
+            )
+            if inferred_name is not None:
+                name = inferred_name
+                scoped_path = (
+                    path[: name_index + 1]
+                    if ignored_suffix and name_index is not None
+                    else path[:name_index]
+                    if name_index is not None
+                    else path[:-1]
+                )
+
+        # Some two-column PDFs attach the creature name only to the core row,
+        # while the six ability cells remain siblings under the surrounding
+        # section.  Widen to that parent only when the complete ordered ability
+        # row is present before the next creature core.
+        if name_index is not None and scoped_path:
+            parent_path = path[:name_index]
+            existing_titles = {
+                _canonical_source_heading(
+                    next(
+                        (
+                            str(value).strip()
+                            for value in reversed(chunk.get("heading_path") or [])
+                            if str(value).strip()
+                        ),
+                        "",
+                    )
+                )
+                for chunk in ordered[start + 1 : end]
+                if [
+                    str(value).strip()
+                    for value in chunk.get("heading_path") or []
+                    if str(value).strip()
+                ][: len(parent_path)]
+                == parent_path
+            }
+            current_has_abilities = all(
+                any(
+                    _canonical_source_heading(
+                        next(
+                            (
+                                str(value).strip()
+                                for value in reversed(chunk.get("heading_path") or [])
+                                if str(value).strip()
+                            ),
+                            "",
+                        )
+                    )
+                    == ability.casefold()
+                    for chunk in ordered[start + 1 : end]
+                    if [
+                        str(value).strip()
+                        for value in chunk.get("heading_path") or []
+                        if str(value).strip()
+                    ][: len(scoped_path)]
+                    == scoped_path
+                )
+                for ability in ABILITY_LABELS
+            )
+            sibling_has_abilities = (
+                {ability.casefold() for ability in ABILITY_LABELS}.issubset(
+                    existing_titles
+                )
+                or "".join(ability.casefold() for ability in ABILITY_LABELS)
+                in existing_titles
+            )
+            if not current_has_abilities and sibling_has_abilities:
+                scoped_path = parent_path
+
+        if scoped_path:
+            end = next(
+                (
+                    index
+                    for index in range(start + 1, end)
+                    if [
+                        str(item).strip()
+                        for item in ordered[index].get("heading_path") or []
+                        if str(item).strip()
+                    ][: len(scoped_path)]
+                    != scoped_path
+                ),
+                end,
+            )
+        scoped = ordered[start:end]
+        chunk_ids = list(
+            dict.fromkeys(
+                str(item.get("id") or "")
+                for item in scoped
+                if str(item.get("id") or "")
+            )
+        )
+        identity = "\x1f".join(("statblock", name.casefold(), chunk_ids[0]))
+        candidate = {
+            "id": "candidate:"
+            + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20],
+            "kind": "statblock",
+            "name": name,
+            "source_chunk_ids": chunk_ids,
+            "source_heading_path": scoped_path,
+            "page_start": _minimum_page_values(item.get("page_start") for item in scoped),
+            "page_end": _maximum_page_values(item.get("page_end") for item in scoped),
+            "extraction_confidence": "high",
+            "extraction_signals": ["creature core", "ordered statblock fields"],
+            "review_status": "pending",
+            "mechanical_scope": "review_required",
+            "application_state": "catalog_only",
+            "execution_state": "agent_resolution_required",
+            "artifact": {
+                "kind": "statblock",
+                "application_state": "catalog_only",
+                "mechanical_scope": "review_required",
+                "card": {"name": name},
+            },
+        }
+        try:
+            normalized_content = _normalize_module_statblock(name, scoped)
+            candidate["normalized_content"] = normalized_content
+            candidate["artifact"]["card"]["normalized_content"] = normalized_content
+            candidate["execution_state"] = "review_ready"
+        except (StatblockImportError, ValueError) as error:
+            candidate["review_error"] = str(error)
+            candidate["extraction_confidence"] = "medium"
+        candidates.append(candidate)
+    return candidates
+
+
+def _merge_extracted_candidates(
+    candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    merged: dict[tuple[str, str], dict[str, Any]] = {}
+    generic_spell_titles = {"spell", "spells", "spell descriptions", "optional spells"}
+    embedded_spell_chunks = {
+        chunk_id
+        for item in candidates
+        if item.get("kind") == "spell"
+        and "embedded spell header" in item.get("extraction_signals", [])
+        for chunk_id in item.get("source_chunk_ids") or []
+    }
+    structural_statblock_chunks = {
+        chunk_id
+        for item in candidates
+        if item.get("kind") == "statblock"
+        and "creature core" in item.get("extraction_signals", [])
+        for chunk_id in item.get("source_chunk_ids") or []
+    }
+    structural_statblock_paths = [
+        [str(value).strip().casefold() for value in item.get("source_heading_path") or []]
+        for item in candidates
+        if item.get("kind") == "statblock"
+        and "creature core" in item.get("extraction_signals", [])
+    ]
+    for candidate in candidates:
+        if candidate.get("kind") == "species" and str(
+            candidate.get("name") or ""
+        ).casefold().endswith(" traits"):
+            candidate["name"] = str(candidate["name"])[: -len(" Traits")]
+            card = dict(dict(candidate.get("artifact") or {}).get("card") or {})
+            card["name"] = candidate["name"]
+            candidate["artifact"]["card"] = card
+        if (
+            candidate.get("kind") == "spell"
+            and str(candidate.get("name") or "").casefold() in generic_spell_titles
+            and embedded_spell_chunks.intersection(candidate.get("source_chunk_ids") or [])
+        ):
+            continue
+        if (
+            candidate.get("kind") == "statblock"
+            and "creature core" not in candidate.get("extraction_signals", [])
+            and (
+                structural_statblock_chunks.intersection(
+                    candidate.get("source_chunk_ids") or []
+                )
+                or any(
+                    structural_path[: len(candidate_path)] == candidate_path
+                    for structural_path in structural_statblock_paths
+                    if (
+                        candidate_path := [
+                            str(value).strip().casefold()
+                            for value in candidate.get("source_heading_path") or []
+                        ]
+                    )
+                )
+            )
+        ):
+            continue
+        kind = str(candidate.get("kind") or "").casefold()
+        candidate_name = " ".join(str(candidate.get("name") or "").split())
+        if kind == "spell":
+            candidate_name = candidate_name.rstrip(" .:;")
+            candidate["name"] = candidate_name
+            card = dict(dict(candidate.get("artifact") or {}).get("card") or {})
+            card["name"] = candidate_name
+            candidate["artifact"]["card"] = card
+        key = (kind, _canonical_source_heading(candidate_name))
+        existing = merged.get(key)
+        if existing is None:
+            merged[key] = candidate
+            continue
+        existing_signals = set(existing.get("extraction_signals") or [])
+        candidate_signals = set(candidate.get("extraction_signals") or [])
+        preferred, other = (
+            (candidate, existing)
+            if (
+                "embedded spell header" in candidate_signals
+                or "creature core" in candidate_signals
+            )
+            and not (
+                "embedded spell header" in existing_signals
+                or "creature core" in existing_signals
+            )
+            else (existing, candidate)
+        )
+        preferred["source_chunk_ids"] = list(
+            dict.fromkeys(
+                [
+                    *preferred.get("source_chunk_ids", []),
+                    *other.get("source_chunk_ids", []),
+                ]
+            )
+        )
+        merged[key] = preferred
+    return list(merged.values())
+
+
+def _unclaimed_mechanical_signals(content: str) -> list[str]:
+    sample = " ".join(content.split())[:12000]
+    folded = sample.casefold()
+    signals = []
+    if "casting time:" in folded and "components:" in folded:
+        signals.append("spell fields")
+    if all(label in folded for label in ("armor class", "hit points", "speed")):
+        signals.append("statblock core")
+    if re.search(r"(?i)\b(?:class|subclass|archetype) features\b", sample):
+        signals.append("class feature table")
+    if _ITEM_HEADER_RE.search(sample[:1000]):
+        signals.append("item header")
+    if len(
+        [
+            label
+            for label in ("ability score increase", "age", "alignment", "size", "speed")
+            if label in folded
+        ]
+    ) >= 4:
+        signals.append("species traits")
+    dice_expressions = re.findall(
+        r"\b\d+d(?:4|6|8|10|12|20|100)(?:\s*[+-]\s*\d+)?\b",
+        folded,
+    )
+    numbered_entries = re.findall(r"(?:^|\s)\d{1,5}\s+[a-z]", folded)
+    operational_terms = sum(
+        term in folded
+        for term in (
+            "attack",
+            "caster",
+            "damage",
+            "hit points",
+            "paralyzed",
+            "poisoned",
+            "round",
+            "saving throw",
+            "spell",
+            "target",
+            "turn",
+        )
+    )
+    if len(numbered_entries) >= 2 and (dice_expressions or operational_terms >= 1):
+        signals.append("random effect table")
+    elif len(dice_expressions) >= 2 and operational_terms >= 2:
+        signals.append("dice procedure")
+    if re.search(
+        r"\b(?:armor class|check|damage|hit points?|roll|saving throw|spell slots?)\b",
+        folded,
+    ) and re.search(
+        r"\b(?:allow|can|for\s+\d|may|must|per|until)\b",
+        folded,
+    ):
+        signals.append("rule procedure")
+    if operational_terms >= 1 and (
+        re.search(r"\bif\b.{0,500}\bthen\b", folded)
+        or (
+            "should" in folded
+            and any(
+                marker in folded
+                for marker in ("benefit", "effect", "gm", "player", "price")
+            )
+        )
+    ):
+        signals.append("adjudication guidance")
+    return signals
 
 
 def module_statblock_review_candidates(
@@ -397,6 +1317,30 @@ def normalize_2014_statblock_candidate(
         ),
         len(ordered),
     )
+    if end_index < len(ordered):
+        next_core_path = [
+            str(value).strip()
+            for value in ordered[end_index].get("heading_path") or []
+            if str(value).strip()
+        ]
+        next_core_heading = (
+            _canonical_source_heading(next_core_path[-1])
+            if next_core_path
+            else ""
+        )
+        if next_core_heading:
+            # Two-column extraction can emit the next creature's lore before
+            # its compact core line. Rewind across only contiguous chunks that
+            # already carry that exact next-creature heading, so the current
+            # card cannot absorb adjacent lore.
+            while end_index > root_index + 1:
+                prior_path = [
+                    _canonical_source_heading(str(value))
+                    for value in ordered[end_index - 1].get("heading_path") or []
+                ]
+                if next_core_heading not in prior_path:
+                    break
+                end_index -= 1
     scoped = ordered[root_index:end_index]
     normalized = _normalize_module_statblock(target, scoped)
     source_chunk_ids = list(
@@ -436,6 +1380,23 @@ def _ordered_chunks_by_scene(
         ]
         for indexed in grouped.values()
     ]
+
+
+def _canonical_statblock_section_title(value: str) -> str | None:
+    title = " ".join(str(value or "").split())
+    compact = re.sub(r"[^A-Z0-9]", "", title.upper())
+    common = {
+        "ACTIONS": "ACTIONS",
+        "REACTIONS": "REACTIONS",
+        "LEGENDARYACTIONS": "LEGENDARY ACTIONS",
+    }.get(compact)
+    if common is not None:
+        return common
+    variant = re.fullmatch(r"(?i)ACTIONS\s+FOR\s+(.+)", title)
+    if variant is None:
+        return None
+    label = " ".join(variant.group(1).split()).upper()
+    return f"ACTIONS FOR {label}" if label else None
 
 
 def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
@@ -486,26 +1447,24 @@ def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
         path = [str(item).strip() for item in chunk.get("heading_path") or []]
         title = path[-1].upper()
         compact_title = re.sub(r"[^A-Z]", "", title)
-        canonical_section = {
-            "ACTIONS": "ACTIONS",
-            "REACTIONS": "REACTIONS",
-            "LEGENDARYACTIONS": "LEGENDARY ACTIONS",
-        }.get(compact_title)
+        canonical_section = _canonical_statblock_section_title(path[-1])
         content = str(chunk.get("content") or "").strip()
         if canonical_section is not None:
+            section_parts.setdefault(canonical_section, [])
             active_section = canonical_section
         if compact_title == "".join(ABILITY_LABELS):
             cursor = 0
             for ability in ABILITY_LABELS:
                 score = re.match(
-                    r"^\s*(\d+)\s*\(([+\-−]\d+)\)",
+                    r"^\s*(\d+)\s*\(([+\-−][0-9lIOS]+)\)",
                     content[cursor:],
                 )
                 if score is None:
                     raise StatblockImportError(
                         "statblock combined ability score row is ambiguous"
                     )
-                ability_values[ability] = f"{score.group(1)} ({score.group(2)})"
+                modifier = score.group(2).translate(_OCR_ABILITY_DIGITS)
+                ability_values[ability] = f"{score.group(1)} ({modifier})"
                 cursor += score.end()
             tail = content[cursor:].strip()
             if tail:
@@ -514,19 +1473,19 @@ def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
                 else:
                     section_parts[active_section].append(tail)
             continue
-        if title in ABILITY_LABELS:
+        ability_title = compact_title if compact_title in ABILITY_LABELS else title
+        if ability_title in ABILITY_LABELS:
             score = re.match(
                 r"^\s*(\d+)\s*\(\s*(?P<sign>[+\-−]?)\s*"
-                r"(?P<modifier>\d+)\s*\)(?P<tail>.*)$",
+                r"(?P<modifier>[0-9lIOS]+)\s*\)(?P<tail>.*)$",
                 content,
                 re.S,
             )
             if score is None:
                 raise StatblockImportError(f"statblock {title} score is ambiguous")
             sign = score.group("sign").replace("−", "-")
-            ability_values[title] = (
-                f"{score.group(1)} ({sign}{score.group('modifier')})"
-            )
+            modifier = score.group("modifier").translate(_OCR_ABILITY_DIGITS)
+            ability_values[ability_title] = f"{score.group(1)} ({sign}{modifier})"
             tail = score.group("tail").strip()
             if tail:
                 if active_section is None:
@@ -535,12 +1494,7 @@ def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
                     section_parts[active_section].append(tail)
             continue
         path_sections = {
-            {
-                "ACTIONS": "ACTIONS",
-                "REACTIONS": "REACTIONS",
-                "LEGENDARYACTIONS": "LEGENDARY ACTIONS",
-            }.get(re.sub(r"[^A-Z]", "", item.upper()))
-            for item in path
+            _canonical_statblock_section_title(item) for item in path
         }
         section = next((value for value in section_parts if value in path_sections), None)
         if section is not None:
@@ -556,7 +1510,9 @@ def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
             "statblock candidate is missing ability scores: " + ", ".join(missing_abilities)
         )
 
-    fields, traits = _split_statblock_details(" ".join(detail_parts))
+    fields, traits = _split_statblock_details(
+        _normalize_statblock_ocr(" ".join(detail_parts))
+    )
     parry_boundary = re.search(r"(?i)(?<![A-Za-z])Parry\.\s+", traits)
     if parry_boundary is not None:
         parry_settlement = parry_reaction_settlement(
@@ -582,7 +1538,7 @@ def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
     rendered = [
         f"# {name}",
         "",
-        f"*{core.group('identity').strip()}*",
+        f"*{_normalize_statblock_ocr(core.group('identity').strip())}*",
         "",
         f"**Armor Class** {core.group('armor').strip()}",
         f"**Hit Points** {_normalize_statblock_ocr(core.group('hit_points').strip())}",
@@ -701,6 +1657,19 @@ def _normalize_statblock_ocr(content: str) -> str:
     normalized = re.sub(
         r"(?i)(?<![A-Za-z0-9])(\d+)dS(?![A-Za-z0-9])",
         r"\1d8",
+        normalized,
+    )
+    normalized = re.sub(
+        r"(?i)^((?:Tiny|Small|Medium|Large|Huge|Gargantuan)\s+"
+        r"[A-Za-z][A-Za-z0-9 '/()\-]{0,120})\.\s*"
+        r"((?:(?:lawful|neutral|chaotic)\s+(?:good|neutral|evil))|neutral|"
+        r"unaligned|any(?:\s+[A-Za-z-]+){0,4}\s+alignment)$",
+        r"\1, \2",
+        normalized,
+    )
+    normalized = re.sub(
+        r"(?i)(?<![A-Za-z0-9])(Challenge\s+)[lI](?=\s*(?:\(|$))",
+        r"\g<1>1",
         normalized,
     )
     normalized = re.sub(
@@ -858,20 +1827,42 @@ def compiled_artifacts_from_candidates(
     content without permitting an incomplete parse to alter a character sheet.
     A reviewed artifact must explicitly opt into `selection_ready`.
     """
+    accepted = [
+        candidate
+        for candidate in candidates
+        if candidate.get("review_status") == "accepted"
+    ]
+    generated_bases: dict[str, int] = {}
+    for candidate in accepted:
+        value = dict(candidate.get("artifact") or {})
+        if str(value.get("id") or "").strip():
+            continue
+        kind = str(value.get("kind") or candidate.get("kind") or "").strip()
+        card = dict(value.get("card") or {})
+        name = str(card.get("name") or candidate.get("name") or "").strip()
+        if kind and name:
+            base = _artifact_id(pack_id, kind, name)
+            generated_bases[base] = generated_bases.get(base, 0) + 1
+
     artifacts: list[dict[str, Any]] = []
     ids: set[str] = set()
-    for candidate in candidates:
-        if candidate.get("review_status") != "accepted":
-            continue
+    for candidate in accepted:
         value = deepcopy(dict(candidate.get("artifact") or {}))
         kind = str(value.get("kind") or candidate.get("kind") or "").strip()
         card = dict(value.get("card") or {})
         name = str(card.get("name") or candidate.get("name") or "").strip()
         if not kind or not name:
             raise ValueError(f"accepted candidate {candidate.get('id')} needs kind and card.name")
-        artifact_id = str(value.get("id") or _artifact_id(pack_id, kind, name)).strip()
+        explicit_artifact_id = str(value.get("id") or "").strip()
+        base_artifact_id = _artifact_id(pack_id, kind, name)
+        artifact_id = explicit_artifact_id or base_artifact_id
+        if not explicit_artifact_id and generated_bases.get(base_artifact_id, 0) > 1:
+            artifact_id = (
+                f"{base_artifact_id}-{_candidate_artifact_disambiguator(candidate)}"
+            )
         if artifact_id in ids:
-            raise ValueError(f"duplicate generated artifact id: {artifact_id}")
+            collision_kind = "explicit" if explicit_artifact_id else "generated"
+            raise ValueError(f"duplicate {collision_kind} artifact id: {artifact_id}")
         ids.add(artifact_id)
         chunk_ids = [str(item) for item in candidate.get("source_chunk_ids") or [] if str(item)]
         if not chunk_ids:
@@ -1013,7 +2004,17 @@ def compiled_artifacts_from_candidates(
                     f"candidate {candidate.get('id')} rule clause coverage: "
                     + "; ".join(coverage_errors)
                 )
-            value["execution_state"] = "clause_ready"
+            clause_modes = {
+                str(clause.settlement["mode"])
+                for clause in compiled_clauses
+            }
+            value["execution_state"] = (
+                "ruling_ready"
+                if clause_modes == {"agent_ruling"}
+                else "descriptive_ready"
+                if clause_modes == {"descriptive"}
+                else "clause_ready"
+            )
         elif (
             state == "selection_ready"
             and mechanical_scope == "mechanical"
@@ -1036,6 +2037,205 @@ def compiled_artifacts_from_candidates(
             }
         )
     return artifacts
+
+
+def artifact_with_direct_resolution(
+    candidate: dict[str, Any],
+    *,
+    citation_source: str = "rule-source:reviewed-import",
+    source_chunks_by_id: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Finalize an imported candidate's unresolved semantics before export.
+
+    Imported commercial, third-party, and homebrew text must not silently become
+    trusted engine code.  When a reviewer has not supplied a static grant,
+    kernel mechanic, or primitive plan, the complete and honest resolution is a
+    source-bound Agent-as-DM clause.  Persisting that clause at build time keeps
+    the original evidence and the execution boundary portable, with no runtime
+    authoring pass when the content is used.
+
+    This helper does not make an unsafe card selection-ready and does not infer
+    game state mutations from prose.  It only turns the previous lazy semantic
+    placeholder into an explicit reviewed settlement contract.
+    """
+
+    value = deepcopy(dict(candidate.get("artifact") or {}))
+    card = deepcopy(dict(value.get("card") or {}))
+    if value.get("rule_clauses") is not None or card.get("rule_clauses") is not None:
+        return value
+    if any(
+        item is not None
+        for item in (
+            value.get("resolution"),
+            card.get("resolution"),
+            value.get("resolution_plan"),
+            card.get("resolution_plan"),
+            value.get("resolution_plans"),
+            card.get("resolution_plans"),
+        )
+    ) or list(value.get("mechanic_refs") or card.get("mechanic_refs") or []):
+        return value
+    name = " ".join(
+        str(card.get("name") or candidate.get("name") or "Imported content").split()
+    )
+    chunk_ids = [
+        str(item).strip()
+        for item in (
+            candidate.get("source_chunk_ids")
+            or value.get("source_chunk_ids")
+            or []
+        )
+        if str(item).strip()
+    ]
+    if not chunk_ids:
+        raise ValueError(
+            f"candidate {candidate.get('id')} needs source chunks before direct resolution"
+        )
+    citation_chunk_id = chunk_ids[0]
+    excerpt = ""
+    if source_chunks_by_id is not None:
+        for chunk_id in chunk_ids:
+            exact_content = " ".join(
+                str(source_chunks_by_id.get(chunk_id) or "").split()
+            )
+            if len(exact_content) >= 10:
+                citation_chunk_id = chunk_id
+                excerpt = exact_content[:4000]
+                break
+        if not excerpt:
+            raise ValueError(
+                f"candidate {candidate.get('id')} has no exact indexed source excerpt"
+            )
+    else:
+        excerpt = _candidate_resolution_excerpt(candidate, card=card, name=name)
+
+    scope = str(
+        value.get("mechanical_scope")
+        or candidate.get("mechanical_scope")
+        or "review_required"
+    )
+    descriptive = scope == "descriptive"
+    settlement: dict[str, Any]
+    if descriptive:
+        settlement = {"mode": "descriptive"}
+        clause_scope = "descriptive"
+    else:
+        ruling_kind = _candidate_ruling_kind(candidate)
+        resolution_reason = (
+            f"The imported {str(value.get('kind') or candidate.get('kind') or 'content')} "
+            f"card {name!r} has source-specific semantics that are not wholly owned "
+            "by a registered kernel mechanic or reviewed primitive plan. Apply only "
+            "the exact cited text through the Agent-as-DM ruling boundary and public "
+            "engine tools."
+        )
+        settlement = {
+            "mode": "agent_ruling",
+            "default_resolver": "agent",
+            "ruling_kind": ruling_kind,
+            "reason": resolution_reason,
+        }
+        clause_scope = "mechanical"
+        value["mechanical_scope"] = "mechanical"
+        existing_requirements = list(card.get("ruling_requirements") or [])
+        existing_requirements.append(
+            {
+                "kind": "source_bound_import_resolution",
+                "reason": resolution_reason,
+                "source_excerpt": excerpt,
+                "default_resolver": "agent",
+                "ruling_kind": ruling_kind,
+                "policy_ref": "rule_clause.v1",
+                "requires_external_input_only_for": [],
+            }
+        )
+        card["ruling_requirements"] = existing_requirements
+
+    clause_id = "source-resolution-" + hashlib.sha256(
+        "\x1f".join(
+            (
+                str(candidate.get("id") or ""),
+                str(value.get("kind") or candidate.get("kind") or "content"),
+                name,
+                citation_chunk_id,
+            )
+        ).encode("utf-8")
+    ).hexdigest()[:16]
+    value["rule_clauses"] = [
+        {
+            "schema_version": 1,
+            "id": clause_id,
+            "title": name,
+            "scope": clause_scope,
+            "source_citations": [
+                {
+                    "source": citation_source,
+                    "source_ref": {"chunk_id": citation_chunk_id},
+                    "source_excerpt": excerpt,
+                }
+            ],
+            "settlement": settlement,
+        }
+    ]
+    value["card"] = card
+    value["semantic_resolution"] = {
+        "status": "resolved",
+        "mode": settlement["mode"],
+        "first_use_compilation_required": False,
+        "clause_ids": [clause_id],
+    }
+    value["execution_state"] = (
+        "descriptive_ready"
+        if settlement["mode"] == "descriptive"
+        else "ruling_ready"
+    )
+    return value
+
+
+def _candidate_resolution_excerpt(
+    candidate: dict[str, Any],
+    *,
+    card: dict[str, Any],
+    name: str,
+) -> str:
+    definition = dict(card.get("definition") or {})
+    choices = dict(card.get("choices") or {})
+    manual_ruling = dict(choices.get("manual_ruling") or {})
+    raw = next(
+        (
+            item
+            for item in (
+                definition.get("effect"),
+                card.get("description"),
+                card.get("normalized_content"),
+                candidate.get("normalized_content"),
+                manual_ruling.get("source_excerpt"),
+            )
+            if str(item or "").strip()
+        ),
+        "",
+    )
+    excerpt = " ".join(str(raw).split())
+    if len(excerpt) < 10:
+        excerpt = f"Imported source card: {name}."
+    return excerpt[:4000]
+
+
+def _candidate_ruling_kind(candidate: dict[str, Any]) -> str:
+    declared = dict(candidate.get("ruling_requirement") or {})
+    kind = str(declared.get("ruling_kind") or "").strip()
+    if kind in {
+        "agent_dm_adjudication",
+        "environmental_consequence",
+        "generic_spell_effect",
+        "module_specific_procedure",
+        "source_or_scene_fact",
+    }:
+        return kind
+    return (
+        "generic_spell_effect"
+        if str(candidate.get("kind") or "") == "spell"
+        else "agent_dm_adjudication"
+    )
 
 
 def validate_selection_ready_artifacts(artifacts: list[dict[str, Any]]) -> list[str]:
@@ -1151,6 +2351,138 @@ def validate_selection_ready_artifacts(artifacts: list[dict[str, Any]]) -> list[
         ):
             errors.append(f"{prefix} feat prerequisites must be a list")
     return errors
+
+
+def audit_release_resolution_readiness(
+    artifacts: list[dict[str, Any]],
+    *,
+    settled_mechanic_ids: set[str] | None = None,
+) -> dict[str, Any]:
+    """Audit that a published artifact never depends on first-use compilation."""
+
+    unresolved: list[dict[str, str]] = []
+    modes: dict[str, int] = {}
+    for index, artifact in enumerate(artifacts):
+        artifact_id = str(artifact.get("id") or f"artifacts[{index}]")
+        execution_state = str(artifact.get("execution_state") or "")
+        if execution_state in {
+            "agent_resolution_required",
+            "content_authoring_required",
+            "first_use_compilation_required",
+        }:
+            unresolved.append(
+                {
+                    "artifact_id": artifact_id,
+                    "reason": (
+                        "artifact still declares deferred semantic authoring: "
+                        f"{execution_state}"
+                    ),
+                }
+            )
+            continue
+        card = dict(artifact.get("card") or {})
+        semantic = dict(artifact.get("semantic_resolution") or {})
+        semantic_mode = str(semantic.get("mode") or "")
+        expected_state = (
+            "ruling_ready"
+            if semantic_mode == "agent_ruling"
+            else "descriptive_ready"
+            if semantic_mode == "descriptive"
+            else ""
+        )
+        if (
+            semantic.get("status") == "resolved"
+            and semantic.get("first_use_compilation_required") is False
+            and expected_state
+            and execution_state != expected_state
+        ):
+            unresolved.append(
+                {
+                    "artifact_id": artifact_id,
+                    "reason": (
+                        "resolved semantic mode has a non-canonical execution state: "
+                        f"expected {expected_state}, found {execution_state or 'missing'}"
+                    ),
+                }
+            )
+            continue
+        plan = artifact.get("resolution_plan", card.get("resolution_plan"))
+        plans = artifact.get("resolution_plans", card.get("resolution_plans"))
+        solution = artifact.get(
+            "resolution_solution", card.get("resolution_solution")
+        )
+        if plan is not None or plans is not None:
+            modes["primitive_plan"] = modes.get("primitive_plan", 0) + 1
+            continue
+        raw_clauses = artifact.get("rule_clauses", card.get("rule_clauses"))
+        if raw_clauses is not None:
+            try:
+                clauses = compile_rule_clauses(raw_clauses)
+            except RuleContractError as error:
+                unresolved.append(
+                    {
+                        "artifact_id": artifact_id,
+                        "reason": f"invalid rule_clauses: {error}",
+                    }
+                )
+                continue
+            for clause in clauses:
+                mode = str(clause.settlement["mode"])
+                modes[mode] = modes.get(mode, 0) + 1
+            continue
+
+        mode = str(semantic.get("mode") or "")
+        if (
+            semantic.get("status") == "resolved"
+            and semantic.get("first_use_compilation_required") is False
+            and mode
+        ):
+            modes[mode] = modes.get(mode, 0) + 1
+            continue
+        if card.get("resolution") is not None:
+            modes["kernel_mechanic"] = modes.get("kernel_mechanic", 0) + 1
+            continue
+        mechanic_refs = {
+            str(item)
+            for item in [
+                *list(artifact.get("mechanic_refs") or []),
+                *list(card.get("mechanic_refs") or []),
+            ]
+            if str(item)
+        }
+        if (
+            mechanic_refs
+            and settled_mechanic_ids is not None
+            and mechanic_refs <= settled_mechanic_ids
+        ):
+            modes["kernel_mechanic"] = modes.get("kernel_mechanic", 0) + 1
+            continue
+        if solution is not None:
+            unresolved.append(
+                {
+                    "artifact_id": artifact_id,
+                    "reason": "resolution_solution has no persisted resolution_plan",
+                }
+            )
+            continue
+        unresolved.append(
+            {
+                "artifact_id": artifact_id,
+                "reason": "artifact has no build-time semantic resolution",
+            }
+        )
+
+    return {
+        "schema_version": 1,
+        "complete": not unresolved,
+        "artifact_count": len(artifacts),
+        "resolved_count": len(artifacts) - len(
+            {item["artifact_id"] for item in unresolved}
+        ),
+        "modes": dict(sorted(modes.items())),
+        "unresolved": unresolved,
+        "first_use_compilation_required": False if not unresolved else True,
+    }
 
 
 def _require_candidate_plan_evidence(
@@ -1376,3 +2708,56 @@ def _artifact_id(pack_id: str, kind: str, name: str) -> str:
     if not slug:
         slug = hashlib.sha256(name.encode("utf-8")).hexdigest()[:12]
     return f"{pack_id}.{kind}.{slug[:100]}"
+
+
+def _candidate_artifact_disambiguator(candidate: dict[str, Any]) -> str:
+    """Return a source-stable suffix for legitimate same-named entities.
+
+    Runtime chunk UUIDs and review candidate IDs are deliberately excluded so
+    importing the same source into a fresh database yields the same artifact
+    identities. Source position plus the reviewed card/body distinguishes
+    repeated headings and genuinely separate same-named entries.
+    """
+
+    artifact = dict(candidate.get("artifact") or {})
+    stable_locator = {
+        "kind": str(artifact.get("kind") or candidate.get("kind") or ""),
+        "name": str(
+            dict(artifact.get("card") or {}).get("name")
+            or candidate.get("name")
+            or ""
+        ),
+        "source_heading_path": list(candidate.get("source_heading_path") or []),
+        "page_start": candidate.get("page_start"),
+        "page_end": candidate.get("page_end"),
+        "artifact": _stable_candidate_value(artifact),
+        "normalized_content": candidate.get("normalized_content"),
+        "extraction_signals": list(candidate.get("extraction_signals") or []),
+    }
+    serialized = json.dumps(
+        stable_locator,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:12]
+
+
+def _stable_candidate_value(value: Any) -> Any:
+    """Remove runtime locators and derived fingerprints from an ID seed."""
+
+    if isinstance(value, list):
+        return [_stable_candidate_value(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    return {
+        key: _stable_candidate_value(item)
+        for key, item in value.items()
+        if key
+        not in {
+            "chunk_id",
+            "fingerprint",
+            "source_chunk_ids",
+            "source_id",
+        }
+    }

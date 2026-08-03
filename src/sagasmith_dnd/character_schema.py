@@ -1473,6 +1473,7 @@ def _normalize_item(value: Any, field: str, *, generate_id: bool = True) -> dict
         "uses",
         "charges",
         "mechanics",
+        "ruling_requirements",
         "resolution_plan",
         "resolution_solution",
     }
@@ -1529,6 +1530,10 @@ def _normalize_item(value: Any, field: str, *, generate_id: bool = True) -> dict
         "uses": uses,
         "charges": charges,
         "mechanics": _normalize_item_mechanics(kind, item.get("mechanics"), f"{field}.mechanics"),
+        "ruling_requirements": _normalize_ruling_requirements(
+            item.get("ruling_requirements") or [],
+            f"{field}.ruling_requirements",
+        ),
     }
     if kind == "weapon" and not result["mechanics"].get("materials"):
         standard_name = re.sub(

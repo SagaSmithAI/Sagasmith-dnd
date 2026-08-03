@@ -45,12 +45,42 @@ valid. A 2024 MOD/SAVE-only table uses a canonical representative score that
 preserves the printed modifier/save exactly and records that normalization in
 provenance instead of inventing an unsupported odd/even score.
 
+Private builds of commercial 2014 books also settle layout variants before
+runtime: explicit `Actions for Type ...` sections become separate actor cards,
+each containing only that action set. One missing ability label is recovered
+only when all six printed scores exist and the other five labels establish a
+unique column; a damaged redundant modifier may be recomputed only from its
+clearly printed score. Monster Manual cards may reuse a bundled SRD identity
+only for `edition=2014`, `publication_id=mm2014`, and one unique name match,
+with the original checksum recorded in the rebuilt private card. Other books,
+same-name variants, and differing mechanics are never replaced by name. A
+visibly damaged heading may likewise be superseded only by one reviewed actor
+on the same page.
+
+The bundled structured catalogs have exact coverage gates: 1,014 SRD 2014
+artifacts (including 319 spells, 474 items, and 182 features) and 1,463 SRD
+2024 artifacts (including 339 spells, 471 items, 269 features, and 330
+monsters). The multilingual source index covers exactly 2,032 Markdown files
+in 42 source partitions. Missing or duplicate files, count drift, duplicate
+artifact IDs, and missing citations fail tests. Non-SRD text from the three
+commercial core books is not distributed in this Apache-2.0 repository; an
+owner may compile legally held PHB/DMG/MM files as private core addons.
+Every bundled artifact also receives a complete build-time clause set that
+separates structured grants, registered kernel mechanics, descriptive text,
+and exact-source Agent-DM rulings. Release audit requires
+`first_use_compilation_required=false`; runtime never authors its resolution.
+Dice procedures, numbered random-effect tables, and adjudication guidance that
+do not match a specialized schema cannot fall through as descriptive prose.
+Each such chunk keeps exact evidence and receives a direct Agent-DM clause at
+build time; only context proven free of mechanical procedure is descriptive.
+
 Removing monster hardcoding means identities, statistics, attacks, traits, and
 sources no longer come from creature-name tables or constructors. Generic
 standard-rule implementations remain engine code—action economy, attacks,
 saves, damage, defenses, and card-declared generic traits—but read their inputs
-from cards rather than branching on monster names. Homebrew semantics still use
-the source-bound first-use Agent interpretation and saved-solution boundary.
+from cards rather than branching on monster names. Homebrew semantics are fixed
+during import, review, or export as a source-bound typed plan or direct Agent-DM
+ruling boundary; runtime does not author a solution on first use.
 
 ## Long-term memory boundary
 
@@ -96,6 +126,18 @@ edition/dependency/source-locked rule pack; distribute pregenerated PCs, NPCs,
 monsters, and summons in a portable `preset_pack`; place adventures, maps, and
 scenes in a separate `module_pack`. Link them with explicit dependencies instead
 of one giant package that bypasses rule-install approval.
+
+For cross-installation migration, a rule pack carries its complete indexed
+sources and replaces local `source_id`/`chunk_id` values with stable locators.
+The receiver validates checksums, system, edition, and exact dependencies, then
+rebuilds sources and citations with fresh local ids. A standalone rule pack must
+also carry a `build_time_complete` resolution audit exactly equal to the
+receiver's recomputation; missing, stale, or deferred semantics block export,
+import, and installation. The result is only a
+validated inactive draft: installation and campaign Owner/DM activation remain
+separate. Rule dependencies use the UUID-independent definition checksum; a
+thin `release_manifest` pins each complete component-envelope checksum. It
+grants no installation or activation authority.
 
 ## Development
 

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
+from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from typing import Any
 
 from sagasmith_core.text import ascii_slug, compact_ascii_key
@@ -30,7 +33,7 @@ class StatblockImportError(ValueError):
     """Raised when required statblock facts cannot be recovered from the source text."""
 
 
-OCR_STATBLOCK_RECOVERY_VERSION = 5
+OCR_STATBLOCK_RECOVERY_VERSION = 11
 
 
 @dataclass(frozen=True)
@@ -109,6 +112,8 @@ _2014_ARMOR = {
 
 def _slug(value: str) -> str:
     result = ascii_slug(value)
+    if len(result) > 80:
+        result = f"{result[:63].rstrip('-')}-{hashlib.sha256(result.encode()).hexdigest()[:12]}"
     return result or "action"
 
 
@@ -263,6 +268,85 @@ def _base_statblock_markdown(markdown: str) -> str:
     return markdown[: variant.start()] if variant else markdown
 
 
+def split_2014_statblock_action_variants(
+    markdown: str,
+) -> list[dict[str, str]]:
+    """Split a shared statblock with two or more named action-set variants.
+
+    Some official cards print one common core followed by headings such as
+    ``Actions for Type 1``. Each action set is a complete selectable actor
+    form; flattening all of them into one inventory creates duplicate action
+    identifiers. This splitter relies only on explicit source headings and
+    never invents a variant or combines action sets.
+    """
+
+    heading_pattern = re.compile(r"(?im)^#{2,6}\s+(.+?)\s*$")
+    headings = list(heading_pattern.finditer(markdown))
+    variants: list[tuple[re.Match[str], str]] = []
+    for heading in headings:
+        match = re.fullmatch(
+            r"(?i)Actions\s+For\s+(.+)",
+            heading.group(1).strip(),
+        )
+        if match is not None:
+            variants.append((heading, " ".join(match.group(1).split())))
+    if len(variants) < 2 or len(
+        {label.casefold() for _heading, label in variants}
+    ) != len(variants):
+        return []
+    root = re.search(r"(?m)^#{1,6}\s+(.+?)\s*$", markdown)
+    if root is None:
+        return []
+    first_variant_start = variants[0][0].start()
+    ranges: list[tuple[int, int, str, str]] = []
+    for variant_index, (heading, label) in enumerate(variants):
+        next_heading = next(
+            (candidate for candidate in headings if candidate.start() > heading.start()),
+            None,
+        )
+        end = next_heading.start() if next_heading is not None else len(markdown)
+        if (
+            next_heading is not None
+            and variant_index < len(variants) - 1
+            and next_heading is not variants[variant_index + 1][0]
+        ):
+            # A non-variant section between variant action sets is ambiguous.
+            return []
+        body = markdown[heading.end() : end].strip()
+        if not body or not re.search(
+            r"(?<!\*)\*\*\*.+?(?:\.\*\*\*|\*\*\*\.)",
+            body,
+        ):
+            return []
+        ranges.append((heading.start(), end, label, body))
+    common_after = markdown[ranges[-1][1] :]
+    common_before = markdown[:first_variant_start].rstrip()
+    result: list[dict[str, str]] = []
+    base_name = " ".join(root.group(1).split())
+    for _start, _end, label, body in ranges:
+        variant_name = f"{base_name} ({label})"
+        prefix = re.sub(
+            r"(?m)^#{1,6}\s+.+?\s*$",
+            f"# {variant_name}",
+            common_before,
+            count=1,
+        )
+        normalized = (
+            prefix
+            + "\n\n## Actions\n\n"
+            + body
+            + ("\n\n" + common_after.lstrip() if common_after.strip() else "")
+        ).strip() + "\n"
+        result.append(
+            {
+                "label": label,
+                "name": variant_name,
+                "normalized_content": normalized,
+            }
+        )
+    return result
+
+
 def _entry_blocks(markdown: str) -> list[tuple[str, str, str]]:
     markdown = _base_statblock_markdown(markdown)
     markers = list(
@@ -388,7 +472,7 @@ def _parse_weapon(
     *,
     actor_name: str = "",
 ) -> dict[str, Any] | None:
-    attack = re.search(
+    attack = re.match(
         r"(?i)\*?(Melee|Ranged|Melee or Ranged)\s+"
         r"(?:(Weapon|Spell)\s+)?Attack(?:\s+Roll)?:\*?\s*"
         r"([+\-−]\s*\d+)\s+to hit",
@@ -858,20 +942,64 @@ def _count(value: str) -> int | None:
 
 
 def _weapon_id(value: str, weapons: dict[str, str]) -> str | None:
+    """Resolve one printed attack label without guessing across ambiguities.
+
+    Statblocks commonly refer to ``Claws (Slaad Form Only)`` as ``claws`` in
+    Multiattack and alternate singular/plural labels such as ``talon`` and
+    ``Talons``.  Only aliases that identify exactly one parsed action are
+    accepted; a colliding short label deliberately remains unresolved.
+    """
+
     normalized = re.sub(r"[^a-z0-9 ]", "", value.casefold()).strip()
-    candidates = [normalized]
-    if normalized.endswith("s"):
-        candidates.append(normalized[:-1])
-    for candidate in candidates:
-        if candidate in weapons:
-            return weapons[candidate]
-    return None
+
+    def number_aliases(label: str) -> set[str]:
+        aliases = {label}
+        if label.endswith("ies") and len(label) > 3:
+            aliases.add(f"{label[:-3]}y")
+        elif label.endswith("es") and len(label) > 2:
+            aliases.add(label[:-2])
+        elif label.endswith("s") and len(label) > 1:
+            aliases.add(label[:-1])
+        else:
+            aliases.add(f"{label}s")
+            aliases.add(f"{label}es")
+        return aliases
+
+    matches: set[str] = set()
+    requested = number_aliases(normalized)
+    for weapon_name, weapon_id in weapons.items():
+        base_name = re.sub(r"\s*\([^)]*\)\s*$", "", weapon_name).strip()
+        aliases = number_aliases(weapon_name) | number_aliases(base_name)
+        if requested & aliases:
+            matches.add(weapon_id)
+            continue
+        # A source can shorten ``tail stinger`` to ``stinger``.  Require a
+        # complete trailing word sequence and uniqueness across all actions.
+        if any(
+            alias.endswith(f" {candidate}") or alias.startswith(f"{candidate} ")
+            for alias in aliases
+            for candidate in requested
+            if candidate
+        ):
+            matches.add(weapon_id)
+    return next(iter(matches)) if len(matches) == 1 else None
 
 
 def _parse_multiattack(description: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    weapon_aliases: dict[str, set[str]] = {}
+    for item in items:
+        raw_name = str(item["name"])
+        for name in (
+            raw_name,
+            re.sub(r"\s*\([^)]*\)\s*$", "", raw_name).strip(),
+        ):
+            alias = re.sub(r"[^a-z0-9 ]", "", name.casefold()).strip()
+            if alias:
+                weapon_aliases.setdefault(alias, set()).add(str(item["id"]))
     weapons = {
-        re.sub(r"[^a-z0-9 ]", "", item["name"].casefold()).strip(): item["id"]
-        for item in items
+        alias: next(iter(weapon_ids))
+        for alias, weapon_ids in weapon_aliases.items()
+        if len(weapon_ids) == 1
     }
 
     def weapon_modes(weapon_id: str) -> list[str]:
@@ -888,7 +1016,113 @@ def _parse_multiattack(description: str, items: list[dict[str, Any]]) -> list[di
     sentence_groups = re.split(r"(?i)\.\s*(?:Or\s+)?", description)
     options: list[dict[str, Any]] = []
     for group in sentence_groups:
-        if "attack" not in group.casefold():
+        repeated_use = re.search(
+            r"(?i)\buses?\s+(?:(?:its|his|her|their)\s+)?"
+            r"(?P<weapon>[a-z][a-z '\-]+?)\s+"
+            r"(?P<count>once|twice|thrice)\s*$",
+            group,
+        )
+        if repeated_use is not None:
+            count = _count(repeated_use.group("count"))
+            weapon_id = _weapon_id(repeated_use.group("weapon"), weapons)
+            if count is None or weapon_id is None:
+                return []
+            options.extend(
+                {
+                    "id": mode,
+                    "attacks": [
+                        {
+                            "weapon_id": weapon_id,
+                            "attack_mode": mode,
+                            "count": count,
+                        }
+                    ],
+                }
+                for mode in weapon_modes(weapon_id)
+            )
+            continue
+        if "attack" not in group.casefold() and "strike" not in group.casefold():
+            continue
+        complete_alternatives = re.search(
+            r"(?i)\bmakes?\s+"
+            r"(?P<total>one|two|three|four|five|six|\d+)\s+attacks?\s*:\s*"
+            r"(?P<required_count>one|two|three|four|five|six|\d+)\s+with\s+"
+            r"(?:its|his|her|their)\s+(?P<required>[a-z][a-z '\-]+?)\s+and\s+"
+            r"(?P<secondary_count>one|two|three|four|five|six|\d+)\s+with\s+"
+            r"(?:its|his|her|their)\s+(?P<secondary>[a-z][a-z '\-]+?)\s+or\s+"
+            r"(?P<alternative_count>one|two|three|four|five|six|\d+)\s+"
+            r"(?:(?:melee|ranged)\s+attacks?\s+)?with\s+"
+            r"(?:its|his|her|their)\s+(?P<alternative>[a-z][a-z '\-]+?)\s*$",
+            group,
+        )
+        if complete_alternatives is not None:
+            total = _count(complete_alternatives.group("total"))
+            required_count = _count(
+                complete_alternatives.group("required_count")
+            )
+            secondary_count = _count(
+                complete_alternatives.group("secondary_count")
+            )
+            alternative_count = _count(
+                complete_alternatives.group("alternative_count")
+            )
+            required_id = _weapon_id(
+                complete_alternatives.group("required"), weapons
+            )
+            secondary_id = _weapon_id(
+                complete_alternatives.group("secondary"), weapons
+            )
+            alternative_id = _weapon_id(
+                complete_alternatives.group("alternative"), weapons
+            )
+            if (
+                total is None
+                or required_count is None
+                or secondary_count is None
+                or alternative_count is None
+                or total != required_count + secondary_count
+                or total != alternative_count
+                or required_id is None
+                or secondary_id is None
+                or alternative_id is None
+            ):
+                return []
+            for required_mode in weapon_modes(required_id):
+                for secondary_mode in weapon_modes(secondary_id):
+                    options.append(
+                        {
+                            "id": (
+                                required_mode
+                                if required_mode == secondary_mode
+                                else "mixed"
+                            ),
+                            "attacks": [
+                                {
+                                    "weapon_id": required_id,
+                                    "attack_mode": required_mode,
+                                    "count": required_count,
+                                },
+                                {
+                                    "weapon_id": secondary_id,
+                                    "attack_mode": secondary_mode,
+                                    "count": secondary_count,
+                                },
+                            ],
+                        }
+                    )
+            for alternative_mode in weapon_modes(alternative_id):
+                options.append(
+                    {
+                        "id": alternative_mode,
+                        "attacks": [
+                            {
+                                "weapon_id": alternative_id,
+                                "attack_mode": alternative_mode,
+                                "count": alternative_count,
+                            }
+                        ],
+                    }
+                )
             continue
         required_plus_alternative = re.search(
             r"(?i)\bmakes?\s+"
@@ -984,6 +1218,78 @@ def _parse_multiattack(description: str, items: list[dict[str, Any]]) -> list[di
                     for mode in weapon_modes(weapon_id)
                 )
             continue
+        repeated_action_alternatives = re.search(
+            r"(?i)\bmakes?\s+"
+            r"(?P<first_count>one|two|three|four|five|six|\d+)\s+"
+            r"(?P<first>[a-z][a-z '\-]+?)\s+attacks?\s+or\s+"
+            r"(?P<second_count>one|two|three|four|five|six|\d+)\s+"
+            r"(?P<second>[a-z][a-z '\-]+?)\s+attacks?\s*$",
+            group,
+        )
+        if repeated_action_alternatives is not None:
+            declarations = [
+                (
+                    _count(repeated_action_alternatives.group("first_count")),
+                    _weapon_id(repeated_action_alternatives.group("first"), weapons),
+                ),
+                (
+                    _count(repeated_action_alternatives.group("second_count")),
+                    _weapon_id(repeated_action_alternatives.group("second"), weapons),
+                ),
+            ]
+            if any(
+                count is None or weapon_id is None
+                for count, weapon_id in declarations
+            ):
+                return []
+            for count, weapon_id in declarations:
+                assert count is not None and weapon_id is not None
+                options.extend(
+                    {
+                        "id": mode,
+                        "attacks": [
+                            {
+                                "weapon_id": weapon_id,
+                                "attack_mode": mode,
+                                "count": count,
+                            }
+                        ],
+                    }
+                    for mode in weapon_modes(weapon_id)
+                )
+            continue
+        either_named_alternatives = re.search(
+            r"(?i)\bmakes?\s+"
+            r"(?P<count>one|two|three|four|five|six|\d+)\s+attacks?\s*,?\s*"
+            r"either\s+with\s+(?:its|his|her|their)\s+"
+            r"(?P<first>[a-z][a-z '\-]+?)\s+or\s+"
+            r"(?:(?:its|his|her|their)\s+)?(?P<second>[a-z][a-z '\-]+?)\s*$",
+            group,
+        )
+        if either_named_alternatives is not None:
+            count = _count(either_named_alternatives.group("count"))
+            alternatives = [
+                _weapon_id(either_named_alternatives.group("first"), weapons),
+                _weapon_id(either_named_alternatives.group("second"), weapons),
+            ]
+            if count is None or any(weapon_id is None for weapon_id in alternatives):
+                return []
+            for weapon_id in alternatives:
+                assert weapon_id is not None
+                options.extend(
+                    {
+                        "id": mode,
+                        "attacks": [
+                            {
+                                "weapon_id": weapon_id,
+                                "attack_mode": mode,
+                                "count": count,
+                            }
+                        ],
+                    }
+                    for mode in weapon_modes(weapon_id)
+                )
+            continue
         alternative = re.search(
             r"(?i)\battacks?\s+"
             r"(one|once|two|twice|three|thrice|four|five|six|\d+)\s*,?\s+"
@@ -1019,7 +1325,7 @@ def _parse_multiattack(description: str, items: list[dict[str, Any]]) -> list[di
         attack_mode = "ranged" if "ranged attack" in group.casefold() else "melee"
         attacks: list[dict[str, Any]] = []
         for match in re.finditer(
-            r"(?i)(one|once|two|twice|three|thrice|four|five|six|\d+)"
+            r"(?i)\b(one|once|two|twice|three|thrice|four|five|six|\d+)\b"
             r"(?:\s+(?:(?:melee|ranged)\s+)?attacks?)?\s+with\s+"
             r"(?:its|his|her|their)\s+"
             r"([a-z][a-z '\-]+?)(?=\s+and\s+|\s*,\s*|\.|$)",
@@ -1032,8 +1338,8 @@ def _parse_multiattack(description: str, items: list[dict[str, Any]]) -> list[di
             attacks.append({"weapon_id": weapon_id, "attack_mode": attack_mode, "count": count})
         if not attacks:
             for match in re.finditer(
-                r"(?i)(one|two|three|four|five|six|\d+)\s+"
-                r"([a-z][a-z '\-]+?)\s+attacks?"
+                r"(?i)\b(one|two|three|four|five|six|\d+)\s+"
+                r"([a-z][a-z '\-]+?)\s+(?:attacks?|strikes?)"
                 r"(?=\s+and\s+|\s*,\s*|\.|$)",
                 group,
             ):
@@ -5049,7 +5355,8 @@ def apply_reviewed_statblock_fill(
 
 
 _OCR_IDENTITY_RE = re.compile(
-    r"(?i)^(Tiny|Small|Medium|Large|Huge|Gargantuan)\s+([^,]+),\s*(.+)$"
+    r"(?i)^(Tiny|Small|Medium|Large|Huge|Gargantuan)\s*"
+    r"([A-Za-z][A-Za-z0-9 '/()\-]{0,120}?)(?:,\s*(.+))?$"
 )
 _OCR_FIELD_LABELS = (
     "Armor Class",
@@ -5066,8 +5373,34 @@ _OCR_FIELD_LABELS = (
     "Challenge",
 )
 _OCR_ENTRY_RE = re.compile(
-    r"^([A-Z][A-Za-z0-9 '/()\-–—]{1,80})\.\s*(.*)$"
+    r"^([A-Z][A-Za-z0-9 '/();\-–—]{1,80})\.\s*(.*)$"
 )
+
+
+# Printed recharge qualifiers can make an otherwise ordinary action or reaction
+# name longer than 80 characters.  The terminating period remains the bounded
+# structural marker; the prose guard below rejects sentence-shaped false hits.
+_OCR_ENTRY_RE = re.compile(r"^([A-Z][^.\r\n]{1,200})\.\s*(.*)$")
+
+
+def _ocr_structural_entry_match(text: str) -> re.Match[str] | None:
+    """Reject ordinary prose sentences that merely contain an early period."""
+
+    match = _OCR_ENTRY_RE.match(text)
+    if match is None:
+        return None
+    title = match.group(1)
+    if ":" in title:
+        # Hit/Failure/Success continuations are effect prose belonging to the
+        # preceding activity, never independent statblock entries.
+        return None
+    if re.match(r"(?i)^(?:the|a|an|each|any)\s+", title) and re.search(
+        r"(?i)\b(?:must|is|are|has|have|can|cannot|makes?|takes?|targets?|"
+        r"becomes?|succeeds?|fails?)\b",
+        title,
+    ):
+        return None
+    return match
 
 
 def _ocr_key(value: str) -> str:
@@ -5091,8 +5424,48 @@ def _repair_layout_ocr_text(text: str) -> str:
         r"\1damage",
         normalized,
     )
-    return re.sub(
+    normalized = re.sub(
+        r"(?i)^(Tiny|Small|Medium|Large|Huge|Gargantuan)\s*"
+        r"([a-z])\s+([a-z]{2,})(?=(?:\s+\([^)]*\))?(?:,|$))",
+        r"\1 \2\3",
+        normalized,
+    )
+    normalized = re.sub(
+        r"(?i)^Languages\s*[^\x00-\x7f]{1,3}$",
+        "Languages -",
+        normalized,
+    )
+    normalized = re.sub(
+        r"(?i)^((?:Tiny|Small|Medium|Large|Huge|Gargantuan)\s+"
+        r"[A-Za-z][A-Za-z0-9 '/()\-]{0,120})[.;]\s*"
+        r"((?:(?:lawful|neutral|chaotic)\s+(?:good|neutral|evil))|neutral|"
+        r"unaligned|any(?:\s+[A-Za-z-]+){0,4}\s+alignment)$",
+        r"\1, \2",
+        normalized,
+    )
+    normalized = re.sub(
         r"(?i)\b(Ignited\s+Illumination),\s+(?=As\s+a\s+bonus\s+action\b)",
+        r"\1. ",
+        normalized,
+    )
+    normalized = re.sub(
+        r"(?i)\bMe[/\\]ee(?=\s+(?:Weapon|Spell)(?:\s+Attack)?\b)",
+        "Melee",
+        normalized,
+    )
+    normalized = re.sub(
+        r"(?i)(\(\s*\d+\s*d\s*\d+)\s*[\u2012\u2013\u2212]\s*(\d+\s*\))",
+        r"\1 - \2",
+        normalized,
+    )
+    normalized = re.sub(
+        r"^([0-9lIOS]{1,3}\s*\([+\-]\s*[0-9lIOS]{1,2})$",
+        r"\1)",
+        normalized,
+    )
+    return re.sub(
+        r"^([A-Z][A-Za-z0-9 '/()\-]{1,80})_\s+"
+        r"(?=(?:Melee|Ranged|Melee or Ranged)\s+(?:Weapon|Spell)\s+Attack:)",
         r"\1. ",
         normalized,
     )
@@ -5132,6 +5505,89 @@ def _ocr_column_split(
     *,
     width: float,
 ) -> float | None:
+    ability_rows: list[list[dict[str, Any]]] = []
+    ability_blocks = [
+        block for block in blocks if _ocr_ability_tokens(block["text"]) is not None
+    ]
+    for anchor in ability_blocks:
+        row = sorted(
+            (
+                block
+                for block in ability_blocks
+                if abs(block["y0"] - anchor["y0"]) <= 12
+                and abs(block["y1"] - anchor["y1"]) <= 12
+            ),
+            key=lambda block: block["x0"],
+        )
+        tokens = [
+            token
+            for block in row
+            for token in (_ocr_ability_tokens(block["text"]) or [])
+        ]
+        if tokens == list(_OCR_ABILITY_ORDER) and row not in ability_rows:
+            ability_rows.append(row)
+
+    def cuts_complete_ability_row(candidate_split: float) -> bool:
+        """Do not mistake one six-column ability table for a page gutter."""
+
+        return any(
+            any(block["cx"] < candidate_split for block in row)
+            and any(block["cx"] >= candidate_split for block in row)
+            for row in ability_rows
+        )
+
+    def structural_midpoint_fallback() -> float | None:
+        midpoint = width / 2
+        identities = [
+            block for block in blocks if _OCR_IDENTITY_RE.fullmatch(block["text"])
+        ]
+        if (
+            any(block["cx"] < midpoint for block in identities)
+            and any(block["cx"] >= midpoint for block in identities)
+        ):
+            return midpoint
+        for identity in identities:
+            identity_is_left = identity["cx"] < midpoint
+            same_side = [
+                block
+                for block in blocks
+                if (block["cx"] < midpoint) == identity_is_left
+            ]
+            other_side = [
+                block
+                for block in blocks
+                if (block["cx"] < midpoint) != identity_is_left
+            ]
+            if all(
+                any(
+                    re.match(rf"(?i)^{re.escape(label)}\s+\S", block["text"])
+                    for block in same_side
+                )
+                for label in ("Armor Class", "Hit Points", "Speed")
+            ) and any(
+                block["text"].upper()
+                in {"ACTIONS", "BONUS ACTIONS", "REACTIONS", "LEGENDARY ACTIONS"}
+                for block in other_side
+            ):
+                return midpoint
+            same_ordinals = [
+                int(match.group(1))
+                for block in same_side
+                if (match := re.match(r"^(\d{1,2})\.\s+", block["text"]))
+            ]
+            other_ordinals = [
+                int(match.group(1))
+                for block in other_side
+                if (match := re.match(r"^(\d{1,2})\.\s+", block["text"]))
+            ]
+            if (
+                same_ordinals
+                and other_ordinals
+                and max(same_ordinals) + 1 == min(other_ordinals)
+            ):
+                return midpoint
+        return None
+
     candidates = [
         width * fraction / 100
         for fraction in range(30, 71)
@@ -5141,6 +5597,8 @@ def _ocr_column_split(
     content_bottom = max(block["y1"] for block in blocks)
     content_span = max(1.0, content_bottom - content_top)
     for split in candidates:
+        if cuts_complete_ability_row(split):
+            continue
         crossing = sum(
             1
             for block in blocks
@@ -5170,10 +5628,10 @@ def _ocr_column_split(
         ):
             ranked.append((crossing, abs(split - width / 2), split))
     if not ranked:
-        return None
+        return structural_midpoint_fallback()
     crossing, _distance, split = min(ranked)
     if crossing > max(2, len(blocks) // 20):
-        return None
+        return structural_midpoint_fallback()
     return split
 
 
@@ -5190,6 +5648,35 @@ def _ocr_peer_heading(
     )
 
 
+def _ocr_probable_peer_heading(
+    ordered: list[dict[str, Any]],
+    index: int,
+) -> bool:
+    """Bound a sibling card even when OCR corrupts only its identity line."""
+
+    block = ordered[index]
+    following = ordered[index + 1] if index + 1 < len(ordered) else None
+    if _ocr_peer_heading(block, following):
+        return True
+    if not (
+        block["text"] == block["text"].upper()
+        and 3 <= len(block["text"]) <= 80
+    ):
+        return False
+    nearby = [
+        candidate
+        for candidate in ordered[index + 1 :]
+        if candidate["y0"] - block["y1"] <= 220
+    ]
+    return all(
+        any(
+            re.match(rf"(?i)^{re.escape(label)}\s+\S", candidate["text"])
+            for candidate in nearby
+        )
+        for label in ("Armor Class", "Hit Points", "Speed")
+    )
+
+
 def _ocr_heading_has_identity(
     heading: dict[str, Any],
     following: dict[str, Any] | None,
@@ -5203,6 +5690,252 @@ def _ocr_heading_has_identity(
     )
 
 
+_OCR_ABILITY_ORDER = ("STR", "DEX", "CON", "INT", "WIS", "CHA")
+_OCR_ABILITY_DIGITS = str.maketrans(
+    {"l": "1", "I": "1", "O": "0", "S": "5"}
+)
+_OCR_ABILITY_SCORE_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?P<score>[0-9lIOS]{1,3})\s*[({]\s*"
+    r"(?P<sign>[+\-])\s*(?P<modifier>[0-9lIOS]{1,2})\s*[)}]"
+    r"(?![A-Za-z0-9])"
+)
+_OCR_ABILITY_SCORE_REDUNDANT_MODIFIER_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?P<score>[0-9lIOS]{1,3})\s*"
+    r"(?:"
+    r"[({]\s*[.,:;·]?\s*[+\-]?\s*[0-9lIOS]{1,2}\s*[)}]"
+    r"|"
+    r"[0-9lIOS]{1,2}\s*[)}]"
+    r")"
+    r"(?![A-Za-z0-9])"
+)
+
+
+def _ocr_ability_score_matches(
+    text: str,
+) -> tuple[list[tuple[str, str]], str] | None:
+    """Read a score row while treating its printed modifier as redundant.
+
+    The strict grammar remains preferred.  The bounded fallback accepts only a
+    short modifier-shaped suffix in the same OCR box; it never supplies or
+    changes an ability score.  D&D derives the modifier from that source score,
+    so corruption such as ``5(3)`` or ``17 (.+3)`` can be repaired without an
+    Agent guess.
+    """
+
+    for pattern, preserve_source in (
+        (_OCR_ABILITY_SCORE_RE, False),
+        (_OCR_ABILITY_SCORE_REDUNDANT_MODIFIER_RE, True),
+    ):
+        matches = list(pattern.finditer(text))
+        if not matches:
+            continue
+        remainder = pattern.sub("", text)
+        if remainder.strip(" \t,;|/"):
+            continue
+        values: list[tuple[str, str]] = []
+        for match in matches:
+            score = int(match.group("score").translate(_OCR_ABILITY_DIGITS))
+            if preserve_source and not 1 <= score <= 30:
+                return None
+            normalized_value = f"{score} ({(score - 10) // 2:+d})"
+            if preserve_source:
+                source_value = match.group(0).strip()
+            else:
+                source_value = (
+                    str(score)
+                    + " ("
+                    + match.group("sign")
+                    + match.group("modifier").translate(_OCR_ABILITY_DIGITS)
+                    + ")"
+                )
+            values.append((normalized_value, source_value))
+        return values, remainder
+    return None
+
+
+def _ocr_ability_tokens(text: str) -> list[str] | None:
+    compact = re.sub(r"[^A-Z]", "", text.upper())
+    if not compact:
+        return None
+    result: list[str] = []
+    while compact:
+        token = next(
+            (ability for ability in _OCR_ABILITY_ORDER if compact.startswith(ability)),
+            None,
+        )
+        if token is None:
+            return None
+        result.append(token)
+        compact = compact[len(token) :]
+    return result
+
+
+def _ocr_ability_table(
+    scoped: list[dict[str, Any]],
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    """Recover six ability columns even when a PDF groups adjacent cells.
+
+    Embedded PDF text and OCR engines legitimately emit either one box per
+    table cell, boxes such as ``DEX CON``, or one box containing the whole
+    score row.  The printed left-to-right order is authoritative; this helper
+    never supplies a missing score or reorders a noncanonical row.
+    """
+
+    label_blocks: list[tuple[dict[str, Any], list[str]]] = []
+    for block in scoped:
+        tokens = _ocr_ability_tokens(block["text"])
+        if tokens is not None:
+            label_blocks.append((block, tokens))
+    label_blocks.sort(key=lambda item: (item[0]["x0"], item[0]["y0"]))
+    labels = [token for _block, tokens in label_blocks for token in tokens]
+    missing = [ability for ability in _OCR_ABILITY_ORDER if ability not in labels]
+    can_repair_one_label = bool(
+        len(missing) == 1
+        and len(labels) == 5
+        and len(set(labels)) == 5
+        and labels
+        == [ability for ability in _OCR_ABILITY_ORDER if ability != missing[0]]
+    )
+    if labels != list(_OCR_ABILITY_ORDER) and not can_repair_one_label:
+        if missing:
+            raise StatblockImportError(
+                "OCR statblock is missing ability labels: " + ", ".join(missing)
+            )
+        raise StatblockImportError("OCR statblock ability labels are ambiguous")
+
+    label_top = min(block["y0"] for block, _tokens in label_blocks)
+    label_bottom = max(block["y1"] for block, _tokens in label_blocks)
+    score_blocks: list[tuple[dict[str, Any], list[tuple[str, str]]]] = []
+    for block in scoped:
+        if block["y0"] < label_top or block["y0"] > label_bottom + 80:
+            continue
+        parsed_values = _ocr_ability_score_matches(block["text"])
+        if parsed_values is None:
+            continue
+        values, _remainder = parsed_values
+        score_blocks.append((block, values))
+    score_blocks.sort(key=lambda item: (item[0]["x0"], item[0]["y0"]))
+    scores = [value for _block, values in score_blocks for value in values]
+    if len(scores) != len(_OCR_ABILITY_ORDER):
+        raise StatblockImportError(
+            "OCR statblock requires exactly six source ability scores"
+        )
+
+    label_by_ability: dict[str, dict[str, Any]] = {}
+    for block, tokens in label_blocks:
+        for token in tokens:
+            label_by_ability[token] = block
+    value_by_ability: dict[str, dict[str, Any]] = {}
+    cursor = 0
+    for block, values in score_blocks:
+        for value, source_value in values:
+            ability = _OCR_ABILITY_ORDER[cursor]
+            value_by_ability[ability] = {
+                **block,
+                "text": value,
+                "source_text": source_value,
+            }
+            cursor += 1
+    if can_repair_one_label:
+        missing_ability = missing[0]
+        label_by_ability[missing_ability] = {
+            **value_by_ability[missing_ability],
+            "text": missing_ability,
+            "inferred_from": "canonical_six_column_ability_table",
+        }
+    return label_by_ability, value_by_ability
+
+
+def _ocr_field_with_continuation(
+    scoped: list[dict[str, Any]],
+    *,
+    label: str,
+) -> dict[str, Any] | None:
+    """Join only vertically adjacent source boxes belonging to one field."""
+
+    ordered = sorted(scoped, key=lambda block: (block["y0"], block["x0"]))
+    field_index = next(
+        (
+            index
+            for index, block in enumerate(ordered)
+            if re.fullmatch(rf"{re.escape(label)}(?:\s+\S.*)?", block["text"])
+        ),
+        None,
+    )
+    if field_index is None:
+        return None
+    parts = [ordered[field_index]]
+    current = parts[0]
+    for following in ordered[field_index + 1 :]:
+        if (
+            following["x1"] < current["x0"] - 40
+            or following["x0"] > current["x1"] + 40
+        ):
+            continue
+        if following["y0"] - current["y1"] > 20:
+            break
+        if following["x0"] < current["x0"] - 8:
+            break
+        if any(
+            re.match(rf"^{re.escape(other)}(?:\s|$)", following["text"])
+            for other in _OCR_FIELD_LABELS
+        ) or _ocr_ability_tokens(following["text"]) is not None:
+            break
+        if following["text"].upper() in {
+            "ACTIONS",
+            "BONUS ACTIONS",
+            "REACTIONS",
+            "LEGENDARY ACTIONS",
+        }:
+            break
+        parts.append(following)
+        current = following
+    text = " ".join(block["text"] for block in parts)
+    if not re.match(rf"^{re.escape(label)}\s+\S", text):
+        return None
+    return {
+        **parts[0],
+        "text": text,
+        "confidence": min(block["confidence"] for block in parts),
+        "x1": max(block["x1"] for block in parts),
+        "y1": max(block["y1"] for block in parts),
+        "source_indices": [block["index"] for block in parts],
+    }
+
+
+def _ocr_repair_section_heading_fragments(
+    scoped: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Rejoin a decorated initial split from an action-economy heading."""
+
+    result = [dict(block) for block in scoped]
+    suppressed: set[int] = set()
+    for block in result:
+        compact = re.sub(r"[^A-Z]", "", block["text"].upper())
+        canonical = {
+            "CTIONS": "ACTIONS",
+            "BONUSCTIONS": "BONUS ACTIONS",
+        }.get(compact)
+        if canonical is None:
+            continue
+        initial = next(
+            (
+                candidate
+                for candidate in result
+                if candidate["index"] != block["index"]
+                and candidate["text"].strip().upper() == "A"
+                and abs(candidate["y0"] - block["y0"]) <= 8
+            ),
+            None,
+        )
+        if initial is None:
+            continue
+        block["text"] = canonical
+        block["confidence"] = min(block["confidence"], initial["confidence"])
+        suppressed.add(initial["index"])
+    return [block for block in result if block["index"] not in suppressed]
+
+
 def _ocr_is_terminal_subject_heading(
     block: dict[str, Any],
     *,
@@ -5211,15 +5944,89 @@ def _ocr_is_terminal_subject_heading(
     """Recognize a trailing plural lore heading for the recovered creature."""
 
     text = str(block["text"]).strip()
-    if not text.endswith((".", ":")) or text != text.upper():
+    if text != text.upper():
         return False
     heading_key = _ocr_key(text.rstrip(".:"))
+    if heading_key == target_key:
+        return True
+    if not text.endswith((".", ":")):
+        return False
     plural_keys = {
         f"{target_key}s",
         f"{target_key}es",
         f"{target_key[:-1]}ies" if target_key.endswith("y") else "",
     }
     return heading_key in plural_keys
+
+
+def discover_2014_statblock_names_from_layout(
+    layout: dict[str, Any],
+    *,
+    minimum_confidence: float = 0.8,
+) -> list[dict[str, Any]]:
+    """Find every structurally proven statblock heading on one layout page.
+
+    The heading is accepted only when the next block in the same detected
+    column is an exact size/type/alignment identity line.  This lets a
+    text-only host enumerate two-column creature pages without guessing names
+    from prose headings or a table of contents.
+    """
+
+    if not isinstance(layout, dict):
+        raise StatblockImportError("OCR layout must be an object")
+    width = layout.get("width")
+    raw_blocks = layout.get("blocks")
+    if (
+        isinstance(width, bool)
+        or not isinstance(width, (int, float))
+        or width <= 0
+        or not isinstance(raw_blocks, list)
+    ):
+        raise StatblockImportError("OCR layout requires positive width and text blocks")
+    blocks = [_ocr_block(raw, index) for index, raw in enumerate(raw_blocks)]
+    if not blocks:
+        return []
+    split = _ocr_column_split(blocks, width=float(width))
+    columns = (
+        [blocks]
+        if split is None
+        else [
+            [block for block in blocks if block["cx"] < split],
+            [block for block in blocks if block["cx"] >= split],
+        ]
+    )
+    discovered: list[dict[str, Any]] = []
+    for column_index, column in enumerate(columns):
+        ordered = sorted(column, key=lambda block: (block["y0"], block["x0"]))
+        for index, heading in enumerate(ordered[:-1]):
+            identity = ordered[index + 1]
+            name = " ".join(str(heading["text"]).split())
+            if (
+                not 2 <= len(name) <= 200
+                or name.endswith((".", ":"))
+                or _ocr_key(name) in {_ocr_key(label) for label in _OCR_FIELD_LABELS}
+                or not _ocr_heading_has_identity(heading, identity)
+                or min(heading["confidence"], identity["confidence"])
+                < minimum_confidence
+            ):
+                continue
+            discovered.append(
+                {
+                    "name": name,
+                    "page_number": layout.get("page_number"),
+                    "column": column_index,
+                    "heading_confidence": heading["confidence"],
+                    "identity": identity["text"],
+                    "identity_confidence": identity["confidence"],
+                    "heading_bbox": [
+                        heading["x0"],
+                        heading["y0"],
+                        heading["x1"],
+                        heading["y1"],
+                    ],
+                }
+            )
+    return discovered
 
 
 def recover_2014_statblock_from_ocr(
@@ -5250,8 +6057,8 @@ def recover_2014_statblock_from_ocr(
     target_key = _ocr_key(name)
     headings = [block for block in blocks if _ocr_key(block["text"]) == target_key]
     split = _ocr_column_split(blocks, width=float(width))
-    structural_headings: list[dict[str, Any]] = []
-    for candidate in headings:
+
+    def has_structural_identity(candidate: dict[str, Any]) -> bool:
         if split is None:
             candidate_column = list(blocks)
         elif candidate["cx"] < split:
@@ -5272,12 +6079,30 @@ def recover_2014_statblock_from_ocr(
             if candidate_index + 1 < len(candidate_ordered)
             else None
         )
-        if _ocr_heading_has_identity(candidate, following):
+        return _ocr_heading_has_identity(candidate, following)
+
+    structural_headings: list[dict[str, Any]] = []
+    for candidate in headings:
+        if has_structural_identity(candidate):
             structural_headings.append(candidate)
+    fuzzy_headings: list[dict[str, Any]] = []
+    if not headings:
+        for candidate in blocks:
+            candidate_key = _ocr_key(candidate["text"])
+            if (
+                not candidate_key
+                or abs(len(candidate_key) - len(target_key)) > 2
+                or SequenceMatcher(None, candidate_key, target_key).ratio() < 0.86
+                or not has_structural_identity(candidate)
+            ):
+                continue
+            fuzzy_headings.append(candidate)
     if len(headings) == 1:
         heading = headings[0]
     elif len(structural_headings) == 1:
         heading = structural_headings[0]
+    elif len(fuzzy_headings) == 1:
+        heading = fuzzy_headings[0]
     else:
         raise StatblockImportError(
             f"OCR recovery requires one structurally unambiguous heading matching {name!r}"
@@ -5301,12 +6126,107 @@ def recover_2014_statblock_from_ocr(
         if _ocr_peer_heading(ordered[index], following):
             end = index
             break
-    unfiltered_scoped = ordered[heading_index:end]
+    continuation_blocks: list[dict[str, Any]] = []
+    if split is not None and heading["cx"] < split:
+        right_ordered = sorted(
+            (block for block in blocks if block["cx"] >= split),
+            key=lambda block: (block["y0"], block["x0"]),
+        )
+        section_index = next(
+            (
+                index
+                for index, block in enumerate(right_ordered)
+                if block["y0"] >= heading["y0"]
+                and block["text"].upper()
+                in {"ACTIONS", "BONUS ACTIONS", "REACTIONS", "LEGENDARY ACTIONS"}
+            ),
+            None,
+        )
+        if section_index is not None:
+            peer_before_section = any(
+                _ocr_probable_peer_heading(right_ordered, index)
+                for index in range(section_index)
+            )
+            if not peer_before_section:
+                continuation_start = section_index
+                earliest_after_heading = next(
+                    (
+                        index
+                        for index, block in enumerate(right_ordered)
+                        if block["y0"] >= heading["y0"] - 10
+                    ),
+                    section_index,
+                )
+                if (
+                    earliest_after_heading <= section_index
+                    and right_ordered[earliest_after_heading]["y0"]
+                    - heading["y0"]
+                    <= max(80.0, float(height) * 0.04)
+                ):
+                    continuation_start = earliest_after_heading
+                continuation_end = len(right_ordered)
+                for index in range(section_index + 1, len(right_ordered)):
+                    if _ocr_probable_peer_heading(right_ordered, index):
+                        continuation_end = index
+                        break
+                continuation_blocks = right_ordered[
+                    continuation_start:continuation_end
+                ]
+        else:
+            left_ordinals = [
+                int(match.group(1))
+                for block in ordered[heading_index:end]
+                if (match := re.match(r"^(\d{1,2})\.\s+", block["text"]))
+            ]
+            right_ordinal_indexes = [
+                (index, int(match.group(1)))
+                for index, block in enumerate(right_ordered)
+                if block["y0"] >= heading["y0"]
+                and (match := re.match(r"^(\d{1,2})\.\s+", block["text"]))
+            ]
+            if (
+                left_ordinals
+                and right_ordinal_indexes
+                and max(left_ordinals) + 1 == right_ordinal_indexes[0][1]
+            ):
+                continuation_blocks = right_ordered[
+                    right_ordinal_indexes[0][0] :
+                ]
+    unfiltered_scoped = [*ordered[heading_index:end], *continuation_blocks]
+    corrupt_decorative_blocks = [
+        block
+        for block in unfiltered_scoped
+        if block["y0"] >= float(height) * 0.85
+        and block["text"].count("=") >= 4
+        and any(character.isalpha() for character in block["text"])
+    ]
+    if corrupt_decorative_blocks:
+        # Embedded PDF fonts can interleave a statblock's final source line
+        # with the decorative bottom border. Accepting that text would produce
+        # a structurally valid but corrupted card, so require the caller to
+        # retry the exact page through its independent OCR layout provider.
+        raise StatblockImportError(
+            "OCR statblock layout contains decorative glyph interleaving"
+        )
     page_furniture = [
         block
         for block in unfiltered_scoped
         if block["y0"] >= float(height) * 0.9
-        and re.fullmatch(r"\d{1,4}", block["text"])
+        and (
+            re.fullmatch(r"\d{1,4}", block["text"])
+            or re.match(
+                r"(?i)^(?:chapter|c(?:h|[lI1]{1,2})apter|part|appendix)"
+                r"\s+[^|:]{1,80}\s*[|:]",
+                block["text"],
+            )
+            or (
+                block["text"] == block["text"].upper()
+                and re.match(
+                    r"^(?:chapter|part|appendix)\d",
+                    _ocr_key(block["text"]),
+                )
+            )
+        )
     ]
     page_furniture_ids = {block["index"] for block in page_furniture}
     non_furniture = [
@@ -5332,6 +6252,7 @@ def recover_2014_statblock_from_ocr(
         for block in unfiltered_scoped
         if block["index"] not in excluded_ids
     ]
+    scoped = _ocr_repair_section_heading_fragments(scoped)
     identity = next(
         (block for block in scoped[1:] if _OCR_IDENTITY_RE.fullmatch(block["text"])),
         None,
@@ -5341,35 +6262,11 @@ def recover_2014_statblock_from_ocr(
 
     core_fields: dict[str, dict[str, Any]] = {}
     for label in _OCR_FIELD_LABELS[:3]:
-        core_fields[label] = next(
-            (
-                block
-                for block in scoped
-                if re.match(rf"(?i)^{re.escape(label)}\s+\S", block["text"])
-            ),
-            None,
-        )
+        core_fields[label] = _ocr_field_with_continuation(scoped, label=label)
         if core_fields[label] is None:
             raise StatblockImportError(f"OCR statblock is missing {label}")
 
-    ability_labels: dict[str, dict[str, Any]] = {}
-    for ability in ("STR", "DEX", "CON", "INT", "WIS", "CHA"):
-        matches = [block for block in scoped if block["text"].upper() == ability]
-        if len(matches) != 1:
-            raise StatblockImportError(f"OCR statblock requires one {ability} label")
-        ability_labels[ability] = matches[0]
-    ability_values: dict[str, dict[str, Any]] = {}
-    for ability, label_block in ability_labels.items():
-        candidates = [
-            block
-            for block in scoped
-            if label_block["y0"] <= block["y0"] <= label_block["y1"] + 60
-            and abs(block["cx"] - label_block["cx"]) <= 45
-            and re.fullmatch(r"\d+\s*\([+\-]\s*\d+\)", block["text"])
-        ]
-        if len(candidates) != 1:
-            raise StatblockImportError(f"OCR statblock requires one {ability} score")
-        ability_values[ability] = candidates[0]
+    ability_labels, ability_values = _ocr_ability_table(scoped)
     challenge = next(
         (
             block
@@ -5378,19 +6275,11 @@ def recover_2014_statblock_from_ocr(
         ),
         None,
     )
-    if challenge is None:
-        raise StatblockImportError("OCR statblock is missing Challenge")
     detail_fields: dict[str, dict[str, Any]] = {}
     for label in _OCR_FIELD_LABELS[3:-1]:
-        matches = [
-            block
-            for block in scoped
-            if re.match(rf"(?i)^{re.escape(label)}\s+\S", block["text"])
-        ]
-        if len(matches) > 1:
-            raise StatblockImportError(f"OCR statblock has ambiguous {label} fields")
-        if matches:
-            detail_fields[label] = matches[0]
+        field = _ocr_field_with_continuation(scoped, label=label)
+        if field is not None:
+            detail_fields[label] = field
 
     critical = [
         heading,
@@ -5399,7 +6288,7 @@ def recover_2014_statblock_from_ocr(
         *ability_labels.values(),
         *ability_values.values(),
         *detail_fields.values(),
-        challenge,
+        *([challenge] if challenge is not None else []),
     ]
     low_confidence = [
         {"text": block["text"], "confidence": block["confidence"]}
@@ -5414,33 +6303,97 @@ def recover_2014_statblock_from_ocr(
     skipped = {
         heading["index"],
         identity["index"],
-        *(block["index"] for block in core_fields.values()),
+        *(
+            source_index
+            for block in core_fields.values()
+            for source_index in block.get("source_indices", [block["index"]])
+        ),
         *(block["index"] for block in ability_labels.values()),
         *(block["index"] for block in ability_values.values()),
+        *(
+            source_index
+            for block in detail_fields.values()
+            for source_index in block.get("source_indices", [block["index"]])[1:]
+        ),
+    }
+    detail_field_by_index = {
+        block["index"]: (label, block) for label, block in detail_fields.items()
     }
     detail_start = max(block["y1"] for block in ability_values.values())
+    continuation_ids = {block["index"] for block in continuation_blocks}
     details: list[str] = []
     for block in scoped:
-        if block["index"] in skipped or block["y0"] < detail_start:
+        if block["index"] in skipped or (
+            block["index"] not in continuation_ids and block["y0"] < detail_start
+        ):
             continue
         text = block["text"]
-        if text.upper() in {"ACTIONS", "REACTIONS", "LEGENDARY ACTIONS"}:
+        if text.upper() in {
+            "ACTIONS",
+            "BONUS ACTIONS",
+            "REACTIONS",
+            "LEGENDARY ACTIONS",
+        }:
             details.append(f"## {text.title()}")
+            continue
+        if (
+            details
+            and not details[-1].startswith(("## ", "**"))
+            and not re.search(r"[.!?:]$", details[-1])
+        ):
+            joined = f"{details[-1]} {text}"
+            joined_entry = _ocr_structural_entry_match(joined)
+            details[-1] = (
+                f"***{joined_entry.group(1)}.*** "
+                f"{joined_entry.group(2)}".rstrip()
+                if joined_entry is not None
+                else joined
+            )
+            continue
+        if (
+            details
+            and re.search(
+                r"(?i)\b(?:Melee|Ranged|Melee\s+or\s+Ranged)\s+"
+                r"(?:Weapon|Spell)$",
+                details[-1],
+            )
+            and re.match(r"(?i)^Attack:\s*", text)
+        ):
+            details[-1] = f"{details[-1]} {text}"
+            continue
+        if (
+            details
+            and re.search(r"(?i)\bone$", details[-1])
+            and re.match(
+                r"(?i)^(?:Tiny|Small|Medium|Large|Huge|Gargantuan)"
+                r"(?:\s+or\s+(?:Tiny|Small|Medium|Large|Huge|Gargantuan|"
+                r"smaller|larger))?\s+creatures?\.\s+Hit:",
+                text,
+            )
+        ):
+            details[-1] = f"{details[-1]} {text}"
+            continue
+        reviewed_detail = detail_field_by_index.get(block["index"])
+        if reviewed_detail is not None:
+            label, joined = reviewed_detail
+            details.append(f"**{label}** {_strip_ocr_label(joined['text'], label)}")
             continue
         field = next(
             (
                 label
                 for label in _OCR_FIELD_LABELS[3:]
-                if re.match(rf"(?i)^{re.escape(label)}\s+\S", text)
+                if re.match(rf"^{re.escape(label)}\s+\S", text)
             ),
             None,
         )
         if field is not None:
             details.append(f"**{field}** {_strip_ocr_label(text, field)}")
             continue
-        entry = _OCR_ENTRY_RE.match(text)
+        entry = _ocr_structural_entry_match(text)
         if entry:
             details.append(f"***{entry.group(1)}.*** {entry.group(2)}".rstrip())
+        elif details and details[-1].startswith("***"):
+            details[-1] = f"{details[-1]} {text}"
         else:
             details.append(text)
 
@@ -5462,11 +6415,16 @@ def recover_2014_statblock_from_ocr(
             *details,
         ]
     )
-    parsed = parse_2014_statblock(
-        content,
-        source_key="ocr-layout-recovery",
-        name=name,
-    )
+    try:
+        parsed = parse_2014_statblock(
+            content,
+            source_key="ocr-layout-recovery",
+            name=name,
+        )
+    except ValueError as error:
+        raise StatblockImportError(
+            f"OCR statblock failed D&D sheet validation: {error}"
+        ) from error
     critical_facts = {
         "identity": identity["text"],
         "armor_class": _strip_ocr_label(
@@ -5484,7 +6442,11 @@ def recover_2014_statblock_from_ocr(
             label: _strip_ocr_label(block["text"], label)
             for label, block in detail_fields.items()
         },
-        "challenge": _strip_ocr_label(challenge["text"], "Challenge"),
+        "challenge": (
+            _strip_ocr_label(challenge["text"], "Challenge")
+            if challenge is not None
+            else None
+        ),
     }
     return {
         "normalized_content": content,
@@ -5500,11 +6462,34 @@ def recover_2014_statblock_from_ocr(
             "recovery_version": OCR_STATBLOCK_RECOVERY_VERSION,
             "page_number": layout.get("page_number"),
             "heading": heading["text"],
+            "heading_match_mode": (
+                "exact" if heading in headings else "bounded_structural_fuzzy"
+            ),
             "heading_confidence": heading["confidence"],
             "matching_heading_count": len(headings),
             "structural_heading_count": len(structural_headings),
+            "fuzzy_heading_count": len(fuzzy_headings),
             "minimum_core_confidence": min(block["confidence"] for block in critical),
             "block_count": len(scoped),
+            "cross_column_continuation_block_count": len(continuation_blocks),
+            "ability_modifier_repairs": [
+                {
+                    "ability": ability,
+                    "source_text": ability_values[ability]["source_text"],
+                    "normalized_text": ability_values[ability]["text"],
+                }
+                for ability in _OCR_ABILITY_ORDER
+                if ability_values[ability]["source_text"]
+                != ability_values[ability]["text"]
+            ],
+            "ability_label_repairs": [
+                {
+                    "ability": ability,
+                    "basis": ability_labels[ability]["inferred_from"],
+                }
+                for ability in _OCR_ABILITY_ORDER
+                if ability_labels[ability].get("inferred_from")
+            ],
             "excluded_page_furniture_count": len(page_furniture),
             "excluded_trailing_subject_heading_count": len(
                 trailing_subject_headings
@@ -5516,13 +6501,233 @@ def recover_2014_statblock_from_ocr(
     }
 
 
+def finalize_imported_actor_rulings(
+    sheet: dict[str, Any],
+    *,
+    settled_mechanic_ids: Iterable[str] = (),
+    settled_card_ids: Iterable[str] = (),
+) -> dict[str, Any]:
+    """Persist direct Agent-ruling boundaries on imported actor content.
+
+    Statblock normalization deliberately does not guess arbitrary passive,
+    spell, or action semantics from prose.  A portable addon nevertheless must
+    not postpone deciding *how* those entries are resolved until first use.
+    This pass records the exact excerpt and the already-reviewed Agent boundary
+    while leaving engine-native mechanics and authored primitive plans intact.
+    """
+
+    value = deepcopy(sheet)
+    settled_mechanics = {str(item) for item in settled_mechanic_ids if str(item)}
+    settled_cards = {str(item) for item in settled_card_ids if str(item)}
+    content = value.setdefault("content", {})
+    for section in ("activities", "features", "feats", "spells"):
+        entries = list(content.get(section) or [])
+        for entry in entries:
+            effect = str(
+                entry.get("description")
+                or dict(entry.get("definition") or {}).get("effect")
+                or ""
+            ).strip()
+            if not effect:
+                continue
+            if str(entry.get("id") or "") in settled_cards:
+                continue
+            mechanic_refs = {
+                str(item) for item in entry.get("mechanic_refs", []) if str(item)
+            }
+            if mechanic_refs & settled_mechanics:
+                continue
+            if (
+                entry.get("resolution") is not None
+                or entry.get("resolution_plan") is not None
+            ):
+                continue
+            manual_ruling = dict(
+                dict(entry.get("choices") or {}).get("manual_ruling") or {}
+            )
+            if (
+                manual_ruling.get("default_resolver") == "agent"
+                and str(manual_ruling.get("source_excerpt") or "").strip()
+            ):
+                continue
+            requirements = list(entry.get("ruling_requirements") or [])
+            if any(
+                isinstance(item, dict)
+                and item.get("default_resolver") == "agent"
+                and str(item.get("source_excerpt") or "").strip()
+                for item in requirements
+            ):
+                continue
+            if str(entry.get("pack_id") or "") in {
+                "dnd5e.content.srd2014",
+                "dnd5e.content.srd2024",
+                "dnd5e.content.standard2014",
+            }:
+                # Bundled standard cards must arrive with their reviewed
+                # build-time clause. A caller-supplied core-looking id is not
+                # enough to turn unknown prose into a trusted ruling.
+                continue
+            requirements.append(
+                {
+                    "kind": "source_bound_import_resolution",
+                    "reason": (
+                        "This imported actor-card entry has source-specific semantics "
+                        "without an exact registered kernel mechanic or primitive plan. "
+                        "Resolve the cited text through the Agent-as-DM boundary and "
+                        "ordinary public engine tools."
+                    ),
+                    "source_excerpt": " ".join(effect.split())[:4000],
+                    "default_resolver": "agent",
+                    "ruling_kind": (
+                        "generic_spell_effect"
+                        if section == "spells"
+                        else "agent_dm_adjudication"
+                    ),
+                    "policy_ref": "actor_card.import.v1",
+                    "requires_external_input_only_for": [],
+                }
+            )
+            entry["ruling_requirements"] = requirements
+        content[section] = entries
+    value["content"] = content
+    inventory = value.setdefault("inventory", {})
+    items = list(inventory.get("items") or [])
+    for item in items:
+        mechanics = dict(item.get("mechanics") or {})
+        effect = str(mechanics.get("on_hit_effect") or "").strip()
+        if not effect or mechanics.get("on_hit_resolution") is not None:
+            continue
+        if str(item.get("id") or "") in settled_cards:
+            continue
+        mechanic_refs = {
+            str(entry) for entry in item.get("mechanic_refs", []) if str(entry)
+        }
+        if mechanic_refs & settled_mechanics:
+            continue
+        if item.get("resolution_plan") is not None:
+            continue
+        requirements = list(item.get("ruling_requirements") or [])
+        if any(
+            isinstance(requirement, dict)
+            and requirement.get("default_resolver") == "agent"
+            and str(requirement.get("source_excerpt") or "").strip()
+            for requirement in requirements
+        ):
+            continue
+        if str(item.get("pack_id") or "") in {
+            "dnd5e.content.srd2014",
+            "dnd5e.content.srd2024",
+            "dnd5e.content.standard2014",
+        }:
+            continue
+        requirements.append(
+            {
+                "kind": "source_bound_import_resolution",
+                "reason": (
+                    "This imported item has a source-specific on-hit effect without "
+                    "an exact registered kernel mechanic or primitive plan. Resolve "
+                    "the cited text through the Agent-as-DM on-hit ruling boundary "
+                    "and ordinary public engine tools."
+                ),
+                "source_excerpt": " ".join(effect.split())[:4000],
+                "default_resolver": "agent",
+                "ruling_kind": "attack_on_hit_effect",
+                "policy_ref": "actor_card.import.v1",
+                "requires_external_input_only_for": [],
+            }
+        )
+        item["ruling_requirements"] = requirements
+    inventory["items"] = items
+    value["inventory"] = inventory
+    return validate_character_sheet(value)
+
+
+def parameterized_statblock_requirements(source_text: str) -> dict[str, Any] | None:
+    """Describe a source statblock whose values depend on its owner or casting.
+
+    Companion statblocks such as class-created constructs are reusable templates,
+    not complete monster instances.  Treating their printed formula as broken OCR
+    either drops legitimate content or tempts an importer to invent one owner's
+    level and ability modifier.  This detector is intentionally narrow: an
+    ordinary missing numeric HP value remains an error.
+    """
+
+    text = str(source_text or "")
+    folded = " ".join(text.split()).casefold()
+    parameter_markers = (
+        (r"\byour\s+[a-z]+\s+level\b|\byour level\b", "owner_class_level"),
+        (r"\byour proficiency bonus\b|\bequals your bonus\b", "owner_proficiency_bonus"),
+        (r"\byour intelligence modifier\b", "owner_intelligence_modifier"),
+        (
+            r"\byour spellcasting ability modifier\b",
+            "owner_spellcasting_ability_modifier",
+        ),
+        (r"\byour spell attack modifier\b", "owner_spell_attack_modifier"),
+        (r"\byour spell save dc\b", "owner_spell_save_dc"),
+        (
+            r"\b(?:the )?spell(?:'s)? level\b|\blevel of the spell\b|"
+            r"\beach spell level\b",
+            "casting_slot_level",
+        ),
+    )
+    parameters = [
+        parameter
+        for pattern, parameter in parameter_markers
+        if re.search(pattern, folded)
+    ]
+    if not parameters:
+        return None
+    source_expressions = []
+    for match in re.finditer(
+        r"(?im)^\s*\*\*(?P<label>Armor Class|Hit Points|Proficiency Bonus)\*\*\s+"
+        r"(?P<expression>[^\r\n]+?)\s*$",
+        text,
+    ):
+        excerpt = " ".join(match.group(0).split())
+        if any(re.search(pattern, excerpt.casefold()) for pattern, _ in parameter_markers):
+            target_path = {
+                "armor class": "combat.armor_class",
+                "hit points": "combat.hp.max",
+                "proficiency bonus": "combat.proficiency_bonus",
+            }[match.group("label").casefold()]
+            source_expressions.append(
+                {
+                    "target_path": target_path,
+                    "source_expression": " ".join(match.group("expression").split()),
+                    "source_excerpt": excerpt,
+                }
+            )
+    if not source_expressions:
+        # A spell effect that scales with the expended slot or spell level is
+        # runtime effect semantics, not an actor-template parameter.  Only a
+        # printed core card field can make the actor itself dependent on its
+        # owner or summoning cast; ordinary effects stay on the complete actor
+        # card and receive their build-time kernel/Agent ruling resolution.
+        return None
+    return {
+        "schema_version": 1,
+        "kind": "dependent_actor_template",
+        "target_path": source_expressions[0]["target_path"],
+        "source_expression": source_expressions[0]["source_expression"],
+        "source_excerpt": source_expressions[0]["source_excerpt"],
+        "source_expressions": source_expressions,
+        "parameters": list(dict.fromkeys(parameters)),
+        "instantiation_phase": "lobby",
+        "runtime_ready": False,
+    }
+
+
 __all__ = [
     "ParsedStatblock",
     "OCR_STATBLOCK_RECOVERY_VERSION",
     "StatblockImportError",
     "apply_statblock_variant",
     "effective_statblock_rating",
+    "finalize_imported_actor_rulings",
+    "parameterized_statblock_requirements",
+    "discover_2014_statblock_names_from_layout",
     "parse_2014_statblock",
     "parse_2024_statblock",
     "recover_2014_statblock_from_ocr",
+    "split_2014_statblock_action_variants",
 ]

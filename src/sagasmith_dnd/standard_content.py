@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from copy import deepcopy
 from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
+from sagasmith_dnd.content_import import audit_release_resolution_readiness
+from sagasmith_dnd.content_resolution import finalize_bundled_artifact_resolutions
 from sagasmith_dnd.spell_resolution import (
     SPELL_RESOLUTION_MECHANIC_ID,
     normalize_spell_resolution,
@@ -155,7 +158,11 @@ def _cached_standard2014_content() -> tuple[dict[str, Any], list[dict[str, Any]]
             }
         ],
     }
-    artifacts = [blade_ward, witch_bolt]
+    artifacts = finalize_bundled_artifact_resolutions(
+        [blade_ward, witch_bolt],
+        source_root=Path("."),
+        source_prefix="book:",
+    )
     native_mechanic_refs = sorted(
         {
             str(mechanic_ref)
@@ -173,6 +180,8 @@ def _cached_standard2014_content() -> tuple[dict[str, Any], list[dict[str, Any]]
         "capabilities": [],
         "native_mechanic_refs": native_mechanic_refs,
         "content_kinds": ["spell"],
+        "resolution_policy": "build_time_complete",
+        "resolution_readiness": audit_release_resolution_readiness(artifacts),
     }
     return manifest, artifacts
 

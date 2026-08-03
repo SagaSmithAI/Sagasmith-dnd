@@ -1,7 +1,7 @@
 """Stable identifiers for source-bound standard spell mechanics."""
 
 STANDARD_2014_CONTENT_PACK_ID = "dnd5e.content.standard2014"
-STANDARD_2014_CONTENT_PACK_VERSION = "1.0.0"
+STANDARD_2014_CONTENT_PACK_VERSION = "1.1.0"
 
 CORE_BLADE_WARD_MECHANIC_ID = "dnd5e.core.spell.blade_ward"
 CORE_BLADE_WARD_SPELL_ID = f"{STANDARD_2014_CONTENT_PACK_ID}.spell.blade-ward"

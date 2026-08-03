@@ -31,13 +31,17 @@ from sagasmith_dnd.core_content_2024 import (
     build_srd2024_content,
     parse_srd2024_monster_artifact,
 )
-from sagasmith_dnd.statblocks import ParsedStatblock, parse_2014_statblock
+from sagasmith_dnd.statblocks import (
+    ParsedStatblock,
+    finalize_imported_actor_rulings,
+    parse_2014_statblock,
+)
 
 DND5E_SYSTEM_ID = "dnd5e"
 SRD2014_PRESET_PACK_ID = "dnd5e.presets.srd2014"
-SRD2014_PRESET_PACK_VERSION = "1.0.0"
+SRD2014_PRESET_PACK_VERSION = "1.1.0"
 SRD2024_PRESET_PACK_ID = "dnd5e.presets.srd2024"
-SRD2024_PRESET_PACK_VERSION = "1.0.0"
+SRD2024_PRESET_PACK_VERSION = "1.1.0"
 PORTABLE_CARD_COMPILER = "sagasmith-dnd.portable-card.v1"
 
 
@@ -116,6 +120,11 @@ def actor_card_from_statblock(
     source_refs: Sequence[str],
     pack_id: str,
     pack_version: str,
+    distribution: str = "private",
+    license_name: str = "user-supplied",
+    attribution: str = "",
+    tags: Sequence[str] | None = None,
+    semantic_fill: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compile one source-bound statblock into a fully portable actor card."""
 
@@ -128,7 +137,7 @@ def actor_card_from_statblock(
         actor_type=actor_type,
         name=parsed.name,
         summary=parsed.summary,
-        sheet=parsed.sheet,
+        sheet=finalize_imported_actor_rulings(parsed.sheet),
         notes=notes,
         provenance={
             "compiler": PORTABLE_CARD_COMPILER,
@@ -141,12 +150,17 @@ def actor_card_from_statblock(
             "experience_points": parsed.experience_points,
             "warnings": list(parsed.warnings),
             "normalization_notes": list(parsed.normalization_notes),
+            "semantic_fill": (
+                copy.deepcopy(semantic_fill) if semantic_fill is not None else None
+            ),
         },
         metadata={
             "title": parsed.name,
             "edition": edition,
-            "license": "CC-BY-4.0",
-            "tags": [actor_type, "srd", f"dnd5e-{edition}"],
+            "distribution": distribution,
+            "license": license_name,
+            "attribution": attribution,
+            "tags": list(tags or [actor_type, f"dnd5e-{edition}"]),
         },
         dependencies=[
             {
@@ -206,6 +220,13 @@ def _cached_srd2014_preset_pack(skill_root: str) -> dict[str, Any]:
                 source_refs=[source_ref],
                 pack_id=SRD2014_CONTENT_PACK_ID,
                 pack_version=SRD2014_CONTENT_PACK_VERSION,
+                distribution="shareable",
+                license_name="CC-BY-4.0",
+                attribution=(
+                    "Includes material from the System Reference Document 5.1 by "
+                    "Wizards of the Coast LLC, licensed under CC-BY-4.0."
+                ),
+                tags=[actor_type, "srd", "dnd5e-2014"],
             )
         )
     if not cards:
@@ -266,6 +287,13 @@ def _cached_srd2024_preset_pack(skill_root: str) -> dict[str, Any]:
                 source_refs=list(artifact.get("rule_refs") or []),
                 pack_id=SRD2024_CONTENT_PACK_ID,
                 pack_version=SRD2024_CONTENT_PACK_VERSION,
+                distribution="shareable",
+                license_name="CC-BY-4.0",
+                attribution=(
+                    "Includes material from the System Reference Document 5.2.1 by "
+                    "Wizards of the Coast LLC, licensed under CC-BY-4.0."
+                ),
+                tags=["monster", "srd", "dnd5e-2024"],
             )
         )
     if not cards:

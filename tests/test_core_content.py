@@ -1,6 +1,7 @@
 from collections import Counter
 from pathlib import Path
 
+from sagasmith_dnd.content_import import audit_release_resolution_readiness
 from sagasmith_dnd.core_content import (
     PACK_VERSION,
     _feat_prerequisites,
@@ -44,7 +45,7 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     manifest, artifacts = build_srd2014_content(workspace / "SagaSmith-dnd-skills")
     counts = Counter(item["kind"] for item in artifacts)
 
-    assert manifest["version"] == PACK_VERSION == "1.19.0"
+    assert manifest["version"] == PACK_VERSION == "1.20.0"
     assert "dnd5e.core.spell.structured_resolution" in manifest[
         "native_mechanic_refs"
     ]
@@ -52,14 +53,29 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
         boundary.id for boundary in get_core_rule_pack("2014").boundaries
     }
     assert set(manifest["native_mechanic_refs"]) <= registered
-    assert counts["spell"] == 319
-    assert counts["species"] == 13
-    assert counts["class"] == 12
-    assert counts["subclass"] == 12
-    assert counts["feature"] >= 175
-    assert counts["background"] == 1
-    assert counts["feat"] == 1
-    assert counts["item"] > 450
+    assert len(artifacts) == 1014
+    assert counts == {
+        "background": 1,
+        "class": 12,
+        "feat": 1,
+        "feature": 182,
+        "item": 474,
+        "species": 13,
+        "spell": 319,
+        "subclass": 12,
+    }
+    assert len({item["id"] for item in artifacts}) == len(artifacts)
+    assert all(item["source_citations"] for item in artifacts)
+    readiness = audit_release_resolution_readiness(artifacts)
+    assert manifest["resolution_policy"] == "build_time_complete"
+    assert manifest["resolution_readiness"] == readiness
+    assert readiness["complete"] is True
+    assert readiness["first_use_compilation_required"] is False
+    assert readiness["resolved_count"] == len(artifacts)
+    assert all(
+        artifact["semantic_resolution"]["first_use_compilation_required"] is False
+        for artifact in artifacts
+    )
 
     names = {(item["kind"], item["card"]["name"]) for item in artifacts}
     assert ("spell", "Spell Lists") not in names
@@ -146,7 +162,7 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     )
     assert light["card"]["ruling_requirements"][0]["default_resolver"] == "agent"
     assert light["card"]["ruling_requirements"][0]["source_excerpt"]
-    assert light["card"]["ruling_requirements"][0]["policy_ref"] == "resolution_plan.v1"
+    assert light["card"]["ruling_requirements"][0]["policy_ref"] == "rule_clause.v1"
     assert all(
         (
             item["card"].get("resolution")
