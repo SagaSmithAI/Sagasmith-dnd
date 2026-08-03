@@ -5142,12 +5142,19 @@ def test_layout_recovery_preserves_and_validates_dependent_hit_point_formula() -
             block("14 (+2) 12 (+1) 14 (+2) 4 (-3) 10 (+0) 6 (-2)", 295),
             block("Senses darkvision 60 ft., passive Perception 14", 335),
             block("Languages understands the languages you speak", 365),
-            block("ACTIONS", 410),
+            block("ACTIONS (REQUIRES YOUR BONUS ACTION)", 410),
             block(
                 "Force-Empowered Rend. Melee Weapon Attack: +4 to hit, reach 5 ft., "
                 "one target. Hit: 8 (1d8 + 4) force damage.",
                 445,
             ),
+            block("REACTION", 480),
+            block(
+                "Deflect Attack. The defender imposes disadvantage on one attack.",
+                515,
+            ),
+            block("IMPROVED DEFENDER", 550),
+            block("At 15th level, the defender becomes more powerful.", 585),
         ],
     }
 
@@ -5156,6 +5163,14 @@ def test_layout_recovery_preserves_and_validates_dependent_hit_point_formula() -
     assert recovered["critical_facts"]["armor_class"] == "15 (natural armor)"
     assert recovered["critical_facts"]["hit_points"].startswith("equal the steel")
     assert "**Hit Points** equal the steel" in recovered["normalized_content"]
+    assert "## Actions" in recovered["normalized_content"]
+    assert "***Force-Empowered Rend.***" in recovered["normalized_content"]
+    assert "## Reactions" in recovered["normalized_content"]
+    assert "IMPROVED DEFENDER" not in recovered["normalized_content"]
+    assert not any(
+        "no weapon attack" in warning or "on-hit effect requires" in warning
+        for warning in recovered["validation"]["warnings"]
+    )
     assert recovered["validation"]["name"] == "Steel Defender"
 
 

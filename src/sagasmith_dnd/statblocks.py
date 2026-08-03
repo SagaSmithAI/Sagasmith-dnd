@@ -33,7 +33,7 @@ class StatblockImportError(ValueError):
     """Raised when required statblock facts cannot be recovered from the source text."""
 
 
-OCR_STATBLOCK_RECOVERY_VERSION = 12
+OCR_STATBLOCK_RECOVERY_VERSION = 13
 
 
 @dataclass(frozen=True)
@@ -487,10 +487,13 @@ def _parse_weapon(
         return None
     mode = attack.group(1).casefold()
     hit = re.search(
-        r"(?i)\*?Hit:\*?\s*(\d+)"
-        r"(?:\s*\((\d+\s*d\s*\d+(?:\s*[+\-]\s*\d+)?"
-        r"(?:\s+plus\s+\d+\s*d\s*\d+(?:\s*[+\-]\s*\d+)?)*)\))?\s*"
-        r"([a-z]+)\s+damage",
+        r"(?i)\*?Hit:\*?\s*(?:"
+        r"(?P<average>\d+)(?:\s*\((?P<formula>\d+\s*d\s*\d+"
+        r"(?:\s*[+\-]\s*\d+)?(?:\s+plus\s+\d+\s*d\s*\d+"
+        r"(?:\s*[+\-]\s*\d+)?)*)\))?"
+        r"|(?P<bare_formula>\d+\s*d\s*\d+(?:\s*[+\-]\s*\d+)?"
+        r"(?:\s+plus\s+\d+\s*d\s*\d+(?:\s*[+\-]\s*\d+)?)*)"
+        r")\s*(?P<damage_type>[a-z]+)\s+damage",
         description,
     )
     additional_damage: list[dict[str, Any]] = []
@@ -499,11 +502,13 @@ def _parse_weapon(
     if hit:
         expression_parts = re.split(
             r"(?i)\s+plus\s+",
-            hit.group(2) or hit.group(1),
+            hit.group("formula")
+            or hit.group("bare_formula")
+            or hit.group("average"),
         )
         expression = re.sub(r"\s+", "", expression_parts[0])
         damage = re.fullmatch(r"(\d+d\d+)(?:([+\-]\d+))?", expression)
-        if hit.group(2) and not damage:
+        if (hit.group("formula") or hit.group("bare_formula")) and not damage:
             raise StatblockImportError(
                 f"weapon action {name!r} has an invalid damage expression"
             )
@@ -521,7 +526,7 @@ def _parse_weapon(
                 {
                     "damage_formula": parsed_extra.group(1),
                     "damage_bonus": int(parsed_extra.group(2) or 0),
-                    "damage_type": hit.group(3).casefold(),
+                    "damage_type": hit.group("damage_type").casefold(),
                 }
             )
         last_damage_end = hit.end()
@@ -530,7 +535,7 @@ def _parse_weapon(
             (
                 r"(?i)\s*,?\s*or\s+\d+\s*"
                 r"\((\d+\s*d\s*\d+)(?:\s*([+\-])\s*(\d+))?\)\s*"
-                rf"{re.escape(hit.group(3))}\s+damage\s+"
+                rf"{re.escape(hit.group('damage_type'))}\s+damage\s+"
                 r"if\s+used\s+with\s+two\s+hands"
                 r"(?:\s+to\s+make\s+a\s+melee\s+attack)?"
             ),
@@ -623,7 +628,7 @@ def _parse_weapon(
             raw_on_hit_effect = raw_on_hit_effect[: trailing_paragraph_match.start()]
         on_hit_effect = raw_on_hit_effect.strip().lstrip(". ,;").strip()
         damage_formula = damage.group(1) if damage else expression
-        damage_type = hit.group(3).casefold()
+        damage_type = hit.group("damage_type").casefold()
         damage_bonus = int(damage.group(2) or 0) if damage else 0
     else:
         effect_hit = re.search(r"(?is)\*?Hit:\*?\s*(\S.+)$", description)
@@ -5422,6 +5427,45 @@ def _ocr_structural_entry_match(text: str) -> re.Match[str] | None:
     return match
 
 
+def _ocr_statblock_section_heading(text: str) -> tuple[str, str] | None:
+    """Normalize printed statblock section dividers without dropping qualifiers."""
+
+    normalized = " ".join(str(text or "").split())
+    action = re.fullmatch(
+        r"(?i)ACTIONS(?:\s*\(\s*(REQUIRES?\s+YOUR\s+BONUS\s+ACTION)\s*\))?",
+        normalized,
+    )
+    if action is not None:
+        qualifier = (
+            "The following actions require your bonus action."
+            if action.group(1)
+            else ""
+        )
+        return "Actions", qualifier
+    compact = re.sub(r"[^A-Z]", "", normalized.upper())
+    section = {
+        "BONUSACTIONS": "Bonus Actions",
+        "REACTION": "Reactions",
+        "REACTIONS": "Reactions",
+        "LEGENDARYACTIONS": "Legendary Actions",
+    }.get(compact)
+    return (section, "") if section is not None else None
+
+
+def _ocr_non_statblock_heading(text: str) -> bool:
+    """Identify a new all-caps source section after a statblock action area."""
+
+    normalized = " ".join(str(text or "").split())
+    words = re.findall(r"[A-Z][A-Z0-9'\-]*", normalized)
+    letters = re.sub(r"[^A-Za-z]", "", normalized)
+    return (
+        1 <= len(words) <= 10
+        and len(letters) >= 5
+        and letters == letters.upper()
+        and not re.search(r"[.!?:]", normalized)
+    )
+
+
 def _ocr_key(value: str) -> str:
     return compact_ascii_key(value)
 
@@ -6422,20 +6466,23 @@ def recover_2014_statblock_from_ocr(
     detail_start = max(block["y1"] for block in ability_values.values())
     continuation_ids = {block["index"] for block in continuation_blocks}
     details: list[str] = []
+    entered_action_section = False
     for block in scoped:
         if block["index"] in skipped or (
             block["index"] not in continuation_ids and block["y0"] < detail_start
         ):
             continue
         text = block["text"]
-        if text.upper() in {
-            "ACTIONS",
-            "BONUS ACTIONS",
-            "REACTIONS",
-            "LEGENDARY ACTIONS",
-        }:
-            details.append(f"## {text.title()}")
+        section_heading = _ocr_statblock_section_heading(text)
+        if section_heading is not None:
+            section, qualifier = section_heading
+            details.append(f"## {section}")
+            if qualifier:
+                details.append(f"***Command Requirement.*** {qualifier}")
+            entered_action_section = True
             continue
+        if entered_action_section and _ocr_non_statblock_heading(text):
+            break
         if details and details[-1].startswith("***"):
             previous_body = details[-1].split("***", 2)[-1].strip()
             if not previous_body or not re.search(r"[.!?:]$", previous_body):
