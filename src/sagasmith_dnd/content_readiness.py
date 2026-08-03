@@ -14,6 +14,12 @@ import hashlib
 import json
 from typing import Any, Mapping, Sequence
 
+from sagasmith_dnd.character_schema import (
+    add_inventory_item,
+    default_character_sheet,
+    normalize_spell_definition,
+)
+
 CATALOG_REVIEW_SCHEMA_VERSION = 1
 SELECTION_CONTRACT_SCHEMA_VERSION = 1
 CATALOG_REVIEW_CHECKS = frozenset(
@@ -22,6 +28,75 @@ CATALOG_REVIEW_CHECKS = frozenset(
 CATALOG_REVIEW_ROLES = frozenset({"primary", "critic", "dm"})
 CATALOG_REVIEW_METHODS = frozenset({"agent", "deterministic", "human"})
 SELECTION_STATUSES = frozenset({"ready", "not_applicable", "blocked"})
+
+# These IDs name reviewed engine entry points, not user-provided functions.  A
+# portable package can select one only by supplying the exact, deterministic
+# schema derived below from the same content hash.
+DND_SELECTION_MATERIALIZERS = {
+    "activity": "dnd5e.character.activity.v1",
+    "background": "dnd5e.character.background.v1",
+    "feat": "dnd5e.character.feat.v1",
+    "feature": "dnd5e.character.feature.v1",
+    "item": "dnd5e.character.inventory_item.v1",
+    "species": "dnd5e.character.species.v1",
+    "spell": "dnd5e.character.spell.v1",
+    "subclass": "dnd5e.character.subclass.v1",
+}
+
+_SELECTION_FIELDS = {
+    "activity": (),
+    "background": (
+        "ability_score_increases",
+        "custom_name",
+        "equipment_item_ids",
+        "equipment_package",
+        "languages",
+        "origin_feat_selection",
+        "skills",
+        "tools",
+    ),
+    "feat": (),
+    "feature": (
+        "grant_level",
+        "initial_setup_full_hp",
+        "replace_existing",
+        "study_started_elapsed_minutes",
+        "study_started_elapsed_ticks",
+    ),
+    "item": (),
+    "species": (
+        "abilities",
+        "ability_scores_include_species_grants",
+        "cantrip_artifact_id",
+        "hit_points_include_species_grants",
+        "languages",
+        "skills",
+        "tools",
+        "values_include_species_grants",
+    ),
+    "spell": ("method", "source_class"),
+    "subclass": ("target_class_name",),
+}
+
+_CARD_BINDINGS = {
+    "activity": ("name",),
+    "background": ("name", "background_grants"),
+    "feat": ("name", "prerequisites", "repeatable", "selection_requirements"),
+    "feature": (
+        "name",
+        "class_name",
+        "subclass_name",
+        "minimum_level",
+        "repeatable_selection_levels",
+        "selection_requirements",
+        "selection_requirements_by_level",
+        "mechanical_grants",
+    ),
+    "item": ("name", "inventory_template"),
+    "species": ("name", "base_species", "grants"),
+    "spell": ("name", "classes", "level", "definition"),
+    "subclass": ("name", "class_name", "minimum_level", "always_prepared_spells"),
+}
 
 
 def content_fingerprint(artifact: Mapping[str, Any]) -> str:
@@ -162,9 +237,14 @@ def build_selection_contract(
 ) -> dict[str, Any]:
     """Build and validate one independently reviewable selection contract."""
 
+    normalized_status = str(status)
+    if normalized_status == "ready" and schema is None:
+        schema = selection_schema_for_artifact(artifact)
+    if normalized_status == "ready" and materializer is None:
+        materializer = DND_SELECTION_MATERIALIZERS.get(str(artifact.get("kind") or ""))
     contract = {
         "schema_version": SELECTION_CONTRACT_SCHEMA_VERSION,
-        "status": status,
+        "status": normalized_status,
         "reviewed_content_hash": content_fingerprint(artifact),
         "materializer": materializer,
         "schema": copy.deepcopy(dict(schema or {})),
@@ -177,6 +257,64 @@ def build_selection_contract(
     if errors:
         raise ValueError("; ".join(errors))
     return contract
+
+
+def selection_schema_for_artifact(artifact: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the only allowed selection surface for a supported artifact kind.
+
+    The schema deliberately contains no executable expression or arbitrary
+    payload.  It binds the reviewed card fields that drive an existing D&D
+    materializer and publishes the exact input keys that the materializer may
+    accept.  The materializer continues to perform all value-level rules
+    validation and transactional mutation.
+    """
+
+    kind = str(artifact.get("kind") or "")
+    if kind not in DND_SELECTION_MATERIALIZERS:
+        raise ValueError(f"{kind or 'artifact'} has no safe character materializer")
+    card = artifact.get("card")
+    if not isinstance(card, Mapping):
+        raise ValueError(f"{kind} artifact needs a structured card")
+    card_value = dict(card)
+    binding = {
+        field: copy.deepcopy(card_value.get(field))
+        for field in _CARD_BINDINGS[kind]
+    }
+    _validate_materializer_card(kind, binding)
+    selection_fields = list(_SELECTION_FIELDS[kind])
+    if kind in {"feat", "feature"}:
+        dynamic_fields = _dynamic_selection_fields(kind, card_value)
+        selection_fields = sorted(set(selection_fields) | set(dynamic_fields))
+    return {
+        "artifact_kind": kind,
+        "selection_fields": selection_fields,
+        "card_binding": binding,
+    }
+
+
+def selection_input_errors(
+    artifact: Mapping[str, Any], selection: Mapping[str, Any]
+) -> list[str]:
+    """Reject facade inputs that are not published by the bound contract."""
+
+    artifact_id = str(artifact.get("id") or "artifact")
+    raw = artifact.get("selection_contract")
+    if not isinstance(raw, Mapping):
+        return [f"{artifact_id}.selection_contract is required"]
+    contract_errors = selection_contract_errors(artifact)
+    if contract_errors:
+        return contract_errors
+    contract = dict(raw)
+    if contract.get("status") != "ready":
+        return [f"{artifact_id}.selection_contract is not ready"]
+    schema = dict(contract["schema"])
+    allowed = set(schema["selection_fields"])
+    unknown = sorted(set(selection) - allowed)
+    return (
+        [f"{artifact_id}.selection has unsupported fields: {', '.join(unknown)}"]
+        if unknown
+        else []
+    )
 
 
 def selection_contract_errors(artifact: Mapping[str, Any]) -> list[str]:
@@ -231,6 +369,21 @@ def selection_contract_errors(artifact: Mapping[str, Any]) -> list[str]:
             errors.append(f"{prefix} ready status requires materializer")
         if blockers:
             errors.append(f"{prefix} ready status cannot have blockers")
+        kind = str(artifact.get("kind") or "")
+        expected_materializer = DND_SELECTION_MATERIALIZERS.get(kind)
+        if expected_materializer is None:
+            errors.append(f"{prefix} {kind or 'artifact'} has no safe materializer")
+        elif materializer != expected_materializer:
+            errors.append(
+                f"{prefix}.materializer must be {expected_materializer} for {kind}"
+            )
+        try:
+            expected_schema = selection_schema_for_artifact(artifact)
+        except ValueError as error:
+            errors.append(f"{prefix}.schema: {error}")
+        else:
+            if schema != expected_schema:
+                errors.append(f"{prefix}.schema does not match the reviewed card")
     elif status == "not_applicable":
         if materializer is not None or schema or blockers:
             errors.append(
@@ -239,6 +392,90 @@ def selection_contract_errors(artifact: Mapping[str, Any]) -> list[str]:
     elif status == "blocked" and not blockers:
         errors.append(f"{prefix} blocked status requires blockers")
     return errors
+
+
+def _dynamic_selection_fields(kind: str, card: Mapping[str, Any]) -> list[str]:
+    values: list[str] = []
+    requirement_values: list[Any] = []
+    if kind == "feat":
+        requirement_values.append(card.get("selection_requirements"))
+    elif kind == "feature":
+        requirement_values.append(card.get("selection_requirements"))
+        by_level = card.get("selection_requirements_by_level")
+        if isinstance(by_level, Mapping):
+            requirement_values.extend(by_level.values())
+    for requirement in requirement_values:
+        if not isinstance(requirement, Mapping):
+            continue
+        field = str(requirement.get("field") or "").strip()
+        if field:
+            values.append(field)
+    return values
+
+
+def _validate_materializer_card(kind: str, binding: Mapping[str, Any]) -> None:
+    name = str(binding.get("name") or "").strip()
+    if not name:
+        raise ValueError(f"{kind} card needs name")
+    if kind == "spell":
+        classes = binding.get("classes")
+        level = binding.get("level")
+        if not isinstance(classes, list) or not classes or any(
+            not isinstance(value, str) or not value.strip() for value in classes
+        ):
+            raise ValueError("spell card needs a non-empty classes list")
+        if isinstance(level, bool) or not isinstance(level, int) or not 0 <= level <= 9:
+            raise ValueError("spell card level must be an integer from 0 to 9")
+        if not isinstance(binding.get("definition"), Mapping):
+            raise ValueError("spell card needs a structured definition")
+        try:
+            normalize_spell_definition(binding["definition"], "spell.definition")
+        except ValueError as error:
+            raise ValueError(f"spell definition is invalid: {error}") from error
+    elif kind == "subclass":
+        if not str(binding.get("class_name") or "").strip():
+            raise ValueError("subclass card needs class_name")
+        minimum = binding.get("minimum_level")
+        if isinstance(minimum, bool) or not isinstance(minimum, int) or minimum < 1:
+            raise ValueError("subclass card needs minimum_level >= 1")
+        if not isinstance(binding.get("always_prepared_spells"), (list, type(None))):
+            raise ValueError("subclass always_prepared_spells must be an array")
+    elif kind == "background":
+        if not isinstance(binding.get("background_grants"), Mapping):
+            raise ValueError("background card needs background_grants")
+    elif kind == "species":
+        if not isinstance(binding.get("grants"), Mapping):
+            raise ValueError("species card needs grants")
+    elif kind == "feat":
+        if not isinstance(binding.get("prerequisites"), (list, type(None))):
+            raise ValueError("feat prerequisites must be an array")
+        if not isinstance(binding.get("repeatable"), (bool, type(None))):
+            raise ValueError("feat repeatable must be a boolean")
+        if not isinstance(binding.get("selection_requirements"), (Mapping, type(None))):
+            raise ValueError("feat selection_requirements must be an object")
+    elif kind == "feature":
+        minimum = binding.get("minimum_level")
+        if minimum is not None and (
+            isinstance(minimum, bool) or not isinstance(minimum, int) or minimum < 1
+        ):
+            raise ValueError("feature minimum_level must be an integer >= 1")
+        for field in (
+            "selection_requirements",
+            "selection_requirements_by_level",
+            "mechanical_grants",
+        ):
+            if not isinstance(binding.get(field), (Mapping, type(None))):
+                raise ValueError(f"feature {field} must be an object")
+    elif kind == "item":
+        if not isinstance(binding.get("inventory_template"), Mapping):
+            raise ValueError("item card needs inventory_template")
+        try:
+            add_inventory_item(
+                default_character_sheet(),
+                dict(binding["inventory_template"]),
+            )
+        except ValueError as error:
+            raise ValueError(f"item inventory_template is invalid: {error}") from error
 
 
 def _exact_field_errors(
@@ -259,6 +496,7 @@ __all__ = [
     "CATALOG_REVIEW_METHODS",
     "CATALOG_REVIEW_ROLES",
     "CATALOG_REVIEW_SCHEMA_VERSION",
+    "DND_SELECTION_MATERIALIZERS",
     "SELECTION_CONTRACT_SCHEMA_VERSION",
     "SELECTION_STATUSES",
     "build_catalog_review",
@@ -266,4 +504,6 @@ __all__ = [
     "catalog_review_errors",
     "content_fingerprint",
     "selection_contract_errors",
+    "selection_input_errors",
+    "selection_schema_for_artifact",
 ]

@@ -12,6 +12,7 @@ from sagasmith_core.text import ascii_slug
 
 from sagasmith_dnd.abilities import ABILITY_LABELS
 from sagasmith_dnd.character_schema import normalize_spell_definition
+from sagasmith_dnd.content_readiness import selection_contract_errors
 from sagasmith_dnd.resolution_plan import (
     ResolutionPlanCompilationError,
     compile_resolution_plan,
@@ -2247,6 +2248,11 @@ def validate_selection_ready_artifacts(artifacts: list[dict[str, Any]]) -> list[
         kind = str(artifact.get("kind") or "")
         card = dict(artifact.get("card") or {})
         prefix = f"artifacts[{index}]"
+        if artifact.get("selection_contract") is not None:
+            errors.extend(
+                f"{prefix}: {error}"
+                for error in selection_contract_errors(artifact)
+            )
         raw_plan = artifact.get("resolution_plan", card.get("resolution_plan"))
         raw_plans = artifact.get("resolution_plans", card.get("resolution_plans"))
         if raw_plan is not None and raw_plans is not None:
