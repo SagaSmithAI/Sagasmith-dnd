@@ -1591,6 +1591,25 @@ def test_background_spell_list_expansion_is_exact_and_requires_a_caster() -> Non
             artifact_id="spell-aid",
         )
 
+    wizard["progression"]["background_grants"]["spell_list_expansion"] = []
+    wizard["progression"]["species_grants"]["spell_list_expansion"] = [
+        {
+            "artifact_id": "spell-aid",
+            "name": "Aid",
+            "pack_id": "dnd5e.content.srd2014",
+            "pack_version": "1.0.0",
+        }
+    ]
+    assert (
+        validate_spell_grant(
+            wizard,
+            spell,
+            source_class="Wizard",
+            artifact_id="spell-aid",
+        )
+        == "wizard"
+    )
+
 
 def test_wizard_preparation_uses_authoritative_spellbook_membership() -> None:
     sheet = default_character_sheet()

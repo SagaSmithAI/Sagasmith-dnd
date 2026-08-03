@@ -1669,19 +1669,22 @@ def validate_spell_grant(
     allowed = {_class_key(item) for item in spell.get("classes", []) if str(item).strip()}
     if not allowed:
         raise CombatEngineError("spell artifact has no structured class-list eligibility")
-    background_expansion = {
+    progression = sheet.get("progression", {})
+    spell_list_expansion = [
+        *progression.get("background_grants", {}).get("spell_list_expansion", []),
+        *progression.get("species_grants", {}).get("spell_list_expansion", []),
+    ]
+    expanded_artifact_ids = {
         str(item.get("artifact_id") or "")
-        for item in sheet.get("progression", {})
-        .get("background_grants", {})
-        .get("spell_list_expansion", [])
+        for item in spell_list_expansion
         if isinstance(item, dict)
     }
-    expanded = bool(artifact_id and artifact_id in background_expansion)
+    expanded = bool(artifact_id and artifact_id in expanded_artifact_ids)
     if source not in allowed and not expanded:
         raise CombatEngineError(f"{spell.get('name') or spell.get('id')} is not a {source} spell")
     if expanded and not _class_has_spell_list(sheet, source, classes[source]):
         raise CombatEngineError(
-            f"background spell-list expansion requires {source} spellcasting access"
+            f"spell-list expansion requires {source} spellcasting access"
         )
     maximum = _maximum_spell_level(_edition(sheet), source, classes[source])
     level = int(spell.get("level", 0) or 0)

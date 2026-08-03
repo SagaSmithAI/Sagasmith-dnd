@@ -1342,6 +1342,17 @@ def test_complete_card_supports_identity_weapons_spells_encumbrance_and_adventur
                     ],
                     "tools": ["Dice set"],
                 },
+                "species": "Marked Human",
+                "species_grants": {
+                    "spell_list_expansion": [
+                        {
+                            "artifact_id": "dnd5e.content.example.spell.misty-step",
+                            "name": "Misty Step",
+                            "pack_id": "dnd5e.content.example",
+                            "pack_version": "1.0.0",
+                        }
+                    ]
+                },
             },
             "abilities": {"strength": {"score": 16}, "dexterity": {"score": 14}},
             "combat": {
@@ -1464,6 +1475,14 @@ def test_complete_card_supports_identity_weapons_spells_encumbrance_and_adventur
         {
             "artifact_id": "dnd5e.content.example.spell.command",
             "name": "Command",
+            "pack_id": "dnd5e.content.example",
+            "pack_version": "1.0.0",
+        }
+    ]
+    assert sheet["progression"]["species_grants"]["spell_list_expansion"] == [
+        {
+            "artifact_id": "dnd5e.content.example.spell.misty-step",
+            "name": "Misty Step",
             "pack_id": "dnd5e.content.example",
             "pack_version": "1.0.0",
         }

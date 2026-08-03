@@ -616,6 +616,7 @@ def species_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
     fixed_tools = string_list(
         grants.get("tool_proficiencies", []), "tool_proficiencies"
     )
+    string_list(grants.get("spell_list_expansion", []), "spell_list_expansion")
     ability_names = {
         "strength",
         "dexterity",

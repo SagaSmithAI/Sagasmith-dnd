@@ -292,6 +292,11 @@ def test_species_materializer_rejects_ocr_counts_and_unbounded_choices() -> None
     )
     assert species_materializer_errors(card) == []
 
+    card["grants"]["spell_list_expansion"] = ["Aid", "aid"]
+    assert species_materializer_errors(card) == [
+        "species spell_list_expansion must be distinct"
+    ]
+
 
 def test_species_materializer_bounds_ability_choices_to_reviewed_options() -> None:
     card = {
