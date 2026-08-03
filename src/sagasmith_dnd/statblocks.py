@@ -5420,7 +5420,7 @@ def _repair_layout_ocr_text(text: str) -> str:
     """Repair only mechanically bounded OCR substitutions before statblock parsing."""
 
     normalized = re.sub(
-        r"(?i)(?<![A-Za-z0-9])(?P<count>[0-9lI]+)\s*d\s*"
+        r"(?i)(?<![A-Za-z0-9])(?P<count>(?:[0-9]+|[lI]\s*[0-9]+))\s*d\s*"
         r"(?P<size>[0-9lIOS](?:\s*[0-9lIOS]){0,2})(?![A-Za-z0-9])",
         lambda match: (
             re.sub(r"\s+", "", match.group("count")).translate(
@@ -6142,12 +6142,39 @@ def recover_2014_statblock_from_ocr(
             ):
                 continue
             fuzzy_headings.append(candidate)
-    if len(headings) == 1:
-        heading = headings[0]
-    elif len(structural_headings) == 1:
+    heading_match_mode = ""
+    if len(structural_headings) == 1:
         heading = structural_headings[0]
+        heading_match_mode = "exact"
     elif len(fuzzy_headings) == 1:
         heading = fuzzy_headings[0]
+        heading_match_mode = "bounded_structural_fuzzy"
+    elif len(headings) == 1:
+        identity_candidates = [
+            block for block in blocks if _OCR_IDENTITY_RE.fullmatch(block["text"])
+        ]
+        if len(identity_candidates) != 1:
+            raise StatblockImportError(
+                f"OCR recovery requires one structurally unambiguous heading matching {name!r}"
+            )
+        source_heading = headings[0]
+        unique_identity = identity_candidates[0]
+        heading_height = max(1.0, float(source_heading["y1"] - source_heading["y0"]))
+        heading = {
+            **source_heading,
+            "index": max(block["index"] for block in blocks) + 1,
+            "text": name,
+            "x0": unique_identity["x0"],
+            "x1": max(unique_identity["x1"], unique_identity["x0"] + 1.0),
+            "y0": unique_identity["y0"] - heading_height - 2.0,
+            "y1": unique_identity["y0"] - 2.0,
+            "cx": unique_identity["cx"],
+            "confidence": min(
+                source_heading["confidence"], unique_identity["confidence"]
+            ),
+        }
+        blocks.append(heading)
+        heading_match_mode = "source_name_unique_identity"
     else:
         raise StatblockImportError(
             f"OCR recovery requires one structurally unambiguous heading matching {name!r}"
@@ -6526,9 +6553,7 @@ def recover_2014_statblock_from_ocr(
             "recovery_version": OCR_STATBLOCK_RECOVERY_VERSION,
             "page_number": layout.get("page_number"),
             "heading": heading["text"],
-            "heading_match_mode": (
-                "exact" if heading in headings else "bounded_structural_fuzzy"
-            ),
+            "heading_match_mode": heading_match_mode,
             "heading_confidence": heading["confidence"],
             "identity_spacing_repair": (
                 {

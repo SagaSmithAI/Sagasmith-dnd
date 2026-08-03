@@ -5095,9 +5095,13 @@ def test_layout_ocr_repairs_only_bounded_weapon_entry_underscore() -> None:
     assert _repair_layout_ocr_text("Hit: 19 (3d 1 2) radiant damage") == (
         "Hit: 19 (3d12) radiant damage"
     )
+    assert _repair_layout_ocr_text("Hit Points 142 (l 5d10 + 60)") == (
+        "Hit Points 142 (15d10 + 60)"
+    )
     assert _repair_layout_ocr_text("Melee Weapon Attack: + 5 to hit") == (
         "Melee Weapon Attack: +5 to hit"
     )
+    assert _repair_layout_ocr_text("RADIANT I D O L") == "RADIANT I D O L"
 
 
 @pytest.mark.parametrize(
@@ -5610,3 +5614,55 @@ def test_layout_recovery_ignores_lore_heading_above_cross_column_continuation() 
         "source_text": "Mediumaberration, chaotic evil",
         "normalized_text": "Medium aberration, chaotic evil",
     }
+
+
+def test_layout_recovery_binds_source_name_to_one_unique_unheaded_card() -> None:
+    def block(text: str, x0: int, y0: int, x1: int, y1: int) -> dict[str, object]:
+        return {
+            "text": text,
+            "confidence": 0.99,
+            "bbox": [x0, y0, x1, y1],
+        }
+
+    layout = {
+        "page_number": 309,
+        "width": 1200,
+        "height": 1600,
+        "blocks": [
+            block("RADIANT I D O L", 60, 800, 320, 840),
+            block("A radiant idol was an angel banished from Syrania.", 60, 850, 500, 875),
+            block("Large celestial, lawful evil", 650, 300, 1050, 325),
+            block("Armor Class 18 (natural armor)", 650, 350, 1050, 375),
+            block("Hit Points 142 (15d10 + 60)", 650, 380, 1050, 405),
+            block("Speed 40 ft.", 650, 410, 900, 435),
+            block("STR DEX CON INT WIS CHA", 660, 470, 1080, 495),
+            block(
+                "23 (+6) 18 (+4) 19 (+4) 17 (+3) 20 (+5) 21 (+5)",
+                660,
+                500,
+                1100,
+                525,
+            ),
+            block("Senses darkvision 120 ft., passive Perception 19", 650, 560, 1120, 585),
+            block("Languages all, telepathy 120 ft.", 650, 590, 1030, 615),
+            block("Challenge 11 (7,200 XP)", 650, 620, 980, 645),
+            block("ACTIONS", 650, 680, 850, 705),
+            block("Multiattack. The radiant idol makes two melee attacks.", 650, 720, 1130, 745),
+            block(
+                "Flail. Melee Weapon Attack: +10 to hit, reach 5 ft., one target. "
+                "Hit: 10 (1d8 + 6) bludgeoning damage.",
+                650,
+                760,
+                1160,
+                800,
+            ),
+        ],
+    }
+
+    recovered = recover_2014_statblock_from_ocr(layout, name="Radiant Idol")
+
+    assert recovered["critical_facts"]["identity"] == "Large celestial, lawful evil"
+    assert recovered["evidence"]["heading_match_mode"] == (
+        "source_name_unique_identity"
+    )
+    assert "***Flail.***" in recovered["normalized_content"]
