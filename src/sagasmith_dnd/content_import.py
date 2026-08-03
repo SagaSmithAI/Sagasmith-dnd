@@ -2945,10 +2945,13 @@ def _species_grants(description: str) -> dict[str, Any] | None:
         "tool_choice_count": 0,
         "tool_options": [],
         "proficiency_choice_groups": [],
+        "narrative_choice_groups": [],
         "tool_expertise_choice_count": 0,
         "tool_expertise_options": [],
         "allow_any_proficient_tool_expertise": False,
         "weapon_proficiencies": [],
+        "cantrip_choice": None,
+        "spell_grants": [],
         "resistances": list(dict.fromkeys(resistances)),
         "features": _species_feature_cards(description),
     }

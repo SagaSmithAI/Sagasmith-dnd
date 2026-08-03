@@ -339,6 +339,42 @@ def test_species_materializer_accepts_cross_kind_proficiency_and_tool_expertise(
     assert species_materializer_errors(card) == []
 
 
+def test_species_materializer_accepts_narrative_choices_and_fixed_spells() -> None:
+    card = {
+        "name": "Kalashtar",
+        "grants": {
+            "narrative_choice_groups": [
+                {
+                    "id": "psychic_glamour",
+                    "count": 1,
+                    "options": [
+                        "Insight",
+                        "Intimidation",
+                        "Performance",
+                        "Persuasion",
+                    ],
+                }
+            ],
+            "spell_grants": [
+                {
+                    "name": "Detect Magic",
+                    "level": 1,
+                    "eligible_classes": ["Wizard"],
+                    "method": "limited_use",
+                    "spellcasting_ability": "intelligence",
+                    "free_casts": 0,
+                    "recovers_on": None,
+                    "allow_slot_cast": False,
+                    "minimum_level": 1,
+                    "ritual_only": True,
+                }
+            ],
+        },
+    }
+
+    assert species_materializer_errors(card) == []
+
+
 def test_feat_materializer_accepts_fixed_and_selected_spell_grants() -> None:
     card = {
         "name": "Aberrant Dragonmark",
@@ -366,6 +402,8 @@ def test_feat_materializer_accepts_fixed_and_selected_spell_grants() -> None:
                     "free_casts": 0,
                     "recovers_on": None,
                     "allow_slot_cast": False,
+                    "minimum_level": 1,
+                    "ritual_only": False,
                 },
                 {
                     "id": "level_1_spell",
@@ -377,6 +415,8 @@ def test_feat_materializer_accepts_fixed_and_selected_spell_grants() -> None:
                     "free_casts": 1,
                     "recovers_on": "long_rest",
                     "allow_slot_cast": False,
+                    "minimum_level": 1,
+                    "ritual_only": False,
                 },
             ],
         },
@@ -423,6 +463,8 @@ def test_feat_materializer_accepts_reviewed_fixed_spell_grants() -> None:
                     "free_casts": 1,
                     "recovers_on": "long_rest",
                     "allow_slot_cast": False,
+                    "minimum_level": 8,
+                    "ritual_only": False,
                 }
             ],
         },
@@ -533,6 +575,7 @@ def test_subclass_spell_grants_keep_known_and_prepared_semantics_distinct() -> N
             "abilities",
             "ability_scores_include_species_grants",
                 "cantrip_artifact_id",
+                "feature_choices",
                 "hit_points_include_species_grants",
                 "languages",
                 "proficiency_choices",

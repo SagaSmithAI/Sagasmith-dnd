@@ -70,6 +70,7 @@ _SELECTION_FIELDS = {
         "abilities",
         "ability_scores_include_species_grants",
         "cantrip_artifact_id",
+        "feature_choices",
         "hit_points_include_species_grants",
         "languages",
         "proficiency_choices",
@@ -737,6 +738,39 @@ def species_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
             errors.append(f"{prefix}.options cannot satisfy count")
     if len(group_ids) != len(set(group_ids)):
         errors.append("species proficiency_choice_groups ids must be distinct")
+    raw_narrative_groups = grants.get("narrative_choice_groups", [])
+    if not isinstance(raw_narrative_groups, list):
+        errors.append("species narrative_choice_groups must be an array")
+        raw_narrative_groups = []
+    narrative_group_ids: list[str] = []
+    for index, raw_group in enumerate(raw_narrative_groups):
+        prefix = f"species narrative_choice_groups[{index}]"
+        if not isinstance(raw_group, Mapping):
+            errors.append(f"{prefix} must be an object")
+            continue
+        unsupported = set(raw_group) - {"id", "count", "options"}
+        if unsupported:
+            errors.append(f"{prefix} has unsupported fields: {sorted(unsupported)}")
+        group_id = str(raw_group.get("id") or "").strip()
+        if not group_id:
+            errors.append(f"{prefix}.id must not be empty")
+        narrative_group_ids.append(group_id.casefold())
+        group_count = raw_group.get("count")
+        if (
+            isinstance(group_count, bool)
+            or not isinstance(group_count, int)
+            or not 1 <= group_count <= 5
+        ):
+            errors.append(f"{prefix}.count must be an integer from 1 to 5")
+            group_count = 0
+        options = string_list(
+            raw_group.get("options", []),
+            f"narrative_choice_groups[{index}].options",
+        )
+        if len(options) < group_count:
+            errors.append(f"{prefix}.options cannot satisfy count")
+    if len(narrative_group_ids) != len(set(narrative_group_ids)):
+        errors.append("species narrative_choice_groups ids must be distinct")
     language_options = string_list(
         grants.get("language_options", []), "language_options"
     )
@@ -814,6 +848,82 @@ def species_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
             item.casefold() for item in options
         ):
             errors.append(f"species {label}_options cannot repeat fixed {label}s")
+    raw_cantrip_choice = grants.get("cantrip_choice")
+    if raw_cantrip_choice is not None:
+        if not isinstance(raw_cantrip_choice, Mapping):
+            errors.append("species cantrip_choice must be an object")
+        else:
+            supported_cantrip_fields = {
+                "class",
+                "level",
+                "spellcasting_ability",
+                "method",
+                "free_casts",
+                "recovers_on",
+                "allow_slot_cast",
+                "minimum_level",
+                "ritual_only",
+            }
+            unsupported = set(raw_cantrip_choice) - supported_cantrip_fields
+            if unsupported:
+                errors.append(
+                    f"species cantrip_choice has unsupported fields: {sorted(unsupported)}"
+                )
+            if not str(raw_cantrip_choice.get("class") or "").strip():
+                errors.append("species cantrip_choice.class must not be empty")
+            if raw_cantrip_choice.get("level") != 0:
+                errors.append("species cantrip_choice.level must be 0")
+            if "spellcasting_ability" in raw_cantrip_choice and str(
+                raw_cantrip_choice.get("spellcasting_ability") or ""
+            ).casefold() not in ability_names:
+                errors.append("species cantrip_choice.spellcasting_ability is invalid")
+            if "method" in raw_cantrip_choice and raw_cantrip_choice.get(
+                "method"
+            ) != "known":
+                errors.append("species cantrip_choice.method must be known")
+            if "free_casts" in raw_cantrip_choice and raw_cantrip_choice.get(
+                "free_casts"
+            ) != 0:
+                errors.append("species cantrip_choice.free_casts must be 0")
+            if "recovers_on" in raw_cantrip_choice and raw_cantrip_choice.get(
+                "recovers_on"
+            ) is not None:
+                errors.append("species cantrip_choice.recovers_on must be null")
+            for flag in ("allow_slot_cast", "ritual_only"):
+                if flag in raw_cantrip_choice and not isinstance(
+                    raw_cantrip_choice.get(flag), bool
+                ):
+                    errors.append(f"species cantrip_choice.{flag} must be a boolean")
+            minimum_level = raw_cantrip_choice.get("minimum_level", 1)
+            if (
+                isinstance(minimum_level, bool)
+                or not isinstance(minimum_level, int)
+                or not 1 <= minimum_level <= 20
+            ):
+                errors.append(
+                    "species cantrip_choice.minimum_level must be an integer from 1 to 20"
+                )
+    raw_species_spell_grants = grants.get("spell_grants", [])
+    if not isinstance(raw_species_spell_grants, list):
+        errors.append("species spell_grants must be an array")
+    elif raw_species_spell_grants:
+        shared_errors = feat_materializer_errors(
+            {
+                "prerequisites": [],
+                "selection_requirements": None,
+                "mechanical_grants": {
+                    "ability_score_increases": {},
+                    "maximum_ability_score": 20,
+                    "languages": [],
+                    "tool_proficiencies": [],
+                    "weapon_proficiencies": [],
+                    "spell_grants": raw_species_spell_grants,
+                },
+            }
+        )
+        errors.extend(
+            error.replace("feat ", "species ", 1) for error in shared_errors
+        )
     return errors
 
 
@@ -858,6 +968,8 @@ def feat_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
             "free_casts",
             "recovers_on",
             "allow_slot_cast",
+            "minimum_level",
+            "ritual_only",
         }
         if choice_group:
             required.update({"id", "count"})
@@ -908,6 +1020,17 @@ def feat_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
             errors.append(f"{prefix}.recovers_on must be null without free casts")
         if not isinstance(raw_grant.get("allow_slot_cast"), bool):
             errors.append(f"{prefix}.allow_slot_cast must be a boolean")
+        minimum_level = raw_grant.get("minimum_level")
+        if (
+            isinstance(minimum_level, bool)
+            or not isinstance(minimum_level, int)
+            or not 1 <= minimum_level <= 20
+        ):
+            errors.append(f"{prefix}.minimum_level must be an integer from 1 to 20")
+        if not isinstance(raw_grant.get("ritual_only"), bool):
+            errors.append(f"{prefix}.ritual_only must be a boolean")
+        if raw_grant.get("ritual_only") is True and free_casts:
+            errors.append(f"{prefix} cannot combine ritual_only with free casts")
 
     prerequisites = binding.get("prerequisites")
     if prerequisites is not None and not isinstance(prerequisites, list):

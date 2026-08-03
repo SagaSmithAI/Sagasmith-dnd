@@ -1384,6 +1384,7 @@ def test_signature_spell_free_use_is_explicit_and_limited_to_third_level() -> No
 
 def test_reviewed_feature_spell_uses_its_own_ability_and_resource() -> None:
     sheet = default_character_sheet()
+    sheet["progression"]["level"] = 1
     spell = _spell("burning-hands", level=1)
     spell["access"].update(
         {
@@ -1396,6 +1397,8 @@ def test_reviewed_feature_spell_uses_its_own_ability_and_resource() -> None:
                     "spellcasting_ability": "constitution",
                     "resource_key": "feat_spell:aberrant:burning-hands",
                     "allow_slot_cast": False,
+                    "minimum_level": 1,
+                    "ritual_only": False,
                 }
             ],
         }

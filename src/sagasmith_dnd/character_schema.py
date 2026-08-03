@@ -1887,6 +1887,8 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
                 "spellcasting_ability",
                 "resource_key",
                 "allow_slot_cast",
+                "minimum_level",
+                "ritual_only",
             },
         )
         method = _text(source.get("method"), f"{source_field}.method", maximum=100)
@@ -1920,6 +1922,16 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
                 "allow_slot_cast": _boolean(
                     source.get("allow_slot_cast"),
                     f"{source_field}.allow_slot_cast",
+                ),
+                "minimum_level": _integer(
+                    source.get("minimum_level"),
+                    f"{source_field}.minimum_level",
+                    minimum=1,
+                    maximum=20,
+                ),
+                "ritual_only": _boolean(
+                    source.get("ritual_only"),
+                    f"{source_field}.ritual_only",
                 ),
             }
         )

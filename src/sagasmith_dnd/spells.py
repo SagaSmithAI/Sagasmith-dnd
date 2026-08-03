@@ -1100,6 +1100,10 @@ def consume_spell_cast(
         feature_sources[0].get("allow_slot_cast")
     ):
         selected_feature_source = feature_sources[0]
+    if selected_feature_source is not None and int(
+        value.get("progression", {}).get("level", 0) or 0
+    ) < int(selected_feature_source.get("minimum_level", 1) or 1):
+        raise CombatEngineError("feature spell minimum character level is not met")
     mode = str(value.get("spellcasting", {}).get("preparation", {}).get("mode") or "known")
     spell_mastery = _is_spell_mastery_choice(value, spell_id)
     signature_spell = _is_signature_spell_choice(value, spell_id)
@@ -1155,7 +1159,14 @@ def consume_spell_cast(
         )
     spellcasting = value.setdefault("spellcasting", {})
     if ritual:
-        if not access.get("ritual_available") or not spellcasting.get("ritual_casting"):
+        feature_ritual = bool(
+            selected_feature_source is not None
+            and selected_feature_source.get("ritual_only")
+        )
+        if not feature_ritual and (
+            not access.get("ritual_available")
+            or not spellcasting.get("ritual_casting")
+        ):
             raise CombatEngineError("spell cannot be cast as a ritual")
         if level != base_level:
             raise CombatEngineError("ritual casting does not allow an upcast spell level")
@@ -1184,8 +1195,11 @@ def consume_spell_cast(
     paid: dict[str, Any] = {"economy": "none", "level": level, "ritual": ritual}
     free_at_will = bool(at_will_available and level == base_level)
     if selected_feature_source is not None:
-        if ritual:
-            raise CombatEngineError("a feature spell use cannot be cast as a ritual")
+        ritual_only = bool(selected_feature_source.get("ritual_only"))
+        if ritual != ritual_only:
+            raise CombatEngineError(
+                "feature spell ritual declaration does not match its reviewed source"
+            )
         if level != base_level:
             raise CombatEngineError(
                 "a feature spell use must be cast at its recorded spell level"
@@ -1196,7 +1210,7 @@ def consume_spell_cast(
             if not isinstance(resource, dict) or int(resource.get("value", 0) or 0) <= 0:
                 raise CombatEngineError("feature spell use is unavailable")
             mutate_bounded_resource(resource, amount=1, direction="spend")
-        elif base_level > 0:
+        elif base_level > 0 and not ritual_only:
             raise CombatEngineError("a leveled feature spell needs its reviewed use resource")
         paid = {
             "economy": "feature_spell",
@@ -1206,7 +1220,7 @@ def consume_spell_cast(
                 selected_feature_source.get("spellcasting_ability") or ""
             ),
             "level": level,
-            "ritual": False,
+            "ritual": ritual_only,
         }
     elif signature_free_cast:
         resource_key = f"signature_spell:{spell_id}"
