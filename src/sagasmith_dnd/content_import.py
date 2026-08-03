@@ -10,7 +10,7 @@ from typing import Any
 
 from sagasmith_core.text import ascii_slug
 
-from sagasmith_dnd.abilities import ABILITY_LABELS
+from sagasmith_dnd.abilities import ABILITY_LABELS, ABILITY_NAMES, SKILL_ABILITIES
 from sagasmith_dnd.character_schema import normalize_spell_definition
 from sagasmith_dnd.content_readiness import (
     build_catalog_review,
@@ -60,6 +60,13 @@ _CLASS_NAMES = {
     "sorcerer",
     "warlock",
     "wizard",
+}
+_SUBCLASS_MINIMUM_LEVELS_2014 = {
+    "cleric": 1,
+    "sorcerer": 1,
+    "warlock": 1,
+    "druid": 2,
+    "wizard": 2,
 }
 _GENERIC_TITLES = {
     "background",
@@ -2078,6 +2085,304 @@ def compiled_artifacts_from_candidates(
             )
         artifacts.append(artifact)
     return artifacts
+
+
+def author_selection_card_from_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+    """Prepare a conservative typed card for the primary build-time reviewer.
+
+    This is an authoring aid, not an approval.  The returned artifact is still
+    bound to the primary review and an independent critic/DM review before it
+    can enter a portable catalog.  It promotes only fields that the existing
+    character materializers can validate; source-specific effects remain on
+    the source-bound Agent ruling clause added later in the review pipeline.
+    """
+
+    value = deepcopy(dict(candidate.get("artifact") or {}))
+    kind = str(value.get("kind") or candidate.get("kind") or "").strip()
+    card = deepcopy(dict(value.get("card") or {}))
+    name = " ".join(str(card.get("name") or candidate.get("name") or "").split())
+    description = " ".join(str(card.get("description") or "").split())
+    if not kind or not name:
+        return value
+    card["name"] = name
+    value["kind"] = kind
+    value["card"] = card
+    if value.get("application_state") == "selection_ready":
+        return value
+
+    if kind == "spell":
+        classes = [
+            str(item).strip().title()
+            for item in card.get("classes") or []
+            if str(item).strip()
+        ]
+        definition = card.get("definition")
+        level = card.get("level")
+        if (
+            classes
+            and isinstance(level, int)
+            and not isinstance(level, bool)
+            and 0 <= level <= 9
+            and isinstance(definition, dict)
+        ):
+            normalize_spell_definition(definition, "candidate spell.definition")
+            card["classes"] = list(dict.fromkeys(classes))
+            value["application_state"] = "selection_ready"
+        return value
+
+    if kind in {"activity", "feat", "feature"}:
+        if kind == "feat":
+            card.setdefault("prerequisites", [])
+            card.setdefault("repeatable", False)
+            card.setdefault("selection_requirements", None)
+        elif kind == "feature":
+            class_name = _candidate_class_name(candidate, description)
+            minimum_level = _candidate_minimum_level(description)
+            if class_name:
+                card.setdefault("class_name", class_name)
+            if minimum_level is not None:
+                card.setdefault("minimum_level", minimum_level)
+        value["application_state"] = "selection_ready"
+        return value
+
+    if kind == "item":
+        item_kind = "magic_item" if _ITEM_HEADER_RE.search(description[:500]) else "equipment"
+        card["inventory_template"] = {
+            "name": name,
+            "kind": item_kind,
+            "quantity": 1,
+            "description": description[:1200],
+            "attunement": (
+                "required" if "requires attunement" in description.casefold() else "none"
+            ),
+            "mechanics": {},
+        }
+        value["application_state"] = "selection_ready"
+        return value
+
+    if kind == "background":
+        card.update(_background_selection_card(description))
+        value["application_state"] = "selection_ready"
+        return value
+
+    if kind == "species":
+        grants = _species_grants(description)
+        if grants is not None:
+            card["grants"] = grants
+            value["application_state"] = "selection_ready"
+        return value
+
+    if kind == "subclass":
+        class_name = _candidate_class_name(candidate, description)
+        if class_name:
+            card["class_name"] = class_name
+            card["minimum_level"] = _candidate_minimum_level(description) or (
+                _SUBCLASS_MINIMUM_LEVELS_2014.get(class_name.casefold(), 3)
+            )
+            card.setdefault("always_prepared_spells", [])
+            value["application_state"] = "selection_ready"
+        return value
+    return value
+
+
+def _candidate_class_name(candidate: dict[str, Any], description: str) -> str:
+    values = [
+        *[str(item) for item in candidate.get("source_heading_path") or []],
+        str(candidate.get("name") or ""),
+        description[:1000],
+    ]
+    combined = " ".join(values).casefold()
+    for class_name in sorted(_CLASS_NAMES, key=len, reverse=True):
+        if re.search(rf"\b{re.escape(class_name)}(?:\s+level|\s+class|\b)", combined):
+            return class_name.title()
+    if "revised ranger" in combined:
+        return "Revised Ranger"
+    return ""
+
+
+def _candidate_minimum_level(description: str) -> int | None:
+    matches = [
+        int(match.group(1))
+        for match in re.finditer(
+            r"(?i)\b(?:at\s+)?(\d{1,2})(?:st|nd|rd|th)[ -]level\b",
+            description,
+        )
+        if 1 <= int(match.group(1)) <= 20
+    ]
+    return min(matches) if matches else None
+
+
+def _background_selection_card(description: str) -> dict[str, Any]:
+    skills: list[str] = []
+    skill_match = re.search(
+        r"(?i)\bSkill Proficiencies\s*:\s*(.+?)"
+        r"(?=\s+(?:Tool Proficienc|Languages|Equipment|Feature)\w*\s*:|$)",
+        description,
+    )
+    if skill_match:
+        folded = skill_match.group(1).casefold().replace("sleight of hand", "sleight_of_hand")
+        folded = folded.replace("animal handling", "animal_handling")
+        skills = [skill for skill in SKILL_ABILITIES if re.search(rf"\b{skill}\b", folded)]
+    language_count = 0
+    language_match = re.search(
+        r"(?i)\bLanguages?\s*:\s*(.+?)(?=\s+(?:Tool Proficienc|Equipment|Feature)\w*\s*:|$)",
+        description,
+    )
+    if language_match and "choice" in language_match.group(1).casefold():
+        language_count = _word_number(language_match.group(1))
+    tool_count = 0
+    tool_match = re.search(
+        r"(?i)\bTool Proficienc(?:y|ies)\s*:\s*(.+?)"
+        r"(?=\s+(?:Languages|Equipment|Feature)\w*\s*:|$)",
+        description,
+    )
+    if tool_match and "choice" in tool_match.group(1).casefold():
+        tool_count = _word_number(tool_match.group(1))
+    return {
+        "skill_proficiencies": list(dict.fromkeys(skills)),
+        "background_grants": {
+            "skills": list(dict.fromkeys(skills)),
+            "tools": [],
+            "languages": [],
+            "choices": {
+                "language_count": language_count,
+                "tool_choice_count": tool_count,
+                "tool_options": [],
+            },
+        },
+    }
+
+
+def _species_grants(description: str) -> dict[str, Any] | None:
+    folded = description.casefold()
+    if not any(label in folded for label in ("ability score increase", "size.", "speed.")):
+        return None
+    increases: dict[str, int] = {}
+    for ability in ABILITY_NAMES:
+        match = re.search(
+            rf"(?i)\b(?:your\s+)?{ability}\s+score\s+increases?\s+by\s+(\d+)",
+            description,
+        )
+        if match:
+            increases[ability] = int(match.group(1))
+    size_match = re.search(r"(?i)\byour size is\s+(Tiny|Small|Medium|Large)\b", description)
+    speed_match = re.search(
+        r"(?i)\b(?:base\s+)?walking speed is\s+(\d+)\s*feet\b",
+        description,
+    )
+    darkvision_match = re.search(r"(?i)\bdarkvision\b.{0,200}?\b(\d+)\s*feet\b", description)
+    language_text = ""
+    language_match = re.search(
+        r"(?i)\bLanguages?\.\s*(.+)$",
+        description,
+    )
+    if language_match:
+        language_text = language_match.group(1)
+    languages = [
+        language
+        for language in (
+            "Abyssal",
+            "Aquan",
+            "Auran",
+            "Celestial",
+            "Common",
+            "Deep Speech",
+            "Draconic",
+            "Dwarvish",
+            "Elvish",
+            "Giant",
+            "Gnomish",
+            "Goblin",
+            "Halfling",
+            "Ignan",
+            "Infernal",
+            "Orc",
+            "Primordial",
+            "Sylvan",
+            "Terran",
+            "Undercommon",
+        )
+        if re.search(rf"(?i)\b{re.escape(language)}\b", language_text)
+    ]
+    language_choice_count = (
+        _word_number(language_text)
+        if "choice" in language_text.casefold()
+        else 0
+    )
+    skill_proficiencies = [
+        skill
+        for skill in SKILL_ABILITIES
+        if re.search(
+            rf"(?i)\bgain proficiency in (?:the )?"
+            rf"{re.escape(skill.replace('_', ' '))}(?: skill)?\b",
+            description,
+        )
+    ]
+    resistances = [
+        damage
+        for damage in (
+            "acid",
+            "cold",
+            "fire",
+            "force",
+            "lightning",
+            "necrotic",
+            "poison",
+            "psychic",
+            "radiant",
+            "thunder",
+        )
+        if re.search(rf"(?i)\bresistance to {damage} damage\b", description)
+    ]
+    return {
+        "ability_score_increases": increases,
+        "size": size_match.group(1).casefold() if size_match else "",
+        "walk_speed": int(speed_match.group(1)) if speed_match else 0,
+        "darkvision_ft": int(darkvision_match.group(1)) if darkvision_match else 0,
+        "languages": list(dict.fromkeys(languages)),
+        "language_choice_count": language_choice_count,
+        "skill_proficiencies": list(dict.fromkeys(skill_proficiencies)),
+        "skill_choice_count": 0,
+        "tool_proficiencies": [],
+        "tool_choices": [],
+        "weapon_proficiencies": [],
+        "resistances": list(dict.fromkeys(resistances)),
+        "features": _species_feature_cards(description),
+    }
+
+
+def _species_feature_cards(description: str) -> list[dict[str, Any]]:
+    starts = [
+        match
+        for match in re.finditer(
+            r"(?<!\w)(?P<name>[A-Z][A-Za-z' -]{1,50})\.\s+",
+            description,
+        )
+        if len(match.group("name").split()) <= 6
+    ]
+    features = []
+    ignored = {"ability score increase", "age", "alignment", "size", "speed", "languages"}
+    for index, match in enumerate(starts):
+        name = " ".join(match.group("name").split())
+        if name.casefold() in ignored:
+            continue
+        end = starts[index + 1].start() if index + 1 < len(starts) else len(description)
+        body = description[match.end() : end].strip()
+        if not body:
+            continue
+        features.append({"name": name, "description": body[:4000]})
+    return features
+
+
+def _word_number(value: str) -> int:
+    folded = value.casefold()
+    digit = re.search(r"\b(\d+)\b", folded)
+    if digit:
+        return int(digit.group(1))
+    for word, number in (("one", 1), ("two", 2), ("three", 3), ("four", 4)):
+        if re.search(rf"\b{word}\b", folded):
+            return number
+    return 0
 
 
 def artifact_with_direct_resolution(

@@ -6,6 +6,7 @@ from sagasmith_dnd.content_import import (
     _trim_trailing_statblock_lore,
     artifact_with_direct_resolution,
     audit_release_resolution_readiness,
+    author_selection_card_from_candidate,
     compiled_artifacts_from_candidates,
     extract_content_candidates,
     extract_content_inventory,
@@ -40,6 +41,97 @@ def test_extracts_review_required_catalog_candidates() -> None:
     assert [item["kind"] for item in candidates] == ["spell", "background"]
     assert all(item["review_status"] == "pending" for item in candidates)
     assert all(item["application_state"] == "catalog_only" for item in candidates)
+
+
+@pytest.mark.parametrize(
+    ("kind", "name", "description", "expected"),
+    [
+        (
+            "species",
+            "Tortle",
+            (
+                "Ability Score Increase. Your Strength score increases by 2, and your "
+                "Wisdom score increases by 1. Size. Your size is Medium. Speed. Your "
+                "base walking speed is 30 feet. Natural Armor. Your shell gives you "
+                "a base AC of 17. Survival Instinct. You gain proficiency in the "
+                "Survival skill. Languages. You can speak, read, and write Aquan and Common."
+            ),
+            "grants",
+        ),
+        (
+            "background",
+            "House Agent",
+            (
+                "Skill Proficiencies: Investigation, Persuasion "
+                "Languages: Two of your choice Equipment: fine clothes."
+            ),
+            "background_grants",
+        ),
+        (
+            "item",
+            "Orb of Shielding",
+            "Wondrous Item, common (requires attunement). The orb shields its bearer.",
+            "inventory_template",
+        ),
+        (
+            "subclass",
+            "School of Geometry",
+            "Wizard Level Features 2nd Spell Map 6th Spell Link.",
+            "class_name",
+        ),
+        (
+            "feat",
+            "Durable Adept",
+            "You have practiced a durable technique.",
+            "prerequisites",
+        ),
+    ],
+)
+def test_primary_review_authors_safe_typed_selection_cards(
+    kind: str,
+    name: str,
+    description: str,
+    expected: str,
+) -> None:
+    artifact = author_selection_card_from_candidate(
+        {
+            "id": f"candidate:{kind}",
+            "kind": kind,
+            "name": name,
+            "source_heading_path": [name],
+            "artifact": {
+                "kind": kind,
+                "application_state": "catalog_only",
+                "card": {"name": name, "description": description},
+            },
+        }
+    )
+
+    assert artifact["application_state"] == "selection_ready"
+    assert expected in artifact["card"]
+    if kind == "species":
+        grants = artifact["card"]["grants"]
+        assert grants["ability_score_increases"] == {"strength": 2, "wisdom": 1}
+        assert grants["walk_speed"] == 30
+        assert grants["languages"] == ["Aquan", "Common"]
+        assert grants["skill_proficiencies"] == ["survival"]
+        assert [item["name"] for item in grants["features"]] == [
+            "Natural Armor",
+            "Survival Instinct",
+        ]
+    elif kind == "background":
+        assert artifact["card"]["skill_proficiencies"] == [
+            "investigation",
+            "persuasion",
+        ]
+        assert artifact["card"]["background_grants"]["choices"][
+            "language_count"
+        ] == 2
+    elif kind == "item":
+        assert artifact["card"]["inventory_template"]["attunement"] == "required"
+    elif kind == "subclass":
+        assert artifact["card"]["class_name"] == "Wizard"
+        assert artifact["card"]["minimum_level"] == 2
 
 
 def test_inventory_splits_flattened_spell_descriptions_and_class_lists() -> None:
