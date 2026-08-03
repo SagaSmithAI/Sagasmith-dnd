@@ -33,7 +33,7 @@ class StatblockImportError(ValueError):
     """Raised when required statblock facts cannot be recovered from the source text."""
 
 
-OCR_STATBLOCK_RECOVERY_VERSION = 11
+OCR_STATBLOCK_RECOVERY_VERSION = 12
 
 
 @dataclass(frozen=True)
@@ -5911,17 +5911,26 @@ def _ocr_field_with_continuation(
 def _ocr_repair_section_heading_fragments(
     scoped: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Rejoin a decorated initial split from an action-economy heading."""
+    """Normalize spaced headings and rejoin a decorated initial ``A``."""
 
     result = [dict(block) for block in scoped]
     suppressed: set[int] = set()
     for block in result:
         compact = re.sub(r"[^A-Z]", "", block["text"].upper())
-        canonical = {
+        complete = {
+            "ACTIONS": "ACTIONS",
+            "BONUSACTIONS": "BONUS ACTIONS",
+            "REACTIONS": "REACTIONS",
+            "LEGENDARYACTIONS": "LEGENDARY ACTIONS",
+        }.get(compact)
+        if complete is not None:
+            block["text"] = complete
+            continue
+        missing_initial = {
             "CTIONS": "ACTIONS",
             "BONUSCTIONS": "BONUS ACTIONS",
         }.get(compact)
-        if canonical is None:
+        if missing_initial is None:
             continue
         initial = next(
             (
@@ -5935,7 +5944,7 @@ def _ocr_repair_section_heading_fragments(
         )
         if initial is None:
             continue
-        block["text"] = canonical
+        block["text"] = missing_initial
         block["confidence"] = min(block["confidence"], initial["confidence"])
         suppressed.add(initial["index"])
     return [block for block in result if block["index"] not in suppressed]
@@ -6133,9 +6142,11 @@ def recover_2014_statblock_from_ocr(
             break
     continuation_blocks: list[dict[str, Any]] = []
     if split is not None and heading["cx"] < split:
-        right_ordered = sorted(
-            (block for block in blocks if block["cx"] >= split),
-            key=lambda block: (block["y0"], block["x0"]),
+        right_ordered = _ocr_repair_section_heading_fragments(
+            sorted(
+                (block for block in blocks if block["cx"] >= split),
+                key=lambda block: (block["y0"], block["x0"]),
+            )
         )
         section_index = next(
             (
@@ -6151,6 +6162,7 @@ def recover_2014_statblock_from_ocr(
             peer_before_section = any(
                 _ocr_probable_peer_heading(right_ordered, index)
                 for index in range(section_index)
+                if right_ordered[index]["y0"] >= heading["y0"] - 10
             )
             if not peer_before_section:
                 continuation_start = section_index

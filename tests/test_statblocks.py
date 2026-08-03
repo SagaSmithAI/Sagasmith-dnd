@@ -5524,3 +5524,56 @@ def test_layout_recovery_uses_one_structural_near_heading_and_numeric_s() -> Non
     assert recovered["evidence"]["matching_heading_count"] == 0
     assert recovered["evidence"]["fuzzy_heading_count"] == 1
     assert recovered["evidence"]["cross_column_continuation_block_count"] == 12
+
+
+def test_layout_recovery_ignores_lore_heading_above_cross_column_continuation() -> None:
+    def block(text: str, x0: int, y0: int, x1: int, y1: int) -> dict[str, object]:
+        return {
+            "text": text,
+            "confidence": 0.99,
+            "bbox": [x0, y0, x1, y1],
+        }
+
+    layout = {
+        "page_number": 287,
+        "width": 1200,
+        "height": 1700,
+        "blocks": [
+            block("BELASHYRRA", 80, 460, 360, 490),
+            block("Medium aberration, chaotic evil", 80, 492, 420, 516),
+            block("Armor Class 19 (natural armor)", 80, 540, 380, 565),
+            block("Hit Points 304 (32d8 + 160)", 80, 568, 390, 593),
+            block("Speed 40 ft., fly 40 ft. (hover)", 80, 596, 410, 621),
+            block("STR DEX CON INT WIS CHA", 90, 650, 520, 675),
+            block(
+                "24 (+7) 21 (+5) 20 (+5) 25 (+7) 22 (+6) 23 (+6)",
+                90,
+                680,
+                550,
+                705,
+            ),
+            block("Senses truesight 120 ft., passive Perception 23", 80, 735, 520, 760),
+            block("Languages Deep Speech, telepathy 120 ft.", 80, 765, 490, 790),
+            block("Challenge 22 (41,000 XP)", 80, 795, 360, 820),
+            block("ACTIONS", 80, 1050, 240, 1075),
+            block("Multiattack. Belashyrra makes two attacks.", 80, 1080, 520, 1105),
+            block("MADNESS OF BELASHYRRA", 650, 120, 1050, 150),
+            block("d6 Flaw (lasts until cured)", 650, 155, 1040, 180),
+            block(
+                "Eye Ray. Belashyrra shoots one magical eye ray.",
+                650,
+                470,
+                1120,
+                500,
+            ),
+            block("LEG E N DARY ACT I O N S", 650, 1120, 980, 1145),
+            block("Claw. Belashyrra makes one claw attack.", 650, 1150, 1080, 1175),
+        ],
+    }
+
+    recovered = recover_2014_statblock_from_ocr(layout, name="Belashyrra")
+
+    assert "***Eye Ray.***" in recovered["normalized_content"]
+    assert "## Legendary Actions" in recovered["normalized_content"]
+    assert "MADNESS OF BELASHYRRA" not in recovered["normalized_content"]
+    assert recovered["evidence"]["cross_column_continuation_block_count"] == 3
