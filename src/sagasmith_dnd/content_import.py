@@ -191,7 +191,7 @@ _SPELL_FIELDS_RE = re.compile(
     r"(?P<duration>Instantaneous|Concentration,\s*up to\s+"
     r"\d+\s+(?:rounds?|minutes?|hours?|days?)|"
     r"\d+\s+(?:rounds?|minutes?|hours?|days?)|Until dispelled|Special)"
-    r"(?:\s+(?P<effect>.*))?$"
+    r"(?:\.\s*|\s+)?(?P<effect>.*)?$"
 )
 _SPELL_LIST_SECTION_RE = re.compile(
     r"(?i)\b(?P<class>" + "|".join(_SPELL_CLASSES) + r")\s+Spells\b"
@@ -336,11 +336,23 @@ def extract_content_candidates(
                 for value in sections.values()
                 for chunk_id in value["source_chunk_ids"]
             ]
-            content = "\n\n".join(
+            all_class_bodies = [
                 body
                 for value in sections.values()
                 for body in value["content"]
                 if body
+            ]
+            relevant_class_bodies = [
+                body
+                for body in all_class_bodies
+                if re.search(
+                    r"(?i)\b(?:Hit\s+Dice?|Armor|Weapons|Tools|Saving\s+Throws|"
+                    r"Skills)\s*:",
+                    body,
+                )
+            ]
+            content = "\n\n".join(
+                dict.fromkeys([*content_parts, *relevant_class_bodies, *all_class_bodies])
             )
         if own_classifications[key] is None and any(
             candidate_key[: len(key)] == key
@@ -354,6 +366,19 @@ def extract_content_candidates(
             # aggregated. Entity parents such as a class still aggregate their
             # differently classified feature descendants.
             continue
+        artifact_card: dict[str, Any] = {
+            "name": candidate_name,
+            "description": content[: (24000 if kind == "class" else 12000)],
+        }
+        if kind == "spell":
+            structured_spell = _spell_card_from_section(
+                candidate_name,
+                heading_path,
+                content,
+                chunks,
+            )
+            if structured_spell is not None:
+                artifact_card.update(structured_spell)
         identity = "\x1f".join((kind, *key))
         candidates.append(
             {
@@ -376,10 +401,7 @@ def extract_content_candidates(
                 "artifact": {
                     "kind": kind,
                     "application_state": "catalog_only",
-                    "card": {
-                        "name": candidate_name,
-                        "description": content[: (24000 if kind == "class" else 12000)],
-                    },
+                    "card": artifact_card,
                 },
             }
         )
@@ -545,6 +567,48 @@ def _mechanical_source_fragment_candidates(
     return candidates
 
 
+def _spell_card_from_section(
+    name: str,
+    heading_path: list[str],
+    content: str,
+    chunks: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    level_heading = next(
+        (
+            str(heading).strip()
+            for heading in reversed(heading_path)
+            if _SPELL_LEVEL_RE.match(str(heading).strip())
+        ),
+        "",
+    )
+    if not level_heading:
+        return None
+    level_folded = level_heading.casefold()
+    school = next((item for item in _SPELL_SCHOOLS if item in level_folded), "")
+    level_match = re.match(r"(?i)(\d)(?:st|nd|rd|th)", level_heading)
+    level = int(level_match.group(1)) if level_match else 0
+    fields = _SPELL_FIELDS_RE.match(
+        re.sub(r"(?i)^\s*Casting\s+Time\s*:\s*", "", content).strip()
+    )
+    if not school or fields is None:
+        return None
+    indexed = _spell_class_index(chunks).get(name.casefold(), {})
+    mentioned = _spell_class_mentions(chunks, name)
+    classes = sorted(set(indexed.get("classes", [])) | set(mentioned["classes"]))
+    return {
+        "level": level,
+        "classes": classes,
+        "definition": {
+            "school": school,
+            "casting_time": fields.group("casting_time").strip(),
+            "range": _spell_range(fields.group("range")),
+            "duration": _spell_duration(fields.group("duration")),
+            "components": _spell_components(fields.group("components")),
+            "effect": (fields.group("effect") or "").strip()[:4000],
+        },
+    }
+
+
 def _embedded_spell_candidates(
     chunks: list[dict[str, Any]],
     *,
@@ -568,7 +632,7 @@ def _embedded_spell_candidates(
             for item in chunk.get("heading_path") or []
             if str(item).strip()
         ]
-        heading_name = heading_path[-1] if heading_path else ""
+        heading_name = heading_path[-1].strip(" .:;") if heading_path else ""
         if (
             heading_name
             and heading_name.casefold() not in _GENERIC_TITLES
@@ -600,9 +664,14 @@ def _embedded_spell_candidates(
             )
             if fields is None:
                 continue
-            classes = sorted(class_index.get(name.casefold(), {}).get("classes", []))
+            indexed = class_index.get(name.casefold(), {})
+            mentioned = _spell_class_mentions(chunks, name)
+            classes = sorted(
+                set(indexed.get("classes", [])) | set(mentioned.get("classes", []))
+            )
             list_chunks = sorted(
-                class_index.get(name.casefold(), {}).get("source_chunk_ids", [])
+                set(indexed.get("source_chunk_ids", []))
+                | set(mentioned.get("source_chunk_ids", []))
             )
             duration = _spell_duration(fields.group("duration"))
             components = _spell_components(fields.group("components"))
@@ -774,6 +843,39 @@ def _spell_class_index(chunks: list[dict[str, Any]]) -> dict[str, dict[str, Any]
                     item["source_chunk_ids"].add(chunk_id)
                 item["ritual"] = bool(item["ritual"] or entry.group("ritual"))
     return result
+
+
+def _spell_class_mentions(chunks: list[dict[str, Any]], spell_name: str) -> dict[str, set[str]]:
+    """Recover list eligibility from list headings and bounded prose declarations."""
+
+    classes: set[str] = set()
+    source_chunk_ids: set[str] = set()
+    name_pattern = re.compile(
+        r"(?i)(?<![A-Za-z])"
+        + r"\s+".join(re.escape(part) for part in spell_name.split())
+        + r"(?![A-Za-z])"
+    )
+    for chunk in chunks:
+        content = " ".join(str(chunk.get("content") or "").split())
+        match = name_pattern.search(content)
+        if match is None:
+            continue
+        prior_classes = set(classes)
+        heading_text = " ".join(str(item) for item in chunk.get("heading_path") or [])
+        for class_name in _SPELL_CLASSES:
+            if re.search(
+                rf"(?i)\b{re.escape(class_name)}\s+Spell(?:s|\s+List)\b",
+                heading_text + " " + content[:500],
+            ):
+                classes.add(class_name.casefold())
+        sentence = content[max(0, match.start() - 250) : match.end() + 350]
+        if re.search(r"(?i)\bspell\s+lists?\b", sentence):
+            for class_name in _SPELL_CLASSES:
+                if re.search(rf"(?i)\b{re.escape(class_name)}\b", sentence):
+                    classes.add(class_name.casefold())
+        if classes != prior_classes and (chunk_id := str(chunk.get("id") or "").strip()):
+            source_chunk_ids.add(chunk_id)
+    return {"classes": classes, "source_chunk_ids": source_chunk_ids}
 
 
 def _spell_range(value: str) -> dict[str, Any]:
@@ -1175,6 +1277,23 @@ def _merge_extracted_candidates(
                 ]
             )
         )
+        preferred_artifact = dict(preferred.get("artifact") or {})
+        preferred_card = dict(preferred_artifact.get("card") or {})
+        other_card = dict(dict(other.get("artifact") or {}).get("card") or {})
+        descriptions = list(
+            dict.fromkeys(
+                str(value).strip()
+                for value in (
+                    preferred_card.get("description"),
+                    other_card.get("description"),
+                )
+                if str(value or "").strip()
+            )
+        )
+        if descriptions:
+            preferred_card["description"] = "\n\n".join(descriptions)[:12000]
+            preferred_artifact["card"] = preferred_card
+            preferred["artifact"] = preferred_artifact
         merged[key] = preferred
     return list(merged.values())
 

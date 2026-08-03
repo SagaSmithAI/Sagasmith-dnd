@@ -60,6 +60,14 @@ def test_ocr_spacing_and_nested_headers_keep_entity_identity() -> None:
                 ),
             },
             {
+                "id": "spell-intro",
+                "heading_path": ["New Spell"],
+                "content": (
+                    "A new cantrip is presented here: mind sliver. It appears on the "
+                    "sorcerer, warlock, and wizard spell lists."
+                ),
+            },
+            {
                 "id": "spell",
                 "heading_path": ["New Spell", "Mind Sliver", "Enchantment cantrip"],
                 "content": (
@@ -75,6 +83,37 @@ def test_ocr_spacing_and_nested_headers_keep_entity_identity() -> None:
         ("feature", "Arcane Topography"),
         ("spell", "Mind Sliver"),
     }
+    mind_sliver = next(item for item in candidates if item["kind"] == "spell")
+    assert mind_sliver["artifact"]["card"]["classes"] == [
+        "sorcerer",
+        "warlock",
+        "wizard",
+    ]
+
+
+def test_spell_list_heading_supplies_embedded_spell_class_eligibility() -> None:
+    candidates = extract_content_candidates(
+        [
+            {
+                "id": "list",
+                "heading_path": ["Artificer Spell List"],
+                "content": "1st Level alarm arcane weapon cure wounds detect magic",
+            },
+            {
+                "id": "spell",
+                "heading_path": ["New Spell", "arcane weapon."],
+                "content": (
+                    "1st-level transmutation Casting Time: 1 bonus action Range: Self "
+                    "Components: V, S Duration: Concentration, up to 1 hour. The weapon "
+                    "deals extra damage."
+                ),
+            },
+        ]
+    )
+
+    spell = next(item for item in candidates if item["kind"] == "spell")
+    assert spell["name"] == "arcane weapon"
+    assert spell["artifact"]["card"]["classes"] == ["artificer"]
 
 
 def test_nested_subclass_headers_do_not_promote_the_generic_parent() -> None:
