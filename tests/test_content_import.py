@@ -415,6 +415,72 @@ def test_source_coverage_fragment_is_runtime_context_not_character_feature() -> 
     assert artifact["selection_applicability"] == "not_applicable"
 
 
+def test_contextual_feature_is_not_promoted_without_character_binding() -> None:
+    artifact = author_selection_card_from_candidate(
+        {
+            "id": "candidate:remarkable-heroes",
+            "kind": "feature",
+            "name": "Remarkable Heroes",
+            "source_heading_path": ["Pulp Adventure", "Remarkable Heroes"],
+            "artifact": {
+                "kind": "feature",
+                "application_state": "catalog_only",
+                "card": {
+                    "name": "Remarkable Heroes",
+                    "description": "Player characters are remarkable heroes.",
+                },
+            },
+        }
+    )
+
+    assert artifact["application_state"] == "catalog_only"
+    assert artifact["selection_applicability"] == "not_applicable"
+
+
+def test_reviewed_generic_feature_requires_explicit_character_applicability() -> None:
+    artifact = author_selection_card_from_candidate(
+        {
+            "id": "candidate:campaign-gift",
+            "kind": "feature",
+            "name": "Campaign Gift",
+            "artifact": {
+                "kind": "feature",
+                "application_state": "catalog_only",
+                "selection_applicability": "character",
+                "card": {
+                    "name": "Campaign Gift",
+                    "description": "The character gains this reviewed feature.",
+                },
+            },
+        }
+    )
+
+    assert artifact["application_state"] == "selection_ready"
+    assert artifact["selection_applicability"] == "character"
+
+
+def test_explicit_not_applicable_feature_cannot_be_repromoted() -> None:
+    artifact = author_selection_card_from_candidate(
+        {
+            "id": "candidate:rule-tip",
+            "kind": "feature",
+            "name": "Keeping Track of Proficiency",
+            "artifact": {
+                "kind": "feature",
+                "application_state": "selection_ready",
+                "selection_applicability": "not_applicable",
+                "card": {
+                    "name": "Keeping Track of Proficiency",
+                    "class_name": "Revised Ranger",
+                },
+            },
+        }
+    )
+
+    assert artifact["application_state"] == "catalog_only"
+    assert artifact["selection_applicability"] == "not_applicable"
+
+
 def test_agent_added_subclass_keeps_its_reviewed_parent_class() -> None:
     artifact = author_selection_card_from_candidate(
         {

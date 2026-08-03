@@ -2458,6 +2458,13 @@ def author_selection_card_from_candidate(
     card["name"] = name
     value["kind"] = kind
     value["card"] = card
+    selection_applicability = str(value.get("selection_applicability") or "")
+    if selection_applicability == "not_applicable":
+        # A reviewer may deliberately retain a rule tip, parent heading, table,
+        # or other contextual feature in the catalog.  Never undo that explicit
+        # boundary merely because the storage kind has a character materializer.
+        value["application_state"] = "catalog_only"
+        return value
     if value.get("application_state") == "selection_ready":
         return value
     if card.get("source_fragment") is True:
@@ -2545,6 +2552,24 @@ def author_selection_card_from_candidate(
                 card.setdefault("subclass_name", subclass_name)
             if minimum_level is not None:
                 card.setdefault("minimum_level", minimum_level)
+            explicit_character_option = selection_applicability == "character"
+            reviewed_character_binding = any(
+                (
+                    str(card.get("class_name") or "").strip(),
+                    str(card.get("subclass_name") or "").strip(),
+                    isinstance(card.get("mechanical_grants"), dict),
+                    isinstance(card.get("selection_requirements"), dict),
+                    isinstance(card.get("selection_requirements_by_level"), dict),
+                )
+            )
+            if not explicit_character_option and not reviewed_character_binding:
+                # Generic headings and source procedures are frequently stored
+                # as feature candidates for retrieval.  A name and an Agent
+                # ruling clause do not prove that adding the card to a character
+                # sheet is meaningful or safe.
+                value["selection_applicability"] = "not_applicable"
+                value["application_state"] = "catalog_only"
+                return value
         value["application_state"] = "selection_ready"
         return value
 
