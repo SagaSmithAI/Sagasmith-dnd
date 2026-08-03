@@ -38,9 +38,7 @@ CORE_SHIELD_SPELL_ID = "dnd5e.content.srd2014.spell.shield"
 CORE_MAGE_ARMOR_MECHANIC_ID = "dnd5e.core.spell.mage_armor"
 CORE_MAGE_ARMOR_SPELL_ID = "dnd5e.content.srd2014.spell.mage-armor"
 CORE_2024_MAGE_ARMOR_SPELL_ID = "dnd5e.content.srd2024.spell.mage-armor"
-CORE_MAGE_ARMOR_SPELL_IDS = frozenset(
-    {CORE_MAGE_ARMOR_SPELL_ID, CORE_2024_MAGE_ARMOR_SPELL_ID}
-)
+CORE_MAGE_ARMOR_SPELL_IDS = frozenset({CORE_MAGE_ARMOR_SPELL_ID, CORE_2024_MAGE_ARMOR_SPELL_ID})
 CORE_MAGIC_ITEM_LAST_CHARGE_MECHANIC_ID = "dnd5e.core.magic_item.last_charge"
 CORE_MAGIC_ITEM_RECHARGE_MECHANIC_ID = "dnd5e.core.magic_item.charge_recovery"
 CORE_MAGIC_ITEM_SPELL_MECHANIC_ID = "dnd5e.core.spell.magic_item_charges"
@@ -98,8 +96,7 @@ def is_core_mage_armor_spell(spell: dict[str, Any]) -> bool:
     """Recognize either edition's source-bound Mage Armor card."""
 
     return str(spell.get("id") or "") in CORE_MAGE_ARMOR_SPELL_IDS or (
-        CORE_MAGE_ARMOR_MECHANIC_ID
-        in {str(item) for item in spell.get("mechanic_refs", [])}
+        CORE_MAGE_ARMOR_MECHANIC_ID in {str(item) for item in spell.get("mechanic_refs", [])}
     )
 
 
@@ -107,8 +104,7 @@ def is_core_blade_ward_spell(spell: dict[str, Any]) -> bool:
     """Recognize only the source-bound standard 2014 Blade Ward mechanic."""
 
     return str(spell.get("id") or "") == CORE_BLADE_WARD_SPELL_ID or (
-        CORE_BLADE_WARD_MECHANIC_ID
-        in {str(item) for item in spell.get("mechanic_refs", [])}
+        CORE_BLADE_WARD_MECHANIC_ID in {str(item) for item in spell.get("mechanic_refs", [])}
     )
 
 
@@ -116,8 +112,7 @@ def is_core_hypnotic_pattern_spell(spell: dict[str, Any]) -> bool:
     """Recognize only a source-bound SRD Hypnotic Pattern mechanic."""
 
     return str(spell.get("id") or "") in CORE_HYPNOTIC_PATTERN_SPELL_IDS or (
-        CORE_HYPNOTIC_PATTERN_MECHANIC_ID
-        in {str(item) for item in spell.get("mechanic_refs", [])}
+        CORE_HYPNOTIC_PATTERN_MECHANIC_ID in {str(item) for item in spell.get("mechanic_refs", [])}
     )
 
 
@@ -125,8 +120,7 @@ def is_core_fly_spell(spell: dict[str, Any]) -> bool:
     """Recognize only a source-bound SRD Fly mechanic."""
 
     return str(spell.get("id") or "") in CORE_FLY_SPELL_IDS or (
-        CORE_FLY_MECHANIC_ID
-        in {str(item) for item in spell.get("mechanic_refs", [])}
+        CORE_FLY_MECHANIC_ID in {str(item) for item in spell.get("mechanic_refs", [])}
     )
 
 
@@ -134,8 +128,7 @@ def is_core_invisibility_spell(spell: dict[str, Any]) -> bool:
     """Recognize only a source-bound SRD Invisibility mechanic."""
 
     return str(spell.get("id") or "") in CORE_INVISIBILITY_SPELL_IDS or (
-        CORE_INVISIBILITY_MECHANIC_ID
-        in {str(item) for item in spell.get("mechanic_refs", [])}
+        CORE_INVISIBILITY_MECHANIC_ID in {str(item) for item in spell.get("mechanic_refs", [])}
     )
 
 
@@ -144,9 +137,7 @@ def invisibility_target_limit(cast_level: int) -> int:
 
     level = int(cast_level)
     if level < 2 or level > 9:
-        raise CombatEngineError(
-            "Invisibility cast_level must be between 2 and 9"
-        )
+        raise CombatEngineError("Invisibility cast_level must be between 2 and 9")
     return level - 1
 
 
@@ -162,9 +153,7 @@ def apply_core_invisibility_effects(
     """Make the explicit touched creatures invisible under one concentration."""
 
     if spell_id not in CORE_INVISIBILITY_SPELL_IDS:
-        raise CombatEngineError(
-            "Invisibility requires its exact source-bound SRD spell id"
-        )
+        raise CombatEngineError("Invisibility requires its exact source-bound SRD spell id")
     if caster_id not in sheets:
         raise CombatEngineError("Invisibility caster sheet is missing")
     normalized_targets = [str(item).strip() for item in target_ids]
@@ -173,18 +162,12 @@ def apply_core_invisibility_effects(
         or any(not item for item in normalized_targets)
         or len(normalized_targets) != len(set(normalized_targets))
     ):
-        raise CombatEngineError(
-            "Invisibility target_ids must be unique and non-empty"
-        )
+        raise CombatEngineError("Invisibility target_ids must be unique and non-empty")
     if len(normalized_targets) > invisibility_target_limit(cast_level):
-        raise CombatEngineError(
-            "Invisibility target count exceeds the cast level"
-        )
+        raise CombatEngineError("Invisibility target count exceeds the cast level")
     missing = [item for item in normalized_targets if item not in sheets]
     if missing:
-        raise CombatEngineError(
-            f"Invisibility target sheets are missing: {missing}"
-        )
+        raise CombatEngineError(f"Invisibility target sheets are missing: {missing}")
     source_effect = next(
         (
             effect
@@ -192,15 +175,12 @@ def apply_core_invisibility_effects(
             if effect.get("active")
             and effect.get("concentration")
             and str(effect.get("id") or "") == concentration_effect_id
-            and str(effect.get("source_spell_id") or "")
-            == spell_id
+            and str(effect.get("source_spell_id") or "") == spell_id
         ),
         None,
     )
     if source_effect is None:
-        raise CombatEngineError(
-            "Invisibility requires its exact active concentration effect"
-        )
+        raise CombatEngineError("Invisibility requires its exact active concentration effect")
 
     value = {actor_id: deepcopy(sheet) for actor_id, sheet in sheets.items()}
     effect_ids: dict[str, str] = {}
@@ -346,10 +326,7 @@ def reconcile_source_effect_dependencies(
     ended_effects: dict[str, list[dict[str, Any]]] = {}
     for target_actor_id, sheet in value.items():
         for effect in sheet.get("effects", []):
-            if (
-                not effect.get("active")
-                or effect.get("dependency") != "source_effect_active"
-            ):
+            if not effect.get("active") or effect.get("dependency") != "source_effect_active":
                 continue
             source_actor_id = str(effect.get("source_actor_id") or "")
             source_effect_id = str(effect.get("source_effect_id") or "")
@@ -384,9 +361,7 @@ def reconcile_source_effect_dependencies(
             )
     return {
         "sheets": value,
-        "changed_actor_ids": sorted(
-            {item["target_actor_id"] for item in ended}
-        ),
+        "changed_actor_ids": sorted({item["target_actor_id"] for item in ended}),
         "ended": ended,
     }
 
@@ -395,8 +370,7 @@ def is_core_witch_bolt_spell(spell: dict[str, Any]) -> bool:
     """Recognize only the source-bound standard 2014 Witch Bolt mechanic."""
 
     return str(spell.get("id") or "") == CORE_WITCH_BOLT_SPELL_ID or (
-        CORE_WITCH_BOLT_MECHANIC_ID
-        in {str(item) for item in spell.get("mechanic_refs", [])}
+        CORE_WITCH_BOLT_MECHANIC_ID in {str(item) for item in spell.get("mechanic_refs", [])}
     )
 
 
@@ -802,11 +776,7 @@ def end_concentration_effects(
     ended_effects: list[dict[str, Any]] = []
     for effect in value.get("effects", []):
         effect_id = str(effect.get("id") or "")
-        if (
-            effect_id in requested
-            and effect.get("active")
-            and effect.get("concentration")
-        ):
+        if effect_id in requested and effect.get("active") and effect.get("concentration"):
             effect["active"] = False
             effect["ended_reason"] = reason
             ended.append(effect_id)
@@ -1079,9 +1049,7 @@ def consume_spell_cast(
         raise CombatEngineError("spell is not on this actor card")
     access = dict(spell.get("access") or {})
     feature_sources = [
-        dict(item)
-        for item in access.get("feature_casting_sources", [])
-        if isinstance(item, dict)
+        dict(item) for item in access.get("feature_casting_sources", []) if isinstance(item, dict)
     ]
     selected_feature_source = None
     if feature_cast_source:
@@ -1089,16 +1057,13 @@ def consume_spell_cast(
             (
                 item
                 for item in feature_sources
-                if str(item.get("source_key") or "").casefold()
-                == feature_cast_source.casefold()
+                if str(item.get("source_key") or "").casefold() == feature_cast_source.casefold()
             ),
             None,
         )
         if selected_feature_source is None:
             raise CombatEngineError("feature_cast_source is not available for this spell")
-    elif len(feature_sources) == 1 and not bool(
-        feature_sources[0].get("allow_slot_cast")
-    ):
+    elif len(feature_sources) == 1 and not bool(feature_sources[0].get("allow_slot_cast")):
         selected_feature_source = feature_sources[0]
     if selected_feature_source is not None and int(
         value.get("progression", {}).get("level", 0) or 0
@@ -1150,9 +1115,7 @@ def consume_spell_cast(
     if signature_free_cast and not signature_spell:
         raise CombatEngineError("signature_free_cast requires a selected Signature Spell")
     if signature_free_cast and selected_feature_source is not None:
-        raise CombatEngineError(
-            "signature_free_cast cannot be combined with feature_cast_source"
-        )
+        raise CombatEngineError("signature_free_cast cannot be combined with feature_cast_source")
     if signature_free_cast and (base_level != 3 or level != 3 or ritual):
         raise CombatEngineError(
             "a Signature Spell free cast must be cast at 3rd level and cannot be a ritual"
@@ -1160,19 +1123,15 @@ def consume_spell_cast(
     spellcasting = value.setdefault("spellcasting", {})
     if ritual:
         feature_ritual = bool(
-            selected_feature_source is not None
-            and selected_feature_source.get("ritual_only")
+            selected_feature_source is not None and selected_feature_source.get("ritual_only")
         )
         if not feature_ritual and (
-            not access.get("ritual_available")
-            or not spellcasting.get("ritual_casting")
+            not access.get("ritual_available") or not spellcasting.get("ritual_casting")
         ):
             raise CombatEngineError("spell cannot be cast as a ritual")
         if level != base_level:
             raise CombatEngineError("ritual casting does not allow an upcast spell level")
-    casting_overrides = dict(
-        (selected_feature_source or {}).get("casting_overrides") or {}
-    )
+    casting_overrides = dict((selected_feature_source or {}).get("casting_overrides") or {})
     components = dict(spell.get("definition", {}).get("components") or {})
     if casting_overrides.get("ignore_material_components") is True:
         components.update(
@@ -1211,9 +1170,7 @@ def consume_spell_cast(
                 "feature spell ritual declaration does not match its reviewed source"
             )
         if level != base_level:
-            raise CombatEngineError(
-                "a feature spell use must be cast at its recorded spell level"
-            )
+            raise CombatEngineError("a feature spell use must be cast at its recorded spell level")
         resource_key = str(selected_feature_source.get("resource_key") or "")
         if resource_key:
             resource = value.setdefault("resources", {}).get(resource_key)
@@ -1226,9 +1183,7 @@ def consume_spell_cast(
             "economy": "feature_spell",
             "resource_key": resource_key or None,
             "source_key": str(selected_feature_source.get("source_key") or ""),
-            "spellcasting_ability": str(
-                selected_feature_source.get("spellcasting_ability") or ""
-            ),
+            "spellcasting_ability": str(selected_feature_source.get("spellcasting_ability") or ""),
             "level": level,
             "ritual": ritual_only,
         }
@@ -1250,13 +1205,9 @@ def consume_spell_cast(
             raise CombatEngineError("innate spellcasting cannot be declared as a ritual")
         if grant_method == "innate" and not free_at_will:
             if level != base_level:
-                raise CombatEngineError(
-                    "innate spellcasting must use the spell's recorded level"
-                )
+                raise CombatEngineError("innate spellcasting must use the spell's recorded level")
             resource_key = str(
-                dict(spell.get("custom_definition") or {}).get(
-                    "innate_resource_key"
-                )
+                dict(spell.get("custom_definition") or {}).get("innate_resource_key")
                 or f"innate_spell:{spell_id}"
             )
             resource = value.setdefault("resources", {}).get(resource_key)
@@ -1270,10 +1221,7 @@ def consume_spell_cast(
                 "ritual": False,
             }
         elif (
-            base_level > 0
-            and not ritual
-            and not free_at_will
-            and grant_method == "mystic_arcanum"
+            base_level > 0 and not ritual and not free_at_will and grant_method == "mystic_arcanum"
         ):
             if level != base_level:
                 raise CombatEngineError("Mystic Arcanum must be cast at its recorded spell level")
@@ -1288,9 +1236,12 @@ def consume_spell_cast(
                 "level": level,
                 "ritual": False,
             }
-        elif base_level > 0 and not ritual and not free_at_will and spellcasting.get(
-            "casting_economy", "slots"
-        ) == "spell_points":
+        elif (
+            base_level > 0
+            and not ritual
+            and not free_at_will
+            and spellcasting.get("casting_economy", "slots") == "spell_points"
+        ):
             points = spellcasting.get("spell_points")
             if not isinstance(points, dict):
                 raise CombatEngineError("spell-point casting is not configured")
@@ -1323,9 +1274,7 @@ def consume_spell_cast(
                 paid = {"economy": "pact_magic", "level": level, "ritual": False}
     ended_invisibility_effect_ids = _end_spell_cast_broken_invisibility(value)
     duration = dict(
-        casting_overrides.get("duration")
-        or spell.get("definition", {}).get("duration")
-        or {}
+        casting_overrides.get("duration") or spell.get("definition", {}).get("duration") or {}
     )
     concentration = bool(duration.get("concentration"))
     if concentration:
@@ -1367,8 +1316,7 @@ def consume_spell_cast(
         *(["material_component"] if components.get("material") else []),
         *(
             ["targets_and_effect"]
-            if automatic_effect is None
-            and not isinstance(spell.get("resolution"), dict)
+            if automatic_effect is None and not isinstance(spell.get("resolution"), dict)
             else []
         ),
     ]
@@ -1391,11 +1339,7 @@ def consume_spell_cast(
                 [
                     "dnd5e.core.spell.cantrip_ritual_level",
                     "dnd5e.core.spell.material_components",
-                    *(
-                        [CORE_BLADE_WARD_MECHANIC_ID]
-                        if automatic_effect == "blade_ward"
-                        else []
-                    ),
+                    *([CORE_BLADE_WARD_MECHANIC_ID] if automatic_effect == "blade_ward" else []),
                     *(
                         ["dnd5e.core.spell.pact_magic"]
                         if rules and rules.core_pack.edition == "2014"
@@ -1580,7 +1524,12 @@ def replace_prepared_spells(
             )
             if preparation.get("mode") == "spellbook" and spell_id not in spellbook_ids:
                 raise CombatEngineError("a wizard can prepare only spells in their spellbook")
-            maximum_level = _maximum_spell_level(edition, source, classes[source])
+            maximum_level = _maximum_spell_level(
+                edition,
+                source,
+                classes[source],
+                progression_profile=_class_spellcasting_profile(value, source),
+            )
             if int(spell.get("level", 0) or 0) > maximum_level:
                 raise CombatEngineError(
                     f"{source} level {classes[source]} cannot prepare spell level "
@@ -1606,7 +1555,12 @@ def replace_prepared_spells(
         removed = old - new
         added = new - old
         if normalized_event == "long_rest":
-            maximum_replacements = _long_rest_replacements(edition, source)
+            profile = _class_spellcasting_profile(value, source)
+            maximum_replacements = (
+                None
+                if profile.get("preparation_mode") in PREPARED_SELECTION_MODES
+                else _long_rest_replacements(edition, source)
+            )
             if maximum_replacements == 0:
                 raise CombatEngineError(f"{source} cannot change prepared spells on a long rest")
             if edition == "2024" and len(old) != len(new):
@@ -1694,14 +1648,24 @@ def validate_spell_grant(
         for item in spell_list_expansion
         if isinstance(item, dict)
     }
-    expanded = bool(artifact_id and artifact_id in expanded_artifact_ids)
+    class_profile = _class_spellcasting_profile(sheet, source)
+    class_expansion = {
+        str(item).casefold() for item in class_profile.get("spell_list_expansion", [])
+    }
+    expanded = bool(
+        (artifact_id and artifact_id in expanded_artifact_ids)
+        or str(spell.get("name") or "").casefold() in class_expansion
+    )
     if source not in allowed and not expanded:
         raise CombatEngineError(f"{spell.get('name') or spell.get('id')} is not a {source} spell")
     if expanded and not _class_has_spell_list(sheet, source, classes[source]):
-        raise CombatEngineError(
-            f"spell-list expansion requires {source} spellcasting access"
-        )
-    maximum = _maximum_spell_level(_edition(sheet), source, classes[source])
+        raise CombatEngineError(f"spell-list expansion requires {source} spellcasting access")
+    maximum = _maximum_spell_level(
+        _edition(sheet),
+        source,
+        classes[source],
+        progression_profile=class_profile,
+    )
     level = int(spell.get("level", 0) or 0)
     if level > maximum:
         raise CombatEngineError(
@@ -1757,6 +1721,33 @@ def _class_key(value: Any) -> str:
     return text.split(":")[-1].split("/")[-1]
 
 
+def _class_spellcasting_profile(sheet: dict[str, Any], source: str) -> dict[str, Any]:
+    source_key = _class_key(source)
+    match = next(
+        (
+            item
+            for item in sheet.get("progression", {}).get("classes", [])
+            if _class_key(item.get("name")) == source_key
+        ),
+        {},
+    )
+    return dict(match.get("spellcasting") or {})
+
+
+def _profile_prepared_spell_limit(
+    sheet: dict[str, Any], profile: dict[str, Any], level: int
+) -> int:
+    formula = dict(profile.get("prepared_limit") or {})
+    if not formula:
+        return 0
+    divisor = int(formula["class_level_divisor"])
+    class_levels = (
+        (level + divisor - 1) // divisor if formula["rounding"] == "up" else level // divisor
+    )
+    score = int(sheet.get("abilities", {}).get(formula["ability"], {}).get("score", 10) or 10)
+    return max(int(formula["minimum"]), class_levels + ability_modifier(score))
+
+
 def _edition(sheet: dict[str, Any]) -> str:
     try:
         return normalize_dnd_edition(sheet.get("edition"))
@@ -1779,6 +1770,9 @@ def prepared_spell_limit(
     """
 
     source = _class_key(source)
+    profile = _class_spellcasting_profile(sheet, source)
+    if profile and profile.get("preparation_mode") in PREPARED_SELECTION_MODES:
+        return _profile_prepared_spell_limit(sheet, profile, level)
     if edition == "2024" and source in _PREPARED_2024:
         return _PREPARED_2024[source][level - 1]
     if edition == "2014" and source in _PREPARED_2014:
@@ -1818,11 +1812,14 @@ def synchronize_prepared_spell_limit(sheet: dict[str, Any]) -> dict[str, Any]:
         for item in value.get("progression", {}).get("classes", [])
         if int(item.get("level", 0) or 0) > 0
     }
-    eligible = _PREPARED_2014 if edition == "2014" else set(_PREPARED_2024)
     limits = {
         source: prepared_spell_limit(value, edition, source, level)
         for source, level in classes.items()
-        if source in eligible
+        if (
+            source in (_PREPARED_2014 if edition == "2014" else set(_PREPARED_2024))
+            or _class_spellcasting_profile(value, source).get("preparation_mode")
+            in PREPARED_SELECTION_MODES
+        )
     }
     if not limits:
         return {"sheet": value, "change": None, "limits": {}}
@@ -1845,7 +1842,27 @@ def synchronize_prepared_spell_limit(sheet: dict[str, Any]) -> dict[str, Any]:
     return {"sheet": value, "change": change, "limits": limits}
 
 
-def _maximum_spell_level(edition: str, source: str, level: int) -> int:
+def _maximum_spell_level(
+    edition: str,
+    source: str,
+    level: int,
+    *,
+    progression_profile: dict[str, Any] | None = None,
+) -> int:
+    profile = dict(progression_profile or {})
+    if profile:
+        progression = str(profile.get("slot_progression") or "none")
+        if progression == "none":
+            return 0
+        if progression == "full":
+            return min(9, (level + 1) // 2)
+        if progression == "half":
+            return min(5, (level + 3) // 4) if level >= 2 else 0
+        if progression == "half_round_up":
+            return min(5, ((level - 1) // 4) + 1)
+        if progression == "pact":
+            return min(5, ((level + 1) // 2))
+        raise CombatEngineError("class spellcasting slot progression is invalid")
     if source in {"paladin", "ranger"}:
         if edition == "2024":
             return min(5, ((level - 1) // 4) + 1)

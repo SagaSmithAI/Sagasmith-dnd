@@ -17,15 +17,14 @@ from typing import Any, Mapping, Sequence
 from sagasmith_dnd.character_schema import (
     add_inventory_item,
     default_character_sheet,
+    normalize_class_spellcasting_profile,
     normalize_feature_casting_overrides,
     normalize_spell_definition,
 )
 
 CATALOG_REVIEW_SCHEMA_VERSION = 1
 SELECTION_CONTRACT_SCHEMA_VERSION = 2
-CATALOG_REVIEW_CHECKS = frozenset(
-    {"identity", "classification", "entry_boundary", "references"}
-)
+CATALOG_REVIEW_CHECKS = frozenset({"identity", "classification", "entry_boundary", "references"})
 CATALOG_REVIEW_ROLES = frozenset({"primary", "critic", "dm"})
 CATALOG_REVIEW_METHODS = frozenset({"agent", "deterministic", "human"})
 SELECTION_STATUSES = frozenset({"ready", "not_applicable", "blocked"})
@@ -172,9 +171,7 @@ def catalog_review_errors(artifact: Mapping[str, Any]) -> list[str]:
     }
     errors = _exact_field_errors(review, expected_fields, prefix)
     if review.get("schema_version") != CATALOG_REVIEW_SCHEMA_VERSION:
-        errors.append(
-            f"{prefix}.schema_version must be {CATALOG_REVIEW_SCHEMA_VERSION}"
-        )
+        errors.append(f"{prefix}.schema_version must be {CATALOG_REVIEW_SCHEMA_VERSION}")
     status = str(review.get("status") or "")
     if status not in {"approved", "needs_review", "rejected"}:
         errors.append(f"{prefix}.status is invalid")
@@ -214,9 +211,7 @@ def catalog_review_errors(artifact: Mapping[str, Any]) -> list[str]:
             checks = {}
         else:
             errors.extend(
-                _exact_field_errors(
-                    dict(checks), CATALOG_REVIEW_CHECKS, f"{field}.checks"
-                )
+                _exact_field_errors(dict(checks), CATALOG_REVIEW_CHECKS, f"{field}.checks")
             )
         checks_pass = all(checks.get(check) is True for check in CATALOG_REVIEW_CHECKS)
         if any(not isinstance(checks.get(check), bool) for check in CATALOG_REVIEW_CHECKS):
@@ -231,17 +226,13 @@ def catalog_review_errors(artifact: Mapping[str, Any]) -> list[str]:
         errors.append(f"{prefix}.decisions must not repeat a reviewer role")
     if status == "approved":
         passed = {
-            role: reviewer
-            for role, reviewer, checks_pass in normalized_decisions
-            if checks_pass
+            role: reviewer for role, reviewer, checks_pass in normalized_decisions if checks_pass
         }
         if "primary" not in passed:
             errors.append(f"{prefix} approved status requires a passing primary review")
         independent_role = "critic" if "critic" in passed else "dm" if "dm" in passed else ""
         if not independent_role:
-            errors.append(
-                f"{prefix} approved status requires a passing critic or DM review"
-            )
+            errors.append(f"{prefix} approved status requires a passing critic or DM review")
         elif passed.get("primary") == passed[independent_role]:
             errors.append(f"{prefix} independent reviewer must differ from primary")
     return errors
@@ -272,9 +263,7 @@ def build_selection_contract(
         "references": list(references),
         "blockers": list(blockers),
     }
-    errors = selection_contract_errors(
-        {**dict(artifact), "selection_contract": contract}
-    )
+    errors = selection_contract_errors({**dict(artifact), "selection_contract": contract})
     if errors:
         raise ValueError("; ".join(errors))
     return contract
@@ -297,10 +286,7 @@ def selection_schema_for_artifact(artifact: Mapping[str, Any]) -> dict[str, Any]
     if not isinstance(card, Mapping):
         raise ValueError(f"{kind} artifact needs a structured card")
     card_value = dict(card)
-    binding = {
-        field: copy.deepcopy(card_value.get(field))
-        for field in _CARD_BINDINGS[kind]
-    }
+    binding = {field: copy.deepcopy(card_value.get(field)) for field in _CARD_BINDINGS[kind]}
     _validate_materializer_card(kind, binding)
     selection_fields = list(_SELECTION_FIELDS[kind])
     if kind in {"feat", "feature"}:
@@ -313,9 +299,7 @@ def selection_schema_for_artifact(artifact: Mapping[str, Any]) -> dict[str, Any]
     }
 
 
-def selection_input_errors(
-    artifact: Mapping[str, Any], selection: Mapping[str, Any]
-) -> list[str]:
+def selection_input_errors(artifact: Mapping[str, Any], selection: Mapping[str, Any]) -> list[str]:
     """Reject facade inputs that are not published by the bound contract."""
 
     artifact_id = str(artifact.get("id") or "artifact")
@@ -332,9 +316,7 @@ def selection_input_errors(
     allowed = set(schema["selection_fields"])
     unknown = sorted(set(selection) - allowed)
     return (
-        [f"{artifact_id}.selection has unsupported fields: {', '.join(unknown)}"]
-        if unknown
-        else []
+        [f"{artifact_id}.selection has unsupported fields: {', '.join(unknown)}"] if unknown else []
     )
 
 
@@ -358,9 +340,7 @@ def selection_contract_errors(artifact: Mapping[str, Any]) -> list[str]:
     }
     errors = _exact_field_errors(contract, expected_fields, prefix)
     if contract.get("schema_version") != SELECTION_CONTRACT_SCHEMA_VERSION:
-        errors.append(
-            f"{prefix}.schema_version must be {SELECTION_CONTRACT_SCHEMA_VERSION}"
-        )
+        errors.append(f"{prefix}.schema_version must be {SELECTION_CONTRACT_SCHEMA_VERSION}")
     status = str(contract.get("status") or "")
     if status not in SELECTION_STATUSES:
         errors.append(f"{prefix}.status is invalid")
@@ -395,9 +375,7 @@ def selection_contract_errors(artifact: Mapping[str, Any]) -> list[str]:
         if expected_materializer is None:
             errors.append(f"{prefix} {kind or 'artifact'} has no safe materializer")
         elif materializer != expected_materializer:
-            errors.append(
-                f"{prefix}.materializer must be {expected_materializer} for {kind}"
-            )
+            errors.append(f"{prefix}.materializer must be {expected_materializer} for {kind}")
         try:
             expected_schema = selection_schema_for_artifact(artifact)
         except ValueError as error:
@@ -457,9 +435,11 @@ def background_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
     fixed_tools = string_list(grants.get("tools", []), "tools")
     grant_skills = string_list(grants.get("skills", []), "skills")
     card_skills = string_list(binding.get("skill_proficiencies", []), "skill_proficiencies")
-    if grant_skills and card_skills and {
-        item.casefold() for item in grant_skills
-    } != {item.casefold() for item in card_skills}:
+    if (
+        grant_skills
+        and card_skills
+        and {item.casefold() for item in grant_skills} != {item.casefold() for item in card_skills}
+    ):
         errors.append("background skill_proficiencies conflict with background_grants.skills")
     string_list(grants.get("spell_list_expansion", []), "spell_list_expansion")
     if not isinstance(grants.get("equipment_item_ids", []), list):
@@ -478,18 +458,14 @@ def background_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
 
     language_count = choice_count("language_count")
     tool_count = choice_count("tool_choice_count")
-    language_options = string_list(
-        choices.get("language_options", []), "language_options"
-    )
+    language_options = string_list(choices.get("language_options", []), "language_options")
     tool_options = string_list(choices.get("tool_options", []), "tool_options")
     allow_any_language = choices.get("allow_any_language", False)
     if not isinstance(allow_any_language, bool):
         errors.append("background allow_any_language must be a boolean")
         allow_any_language = False
     if language_count and not language_options and not allow_any_language:
-        errors.append(
-            "background language choices need language_options or allow_any_language"
-        )
+        errors.append("background language choices need language_options or allow_any_language")
     if language_options and len(language_options) < language_count:
         errors.append("background language_options cannot satisfy language_count")
     if tool_count and len(tool_options) < tool_count:
@@ -512,9 +488,7 @@ def background_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
             return
         unsupported_package = set(raw_package) - {"items", "wallet"}
         if unsupported_package:
-            errors.append(
-                f"{prefix} has unsupported fields: {sorted(unsupported_package)}"
-            )
+            errors.append(f"{prefix} has unsupported fields: {sorted(unsupported_package)}")
         items = raw_package.get("items", [])
         if not isinstance(items, list):
             errors.append(f"{prefix} items must be an array")
@@ -532,9 +506,7 @@ def background_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
                 "selected_tool",
             }
             if unsupported_item:
-                errors.append(
-                    f"{item_prefix} has unsupported fields: {sorted(unsupported_item)}"
-                )
+                errors.append(f"{item_prefix} has unsupported fields: {sorted(unsupported_item)}")
             sources = [
                 bool(str(raw_item.get("artifact_id") or "").strip()),
                 raw_item.get("selected_tool") is True,
@@ -611,12 +583,8 @@ def species_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
         return normalized
 
     fixed_languages = string_list(grants.get("languages", []), "languages")
-    fixed_skills = string_list(
-        grants.get("skill_proficiencies", []), "skill_proficiencies"
-    )
-    fixed_tools = string_list(
-        grants.get("tool_proficiencies", []), "tool_proficiencies"
-    )
+    fixed_skills = string_list(grants.get("skill_proficiencies", []), "skill_proficiencies")
+    fixed_tools = string_list(grants.get("tool_proficiencies", []), "tool_proficiencies")
     string_list(grants.get("armor_proficiencies", []), "armor_proficiencies")
     string_list(grants.get("spell_list_expansion", []), "spell_list_expansion")
     ability_names = {
@@ -652,8 +620,7 @@ def species_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
     }
     if unsupported_ability_choice:
         errors.append(
-            "species ability_choice has unsupported fields: "
-            f"{sorted(unsupported_ability_choice)}"
+            f"species ability_choice has unsupported fields: {sorted(unsupported_ability_choice)}"
         )
     ability_choice_count = raw_ability_choice.get("count", 0)
     if (
@@ -670,9 +637,7 @@ def species_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
         or ability_choice_amount < 0
         or (ability_choice_count > 0 and ability_choice_amount < 1)
     ):
-        errors.append(
-            "species ability_choice.amount must be a positive integer when choices exist"
-        )
+        errors.append("species ability_choice.amount must be a positive integer when choices exist")
     excluded_abilities = [
         item.casefold()
         for item in string_list(raw_ability_choice.get("exclude", []), "ability_choice.exclude")
@@ -698,9 +663,7 @@ def species_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
         "tool": {item.casefold() for item in fixed_tools},
         "weapon": {
             item.casefold()
-            for item in string_list(
-                grants.get("weapon_proficiencies", []), "weapon_proficiencies"
-            )
+            for item in string_list(grants.get("weapon_proficiencies", []), "weapon_proficiencies")
         },
     }
     known_skills = set(default_character_sheet()["skills"])
@@ -793,17 +756,14 @@ def species_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
             errors.append(f"{prefix}.options cannot satisfy count")
     if len(narrative_group_ids) != len(set(narrative_group_ids)):
         errors.append("species narrative_choice_groups ids must be distinct")
-    language_options = string_list(
-        grants.get("language_options", []), "language_options"
-    )
+    language_options = string_list(grants.get("language_options", []), "language_options")
     skill_options = string_list(grants.get("skill_options", []), "skill_options")
     tool_options = string_list(
         grants.get("tool_options", grants.get("tool_choices", [])),
         "tool_options",
     )
     size_options = [
-        item.casefold()
-        for item in string_list(grants.get("size_options", []), "size_options")
+        item.casefold() for item in string_list(grants.get("size_options", []), "size_options")
     ]
     fixed_size = str(grants.get("size") or "").strip().casefold()
     valid_sizes = {"tiny", "small", "medium", "large"}
@@ -828,31 +788,21 @@ def species_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
     tool_expertise_options = string_list(
         grants.get("tool_expertise_options", []), "tool_expertise_options"
     )
-    allow_any_tool_expertise = grants.get(
-        "allow_any_proficient_tool_expertise", False
-    )
+    allow_any_tool_expertise = grants.get("allow_any_proficient_tool_expertise", False)
     if not isinstance(allow_any_tool_expertise, bool):
         errors.append("species allow_any_proficient_tool_expertise must be a boolean")
         allow_any_tool_expertise = False
-    if (
-        tool_expertise_count
-        and not tool_expertise_options
-        and not allow_any_tool_expertise
-    ):
+    if tool_expertise_count and not tool_expertise_options and not allow_any_tool_expertise:
         errors.append(
             "species tool expertise choices need options or an explicit proficient-tool choice"
         )
     if tool_expertise_options and len(tool_expertise_options) < tool_expertise_count:
-        errors.append(
-            "species tool_expertise_options cannot satisfy tool_expertise_choice_count"
-        )
+        errors.append("species tool_expertise_options cannot satisfy tool_expertise_choice_count")
     for flag in ("allow_any_language", "allow_any_skill"):
         if flag in grants and not isinstance(grants.get(flag), bool):
             errors.append(f"species {flag} must be a boolean")
     if language_count and not language_options and grants.get("allow_any_language") is not True:
-        errors.append(
-            "species language choices need language_options or allow_any_language"
-        )
+        errors.append("species language choices need language_options or allow_any_language")
     if skill_count and not skill_options and grants.get("allow_any_skill") is not True:
         errors.append("species skill choices need skill_options or allow_any_skill")
     if language_options and len(language_options) < language_count:
@@ -866,9 +816,7 @@ def species_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
         (fixed_skills, skill_options, "skill"),
         (fixed_tools, tool_options, "tool"),
     ):
-        if {item.casefold() for item in fixed}.intersection(
-            item.casefold() for item in options
-        ):
+        if {item.casefold() for item in fixed}.intersection(item.casefold() for item in options):
             errors.append(f"species {label}_options cannot repeat fixed {label}s")
     raw_cantrip_choice = grants.get("cantrip_choice")
     if raw_cantrip_choice is not None:
@@ -895,21 +843,20 @@ def species_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
                 errors.append("species cantrip_choice.class must not be empty")
             if raw_cantrip_choice.get("level") != 0:
                 errors.append("species cantrip_choice.level must be 0")
-            if "spellcasting_ability" in raw_cantrip_choice and str(
-                raw_cantrip_choice.get("spellcasting_ability") or ""
-            ).casefold() not in ability_names:
+            if (
+                "spellcasting_ability" in raw_cantrip_choice
+                and str(raw_cantrip_choice.get("spellcasting_ability") or "").casefold()
+                not in ability_names
+            ):
                 errors.append("species cantrip_choice.spellcasting_ability is invalid")
-            if "method" in raw_cantrip_choice and raw_cantrip_choice.get(
-                "method"
-            ) != "known":
+            if "method" in raw_cantrip_choice and raw_cantrip_choice.get("method") != "known":
                 errors.append("species cantrip_choice.method must be known")
-            if "free_casts" in raw_cantrip_choice and raw_cantrip_choice.get(
-                "free_casts"
-            ) != 0:
+            if "free_casts" in raw_cantrip_choice and raw_cantrip_choice.get("free_casts") != 0:
                 errors.append("species cantrip_choice.free_casts must be 0")
-            if "recovers_on" in raw_cantrip_choice and raw_cantrip_choice.get(
-                "recovers_on"
-            ) is not None:
+            if (
+                "recovers_on" in raw_cantrip_choice
+                and raw_cantrip_choice.get("recovers_on") is not None
+            ):
                 errors.append("species cantrip_choice.recovers_on must be null")
             for flag in ("allow_slot_cast", "ritual_only"):
                 if flag in raw_cantrip_choice and not isinstance(
@@ -943,9 +890,7 @@ def species_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
                 },
             }
         )
-        errors.extend(
-            error.replace("feat ", "species ", 1) for error in shared_errors
-        )
+        errors.extend(error.replace("feat ", "species ", 1) for error in shared_errors)
     return errors
 
 
@@ -1038,9 +983,7 @@ def feat_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
             free_casts = 0
         recovers_on = raw_grant.get("recovers_on")
         if free_casts and recovers_on not in {"short_rest", "long_rest"}:
-            errors.append(
-                f"{prefix}.recovers_on must be short_rest or long_rest for free casts"
-            )
+            errors.append(f"{prefix}.recovers_on must be short_rest or long_rest for free casts")
         if not free_casts and recovers_on is not None:
             errors.append(f"{prefix}.recovers_on must be null without free casts")
         if not isinstance(raw_grant.get("allow_slot_cast"), bool):
@@ -1058,11 +1001,7 @@ def feat_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
             errors.append(f"{prefix} cannot combine ritual_only with free casts")
         try:
             normalize_feature_casting_overrides(
-                (
-                    raw_grant["casting_overrides"]
-                    if "casting_overrides" in raw_grant
-                    else {}
-                ),
+                (raw_grant["casting_overrides"] if "casting_overrides" in raw_grant else {}),
                 f"{prefix}.casting_overrides",
             )
         except ValueError as error:
@@ -1146,8 +1085,7 @@ def feat_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
         unsupported = set(requirements) - supported_requirement_fields
         if unsupported:
             errors.append(
-                "feat spell selection requirements have unsupported fields: "
-                f"{sorted(unsupported)}"
+                f"feat spell selection requirements have unsupported fields: {sorted(unsupported)}"
             )
         if not str(requirements.get("field") or "").strip():
             errors.append("feat spell selection requirements need a field")
@@ -1219,9 +1157,7 @@ def subclass_spell_grant_errors(binding: Mapping[str, Any]) -> list[str]:
                 "known",
                 "spellbook",
             }:
-                errors.append(
-                    f"{prefix}.method must be always_prepared, known, or spellbook"
-                )
+                errors.append(f"{prefix}.method must be always_prepared, known, or spellbook")
     if len(normalized_names) != len(set(normalized_names)):
         errors.append("subclass spell grants must not repeat a spell")
     return errors
@@ -1234,8 +1170,10 @@ def _validate_materializer_card(kind: str, binding: Mapping[str, Any]) -> None:
     if kind == "spell":
         classes = binding.get("classes")
         level = binding.get("level")
-        if not isinstance(classes, list) or not classes or any(
-            not isinstance(value, str) or not value.strip() for value in classes
+        if (
+            not isinstance(classes, list)
+            or not classes
+            or any(not isinstance(value, str) or not value.strip() for value in classes)
         ):
             raise ValueError("spell card needs a non-empty classes list")
         if isinstance(level, bool) or not isinstance(level, int) or not 0 <= level <= 9:
@@ -1276,16 +1214,21 @@ def _validate_materializer_card(kind: str, binding: Mapping[str, Any]) -> None:
             "tool_proficiencies",
             "weapon_proficiencies",
         }
-        optional = {"tool_choice_count", "tool_options"}
+        optional = {"tool_choice_count", "tool_options", "spellcasting"}
         if not expected.issubset(definition) or set(definition) - expected - optional:
             raise ValueError("class_definition has missing or unsupported fields")
         hit_die = definition.get("hit_die")
-        if isinstance(hit_die, bool) or not isinstance(hit_die, int) or hit_die not in {
-            6,
-            8,
-            10,
-            12,
-        }:
+        if (
+            isinstance(hit_die, bool)
+            or not isinstance(hit_die, int)
+            or hit_die
+            not in {
+                6,
+                8,
+                10,
+                12,
+            }
+        ):
             raise ValueError("class hit_die must be one of 6, 8, 10, or 12")
         sheet = default_character_sheet()
         saves = definition.get("saving_throw_proficiencies")
@@ -1302,8 +1245,7 @@ def _validate_materializer_card(kind: str, binding: Mapping[str, Any]) -> None:
             not isinstance(options, list)
             or not options
             or any(
-                str(item).casefold().replace(" ", "_") not in sheet["skills"]
-                for item in options
+                str(item).casefold().replace(" ", "_") not in sheet["skills"] for item in options
             )
         ):
             raise ValueError("class skill_options must contain known skills")
@@ -1321,9 +1263,7 @@ def _validate_materializer_card(kind: str, binding: Mapping[str, Any]) -> None:
             or not 0 <= tool_count <= len(tool_options)
         ):
             raise ValueError("class tool_choice_count is invalid")
-        if len({str(item).strip().casefold() for item in tool_options}) != len(
-            tool_options
-        ):
+        if len({str(item).strip().casefold() for item in tool_options}) != len(tool_options):
             raise ValueError("class tool_options must be distinct")
         for field in (
             "armor_proficiencies",
@@ -1335,6 +1275,11 @@ def _validate_materializer_card(kind: str, binding: Mapping[str, Any]) -> None:
                 not isinstance(item, str) or not item.strip() for item in values
             ):
                 raise ValueError(f"class {field} must be an array of names")
+        if "spellcasting" in definition:
+            normalize_class_spellcasting_profile(
+                definition["spellcasting"],
+                "class class_definition.spellcasting",
+            )
     elif kind == "species":
         if not isinstance(binding.get("grants"), Mapping):
             raise ValueError("species card needs grants")

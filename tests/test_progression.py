@@ -12,6 +12,48 @@ from sagasmith_dnd.progression import (
     initialize_base_class,
     synchronize_class_feature_resources,
 )
+from sagasmith_dnd.spells import validate_spell_grant
+
+
+def _artificer_spellcasting_profile() -> dict:
+    return {
+        "ability": "intelligence",
+        "class_list": "artificer",
+        "preparation_mode": "prepared",
+        "slot_progression": "half_round_up",
+        "ritual_casting": True,
+        "spellbook": False,
+        "cantrips_known_by_level": [
+            2,
+            2,
+            2,
+            2,
+            2,
+            2,
+            2,
+            2,
+            2,
+            3,
+            3,
+            3,
+            3,
+            4,
+            4,
+            4,
+            4,
+            4,
+            4,
+            4,
+        ],
+        "leveled_spells_known_by_level": [],
+        "prepared_limit": {
+            "ability": "intelligence",
+            "class_level_divisor": 2,
+            "rounding": "down",
+            "minimum": 1,
+        },
+        "spell_list_expansion": ["Cure Wounds", "Magic Weapon"],
+    }
 
 
 def test_initialize_reviewed_addon_base_class_applies_only_common_level_one_rules() -> None:
@@ -75,6 +117,63 @@ def test_initialize_reviewed_addon_base_class_rejects_unreviewed_choices() -> No
             },
             skill_choices=["stealth"],
         )
+
+
+def test_reviewed_addon_class_spellcasting_survives_selection_and_advancement() -> None:
+    sheet = default_character_sheet()
+    sheet["abilities"]["intelligence"]["score"] = 16
+    initialized = initialize_base_class(
+        sheet,
+        class_name="Artificer",
+        class_definition={
+            "hit_die": 8,
+            "saving_throw_proficiencies": ["constitution", "intelligence"],
+            "armor_proficiencies": ["light armor", "medium armor", "shields"],
+            "weapon_proficiencies": ["simple weapons"],
+            "tool_proficiencies": ["thieves' tools", "tinker's tools"],
+            "skill_choice_count": 2,
+            "skill_options": ["arcana", "investigation"],
+            "spellcasting": _artificer_spellcasting_profile(),
+        },
+        skill_choices=["arcana", "investigation"],
+    )
+    level_one = validate_character_sheet(initialized["sheet"])
+
+    assert level_one["spellcasting"]["ability"] == "intelligence"
+    assert level_one["spellcasting"]["class_lists"] == ["artificer"]
+    assert level_one["spellcasting"]["spell_slots"]["1"]["max"] == 2
+    assert level_one["spellcasting"]["preparation"]["max_prepared"] == 3
+    assert initialized["spellcasting"]["spell_choices"] == {
+        "cantrips_to_add": 2,
+        "leveled_spells_to_add": 0,
+    }
+    assert (
+        validate_spell_grant(
+            level_one,
+            {"name": "Cure Wounds", "level": 1, "classes": ["Cleric"]},
+            source_class="Artificer",
+            artifact_id="cure-wounds",
+        )
+        == "artificer"
+    )
+
+    advanced = level_one
+    for _ in range(4):
+        advanced = advance_single_class_level(
+            advanced,
+            class_name="Artificer",
+            hp_method="fixed",
+        )["sheet"]
+    advanced = validate_character_sheet(advanced)
+
+    assert advanced["progression"]["classes"][0]["spellcasting"] == (
+        _artificer_spellcasting_profile()
+    )
+    assert {
+        level: resource["max"]
+        for level, resource in advanced["spellcasting"]["spell_slots"].items()
+    } == {"1": 4, "2": 2}
+    assert advanced["spellcasting"]["preparation"]["max_prepared"] == 5
 
 
 class _SequenceRng:
@@ -229,9 +328,13 @@ def test_2024_wizard_advancement_reports_spellbook_and_prepared_growth() -> None
 
 def test_level_advancement_keeps_machine_source_separate_from_display_source() -> None:
     sheet = _single_class_sheet("Rogue", hit_die=8, constitution=14, hp=(10, 10))
-    source_ref = '{"content_sha256":"' + ("a" * 64) + '","heading_path":[' + (
-        '"long heading",' * 30
-    ).rstrip(",") + "]}"
+    source_ref = (
+        '{"content_sha256":"'
+        + ("a" * 64)
+        + '","heading_path":['
+        + ('"long heading",' * 30).rstrip(",")
+        + "]}"
+    )
     reason = "Reached the module milestone after resolving the chapter."
 
     result = advance_single_class_level(
@@ -580,10 +683,7 @@ def test_resource_sync_recomputes_2014_prepared_limit_after_an_ability_change(
             "class_limits": {class_name.casefold(): expected},
         }
     ]
-    assert (
-        synchronize_class_feature_resources(synchronized["sheet"])["changes"]
-        == []
-    )
+    assert synchronize_class_feature_resources(synchronized["sheet"])["changes"] == []
 
 
 def test_per_level_hp_bonus_is_separate_from_the_minimum_class_gain() -> None:
@@ -814,12 +914,9 @@ def test_constitution_change_preserves_long_base_sources_in_structured_adjustmen
         source="Rogue level 10 Ability Score Improvement",
     )
 
+    assert all(item["source"] == long_source for item in updated["combat"]["hp_progression"])
     assert all(
-        item["source"] == long_source for item in updated["combat"]["hp_progression"]
-    )
-    assert all(
-        item["adjustments"][0]["source"]
-        == "Rogue level 10 Ability Score Improvement"
+        item["adjustments"][0]["source"] == "Rogue level 10 Ability Score Improvement"
         for item in updated["combat"]["hp_progression"]
     )
 

@@ -784,17 +784,11 @@ def _normalize_weapon_on_hit_resolution(value: Any, field: str) -> dict[str, Any
             resolution.get("target_ability"),
             f"{field}.target_ability",
         ).casefold()
-        if (
-            source_ability not in ABILITY_NAMES
-            or target_ability not in ABILITY_NAMES
-        ):
+        if source_ability not in ABILITY_NAMES or target_ability not in ABILITY_NAMES:
             raise ValueError(f"{field} contest abilities are invalid")
         if _text(resolution.get("ties"), f"{field}.ties") != "no_movement":
             raise ValueError(f"{field}.ties is unsupported")
-        if (
-            _text(resolution.get("direction"), f"{field}.direction")
-            != "toward_source"
-        ):
+        if _text(resolution.get("direction"), f"{field}.direction") != "toward_source":
             raise ValueError(f"{field}.direction is unsupported")
         maximum_distance_ft = _integer(
             resolution.get("maximum_distance_ft"),
@@ -803,9 +797,7 @@ def _normalize_weapon_on_hit_resolution(value: Any, field: str) -> dict[str, Any
             maximum=500,
         )
         if maximum_distance_ft % 5:
-            raise ValueError(
-                f"{field}.maximum_distance_ft must use five-foot increments"
-            )
+            raise ValueError(f"{field}.maximum_distance_ft must use five-foot increments")
         return {
             "kind": kind,
             "trigger": trigger,
@@ -1089,9 +1081,8 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
             )
         ]
         valid_sizes = {"tiny", "small", "medium", "large", "huge", "gargantuan"}
-        if (
-            len(required_target_sizes) != len(set(required_target_sizes))
-            or any(item not in valid_sizes for item in required_target_sizes)
+        if len(required_target_sizes) != len(set(required_target_sizes)) or any(
+            item not in valid_sizes for item in required_target_sizes
         ):
             raise ValueError(f"{field}.required_target_sizes is invalid")
         mastery = _text(mechanics.get("mastery"), f"{field}.mastery").casefold()
@@ -1388,9 +1379,7 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
         _reject_unknown(mechanics, field, {"magic", "rarity", "slaying"})
         normalized_ammunition: dict[str, Any] = {}
         if "magic" in mechanics:
-            normalized_ammunition["magic"] = _boolean(
-                mechanics["magic"], f"{field}.magic"
-            )
+            normalized_ammunition["magic"] = _boolean(mechanics["magic"], f"{field}.magic")
         if "rarity" in mechanics:
             normalized_ammunition["rarity"] = _text(
                 mechanics["rarity"], f"{field}.rarity", maximum=40
@@ -1569,9 +1558,7 @@ def _normalize_item(value: Any, field: str, *, generate_id: bool = True) -> dict
             re.sub(r"[^a-z ]", " ", result["name"].casefold()),
         ).strip()
         if standard_name in STANDARD_WEAPON_MATERIALS:
-            result["mechanics"]["materials"] = list(
-                STANDARD_WEAPON_MATERIALS[standard_name]
-            )
+            result["mechanics"]["materials"] = list(STANDARD_WEAPON_MATERIALS[standard_name])
     if item.get("resolution_plan") is not None:
         result["resolution_plan"] = _normalize_embedded_resolution_plan(
             item["resolution_plan"],
@@ -1581,9 +1568,7 @@ def _normalize_item(value: Any, field: str, *, generate_id: bool = True) -> dict
         )
     if item.get("resolution_solution") is not None:
         if "resolution_plan" not in result:
-            raise ValueError(
-                f"{field}.resolution_solution requires resolution_plan"
-            )
+            raise ValueError(f"{field}.resolution_solution requires resolution_plan")
         result["resolution_solution"] = _normalize_embedded_resolution_solution(
             item["resolution_solution"],
             result["resolution_plan"],
@@ -1780,19 +1765,13 @@ def normalize_spell_definition(value: Any, field: str = "spell.definition") -> d
         {"school", "casting_time", "range", "duration", "components", "effect"},
     )
     spell_range = _object(definition.get("range") or {}, f"{field}.range")
-    _reject_unknown(
-        spell_range, f"{field}.range", {"kind", "normal_ft", "long_ft", "area"}
-    )
+    _reject_unknown(spell_range, f"{field}.range", {"kind", "normal_ft", "long_ft", "area"})
     range_kind = _text(spell_range.get("kind"), f"{field}.range.kind", default="special")
     if range_kind not in {"self", "touch", "distance", "sight", "unlimited", "special"}:
         raise ValueError(f"{field}.range.kind is invalid")
     duration = _object(definition.get("duration") or {}, f"{field}.duration")
-    _reject_unknown(
-        duration, f"{field}.duration", {"kind", "value", "unit", "concentration"}
-    )
-    duration_kind = _text(
-        duration.get("kind"), f"{field}.duration.kind", default="instantaneous"
-    )
+    _reject_unknown(duration, f"{field}.duration", {"kind", "value", "unit", "concentration"})
+    duration_kind = _text(duration.get("kind"), f"{field}.duration.kind", default="instantaneous")
     if duration_kind not in {"instantaneous", "timed", "until_dispelled", "special"}:
         raise ValueError(f"{field}.duration.kind is invalid")
     duration_unit = _text(duration.get("unit"), f"{field}.duration.unit", default="round")
@@ -1806,17 +1785,13 @@ def normalize_spell_definition(value: Any, field: str = "spell.definition") -> d
     )
     return {
         "school": _text(definition.get("school"), f"{field}.school", maximum=100),
-        "casting_time": _text(
-            definition.get("casting_time"), f"{field}.casting_time", maximum=200
-        ),
+        "casting_time": _text(definition.get("casting_time"), f"{field}.casting_time", maximum=200),
         "range": {
             "kind": range_kind,
             "normal_ft": _integer(
                 spell_range.get("normal_ft"), f"{field}.range.normal_ft", minimum=0
             ),
-            "long_ft": _integer(
-                spell_range.get("long_ft"), f"{field}.range.long_ft", minimum=0
-            ),
+            "long_ft": _integer(spell_range.get("long_ft"), f"{field}.range.long_ft", minimum=0),
             "area": _text(spell_range.get("area"), f"{field}.range.area", maximum=200),
         },
         "duration": {
@@ -1876,6 +1851,133 @@ def normalize_feature_casting_overrides(
             f"{field}.ignore_material_components",
         )
     return result
+
+
+def normalize_class_spellcasting_profile(
+    value: Any,
+    field: str = "class_definition.spellcasting",
+) -> dict[str, Any]:
+    """Validate a portable addon class's spellcasting progression."""
+
+    profile = _object(value, field)
+    expected = {
+        "ability",
+        "class_list",
+        "preparation_mode",
+        "slot_progression",
+        "ritual_casting",
+        "spellbook",
+        "cantrips_known_by_level",
+        "leveled_spells_known_by_level",
+        "prepared_limit",
+        "spell_list_expansion",
+    }
+    _reject_unknown(profile, field, expected)
+    missing = expected - set(profile)
+    if missing:
+        raise ValueError(f"{field} has missing fields: {', '.join(sorted(missing))}")
+    ability = _text(profile.get("ability"), f"{field}.ability", maximum=30).casefold()
+    if ability not in ABILITY_NAMES:
+        raise ValueError(f"{field}.ability is invalid")
+    class_list = _text(profile.get("class_list"), f"{field}.class_list", maximum=100)
+    if not class_list:
+        raise ValueError(f"{field}.class_list must not be empty")
+    preparation_mode = _text(
+        profile.get("preparation_mode"),
+        f"{field}.preparation_mode",
+        maximum=30,
+    ).casefold()
+    if preparation_mode not in {"known", "prepared", "spellbook"}:
+        raise ValueError(f"{field}.preparation_mode is invalid")
+    slot_progression = _text(
+        profile.get("slot_progression"),
+        f"{field}.slot_progression",
+        maximum=30,
+    ).casefold()
+    if slot_progression not in {"none", "full", "half", "half_round_up", "pact"}:
+        raise ValueError(f"{field}.slot_progression is invalid")
+
+    def progression_values(key: str) -> list[int]:
+        raw = _array(profile.get(key), f"{field}.{key}")
+        if len(raw) not in {0, 20}:
+            raise ValueError(f"{field}.{key} must be empty or contain levels 1 through 20")
+        values = [
+            _integer(item, f"{field}.{key}[{index}]", minimum=0, maximum=99)
+            for index, item in enumerate(raw)
+        ]
+        if values != sorted(values):
+            raise ValueError(f"{field}.{key} must be nondecreasing")
+        return values
+
+    cantrips = progression_values("cantrips_known_by_level")
+    spells_known = progression_values("leveled_spells_known_by_level")
+    raw_limit = _object(profile.get("prepared_limit") or {}, f"{field}.prepared_limit")
+    _reject_unknown(
+        raw_limit,
+        f"{field}.prepared_limit",
+        {"ability", "class_level_divisor", "rounding", "minimum"},
+    )
+    prepared_limit: dict[str, Any] = {}
+    if preparation_mode in PREPARED_SELECTION_MODES:
+        required_limit = {"ability", "class_level_divisor", "rounding", "minimum"}
+        missing_limit = required_limit - set(raw_limit)
+        if missing_limit:
+            raise ValueError(
+                f"{field}.prepared_limit has missing fields: {', '.join(sorted(missing_limit))}"
+            )
+        limit_ability = _text(
+            raw_limit.get("ability"),
+            f"{field}.prepared_limit.ability",
+            maximum=30,
+        ).casefold()
+        if limit_ability not in ABILITY_NAMES:
+            raise ValueError(f"{field}.prepared_limit.ability is invalid")
+        rounding = _text(
+            raw_limit.get("rounding"),
+            f"{field}.prepared_limit.rounding",
+            maximum=10,
+        ).casefold()
+        if rounding not in {"down", "up"}:
+            raise ValueError(f"{field}.prepared_limit.rounding is invalid")
+        prepared_limit = {
+            "ability": limit_ability,
+            "class_level_divisor": _integer(
+                raw_limit.get("class_level_divisor"),
+                f"{field}.prepared_limit.class_level_divisor",
+                minimum=1,
+                maximum=20,
+            ),
+            "rounding": rounding,
+            "minimum": _integer(
+                raw_limit.get("minimum"),
+                f"{field}.prepared_limit.minimum",
+                minimum=0,
+                maximum=99,
+            ),
+        }
+    elif raw_limit:
+        raise ValueError(f"{field}.prepared_limit is only valid for prepared casters")
+    spell_list = _string_list(
+        profile.get("spell_list_expansion"),
+        f"{field}.spell_list_expansion",
+    )
+    if len({item.casefold() for item in spell_list}) != len(spell_list):
+        raise ValueError(f"{field}.spell_list_expansion contains duplicates")
+    spellbook = _boolean(profile.get("spellbook"), f"{field}.spellbook")
+    if spellbook != (preparation_mode == "spellbook"):
+        raise ValueError(f"{field}.spellbook must match the spellbook preparation mode")
+    return {
+        "ability": ability,
+        "class_list": class_list,
+        "preparation_mode": preparation_mode,
+        "slot_progression": slot_progression,
+        "ritual_casting": _boolean(profile.get("ritual_casting"), f"{field}.ritual_casting"),
+        "spellbook": spellbook,
+        "cantrips_known_by_level": cantrips,
+        "leveled_spells_known_by_level": spells_known,
+        "prepared_limit": prepared_limit,
+        "spell_list_expansion": spell_list,
+    }
 
 
 CHARACTER_SPELL_CARD_FIELDS = frozenset(
@@ -1964,37 +2066,37 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
         if ability not in {*ABILITY_NAMES, "none"}:
             raise ValueError(f"{source_field}.spellcasting_ability is invalid")
         normalized_source = {
-                "source_key": _text(
-                    source.get("source_key"),
-                    f"{source_field}.source_key",
+            "source_key": _text(
+                source.get("source_key"),
+                f"{source_field}.source_key",
+                maximum=300,
+            ),
+            "method": method,
+            "spellcasting_ability": ability,
+            "resource_key": (
+                _text(
+                    source.get("resource_key"),
+                    f"{source_field}.resource_key",
                     maximum=300,
-                ),
-                "method": method,
-                "spellcasting_ability": ability,
-                "resource_key": (
-                    _text(
-                        source.get("resource_key"),
-                        f"{source_field}.resource_key",
-                        maximum=300,
-                    )
-                    if source.get("resource_key") is not None
-                    else None
-                ),
-                "allow_slot_cast": _boolean(
-                    source.get("allow_slot_cast"),
-                    f"{source_field}.allow_slot_cast",
-                ),
-                "minimum_level": _integer(
-                    source.get("minimum_level"),
-                    f"{source_field}.minimum_level",
-                    minimum=1,
-                    maximum=20,
-                ),
-                "ritual_only": _boolean(
-                    source.get("ritual_only"),
-                    f"{source_field}.ritual_only",
-                ),
-            }
+                )
+                if source.get("resource_key") is not None
+                else None
+            ),
+            "allow_slot_cast": _boolean(
+                source.get("allow_slot_cast"),
+                f"{source_field}.allow_slot_cast",
+            ),
+            "minimum_level": _integer(
+                source.get("minimum_level"),
+                f"{source_field}.minimum_level",
+                minimum=1,
+                maximum=20,
+            ),
+            "ritual_only": _boolean(
+                source.get("ritual_only"),
+                f"{source_field}.ritual_only",
+            ),
+        }
         casting_overrides = normalize_feature_casting_overrides(
             source["casting_overrides"] if "casting_overrides" in source else {},
             f"{source_field}.casting_overrides",
@@ -2002,9 +2104,7 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
         if casting_overrides:
             normalized_source["casting_overrides"] = casting_overrides
         feature_casting_sources.append(normalized_source)
-    feature_source_keys = [
-        item["source_key"].casefold() for item in feature_casting_sources
-    ]
+    feature_source_keys = [item["source_key"].casefold() for item in feature_casting_sources]
     if len(feature_source_keys) != len(set(feature_source_keys)):
         raise ValueError(f"{field}.access.feature_casting_sources contains duplicates")
     spell_id = _text(
@@ -2080,9 +2180,7 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
         )
     if spell.get("resolution_solution") is not None:
         if "resolution_plan" not in result:
-            raise ValueError(
-                f"{field}.resolution_solution requires resolution_plan"
-            )
+            raise ValueError(f"{field}.resolution_solution requires resolution_plan")
         result["resolution_solution"] = _normalize_embedded_resolution_solution(
             spell["resolution_solution"],
             result["resolution_plan"],
@@ -2090,15 +2188,11 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
             source_card=result,
         )
     if result["resolution"] is not None and "resolution_plan" in result:
-        raise ValueError(
-            f"{field} cannot combine structured resolution and resolution_plan"
-        )
+        raise ValueError(f"{field} cannot combine structured resolution and resolution_plan")
     if "resolution_plan" in result and (
         set(result["mechanic_refs"]) & ENGINE_SETTLED_SPELL_MECHANIC_IDS
     ):
-        raise ValueError(
-            f"{field} cannot combine an engine-settled mechanic and resolution_plan"
-        )
+        raise ValueError(f"{field} cannot combine an engine-settled mechanic and resolution_plan")
     return result
 
 
@@ -2216,15 +2310,12 @@ def _normalize_effect(value: Any, field: str) -> dict[str, Any]:
             or not 0 <= change_value <= 30
         ):
             raise ValueError(
-                f"{field} ability score effects require an override or minimum "
-                "between 0 and 30"
+                f"{field} ability score effects require an override or minimum between 0 and 30"
             )
         if path == "combat.hp.excess_on_end" and (
             mode != "set" or change_value != "temporary_hit_points"
         ):
-            raise ValueError(
-                f"{field} combat.hp.excess_on_end supports temporary_hit_points only"
-            )
+            raise ValueError(f"{field} combat.hp.excess_on_end supports temporary_hit_points only")
     normalized = {
         "id": _text(effect.get("id"), f"{field}.id", default=_uuid(), maximum=100),
         "name": _text(effect.get("name"), f"{field}.name", maximum=300),
@@ -2260,9 +2351,7 @@ def _normalize_effect(value: Any, field: str) -> dict[str, Any]:
         if dependency != "source_effect_active":
             raise ValueError(f"{field}.dependency is unsupported")
         if not source_actor_id or not source_effect_id:
-            raise ValueError(
-                f"{field}.dependency requires source_actor_id and source_effect_id"
-            )
+            raise ValueError(f"{field}.dependency requires source_actor_id and source_effect_id")
         normalized.update(
             {
                 "dependency": dependency,
@@ -2271,9 +2360,7 @@ def _normalize_effect(value: Any, field: str) -> dict[str, Any]:
             }
         )
     elif source_actor_id or source_effect_id:
-        raise ValueError(
-            f"{field}.source_actor_id and source_effect_id require dependency"
-        )
+        raise ValueError(f"{field}.source_actor_id and source_effect_id require dependency")
     ended_reason = _text(effect.get("ended_reason"), f"{field}.ended_reason", maximum=300)
     if ended_reason:
         if normalized["active"]:
@@ -2410,32 +2497,38 @@ def validate_character_sheet(
     for index, item in enumerate(_array(progression["classes"], "sheet.progression.classes")):
         entry = _object(item, f"sheet.progression.classes[{index}]")
         _reject_unknown(
-            entry, f"sheet.progression.classes[{index}]", {"name", "level", "subclass", "hit_die"}
+            entry,
+            f"sheet.progression.classes[{index}]",
+            {"name", "level", "subclass", "hit_die", "spellcasting"},
         )
-        classes.append(
-            {
-                "name": _text(
-                    entry.get("name"), f"sheet.progression.classes[{index}].name", maximum=200
-                ),
-                "level": _integer(
-                    entry.get("level"),
-                    f"sheet.progression.classes[{index}].level",
-                    minimum=1,
-                    maximum=20,
-                ),
-                "subclass": _text(
-                    entry.get("subclass"),
-                    f"sheet.progression.classes[{index}].subclass",
-                    maximum=200,
-                ),
-                "hit_die": _integer(
-                    entry.get("hit_die"),
-                    f"sheet.progression.classes[{index}].hit_die",
-                    minimum=1,
-                    maximum=20,
-                ),
-            }
-        )
+        normalized_class = {
+            "name": _text(
+                entry.get("name"), f"sheet.progression.classes[{index}].name", maximum=200
+            ),
+            "level": _integer(
+                entry.get("level"),
+                f"sheet.progression.classes[{index}].level",
+                minimum=1,
+                maximum=20,
+            ),
+            "subclass": _text(
+                entry.get("subclass"),
+                f"sheet.progression.classes[{index}].subclass",
+                maximum=200,
+            ),
+            "hit_die": _integer(
+                entry.get("hit_die"),
+                f"sheet.progression.classes[{index}].hit_die",
+                minimum=1,
+                maximum=20,
+            ),
+        }
+        if "spellcasting" in entry:
+            normalized_class["spellcasting"] = normalize_class_spellcasting_profile(
+                entry["spellcasting"],
+                f"sheet.progression.classes[{index}].spellcasting",
+            )
+        classes.append(normalized_class)
     level = _integer(progression["level"], "sheet.progression.level", minimum=1, maximum=20)
     if classes and sum(item["level"] for item in classes) != level:
         raise ValueError("sheet.progression.level must equal the total class levels")
@@ -2454,9 +2547,7 @@ def validate_character_sheet(
             "choices",
         },
     )
-    species_grants = _object(
-        progression["species_grants"], "sheet.progression.species_grants"
-    )
+    species_grants = _object(progression["species_grants"], "sheet.progression.species_grants")
     _reject_unknown(
         species_grants,
         "sheet.progression.species_grants",
@@ -2577,8 +2668,7 @@ def validate_character_sheet(
                 )
             ):
                 adjustment_path = (
-                    f"sheet.combat.hp_progression[{index}]"
-                    f".adjustments[{adjustment_index}]"
+                    f"sheet.combat.hp_progression[{index}].adjustments[{adjustment_index}]"
                 )
                 adjustment = _object(raw_adjustment, adjustment_path)
                 _reject_unknown(
@@ -2618,9 +2708,7 @@ def validate_character_sheet(
                 score_fields = {"previous_score", "new_score"} & set(adjustment)
                 if kind == "constitution_modifier_change":
                     if score_fields != {"previous_score", "new_score"}:
-                        raise ValueError(
-                            f"{adjustment_path} requires previous_score and new_score"
-                        )
+                        raise ValueError(f"{adjustment_path} requires previous_score and new_score")
                     normalized_adjustment["previous_score"] = _integer(
                         adjustment.get("previous_score"),
                         f"{adjustment_path}.previous_score",
@@ -3054,75 +3142,75 @@ def validate_character_sheet(
                 maximum=CONTENT_ARTIFACT_ID_MAX_LENGTH,
             )
             normalized_entry = {
-                    "id": entry_id,
-                    "name": _text(
-                        entry.get("name"), f"sheet.content.{name}[{index}].name", maximum=300
+                "id": entry_id,
+                "name": _text(
+                    entry.get("name"), f"sheet.content.{name}[{index}].name", maximum=300
+                ),
+                "source_key": _text(
+                    entry.get("source_key"),
+                    f"sheet.content.{name}[{index}].source_key",
+                    maximum=300,
+                ),
+                "description": _text(
+                    entry.get("description"),
+                    f"sheet.content.{name}[{index}].description",
+                    maximum=4000,
+                ),
+                "uses": _normalize_resource(
+                    (entry.get("uses") or {} if "uses" in entry else {"unlimited": True}),
+                    f"sheet.content.{name}[{index}].uses",
+                ),
+                "resource_key": _text(
+                    entry.get("resource_key"),
+                    f"sheet.content.{name}[{index}].resource_key",
+                    maximum=200,
+                ),
+                "activation": {
+                    "type": activation_type,
+                    "cost": _integer(
+                        activation.get("cost"),
+                        f"sheet.content.{name}[{index}].activation.cost",
+                        minimum=0,
                     ),
-                    "source_key": _text(
-                        entry.get("source_key"),
-                        f"sheet.content.{name}[{index}].source_key",
-                        maximum=300,
+                    "trigger": _text(
+                        activation.get("trigger"),
+                        f"sheet.content.{name}[{index}].activation.trigger",
+                        maximum=1000,
                     ),
-                    "description": _text(
-                        entry.get("description"),
-                        f"sheet.content.{name}[{index}].description",
-                        maximum=4000,
-                    ),
-                    "uses": _normalize_resource(
-                        (entry.get("uses") or {} if "uses" in entry else {"unlimited": True}),
-                        f"sheet.content.{name}[{index}].uses",
-                    ),
-                    "resource_key": _text(
-                        entry.get("resource_key"),
-                        f"sheet.content.{name}[{index}].resource_key",
-                        maximum=200,
-                    ),
-                    "activation": {
-                        "type": activation_type,
-                        "cost": _integer(
-                            activation.get("cost"),
-                            f"sheet.content.{name}[{index}].activation.cost",
-                            minimum=0,
-                        ),
-                        "trigger": _text(
-                            activation.get("trigger"),
-                            f"sheet.content.{name}[{index}].activation.trigger",
-                            maximum=1000,
-                        ),
-                    },
-                    "scaling": scaling,
-                    "resource_scaling": _normalize_resource_scaling(
-                        entry.get("resource_scaling") or {},
-                        f"sheet.content.{name}[{index}].resource_scaling",
-                    ),
-                    "attack_scaling": attack_scaling,
-                    "choices": _object(
-                        entry.get("choices") or {}, f"sheet.content.{name}[{index}].choices"
-                    ),
-                    "advancement_grants": advancement_grants,
-                    "pack_id": _text(
-                        entry.get("pack_id"),
-                        f"sheet.content.{name}[{index}].pack_id",
-                        maximum=200,
-                    ),
-                    "pack_version": _text(
-                        entry.get("pack_version"),
-                        f"sheet.content.{name}[{index}].pack_version",
-                        maximum=64,
-                    ),
-                    "rule_refs": _string_list(
-                        entry.get("rule_refs") or [],
-                        f"sheet.content.{name}[{index}].rule_refs",
-                    ),
-                    "mechanic_refs": _string_list(
-                        entry.get("mechanic_refs") or [],
-                        f"sheet.content.{name}[{index}].mechanic_refs",
-                    ),
-                    "ruling_requirements": _normalize_ruling_requirements(
-                        entry.get("ruling_requirements") or [],
-                        f"sheet.content.{name}[{index}].ruling_requirements",
-                    ),
-                }
+                },
+                "scaling": scaling,
+                "resource_scaling": _normalize_resource_scaling(
+                    entry.get("resource_scaling") or {},
+                    f"sheet.content.{name}[{index}].resource_scaling",
+                ),
+                "attack_scaling": attack_scaling,
+                "choices": _object(
+                    entry.get("choices") or {}, f"sheet.content.{name}[{index}].choices"
+                ),
+                "advancement_grants": advancement_grants,
+                "pack_id": _text(
+                    entry.get("pack_id"),
+                    f"sheet.content.{name}[{index}].pack_id",
+                    maximum=200,
+                ),
+                "pack_version": _text(
+                    entry.get("pack_version"),
+                    f"sheet.content.{name}[{index}].pack_version",
+                    maximum=64,
+                ),
+                "rule_refs": _string_list(
+                    entry.get("rule_refs") or [],
+                    f"sheet.content.{name}[{index}].rule_refs",
+                ),
+                "mechanic_refs": _string_list(
+                    entry.get("mechanic_refs") or [],
+                    f"sheet.content.{name}[{index}].mechanic_refs",
+                ),
+                "ruling_requirements": _normalize_ruling_requirements(
+                    entry.get("ruling_requirements") or [],
+                    f"sheet.content.{name}[{index}].ruling_requirements",
+                ),
+            }
             if entry.get("resolution_plan") is not None:
                 normalized_entry["resolution_plan"] = _normalize_embedded_resolution_plan(
                     entry["resolution_plan"],
@@ -3136,9 +3224,7 @@ def validate_character_sheet(
                 )
                 normalized_entry["choices"]["resolution_plan"] = {
                     "id": normalized_entry["resolution_plan"]["id"],
-                    "fingerprint": normalized_entry["resolution_plan"][
-                        "fingerprint"
-                    ],
+                    "fingerprint": normalized_entry["resolution_plan"]["fingerprint"],
                 }
             if entry.get("resolution_solution") is not None:
                 if "resolution_plan" not in normalized_entry:
@@ -3146,16 +3232,11 @@ def validate_character_sheet(
                         f"sheet.content.{name}[{index}].resolution_solution "
                         "requires resolution_plan"
                     )
-                normalized_entry["resolution_solution"] = (
-                    _normalize_embedded_resolution_solution(
-                        entry["resolution_solution"],
-                        normalized_entry["resolution_plan"],
-                        (
-                            f"sheet.content.{name}[{index}]."
-                            "resolution_solution"
-                        ),
-                        source_card=normalized_entry,
-                    )
+                normalized_entry["resolution_solution"] = _normalize_embedded_resolution_solution(
+                    entry["resolution_solution"],
+                    normalized_entry["resolution_plan"],
+                    (f"sheet.content.{name}[{index}].resolution_solution"),
+                    source_card=normalized_entry,
                 )
             result.append(normalized_entry)
         return result
@@ -3233,9 +3314,7 @@ def validate_character_sheet(
     }
     item_spell_ids.discard("")
 
-    conditions = sorted(
-        condition_ids(_string_list(value["conditions"], "sheet.conditions"))
-    )
+    conditions = sorted(condition_ids(_string_list(value["conditions"], "sheet.conditions")))
     if exhaustion >= 6 and "dead" not in conditions:
         conditions.append("dead")
     if "dead" in conditions:
@@ -3888,12 +3967,7 @@ def _derive_armor_class(
             else:
                 dexterity_bonus = min(dexterity_modifier, mechanics["dexterity_max"])
             corrosion_penalty = int(mechanics.get("corrosion_penalty", 0) or 0)
-            total = (
-                mechanics["base_ac"]
-                - corrosion_penalty
-                + dexterity_bonus
-                + magic_bonus
-            )
+            total = mechanics["base_ac"] - corrosion_penalty + dexterity_bonus + magic_bonus
             breakdown["mode"] = "armor"
             breakdown["base"] = mechanics["base_ac"]
             breakdown["armor"] = {
@@ -4117,8 +4191,10 @@ def _weapon_attacks(
                 weapon_dice_multiplier *= int(change["value"])
     attacks = []
     for item in inventory["items"]:
-        if item["kind"] != "weapon" or item.get("condition") == "destroyed" or not (
-            item["equipped"] or item["mechanics"].get("always_available", False)
+        if (
+            item["kind"] != "weapon"
+            or item.get("condition") == "destroyed"
+            or not (item["equipped"] or item["mechanics"].get("always_available", False))
         ):
             continue
         mechanics = item["mechanics"]
@@ -4190,9 +4266,7 @@ def _weapon_attacks(
                         ),
                     }
                     for part in (
-                        mechanics["versatile_additional_damage"]
-                        if magic_properties_active
-                        else []
+                        mechanics["versatile_additional_damage"] if magic_properties_active else []
                     )
                 ],
                 "on_hit_effect": (mechanics["on_hit_effect"] if magic_properties_active else ""),
@@ -4202,9 +4276,7 @@ def _weapon_attacks(
                     else None
                 ),
                 "resolution_plan": (
-                    copy.deepcopy(item.get("resolution_plan"))
-                    if magic_properties_active
-                    else None
+                    copy.deepcopy(item.get("resolution_plan")) if magic_properties_active else None
                 ),
                 "magic_bonus": magic_bonus,
                 "magic_suppressed_by_attunement": (
@@ -4223,9 +4295,7 @@ def _weapon_attacks(
                 ),
                 "properties": mechanics["properties"],
                 "materials": mechanics["materials"],
-                "corrosion_penalty": int(
-                    mechanics.get("corrosion_penalty", 0) or 0
-                ),
+                "corrosion_penalty": int(mechanics.get("corrosion_penalty", 0) or 0),
                 "range_ft": {
                     "normal": mechanics["normal_range_ft"],
                     "long": mechanics["long_range_ft"],
@@ -4263,10 +4333,7 @@ def effective_hit_point_maximum(sheet: dict[str, Any]) -> int:
         if not isinstance(effect, dict) or not effect.get("active", False):
             continue
         for change in effect.get("changes", []):
-            if (
-                isinstance(change, dict)
-                and change.get("path") == "combat.hp.maximum_multiplier"
-            ):
+            if isinstance(change, dict) and change.get("path") == "combat.hp.maximum_multiplier":
                 maximum_multiplier *= int(change["value"])
     return effective_hit_point_maximum_value(
         edition=str(sheet.get("edition") or DEFAULT_CHARACTER_EDITION),
@@ -4311,11 +4378,7 @@ def effective_ability_scores(sheet: dict[str, Any]) -> dict[str, int]:
                 or not 0 <= score <= 30
             ):
                 raise ValueError("active ability-score effect is malformed")
-            scores[ability] = (
-                score
-                if change["mode"] == "override"
-                else max(scores[ability], score)
-            )
+            scores[ability] = score if change["mode"] == "override" else max(scores[ability], score)
     return scores
 
 
@@ -4349,11 +4412,7 @@ def active_effect_roll_bonus(sheet: dict[str, Any], kind: str) -> int:
             if change["path"] != path:
                 continue
             value = change["value"]
-            if (
-                change["mode"] != "add"
-                or isinstance(value, bool)
-                or not isinstance(value, int)
-            ):
+            if change["mode"] != "add" or isinstance(value, bool) or not isinstance(value, int):
                 raise ValueError(f"active {path} effect modifier is malformed")
             bonus += value
     return bonus
@@ -4671,8 +4730,7 @@ def consume_weapon_ammunition(
     if not selected_ammunition_id:
         raise ValueError("weapon has no linked ammunition")
     if ammunition_item_id is not None and "ammunition" not in {
-        str(item).strip().casefold()
-        for item in weapon["mechanics"].get("properties", [])
+        str(item).strip().casefold() for item in weapon["mechanics"].get("properties", [])
     }:
         raise ValueError("weapon cannot use selected ammunition")
     count = _integer(quantity, "quantity", minimum=1)
@@ -4817,13 +4875,8 @@ def set_exhaustion_level(sheet: dict[str, Any], value: int) -> dict[str, Any]:
         maximum=6,
     )
     current_level = int(result["combat"]["exhaustion"])
-    exhaustion_immunities = condition_ids(
-        result["traits"].get("condition_immunities")
-    )
-    if (
-        level > current_level
-        and exhaustion_immunities.intersection({"exhaustion", "exhausted"})
-    ):
+    exhaustion_immunities = condition_ids(result["traits"].get("condition_immunities"))
+    if level > current_level and exhaustion_immunities.intersection({"exhaustion", "exhausted"}):
         return result
     result["combat"]["exhaustion"] = level
     hit_points = result["combat"]["hp"]

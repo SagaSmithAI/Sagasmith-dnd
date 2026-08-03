@@ -6,6 +6,7 @@ from copy import deepcopy
 from dataclasses import asdict
 from typing import Any
 
+from sagasmith_dnd.character_schema import normalize_class_spellcasting_profile
 from sagasmith_dnd.combat_engine import CombatEngineError
 from sagasmith_dnd.editions import normalize_dnd_edition
 from sagasmith_dnd.engine import ability_modifier, roll
@@ -320,6 +321,102 @@ def _append_hit_point_adjustment(
     entry["adjustments"] = adjustments
 
 
+def _profile_slot_table(profile: dict[str, Any]) -> dict[int, tuple[int, ...]]:
+    progression = str(profile.get("slot_progression") or "none")
+    if progression == "full":
+        return FULL_CASTER_SLOTS
+    if progression == "half":
+        return HALF_CASTER_SLOTS
+    if progression == "half_round_up":
+        return HALF_CASTER_SLOTS_2024
+    if progression in {"none", "pact"}:
+        return {}
+    raise CombatEngineError("class spellcasting slot_progression is invalid")
+
+
+def _profile_prepared_limit(
+    sheet: dict[str, Any], profile: dict[str, Any], class_level: int
+) -> int:
+    formula = dict(profile.get("prepared_limit") or {})
+    if not formula:
+        return 0
+    divisor = int(formula["class_level_divisor"])
+    quotient = (
+        (class_level + divisor - 1) // divisor
+        if formula["rounding"] == "up"
+        else class_level // divisor
+    )
+    score = int(sheet.get("abilities", {}).get(formula["ability"], {}).get("score", 10) or 10)
+    return max(int(formula["minimum"]), quotient + ability_modifier(score))
+
+
+def _initialize_profile_spellcasting(
+    sheet: dict[str, Any],
+    *,
+    class_name: str,
+    profile: dict[str, Any],
+) -> dict[str, Any]:
+    spellcasting = sheet.setdefault("spellcasting", {})
+    spellcasting["ability"] = profile["ability"]
+    spellcasting["class_lists"] = list(
+        dict.fromkeys([*list(spellcasting.get("class_lists") or []), profile["class_list"]])
+    )
+    spellcasting["ritual_casting"] = bool(profile["ritual_casting"])
+    spellcasting["spellbook"] = {
+        "enabled": bool(profile["spellbook"]),
+        "spell_ids": [],
+    }
+    preparation = spellcasting.setdefault("preparation", {})
+    preparation.update(
+        mode=profile["preparation_mode"],
+        max_prepared=_profile_prepared_limit(sheet, profile, 1),
+        changes_on="long_rest",
+        selected_spell_ids=[],
+    )
+    slot_changes: dict[str, dict[str, int]] = {}
+    if profile["slot_progression"] == "pact":
+        maximum, slot_level = PACT_MAGIC[1]
+        spellcasting["pact_magic"] = {
+            "label": "Pact Magic",
+            "value": maximum,
+            "max": maximum,
+            "recovers_on": "short_rest",
+            "source_key": class_name,
+            "slot_level": slot_level,
+        }
+    else:
+        spellcasting["pact_magic"] = None
+        slots = _profile_slot_table(profile).get(1, ())
+        spellcasting["spell_slots"] = {
+            str(level): {
+                "label": f"Level {level} spell slots",
+                "value": maximum,
+                "max": maximum,
+                "recovers_on": "long_rest",
+                "source_key": class_name,
+                "slot_level": level,
+            }
+            for level, maximum in enumerate(slots, start=1)
+        }
+        slot_changes = {
+            str(level): {"old_max": 0, "new_max": maximum}
+            for level, maximum in enumerate(slots, start=1)
+        }
+    cantrips = list(profile.get("cantrips_known_by_level") or [])
+    spells_known = list(profile.get("leveled_spells_known_by_level") or [])
+    return {
+        "kind": profile["slot_progression"],
+        "ability": profile["ability"],
+        "mode": profile["preparation_mode"],
+        "slot_changes": slot_changes,
+        "max_prepared": int(preparation["max_prepared"]),
+        "spell_choices": {
+            "cantrips_to_add": cantrips[0] if cantrips else 0,
+            "leveled_spells_to_add": spells_known[0] if spells_known else 0,
+        },
+    }
+
+
 def initialize_base_class(
     sheet: dict[str, Any],
     *,
@@ -357,7 +454,7 @@ def initialize_base_class(
         "tool_proficiencies",
         "weapon_proficiencies",
     }
-    optional_fields = {"tool_choice_count", "tool_options"}
+    optional_fields = {"tool_choice_count", "tool_options", "spellcasting"}
     if (
         not expected_fields.issubset(definition)
         or set(definition) - expected_fields - optional_fields
@@ -384,16 +481,12 @@ def initialize_base_class(
         raise CombatEngineError("class skill_choice_count must be a non-negative integer")
     selected_skills = _normalized_distinct_names(skill_choices, field="skill_choices")
     if len(selected_skills) != choice_count:
-        raise CombatEngineError(
-            f"class requires exactly {choice_count} distinct skill choices"
-        )
+        raise CombatEngineError(f"class requires exactly {choice_count} distinct skill choices")
     if any(item not in skill_options for item in selected_skills):
         raise CombatEngineError("class skill choice is not one of the reviewed options")
     if any(value["skills"][item].get("proficiency") != "none" for item in selected_skills):
         raise CombatEngineError("class skill choice is already proficient")
-    tool_options = _display_distinct_names(
-        definition.get("tool_options", []), field="tool_options"
-    )
+    tool_options = _display_distinct_names(definition.get("tool_options", []), field="tool_options")
     tool_choice_count = definition.get("tool_choice_count", 0)
     if (
         isinstance(tool_choice_count, bool)
@@ -403,9 +496,7 @@ def initialize_base_class(
         raise CombatEngineError("class tool_choice_count is invalid")
     selected_tools = _display_distinct_names(tool_choices or [], field="tool_choices")
     if len(selected_tools) != tool_choice_count:
-        raise CombatEngineError(
-            f"class requires exactly {tool_choice_count} distinct tool choices"
-        )
+        raise CombatEngineError(f"class requires exactly {tool_choice_count} distinct tool choices")
     tool_option_keys = {item.casefold(): item for item in tool_options}
     if any(item.casefold() not in tool_option_keys for item in selected_tools):
         raise CombatEngineError("class tool choice is not one of the reviewed options")
@@ -419,9 +510,7 @@ def initialize_base_class(
         target: _display_distinct_names(definition.get(field), field=field)
         for target, field in proficiency_fields.items()
     }
-    fixed_tool_keys = {
-        item.casefold() for item in normalized_proficiencies["tools"]
-    }
+    fixed_tool_keys = {item.casefold() for item in normalized_proficiencies["tools"]}
     if any(item.casefold() in fixed_tool_keys for item in selected_tools):
         raise CombatEngineError("class tool choice duplicates a fixed tool proficiency")
     existing_tool_keys = {
@@ -452,16 +541,30 @@ def initialize_base_class(
         }
     )
     hit_dice = combat.setdefault("hit_dice", {})
-    hit_die_key, hit_die_resource = _class_hit_die_resource(
-        hit_dice, normalized_name, hit_die
-    )
+    hit_die_key, hit_die_resource = _class_hit_die_resource(hit_dice, normalized_name, hit_die)
     hit_die_resource["max"] = int(hit_die_resource.get("max", 0) or 0) + 1
     hit_die_resource["value"] = int(hit_die_resource.get("value", 0) or 0) + 1
     hit_dice[hit_die_key] = hit_die_resource
 
-    progression["classes"] = [
-        {"name": normalized_name, "level": 1, "subclass": "", "hit_die": hit_die}
-    ]
+    class_entry: dict[str, Any] = {
+        "name": normalized_name,
+        "level": 1,
+        "subclass": "",
+        "hit_die": hit_die,
+    }
+    spellcasting_materialization: dict[str, Any] | None = None
+    if "spellcasting" in definition:
+        try:
+            spellcasting_profile = normalize_class_spellcasting_profile(definition["spellcasting"])
+        except ValueError as error:
+            raise CombatEngineError(str(error)) from error
+        class_entry["spellcasting"] = spellcasting_profile
+        spellcasting_materialization = _initialize_profile_spellcasting(
+            value,
+            class_name=normalized_name,
+            profile=spellcasting_profile,
+        )
+    progression["classes"] = [class_entry]
     for ability in saving_throws:
         value["abilities"][ability]["save_proficient"] = True
     for skill in selected_skills:
@@ -481,6 +584,7 @@ def initialize_base_class(
         "skill_proficiencies": selected_skills,
         "tool_proficiency_choices": selected_tools,
         "proficiencies": normalized_proficiencies,
+        "spellcasting": spellcasting_materialization,
     }
 
 
@@ -595,6 +699,7 @@ def advance_single_class_level(
         old_level,
         new_level,
         edition=edition,
+        progression_profile=dict(target.get("spellcasting") or {}),
     )
     resource_sync = synchronize_class_feature_resources(value)
     value = resource_sync["sheet"]
@@ -628,6 +733,7 @@ def advance_single_class_level(
             old_level,
             new_level,
             edition=edition,
+            progression_profile=dict(target.get("spellcasting") or {}),
         ),
         "feature_resource_changes": resource_sync["changes"],
     }
@@ -670,13 +776,9 @@ def synchronize_class_feature_resources(sheet: dict[str, Any]) -> dict[str, Any]
             old_resource = dict(resources.get(target) or {})
         old_maximum = int(old_resource.get("max", 0) or 0)
         old_value = int(old_resource.get("value", old_maximum) or 0)
-        recovery_requirements = dict(
-            old_resource.get("recovery_requirements") or {}
-        )
+        recovery_requirements = dict(old_resource.get("recovery_requirements") or {})
         recovery_amounts = dict(
-            scaling.get("recovery_amounts")
-            or old_resource.get("recovery_amounts")
-            or {}
+            scaling.get("recovery_amounts") or old_resource.get("recovery_amounts") or {}
         )
         updated = {
             "label": str(scaling.get("label") or old_resource.get("label") or target),
@@ -708,10 +810,10 @@ def synchronize_class_feature_resources(sheet: dict[str, Any]) -> dict[str, Any]
                     "feature_id": str(feature.get("id") or ""),
                     "target": target,
                     "class_level": class_level,
-                        "old_max": old_maximum,
-                        "new_max": new_maximum,
-                        "old_value": old_value,
-                        "new_value": updated["value"],
+                    "old_max": old_maximum,
+                    "new_max": new_maximum,
+                    "old_value": old_value,
+                    "new_value": updated["value"],
                     "recovers_on": recovery,
                     "unlimited": unlimited,
                 }
@@ -797,14 +899,12 @@ def _remove_unreferenced_shadow_resources(
             continue
         uses = dict(feature.get("uses") or {})
         label = str(uses.get("label") or scaling.get("label") or "").strip().casefold()
-        source_key = str(
-            uses.get("source_key") or scaling.get("class_name") or ""
-        ).strip().casefold()
+        source_key = (
+            str(uses.get("source_key") or scaling.get("class_name") or "").strip().casefold()
+        )
         if not label or not source_key:
             continue
-        local_owners.setdefault((label, source_key), []).append(
-            str(feature.get("id") or "")
-        )
+        local_owners.setdefault((label, source_key), []).append(str(feature.get("id") or ""))
 
     resources = sheet.setdefault("resources", {})
     for resource_key, raw_resource in list(resources.items()):
@@ -869,19 +969,21 @@ def _advance_spellcasting(
     new_level: int,
     *,
     edition: str,
+    progression_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     key = class_name.casefold()
+    profile = dict(progression_profile or {})
     config = CASTER_CONFIG.get(key)
-    if config is None:
+    if not profile and config is None:
         return {"kind": "none", "slot_changes": {}}
-    ability, legacy_mode, kind = config
-    mode = (
-        "spellbook"
-        if key == "wizard"
-        else "prepared"
-        if edition == "2024"
-        else legacy_mode
-    )
+    if profile:
+        ability = str(profile["ability"])
+        kind = str(profile["slot_progression"])
+        mode = str(profile["preparation_mode"])
+    else:
+        assert config is not None
+        ability, legacy_mode, kind = config
+        mode = "spellbook" if key == "wizard" else "prepared" if edition == "2024" else legacy_mode
     spellcasting = sheet.setdefault("spellcasting", {})
     spellcasting["ability"] = spellcasting.get("ability") or ability
     preparation = spellcasting.setdefault("preparation", {})
@@ -889,8 +991,18 @@ def _advance_spellcasting(
     preparation.setdefault("selected_spell_ids", [])
     preparation["changes_on"] = "long_rest"
     spellcasting.setdefault("spellbook", {"enabled": False, "spell_ids": []})
-    if key == "wizard":
+    if key == "wizard" or profile.get("spellbook") is True:
         spellcasting["spellbook"]["enabled"] = True
+    if profile:
+        spellcasting["ritual_casting"] = bool(profile["ritual_casting"])
+        spellcasting["class_lists"] = list(
+            dict.fromkeys(
+                [
+                    *list(spellcasting.get("class_lists") or []),
+                    str(profile["class_list"]),
+                ]
+            )
+        )
     slot_changes: dict[str, dict[str, int]] = {}
     if kind == "pact":
         old_max, old_slot_level = PACT_MAGIC[old_level]
@@ -916,7 +1028,9 @@ def _advance_spellcasting(
         }
     else:
         table = (
-            FULL_CASTER_SLOTS
+            _profile_slot_table(profile)
+            if profile
+            else FULL_CASTER_SLOTS
             if kind == "full"
             else HALF_CASTER_SLOTS_2024
             if edition == "2024"
@@ -946,11 +1060,15 @@ def _advance_spellcasting(
             if old_max != new_max:
                 slot_changes[str(slot_level)] = {"old_max": old_max, "new_max": new_max}
     if mode in PREPARED_SELECTION_MODES:
-        preparation["max_prepared"] = prepared_spell_limit(
-            sheet,
-            normalize_dnd_edition(sheet.get("edition")),
-            key,
-            new_level,
+        preparation["max_prepared"] = (
+            _profile_prepared_limit(sheet, profile, new_level)
+            if profile
+            else prepared_spell_limit(
+                sheet,
+                normalize_dnd_edition(sheet.get("edition")),
+                key,
+                new_level,
+            )
         )
     return {
         "kind": kind,
@@ -967,9 +1085,21 @@ def _spell_choice_delta(
     new_level: int,
     *,
     edition: str = "2014",
+    progression_profile: dict[str, Any] | None = None,
 ) -> dict[str, int]:
     key = class_name.casefold()
     result = {"cantrips_to_add": 0, "leveled_spells_to_add": 0}
+    profile = dict(progression_profile or {})
+    if profile:
+        cantrips = list(profile.get("cantrips_known_by_level") or [])
+        spells_known = list(profile.get("leveled_spells_known_by_level") or [])
+        if cantrips:
+            result["cantrips_to_add"] = max(0, cantrips[new_level - 1] - cantrips[old_level - 1])
+        if spells_known:
+            result["leveled_spells_to_add"] = max(
+                0, spells_known[new_level - 1] - spells_known[old_level - 1]
+            )
+        return result
     cantrips = CANTRIPS_KNOWN.get(key)
     if cantrips:
         result["cantrips_to_add"] = max(0, cantrips[new_level - 1] - cantrips[old_level - 1])
