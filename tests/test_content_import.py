@@ -261,6 +261,8 @@ def test_descriptive_parent_does_not_inherit_nested_level_feature() -> None:
     )
 
     assert [item["name"] for item in candidates] == ["Magic Item Analysis"]
+    authored = author_selection_card_from_candidate(candidates[0])
+    assert authored["card"]["class_name"] == "Artificer"
 
 
 @pytest.mark.parametrize(

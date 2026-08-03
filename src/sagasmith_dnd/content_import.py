@@ -386,6 +386,7 @@ def extract_content_candidates(
                 + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20],
                 "kind": kind,
                 "name": candidate_name,
+                "source_class_name": source_class_name,
                 "source_chunk_ids": list(dict.fromkeys(source_chunk_ids)),
                 "source_heading_path": section["heading_path"],
                 "page_start": page_start,
@@ -2410,6 +2411,11 @@ def author_selection_card_from_candidate(candidate: dict[str, Any]) -> dict[str,
 
 
 def _candidate_class_name(candidate: dict[str, Any], description: str) -> str:
+    source_class_name = " ".join(
+        str(candidate.get("source_class_name") or "").split()
+    )
+    if source_class_name:
+        return source_class_name
     for heading in reversed(candidate.get("source_heading_path") or []):
         parent_class = _SUBCLASS_PARENT_CLASS_NAMES.get(str(heading).casefold().strip())
         if parent_class:
