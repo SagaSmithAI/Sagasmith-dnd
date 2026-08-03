@@ -5623,8 +5623,8 @@ def _ocr_column_split(
         if (
             left >= 5
             and right >= 5
-            and left_span >= content_span * 0.4
-            and right_span >= content_span * 0.4
+            and left_span >= content_span * 0.25
+            and right_span >= content_span * 0.25
         ):
             ranked.append((crossing, abs(split - width / 2), split))
     if not ranked:
@@ -6336,6 +6336,11 @@ def recover_2014_statblock_from_ocr(
         }:
             details.append(f"## {text.title()}")
             continue
+        if details and details[-1].startswith("***"):
+            previous_body = details[-1].split("***", 2)[-1].strip()
+            if not previous_body or not re.search(r"[.!?:]$", previous_body):
+                details[-1] = f"{details[-1]} {text}"
+                continue
         if (
             details
             and not details[-1].startswith(("## ", "**"))

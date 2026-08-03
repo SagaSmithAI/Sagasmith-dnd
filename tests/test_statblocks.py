@@ -4933,6 +4933,80 @@ def test_layout_ocr_recovers_one_statblock_without_image_reasoning() -> None:
         recover_2014_statblock_from_ocr(layout, name="Adult Blue Dragon")
 
 
+def test_layout_ocr_separates_asymmetric_same_name_lore_column() -> None:
+    def block(text: str, x0: int, y0: int, x1: int, y1: int) -> dict[str, object]:
+        return {
+            "text": text,
+            "confidence": 0.99,
+            "bbox": [x0, y0, x1, y1],
+        }
+
+    layout = {
+        "page_number": 198,
+        "width": 1200,
+        "height": 1600,
+        "blocks": [
+            block("SIRE OF INSANITY", 120, 100, 380, 130),
+            block("Huge fiend (demon), chaotic evil", 120, 135, 420, 160),
+            block("Armor Class 17 (natural armor)", 120, 180, 390, 205),
+            block("Hit Points 157 (15d12 + 60)", 120, 210, 380, 235),
+            block("Speed 40 ft.", 120, 240, 260, 265),
+            *[
+                block(label, 135 + index * 80, 290, 180 + index * 80, 315)
+                for index, label in enumerate(("STR", "DEX", "CON", "INT", "WIS", "CHA"))
+            ],
+            *[
+                block(value, 130 + index * 80, 320, 190 + index * 80, 345)
+                for index, value in enumerate(
+                    ("23 (+6)", "6 (-2)", "19 (+4)", "14 (+2)", "19 (+4)", "22 (+6)")
+                )
+            ],
+            block("Senses truesight 120 ft., passive Perception 14", 120, 370, 500, 395),
+            block("Languages Abyssal, Common, telepathy 120 ft.", 120, 400, 500, 425),
+            block("Challenge 12 (8,400 XP)", 120, 430, 350, 455),
+            block(
+                "Aura of Mind Erosion. A creature has disadvantage on Wisdom and",
+                120,
+                500,
+                570,
+                525,
+            ),
+            block("Charisma saves.", 120, 530, 280, 555),
+            block("ACTIONS", 120, 1200, 240, 1230),
+            block(
+                "Bite. Melee Weapon Attack: +10 to hit, reach 5 ft., one target.",
+                120,
+                1260,
+                570,
+                1285,
+            ),
+            block("Hit: 25 (3d12 + 6) piercing damage.", 120, 1290, 440, 1315),
+            block(
+                "Claws. Melee Weapon Attack: +10 to hit, reach 10 ft., one target.",
+                120,
+                1340,
+                580,
+                1365,
+            ),
+            block("Hit: 10 (1d8 + 6) slashing damage.", 120, 1370, 440, 1395),
+            block("SIRE OF INSANITY", 640, 1080, 900, 1110),
+            block("Rakdos nightclubs are the favored", 640, 1140, 1060, 1165),
+            block("haunts of the demons known as sires of insanity.", 640, 1210, 1100, 1235),
+            block("This is lore, not part of the creature card.", 640, 1280, 1050, 1305),
+            block("The sire works its evil from the shadows.", 640, 1350, 1040, 1375),
+            block("Its victims remember only terror.", 640, 1420, 980, 1445),
+        ],
+    }
+
+    recovered = recover_2014_statblock_from_ocr(layout, name="Sire of Insanity")
+
+    assert recovered["validation"]["challenge_rating"] == "12"
+    assert recovered["evidence"]["matching_heading_count"] == 2
+    assert recovered["evidence"]["structural_heading_count"] == 1
+    assert recovered["evidence"]["column_split"] is not None
+    assert "Wisdom and Charisma saves" in recovered["normalized_content"]
+    assert "This is lore" not in recovered["normalized_content"]
+
 def test_layout_recovery_accepts_unaligned_cards_and_grouped_ability_cells() -> None:
     def block(text: str, x0: int, y0: int, x1: int, y1: int) -> dict[str, object]:
         return {
