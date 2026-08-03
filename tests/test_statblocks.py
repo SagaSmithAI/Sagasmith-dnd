@@ -95,6 +95,26 @@ def test_parameterized_statblock_requirements_keep_companion_hp_source_bound() -
     ) is None
 
 
+def test_parameterized_statblock_compiles_split_ocr_formula_tokens() -> None:
+    requirement = parameterized_statblock_requirements(
+        "# Steel Defender\n\n"
+        "**Armor Class** 15 (natural armor)\n"
+        "**Hit Points** equal the steel defender's Constitution modifier + "
+        "your I ntelligence modifier + five times your level i n this class\n"
+    )
+
+    assert requirement is not None
+    assert requirement["runtime_ready"] is True
+    assert requirement["parameters"] == [
+        "owner_class_level",
+        "owner_intelligence_modifier",
+    ]
+    assert requirement["solution"]["numeric_parameters"] == [
+        "owner_class_level",
+        "owner_intelligence_modifier",
+    ]
+
+
 def test_parameterized_statblock_requirements_cover_numeric_owner_and_spell_formulas() -> None:
     owner = parameterized_statblock_requirements(
         "# Wildfire Spirit\n\n"

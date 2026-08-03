@@ -6753,6 +6753,35 @@ def finalize_imported_actor_rulings(
     return validate_character_sheet(value)
 
 
+_DEPENDENT_TEMPLATE_GRAMMAR_TOKENS = (
+    "strength",
+    "dexterity",
+    "constitution",
+    "intelligence",
+    "wisdom",
+    "charisma",
+    "level",
+    "modifier",
+    "proficiency",
+    "bonus",
+    "times",
+    "class",
+    "spellcasting",
+    "in",
+)
+
+
+def _normalize_dependent_template_ocr_tokens(value: str) -> str:
+    """Collapse whitespace inserted inside the bounded formula vocabulary."""
+
+    normalized = str(value or "")
+    for token in _DEPENDENT_TEMPLATE_GRAMMAR_TOKENS:
+        pattern = r"(?<![A-Za-z])" + r"\s*".join(re.escape(char) for char in token)
+        pattern += r"(?![A-Za-z])"
+        normalized = re.sub(pattern, token, normalized, flags=re.IGNORECASE)
+    return normalized
+
+
 def parameterized_statblock_requirements(source_text: str) -> dict[str, Any] | None:
     """Describe a source statblock whose values depend on its owner or casting.
 
@@ -6764,7 +6793,9 @@ def parameterized_statblock_requirements(source_text: str) -> dict[str, Any] | N
     """
 
     text = str(source_text or "")
-    folded = " ".join(text.split()).casefold()
+    folded = _normalize_dependent_template_ocr_tokens(
+        " ".join(text.split()).casefold()
+    )
     parameter_markers = (
         (r"\byour\s+[a-z]+\s+level\b|\byour level\b", "owner_class_level"),
         (
@@ -6911,7 +6942,9 @@ _DEPENDENT_TEMPLATE_NUMERIC_PARAMETERS = frozenset(
 def _normalized_template_expression(value: str) -> str:
     """Normalize bounded PDF/OCR noise without changing formula meaning."""
 
-    text = " ".join(str(value or "").split()).casefold()
+    text = _normalize_dependent_template_ocr_tokens(
+        " ".join(str(value or "").split()).casefold()
+    )
     replacements = {
         "intell igence": "intelligence",
         "i ntell igence": "intelligence",
