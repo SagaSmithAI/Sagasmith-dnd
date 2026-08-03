@@ -12,7 +12,11 @@ from sagasmith_core.text import ascii_slug
 
 from sagasmith_dnd.abilities import ABILITY_LABELS
 from sagasmith_dnd.character_schema import normalize_spell_definition
-from sagasmith_dnd.content_readiness import selection_contract_errors
+from sagasmith_dnd.content_readiness import (
+    build_catalog_review,
+    build_selection_contract,
+    selection_contract_errors,
+)
 from sagasmith_dnd.resolution_plan import (
     ResolutionPlanCompilationError,
     compile_resolution_plan,
@@ -1820,7 +1824,10 @@ def _maximum_page_values(values: Any) -> int | None:
 
 
 def compiled_artifacts_from_candidates(
-    candidates: list[dict[str, Any]], *, pack_id: str
+    candidates: list[dict[str, Any]],
+    *,
+    pack_id: str,
+    require_review_contracts: bool = False,
 ) -> list[dict[str, Any]]:
     """Turn DM-approved candidates into source-bound pack artifacts.
 
@@ -1849,6 +1856,25 @@ def compiled_artifacts_from_candidates(
     ids: set[str] = set()
     for candidate in accepted:
         value = deepcopy(dict(candidate.get("artifact") or {}))
+        reviewed_catalog = value.pop("catalog_review", None)
+        reviewed_selection = value.pop("selection_contract", None)
+        if require_review_contracts and (
+            not isinstance(reviewed_catalog, dict)
+            or reviewed_catalog.get("status") != "approved"
+        ):
+            raise ValueError(
+                f"accepted candidate {candidate.get('id')} needs an approved "
+                "catalog review"
+            )
+        if require_review_contracts and not isinstance(reviewed_selection, dict):
+            raise ValueError(
+                f"accepted candidate {candidate.get('id')} needs a selection contract"
+            )
+        if (reviewed_catalog is None) != (reviewed_selection is None):
+            raise ValueError(
+                f"accepted candidate {candidate.get('id')} must keep catalog and "
+                "selection attestations together"
+            )
         kind = str(value.get("kind") or candidate.get("kind") or "").strip()
         card = dict(value.get("card") or {})
         name = str(card.get("name") or candidate.get("name") or "").strip()
@@ -2026,17 +2052,31 @@ def compiled_artifacts_from_candidates(
                 f"candidate {candidate.get('id')} mechanical content needs a "
                 "rule_clauses or resolution_plan before it becomes selection_ready"
             )
-        artifacts.append(
-            {
-                **value,
-                "id": artifact_id,
-                "kind": kind,
-                "card": card,
-                "application_state": state,
-                "mechanical_scope": mechanical_scope,
-                "source_chunk_ids": chunk_ids,
-            }
-        )
+        artifact = {
+            **value,
+            "id": artifact_id,
+            "kind": kind,
+            "card": card,
+            "application_state": state,
+            "mechanical_scope": mechanical_scope,
+            "source_chunk_ids": chunk_ids,
+        }
+        if isinstance(reviewed_catalog, dict) and isinstance(
+            reviewed_selection, dict
+        ):
+            selection_status = str(reviewed_selection.get("status") or "")
+            artifact["selection_contract"] = build_selection_contract(
+                artifact,
+                status=selection_status,
+                references=list(reviewed_selection.get("references") or []),
+                blockers=list(reviewed_selection.get("blockers") or []),
+            )
+            artifact["catalog_review"] = build_catalog_review(
+                artifact,
+                decisions=list(reviewed_catalog.get("decisions") or []),
+                status="approved",
+            )
+        artifacts.append(artifact)
     return artifacts
 
 
