@@ -1075,54 +1075,27 @@ def _rulebook_statblock_candidates(
         # row is present before the next creature core.
         if name_index is not None and scoped_path:
             parent_path = path[:name_index]
-            existing_titles = {
-                _canonical_source_heading(
-                    next(
-                        (
-                            str(value).strip()
-                            for value in reversed(chunk.get("heading_path") or [])
-                            if str(value).strip()
-                        ),
-                        "",
-                    )
-                )
-                for chunk in ordered[start + 1 : end]
-                if [
-                    str(value).strip()
-                    for value in chunk.get("heading_path") or []
-                    if str(value).strip()
-                ][: len(parent_path)]
-                == parent_path
-            }
-            current_has_abilities = all(
-                any(
-                    _canonical_source_heading(
-                        next(
-                            (
-                                str(value).strip()
-                                for value in reversed(chunk.get("heading_path") or [])
-                                if str(value).strip()
-                            ),
-                            "",
-                        )
-                    )
-                    == ability.casefold()
-                    for chunk in ordered[start + 1 : end]
-                    if [
+            def ability_coverage(prefix: list[str]) -> set[str]:
+                coverage: set[str] = set()
+                for chunk in ordered[start + 1 : end]:
+                    chunk_path = [
                         str(value).strip()
                         for value in chunk.get("heading_path") or []
                         if str(value).strip()
-                    ][: len(scoped_path)]
-                    == scoped_path
-                )
-                for ability in ABILITY_LABELS
+                    ]
+                    if chunk_path[: len(prefix)] != prefix or not chunk_path:
+                        continue
+                    coverage.update(
+                        _statblock_ability_heading_labels(chunk_path[-1])
+                    )
+                return coverage
+
+            all_abilities = set(ABILITY_LABELS)
+            current_has_abilities = all_abilities.issubset(
+                ability_coverage(scoped_path)
             )
-            sibling_has_abilities = (
-                {ability.casefold() for ability in ABILITY_LABELS}.issubset(
-                    existing_titles
-                )
-                or "".join(ability.casefold() for ability in ABILITY_LABELS)
-                in existing_titles
+            sibling_has_abilities = all_abilities.issubset(
+                ability_coverage(parent_path)
             )
             if not current_has_abilities and sibling_has_abilities:
                 scoped_path = parent_path
@@ -1621,6 +1594,33 @@ def _canonical_statblock_section_title(value: str) -> str | None:
     return f"ACTIONS FOR {label}" if label else None
 
 
+def _statblock_ability_heading_labels(value: str) -> list[str]:
+    """Return an exact ability-label partition for a PDF heading.
+
+    Column extraction can preserve ``DEX CON`` as one heading while emitting
+    the other labels separately. Only a full concatenation of the six closed
+    D&D abbreviations is accepted, so prose headings cannot become score rows.
+    """
+
+    compact = re.sub(r"[^A-Z]", "", str(value or "").upper())
+    labels: list[str] = []
+    cursor = 0
+    while cursor < len(compact):
+        label = next(
+            (
+                ability
+                for ability in ABILITY_LABELS
+                if compact.startswith(ability, cursor)
+            ),
+            None,
+        )
+        if label is None or label in labels:
+            return []
+        labels.append(label)
+        cursor += len(label)
+    return labels
+
+
 def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
     if not chunks:
         raise StatblockImportError("statblock candidate has no source chunks")
@@ -1665,15 +1665,87 @@ def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
                 "content": root_text[match.end() : end].strip(),
             }
         )
+    ability_chunks = [
+        (chunk, _statblock_ability_heading_labels(path[-1]))
+        for chunk in expanded_chunks
+        if (
+            path := [
+                str(item).strip()
+                for item in chunk.get("heading_path") or []
+                if str(item).strip()
+            ]
+        )
+        and _statblock_ability_heading_labels(path[-1])
+    ]
+    flattened_ability_labels = [
+        label for _chunk, labels in ability_chunks for label in labels
+    ]
+    consumed_ability_chunks: set[int] = set()
+    fragmented_ability_row = any(
+        not str(chunk.get("content") or "").strip()
+        for chunk, _labels in ability_chunks
+    )
+    if (
+        flattened_ability_labels == list(ABILITY_LABELS)
+        and fragmented_ability_row
+    ):
+        ability_row = " ".join(
+            str(chunk.get("content") or "").strip()
+            for chunk, _labels in ability_chunks
+            if str(chunk.get("content") or "").strip()
+        )
+        cursor = 0
+        for ability in ABILITY_LABELS:
+            score = re.match(
+                r"^\s*(?P<score>\d+)\s*\([^)]{1,12}\)",
+                ability_row[cursor:],
+            )
+            if score is None:
+                raise StatblockImportError(
+                    "statblock reconstructed ability score row is ambiguous"
+                )
+            score_value = int(score.group("score"))
+            modifier = (score_value - 10) // 2
+            ability_values[ability] = f"{score_value} ({modifier:+d})"
+            cursor += score.end()
+        tail = ability_row[cursor:].strip()
+        if tail:
+            detail_parts.append(tail)
+        consumed_ability_chunks = {id(chunk) for chunk, _labels in ability_chunks}
     for chunk in expanded_chunks:
+        if id(chunk) in consumed_ability_chunks:
+            continue
         path = [str(item).strip() for item in chunk.get("heading_path") or []]
         title = path[-1].upper()
         compact_title = re.sub(r"[^A-Z]", "", title)
+        ability_titles = _statblock_ability_heading_labels(path[-1])
         canonical_section = _canonical_statblock_section_title(path[-1])
         content = str(chunk.get("content") or "").strip()
         if canonical_section is not None:
             section_parts.setdefault(canonical_section, [])
             active_section = canonical_section
+        if ability_titles and len(ability_titles) > 1:
+            cursor = 0
+            for ability in ability_titles:
+                score = re.match(
+                    r"^\s*(\d+)\s*\(\s*(?P<modifier>[^)]{1,8})\s*\)",
+                    content[cursor:],
+                )
+                if score is None:
+                    raise StatblockImportError(
+                        "statblock grouped ability score row is ambiguous"
+                    )
+                modifier = score.group("modifier").translate(_OCR_ABILITY_DIGITS)
+                modifier = re.sub(r"[^+\-0-9]", "-", modifier)
+                ability_values[ability] = f"{score.group(1)} ({modifier})"
+                cursor += score.end()
+            tail = content[cursor:].strip()
+            if tail:
+                if active_section is None:
+                    detail_parts.append(tail)
+                else:
+                    section_parts[active_section].append(tail)
+            continue
         if compact_title == "".join(ABILITY_LABELS):
             cursor = 0
             for ability in ABILITY_LABELS:
@@ -1732,9 +1804,20 @@ def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
             "statblock candidate is missing ability scores: " + ", ".join(missing_abilities)
         )
 
-    fields, traits = _split_statblock_details(
-        _normalize_statblock_ocr(" ".join(detail_parts))
+    normalized_details = _normalize_statblock_ocr(" ".join(detail_parts))
+    inline_actions = re.search(
+        r"(?i)(?<![A-Za-z])Actions"
+        r"(?:\s*\(Requires?\s+Your\s+Bonus\s+Action\))?\s+"
+        r"(?=[A-Z][A-Za-z0-9'鈥?-]*(?:\s+[A-Z][A-Za-z0-9'鈥?-]*)*\.\s+"
+        r"(?:Melee|Ranged|Melee or Ranged)\s+(?:Weapon|Spell)\s+Attack:)",
+        normalized_details,
     )
+    if inline_actions is not None:
+        section_parts["ACTIONS"].insert(
+            0, normalized_details[inline_actions.end() :].strip()
+        )
+        normalized_details = normalized_details[: inline_actions.start()].strip()
+    fields, traits = _split_statblock_details(normalized_details)
     parry_boundary = re.search(r"(?i)(?<![A-Za-z])Parry\.\s+", traits)
     if parry_boundary is not None:
         parry_settlement = parry_reaction_settlement(
@@ -2011,6 +2094,16 @@ def _split_statblock_details(content: str) -> tuple[dict[str, str], str]:
                 tail = challenge.group("tail").strip()
                 traits = " ".join(part for part in (traits, tail) if part).strip()
                 continue
+        trait_boundary = re.search(
+            r"(?<![A-Za-z])"
+            r"(?P<name>[A-Z][A-Za-z'鈥?-]+(?:\s+(?:[A-Z][A-Za-z'鈥?-]+|"
+            r"of|the|and|or)){0,7})\.\s+(?=[A-Z])",
+            value,
+        )
+        if trait_boundary is not None:
+            tail = value[trait_boundary.start() :].strip()
+            value = value[: trait_boundary.start()].strip()
+            traits = " ".join(part for part in (traits, tail) if part).strip()
         fields[label] = value
     return fields, traits
 
@@ -2331,6 +2424,14 @@ def author_selection_card_from_candidate(
         return value
 
     if kind == "statblock":
+        reviewed_template = dict(card.get("dependent_actor_template") or {})
+        reviewed_owner_class_name = " ".join(
+            str(
+                card.pop("owner_class_name", None)
+                or reviewed_template.get("owner_class_name")
+                or ""
+            ).split()
+        )
         source_text = str(card.get("normalized_content") or "").strip()
         if not source_text and source_chunks_by_id:
             source_text = "\n\n".join(
@@ -2342,6 +2443,17 @@ def author_selection_card_from_candidate(
                 source_text = f"# {name}\n\n{source_text}"
         requirement = parameterized_statblock_requirements(source_text)
         if requirement is not None:
+            if reviewed_owner_class_name:
+                requirement["owner_class_name"] = reviewed_owner_class_name
+            solution = dict(requirement.get("solution") or {})
+            if (
+                "owner_class_level" in set(solution.get("numeric_parameters") or [])
+                and not solution.get("owner_class_names")
+            ):
+                owner_class_name = _candidate_class_name(candidate, source_text)
+                if owner_class_name:
+                    requirement["owner_class_name"] = owner_class_name
+            card["normalized_content"] = source_text
             card["dependent_actor_template"] = requirement
             value["selection_applicability"] = "not_applicable"
             value["application_state"] = "catalog_only"

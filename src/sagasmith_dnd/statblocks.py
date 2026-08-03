@@ -8,7 +8,7 @@ from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import dataclass
 from difflib import SequenceMatcher
-from typing import Any
+from typing import Any, Mapping
 
 from sagasmith_core.text import ascii_slug, compact_ascii_key
 
@@ -6656,7 +6656,10 @@ def parameterized_statblock_requirements(source_text: str) -> dict[str, Any] | N
     folded = " ".join(text.split()).casefold()
     parameter_markers = (
         (r"\byour\s+[a-z]+\s+level\b|\byour level\b", "owner_class_level"),
-        (r"\byour proficiency bonus\b|\bequals your bonus\b", "owner_proficiency_bonus"),
+        (
+            r"\byour proficiency bonus\b|\bequals your bonus\b|\bpb\b",
+            "owner_proficiency_bonus",
+        ),
         *(
             (
                 rf"\byour {ability} modifier\b",
@@ -6691,11 +6694,14 @@ def parameterized_statblock_requirements(source_text: str) -> dict[str, Any] | N
     if not parameters:
         return None
     source_expressions = []
-    markdown_fields = list(re.finditer(
-        r"(?im)^\s*\*\*(?P<label>Armor Class|Hit Points|Proficiency Bonus)\*\*\s+"
-        r"(?P<expression>[^\r\n]+?)\s*$",
-        text,
-    ))
+    markdown_fields = list(
+        re.finditer(
+            r"(?ims)^\s*\*\*(?P<label>Armor Class|Hit Points|Proficiency Bonus)\*\*\s+"
+            r"(?P<expression>.+?)\s*(?=\r?\n\s*\r?\n|\r?\n\s*\*\*|"
+            r"\r?\n\s*#{1,6}\s|\Z)",
+            text,
+        )
+    )
     # PDF layout extraction can legitimately flatten one statblock row into a
     # single chunk before the Markdown normalizer has inserted emphasis.  Keep
     # the fallback bounded by printed core-field labels so ordinary prose that
@@ -6746,6 +6752,18 @@ def parameterized_statblock_requirements(source_text: str) -> dict[str, Any] | N
         # owner or summoning cast; ordinary effects stay on the complete actor
         # card and receive their build-time kernel/Agent ruling resolution.
         return None
+    source_variant_options = sorted(
+        {
+            label
+            for match in re.finditer(r"\(([^()]+?)\s+Only\)", text, re.IGNORECASE)
+            for label in _variant_labels(match.group(1))
+        }
+    )
+    solution = compile_parameterized_statblock_solution(
+        source_expressions,
+        parameters=parameters,
+        variant_options=source_variant_options,
+    )
     return {
         "schema_version": 1,
         "kind": "dependent_actor_template",
@@ -6754,9 +6772,542 @@ def parameterized_statblock_requirements(source_text: str) -> dict[str, Any] | N
         "source_excerpt": source_expressions[0]["source_excerpt"],
         "source_expressions": source_expressions,
         "parameters": list(dict.fromkeys(parameters)),
-        "instantiation_phase": "lobby",
-        "runtime_ready": False,
+        "variant_options": source_variant_options,
+        "instantiation_phase": "lobby_play_or_combat",
+        "solution": solution,
+        "runtime_ready": solution is not None,
     }
+
+
+_DEPENDENT_TEMPLATE_NUMERIC_PARAMETERS = frozenset(
+    {
+        "owner_class_level",
+        "owner_proficiency_bonus",
+        "owner_strength_modifier",
+        "owner_dexterity_modifier",
+        "owner_constitution_modifier",
+        "owner_intelligence_modifier",
+        "owner_wisdom_modifier",
+        "owner_charisma_modifier",
+        "owner_spellcasting_ability_modifier",
+        "owner_spell_attack_modifier",
+        "owner_spell_save_dc",
+        "casting_slot_level",
+    }
+)
+
+
+def _normalized_template_expression(value: str) -> str:
+    """Normalize bounded PDF/OCR noise without changing formula meaning."""
+
+    text = " ".join(str(value or "").split()).casefold()
+    replacements = {
+        "intell igence": "intelligence",
+        "i ntell igence": "intelligence",
+        "l 0": "10",
+        "l s": "15",
+        "for.each": "for each",
+        "3 rd": "3rd",
+        "4 th": "4th",
+        "5 th": "5th",
+        "6 th": "6th",
+        "on ly": "only",
+        "ha·s": "has",
+    }
+    for source, target in replacements.items():
+        text = text.replace(source, target)
+    text = re.sub(r"^(?:equals to|equal to|equals|equal)\s+", "", text)
+    return text.strip(" .")
+
+
+def _template_parameter_for_owner_level(expression: str) -> str | None:
+    if re.fullmatch(
+        r"your (?:[a-z]+ )?level(?: in this class)?|your level in this class",
+        expression,
+    ):
+        return "owner_class_level"
+    return None
+
+
+def _template_sum_term(term: str) -> dict[str, Any] | None:
+    value = term.strip()
+    if re.fullmatch(r"\d+", value):
+        return {"op": "constant", "value": int(value)}
+    owner_level = _template_parameter_for_owner_level(value)
+    if owner_level:
+        return {"op": "parameter", "name": owner_level}
+    level_multiplier = re.fullmatch(
+        r"(?P<count>\d+|one|two|three|four|five|six|seven|eight|nine|ten) "
+        r"times (?P<level>your (?:[a-z]+ )?level(?: in this class)?|"
+        r"your level in this class)",
+        value,
+    )
+    if level_multiplier is not None:
+        raw_count = level_multiplier.group("count")
+        coefficient = int(raw_count) if raw_count.isdigit() else _NUMBER_WORDS[raw_count]
+        return {
+            "op": "multiply",
+            "coefficient": coefficient,
+            "term": {"op": "parameter", "name": "owner_class_level"},
+        }
+    owner_modifier = re.fullmatch(
+        r"your (strength|dexterity|constitution|intelligence|wisdom|charisma) "
+        r"modifier",
+        value,
+    )
+    if owner_modifier is not None:
+        return {
+            "op": "parameter",
+            "name": f"owner_{owner_modifier.group(1)}_modifier",
+        }
+    if value == "your spellcasting ability modifier":
+        return {"op": "parameter", "name": "owner_spellcasting_ability_modifier"}
+    if value in {"your proficiency bonus", "your bonus"}:
+        return {"op": "parameter", "name": "owner_proficiency_bonus"}
+    if value in {"the level of the spell", "the spell's level", "spell level"}:
+        return {"op": "parameter", "name": "casting_slot_level"}
+    self_modifier = re.fullmatch(
+        r"(?:the )?.+?[’']s (strength|dexterity|constitution|intelligence|wisdom|"
+        r"charisma) modifier",
+        value,
+    )
+    if self_modifier is not None:
+        return {"op": "self_ability_modifier", "ability": self_modifier.group(1)}
+    scaled = re.fullmatch(
+        r"(?P<amount>\d+) for each spell level above (?P<base>\d+)(?:st|nd|rd|th)",
+        value,
+    )
+    if scaled is not None:
+        return {
+            "op": "scale_above",
+            "parameter": "casting_slot_level",
+            "baseline": int(scaled.group("base")),
+            "per_step": int(scaled.group("amount")),
+        }
+    return None
+
+
+def _variant_labels(value: str) -> list[str]:
+    normalized = re.sub(r"\bonly\b", "", value.casefold())
+    return [
+        label.strip().replace(" ", "_")
+        for label in re.split(r"\s*(?:,|\band\b)\s*", normalized)
+        if label.strip()
+    ]
+
+
+def _compile_template_expression(source_expression: str) -> dict[str, Any] | None:
+    expression = _normalized_template_expression(source_expression)
+    # Printed Hit Dice and natural-armor annotations describe the resulting
+    # card but do not participate in the numeric formula.
+    expression = re.sub(r"\s*\(the .+? hit dice.+?\)\s*$", "", expression)
+    expression = re.sub(r"\s*\(natural armor\)\s*", " ", expression).strip()
+
+    # Form-specific bases such as the summon spells in Tasha's are finite,
+    # source-authored choices.  They become an enum, never a free-form input.
+    variant_prefix = re.match(
+        r"^(?P<variants>\d+ \([^)]+ only\)(?: or \d+ \([^)]+ only\))+)(?P<rest>.*)$",
+        expression,
+    )
+    terms: list[dict[str, Any]] = []
+    if variant_prefix is not None:
+        options: dict[str, int] = {}
+        for value, labels in re.findall(
+            r"(\d+) \(([^)]+ only)\)", variant_prefix.group("variants")
+        ):
+            for label in _variant_labels(labels):
+                options[label] = int(value)
+        if not options:
+            return None
+        terms.append(
+            {
+                "op": "variant",
+                "parameter": "template_variant",
+                "options": options,
+            }
+        )
+        expression = variant_prefix.group("rest").strip()
+        expression = expression.removeprefix("+").strip()
+
+    for raw_term in (part.strip() for part in expression.split("+")):
+        if not raw_term:
+            continue
+        variant_addition = re.fullmatch(r"(\d+) \(([^)]+ only)\)", raw_term)
+        if variant_addition is not None:
+            options = {
+                label: int(variant_addition.group(1))
+                for label in _variant_labels(variant_addition.group(2))
+            }
+            terms.append(
+                {
+                    "op": "variant",
+                    "parameter": "template_variant",
+                    "options": options,
+                    "default": 0,
+                }
+            )
+            continue
+        compiled = _template_sum_term(raw_term)
+        if compiled is None:
+            return None
+        terms.append(compiled)
+    if not terms:
+        return None
+    return terms[0] if len(terms) == 1 else {"op": "sum", "terms": terms}
+
+
+def _dependent_template_solution_hash(
+    source_expressions: Iterable[Mapping[str, Any]],
+) -> str:
+    canonical = "\n".join(
+        f"{str(item.get('target_path') or '')}\0"
+        f"{' '.join(str(item.get('source_expression') or '').split())}"
+        for item in source_expressions
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def compile_parameterized_statblock_solution(
+    source_expressions: Iterable[Mapping[str, Any]],
+    *,
+    parameters: Iterable[str] = (),
+    variant_options: Iterable[str] = (),
+) -> dict[str, Any] | None:
+    """Compile exact printed card fields to a closed, data-only formula plan."""
+
+    expressions = [dict(item) for item in source_expressions]
+    compiled_fields: list[dict[str, Any]] = []
+    for expression in expressions:
+        target_path = str(expression.get("target_path") or "")
+        if target_path not in {
+            "combat.armor_class",
+            "combat.hp.max",
+            "combat.proficiency_bonus",
+        }:
+            return None
+        formula = _compile_template_expression(
+            str(expression.get("source_expression") or "")
+        )
+        if formula is None:
+            return None
+        compiled_fields.append(
+            {
+                "target_path": target_path,
+                "source_expression": " ".join(
+                    str(expression.get("source_expression") or "").split()
+                ),
+                "formula": formula,
+            }
+        )
+    if not compiled_fields:
+        return None
+    numeric_parameters: set[str] = {
+        str(value) for value in parameters if str(value)
+    }
+    variants: set[str] = {str(value) for value in variant_options if str(value)}
+
+    def collect(node: Mapping[str, Any]) -> None:
+        operation = node.get("op")
+        if operation == "parameter":
+            numeric_parameters.add(str(node.get("name") or ""))
+        elif operation == "scale_above":
+            numeric_parameters.add(str(node.get("parameter") or ""))
+        elif operation == "variant":
+            variants.update(str(value) for value in dict(node.get("options") or {}))
+        elif operation == "multiply":
+            collect(dict(node.get("term") or {}))
+        elif operation == "sum":
+            for term in node.get("terms") or []:
+                collect(dict(term))
+
+    for field in compiled_fields:
+        collect(dict(field["formula"]))
+    owner_class_names = sorted(
+        {
+            match.group(1)
+            for expression in expressions
+            for match in re.finditer(
+                r"\byour ([a-z]+) level\b",
+                _normalized_template_expression(
+                    str(expression.get("source_expression") or "")
+                ),
+            )
+        }
+    )
+    return {
+        "schema_version": 1,
+        "kind": "bounded_statblock_formula_plan",
+        "reviewed_expression_hash": _dependent_template_solution_hash(expressions),
+        "fields": compiled_fields,
+        "numeric_parameters": sorted(numeric_parameters),
+        "owner_class_names": owner_class_names,
+        "variant_parameter": "template_variant" if variants else None,
+        "variant_options": sorted(variants),
+    }
+
+
+def dependent_actor_template_solution_errors(
+    requirement: Mapping[str, Any],
+) -> list[str]:
+    """Validate a portable formula plan and its immutable source binding."""
+
+    errors: list[str] = []
+    expressions = requirement.get("source_expressions")
+    if not isinstance(expressions, list) or not expressions:
+        return ["dependent actor template needs source_expressions"]
+    solution = requirement.get("solution")
+    if not isinstance(solution, Mapping):
+        return ["dependent actor template needs a bounded solution"]
+    expected = compile_parameterized_statblock_solution(
+        [dict(item) for item in expressions if isinstance(item, Mapping)],
+        parameters=(
+            [str(value) for value in requirement.get("parameters") or []]
+            if isinstance(requirement.get("parameters"), list)
+            else []
+        ),
+        variant_options=(
+            [str(value) for value in requirement.get("variant_options") or []]
+            if isinstance(requirement.get("variant_options"), list)
+            else []
+        ),
+    )
+    if expected is None:
+        return ["dependent actor template source expressions are not safely compilable"]
+    if dict(solution) != expected:
+        errors.append("dependent actor template solution is stale or unsupported")
+    declared = requirement.get("parameters")
+    if not isinstance(declared, list) or any(
+        str(value) not in _DEPENDENT_TEMPLATE_NUMERIC_PARAMETERS for value in declared
+    ):
+        errors.append("dependent actor template parameters are unsupported")
+    owner_class_name = requirement.get("owner_class_name")
+    if owner_class_name is not None and (
+        not isinstance(owner_class_name, str)
+        or not owner_class_name.strip()
+        or len(owner_class_name) > 200
+    ):
+        errors.append("dependent actor template owner_class_name is invalid")
+    if requirement.get("runtime_ready") is not True:
+        errors.append("dependent actor template is not runtime-ready")
+    return errors
+
+
+def _evaluate_dependent_template_formula(
+    formula: Mapping[str, Any],
+    *,
+    numeric_parameters: Mapping[str, int],
+    self_ability_modifiers: Mapping[str, int],
+    template_variant: str | None,
+) -> int:
+    operation = str(formula.get("op") or "")
+    if operation == "constant":
+        return int(formula["value"])
+    if operation == "parameter":
+        return int(numeric_parameters[str(formula["name"])])
+    if operation == "self_ability_modifier":
+        return int(self_ability_modifiers[str(formula["ability"])])
+    if operation == "multiply":
+        return int(formula["coefficient"]) * _evaluate_dependent_template_formula(
+            dict(formula["term"]),
+            numeric_parameters=numeric_parameters,
+            self_ability_modifiers=self_ability_modifiers,
+            template_variant=template_variant,
+        )
+    if operation == "scale_above":
+        value = int(numeric_parameters[str(formula["parameter"])])
+        return max(0, value - int(formula["baseline"])) * int(formula["per_step"])
+    if operation == "variant":
+        options = dict(formula["options"])
+        if template_variant in options:
+            return int(options[str(template_variant)])
+        if "default" in formula:
+            return int(formula["default"])
+        raise ValueError("template_variant must select a reviewed source option")
+    if operation == "sum":
+        return sum(
+            _evaluate_dependent_template_formula(
+                dict(term),
+                numeric_parameters=numeric_parameters,
+                self_ability_modifiers=self_ability_modifiers,
+                template_variant=template_variant,
+            )
+            for term in formula["terms"]
+        )
+    raise ValueError("dependent actor template formula operation is unsupported")
+
+
+def materialize_parameterized_statblock_source(
+    source_text: str,
+    requirement: Mapping[str, Any],
+    *,
+    numeric_parameters: Mapping[str, int],
+    self_ability_modifiers: Mapping[str, int] | None = None,
+    template_variant: str | None = None,
+    allow_self_modifier_placeholders: bool = False,
+) -> tuple[str, dict[str, int]]:
+    """Resolve one reviewed template into ordinary statblock text.
+
+    This function never evaluates source text.  It executes only the exact
+    formula plan reproduced by the deterministic validator above.
+    """
+
+    errors = dependent_actor_template_solution_errors(requirement)
+    if errors:
+        raise ValueError("; ".join(errors))
+    solution = dict(requirement["solution"])
+    expected_parameters = set(solution["numeric_parameters"])
+    supplied = set(numeric_parameters)
+    if supplied != expected_parameters:
+        missing = sorted(expected_parameters - supplied)
+        unknown = sorted(supplied - expected_parameters)
+        details = []
+        if missing:
+            details.append("missing " + ", ".join(missing))
+        if unknown:
+            details.append("unsupported " + ", ".join(unknown))
+        raise ValueError("template numeric parameters are invalid: " + "; ".join(details))
+    normalized_parameters: dict[str, int] = {}
+    for name, raw_value in numeric_parameters.items():
+        if isinstance(raw_value, bool) or not isinstance(raw_value, int):
+            raise ValueError(f"template parameter {name} must be an integer")
+        if name in {"owner_class_level", "owner_proficiency_bonus", "casting_slot_level"}:
+            if raw_value < 1 or raw_value > 30:
+                raise ValueError(f"template parameter {name} is outside its bounded range")
+        elif raw_value < -10 or raw_value > 40:
+            raise ValueError(f"template parameter {name} is outside its bounded range")
+        normalized_parameters[str(name)] = raw_value
+    options = list(solution.get("variant_options") or [])
+    normalized_variant = (
+        str(template_variant).strip().casefold().replace(" ", "_")
+        if template_variant is not None
+        else None
+    )
+    if options and normalized_variant not in options:
+        raise ValueError("template_variant must be one of: " + ", ".join(options))
+    if not options and normalized_variant is not None:
+        raise ValueError("template_variant is not accepted by this template")
+    self_values = dict(self_ability_modifiers or {})
+    rendered = str(source_text)
+    resolved: dict[str, int] = {}
+    for field in solution["fields"]:
+        formula = dict(field["formula"])
+        try:
+            result = _evaluate_dependent_template_formula(
+                formula,
+                numeric_parameters=normalized_parameters,
+                self_ability_modifiers=self_values,
+                template_variant=normalized_variant,
+            )
+        except KeyError as error:
+            if not allow_self_modifier_placeholders:
+                raise ValueError(
+                    f"template needs self ability modifier {error.args[0]}"
+                ) from error
+            result = 1
+        if result < 0 or result > 100_000:
+            raise ValueError("template formula result is outside its bounded range")
+        source_expression = str(field["source_expression"])
+        expression_pattern = re.compile(
+            r"\s+".join(re.escape(part) for part in source_expression.split()),
+            re.IGNORECASE,
+        )
+        rendered, count = expression_pattern.subn(str(result), rendered, count=1)
+        if count != 1:
+            raise ValueError("template source expression no longer matches reviewed text")
+        resolved[str(field["target_path"])] = result
+
+    token_values = {
+        "owner_proficiency_bonus": lambda value: f"{value:+d}",
+        "owner_spell_attack_modifier": lambda value: f"{value:+d}",
+        "owner_spell_save_dc": str,
+        "owner_spellcasting_ability_modifier": lambda value: f"{value:+d}",
+        "owner_strength_modifier": lambda value: f"{value:+d}",
+        "owner_dexterity_modifier": lambda value: f"{value:+d}",
+        "owner_constitution_modifier": lambda value: f"{value:+d}",
+        "owner_intelligence_modifier": lambda value: f"{value:+d}",
+        "owner_wisdom_modifier": lambda value: f"{value:+d}",
+        "owner_charisma_modifier": lambda value: f"{value:+d}",
+    }
+    token_patterns = {
+        "owner_proficiency_bonus": r"\byour proficiency bonus\b",
+        "owner_spell_attack_modifier": r"\byour spell attack modifier\b",
+        "owner_spell_save_dc": r"\byour spell save dc\b",
+        "owner_spellcasting_ability_modifier": r"\byour spellcasting ability modifier\b",
+        **{
+            f"owner_{ability}_modifier": rf"\byour {ability} modifier\b"
+            for ability in (
+                "strength",
+                "dexterity",
+                "constitution",
+                "intelligence",
+                "wisdom",
+                "charisma",
+            )
+        },
+    }
+    for name, pattern in token_patterns.items():
+        if name not in normalized_parameters:
+            continue
+        rendered = re.sub(
+            pattern,
+            token_values[name](normalized_parameters[name]),
+            rendered,
+            flags=re.IGNORECASE,
+        )
+    if "owner_proficiency_bonus" in normalized_parameters:
+        rendered = re.sub(
+            r"(?<![A-Za-z])PB(?![A-Za-z])",
+            str(normalized_parameters["owner_proficiency_bonus"]),
+            rendered,
+        )
+    return rendered, resolved
+
+
+def apply_dependent_actor_template_variant(
+    sheet: Mapping[str, Any],
+    requirement: Mapping[str, Any],
+    *,
+    template_variant: str | None,
+) -> dict[str, Any]:
+    """Remove entries explicitly restricted to a different reviewed form."""
+
+    value = deepcopy(dict(sheet))
+    solution = dict(requirement.get("solution") or {})
+    options = {
+        str(option) for option in solution.get("variant_options") or []
+    }
+    if not options:
+        if template_variant is not None:
+            raise ValueError("template_variant is not accepted by this template")
+        return value
+    selected = str(template_variant or "").strip().casefold().replace(" ", "_")
+    if selected not in options:
+        raise ValueError("template_variant must select a reviewed source option")
+
+    restriction = re.compile(r"\((?P<labels>[^()]+?)\s+only\)", re.IGNORECASE)
+
+    def available(entry: Mapping[str, Any]) -> bool:
+        text = " ".join(
+            str(entry.get(field) or "") for field in ("name", "description")
+        )
+        match = restriction.search(text)
+        if match is None:
+            return True
+        labels = set(_variant_labels(match.group("labels")))
+        bounded_labels = labels & options
+        return not bounded_labels or selected in bounded_labels
+
+    content = dict(value.get("content") or {})
+    for section in ("activities", "features", "feats", "spells"):
+        entries = content.get(section)
+        if isinstance(entries, list):
+            content[section] = [
+                deepcopy(dict(entry))
+                for entry in entries
+                if isinstance(entry, Mapping) and available(entry)
+            ]
+    value["content"] = content
+    return validate_character_sheet(value)
 
 
 __all__ = [
@@ -6764,8 +7315,12 @@ __all__ = [
     "OCR_STATBLOCK_RECOVERY_VERSION",
     "StatblockImportError",
     "apply_statblock_variant",
+    "apply_dependent_actor_template_variant",
     "effective_statblock_rating",
     "finalize_imported_actor_rulings",
+    "compile_parameterized_statblock_solution",
+    "dependent_actor_template_solution_errors",
+    "materialize_parameterized_statblock_source",
     "parameterized_statblock_requirements",
     "discover_2014_statblock_names_from_layout",
     "parse_2014_statblock",

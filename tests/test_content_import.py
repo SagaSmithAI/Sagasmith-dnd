@@ -470,6 +470,10 @@ def test_parameterized_statblock_persists_its_lobby_template_contract() -> None:
         "owner_class_level",
         "owner_intelligence_modifier",
     ]
+    assert requirement["runtime_ready"] is True
+    assert artifact["card"]["normalized_content"].startswith(
+        "# Alchemical Homunculus"
+    )
     assert artifact["selection_applicability"] == "not_applicable"
     assert artifact["application_state"] == "catalog_only"
 
@@ -939,6 +943,96 @@ def test_rulebook_statblock_uses_combined_sibling_ability_row_without_parent_dup
     assert [item["name"] for item in statblocks] == ["Wildfire Spirit"]
     assert statblocks[0]["execution_state"] == "review_ready"
     assert statblocks[0]["source_chunk_ids"] == ["core", "abilities"]
+
+
+def test_rulebook_statblock_uses_fragmented_sibling_ability_headings() -> None:
+    parent = ["Circle", "Summon Wildfire"]
+    chunks = [
+        {
+            "id": "feature",
+            "section_ordinal": 0,
+            "ordinal": 0,
+            "heading_path": parent,
+            "content": "See the Wildfire Spirit stat block.",
+            "page_start": 3,
+            "page_end": 3,
+        },
+        {
+            "id": "core",
+            "section_ordinal": 1,
+            "ordinal": 0,
+            "heading_path": [*parent, "Wildfire Spirit"],
+            "content": (
+                "Small elemental, any chaotic alignment Armor Class 13 "
+                "(natural armor) Hit Points 54 Speed 20 ft., fly 30 ft. (hover)"
+            ),
+            "page_start": 3,
+            "page_end": 3,
+        },
+        *[
+            {
+                "id": heading.casefold().replace(" ", "-"),
+                "section_ordinal": index + 2,
+                "ordinal": 0,
+                "heading_path": [*parent, heading],
+                "content": value,
+                "page_start": 3,
+                "page_end": 3,
+            }
+            for index, (heading, value) in enumerate(
+                (
+                    ("STR", "10 (+0)"),
+                    ("DEX CON", "14 (+2) 14 (+2)"),
+                    ("INT", "13 (+1)"),
+                    ("WIS", "15 (+2)"),
+                    (
+                        "CHA",
+                        "11 (+0) Saving Throws Dex +4, Con +4, Wis +4 "
+                        "Damage Immunities fire Languages understands the languages you speak "
+                        "Soul Bond. Its attacks use its owner's proficiency. "
+                        "Actions (Requires Your Bonus Action) Flame Seed. "
+                        "Ranged Weapon Attack: +4 to hit, range 30 ft., one target. "
+                        "Hit: 5 (1d6 + 2) fire damage.",
+                    ),
+                )
+            )
+        ],
+        {
+            "id": "next-feature",
+            "section_ordinal": 8,
+            "ordinal": 0,
+            "heading_path": ["Circle", "Enhanced Bond"],
+            "content": "This narrative is not part of the stat block.",
+            "page_start": 3,
+            "page_end": 3,
+        },
+    ]
+
+    statblock = next(
+        item
+        for item in extract_content_inventory(chunks)["candidates"]
+        if item["kind"] == "statblock"
+    )
+
+    assert statblock["execution_state"] == "review_ready"
+    assert statblock["source_chunk_ids"] == [
+        "core",
+        "str",
+        "dex-con",
+        "int",
+        "wis",
+        "cha",
+    ]
+    assert "| 10 (+0) | 14 (+2) | 14 (+2) | 13 (+1) | 15 (+2) | 11 (+0) |" in (
+        statblock["normalized_content"]
+    )
+    assert "Enhanced Bond" not in statblock["normalized_content"]
+    assert "**Languages** understands the languages you speak" in (
+        statblock["normalized_content"]
+    )
+    assert "***Soul Bond***." in statblock["normalized_content"]
+    assert "## Actions" in statblock["normalized_content"]
+    assert "***Flame Seed***. Ranged Weapon Attack" in statblock["normalized_content"]
 
 
 def test_named_statblock_lore_is_trimmed_only_after_a_complete_attack() -> None:

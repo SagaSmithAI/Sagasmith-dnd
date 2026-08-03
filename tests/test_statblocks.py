@@ -15,6 +15,7 @@ from sagasmith_dnd.statblocks import (
     _repair_layout_ocr_text,
     _structure_gazer_eye_rays,
     _structure_intellect_devourer_actions,
+    apply_dependent_actor_template_variant,
     apply_reviewed_statblock_fill,
     apply_statblock_variant,
     area_save_damage_spec,
@@ -22,6 +23,7 @@ from sagasmith_dnd.statblocks import (
     effective_statblock_rating,
     finalize_imported_actor_rulings,
     gazer_eye_ray_spec,
+    materialize_parameterized_statblock_source,
     parameterized_statblock_requirements,
     parse_2014_statblock,
     recover_2014_statblock_from_ocr,
@@ -40,7 +42,19 @@ def test_parameterized_statblock_requirements_keep_companion_hp_source_bound() -
 
     requirement = parameterized_statblock_requirements(source)
 
-    assert requirement == {
+    assert requirement is not None
+    assert {
+        key: requirement[key]
+        for key in (
+            "schema_version",
+            "kind",
+            "target_path",
+            "source_expression",
+            "source_excerpt",
+            "source_expressions",
+            "parameters",
+        )
+    } == {
         "schema_version": 1,
         "kind": "dependent_actor_template",
         "target_path": "combat.hp.max",
@@ -66,9 +80,13 @@ def test_parameterized_statblock_requirements_keep_companion_hp_source_bound() -
             }
         ],
         "parameters": ["owner_class_level", "owner_intelligence_modifier"],
-        "instantiation_phase": "lobby",
-        "runtime_ready": False,
     }
+    assert requirement["instantiation_phase"] == "lobby_play_or_combat"
+    assert requirement["runtime_ready"] is True
+    assert requirement["solution"]["numeric_parameters"] == [
+        "owner_class_level",
+        "owner_intelligence_modifier",
+    ]
     assert parameterized_statblock_requirements(
         "**Hit Points** 45 (6d10 + 12)"
     ) is None
@@ -134,6 +152,20 @@ def test_parameterized_statblock_requirements_accept_bounded_flat_pdf_fields() -
     ]
 
 
+def test_parameterized_statblock_accepts_wrapped_markdown_core_field() -> None:
+    requirement = parameterized_statblock_requirements(
+        "# Steel Defender\n\n"
+        "**Armor Class** 15 (natural armor)\n\n"
+        "**Hit Points** equal the steel defender's Constitution modifier + your\n"
+        "Intelligence modifier + five times your artificer level\n\n"
+        "**Speed** 40 ft.\n"
+    )
+
+    assert requirement is not None
+    assert requirement["runtime_ready"] is True
+    assert requirement["source_expression"].endswith("your artificer level")
+
+
 def test_parameterized_statblock_ignores_narrative_hit_point_phrases() -> None:
     requirement = parameterized_statblock_requirements(
         "Tiny construct Armor Class 13 (natural armor) "
@@ -167,6 +199,105 @@ def test_runtime_spell_level_effect_is_not_a_dependent_actor_template() -> None:
         "1st level or higher, the ward regains hit points equal to twice the "
         "level of the spell."
     ) is None
+
+
+def test_parameterized_statblock_solution_materializes_owner_and_self_values() -> None:
+    source = (
+        "# Steel Defender\n\n"
+        "**Armor Class** 15 (natural armor)\n"
+        "**Hit Points** equal the steel defender's Constitution modifier + "
+        "your Intelligence modifier + five times your level in this class\n"
+        "***Force-Empowered Rend.*** Melee Weapon Attack: your spell attack "
+        "modifier to hit. Hit: 1d8 + PB force damage.\n"
+    )
+    requirement = parameterized_statblock_requirements(source)
+    assert requirement is not None
+
+    rendered, resolved = materialize_parameterized_statblock_source(
+        source,
+        requirement,
+        numeric_parameters={
+            "owner_class_level": 7,
+            "owner_intelligence_modifier": 4,
+            "owner_proficiency_bonus": 3,
+            "owner_spell_attack_modifier": 7,
+        },
+        self_ability_modifiers={"constitution": 2},
+    )
+
+    assert "**Hit Points** 41" in rendered
+    assert "Melee Weapon Attack: +7 to hit" in rendered
+    assert "1d8 + 3 force damage" in rendered
+    assert resolved == {"combat.hp.max": 41}
+
+
+def test_parameterized_statblock_solution_requires_reviewed_variant() -> None:
+    source = (
+        "# Bestial Spirit\n\n"
+        "**Armor Class** 11 + the level of the spell (natural armor)\n"
+        "**Hit Points** 20 (Air only) or 30 (Land and Water only) + "
+        "5 for each spell level above 2nd\n"
+        "**Proficiency Bonus** equals your bonus\n"
+    )
+    requirement = parameterized_statblock_requirements(source)
+    assert requirement is not None
+    assert requirement["solution"]["variant_options"] == ["air", "land", "water"]
+
+    rendered, resolved = materialize_parameterized_statblock_source(
+        source,
+        requirement,
+        numeric_parameters={
+            "casting_slot_level": 4,
+            "owner_proficiency_bonus": 3,
+        },
+        self_ability_modifiers={},
+        template_variant="water",
+    )
+
+    assert "**Armor Class** 15" in rendered
+    assert "**Hit Points** 40" in rendered
+    assert "**Proficiency Bonus** 3" in rendered
+    assert resolved == {
+        "combat.armor_class": 15,
+        "combat.hp.max": 40,
+        "combat.proficiency_bonus": 3,
+    }
+
+
+def test_dependent_actor_template_variant_filters_only_other_forms() -> None:
+    requirement = parameterized_statblock_requirements(
+        "# Celestial Spirit\n\n"
+        "**Armor Class** 11 + the level of the spell (natural armor) + "
+        "2 (Defender only)\n"
+        "**Hit Points** 40 + 10 for each spell level above 5th\n"
+        "***Radiant Bow (Archer Only).*** Ranged Weapon Attack.\n"
+    )
+    assert requirement is not None
+    sheet = parse_2014_statblock(COMMONER, source_key="test").sheet
+    sheet["content"]["features"] = [
+        {
+            "id": "bow",
+            "name": "Radiant Bow (Archer Only)",
+            "description": "Archer form only.",
+            "activation": {"type": "passive", "cost": 0},
+            "mechanic_refs": [],
+        },
+        {
+            "id": "mace",
+            "name": "Radiant Mace (Defender Only)",
+            "description": "Defender form only.",
+            "activation": {"type": "passive", "cost": 0},
+            "mechanic_refs": [],
+        },
+    ]
+
+    selected = apply_dependent_actor_template_variant(
+        sheet,
+        requirement,
+        template_variant="defender",
+    )
+
+    assert [item["id"] for item in selected["content"]["features"]] == ["mace"]
 
 
 def test_finalize_imported_actor_rulings_eliminates_lazy_semantic_fill() -> None:
