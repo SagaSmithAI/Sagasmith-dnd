@@ -1821,9 +1821,8 @@ def normalize_spell_definition(value: Any, field: str = "spell.definition") -> d
     }
 
 
-def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
-    spell = _object(value, field)
-    allowed = {
+CHARACTER_SPELL_CARD_FIELDS = frozenset(
+    {
         "id",
         "source_key",
         "name",
@@ -1843,7 +1842,12 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
         "resolution_solution",
         "ruling_requirements",
     }
-    _reject_unknown(spell, field, allowed)
+)
+
+
+def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
+    spell = _object(value, field)
+    _reject_unknown(spell, field, CHARACTER_SPELL_CARD_FIELDS)
     grant = _object(spell.get("grant") or {}, f"{field}.grant")
     _reject_unknown(grant, f"{field}.grant", {"source_type", "source_key", "method"})
     access = _object(spell.get("access") or {}, f"{field}.access")
