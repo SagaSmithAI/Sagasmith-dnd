@@ -415,6 +415,32 @@ def test_source_coverage_fragment_is_runtime_context_not_character_feature() -> 
     assert artifact["selection_applicability"] == "not_applicable"
 
 
+def test_agent_added_subclass_keeps_its_reviewed_parent_class() -> None:
+    artifact = author_selection_card_from_candidate(
+        {
+            "id": "candidate:agent:gunsmith",
+            "kind": "subclass",
+            "name": "Gunsmith",
+            "source_heading_path": ["Gunsmith"],
+            "artifact": {
+                "kind": "subclass",
+                "application_state": "catalog_only",
+                "card": {
+                    "name": "Gunsmith",
+                    "description": "A master engineer who forges a magical firearm.",
+                    "class_name": "Artificer",
+                    "minimum_level": 1,
+                    "always_prepared_spells": [],
+                },
+            },
+        }
+    )
+
+    assert artifact["application_state"] == "selection_ready"
+    assert artifact["card"]["class_name"] == "Artificer"
+    assert artifact["card"]["minimum_level"] == 1
+
+
 def test_inventory_splits_flattened_spell_descriptions_and_class_lists() -> None:
     inventory = extract_content_inventory(
         [

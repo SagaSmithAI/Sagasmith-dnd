@@ -2398,11 +2398,14 @@ def author_selection_card_from_candidate(candidate: dict[str, Any]) -> dict[str,
         return value
 
     if kind == "subclass":
-        class_name = _candidate_class_name(candidate, description)
+        class_name = " ".join(str(card.get("class_name") or "").split()) or (
+            _candidate_class_name(candidate, description)
+        )
         if class_name:
             card["class_name"] = class_name
-            card["minimum_level"] = _candidate_minimum_level(description) or (
-                _SUBCLASS_MINIMUM_LEVELS_2014.get(class_name.casefold(), 3)
+            card["minimum_level"] = card.get("minimum_level") or (
+                _candidate_minimum_level(description)
+                or _SUBCLASS_MINIMUM_LEVELS_2014.get(class_name.casefold(), 3)
             )
             card.setdefault("always_prepared_spells", [])
             value["application_state"] = "selection_ready"
