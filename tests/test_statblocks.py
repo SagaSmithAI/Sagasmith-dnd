@@ -722,16 +722,16 @@ def test_agent_can_supply_one_source_reviewed_missing_ability_score() -> None:
 
 
 def test_agent_slot_uses_next_same_column_identity_as_a_hard_boundary() -> None:
-    def block(text: str, y: int) -> dict:
+    def block(text: str, y: int, x: int = 40) -> dict:
         return {
             "text": text,
             "confidence": 0.99,
-            "bbox": [40, y, 440, y + 14],
+            "bbox": [x, y, x + 400, y + 14],
         }
 
     layout = {
         "page_number": 33,
-        "width": 1000,
+        "width": 1200,
         "height": 1400,
         "blocks": [
             block("FIRST CREATURE", 90),
@@ -763,6 +763,10 @@ def test_agent_slot_uses_next_same_column_identity_as_a_hard_boundary() -> None:
                 "Hit: 8 (1d8 + 4) slashing damage.",
                 534,
             ),
+            block("Magic Sense. The creature notices nearby magic.", 118, 700),
+            block("LEGENDARY ACTIONS", 260, 700),
+            block("Detect. The creature makes a Wisdom (Perception) check.", 290, 700),
+            block("Second Creature Trait. This belongs to the next card.", 350, 700),
         ],
     }
 
@@ -775,6 +779,8 @@ def test_agent_slot_uses_next_same_column_identity_as_a_hard_boundary() -> None:
     assert recovered["validation"]["name"] == "Reviewed First Creature"
     assert "Armor Class** 17" not in recovered["normalized_content"]
     assert "Second Attack" not in recovered["normalized_content"]
+    assert "Detect" in recovered["normalized_content"]
+    assert "Second Creature Trait" not in recovered["normalized_content"]
 
 
 def test_layout_discovery_rejects_size_word_lore_and_repairs_identity_separator() -> None:

@@ -38,7 +38,7 @@ class StatblockImportError(ValueError):
     """Raised when required statblock facts cannot be recovered from the source text."""
 
 
-OCR_STATBLOCK_RECOVERY_VERSION = 16
+OCR_STATBLOCK_RECOVERY_VERSION = 17
 
 
 @dataclass(frozen=True)
