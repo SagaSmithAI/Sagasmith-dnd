@@ -721,6 +721,66 @@ def test_agent_can_supply_one_source_reviewed_missing_ability_score() -> None:
     }
 
 
+def test_agent_can_replace_one_exact_source_reviewed_ocr_line() -> None:
+    def block(text: str, y: int) -> dict:
+        return {
+            "text": text,
+            "confidence": 0.99,
+            "bbox": [40, y, 440, y + 14],
+        }
+
+    layout = {
+        "page_number": 121,
+        "width": 1000,
+        "height": 1400,
+        "blocks": [
+            block("DRIDER", 90),
+            block("Large monstrosity, chaotic evil", 118),
+            block("Armor Class 19 (natural armor)", 136),
+            block("Hit Points 123 (13d10 + 52)", 154),
+            block("Speed 30 ft., climb 30 ft.", 172),
+            block("STR DEX CON INT WIS CHA", 200),
+            block("16 (+3) 16 (+3) 18 (+4) 13 (+1) 14 (+2) 12 (+1)", 218),
+            block("Challenge 6 (2,300 XP)", 250),
+            block("ACTIONS", 280),
+            block(
+                "Bite. Melee Weapon Attack: +6 to hit, reach 5 ft., one creature.",
+                310,
+            ),
+            block("ii g", 330),
+        ],
+    }
+
+    with pytest.raises(StatblockImportError, match="neither supported Hit damage"):
+        recover_2014_statblock_from_ocr(
+            layout,
+            name="Drider",
+            statblock_slot=1,
+        )
+
+    recovered = recover_2014_statblock_from_ocr(
+        layout,
+        name="Drider",
+        statblock_slot=1,
+        reviewed_text_replacements=[
+            {
+                "old": "ii g",
+                "new": "Hit: 2 (1d4) piercing damage plus 9 (2d8) poison damage.",
+            }
+        ],
+    )
+
+    assert recovered["validation"]["name"] == "Drider"
+    assert recovered["evidence"]["reviewed_ocr_corrections"] == {
+        "text_replacements": [
+            {
+                "old": "ii g",
+                "new": "Hit: 2 (1d4) piercing damage plus 9 (2d8) poison damage.",
+            }
+        ]
+    }
+
+
 def test_agent_slot_uses_next_same_column_identity_as_a_hard_boundary() -> None:
     def block(text: str, y: int, x: int = 40) -> dict:
         return {

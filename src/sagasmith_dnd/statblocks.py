@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 import unicodedata
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from difflib import SequenceMatcher
@@ -38,7 +38,7 @@ class StatblockImportError(ValueError):
     """Raised when required statblock facts cannot be recovered from the source text."""
 
 
-OCR_STATBLOCK_RECOVERY_VERSION = 18
+OCR_STATBLOCK_RECOVERY_VERSION = 19
 
 
 @dataclass(frozen=True)
@@ -6421,6 +6421,7 @@ def recover_2014_statblock_from_ocr(
     minimum_confidence: float = 0.8,
     statblock_slot: int | None = None,
     reviewed_ability_scores: Mapping[str, str] | None = None,
+    reviewed_text_replacements: Sequence[Mapping[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Recover one statblock from layout OCR without requiring an image-capable model."""
 
@@ -6758,6 +6759,33 @@ def recover_2014_statblock_from_ocr(
         if block["index"] not in excluded_ids
     ]
     scoped = _ocr_repair_section_heading_fragments(scoped)
+    normalized_text_replacements: list[dict[str, str]] = []
+    for index, raw_replacement in enumerate(reviewed_text_replacements or ()):
+        if not isinstance(raw_replacement, Mapping) or set(raw_replacement) != {
+            "old",
+            "new",
+        }:
+            raise StatblockImportError(
+                f"reviewed OCR text replacement {index} requires only old and new"
+            )
+        old = " ".join(str(raw_replacement.get("old") or "").split())
+        new = " ".join(str(raw_replacement.get("new") or "").split())
+        if not old or not new or old == new or len(old) > 500 or len(new) > 2000:
+            raise StatblockImportError(
+                f"reviewed OCR text replacement {index} is empty, unchanged, or too long"
+            )
+        matches = [
+            block
+            for block in scoped
+            if " ".join(str(block["text"]).split()) == old
+        ]
+        if len(matches) != 1:
+            raise StatblockImportError(
+                f"reviewed OCR text replacement {index} must match exactly one scoped block"
+            )
+        matched = matches[0]
+        matched["text"] = new
+        normalized_text_replacements.append({"old": old, "new": new})
     identity = next(
         (block for block in scoped[1:] if _ocr_identity_match(block["text"])),
         None,
@@ -7038,12 +7066,25 @@ def recover_2014_statblock_from_ocr(
             ),
             "reviewed_ocr_corrections": (
                 {
-                    "abilities": {
-                        ability.lower(): value
-                        for ability, value in dict(reviewed_ability_scores or {}).items()
-                    }
+                    **(
+                        {
+                            "abilities": {
+                                ability.lower(): value
+                                for ability, value in dict(
+                                    reviewed_ability_scores or {}
+                                ).items()
+                            }
+                        }
+                        if reviewed_ability_scores
+                        else {}
+                    ),
+                    **(
+                        {"text_replacements": normalized_text_replacements}
+                        if normalized_text_replacements
+                        else {}
+                    ),
                 }
-                if reviewed_ability_scores
+                if reviewed_ability_scores or normalized_text_replacements
                 else None
             ),
             "matching_heading_count": len(headings),
