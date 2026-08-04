@@ -44,8 +44,20 @@ from sagasmith_dnd.statblocks import (
 )
 
 _ITEM_HEADER_RE = re.compile(
-    r"(?im)^(?:wondrous item|weapon|armor|potion|ring|rod|staff|wand)(?:\s*[,—-]|\s*$)"
+    r"(?im)^(?:wondrous item|weapon|armor|potion|ring|rod|scroll|staff|wand)"
+    r"(?:\s*\([^\n)]{1,120}\))?\s*(?:,|—|–|-)"
 )
+_ITEM_CATEGORY_LABELS = {
+    "armor": "Armor",
+    "potion": "Potion",
+    "ring": "Ring",
+    "rod": "Rod",
+    "scroll": "Scroll",
+    "staff": "Staff",
+    "wand": "Wand",
+    "weapon": "Weapon",
+    "wondrousitem": "Wondrous item",
+}
 _SPELL_LEVEL_RE = re.compile(
     r"(?im)^(?:\d+(?:st|nd|rd|th)[ -]level\s+[a-z]+|[a-z]+\s+cantrip)\b"
 )
@@ -320,6 +332,68 @@ def _bounded_ocr_edit_distance(left: str, right: str, maximum: int) -> int:
             return maximum + 1
         previous = current
     return previous[-1]
+
+
+def _normalize_item_header_ocr_text(value: str) -> str:
+    """Repair only the bounded category label before an item's first comma."""
+
+    match = re.match(
+        r"^(?P<leading>\s*)(?P<label>[^,(\n0-9]{1,40})"
+        r"(?P<parenthetical>\s*\([^\n)]{1,120}\))?"
+        r"(?P<rest>\s*(?:,|—|–|-)[\s\S]*)$",
+        value,
+    )
+    if match is None:
+        return value
+    label = match.group("label").rstrip()
+    parenthetical = str(match.group("parenthetical") or "")
+    compact = re.sub(r"[^A-Za-z]", "", label).casefold()
+    matches = sorted(
+        (
+            _bounded_ocr_edit_distance(compact, expected, 2),
+            expected,
+            rendered,
+        )
+        for expected, rendered in _ITEM_CATEGORY_LABELS.items()
+        if abs(len(compact) - len(expected)) <= 2
+    )
+    if not matches or matches[0][0] > 2:
+        return value
+    if len(matches) > 1 and matches[0][0] == matches[1][0]:
+        return value
+    return (
+        f"{match.group('leading')}{matches[0][2]}{parenthetical}"
+        f"{match.group('rest')}"
+    )
+
+
+def _item_category_suffix(value: str) -> tuple[int, str] | None:
+    """Return a bounded OCR category suffix start and its canonical label."""
+
+    tokens = list(re.finditer(r"[^\s]+", value))
+    matches: list[tuple[int, int, int, str]] = []
+    for token_count in (1, 2, 3):
+        if len(tokens) < token_count:
+            continue
+        start = tokens[-token_count].start()
+        raw = value[start:]
+        compact = re.sub(r"[^A-Za-z]", "", raw).casefold()
+        for expected, rendered in _ITEM_CATEGORY_LABELS.items():
+            if abs(len(compact) - len(expected)) > 2:
+                continue
+            distance = _bounded_ocr_edit_distance(compact, expected, 2)
+            if distance <= 2:
+                matches.append((distance, -len(raw), start, rendered))
+    matches.sort()
+    if not matches:
+        return None
+    if (
+        len(matches) > 1
+        and matches[0][0] == matches[1][0]
+        and matches[0][3] != matches[1][3]
+    ):
+        return None
+    return matches[0][2], matches[0][3]
 
 
 def _canonical_source_heading(value: str) -> str:
@@ -1049,15 +1123,57 @@ def extract_content_candidates(
             section.get("page_end"), chunk.get("page_end")
         )
 
-    own_classifications = {
-        key: _classify(
-            str(section["title"]),
-            list(section["heading_path"]),
-            "\n\n".join(section["content"]),
+    own_classifications: dict[
+        tuple[str, ...], tuple[str, tuple[str, ...]] | None
+    ] = {}
+    primary_content_indexes: dict[tuple[str, ...], int | None] = {}
+    for key, section in sections.items():
+        title = str(section["title"])
+        heading_path = list(section["heading_path"])
+        contents = list(section["content"])
+        joined_classification = _classify(
+            title,
+            heading_path,
+            "\n\n".join(contents),
             source_title=source_title,
         )
-        for key, section in sections.items()
-    }
+        fragment_classifications = [
+            _classify(
+                title,
+                heading_path,
+                content,
+                source_title=source_title,
+            )
+            for content in contents
+        ]
+        classified_fragments = [
+            (index, classification)
+            for index, classification in enumerate(fragment_classifications)
+            if classification is not None
+        ]
+        # PDF illustration labels and running prose can share the canonical
+        # heading of the real entity body. Classify every source fragment as
+        # well as the joined section so a harmless leading fragment cannot
+        # hide a later, structurally complete entity header.
+        fragment_kinds = {
+            classification[0] for _index, classification in classified_fragments
+        }
+        if joined_classification is not None:
+            classification = joined_classification
+        elif len(fragment_kinds) == 1:
+            classification = classified_fragments[0][1]
+        else:
+            classification = None
+        own_classifications[key] = classification
+        primary_content_indexes[key] = next(
+            (
+                index
+                for index, fragment_classification in classified_fragments
+                if classification is not None
+                and fragment_classification[0] == classification[0]
+            ),
+            None,
+        )
     descendants_by_key: dict[tuple[str, ...], list[dict[str, Any]]] = {
         key: [] for key in sections
     }
@@ -1077,7 +1193,12 @@ def extract_content_candidates(
     source_class_name = _class_name_from_source(source_title)
     for key, section in sections.items():
         descendants = descendants_by_key[key]
-        content_parts = [*section["content"]]
+        own_content_parts = [*section["content"]]
+        primary_content_index = primary_content_indexes[key]
+        if primary_content_index not in {None, 0}:
+            primary_content = own_content_parts.pop(primary_content_index)
+            own_content_parts.insert(0, primary_content)
+        content_parts = own_content_parts
         source_chunk_ids = list(section["source_chunk_ids"])
         page_start = section["page_start"]
         page_end = section["page_end"]
@@ -1102,7 +1223,6 @@ def extract_content_candidates(
             if aggregate_classification is not None and aggregate_classification[0] in {
                 "background",
                 "class",
-                "item",
                 "species",
                 "statblock",
             }:
@@ -1217,6 +1337,7 @@ def extract_content_candidates(
             class_index=spell_class_index,
         )
     )
+    candidates.extend(_embedded_item_candidates(chunks))
     candidates.extend(_ordered_class_candidates(chunks))
     candidates.extend(_ordered_species_candidates(chunks))
     candidates.extend(_embedded_species_candidates(chunks))
@@ -1624,6 +1745,127 @@ def _embedded_spell_candidates(
                                 "effect": (fields.group("effect") or "").strip()[:4000],
                             },
                             "source_title": source_title,
+                        },
+                    },
+                }
+            )
+    return candidates
+
+
+def _embedded_item_candidates(
+    chunks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Recover item entries whose display heading was fused into prior prose."""
+
+    candidates: list[dict[str, Any]] = []
+    for chunk in chunks:
+        chunk_id = str(chunk.get("id") or "").strip()
+        heading_path = [
+            str(value).strip()
+            for value in chunk.get("heading_path") or []
+            if str(value).strip()
+        ]
+        if not chunk_id or not heading_path or not any(
+            "magic item" in value.casefold()
+            or value.casefold() in {"artifact", "artifacts"}
+            for value in heading_path
+        ):
+            continue
+        content = str(chunk.get("content") or "")
+        recovered: list[tuple[int, int, str, str]] = []
+        for comma in re.finditer(",", content):
+            window_start = max(0, comma.start() - 200)
+            before_comma = content[window_start : comma.start()].rstrip()
+            category_end = len(before_comma)
+            if before_comma.endswith(")"):
+                opening = before_comma.rfind("(", max(0, category_end - 130))
+                if opening >= 0:
+                    category_end = opening
+            category_prefix = before_comma[:category_end].rstrip()
+            category = _item_category_suffix(category_prefix)
+            if category is None:
+                continue
+            category_start, rendered_category = category
+            name_prefix = category_prefix[:category_start]
+            name_start = max(
+                name_prefix.rfind("."),
+                name_prefix.rfind("!"),
+                name_prefix.rfind("?"),
+            ) + 1
+            raw_name = name_prefix[name_start:].strip(
+                " \t\r\n\"'~:;,-·•"
+            )
+            ascii_letters = [
+                character
+                for character in raw_name
+                if character.isascii() and character.isalpha()
+            ]
+            if (
+                not 3 <= len(raw_name) <= 100
+                or not ascii_letters
+                or len(raw_name.split()) > 12
+                or sum(character.isupper() for character in ascii_letters)
+                / len(ascii_letters)
+                < 0.7
+            ):
+                continue
+            name = _normalize_candidate_display_name(raw_name)
+            if not name:
+                continue
+            recovered.append(
+                (
+                    window_start + name_start,
+                    window_start + category_start,
+                    name,
+                    rendered_category,
+                )
+            )
+        recovered = list(dict.fromkeys(recovered))
+        for index, (entry_start, category_start, name, rendered_category) in enumerate(
+            recovered
+        ):
+            end = recovered[index + 1][0] if index + 1 < len(recovered) else len(content)
+            description = content[category_start:end].strip()
+            if not description:
+                continue
+            context_end = max(
+                (
+                    position
+                    for position, value in enumerate(heading_path)
+                    if "magic item" in value.casefold()
+                    or value.casefold() in {"artifact", "artifacts"}
+                ),
+                default=len(heading_path) - 2,
+            )
+            source_heading_path = [*heading_path[: context_end + 1], name]
+            identity = "\x1f".join(
+                ("item", chunk_id, str(entry_start), _canonical_source_heading(name))
+            )
+            candidates.append(
+                {
+                    "id": "candidate:"
+                    + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20],
+                    "kind": "item",
+                    "name": name,
+                    "source_chunk_ids": [chunk_id],
+                    "source_heading_path": source_heading_path,
+                    "page_start": chunk.get("page_start"),
+                    "page_end": chunk.get("page_end"),
+                    "extraction_confidence": "medium",
+                    "extraction_signals": [
+                        "embedded item category",
+                        rendered_category.casefold(),
+                    ],
+                    "review_status": "pending",
+                    "mechanical_scope": "review_required",
+                    "application_state": "catalog_only",
+                    "execution_state": "not_compiled",
+                    "artifact": {
+                        "kind": "item",
+                        "application_state": "catalog_only",
+                        "card": {
+                            "name": name,
+                            "description": description[:12000],
                         },
                     },
                 }
@@ -2467,6 +2709,7 @@ def _rulebook_statblock_candidates(
         # while the six ability cells remain siblings under the surrounding
         # section.  Widen to that parent only when the complete ordered ability
         # row is present before the next creature core.
+        widened_to_sibling_abilities = False
         if name_index is not None and scoped_path:
             parent_path = path[:name_index]
             def ability_coverage(prefix: list[str]) -> set[str]:
@@ -2493,6 +2736,7 @@ def _rulebook_statblock_candidates(
             )
             if not current_has_abilities and sibling_has_abilities:
                 scoped_path = parent_path
+                widened_to_sibling_abilities = True
 
         if scoped_path:
             end = next(
@@ -2508,6 +2752,35 @@ def _rulebook_statblock_candidates(
                 ),
                 end,
             )
+        if widened_to_sibling_abilities:
+            # Widening to the parent is necessary for malformed PDF tables
+            # whose six ability cells became siblings of the creature title.
+            # That parent can also contain an entire chapter, so retain only
+            # the shortest local prefix that forms a complete statblock, plus
+            # immediately following action/reaction sections.
+            minimum_end: int | None = None
+            for candidate_end in range(start + 1, end + 1):
+                try:
+                    _normalize_module_statblock(name, ordered[start:candidate_end])
+                except (StatblockImportError, ValueError):
+                    continue
+                minimum_end = candidate_end
+                break
+            if minimum_end is not None:
+                end = minimum_end
+                while end < len(ordered):
+                    next_path = [
+                        str(item).strip()
+                        for item in ordered[end].get("heading_path") or []
+                        if str(item).strip()
+                    ]
+                    if next_path[: len(scoped_path)] != scoped_path:
+                        break
+                    if not next_path or _canonical_statblock_section_title(
+                        next_path[-1]
+                    ) is None:
+                        break
+                    end += 1
         scoped = ordered[start:end]
         chunk_ids = list(
             dict.fromkeys(
@@ -2788,7 +3061,7 @@ def _unclaimed_mechanical_signals(content: str) -> list[str]:
         signals.append("statblock core")
     if re.search(r"(?i)\b(?:class|subclass|archetype) features\b", sample):
         signals.append("class feature table")
-    if _ITEM_HEADER_RE.search(sample[:1000]):
+    if _ITEM_HEADER_RE.search(_normalize_item_header_ocr_text(sample[:1000])):
         signals.append("item header")
     if len(
         [
@@ -3179,7 +3452,8 @@ def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
         for chunk, _labels in ability_chunks
     )
     if (
-        flattened_ability_labels == list(ABILITY_LABELS)
+        len(flattened_ability_labels) == len(ABILITY_LABELS)
+        and set(flattened_ability_labels) == set(ABILITY_LABELS)
         and fragmented_ability_row
     ):
         ability_row = " ".join(
@@ -4478,7 +4752,13 @@ def author_selection_card_from_candidate(
         return value
 
     if kind == "item":
-        item_kind = "magic_item" if _ITEM_HEADER_RE.search(description[:500]) else "equipment"
+        item_kind = (
+            "magic_item"
+            if _ITEM_HEADER_RE.search(
+                _normalize_item_header_ocr_text(description[:500])
+            )
+            else "equipment"
+        )
         card.setdefault(
             "inventory_template",
             {
@@ -5982,8 +6262,18 @@ def _classify(
     if len(species_signals) >= 4:
         return "species", species_signals
 
-    item_header = _ITEM_HEADER_RE.search(sample[:500])
-    if item_header:
+    raw_item_sample = sample[:500]
+    item_header = _ITEM_HEADER_RE.search(
+        _normalize_item_header_ocr_text(raw_item_sample)
+    )
+    exact_item_header = _ITEM_HEADER_RE.search(raw_item_sample)
+    item_context = "magic item" in ancestors or bool(
+        re.search(
+            r"(?i)\b(?:common|uncommon|rare|very rare|legendary|artifact|varies)\b",
+            raw_item_sample[:240],
+        )
+    )
+    if item_header and (exact_item_header or item_context):
         signals = ["item category"]
         for label in ("rarity", "requires attunement", "charges"):
             if label in folded:

@@ -43,6 +43,131 @@ def test_extracts_review_required_catalog_candidates() -> None:
     assert all(item["application_state"] == "catalog_only" for item in candidates)
 
 
+@pytest.mark.parametrize(
+    ("name", "header"),
+    [
+        ("Adamantine Armor", "Armor (medium or heavy, but not hide), uncommon"),
+        ("Ammunition, +1, +2, or +3", "Weapon (any ammunition), uncommon"),
+        ("Spell Scroll", "Scroll, varies"),
+        ("Dwarven Plate", ".-trmor (plate), very rare"),
+        ("Efreeti Bottle", "'Fondrous item, very rare"),
+        ("Wand of Paralysis", "IVand, rare"),
+    ],
+)
+def test_item_candidates_accept_typed_parenthetical_categories(
+    name: str,
+    header: str,
+) -> None:
+    candidates = extract_content_candidates(
+        [
+            {
+                "id": "item",
+                "heading_path": ["Chapter 7", "Magic Items", name],
+                "content": f"{header}\nReviewed item effect.",
+            }
+        ]
+    )
+
+    assert [(item["kind"], item["name"]) for item in candidates] == [
+        ("item", name)
+    ]
+
+
+def test_item_candidate_does_not_promote_a_descriptive_parent_heading() -> None:
+    candidates = extract_content_candidates(
+        [
+            {
+                "id": "weather",
+                "heading_path": ["Travel", "Weather"],
+                "content": "Weather can alter a journey.",
+            },
+            {
+                "id": "warning",
+                "heading_path": ["Travel", "Weather", "Weapon of Warning"],
+                "content": "Weapon (any), uncommon\nReviewed item effect.",
+            },
+        ]
+    )
+
+    assert [(item["kind"], item["name"]) for item in candidates] == [
+        ("item", "Weapon of Warning")
+    ]
+
+
+@pytest.mark.parametrize(
+    ("name", "content"),
+    [
+        (
+            "Weather",
+            "d20 1-14 15-17 18-20 Temperature Normal Wind None Light Strong",
+        ),
+        ("1/4 (50 XP)", "ore, scout, swarm of insects, winged kobold"),
+    ],
+)
+def test_item_candidate_rejects_non_item_table_rows(name: str, content: str) -> None:
+    candidates = extract_content_candidates(
+        [{"id": "table", "heading_path": ["Appendix", name], "content": content}]
+    )
+
+    assert not [item for item in candidates if item["kind"] == "item"]
+
+
+def test_item_candidate_uses_typed_body_after_duplicate_illustration_heading() -> None:
+    candidates = extract_content_candidates(
+        [
+            {
+                "id": "illustration-label",
+                "heading_path": ["Magic Items", "Dwarven Thrower"],
+                "content": "Dwarven Plate",
+            },
+            {
+                "id": "item-body",
+                "heading_path": ["Magic Items", "DWARVEN THROWER"],
+                "content": (
+                    "Weapon (warhammer), very rare (requires attunement by a dwarf) "
+                    "This magic weapon returns to your hand."
+                ),
+            },
+        ]
+    )
+
+    item = next(value for value in candidates if value["kind"] == "item")
+    assert item["name"] == "Dwarven Thrower"
+    assert item["source_chunk_ids"] == ["illustration-label", "item-body"]
+    assert item["artifact"]["card"]["description"].startswith("Weapon (warhammer)")
+
+
+def test_item_candidates_recover_a_fused_magic_item_heading_from_prior_prose() -> None:
+    candidates = extract_content_candidates(
+        [
+            {
+                "id": "demon-armor",
+                "heading_path": ["Magic Items", "Demon Armor"],
+                "content": (
+                    "Armor (plate), very rare. The armor has a cursed property. "
+                    '~IM ENSIONAL SHACKLES "\\ondrous item, rare. '
+                    "The shackles prevent extradimensional travel."
+                ),
+                "page_start": 165,
+                "page_end": 165,
+            }
+        ]
+    )
+
+    recovered = next(
+        item for item in candidates if "SHACKLES" in item["name"].upper()
+    )
+    assert recovered["kind"] == "item"
+    assert recovered["source_chunk_ids"] == ["demon-armor"]
+    assert recovered["source_heading_path"] == [
+        "Magic Items",
+        "IM ENSIONAL SHACKLES",
+    ]
+    assert recovered["artifact"]["card"]["description"].startswith(
+        '"\\ondrous item, rare'
+    )
+
+
 def test_same_named_features_under_different_subclasses_do_not_merge() -> None:
     candidates = extract_content_candidates(
         [
@@ -2251,6 +2376,90 @@ def test_rulebook_statblock_uses_fragmented_sibling_ability_headings() -> None:
     assert "***Soul Bond***." in statblock["normalized_content"]
     assert "## Actions" in statblock["normalized_content"]
     assert "***Flame Seed***. Ranged Weapon Attack" in statblock["normalized_content"]
+
+
+def test_rulebook_statblock_bounds_out_of_order_sibling_abilities_and_actions() -> None:
+    parent = ["Magic Items"]
+    chunks = [
+        {
+            "id": "core",
+            "section_ordinal": 0,
+            "ordinal": 0,
+            "heading_path": [*parent, "Avatar of Death"],
+            "content": (
+                "Medium undead, neutral evil Armor Class 20 Hit Points 20 "
+                "Speed 60 ft., fly 60 ft. (hover)"
+            ),
+            "page_start": 164,
+            "page_end": 164,
+        },
+        *[
+            {
+                "id": heading.casefold(),
+                "section_ordinal": index + 1,
+                "ordinal": 0,
+                "heading_path": [*parent, heading],
+                "content": value,
+                "page_start": 164,
+                "page_end": 164,
+            }
+            for index, (heading, value) in enumerate(
+                (
+                    ("CON", ""),
+                    ("INT", ""),
+                    ("WIS", ""),
+                    ("DEX", ""),
+                    ("CHA", ""),
+                    (
+                        "STR",
+                        "16 (+3) 16 (+3) 16 (+3) 16 (+3) 16 (+3) 16 (+3) "
+                        "Damage Immunities necrotic, poison",
+                    ),
+                )
+            )
+        ],
+        {
+            "id": "actions",
+            "section_ordinal": 7,
+            "ordinal": 0,
+            "heading_path": [*parent, "ACTIONS"],
+            "content": (
+                "Reaping Scythe. Melee Weapon Attack: +3 to hit, reach 5 ft., "
+                "one target. Hit: 7 (1d8 + 3) slashing damage."
+            ),
+            "page_start": 164,
+            "page_end": 164,
+        },
+        {
+            "id": "next-item",
+            "section_ordinal": 8,
+            "ordinal": 0,
+            "heading_path": [*parent, "Defender"],
+            "content": "Weapon (any sword), legendary. This is a magic weapon.",
+            "page_start": 164,
+            "page_end": 164,
+        },
+    ]
+
+    statblock = next(
+        item
+        for item in extract_content_inventory(chunks)["candidates"]
+        if item["kind"] == "statblock"
+    )
+
+    assert statblock["execution_state"] == "review_ready"
+    assert statblock["source_chunk_ids"] == [
+        "core",
+        "con",
+        "int",
+        "wis",
+        "dex",
+        "cha",
+        "str",
+        "actions",
+    ]
+    assert "## Actions" in statblock["normalized_content"]
+    assert "This is a magic weapon" not in statblock["normalized_content"]
 
 
 def test_named_statblock_lore_is_trimmed_only_after_a_complete_attack() -> None:
