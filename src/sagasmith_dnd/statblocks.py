@@ -38,7 +38,7 @@ class StatblockImportError(ValueError):
     """Raised when required statblock facts cannot be recovered from the source text."""
 
 
-OCR_STATBLOCK_RECOVERY_VERSION = 17
+OCR_STATBLOCK_RECOVERY_VERSION = 18
 
 
 @dataclass(frozen=True)
@@ -5898,6 +5898,22 @@ def _ocr_heading_has_identity(
     )
 
 
+def _ocr_decorative_heading_has_identity(
+    heading: dict[str, Any],
+    following: dict[str, Any] | None,
+) -> bool:
+    """Reject action prose that merely happens to precede the next identity."""
+
+    normalized = " ".join(str(heading.get("text") or "").split())
+    return bool(
+        _ocr_heading_has_identity(heading, following)
+        and 1 <= len(normalized.split()) <= 10
+        and 2 <= len(normalized) <= 80
+        and re.search(r"[A-Za-z]", normalized)
+        and re.search(r"[.!?:]", normalized) is None
+    )
+
+
 _OCR_ABILITY_ORDER = ("STR", "DEX", "CON", "INT", "WIS", "CHA")
 _OCR_ABILITY_DIGITS = str.maketrans(
     {"l": "1", "I": "1", "O": "0", "S": "5"}
@@ -6364,7 +6380,8 @@ def discover_2014_statblock_slots_from_layout(
             heading = ordered[identity_index - 1] if identity_index else None
             discovered_name = (
                 " ".join(str(heading["text"]).split())
-                if heading is not None and _ocr_heading_has_identity(heading, identity)
+                if heading is not None
+                and _ocr_decorative_heading_has_identity(heading, identity)
                 else None
             )
             slots.append(
@@ -6387,6 +6404,11 @@ def discover_2014_statblock_slots_from_layout(
                         *(field["confidence"] for field in core.values()),
                     ),
                     "_identity_index": identity["index"],
+                    **(
+                        {"_heading_index": heading["index"]}
+                        if discovered_name is not None and heading is not None
+                        else {}
+                    ),
                 }
             )
     return slots
@@ -6503,9 +6525,20 @@ def recover_2014_statblock_from_ocr(
                 12.0,
                 float(boundary_identity["y1"] - boundary_identity["y0"]),
             )
-            selected_slot_boundary_y0 = (
-                float(boundary_identity["y0"]) - boundary_heading_height - 2.0
-            )
+            boundary_heading_index = same_column_slots[
+                same_column_position + 1
+            ].get("_heading_index")
+            if boundary_heading_index is not None:
+                boundary_heading = next(
+                    block
+                    for block in blocks
+                    if block["index"] == boundary_heading_index
+                )
+                selected_slot_boundary_y0 = float(boundary_heading["y0"]) - 10.0
+            else:
+                selected_slot_boundary_y0 = (
+                    float(boundary_identity["y0"]) - boundary_heading_height - 2.0
+                )
         identity_block = next(
             block
             for block in blocks

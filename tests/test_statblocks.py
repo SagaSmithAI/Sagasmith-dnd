@@ -783,6 +783,61 @@ def test_agent_slot_uses_next_same_column_identity_as_a_hard_boundary() -> None:
     assert "Second Creature Trait" not in recovered["normalized_content"]
 
 
+def test_agent_slot_bounds_right_column_at_the_next_decorative_title() -> None:
+    def block(text: str, y: int, x: int = 40) -> dict:
+        return {
+            "text": text,
+            "confidence": 0.99,
+            "bbox": [x, y, x + 400, y + 14],
+        }
+
+    layout = {
+        "page_number": 106,
+        "width": 1200,
+        "height": 1400,
+        "blocks": [
+            block("FIRST DRAGON", 90),
+            block("Huge dragon, chaotic good", 118),
+            block("Armor Class 18 (natural armor)", 136),
+            block("Hit Points 172 (15d12 + 75)", 154),
+            block("Speed 40 ft., fly 80 ft.", 172),
+            block("STR DEX CON INT WIS CHA", 200),
+            block("23 (+6) 10 (+0) 21 (+5) 14 (+2) 13 (+1) 17 (+3)", 218),
+            block("Challenge 13 (10,000 XP)", 250),
+            block("ACTIONS", 280),
+            block(
+                "Bite. Melee Weapon Attack: +11 to hit. "
+                "Hit: 17 (2d10 + 6) piercing damage.",
+                310,
+            ),
+            block("LEGENDARY ACTIONS", 104, 700),
+            block("Wing Attack. This belongs to the first dragon.", 122, 700),
+            block("SECOND DRAGON", 350),
+            block("Large dragon, chaotic good", 378),
+            block("Armor Class 17 (natural armor)", 396),
+            block("Hit Points 110 (13d10 + 39)", 414),
+            block("Speed 40 ft., fly 80 ft.", 432),
+            # OCR can place the right-column action one pixel above its visual
+            # title. It must still belong to the second card.
+            block(
+                "Young Bite. Melee Weapon Attack: +7 to hit. "
+                "Hit: 15 (2d10 + 4) piercing damage.",
+                349,
+                700,
+            ),
+        ],
+    }
+
+    recovered = recover_2014_statblock_from_ocr(
+        layout,
+        name="Reviewed First Dragon",
+        statblock_slot=1,
+    )
+
+    assert "Wing Attack" in recovered["normalized_content"]
+    assert "Young Bite" not in recovered["normalized_content"]
+
+
 def test_layout_discovery_rejects_size_word_lore_and_repairs_identity_separator() -> None:
     def block(text: str, y: int) -> dict:
         return {
