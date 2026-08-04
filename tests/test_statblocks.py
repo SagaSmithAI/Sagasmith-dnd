@@ -5809,8 +5809,11 @@ def test_layout_recovery_does_not_guess_an_ability_score(
     assert _ocr_ability_score_matches(source_value) is None
 
 
-def test_layout_recovery_ignores_one_edge_quote_around_an_ability_score() -> None:
-    parsed = _ocr_ability_score_matches("'16 (+3)")
+@pytest.mark.parametrize("source", ["'16 (+3)", ":16 (+3)"])
+def test_layout_recovery_ignores_one_edge_glyph_around_an_ability_score(
+    source: str,
+) -> None:
+    parsed = _ocr_ability_score_matches(source)
 
     assert parsed is not None
     assert parsed[0] == [("16 (+3)", "16 (+3)")]
