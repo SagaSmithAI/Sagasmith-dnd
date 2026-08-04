@@ -5925,6 +5925,7 @@ _OCR_ABILITY_SCORE_RE = re.compile(
 )
 _OCR_ABILITY_SCORE_REDUNDANT_MODIFIER_RE = re.compile(
     r"(?<![A-Za-z0-9])(?P<score>[0-9lIOS](?:\s*[0-9lIOS]){0,2})\s*"
+    r"[.,:;路]?\s*"
     r"(?:"
     r"[({]\s*[.,:;·]?\s*[+\-]?\s*[0-9lIOS]{1,2}\s*[)}]"
     r"|"
@@ -5954,7 +5955,7 @@ def _ocr_ability_score_matches(
         if not matches:
             continue
         remainder = pattern.sub("", text)
-        if remainder.strip(" \t,:;|/'’‘`”“"):
+        if remainder.strip(" \t,:;|/'’‘`”“)"):
             continue
         values: list[tuple[str, str]] = []
         for match in matches:
@@ -5967,7 +5968,9 @@ def _ocr_ability_score_matches(
                 return None
             normalized_value = f"{score} ({(score - 10) // 2:+d})"
             if preserve_source:
-                source_value = match.group(0).strip()
+                source_value = (
+                    text.strip() if len(matches) == 1 else match.group(0).strip()
+                )
             else:
                 source_value = (
                     str(score)

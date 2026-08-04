@@ -5733,6 +5733,8 @@ def test_layout_ocr_repairs_only_bounded_weapon_entry_underscore() -> None:
         ("17 (.+3)", "17 (+3)"),
         ("8 (1)", "8 (-1)"),
         ("8 1)", "8 (-1)"),
+        ("7(2))", "7 (-2)"),
+        ("7.(2)", "7 (-2)"),
     ],
 )
 def test_layout_recovery_repairs_only_redundant_ability_modifier_ocr(
