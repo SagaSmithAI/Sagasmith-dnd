@@ -5809,6 +5809,13 @@ def test_layout_recovery_does_not_guess_an_ability_score(
     assert _ocr_ability_score_matches(source_value) is None
 
 
+def test_layout_recovery_ignores_one_edge_quote_around_an_ability_score() -> None:
+    parsed = _ocr_ability_score_matches("'16 (+3)")
+
+    assert parsed is not None
+    assert parsed[0] == [("16 (+3)", "16 (+3)")]
+
+
 def test_layout_recovery_joins_spaced_digits_inside_explicit_ability_cells() -> None:
     parsed = _ocr_ability_score_matches(
         "1 7 (+3) 1 5 (+2) 14 (+2) 1 0 (+O) 1 5 (+2) 11 (+O)"

@@ -5954,7 +5954,7 @@ def _ocr_ability_score_matches(
         if not matches:
             continue
         remainder = pattern.sub("", text)
-        if remainder.strip(" \t,;|/"):
+        if remainder.strip(" \t,;|/'’‘`”“"):
             continue
         values: list[tuple[str, str]] = []
         for match in matches:
