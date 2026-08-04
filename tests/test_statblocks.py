@@ -579,6 +579,7 @@ def test_agent_can_name_a_structural_slot_when_the_decorative_title_is_missing()
         ("Large construict, unaligned", "Large construct, unaligned"),
         ("Large end (demon), hac ev", "Large fiend (demon), hac ev"),
         ("Medium plaht, unaligned", "Medium plant, unaligned"),
+        ("Medjum monstrosity, unaligned", "Medium monstrosity, unaligned"),
     ],
 )
 def test_agent_slot_repairs_bounded_identity_glyph_noise(
@@ -626,6 +627,38 @@ def test_agent_slot_repairs_bounded_identity_glyph_noise(
         "source_text": source_identity,
         "normalized_text": expected_identity,
     }
+
+
+@pytest.mark.parametrize(
+    "source_label",
+    ["Hlt Points 93 (11d10 + 33)", "Hit Polnts 93 (11d10 + 33)"],
+)
+def test_agent_slot_repairs_bounded_hit_points_label_glyphs(
+    source_label: str,
+) -> None:
+    def block(text: str, y: int) -> dict:
+        return {
+            "text": text,
+            "confidence": 0.99,
+            "bbox": [40, y, 440, y + 14],
+        }
+
+    layout = {
+        "page_number": 277,
+        "width": 1000,
+        "height": 1400,
+        "blocks": [
+            block("RED SLAAD", 90),
+            block("Large aberration, chaotic neutral", 118),
+            block("Armor Class 14 (natural armor)", 136),
+            block(source_label, 154),
+            block("Speed 30 ft.", 172),
+        ],
+    }
+
+    slots = discover_2014_statblock_slots_from_layout(layout)
+    assert len(slots) == 1
+    assert slots[0]["core"]["Hit Points"] == "Hit Points 93 (11d10 + 33)"
 
 
 def test_agent_slot_uses_next_same_column_identity_as_a_hard_boundary() -> None:

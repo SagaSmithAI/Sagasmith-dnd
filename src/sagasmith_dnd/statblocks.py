@@ -38,7 +38,7 @@ class StatblockImportError(ValueError):
     """Raised when required statblock facts cannot be recovered from the source text."""
 
 
-OCR_STATBLOCK_RECOVERY_VERSION = 15
+OCR_STATBLOCK_RECOVERY_VERSION = 16
 
 
 @dataclass(frozen=True)
@@ -5440,6 +5440,20 @@ def _normalize_ocr_identity_text(text: str) -> str:
     normalized = unicodedata.normalize("NFKD", " ".join(str(text).split()))
     normalized = normalized.encode("ascii", "ignore").decode("ascii")
     normalized = re.sub(r"^[^A-Za-z]{1,3}(?=[A-Za-z])", "", normalized)
+    size_prefix = re.match(r"^([A-Za-z]{3,12})(.*)$", normalized)
+    if size_prefix is not None:
+        observed_size = size_prefix.group(1).lower()
+        ranked_sizes = sorted(
+            (
+                SequenceMatcher(None, observed_size, size.lower()).ratio(),
+                size,
+            )
+            for size in ("Tiny", "Small", "Medium", "Large", "Huge", "Gargantuan")
+        )
+        best_score, best_size = ranked_sizes[-1]
+        runner_up_score = ranked_sizes[-2][0]
+        if best_score >= 0.72 and best_score - runner_up_score >= 0.12:
+            normalized = f"{best_size}{size_prefix.group(2)}"
     normalized = re.sub(
         r"(?i)^(Tiny|Small|Medium|Large|Huge|Gargantuan)[^A-Za-z0-9(),]{1,3}"
         rf"(?={_OCR_CREATURE_TYPE_PATTERN}\b)",
@@ -5576,6 +5590,11 @@ def _repair_layout_ocr_text(text: str) -> str:
     """Repair only mechanically bounded OCR substitutions before statblock parsing."""
 
     normalized = re.sub(
+        r"(?i)^H[il1]t\s+P[o0][il1]nts(?=\s+\S)",
+        "Hit Points",
+        text,
+    )
+    normalized = re.sub(
         r"(?i)(?<![A-Za-z0-9])(?P<count>(?:[0-9]+|[lI]\s*[0-9]+))\s*d\s*"
         r"(?P<size>[0-9lIOS](?:\s*[0-9lIOS]){0,2})(?![A-Za-z0-9])",
         lambda match: (
@@ -5587,7 +5606,7 @@ def _repair_layout_ocr_text(text: str) -> str:
                 _OCR_ABILITY_DIGITS
             )
         ),
-        text,
+        normalized,
     )
     normalized = re.sub(
         r"(?i)^Challenge\s*[-\u2012\u2013\u2014]\s*(?=\(|\d)",
