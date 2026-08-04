@@ -117,6 +117,7 @@ _CARD_BINDINGS = {
         "minimum_level",
         "always_prepared_spells",
         "spell_grants",
+        "spell_list_expansion",
     ),
 }
 
@@ -1162,6 +1163,17 @@ def subclass_spell_grant_errors(binding: Mapping[str, Any]) -> list[str]:
         grants = []
     if not isinstance(grants, list):
         return ["subclass spell_grants must be an array"]
+    expansion = binding.get("spell_list_expansion")
+    if expansion is None:
+        expansion = []
+    if not isinstance(expansion, list) or any(
+        not isinstance(item, str) or not item.strip() for item in expansion
+    ):
+        errors.append("subclass spell_list_expansion must be an array of non-empty strings")
+        expansion = []
+    expansion_names = [str(item).strip().casefold() for item in expansion]
+    if len(expansion_names) != len(set(expansion_names)):
+        errors.append("subclass spell_list_expansion must not repeat a spell")
     for label, entries, legacy_mode in (
         ("always_prepared_spells", legacy, True),
         ("spell_grants", grants, False),
@@ -1200,6 +1212,8 @@ def subclass_spell_grant_errors(binding: Mapping[str, Any]) -> list[str]:
                 errors.append(f"{prefix}.method must be always_prepared, known, or spellbook")
     if len(normalized_names) != len(set(normalized_names)):
         errors.append("subclass spell grants must not repeat a spell")
+    if set(normalized_names).intersection(expansion_names):
+        errors.append("subclass spells cannot be both granted and list-expanded")
     return errors
 
 

@@ -1353,6 +1353,17 @@ def test_complete_card_supports_identity_weapons_spells_encumbrance_and_adventur
                         }
                     ]
                 },
+                "subclass_grants": {
+                    "spell_list_expansion": [
+                        {
+                            "artifact_id": "dnd5e.content.example.spell.command",
+                            "name": "Command",
+                            "pack_id": "dnd5e.content.example",
+                            "pack_version": "1.0.0",
+                            "source_class": "Warlock",
+                        }
+                    ]
+                },
             },
             "abilities": {"strength": {"score": 16}, "dexterity": {"score": 14}},
             "combat": {
@@ -1485,6 +1496,15 @@ def test_complete_card_supports_identity_weapons_spells_encumbrance_and_adventur
             "name": "Misty Step",
             "pack_id": "dnd5e.content.example",
             "pack_version": "1.0.0",
+        }
+    ]
+    assert sheet["progression"]["subclass_grants"]["spell_list_expansion"] == [
+        {
+            "artifact_id": "dnd5e.content.example.spell.command",
+            "name": "Command",
+            "pack_id": "dnd5e.content.example",
+            "pack_version": "1.0.0",
+            "source_class": "Warlock",
         }
     ]
     assert sheet["identity"]["deity"] == "Tyr"

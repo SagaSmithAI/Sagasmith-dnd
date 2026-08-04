@@ -273,6 +273,40 @@ def _normalize_spell_list_expansion(value: Any, field: str) -> list[dict[str, st
     return result
 
 
+def _normalize_subclass_spell_list_expansion(
+    value: Any, field: str
+) -> list[dict[str, str]]:
+    result: list[dict[str, str]] = []
+    for index, raw_grant in enumerate(_array(value or [], field)):
+        grant_field = f"{field}[{index}]"
+        grant = _object(raw_grant, grant_field)
+        _reject_unknown(
+            grant,
+            grant_field,
+            {"artifact_id", "name", "pack_id", "pack_version", "source_class"},
+        )
+        result.append(
+            {
+                key: _text(grant.get(key), f"{grant_field}.{key}", maximum=500)
+                for key in (
+                    "artifact_id",
+                    "name",
+                    "pack_id",
+                    "pack_version",
+                    "source_class",
+                )
+            }
+        )
+    if any(not grant[field_name] for grant in result for field_name in grant):
+        raise ValueError(f"{field} needs exact artifact provenance and source class")
+    identities = [
+        (item["source_class"].casefold(), item["artifact_id"]) for item in result
+    ]
+    if len(identities) != len(set(identities)):
+        raise ValueError(f"{field} contains duplicate class artifacts")
+    return result
+
+
 def _damage_parts(value: Any, field: str) -> list[dict[str, Any]]:
     parts: list[dict[str, Any]] = []
     for index, raw in enumerate(_array(value or [], field)):
@@ -347,6 +381,7 @@ def default_character_sheet() -> dict[str, Any]:
             },
             "species": "",
             "species_grants": {"spell_list_expansion": []},
+            "subclass_grants": {"spell_list_expansion": []},
         },
         "ability_generation": {
             "ruleset": "",
@@ -2525,6 +2560,7 @@ def validate_character_sheet(
             "background_grants",
             "species",
             "species_grants",
+            "subclass_grants",
         },
     )
     classes = []
@@ -2585,6 +2621,14 @@ def validate_character_sheet(
     _reject_unknown(
         species_grants,
         "sheet.progression.species_grants",
+        {"spell_list_expansion"},
+    )
+    subclass_grants = _object(
+        progression["subclass_grants"], "sheet.progression.subclass_grants"
+    )
+    _reject_unknown(
+        subclass_grants,
+        "sheet.progression.subclass_grants",
         {"spell_list_expansion"},
     )
 
@@ -3415,6 +3459,10 @@ def validate_character_sheet(
         species_grants["spell_list_expansion"],
         "sheet.progression.species_grants.spell_list_expansion",
     )
+    subclass_spell_list_expansion = _normalize_subclass_spell_list_expansion(
+        subclass_grants["spell_list_expansion"],
+        "sheet.progression.subclass_grants.spell_list_expansion",
+    )
     inventory_item_ids = {item["id"] for item in inventory["items"]}
     if not set(background_item_ids).issubset(inventory_item_ids):
         raise ValueError("background equipment references an unknown inventory item")
@@ -3473,6 +3521,9 @@ def validate_character_sheet(
             "species": _text(progression["species"], "sheet.progression.species", maximum=200),
             "species_grants": {
                 "spell_list_expansion": species_spell_list_expansion,
+            },
+            "subclass_grants": {
+                "spell_list_expansion": subclass_spell_list_expansion,
             },
         },
         "abilities": normalized_abilities,

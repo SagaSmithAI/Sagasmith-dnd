@@ -1729,6 +1729,39 @@ def test_background_spell_list_expansion_is_exact_and_requires_a_caster() -> Non
         )
         == "wizard"
     )
+
+    undying = default_character_sheet()
+    undying["edition"] = "2014"
+    undying["progression"]["level"] = 6
+    undying["progression"]["classes"] = [
+        {"name": "Warlock", "level": 3, "subclass": "The Undying", "hit_die": 8},
+        {"name": "Wizard", "level": 3, "subclass": "", "hit_die": 6},
+    ]
+    undying["progression"]["subclass_grants"]["spell_list_expansion"] = [
+        {
+            "artifact_id": "spell-aid",
+            "name": "Aid",
+            "pack_id": "dnd5e.content.srd2014",
+            "pack_version": "1.0.0",
+            "source_class": "Warlock",
+        }
+    ]
+    with pytest.raises(CombatEngineError, match="not a wizard spell"):
+        validate_spell_grant(
+            undying,
+            spell,
+            source_class="Wizard",
+            artifact_id="spell-aid",
+        )
+    assert (
+        validate_spell_grant(
+            undying,
+            spell,
+            source_class="Warlock",
+            artifact_id="spell-aid",
+        )
+        == "warlock"
+    )
     with pytest.raises(CombatEngineError, match="not a wizard spell"):
         validate_spell_grant(
             wizard,

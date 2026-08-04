@@ -1672,12 +1672,21 @@ def validate_spell_grant(
         for item in spell_list_expansion
         if isinstance(item, dict)
     }
+    subclass_expanded_artifact_ids = {
+        str(item.get("artifact_id") or "")
+        for item in progression.get("subclass_grants", {}).get(
+            "spell_list_expansion", []
+        )
+        if isinstance(item, dict)
+        and str(item.get("source_class") or "").casefold() == source
+    }
     class_profile = _class_spellcasting_profile(sheet, source)
     class_expansion = {
         str(item).casefold() for item in class_profile.get("spell_list_expansion", [])
     }
     expanded = bool(
         (artifact_id and artifact_id in expanded_artifact_ids)
+        or (artifact_id and artifact_id in subclass_expanded_artifact_ids)
         or str(spell.get("name") or "").casefold() in class_expansion
     )
     if source not in allowed and not expanded:

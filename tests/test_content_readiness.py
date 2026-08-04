@@ -594,12 +594,19 @@ def test_subclass_spell_grants_keep_known_and_prepared_semantics_distinct() -> N
         "spell_grants": [
             {"name": "Chill Touch", "minimum_level": 2, "method": "known"}
         ],
+        "spell_list_expansion": ["Aid"],
     }
     assert subclass_spell_grant_errors(card) == []
 
     card["spell_grants"][0]["method"] = "prepared"
     assert subclass_spell_grant_errors(card) == [
         "subclass spell_grants[0].method must be always_prepared, known, or spellbook"
+    ]
+
+    card["spell_grants"][0]["method"] = "known"
+    card["spell_list_expansion"] = ["Aid", "aid"]
+    assert subclass_spell_grant_errors(card) == [
+        "subclass spell_list_expansion must not repeat a spell"
     ]
 
 
