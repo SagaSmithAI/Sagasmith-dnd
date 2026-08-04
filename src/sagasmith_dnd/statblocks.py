@@ -5986,13 +5986,16 @@ def _ocr_ability_tokens(text: str) -> list[str] | None:
 
 def _ocr_ability_table(
     scoped: list[dict[str, Any]],
+    *,
+    reviewed_ability_scores: Mapping[str, str] | None = None,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
     """Recover six ability columns even when a PDF groups adjacent cells.
 
     Embedded PDF text and OCR engines legitimately emit either one box per
     table cell, boxes such as ``DEX CON``, or one box containing the whole
     score row.  The printed left-to-right order is authoritative; this helper
-    never supplies a missing score or reorders a noncanonical row.
+    never supplies a missing score or reorders a noncanonical row unless an
+    upstream, source-corroborated Agent review names the exact missing column.
     """
 
     label_blocks: list[tuple[dict[str, Any], list[str]]] = []
@@ -6029,8 +6032,22 @@ def _ocr_ability_table(
         values, _remainder = parsed_values
         score_blocks.append((block, values))
     score_blocks.sort(key=lambda item: (item[0]["x0"], item[0]["y0"]))
+    reviewed_scores = {
+        str(ability).upper(): str(value)
+        for ability, value in dict(reviewed_ability_scores or {}).items()
+    }
+    if any(ability not in _OCR_ABILITY_ORDER for ability in reviewed_scores):
+        raise StatblockImportError("reviewed OCR ability score has an unknown ability")
+    reviewed_values: dict[str, tuple[str, str]] = {}
+    for ability, source_value in reviewed_scores.items():
+        parsed = _ocr_ability_score_matches(source_value)
+        if parsed is None or len(parsed[0]) != 1 or parsed[1].strip():
+            raise StatblockImportError(
+                f"reviewed OCR {ability} score must be one exact score and modifier"
+            )
+        reviewed_values[ability] = parsed[0][0]
     scores = [value for _block, values in score_blocks for value in values]
-    if len(scores) != len(_OCR_ABILITY_ORDER):
+    if len(scores) + len(reviewed_values) != len(_OCR_ABILITY_ORDER):
         raise StatblockImportError(
             "OCR statblock requires exactly six source ability scores"
         )
@@ -6040,16 +6057,48 @@ def _ocr_ability_table(
         for token in tokens:
             label_by_ability[token] = block
     value_by_ability: dict[str, dict[str, Any]] = {}
-    cursor = 0
-    for block, values in score_blocks:
-        for value, source_value in values:
-            ability = _OCR_ABILITY_ORDER[cursor]
+    remaining_abilities = [
+        ability for ability in _OCR_ABILITY_ORDER if ability not in reviewed_values
+    ]
+    if reviewed_values and all(len(values) == 1 for _block, values in score_blocks):
+        for block, values in score_blocks:
+            available = [
+                ability for ability in remaining_abilities if ability not in value_by_ability
+            ]
+            if not available:
+                raise StatblockImportError("reviewed OCR ability scores are ambiguous")
+            ability = min(
+                available,
+                key=lambda item: abs(
+                    float(block["cx"]) - float(label_by_ability[item]["cx"])
+                ),
+            )
+            value, source_value = values[0]
             value_by_ability[ability] = {
                 **block,
                 "text": value,
                 "source_text": source_value,
             }
-            cursor += 1
+    else:
+        cursor = 0
+        for block, values in score_blocks:
+            for value, source_value in values:
+                ability = remaining_abilities[cursor]
+                value_by_ability[ability] = {
+                    **block,
+                    "text": value,
+                    "source_text": source_value,
+                }
+                cursor += 1
+    for ability, (value, source_value) in reviewed_values.items():
+        label = label_by_ability[ability]
+        value_by_ability[ability] = {
+            **label,
+            "text": value,
+            "source_text": source_value,
+            "confidence": 1.0,
+            "reviewed_ocr_correction": True,
+        }
     if can_repair_one_label:
         missing_ability = missing[0]
         label_by_ability[missing_ability] = {
@@ -6349,6 +6398,7 @@ def recover_2014_statblock_from_ocr(
     name: str,
     minimum_confidence: float = 0.8,
     statblock_slot: int | None = None,
+    reviewed_ability_scores: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Recover one statblock from layout OCR without requiring an image-capable model."""
 
@@ -6681,7 +6731,10 @@ def recover_2014_statblock_from_ocr(
         if core_fields[label] is None:
             raise StatblockImportError(f"OCR statblock is missing {label}")
 
-    ability_labels, ability_values = _ocr_ability_table(scoped)
+    ability_labels, ability_values = _ocr_ability_table(
+        scoped,
+        reviewed_ability_scores=reviewed_ability_scores,
+    )
     challenge = next(
         (
             block
@@ -6929,6 +6982,16 @@ def recover_2014_statblock_from_ocr(
                     "normalized_text": normalized_identity,
                 }
                 if identity_source_text != normalized_identity
+                else None
+            ),
+            "reviewed_ocr_corrections": (
+                {
+                    "abilities": {
+                        ability.lower(): value
+                        for ability, value in dict(reviewed_ability_scores or {}).items()
+                    }
+                }
+                if reviewed_ability_scores
                 else None
             ),
             "matching_heading_count": len(headings),

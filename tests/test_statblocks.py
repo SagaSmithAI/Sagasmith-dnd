@@ -661,6 +661,66 @@ def test_agent_slot_repairs_bounded_hit_points_label_glyphs(
     assert slots[0]["core"]["Hit Points"] == "Hit Points 93 (11d10 + 33)"
 
 
+def test_agent_can_supply_one_source_reviewed_missing_ability_score() -> None:
+    def block(text: str, x: int, y: int) -> dict:
+        return {
+            "text": text,
+            "confidence": 0.99,
+            "bbox": [x, y, x + 60, y + 14],
+        }
+
+    layout = {
+        "page_number": 34,
+        "width": 1000,
+        "height": 1400,
+        "blocks": [
+            block("BUGBEAR CHIEF", 540, 90),
+            block("Medium humanoid (goblinoid), chaotic evil", 540, 118),
+            block("Armor Class 17 (chain shirt, shield)", 540, 136),
+            block("Hit Points 65 (10d8 + 20)", 540, 154),
+            block("Speed 30 ft.", 540, 172),
+            *[
+                block(ability, 540 + index * 70, 200)
+                for index, ability in enumerate(("STR", "DEX", "CON", "INT", "WIS", "CHA"))
+            ],
+            *[
+                block(value, 610 + index * 70, 218)
+                for index, value in enumerate(
+                    ("14 (+2)", "14 (+2)", "11 (+0)", "12 (+1)", "11 (+0)")
+                )
+            ],
+            block("Challenge 3 (700 XP)", 540, 250),
+            block("ACTIONS", 540, 280),
+            block(
+                "Morningstar. Melee Weapon Attack: +5 to hit. "
+                "Hit: 12 (2d8 + 3) piercing damage.",
+                540,
+                310,
+            ),
+        ],
+    }
+
+    with pytest.raises(StatblockImportError, match="exactly six source ability"):
+        recover_2014_statblock_from_ocr(
+            layout,
+            name="Bugbear Chief",
+            statblock_slot=1,
+        )
+
+    recovered = recover_2014_statblock_from_ocr(
+        layout,
+        name="Bugbear Chief",
+        statblock_slot=1,
+        reviewed_ability_scores={"str": "17 (+3)"},
+    )
+
+    assert recovered["critical_facts"]["abilities"]["str"] == "17 (+3)"
+    assert recovered["critical_facts"]["abilities"]["dex"] == "14 (+2)"
+    assert recovered["evidence"]["reviewed_ocr_corrections"] == {
+        "abilities": {"str": "17 (+3)"}
+    }
+
+
 def test_agent_slot_uses_next_same_column_identity_as_a_hard_boundary() -> None:
     def block(text: str, y: int) -> dict:
         return {
