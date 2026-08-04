@@ -6465,6 +6465,7 @@ def recover_2014_statblock_from_ocr(
     heading_match_mode = ""
     selected_slot: dict[str, Any] | None = None
     selected_slot_boundary_identity_index: int | None = None
+    selected_slot_boundary_y0: float | None = None
     if statblock_slot is not None:
         if (
             isinstance(statblock_slot, bool)
@@ -6492,6 +6493,18 @@ def recover_2014_statblock_from_ocr(
         if same_column_position + 1 < len(same_column_slots):
             selected_slot_boundary_identity_index = int(
                 same_column_slots[same_column_position + 1]["_identity_index"]
+            )
+            boundary_identity = next(
+                block
+                for block in blocks
+                if block["index"] == selected_slot_boundary_identity_index
+            )
+            boundary_heading_height = max(
+                12.0,
+                float(boundary_identity["y1"] - boundary_identity["y0"]),
+            )
+            selected_slot_boundary_y0 = (
+                float(boundary_identity["y0"]) - boundary_heading_height - 2.0
             )
         identity_block = next(
             block
@@ -6645,6 +6658,12 @@ def recover_2014_statblock_from_ocr(
                 continuation_blocks = right_ordered[
                     right_ordinal_indexes[0][0] :
                 ]
+        if selected_slot_boundary_y0 is not None:
+            continuation_blocks = [
+                block
+                for block in continuation_blocks
+                if float(block["y0"]) < selected_slot_boundary_y0
+            ]
     unfiltered_scoped = [*ordered[heading_index:end], *continuation_blocks]
     corrupt_decorative_blocks = [
         block
