@@ -7157,7 +7157,7 @@ def _template_sum_term(term: str) -> dict[str, Any] | None:
         }
     if value == "your spellcasting ability modifier":
         return {"op": "parameter", "name": "owner_spellcasting_ability_modifier"}
-    if value in {"your proficiency bonus", "your bonus"}:
+    if value in {"pb", "your proficiency bonus", "your bonus"}:
         return {"op": "parameter", "name": "owner_proficiency_bonus"}
     if value in {"the level of the spell", "the spell's level", "spell level"}:
         return {"op": "parameter", "name": "casting_slot_level"}

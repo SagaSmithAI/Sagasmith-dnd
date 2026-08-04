@@ -177,6 +177,38 @@ def test_parameterized_statblock_requirements_cover_numeric_owner_and_spell_form
     ]
 
 
+def test_parameterized_statblock_compiles_printed_pb_abbreviation() -> None:
+    source = (
+        "# Beast of the Land\n\n"
+        "**Armor Class** 13 + PB (natural armor)\n\n"
+        "**Hit Points** 5 + five times your ranger level\n\n"
+        "**Proficiency Bonus (PB)** equals your bonus\n"
+    )
+
+    requirement = parameterized_statblock_requirements(source)
+
+    assert requirement is not None
+    assert requirement["runtime_ready"] is True
+    assert requirement["solution"]["numeric_parameters"] == [
+        "owner_class_level",
+        "owner_proficiency_bonus",
+    ]
+    rendered, resolved = materialize_parameterized_statblock_source(
+        source,
+        requirement,
+        numeric_parameters={
+            "owner_class_level": 7,
+            "owner_proficiency_bonus": 3,
+        },
+    )
+    assert "**Armor Class** 16" in rendered
+    assert "**Hit Points** 40" in rendered
+    assert resolved == {
+        "combat.armor_class": 16,
+        "combat.hp.max": 40,
+    }
+
+
 def test_parameterized_statblock_requirements_accept_bounded_flat_pdf_fields() -> None:
     requirement = parameterized_statblock_requirements(
         "Tiny construct, neutral Armor Class 13 (natural armor) "

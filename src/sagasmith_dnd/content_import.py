@@ -38,9 +38,11 @@ from sagasmith_dnd.spell_resolution import (
 )
 from sagasmith_dnd.statblocks import (
     StatblockImportError,
+    dependent_actor_template_solution_errors,
     parameterized_statblock_requirements,
     parry_reaction_settlement,
     parse_2014_statblock,
+    parse_2014_statblock_template_preview,
 )
 
 _ITEM_HEADER_RE = re.compile(
@@ -502,7 +504,7 @@ def _normalize_spell_field_labels(value: str) -> str:
         return f"{matches[0][1]}:"
 
     return re.sub(
-        r"(?P<label>[A-Za-z!;1]{3,14}(?:\s+[A-Za-z!;1]{2,10})?)\s*:",
+        r"(?P<label>[A-Za-z!;1]{3,14}(?:\s+[A-Za-z!;1]{1,10}){0,2})\s*:",
         replace,
         value,
     )
@@ -511,7 +513,13 @@ def _normalize_spell_field_labels(value: str) -> str:
 def _normalize_spell_ocr_text(value: str) -> str:
     """Repair OCR damage in the bounded, schema-bearing part of spell text."""
 
-    normalized = " ".join(str(value).replace("\x02", " ").split())
+    normalized = str(value).replace("\x02", " ")
+    # pypdfium2 exposes U+FFFE at a discretionary word break in a subset of
+    # embedded fonts.  It is not source punctuation: ``cast￾ ing`` is the
+    # printed word ``casting``.  Remove the marker and its layout whitespace
+    # before interpreting any spell field or effect.
+    normalized = re.sub(r"\ufffe\s*", "", normalized)
+    normalized = " ".join(normalized.split())
     normalized = _normalize_spell_field_labels(normalized)
     casting_matches = list(
         re.finditer(r"(?i)\bCasting\s+Time\s*:", normalized)
@@ -737,6 +745,17 @@ def _normalize_spell_ocr_text(value: str) -> str:
             normalized,
         )
     normalized = re.sub(r"(?i)\bcan\s+trip\b", "cantrip", normalized)
+    normalized = re.sub(r"(?i)\b[lI](?=d\d+\b)", "1", normalized)
+    normalized = re.sub(
+        r"(?i)\b(?P<count>\d+)d\s+[lI1]\s+(?P<sides>\d+)\b",
+        lambda match: f"{match.group('count')}d1{match.group('sides')}",
+        normalized,
+    )
+    normalized = re.sub(
+        r"\b(?P<tens>\d)\s+(?P<ones>\d)(?=(?:st|nd|rd|th)\b)",
+        lambda match: f"{match.group('tens')}{match.group('ones')}",
+        normalized,
+    )
     normalized = re.sub(r"\s+,", ",", normalized)
     return normalized
 
@@ -2631,6 +2650,10 @@ def _spell_class_mentions(chunks: list[dict[str, Any]], spell_name: str) -> dict
 
 def _spell_range(value: str) -> dict[str, Any]:
     text = " ".join(value.split())
+    # A common PDF text-layer failure separates one multi-digit measurement
+    # immediately before its printed unit (``1 5-foot radius``).  Joining only
+    # this bounded schema position cannot alter prose or dice expressions.
+    text = re.sub(r"\b(\d)\s+(\d)(?=\s*-?\s*(?:feet|foot|ft\.?))", r"\1\2", text)
     folded = text.casefold()
     if folded.startswith("self"):
         kind = "self"
@@ -2685,15 +2708,33 @@ def _spell_duration(value: str) -> dict[str, Any]:
 
 def _spell_components(value: str) -> dict[str, Any]:
     text = " ".join(value.split())
-    tokens = {item.strip().upper() for item in text.split(",")[:3]}
-    material_match = re.search(r"(?i)\bM\s*\((.+)\)\s*$", text)
+    tokens = {
+        re.sub(r"[^A-Za-z]", "", item).upper()
+        for item in text.split(",")[:3]
+    }
+    material_match = re.search(
+        r"(?i)\bM\s*\((.+)\)\s*[^A-Za-z0-9]*$",
+        text,
+    )
     material_description = material_match.group(1).strip() if material_match else ""
+    material_cost_cp = 0
+    cost_match = re.search(
+        r"(?i)\bworth\s+(?:at\s+least\s+)?"
+        r"(?P<amount>\d[\d,]*)\s*(?P<currency>cp|sp|ep|gp|pp)\b",
+        material_description,
+    )
+    if cost_match is not None:
+        amount = int(cost_match.group("amount").replace(",", ""))
+        multiplier = {"cp": 1, "sp": 10, "ep": 50, "gp": 100, "pp": 1000}[
+            cost_match.group("currency").casefold()
+        ]
+        material_cost_cp = amount * multiplier
     return {
         "verbal": "V" in tokens or bool(re.search(r"(?i)(?:^|,\s*)V(?:,|$)", text)),
         "somatic": "S" in tokens or bool(re.search(r"(?i)(?:^|,\s*)S(?:,|$)", text)),
         "material": bool(material_match or re.search(r"(?i)(?:^|,\s*)M(?:,|$)", text)),
         "material_description": material_description,
-        "material_cost_cp": 0,
+        "material_cost_cp": material_cost_cp,
         "consumed": "consume" in material_description.casefold(),
     }
 
@@ -4767,6 +4808,21 @@ def author_selection_card_from_candidate(
                 source_text = f"# {name}\n\n{source_text}"
         requirement = parameterized_statblock_requirements(source_text)
         if requirement is not None:
+            try:
+                parse_2014_statblock_template_preview(
+                    source_text,
+                    source_key=f"candidate-template:{candidate.get('id') or name}",
+                    rule_refs=[],
+                    name=name,
+                )
+            except (StatblockImportError, ValueError):
+                # A recognized owner-dependent formula does not prove that OCR
+                # recovered the surrounding statblock. Keep the source card in
+                # the catalog, but do not mark it as an executable dependent
+                # template until layout/Agent review restores a complete card.
+                return value
+            if dependent_actor_template_solution_errors(requirement):
+                return value
             if reviewed_owner_class_name:
                 requirement["owner_class_name"] = reviewed_owner_class_name
             solution = dict(requirement.get("solution") or {})

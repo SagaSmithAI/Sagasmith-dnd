@@ -312,6 +312,33 @@ def test_phb_four_column_spell_list_supplies_class_and_repairs_schema_ocr() -> N
     assert spell["artifact"]["card"]["definition"]["range"]["normal_ft"] == 60
 
 
+def test_split_single_letter_spell_field_label_still_extracts_the_spell() -> None:
+    candidates = extract_content_candidates(
+        [
+            {
+                "id": "spell",
+                "heading_path": ["SPIRIT SHROUD"],
+                "content": (
+                    "3rd-level necromancy Casting T ime: 1 bonus action Range: Self "
+                    "Components: V, S Duration: Concentration, up to 1 minute "
+                    "Spirits sur￾ round you for 1 1th level and deal ld8 damage; "
+                    "a critical hit deals 8d l 2 damage."
+                ),
+            }
+        ]
+    )
+
+    spell = next(item for item in candidates if item["kind"] == "spell")
+    assert spell["name"] == "SPIRIT SHROUD"
+    assert spell["artifact"]["card"]["definition"]["casting_time"] == (
+        "1 bonus action"
+    )
+    assert spell["artifact"]["card"]["definition"]["effect"] == (
+        "Spirits surround you for 11th-level and deal 1d8 damage; "
+        "a critical hit deals 8d12 damage."
+    )
+
+
 def test_plural_subclass_parent_and_background_word_choices_are_bounded() -> None:
     subclass = author_selection_card_from_candidate(
         {
@@ -383,6 +410,66 @@ def test_shared_cantrip_declaration_supplies_nested_spell_classes() -> None:
         "wizard",
     ]
     assert spell["source_chunk_ids"] == ["spell", "intro"]
+
+
+def test_spell_schema_recovers_component_punctuation_cost_and_split_range() -> None:
+    candidates = extract_content_candidates(
+        [
+            {
+                "id": "class-list",
+                "heading_path": ["Artificer Spells"],
+                "content": "Summon Clockwork appears on the artificer spell list.",
+            },
+            {
+                "id": "spell",
+                "heading_path": ["Summon Clockwork"],
+                "content": (
+                    "4th-level conjuration Casting Time: 1 action "
+                    "Range: Self (1 5-foot radius) Components: V, .S, M "
+                    "(an ornate lockbox worth at least 400 gp) · "
+                    "Duration: Concentration, up to 1 hour. You summon a construct."
+                ),
+            },
+        ]
+    )
+
+    spell = next(item for item in candidates if item["kind"] == "spell")
+    definition = spell["artifact"]["card"]["definition"]
+    assert definition["range"] == {
+        "kind": "self",
+        "normal_ft": 0,
+        "long_ft": 0,
+        "area": "15-foot radius",
+    }
+    assert definition["components"] == {
+        "verbal": True,
+        "somatic": True,
+        "material": True,
+        "material_description": "an ornate lockbox worth at least 400 gp",
+        "material_cost_cp": 40_000,
+        "consumed": False,
+    }
+
+
+def test_spell_schema_records_consumed_material_cost_in_copper() -> None:
+    candidates = extract_content_candidates(
+        [
+            {
+                "id": "spell",
+                "heading_path": ["Restore the Fallen"],
+                "content": (
+                    "5th-level necromancy Casting Time: 1 action Range: Touch "
+                    "Components: V, S, M (a diamond worth 500 gp, which the spell "
+                    "consumes) Duration: Instantaneous. Life returns."
+                ),
+            }
+        ]
+    )
+
+    spell = next(item for item in candidates if item["kind"] == "spell")
+    components = spell["artifact"]["card"]["definition"]["components"]
+    assert components["material_cost_cp"] == 50_000
+    assert components["consumed"] is True
 
 
 def test_nested_subclass_headers_do_not_promote_the_generic_parent() -> None:
@@ -1471,10 +1558,20 @@ def test_parameterized_statblock_persists_its_lobby_template_contract() -> None:
         },
         source_chunks_by_id={
             "core": (
-                "Tiny construct, neutral Armor Class 13 (natural armor) "
-                "Hit Points equal to five times your level in this class + your "
-                "Intelligence modifier Speed 20 ft., fly 30 ft. "
-                "STR DEX CON INT WIS CHA"
+                "*Tiny construct, neutral*\n\n"
+                "**Armor Class** 13 (natural armor)\n"
+                "**Hit Points** equal to five times your level in this class + "
+                "your Intelligence modifier\n"
+                "**Speed** 20 ft., fly 30 ft.\n\n"
+                "| STR | DEX | CON | INT | WIS | CHA |\n"
+                "|---:|---:|---:|---:|---:|---:|\n"
+                "| 4 (-3) | 15 (+2) | 12 (+1) | 10 (+0) | 10 (+0) | 7 (-2) |\n\n"
+                "**Senses** darkvision 60 ft., passive Perception 10\n"
+                "**Languages** understands the languages you speak\n"
+                "**Challenge** —\n\n"
+                "## Actions\n\n"
+                "***Force Strike.*** *Ranged Weapon Attack:* your spell attack "
+                "modifier to hit, range 30 ft., one target. *Hit:* 1d4 + PB force damage."
             )
         },
     )
@@ -1483,13 +1580,40 @@ def test_parameterized_statblock_persists_its_lobby_template_contract() -> None:
     assert requirement["kind"] == "dependent_actor_template"
     assert requirement["parameters"] == [
         "owner_class_level",
+        "owner_proficiency_bonus",
         "owner_intelligence_modifier",
+        "owner_spell_attack_modifier",
     ]
     assert requirement["runtime_ready"] is True
     assert artifact["card"]["normalized_content"].startswith(
         "# Alchemical Homunculus"
     )
     assert artifact["selection_applicability"] == "not_applicable"
+    assert artifact["application_state"] == "catalog_only"
+
+
+def test_parameterized_formula_does_not_hide_an_incomplete_statblock() -> None:
+    artifact = author_selection_card_from_candidate(
+        {
+            "id": "candidate:broken-homunculus",
+            "kind": "statblock",
+            "name": "Alchemical Homunculus",
+            "source_chunk_ids": ["core"],
+            "artifact": {
+                "kind": "statblock",
+                "application_state": "catalog_only",
+                "card": {"name": "Alchemical Homunculus"},
+            },
+        },
+        source_chunks_by_id={
+            "core": (
+                "Tiny construct Armor Class 13 Hit Points equal to five times "
+                "your level in this class + your Intelligence modifier Speed 20 ft."
+            )
+        },
+    )
+
+    assert "dependent_actor_template" not in artifact["card"]
     assert artifact["application_state"] == "catalog_only"
 
 
