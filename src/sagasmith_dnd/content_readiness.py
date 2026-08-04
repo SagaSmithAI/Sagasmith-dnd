@@ -465,6 +465,43 @@ def background_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
     language_options = string_list(choices.get("language_options", []), "language_options")
     skill_options = string_list(choices.get("skill_options", []), "skill_options")
     tool_options = string_list(choices.get("tool_options", []), "tool_options")
+    raw_tool_groups = choices.get("tool_option_groups", [])
+    if not isinstance(raw_tool_groups, list):
+        errors.append("background tool_option_groups must be an array")
+        raw_tool_groups = []
+    tool_group_ids: list[str] = []
+    grouped_tools: list[str] = []
+    for index, raw_group in enumerate(raw_tool_groups):
+        prefix = f"background tool_option_groups[{index}]"
+        if not isinstance(raw_group, Mapping):
+            errors.append(f"{prefix} must be an object")
+            continue
+        unsupported = set(raw_group) - {"id", "maximum", "options"}
+        if unsupported:
+            errors.append(f"{prefix} has unsupported fields: {sorted(unsupported)}")
+        group_id = str(raw_group.get("id") or "").strip()
+        if not group_id:
+            errors.append(f"{prefix}.id must not be empty")
+        tool_group_ids.append(group_id.casefold())
+        maximum = raw_group.get("maximum")
+        if (
+            isinstance(maximum, bool)
+            or not isinstance(maximum, int)
+            or not 1 <= maximum <= 5
+        ):
+            errors.append(f"{prefix}.maximum must be an integer from 1 to 5")
+        group_options = string_list(
+            raw_group.get("options", []), f"tool_option_groups[{index}].options"
+        )
+        grouped_tools.extend(group_options)
+    if len(tool_group_ids) != len(set(tool_group_ids)):
+        errors.append("background tool_option_groups ids must be distinct")
+    if raw_tool_groups:
+        grouped_keys = [item.casefold() for item in grouped_tools]
+        if len(grouped_keys) != len(set(grouped_keys)):
+            errors.append("background tool_option_groups options must not overlap")
+        if set(grouped_keys) != {item.casefold() for item in tool_options}:
+            errors.append("background tool_option_groups must cover tool_options exactly")
     allow_any_language = choices.get("allow_any_language", False)
     if not isinstance(allow_any_language, bool):
         errors.append("background allow_any_language must be a boolean")

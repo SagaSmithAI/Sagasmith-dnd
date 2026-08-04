@@ -181,9 +181,32 @@ def test_background_materializer_requires_bounded_choice_semantics() -> None:
             "language_options": ["Draconic", "Goblin"],
             "skill_options": ["Arcana", "Religion"],
             "tool_options": ["Alchemist's Supplies", "Tinker's Tools"],
+            "tool_option_groups": [
+                {
+                    "id": "artisan",
+                    "maximum": 1,
+                    "options": ["Alchemist's Supplies"],
+                },
+                {
+                    "id": "other",
+                    "maximum": 1,
+                    "options": ["Tinker's Tools"],
+                },
+            ],
         }
     )
     assert background_materializer_errors(card) == []
+
+    card["background_grants"]["choices"]["tool_option_groups"][1]["options"] = [
+        "Alchemist's Supplies"
+    ]
+    assert background_materializer_errors(card) == [
+        "background tool_option_groups options must not overlap",
+        "background tool_option_groups must cover tool_options exactly",
+    ]
+    card["background_grants"]["choices"]["tool_option_groups"][1]["options"] = [
+        "Tinker's Tools"
+    ]
 
     card["background_grants"]["spell_list_expansion"] = ["Aid", "aid"]
     assert background_materializer_errors(card) == [
