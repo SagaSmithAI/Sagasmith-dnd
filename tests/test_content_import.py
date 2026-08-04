@@ -512,6 +512,33 @@ def test_primary_review_preserves_agent_authored_species_and_item_cards() -> Non
             },
         }
     )
+    source_specific_species = author_selection_card_from_candidate(
+        {
+            "id": "candidate:source-specific-species",
+            "kind": "species",
+            "name": "Eladrin",
+            "artifact": {
+                "kind": "species",
+                "card": {
+                    "name": "Eladrin",
+                    "description": "Choose a season; Fey Step follows the cited source.",
+                    "grants": {
+                        "ability_score_increases": {"charisma": 1},
+                        "size": "medium",
+                        "walk_speed": 30,
+                        "languages": ["Common", "Elvish"],
+                        "features": [
+                            {
+                                "name": "Fey Step",
+                                "description": "Source-bound seasonal teleport.",
+                            }
+                        ],
+                        "unresolved": [],
+                    },
+                },
+            },
+        }
+    )
 
     assert species["card"]["grants"]["ability_score_increases"] == {"wisdom": 2}
     assert species["card"]["grants"]["walk_speed"] == 25
@@ -520,6 +547,7 @@ def test_primary_review_preserves_agent_authored_species_and_item_cards() -> Non
     assert item["card"]["inventory_template"]["description"] == (
         "Reviewer-normalized description."
     )
+    assert source_specific_species["application_state"] == "selection_ready"
 
 
 def test_primary_review_preserves_valid_agent_authored_base_class_card() -> None:

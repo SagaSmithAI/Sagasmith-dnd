@@ -2623,14 +2623,15 @@ def author_selection_card_from_candidate(
 
     if kind == "species":
         grants = _species_grants(description)
-        if grants is not None:
-            reviewed_grants = card.get("grants")
+        reviewed_grants = card.get("grants")
+        if grants is not None or isinstance(reviewed_grants, dict):
             if isinstance(reviewed_grants, dict):
                 card["grants"] = {
-                    **deepcopy(grants),
+                    **deepcopy(grants or {}),
                     **deepcopy(reviewed_grants),
                 }
             else:
+                assert grants is not None
                 card["grants"] = grants
             value["application_state"] = (
                 "selection_ready"
