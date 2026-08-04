@@ -459,8 +459,10 @@ def background_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
         return raw
 
     language_count = choice_count("language_count")
+    skill_count = choice_count("skill_choice_count")
     tool_count = choice_count("tool_choice_count")
     language_options = string_list(choices.get("language_options", []), "language_options")
+    skill_options = string_list(choices.get("skill_options", []), "skill_options")
     tool_options = string_list(choices.get("tool_options", []), "tool_options")
     allow_any_language = choices.get("allow_any_language", False)
     if not isinstance(allow_any_language, bool):
@@ -470,6 +472,8 @@ def background_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
         errors.append("background language choices need language_options or allow_any_language")
     if language_options and len(language_options) < language_count:
         errors.append("background language_options cannot satisfy language_count")
+    if skill_count and len(skill_options) < skill_count:
+        errors.append("background skill_options cannot satisfy skill_choice_count")
     if tool_count and len(tool_options) < tool_count:
         errors.append("background tool_options cannot satisfy tool_choice_count")
     if {item.casefold() for item in fixed_languages}.intersection(
@@ -480,6 +484,11 @@ def background_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
         item.casefold() for item in tool_options
     ):
         errors.append("background tool_options cannot repeat fixed tools")
+    fixed_skills = card_skills or grant_skills
+    if {item.casefold() for item in fixed_skills}.intersection(
+        item.casefold() for item in skill_options
+    ):
+        errors.append("background skill_options cannot repeat fixed skills")
 
     def validate_equipment_package(package_name: str, raw_package: Any) -> None:
         prefix = f"background equipment package {package_name}"

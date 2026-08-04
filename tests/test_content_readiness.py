@@ -162,6 +162,8 @@ def test_background_materializer_requires_bounded_choice_semantics() -> None:
                 "language_count": 1,
                 "language_options": [],
                 "allow_any_language": False,
+                "skill_choice_count": 1,
+                "skill_options": [],
                 "tool_choice_count": 1,
                 "tool_options": [],
             },
@@ -170,12 +172,14 @@ def test_background_materializer_requires_bounded_choice_semantics() -> None:
 
     assert background_materializer_errors(card) == [
         "background language choices need language_options or allow_any_language",
+        "background skill_options cannot satisfy skill_choice_count",
         "background tool_options cannot satisfy tool_choice_count",
     ]
 
     card["background_grants"]["choices"].update(
         {
             "language_options": ["Draconic", "Goblin"],
+            "skill_options": ["Arcana", "Religion"],
             "tool_options": ["Alchemist's Supplies", "Tinker's Tools"],
         }
     )
@@ -191,6 +195,15 @@ def test_background_materializer_requires_bounded_choice_semantics() -> None:
     card["background_grants"]["skills"] = ["Persuasion"]
     assert background_materializer_errors(card) == [
         "background skill_proficiencies conflict with background_grants.skills"
+    ]
+
+    card["background_grants"]["skills"] = ["Investigation"]
+    card["background_grants"]["choices"]["skill_options"] = [
+        "Investigation",
+        "Religion",
+    ]
+    assert background_materializer_errors(card) == [
+        "background skill_options cannot repeat fixed skills"
     ]
 
 
