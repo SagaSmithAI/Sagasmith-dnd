@@ -348,6 +348,8 @@ def _normalize_item_header_ocr_text(value: str) -> str:
     label = match.group("label").rstrip()
     parenthetical = str(match.group("parenthetical") or "")
     compact = re.sub(r"[^A-Za-z]", "", label).casefold()
+    if len(compact) < 2:
+        return value
     matches = sorted(
         (
             _bounded_ocr_edit_distance(compact, expected, 2),
@@ -850,11 +852,64 @@ def _ordered_class_candidates(
 
     candidates: list[dict[str, Any]] = []
     for anchor_index, (start, name) in enumerate(anchors):
-        end = (
+        hard_end = (
             anchors[anchor_index + 1][0]
             if anchor_index + 1 < len(anchors)
             else len(chunks)
         )
+        end = hard_end
+        if anchor_index + 1 < len(anchors):
+            next_name = anchors[anchor_index + 1][1]
+            canonical_next_name = _canonical_source_heading(next_name)
+            for index in range(start + 1, hard_end):
+                path = [
+                    str(value).strip()
+                    for value in chunks[index].get("heading_path") or []
+                    if str(value).strip()
+                ]
+                if len(path) < 2:
+                    continue
+                observed = _canonical_source_heading(path[-1])
+                if (
+                    _bounded_ocr_edit_distance(
+                        observed,
+                        canonical_next_name,
+                        2,
+                    )
+                    <= 2
+                ):
+                    end = index
+                    break
+            if end == hard_end:
+                next_class_pattern = re.compile(
+                    rf"(?i)\b{re.escape(next_name)}s?\b"
+                )
+                for index in range(max(start + 1, hard_end - 12), hard_end):
+                    path = " ".join(
+                        str(value).strip()
+                        for value in chunks[index].get("heading_path") or []
+                    )
+                    content = str(chunks[index].get("content") or "")[:1600]
+                    if next_class_pattern.search(f"{path}\n{content}"):
+                        end = index
+                        break
+        else:
+            start_path = [
+                str(value).strip()
+                for value in chunks[start].get("heading_path") or []
+                if str(value).strip()
+            ]
+            start_root = start_path[0].casefold() if start_path else ""
+            if start_root:
+                for index in range(start + 1, hard_end):
+                    path = [
+                        str(value).strip()
+                        for value in chunks[index].get("heading_path") or []
+                        if str(value).strip()
+                    ]
+                    if path and path[0].casefold() != start_root:
+                        end = index
+                        break
         evidence = [
             chunk
             for chunk in chunks[start:end]
@@ -1445,7 +1500,13 @@ def _mechanical_source_fragment_candidates(
         chunk_id = str(chunk.get("id") or "").strip()
         content = str(chunk.get("content") or "").strip()
         signals = _unclaimed_mechanical_signals(content)
-        if not chunk_id or chunk_id in claimed_chunk_ids or not signals:
+        meaningful_text = "".join(character for character in content if character.isalnum())
+        if (
+            not chunk_id
+            or chunk_id in claimed_chunk_ids
+            or len(meaningful_text) < 12
+            or not signals
+        ):
             continue
         heading_path = [
             str(item).strip()
@@ -1500,13 +1561,13 @@ def _mechanical_source_fragment_candidates(
     return candidates
 
 
-def _spell_text_with_field_continuations(
+def _spell_text_and_field_continuations(
     content: str,
     *,
     source_chunk_ids: list[str],
     chunks: list[dict[str, Any]],
-) -> str:
-    """Join only an adjacent continuation that starts with the missing field."""
+) -> tuple[str, list[str]]:
+    """Join adjacent spell fields and retain every supporting source chunk."""
 
     by_id = {
         str(chunk.get("id") or ""): index
@@ -1515,9 +1576,10 @@ def _spell_text_with_field_continuations(
     }
     positions = [by_id[item] for item in source_chunk_ids if item in by_id]
     if not positions:
-        return content
+        return content, list(dict.fromkeys(source_chunk_ids))
     position = max(positions)
     result = content
+    used_chunk_ids = list(dict.fromkeys(source_chunk_ids))
     current_path = [
         _canonical_source_heading(item)
         for item in chunks[position].get("heading_path") or []
@@ -1543,12 +1605,35 @@ def _spell_text_with_field_continuations(
         if current_path[:-1] != next_path[:-1]:
             break
         continuation = _normalize_spell_ocr_text(next_chunk.get("content") or "")
-        if not re.match(rf"(?i)^{re.escape(missing)}\s*:", continuation):
+        continuation_match = re.match(
+            rf"(?is)^\s*(?:\d{{1,3}}\s+)?"
+            rf"(?P<body>{re.escape(missing)}\s*:.*)$",
+            continuation,
+        )
+        if continuation_match is None:
             break
-        result = f"{result} {next_chunk.get('content') or ''}".strip()
+        result = f"{result} {continuation_match.group('body')}".strip()
+        next_chunk_id = str(next_chunk.get("id") or "")
+        if next_chunk_id and next_chunk_id not in used_chunk_ids:
+            used_chunk_ids.append(next_chunk_id)
         position = next_position
         current_path = next_path
-    return result
+    return result, used_chunk_ids
+
+
+def _spell_text_with_field_continuations(
+    content: str,
+    *,
+    source_chunk_ids: list[str],
+    chunks: list[dict[str, Any]],
+) -> str:
+    """Join only an adjacent continuation that starts with the missing field."""
+
+    return _spell_text_and_field_continuations(
+        content,
+        source_chunk_ids=source_chunk_ids,
+        chunks=chunks,
+    )[0]
 
 
 def _spell_card_from_section(
@@ -1629,6 +1714,11 @@ def _embedded_spell_candidates(
 ) -> list[dict[str, Any]]:
     class_index = class_index or _spell_class_index(chunks)
     candidates = []
+    chunks_by_id = {
+        str(chunk.get("id") or ""): chunk
+        for chunk in chunks
+        if str(chunk.get("id") or "")
+    }
     for chunk in chunks:
         content = _normalize_spell_ocr_text(chunk.get("content") or "")
         chunk_id = str(chunk.get("id") or "").strip()
@@ -1680,8 +1770,21 @@ def _embedded_spell_candidates(
                 school for school in _SPELL_SCHOOLS if school in level_text
             )
             level = 0 if "cantrip" in level_text else int(level_text[0])
+            spell_text, spell_chunk_ids = _spell_text_and_field_continuations(
+                scan_content[match.start() : end].strip(),
+                source_chunk_ids=[chunk_id],
+                chunks=chunks,
+            )
+            spell_starts = list(_EMBEDDED_SPELL_START_RE.finditer(spell_text))
+            if not spell_starts:
+                continue
+            spell_end = (
+                spell_starts[1].start()
+                if len(spell_starts) >= 2
+                else len(spell_text)
+            )
             fields = _SPELL_FIELDS_RE.match(
-                scan_content[match.end() : end].strip()
+                spell_text[spell_starts[0].end() : spell_end].strip()
             )
             if fields is None:
                 continue
@@ -1704,7 +1807,12 @@ def _embedded_spell_candidates(
             components = _spell_components(fields.group("components"))
             spell_range = _spell_range(fields.group("range"))
             identity = "\x1f".join(("spell", name.casefold(), chunk_id))
-            source_chunk_ids = list(dict.fromkeys([chunk_id, *list_chunks]))
+            source_chunk_ids = list(dict.fromkeys([*spell_chunk_ids, *list_chunks]))
+            source_chunks = [
+                chunks_by_id[item]
+                for item in spell_chunk_ids
+                if item in chunks_by_id
+            ]
             candidates.append(
                 {
                     "id": "candidate:"
@@ -1713,8 +1821,12 @@ def _embedded_spell_candidates(
                     "name": name,
                     "source_chunk_ids": source_chunk_ids,
                     "source_heading_path": list(chunk.get("heading_path") or []),
-                    "page_start": chunk.get("page_start"),
-                    "page_end": chunk.get("page_end"),
+                    "page_start": _minimum_page_values(
+                        item.get("page_start") for item in source_chunks
+                    ),
+                    "page_end": _maximum_page_values(
+                        item.get("page_end") for item in source_chunks
+                    ),
                     "extraction_confidence": "high" if classes else "medium",
                     "extraction_signals": [
                         "embedded spell header",
@@ -4959,7 +5071,8 @@ def _class_selection_definition(description: str) -> dict[str, Any] | None:
         else _fuzzy_catalog_names(skills_text, tuple(SKILL_ABILITIES))
     )
     choice_match = re.search(
-        r"(?i)\bChoose\s*(?:any\s+)?(?P<count>[A-Za-z0-9]{1,5}?)(?=\s|from\b)",
+        r"(?i)\bChoose\s+(?:(?P<any>any)\s+)?"
+        r"(?P<count>[A-Za-z0-9]{1,5})(?=\s|$|from\b)",
         skills_text,
     )
     skill_choice_count = (
@@ -6141,7 +6254,12 @@ def _classify(
         )
     )
     spell_level = bool(_SPELL_LEVEL_RE.search(normalized_spell_sample))
-    if "casting time" in spell_labels and (spell_level or len(spell_labels) >= 3):
+    if (
+        title_folded not in _GENERIC_TITLES
+        and _PAGE_HEADER_RE.match(title_folded) is None
+        and "casting time" in spell_labels
+        and (spell_level or len(spell_labels) >= 3)
+    ):
         signals = [*spell_labels, *(["spell level"] if spell_level else [])]
         return "spell", tuple(signals)
 
@@ -6273,7 +6391,12 @@ def _classify(
             raw_item_sample[:240],
         )
     )
-    if item_header and (exact_item_header or item_context):
+    if (
+        title_folded not in _GENERIC_FEATURE_TITLES
+        and _PAGE_HEADER_RE.match(title_folded) is None
+        and item_header
+        and (exact_item_header or item_context)
+    ):
         signals = ["item category"]
         for label in ("rarity", "requires attunement", "charges"):
             if label in folded:

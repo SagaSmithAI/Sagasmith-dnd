@@ -1726,6 +1726,108 @@ def test_inventory_repairs_spell_header_ocr_and_bounded_field_continuation() -> 
     assert spells["Tidal Wave"]["definition"]["school"] == "conjuration"
 
 
+def test_inventory_recovers_embedded_spells_split_across_page_headers() -> None:
+    candidates = extract_content_candidates(
+        [
+            {
+                "id": "cleric-list",
+                "heading_path": ["Spells", "Cleric Spells", "5th Level"],
+                "content": "Dispel Evil and Good",
+            },
+            {
+                "id": "wizard-list",
+                "heading_path": ["Spells", "Wizard Spells", "3rd Level"],
+                "content": "Gaseous Form",
+            },
+            {
+                "id": "disintegrate",
+                "heading_path": ["Spells", "Spell Descriptions", "DISINTEGRATE"],
+                "page_start": 233,
+                "page_end": 233,
+                "content": (
+                    "6th-level transmutation Casting Time: 1 action Range: 60 feet "
+                    "Components: V, S Duration: Instantaneous A ray strikes. "
+                    "DIspeL EVIL AND Good 5th-level abjuration Casting Time: "
+                    "1 action Range: Self"
+                ),
+            },
+            {
+                "id": "dispel-continuation",
+                "heading_path": ["Spells", "Spell Descriptions", "PART 3 | SPELLS"],
+                "page_start": 234,
+                "page_end": 234,
+                "content": (
+                    "234 Components: V, S Duration: Concentration, up to 1 minute "
+                    "Protective energy surrounds you."
+                ),
+            },
+            {
+                "id": "friends",
+                "heading_path": ["Spells", "Spell Descriptions", "FRIENDS"],
+                "page_start": 243,
+                "page_end": 243,
+                "content": (
+                    "Enchantment cantrip Casting Time: 1 action Range: Self "
+                    "Components: S Duration: Concentration, up to 1 minute "
+                    "You gain advantage. Gaseous Form 3rd-level transmutation "
+                    "Casting Time: 1 action Range: Touch"
+                ),
+            },
+            {
+                "id": "gaseous-continuation",
+                "heading_path": ["Spells", "Spell Descriptions", "PART 3 | SPELLS"],
+                "page_start": 244,
+                "page_end": 244,
+                "content": (
+                    "244 Components: V, S Duration: Concentration, up to 1 hour "
+                    "The target becomes a misty cloud. Gate 9th-level conjuration "
+                    "Casting Time: 1 action Range: 60 feet Components: V, S "
+                    "Duration: Concentration, up to 1 minute A portal opens."
+                ),
+            },
+        ]
+    )
+
+    spells = {
+        item["name"].casefold(): item
+        for item in candidates
+        if item["kind"] == "spell"
+    }
+    dispel = next(
+        item for name, item in spells.items() if "evil and good" in name
+    )
+    gaseous = spells["gaseous form"]
+    assert dispel["source_chunk_ids"][:2] == [
+        "disintegrate",
+        "dispel-continuation",
+    ]
+    assert dispel["page_end"] == 234
+    assert gaseous["source_chunk_ids"][:2] == [
+        "friends",
+        "gaseous-continuation",
+    ]
+    assert gaseous["artifact"]["card"]["definition"]["effect"] == (
+        "The target becomes a misty cloud."
+    )
+    assert not any(name.startswith("part 3") for name in spells)
+
+
+def test_generic_equipment_heading_is_not_a_magic_item() -> None:
+    candidates = extract_content_candidates(
+        [
+            {
+                "id": "equipment",
+                "heading_path": ["Class Features", "EQUIPMENT"],
+                "content": (
+                    "Weapon, simple and martial. You start with a shield and a pack."
+                ),
+            }
+        ]
+    )
+
+    assert not any(item["kind"] == "item" for item in candidates)
+
+
 def test_inventory_recovers_later_spell_after_first_spell_schema() -> None:
     inventory = extract_content_inventory(
         [
@@ -1987,6 +2089,13 @@ def test_inventory_does_not_misclassify_dense_random_effect_tables_as_prose() ->
                 "page_end": 1,
             },
             {
+                "id": "damaged-condition-bullets",
+                "heading_path": ["Conditions", "Restrained"],
+                "content": "o\n\n- \n-",
+                "page_start": 2,
+                "page_end": 2,
+            },
+            {
                 "id": "duration-table",
                 "heading_path": ["Sample durations"],
                 "content": (
@@ -2050,6 +2159,12 @@ def test_inventory_does_not_misclassify_dense_random_effect_tables_as_prose() ->
         item for item in inventory["ledger"] if item["chunk_id"] == "ordinary-prose"
     )
     assert ordinary["disposition"] == "descriptive_context"
+    damaged = next(
+        item
+        for item in inventory["ledger"]
+        if item["chunk_id"] == "damaged-condition-bullets"
+    )
+    assert damaged["disposition"] == "descriptive_context"
 
 
 def test_rulebook_statblock_ignores_ocr_chapter_footer_inside_heading_path() -> None:
@@ -3854,6 +3969,15 @@ def test_flat_phb_class_feature_siblings_recover_distinct_base_classes() -> None
                 ),
             },
             {
+                "id": "cleric-introduction",
+                "heading_path": [
+                    "Chapter 3 - Classes",
+                    "PRIMAL PATHS",
+                    "PART I CLASSES",
+                ],
+                "content": "Clerics are intermediaries between mortals and the gods.",
+            },
+            {
                 "id": "cleric",
                 "heading_path": ["Chapter 3 - Classes", "CLASS FEATURES"],
                 "content": "As a clerie, you gain the following class features.",
@@ -3882,6 +4006,72 @@ def test_flat_phb_class_feature_siblings_recover_distinct_base_classes() -> None
         "barbarian",
         "barbarian-proficiencies",
     ]
+    assert classes[1]["source_chunk_ids"] == [
+        "cleric",
+        "cleric-proficiencies",
+    ]
+
+
+def test_flat_last_phb_class_stops_at_the_next_chapter() -> None:
+    candidates = extract_content_candidates(
+        [
+            {
+                "id": "wizard",
+                "heading_path": ["Chapter 3 - Classes", "CLASS FEATURES"],
+                "content": "As a wizard, you gain the following class features.",
+            },
+            {
+                "id": "wizard-proficiencies",
+                "heading_path": ["Chapter 3 - Classes", "PROFICIENCIES"],
+                "content": (
+                    "Hit Dice: 1d6 per wizard level Armor: None Weapons: Daggers "
+                    "Tools: None Saving Throws: Intelligence, Wisdom Skills: "
+                    "Choose two from Arcana, History, and Investigation You start "
+                    "with equipment."
+                ),
+            },
+            {
+                "id": "chapter-four",
+                "heading_path": ["Chapter 4 - Personality and Background"],
+                "content": (
+                    "When you make an ability check, you must roll a d20 and add "
+                    "the relevant modifier."
+                ),
+            },
+        ],
+        source_title="D&D 5E - Player's Handbook",
+    )
+
+    wizard = next(item for item in candidates if item["kind"] == "class")
+    assert wizard["source_chunk_ids"] == ["wizard", "wizard-proficiencies"]
+    chapter_rule = next(item for item in candidates if item.get("coverage_fallback"))
+    assert chapter_rule["source_chunk_ids"] == ["chapter-four"]
+
+
+def test_class_selection_parses_choose_any_skill_count() -> None:
+    candidate = {
+        "kind": "class",
+        "name": "Bard",
+        "source_chunk_ids": ["bard"],
+        "artifact": {
+            "kind": "class",
+            "card": {
+                "name": "Bard",
+                "description": (
+                    "Hit Dice: Id8 per bard level Armor: Light armor Weapons: "
+                    "Simple weapons Tools: Three musical instruments Saving Throws: "
+                    "Dexterity, Charisma Skills: Choose any three You start with "
+                    "equipment."
+                ),
+            },
+        },
+    }
+
+    artifact = author_selection_card_from_candidate(candidate)
+
+    assert artifact["application_state"] == "selection_ready"
+    assert artifact["card"]["class_definition"]["skill_choice_count"] == 3
+    assert len(artifact["card"]["class_definition"]["skill_options"]) == 18
 
 
 def test_flat_plural_subclass_container_does_not_promote_features() -> None:
