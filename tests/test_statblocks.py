@@ -115,6 +115,30 @@ def test_parameterized_statblock_compiles_split_ocr_formula_tokens() -> None:
     ]
 
 
+def test_parameterized_statblock_compiles_half_summoner_hit_point_maximum() -> None:
+    source = (
+        "# Avatar of Death\n\n"
+        "**Armor Class** 20\n"
+        "**Hit Points** half the hit point maximum of its summoner\n"
+        "**Speed** 60 ft., fly 60 ft. (hover)\n"
+    )
+
+    requirement = parameterized_statblock_requirements(source)
+
+    assert requirement is not None
+    assert requirement["runtime_ready"] is True
+    assert requirement["solution"]["numeric_parameters"] == [
+        "owner_hit_point_maximum"
+    ]
+    rendered, resolved = materialize_parameterized_statblock_source(
+        source,
+        requirement,
+        numeric_parameters={"owner_hit_point_maximum": 101},
+    )
+    assert "**Hit Points** 50" in rendered
+    assert resolved == {"combat.hp.max": 50}
+
+
 def test_parameterized_statblock_requirements_cover_numeric_owner_and_spell_formulas() -> None:
     owner = parameterized_statblock_requirements(
         "# Wildfire Spirit\n\n"
@@ -541,6 +565,70 @@ def test_point_radius_save_damage_is_structured_from_exact_source() -> None:
             "a failed save, or half as much damage on a successful one."
         ),
     }
+
+
+def test_area_save_damage_resolves_dynamic_species_cone_contract() -> None:
+    sheet = parse_2014_statblock(
+        COMMONER,
+        source_key="species-test",
+        name="Commoner",
+    ).sheet
+    activity_id = "species.dragonborn.activity.breath-weapon"
+    sheet["content"]["activities"].append(
+        {
+            "id": activity_id,
+            "name": "Breath Weapon",
+            "source_key": "Dragonborn",
+            "description": "A source-bound 15-foot cone breath weapon.",
+            "uses": {
+                "label": "Breath Weapon",
+                "value": 1,
+                "max": 1,
+                "recovers_on": "short_rest",
+                "source_key": "Dragonborn",
+                "slot_level": 0,
+                "unlimited": False,
+            },
+            "resource_key": "",
+            "activation": {"type": "action", "cost": 1, "trigger": ""},
+            "scaling": [],
+            "resource_scaling": {},
+            "attack_scaling": {},
+            "choices": {
+                "area_save_damage": {
+                    "kind": "self_cone_save_damage",
+                    "origin": {"kind": "self"},
+                    "area": {"shape": "cone", "length_ft": 15},
+                    "targets": "each_creature",
+                    "save_ability": "dexterity",
+                    "save_dc_formula": {
+                        "base": 8,
+                        "ability": "constitution",
+                        "include_proficiency": True,
+                    },
+                    "damage_formula_by_level": {"1": "2d6", "6": "3d6"},
+                    "damage_type": "fire",
+                    "half_on_success": True,
+                    "save_source_kind": "nonmagical_effect",
+                    "source_excerpt": "A source-bound 15-foot cone breath weapon.",
+                }
+            },
+            "advancement_grants": [],
+            "pack_id": "dnd5e.content.standard2014",
+            "pack_version": "1.4.0",
+            "rule_refs": ["book:players-handbook-2014:p34"],
+            "mechanic_refs": ["dnd5e.core.activity.area_save_damage"],
+            "ruling_requirements": [],
+        }
+    )
+    sheet = validate_character_sheet(sheet)
+
+    spec = area_save_damage_spec(sheet, activity_id)
+
+    assert spec is not None
+    assert spec["kind"] == "self_cone_save_damage"
+    assert spec["save_dc"] == 10
+    assert spec["damage_formula"] == "2d6"
 
 
 TROLL = """## Troll
@@ -5094,6 +5182,8 @@ def test_layout_recovery_accepts_unaligned_cards_and_grouped_ability_cells() -> 
                 475,
             ),
             block("Hit: 5 (1d4 + 3) bludgeoning damage.", 80, 478, 390, 498),
+            block("Talons. Every magic item you wear or carry", 100, 525, 430, 545),
+            block("disintegrates when the card is drawn.", 80, 548, 380, 568),
         ],
     }
 
@@ -5114,6 +5204,10 @@ def test_layout_recovery_accepts_unaligned_cards_and_grouped_ability_cells() -> 
         "wis": "10 (+0)",
         "cha": "1 (-5)",
     }
+    assert "Talons" not in recovered["normalized_content"]
+    assert recovered["evidence"]["surrounding_prose_boundary"]["text"].startswith(
+        "Talons."
+    )
 
 
 def test_layout_recovery_preserves_and_validates_dependent_hit_point_formula() -> None:
@@ -5185,6 +5279,7 @@ def test_layout_ocr_repairs_only_bounded_weapon_entry_underscore() -> None:
     assert _repair_layout_ocr_text("Smallest objects") == "Smallest objects"
     assert _repair_layout_ocr_text("Languagesбк") == "Languages -"
     assert _repair_layout_ocr_text("Languages бк") == "Languages -"
+    assert _repair_layout_ocr_text("Challenge- (0 XP)") == "Challenge - (0 XP)"
     assert _repair_layout_ocr_text("Me/ee Weapon") == "Melee Weapon"
     assert _repair_layout_ocr_text("open/close") == "open/close"
     assert _repair_layout_ocr_text("Hit: 2 (1d6 \u2013 1) bludgeoning damage") == (

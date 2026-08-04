@@ -18,7 +18,11 @@ from sagasmith_dnd.activity_identity import (
     is_multiattack_activity,
     is_multiattack_source_name,
 )
-from sagasmith_dnd.character_schema import default_character_sheet, validate_character_sheet
+from sagasmith_dnd.character_schema import (
+    default_character_sheet,
+    derive_character_sheet,
+    validate_character_sheet,
+)
 from sagasmith_dnd.engine import ability_modifier
 from sagasmith_dnd.resolution_plan import (
     ResolutionPlanCompilationError,
@@ -33,7 +37,7 @@ class StatblockImportError(ValueError):
     """Raised when required statblock facts cannot be recovered from the source text."""
 
 
-OCR_STATBLOCK_RECOVERY_VERSION = 13
+OCR_STATBLOCK_RECOVERY_VERSION = 14
 
 
 @dataclass(frozen=True)
@@ -2533,8 +2537,46 @@ def area_save_damage_spec(
     if recorded.get("kind") not in {
         "visible_point_radius_save_damage",
         "self_line_save_damage",
+        "self_cone_save_damage",
     }:
         raise StatblockImportError("unsupported area saving-throw damage contract")
+    save_formula = recorded.get("save_dc_formula")
+    if save_formula is not None:
+        if not isinstance(save_formula, Mapping) or set(save_formula) != {
+            "base",
+            "ability",
+            "include_proficiency",
+        }:
+            raise StatblockImportError("area save DC formula is invalid")
+        ability = str(save_formula.get("ability") or "").casefold()
+        derived = derive_character_sheet(sheet)
+        modifiers = dict(derived.get("ability_modifiers") or {})
+        if ability not in modifiers:
+            raise StatblockImportError("area save DC formula references an unknown ability")
+        recorded["save_dc"] = (
+            int(save_formula.get("base", 0) or 0)
+            + int(modifiers[ability])
+            + (
+                int(derived.get("proficiency_bonus", 0) or 0)
+                if save_formula.get("include_proficiency") is True
+                else 0
+            )
+        )
+    damage_by_level = recorded.get("damage_formula_by_level")
+    if damage_by_level is not None:
+        if not isinstance(damage_by_level, Mapping) or not damage_by_level:
+            raise StatblockImportError("area damage scaling must be a non-empty object")
+        total_level = int(dict(sheet.get("progression") or {}).get("level", 0) or 0)
+        thresholds = sorted(
+            int(level)
+            for level in damage_by_level
+            if str(level).isdigit() and 1 <= int(level) <= 20
+        )
+        if len(thresholds) != len(damage_by_level) or not thresholds:
+            raise StatblockImportError("area damage scaling levels are invalid")
+        eligible = [level for level in thresholds if level <= max(1, total_level)]
+        threshold = max(eligible or [min(thresholds)])
+        recorded["damage_formula"] = str(damage_by_level[str(threshold)])
     return deepcopy(recorded)
 
 
@@ -5492,6 +5534,11 @@ def _repair_layout_ocr_text(text: str) -> str:
         text,
     )
     normalized = re.sub(
+        r"(?i)^Challenge\s*[-\u2012\u2013\u2014]\s*(?=\(|\d)",
+        "Challenge - ",
+        normalized,
+    )
+    normalized = re.sub(
         r"(?<![A-Za-z0-9])(?P<digits>[0-9](?:\s+[0-9]{1,2}){1,2})"
         r"(?=\s*(?:ft\.|feet\b|miles?\b|points?\b|XP\b|[(,.;]|$))",
         lambda match: re.sub(r"\s+", "", match.group("digits")),
@@ -6465,9 +6512,24 @@ def recover_2014_statblock_from_ocr(
     }
     detail_start = max(block["y1"] for block in ability_values.values())
     continuation_ids = {block["index"] for block in continuation_blocks}
+    body_left_samples = [
+        identity["x0"],
+        *(block["x0"] for block in core_fields.values()),
+        *(block["x0"] for block in detail_fields.values()),
+        *(
+            block["x0"]
+            for block in scoped
+            if _ocr_statblock_section_heading(block["text"]) is not None
+        ),
+    ]
+    ordered_left_samples = sorted(float(value) for value in body_left_samples)
+    body_left = ordered_left_samples[len(ordered_left_samples) // 2]
+    paragraph_indent = max(5.0, float(width) * 0.008)
     details: list[str] = []
     entered_action_section = False
-    for block in scoped:
+    action_entry_count = 0
+    surrounding_prose_boundary: dict[str, Any] | None = None
+    for scoped_index, block in enumerate(scoped):
         if block["index"] in skipped or (
             block["index"] not in continuation_ids and block["y0"] < detail_start
         ):
@@ -6483,6 +6545,26 @@ def recover_2014_statblock_from_ocr(
             continue
         if entered_action_section and _ocr_non_statblock_heading(text):
             break
+        entry = _ocr_structural_entry_match(text)
+        if (
+            entered_action_section
+            and action_entry_count
+            and entry is not None
+            and block["x0"] - body_left >= paragraph_indent
+            and scoped_index > 0
+            and block["y0"] - scoped[scoped_index - 1]["y1"] >= paragraph_indent
+            and scoped_index + 1 < len(scoped)
+        ):
+            following = scoped[scoped_index + 1]
+            if (
+                following["x0"] <= body_left + paragraph_indent / 2
+                and 0 <= following["y0"] - block["y1"] <= 20
+            ):
+                # A compact statblock may end above ordinary indented source
+                # prose.  Named prose paragraphs look like actions in plain
+                # text, so use the layout transition as the bounded signal.
+                surrounding_prose_boundary = block
+                break
         if details and details[-1].startswith("***"):
             previous_body = details[-1].split("***", 2)[-1].strip()
             if not previous_body or not re.search(r"[.!?:]$", previous_body):
@@ -6541,9 +6623,10 @@ def recover_2014_statblock_from_ocr(
         if field is not None:
             details.append(f"**{field}** {_strip_ocr_label(text, field)}")
             continue
-        entry = _ocr_structural_entry_match(text)
         if entry:
             details.append(f"***{entry.group(1)}.*** {entry.group(2)}".rstrip())
+            if entered_action_section:
+                action_entry_count += 1
         elif details and details[-1].startswith("***"):
             details[-1] = f"{details[-1]} {text}"
         else:
@@ -6651,6 +6734,19 @@ def recover_2014_statblock_from_ocr(
             "excluded_page_furniture_count": len(page_furniture),
             "excluded_trailing_subject_heading_count": len(
                 trailing_subject_headings
+            ),
+            "surrounding_prose_boundary": (
+                {
+                    "text": surrounding_prose_boundary["text"],
+                    "bbox": [
+                        surrounding_prose_boundary["x0"],
+                        surrounding_prose_boundary["y0"],
+                        surrounding_prose_boundary["x1"],
+                        surrounding_prose_boundary["y1"],
+                    ],
+                }
+                if surrounding_prose_boundary is not None
+                else None
             ),
             "column_split": split,
             "column_bounds": column_bounds,
@@ -6814,6 +6910,8 @@ _DEPENDENT_TEMPLATE_GRAMMAR_TOKENS = (
     "times",
     "class",
     "spellcasting",
+    "hit point maximum",
+    "summoner",
     "in",
 )
 
@@ -6869,6 +6967,11 @@ def parameterized_statblock_requirements(source_text: str) -> dict[str, Any] | N
         ),
         (r"\byour spell attack modifier\b", "owner_spell_attack_modifier"),
         (r"\byour spell save dc\b", "owner_spell_save_dc"),
+        (
+            r"\bhalf (?:the )?hit point maximum of (?:its|the) summoner\b|"
+            r"\bhalf your hit point maximum\b",
+            "owner_hit_point_maximum",
+        ),
         (
             r"\b(?:the )?spell(?:'s)? level\b|\blevel of the spell\b|"
             r"\beach spell level\b",
@@ -6981,6 +7084,7 @@ _DEPENDENT_TEMPLATE_NUMERIC_PARAMETERS = frozenset(
         "owner_spellcasting_ability_modifier",
         "owner_spell_attack_modifier",
         "owner_spell_save_dc",
+        "owner_hit_point_maximum",
         "casting_slot_level",
     }
 )
@@ -7057,6 +7161,17 @@ def _template_sum_term(term: str) -> dict[str, Any] | None:
         return {"op": "parameter", "name": "owner_proficiency_bonus"}
     if value in {"the level of the spell", "the spell's level", "spell level"}:
         return {"op": "parameter", "name": "casting_slot_level"}
+    if value in {
+        "half the hit point maximum of its summoner",
+        "half the hit point maximum of the summoner",
+        "half hit point maximum of its summoner",
+        "half your hit point maximum",
+    }:
+        return {
+            "op": "floor_divide",
+            "divisor": 2,
+            "term": {"op": "parameter", "name": "owner_hit_point_maximum"},
+        }
     self_modifier = re.fullmatch(
         r"(?:the )?.+?[’']s (strength|dexterity|constitution|intelligence|wisdom|"
         r"charisma) modifier",
@@ -7207,6 +7322,8 @@ def compile_parameterized_statblock_solution(
             variants.update(str(value) for value in dict(node.get("options") or {}))
         elif operation == "multiply":
             collect(dict(node.get("term") or {}))
+        elif operation == "floor_divide":
+            collect(dict(node.get("term") or {}))
         elif operation == "sum":
             for term in node.get("terms") or []:
                 collect(dict(term))
@@ -7304,6 +7421,16 @@ def _evaluate_dependent_template_formula(
             self_ability_modifiers=self_ability_modifiers,
             template_variant=template_variant,
         )
+    if operation == "floor_divide":
+        divisor = int(formula["divisor"])
+        if divisor < 1:
+            raise ValueError("dependent actor divisor must be positive")
+        return _evaluate_dependent_template_formula(
+            dict(formula["term"]),
+            numeric_parameters=numeric_parameters,
+            self_ability_modifiers=self_ability_modifiers,
+            template_variant=template_variant,
+        ) // divisor
     if operation == "scale_above":
         value = int(numeric_parameters[str(formula["parameter"])])
         return max(0, value - int(formula["baseline"])) * int(formula["per_step"])
@@ -7363,6 +7490,9 @@ def materialize_parameterized_statblock_source(
             raise ValueError(f"template parameter {name} must be an integer")
         if name in {"owner_class_level", "owner_proficiency_bonus", "casting_slot_level"}:
             if raw_value < 1 or raw_value > 30:
+                raise ValueError(f"template parameter {name} is outside its bounded range")
+        elif name == "owner_hit_point_maximum":
+            if raw_value < 1 or raw_value > 100_000:
                 raise ValueError(f"template parameter {name} is outside its bounded range")
         elif raw_value < -10 or raw_value > 40:
             raise ValueError(f"template parameter {name} is outside its bounded range")
@@ -7488,6 +7618,7 @@ def parse_2014_statblock_template_preview(
         "owner_proficiency_bonus": 4,
         "owner_spell_attack_modifier": 8,
         "owner_spell_save_dc": 16,
+        "owner_hit_point_maximum": 101,
         "owner_spellcasting_ability_modifier": 4,
         "owner_strength_modifier": 4,
         "owner_dexterity_modifier": 4,

@@ -72,6 +72,7 @@ _SELECTION_FIELDS = {
         "abilities",
         "ability_scores_include_species_grants",
         "cantrip_artifact_id",
+        "feat_selection",
         "feature_choices",
         "hit_points_include_species_grants",
         "languages",
@@ -974,6 +975,171 @@ def species_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
                 )
             except ValueError as error:
                 errors.append(str(error))
+    raw_feat_choice = grants.get("feat_choice")
+    if raw_feat_choice is not None:
+        if not isinstance(raw_feat_choice, Mapping):
+            errors.append("species feat_choice must be an object")
+        else:
+            unsupported = set(raw_feat_choice) - {"count", "allowed_categories"}
+            if unsupported:
+                errors.append(
+                    f"species feat_choice has unsupported fields: {sorted(unsupported)}"
+                )
+            feat_count = raw_feat_choice.get("count")
+            if feat_count != 1:
+                errors.append("species feat_choice.count must be 1")
+            categories = raw_feat_choice.get("allowed_categories", [])
+            if not isinstance(categories, list) or any(
+                not isinstance(item, str) or not item.strip() for item in categories
+            ):
+                errors.append(
+                    "species feat_choice.allowed_categories must be an array of names"
+                )
+            elif len({item.strip().casefold() for item in categories}) != len(categories):
+                errors.append("species feat_choice.allowed_categories must be distinct")
+    raw_affinity_choice = grants.get("damage_affinity_choice")
+    if raw_affinity_choice is not None:
+        prefix = "species damage_affinity_choice"
+        if not isinstance(raw_affinity_choice, Mapping):
+            errors.append(f"{prefix} must be an object")
+        else:
+            unsupported = set(raw_affinity_choice) - {
+                "id",
+                "options",
+                "resistance",
+                "activity",
+            }
+            if unsupported:
+                errors.append(f"{prefix} has unsupported fields: {sorted(unsupported)}")
+            if not str(raw_affinity_choice.get("id") or "").strip():
+                errors.append(f"{prefix}.id must not be empty")
+            if not isinstance(raw_affinity_choice.get("resistance"), bool):
+                errors.append(f"{prefix}.resistance must be a boolean")
+            options = raw_affinity_choice.get("options")
+            if not isinstance(options, list) or not options:
+                errors.append(f"{prefix}.options must be a non-empty array")
+                options = []
+            option_ids: list[str] = []
+            valid_damage_types = {
+                "acid",
+                "cold",
+                "fire",
+                "force",
+                "lightning",
+                "necrotic",
+                "poison",
+                "psychic",
+                "radiant",
+                "thunder",
+            }
+            for index, raw_option in enumerate(options):
+                option_prefix = f"{prefix}.options[{index}]"
+                if not isinstance(raw_option, Mapping):
+                    errors.append(f"{option_prefix} must be an object")
+                    continue
+                if set(raw_option) != {
+                    "id",
+                    "name",
+                    "damage_type",
+                    "save_ability",
+                    "area",
+                }:
+                    errors.append(f"{option_prefix} fields are invalid")
+                option_id = str(raw_option.get("id") or "").strip().casefold()
+                if not option_id or not str(raw_option.get("name") or "").strip():
+                    errors.append(f"{option_prefix} id and name must not be empty")
+                option_ids.append(option_id)
+                if str(raw_option.get("damage_type") or "").casefold() not in (
+                    valid_damage_types
+                ):
+                    errors.append(f"{option_prefix}.damage_type is invalid")
+                if str(raw_option.get("save_ability") or "").casefold() not in (
+                    ability_names
+                ):
+                    errors.append(f"{option_prefix}.save_ability is invalid")
+                area = raw_option.get("area")
+                if not isinstance(area, Mapping):
+                    errors.append(f"{option_prefix}.area must be an object")
+                    continue
+                shape = str(area.get("shape") or "").casefold()
+                expected = (
+                    {"shape", "length_ft", "width_ft"}
+                    if shape == "line"
+                    else {"shape", "length_ft"}
+                    if shape == "cone"
+                    else set()
+                )
+                if not expected or set(area) != expected:
+                    errors.append(f"{option_prefix}.area must be a bounded line or cone")
+                for field in expected - {"shape"}:
+                    distance = area.get(field)
+                    if (
+                        isinstance(distance, bool)
+                        or not isinstance(distance, int)
+                        or distance <= 0
+                    ):
+                        errors.append(f"{option_prefix}.area.{field} must be positive")
+            if len(option_ids) != len(set(option_ids)):
+                errors.append(f"{prefix}.options ids must be distinct")
+            activity = raw_affinity_choice.get("activity")
+            if not isinstance(activity, Mapping):
+                errors.append(f"{prefix}.activity must be an object")
+            else:
+                if set(activity) != {
+                    "id",
+                    "name",
+                    "uses",
+                    "save_dc",
+                    "damage_by_level",
+                }:
+                    errors.append(f"{prefix}.activity fields are invalid")
+                if not str(activity.get("id") or "").strip() or not str(
+                    activity.get("name") or ""
+                ).strip():
+                    errors.append(f"{prefix}.activity id and name must not be empty")
+                uses = activity.get("uses")
+                if not isinstance(uses, Mapping) or set(uses) != {"max", "recovers_on"}:
+                    errors.append(f"{prefix}.activity.uses is invalid")
+                elif uses.get("max") != 1 or uses.get("recovers_on") not in {
+                    "short_rest",
+                    "long_rest",
+                }:
+                    errors.append(f"{prefix}.activity.uses must be one rest-recovered use")
+                save_dc = activity.get("save_dc")
+                if not isinstance(save_dc, Mapping) or set(save_dc) != {
+                    "base",
+                    "ability",
+                    "include_proficiency",
+                }:
+                    errors.append(f"{prefix}.activity.save_dc is invalid")
+                elif (
+                    isinstance(save_dc.get("base"), bool)
+                    or not isinstance(save_dc.get("base"), int)
+                    or save_dc.get("base") < 1
+                    or str(save_dc.get("ability") or "").casefold()
+                    not in ability_names
+                    or not isinstance(save_dc.get("include_proficiency"), bool)
+                ):
+                    errors.append(f"{prefix}.activity.save_dc values are invalid")
+                damage_by_level = activity.get("damage_by_level")
+                if not isinstance(damage_by_level, Mapping) or not damage_by_level:
+                    errors.append(f"{prefix}.activity.damage_by_level must not be empty")
+                else:
+                    levels = []
+                    for raw_level, formula in damage_by_level.items():
+                        try:
+                            level = int(raw_level)
+                        except (TypeError, ValueError):
+                            level = 0
+                        levels.append(level)
+                        if not 1 <= level <= 20 or not str(formula).strip():
+                            errors.append(
+                                f"{prefix}.activity.damage_by_level entries are invalid"
+                            )
+                    if len(levels) != len(set(levels)) or 1 not in levels:
+                        errors.append(
+                            f"{prefix}.activity.damage_by_level needs distinct levels starting at 1"
+                        )
     return errors
 
 

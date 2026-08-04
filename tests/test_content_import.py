@@ -152,6 +152,78 @@ def test_spell_list_heading_supplies_embedded_spell_class_eligibility() -> None:
     assert spell["artifact"]["card"]["classes"] == ["artificer"]
 
 
+def test_phb_four_column_spell_list_supplies_class_and_repairs_schema_ocr() -> None:
+    candidates = extract_content_candidates(
+        [
+            {
+                "id": "bard-list",
+                "heading_path": [
+                    "Chapter 11 - Spells",
+                    "BARD SPELLS",
+                    "1ST LEVEL",
+                ],
+                "content": "Dissonant Whispers Feather Fali Healing Word",
+            },
+            {
+                "id": "spell",
+                "heading_path": [
+                    "Chapter 11 - Spells",
+                    "SPELL DESCRIPTIONS",
+                    "DISSONANT WHISPERS",
+                ],
+                "content": (
+                    "1st-leveI enchantment Casting Time: I aetion Range: 60 feel "
+                    "Components: V Duration: Instanta neous A discordant melody plays."
+                ),
+            },
+        ]
+    )
+
+    spell = next(item for item in candidates if item["kind"] == "spell")
+
+    assert spell["artifact"]["card"]["classes"] == ["bard"]
+    assert spell["artifact"]["card"]["level"] == 1
+    assert spell["artifact"]["card"]["definition"]["casting_time"] == "1 action"
+    assert spell["artifact"]["card"]["definition"]["range"]["normal_ft"] == 60
+
+
+def test_plural_subclass_parent_and_background_word_choices_are_bounded() -> None:
+    subclass = author_selection_card_from_candidate(
+        {
+            "kind": "subclass",
+            "name": "Path of the Berserker",
+            "source_heading_path": ["Primal Paths", "Path of the Berserker"],
+            "artifact": {
+                "kind": "subclass",
+                "card": {
+                    "name": "Path of the Berserker",
+                    "description": "A relentless source-bound primal path.",
+                },
+            },
+        }
+    )
+    background = author_selection_card_from_candidate(
+        {
+            "kind": "background",
+            "name": "Acolyte",
+            "artifact": {
+                "kind": "background",
+                "card": {
+                    "name": "Acolyte",
+                    "description": (
+                        "Skill Proficiencies: Insight, Religion Languages: Two of "
+                        "your choice Equipment: holy symbol and 15 gp"
+                    ),
+                },
+            },
+        }
+    )
+
+    assert subclass["card"]["class_name"] == "Barbarian"
+    assert subclass["card"]["minimum_level"] == 3
+    assert background["card"]["background_grants"]["choices"]["language_count"] == 2
+
+
 def test_shared_cantrip_declaration_supplies_nested_spell_classes() -> None:
     candidates = extract_content_candidates(
         [
@@ -471,6 +543,243 @@ def test_primary_review_preserves_agent_authored_background_semantics() -> None:
     ]
 
 
+def test_primary_review_recovers_printed_2014_background_tool_contracts() -> None:
+    artifact = author_selection_card_from_candidate(
+        {
+            "id": "candidate:entertainer",
+            "kind": "background",
+            "name": "Entertainer",
+            "artifact": {
+                "kind": "background",
+                "card": {
+                    "name": "Entertainer",
+                    "description": (
+                        "Skill Proficiencies: Acrobatics, Performance "
+                        "Tool Proficiencies: Disguise kit, one type of musical "
+                        "instrument Equiprnent: A musical instrument and 15 gp"
+                    ),
+                },
+            },
+        }
+    )
+
+    grants = artifact["card"]["background_grants"]
+    assert artifact["application_state"] == "selection_ready"
+    assert grants["tools"] == ["Disguise Kit"]
+    assert grants["choices"]["tool_choice_count"] == 1
+    assert grants["choices"]["tool_option_groups"] == [
+        {
+            "id": "musical-instrument",
+            "maximum": 1,
+            "options": [
+                "Bagpipes",
+                "Drum",
+                "Dulcimer",
+                "Flute",
+                "Horn",
+                "Lute",
+                "Lyre",
+                "Pan Flute",
+                "Shawm",
+                "Viol",
+            ],
+        }
+    ]
+    assert grants["choices"]["equipment_description"].startswith(
+        "A musical instrument"
+    )
+
+
+def test_primary_review_hydrates_official_spell_schema_from_exact_dependency() -> None:
+    artifact = author_selection_card_from_candidate(
+        {
+            "id": "candidate:freezing-sphere",
+            "kind": "spell",
+            "name": "OTl LUKE'S FREEZING SPHERE",
+            "artifact": {
+                "kind": "spell",
+                "card": {
+                    "name": "OTl LUKE'S FREEZING SPHERE",
+                    "description": "6th-level evocation source text.",
+                },
+            },
+        },
+        reference_artifacts=[
+            {
+                "id": "dnd5e.content.srd2014.spell.freezing-sphere",
+                "kind": "spell",
+                "card": {
+                    "name": "Freezing Sphere",
+                    "level": 6,
+                    "classes": ["wizard"],
+                    "definition": {
+                        "school": "evocation",
+                        "casting_time": "1 action",
+                        "range": {"kind": "distance", "normal_ft": 300},
+                        "duration": {
+                            "kind": "instantaneous",
+                            "concentration": False,
+                        },
+                        "components": {
+                            "verbal": True,
+                            "somatic": True,
+                            "material": True,
+                            "material_description": "a small crystal sphere",
+                        },
+                        "effect": "Reference prose must not replace source prose.",
+                    },
+                    "resolution": {
+                        "kind": "saving_throw",
+                        "save_ability": "constitution",
+                    },
+                },
+                "mechanic_refs": ["dnd5e.core.spell.structured_resolution"],
+                "_selection_source_names": ["Otiluke's Freezing Sphere"],
+                "_preserve_imported_name": True,
+                "_selection_schema_reference": {
+                    "pack_id": "dnd5e.content.srd2014",
+                    "pack_version": "1.0.0",
+                    "artifact_id": "dnd5e.content.srd2014.spell.freezing-sphere",
+                },
+            }
+        ],
+    )
+
+    assert artifact["application_state"] == "selection_ready"
+    assert artifact["card"]["name"] == "Otiluke's Freezing Sphere"
+    assert artifact["card"]["level"] == 6
+    assert artifact["card"]["classes"] == ["Wizard"]
+    assert artifact["card"]["definition"]["effect"] == (
+        "6th-level evocation source text."
+    )
+    assert artifact["card"]["resolution"] == {
+        "kind": "saving_throw",
+        "save_ability": "constitution",
+    }
+    assert artifact["mechanic_refs"] == [
+        "dnd5e.core.spell.structured_resolution"
+    ]
+    assert artifact["card"]["mechanic_refs"] == [
+        "dnd5e.core.spell.structured_resolution"
+    ]
+    directly_resolved = artifact_with_direct_resolution(
+        {
+            "id": "candidate:freezing-sphere",
+            "kind": "spell",
+            "source_chunk_ids": ["spell-source"],
+            "artifact": artifact,
+        }
+    )
+    assert "rule_clauses" not in directly_resolved
+    assert directly_resolved["card"]["resolution"]["kind"] == "saving_throw"
+    assert artifact["selection_schema_references"] == [
+        {
+            "pack_id": "dnd5e.content.srd2014",
+            "pack_version": "1.0.0",
+            "artifact_id": "dnd5e.content.srd2014.spell.freezing-sphere",
+        }
+    ]
+
+
+def test_primary_review_repairs_only_unique_official_spell_identity() -> None:
+    definition = {
+        "school": "abjuration",
+        "casting_time": "1 action",
+        "range": {"kind": "self"},
+        "duration": {"kind": "timed", "value": 10, "unit": "minute"},
+        "components": {"verbal": True},
+        "effect": "The reviewed source effect applies.",
+    }
+    repaired = author_selection_card_from_candidate(
+        {
+            "kind": "spell",
+            "name": "Cirele of Power",
+            "artifact": {
+                "kind": "spell",
+                "card": {
+                    "name": "Cirele of Power",
+                    "level": 5,
+                    "classes": ["paladin"],
+                    "definition": definition,
+                },
+            },
+        },
+        reference_artifacts=[
+            {
+                "kind": "spell",
+                "card": {"name": "Circle of Power"},
+                "_selection_source_names": ["Circle of Power"],
+            }
+        ],
+    )
+    ambiguous = author_selection_card_from_candidate(
+        {
+            "kind": "spell",
+            "name": "Blanding Smite",
+            "artifact": {
+                "kind": "spell",
+                "card": {
+                    "name": "Blanding Smite",
+                    "level": 2,
+                    "classes": ["paladin"],
+                    "definition": definition,
+                },
+            },
+        },
+        reference_artifacts=[
+            {
+                "kind": "spell",
+                "card": {"name": name},
+                "_selection_source_names": [name],
+            }
+            for name in ("Blinding Smite", "Branding Smite")
+        ],
+    )
+    recovered_suffix = author_selection_card_from_candidate(
+        {
+            "kind": "spell",
+            "name": "Cloud",
+            "artifact": {
+                "kind": "spell",
+                "card": {
+                    "name": "Cloud",
+                    "level": 3,
+                    "classes": ["wizard"],
+                    "definition": {
+                        **definition,
+                        "school": "conjuration",
+                    },
+                },
+            },
+        },
+        reference_artifacts=[
+            {
+                "kind": "spell",
+                "card": {
+                    "name": "Fog Cloud",
+                    "level": 1,
+                    "classes": ["wizard"],
+                    "definition": {**definition, "school": "conjuration"},
+                },
+            },
+            {
+                "kind": "spell",
+                "card": {
+                    "name": "Stinking Cloud",
+                    "level": 3,
+                    "classes": ["wizard"],
+                    "definition": {**definition, "school": "conjuration"},
+                },
+            },
+        ],
+    )
+
+    assert repaired["card"]["name"] == "Circle of Power"
+    assert repaired["application_state"] == "selection_ready"
+    assert ambiguous["card"]["name"] == "Blanding Smite"
+    assert recovered_suffix["card"]["name"] == "Stinking Cloud"
+
+
 def test_primary_review_blocks_unbounded_tool_choice_until_agent_authors_options() -> None:
     candidate = {
         "id": "candidate:guild-artisan",
@@ -618,6 +927,271 @@ def test_primary_review_preserves_valid_agent_authored_base_class_card() -> None
     assert artifact["card"]["class_definition"]["tool_choice_count"] == 1
 
 
+def test_trusted_reference_hydrates_typed_species_without_replacing_source_prose() -> None:
+    candidate = {
+        "id": "candidate:hill-dwarf",
+        "kind": "species",
+        "name": "HILL DWARF",
+        "source_heading_path": ["Races", "HILL DWARF"],
+        "artifact": {
+            "kind": "species",
+            "application_state": "catalog_only",
+            "card": {
+                "name": "HILL DWARF",
+                "description": "OCR source prose retained for exact source-bound rulings.",
+            },
+        },
+    }
+    reference_grants = {
+        "ability_score_increases": {"constitution": 2, "wisdom": 1},
+        "size": "medium",
+        "walk_speed": 25,
+        "languages": ["Common", "Dwarvish"],
+        "features": [{"name": "Dwarven Toughness", "description": "Reviewed grant."}],
+    }
+
+    artifact = author_selection_card_from_candidate(
+        candidate,
+        reference_artifacts=[
+            {
+                "id": "dnd5e.content.srd2014.species.hill-dwarf",
+                "kind": "species",
+                "card": {
+                    "name": "Hill Dwarf",
+                    "base_species": "Dwarf",
+                    "grants": reference_grants,
+                },
+                "_selection_schema_reference": {
+                    "pack_id": "dnd5e.content.srd2014",
+                    "pack_version": "1.20.0",
+                    "artifact_id": "dnd5e.content.srd2014.species.hill-dwarf",
+                },
+            }
+        ],
+    )
+
+    assert artifact["application_state"] == "selection_ready"
+    assert artifact["card"]["name"] == "Hill Dwarf"
+    assert artifact["card"]["base_species"] == "Dwarf"
+    assert artifact["card"]["grants"] == reference_grants
+    assert artifact["card"]["description"].startswith("OCR source prose")
+    assert artifact["selection_schema_references"] == [
+        {
+            "pack_id": "dnd5e.content.srd2014",
+            "pack_version": "1.20.0",
+            "artifact_id": "dnd5e.content.srd2014.species.hill-dwarf",
+        }
+    ]
+
+
+def test_trusted_species_reference_prefers_complete_standard_mechanics() -> None:
+    incomplete = {
+        "id": "dnd5e.content.srd2014.species.tiefling",
+        "kind": "species",
+        "card": {
+            "name": "Tiefling",
+            "grants": {"unresolved": ["level_granted_species_spells"]},
+        },
+        "_selection_schema_reference": {
+            "pack_id": "dnd5e.content.srd2014",
+            "pack_version": "1.20.0",
+            "artifact_id": "dnd5e.content.srd2014.species.tiefling",
+        },
+    }
+    complete = {
+        "id": "dnd5e.content.standard2014.species.tiefling",
+        "kind": "species",
+        "card": {
+            "name": "Tiefling",
+            "grants": {
+                "spell_grants": [
+                    {
+                        "name": "Thaumaturgy",
+                        "level": 0,
+                        "eligible_classes": ["Cleric"],
+                        "method": "known",
+                        "spellcasting_ability": "charisma",
+                        "free_casts": 0,
+                        "recovers_on": None,
+                        "allow_slot_cast": False,
+                        "minimum_level": 1,
+                        "ritual_only": False,
+                    }
+                ],
+                "unresolved": [],
+            },
+        },
+        "_selection_schema_reference": {
+            "pack_id": "dnd5e.content.standard2014",
+            "pack_version": "1.4.0",
+            "artifact_id": "dnd5e.content.standard2014.species.tiefling",
+        },
+    }
+
+    artifact = author_selection_card_from_candidate(
+        {
+            "id": "candidate:tiefling",
+            "kind": "species",
+            "name": "TIEFLING",
+            "artifact": {
+                "kind": "species",
+                "card": {"name": "TIEFLING", "description": "Source-local prose."},
+            },
+        },
+        reference_artifacts=[incomplete, complete],
+    )
+
+    assert artifact["application_state"] == "selection_ready"
+    assert artifact["card"]["grants"]["unresolved"] == []
+    assert artifact["card"]["grants"]["spell_grants"][0]["name"] == "Thaumaturgy"
+    assert artifact["selection_schema_references"] == [
+        complete["_selection_schema_reference"]
+    ]
+
+
+def test_trusted_base_species_fills_subrace_defaults_without_overwriting_differences() -> None:
+    base_reference = {
+        "id": "dnd5e.content.srd2014.species.dwarf",
+        "kind": "species",
+        "card": {
+            "name": "Dwarf",
+            "base_species": "Dwarf",
+            "grants": {
+                "ability_score_increases": {"constitution": 2},
+                "ability_choice": {"count": 0, "amount": 0, "exclude": [], "options": []},
+                "size": "medium",
+                "walk_speed": 25,
+                "darkvision_ft": 60,
+                "languages": ["Common", "Dwarvish"],
+                "weapon_proficiencies": ["battleaxe", "handaxe"],
+                "features": [{"name": "Dwarven Resilience", "description": "Reviewed."}],
+            },
+        },
+        "_selection_schema_reference": {
+            "pack_id": "dnd5e.content.srd2014",
+            "pack_version": "1.20.0",
+            "artifact_id": "dnd5e.content.srd2014.species.dwarf",
+        },
+    }
+    artifact = author_selection_card_from_candidate(
+        {
+            "id": "candidate:mountain-dwarf",
+            "kind": "species",
+            "name": "MOUNTAIN DWARF",
+            "artifact": {
+                "kind": "species",
+                "card": {
+                    "name": "MOUNTAIN DWARF",
+                    "base_species": "DWARF",
+                    "description": (
+                        "Ability Score Increase. Your Strength score increases by 2. "
+                        "Dwarven Armor Training. You have proficiency with light and "
+                        "medium armor."
+                    ),
+                },
+            },
+        },
+        reference_artifacts=[base_reference],
+    )
+
+    grants = artifact["card"]["grants"]
+    assert artifact["application_state"] == "selection_ready"
+    assert artifact["card"]["base_species"] == "Dwarf"
+    assert grants["ability_score_increases"] == {"constitution": 2, "strength": 2}
+    assert grants["size"] == "medium"
+    assert grants["walk_speed"] == 25
+    assert grants["darkvision_ft"] == 60
+    assert grants["armor_proficiencies"] == ["light armor", "medium armor"]
+    assert grants["weapon_proficiencies"] == ["battleaxe", "handaxe"]
+    assert artifact["selection_schema_references"][0]["artifact_id"].endswith(
+        ".species.dwarf"
+    )
+
+
+def test_variant_human_replaces_base_ability_grant_and_requires_skill_and_feat() -> None:
+    artifact = author_selection_card_from_candidate(
+        {
+            "id": "candidate:variant-human",
+            "kind": "species",
+            "name": "VARIANT HUMAN",
+            "artifact": {
+                "kind": "species",
+                "card": {
+                    "name": "VARIANT HUMAN",
+                    "base_species": "HUMAN",
+                    "description": (
+                        "Ability Score Increase. Your ability scores each increase by 1. "
+                        "Size. Your size is Medium. Speed. Your walking speed is 30 feet. "
+                        "Languages. You speak Common and one extra language of your choice. "
+                        "These variant traits replace the human's Ability Score Increase trait. "
+                        "Ability Seore Inerease. Two different ability seores of your ehoiee "
+                        "inerease by l. Skills. Vou gain profieieney in one skill of your "
+                        "ehoiee. Feat. Vou gain one feat of your ehoiee."
+                    ),
+                },
+            },
+        },
+        reference_artifacts=[
+            {
+                "id": "dnd5e.content.srd2014.species.human",
+                "kind": "species",
+                "card": {
+                    "name": "Human",
+                    "base_species": "Human",
+                    "grants": {
+                        "ability_score_increases": {
+                            "strength": 1,
+                            "dexterity": 1,
+                            "constitution": 1,
+                            "intelligence": 1,
+                            "wisdom": 1,
+                            "charisma": 1,
+                        },
+                        "ability_choice": {
+                            "count": 0,
+                            "amount": 0,
+                            "exclude": [],
+                            "options": [],
+                        },
+                        "size": "medium",
+                        "walk_speed": 30,
+                        "languages": ["Common"],
+                        "language_choice_count": 1,
+                        "allow_any_language": True,
+                        "features": [],
+                    },
+                },
+                "_selection_schema_reference": {
+                    "pack_id": "dnd5e.content.srd2014",
+                    "pack_version": "1.20.0",
+                    "artifact_id": "dnd5e.content.srd2014.species.human",
+                },
+            }
+        ],
+    )
+
+    grants = artifact["card"]["grants"]
+    assert artifact["application_state"] == "selection_ready"
+    assert grants["ability_score_increases"] == {}
+    assert grants["ability_choice"] == {
+        "count": 2,
+        "amount": 1,
+        "exclude": [],
+        "options": [
+            "strength",
+            "dexterity",
+            "constitution",
+            "intelligence",
+            "wisdom",
+            "charisma",
+        ],
+    }
+    assert grants["skill_choice_count"] == 1
+    assert grants["allow_any_skill"] is True
+    assert grants["feat_choice"] == {"count": 1, "allowed_categories": []}
+    assert grants["languages"] == ["Common"]
+
+
 def test_primary_review_blocks_implausible_ocr_species_choices() -> None:
     artifact = author_selection_card_from_candidate(
         {
@@ -638,8 +1212,9 @@ def test_primary_review_blocks_implausible_ocr_species_choices() -> None:
         }
     )
 
-    assert artifact["application_state"] == "catalog_only"
-    assert artifact["card"]["grants"]["language_choice_count"] == 100
+    assert artifact["application_state"] == "selection_ready"
+    assert artifact["card"]["grants"]["language_choice_count"] == 1
+    assert artifact["card"]["grants"]["language_options"] == ["Elvish", "Vedalken"]
 
 
 def test_source_coverage_fragment_is_runtime_context_not_character_feature() -> None:
@@ -1024,6 +1599,86 @@ def test_inventory_repairs_spell_header_ocr_and_bounded_field_continuation() -> 
         "concentration": True,
     }
     assert spells["Tidal Wave"]["definition"]["school"] == "conjuration"
+
+
+def test_inventory_recovers_later_spell_after_first_spell_schema() -> None:
+    inventory = extract_content_inventory(
+        [
+            {
+                "id": "cleric-cantrips",
+                "heading_path": [
+                    "Spells",
+                    "Spell Lists",
+                    "Cleric Spells",
+                    "Cantrips",
+                ],
+                "content": "Resistance",
+            },
+            {
+                "id": "cleric-fifth-level",
+                "heading_path": [
+                    "Spells",
+                    "Spell Lists",
+                    "Cleric Spells",
+                    "5th Level",
+                ],
+                "content": "Greater Restoration",
+            },
+            {
+                "id": "greater-invisibility-and-restoration",
+                "heading_path": [
+                    "Spells",
+                    "Spell Descriptions",
+                    "GREATER INVISIBILITY",
+                ],
+                "content": (
+                    "4th-level illusion Casting Time: 1 action Range: Touch "
+                    "Components: V, S Duration: Concenlralion, up to I minule "
+                    "The target becomes invisible. "
+                    "GREATER RESTORATlON 5th-ievei abjuration "
+                    "Casting Time: I aclion Range: Touch Components: V, 5, M "
+                    "(diamond dust) Duration: Inslanlaneous The spell ends one "
+                    "debilitating effect."
+                ),
+            },
+            {
+                "id": "remove-curse-and-resistance",
+                "heading_path": [
+                    "Spells",
+                    "Spell Descriptions",
+                    "REMOVE CURSE",
+                ],
+                "content": (
+                    "3rd-level abjuration Casting Time: 1 action Range: Touch "
+                    "Components: V, S Duration: Instantaneous A curse ends. "
+                    "PART 3 SPELLS RESlSTANCE Abjuration cantrip "
+                    "Casting Time: I action Range: Touch Components: V, S, M "
+                    "Duration: Concenlralion, up to I minule The target adds "
+                    "a d4 to one saving throw."
+                ),
+            },
+        ]
+    )
+    spells = {
+        item["name"].casefold(): item["artifact"]["card"]
+        for item in inventory["candidates"]
+        if item["kind"] == "spell"
+    }
+
+    assert "greater restoration" in spells
+    assert spells["greater restoration"]["definition"]["duration"] == {
+        "kind": "instantaneous",
+        "value": 0,
+        "unit": "round",
+        "concentration": False,
+    }
+    assert "resistance" in spells
+    assert spells["resistance"]["definition"]["duration"] == {
+        "kind": "timed",
+        "value": 1,
+        "unit": "minute",
+        "concentration": True,
+    }
 
 
 def test_spell_merge_keeps_source_possessive_recovered_from_ocr() -> None:
@@ -2969,6 +3624,254 @@ def test_class_features_are_not_misclassified_as_feats() -> None:
         ("spell", "Spark"),
     ]
     assert candidates[0]["source_chunk_ids"] == ["class", "class-features", "rage"]
+
+
+def test_flat_phb_class_feature_siblings_recover_distinct_base_classes() -> None:
+    candidates = extract_content_candidates(
+        [
+            {
+                "id": "barbarian",
+                "heading_path": ["Chapter 3 - Classes", "CLASS FEATURES"],
+                "content": "As a barbarian, you gain the following class features.",
+            },
+            {
+                "id": "barbarian-proficiencies",
+                "heading_path": ["Chapter 3 - Classes", "PROFICIENCIES"],
+                "content": (
+                    "Hit Dice: ld12 per barbarian level Armor: Light armor "
+                    "Weapons: Simple weapons Tools: None Saving Throws: Strength, "
+                    "Constitution Skills: Choose two from Athletics, Nature, and "
+                    "Survival You start with equipment."
+                ),
+            },
+            {
+                "id": "cleric",
+                "heading_path": ["Chapter 3 - Classes", "CLASS FEATURES"],
+                "content": "As a clerie, you gain the following class features.",
+            },
+            {
+                "id": "cleric-proficiencies",
+                "heading_path": ["Chapter 3 - Classes", "PROFICIENCIES"],
+                "content": (
+                    "Hit Dice: 1d8 per cleric level Armor: Light armor Weapons: "
+                    "Simple weapons Tools: None Saving Throws: Wisdom, Charisma "
+                    "Skills: Choose two from History, Insight, and Religion You "
+                    "start with equipment."
+                ),
+            },
+        ],
+        source_title="D&D 5E - Player's Handbook",
+    )
+
+    classes = [item for item in candidates if item["kind"] == "class"]
+    assert [item["name"] for item in classes] == ["Barbarian", "Cleric"]
+    assert [
+        author_selection_card_from_candidate(item)["application_state"]
+        for item in classes
+    ] == ["selection_ready", "selection_ready"]
+    assert classes[0]["source_chunk_ids"] == [
+        "barbarian",
+        "barbarian-proficiencies",
+    ]
+
+
+def test_flat_plural_subclass_container_does_not_promote_features() -> None:
+    candidates = extract_content_candidates(
+        [
+            {
+                "id": "thief",
+                "heading_path": ["Chapter 3 - Classes", "ROGUISH ARCHETYPES", "THIEF"],
+                "content": "You hone your skills in the larcenous arts as this archetype.",
+            },
+            {
+                "id": "fast-hands",
+                "heading_path": [
+                    "Chapter 3 - Classes",
+                    "ROGUISH ARCHETYPES",
+                    "FAST HANDS",
+                ],
+                "content": "You can use a bonus action for the listed object interactions.",
+            },
+            {
+                "id": "archfey",
+                "heading_path": [
+                    "Chapter 3 - Classes",
+                    "OTHERWORLDLY PATRONS",
+                    "THEARCHFEY",
+                ],
+                "content": "Your patron is a lord or lady of the fey with inscrutable motives.",
+            },
+            {
+                "id": "war-domain",
+                "heading_path": [
+                    "Chapter 3 - Classes",
+                    "DIVINE DOMAINS",
+                    "WAR DOMAIN SPELLS",
+                ],
+                "content": "Cleric Level Spells 1st divine favor, shield of faith.",
+            },
+            {
+                "id": "light-domain",
+                "heading_path": [
+                    "Chapter 3 - Classes",
+                    "DIVINE DOMAINS",
+                    "LIGHT DOMAIN",
+                ],
+                "content": "Gods of light promote rebirth and renewal.",
+            },
+            {
+                "id": "light-domain-spells",
+                "heading_path": [
+                    "Chapter 3 - Classes",
+                    "DIVINE DOMAINS",
+                    "LICHT DOMAIN SPELLS",
+                ],
+                "content": "Cleric Level Spells 1st burning hands, faerie fire.",
+            },
+        ]
+    )
+
+    assert {
+        item["name"] for item in candidates if item["kind"] == "subclass"
+    } == {"THIEF", "The Archfey", "WAR DOMAIN", "LIGHT DOMAIN"}
+    light = next(item for item in candidates if item["name"] == "LIGHT DOMAIN")
+    assert light["source_chunk_ids"] == ["light-domain", "light-domain-spells"]
+    assert not any(item["name"] == "FAST HANDS" for item in candidates)
+
+
+def test_ordered_species_traits_recover_subraces_and_drifted_parent() -> None:
+    candidates = extract_content_candidates(
+        [
+            {
+                "id": "dwarf",
+                "heading_path": ["Chapter 2 - Races", "DWARF", "DWARF TRAITS"],
+                "content": (
+                    "Ability Score Increase. Your Constitution score increases by 2. "
+                    "Size. Your size is Medium. Speed. Your walking speed is 25 feet. "
+                    "Languages. You speak Common and Dwarvish."
+                ),
+            },
+            {
+                "id": "hill-dwarf",
+                "heading_path": [
+                    "Chapter 2 - Races",
+                    "DWARF",
+                    "DWARF TRAITS",
+                    "HILL DWARF",
+                ],
+                "content": (
+                    "As a hill dwarf, you have keen senses. Ability Score Increase. "
+                    "Your Wisdom score increases by 1."
+                ),
+            },
+            {
+                "id": "half-orc",
+                "heading_path": ["Chapter 2 - Races", "HALF-ELF", "HALF-ORC TRAITS"],
+                "content": "Your half-orc character has traits from orc ancestry.",
+            },
+            {
+                "id": "half-orc-continuation",
+                "heading_path": ["Chapter 2 - Races", "HALF-ELF", "ACCEPTANCE"],
+                "content": (
+                    "Ability Score Increase. Your Strength score increases by 2 and your "
+                    "Constitution score increases by 1. Size. Your size is Medium. "
+                    "Speed. Your walking speed is 30 feet. Languages. You speak Common "
+                    "and Orc."
+                ),
+            },
+        ]
+    )
+
+    species = [item for item in candidates if item["kind"] == "species"]
+    assert {item["name"] for item in species} == {
+        "DWARF",
+        "HILL DWARF",
+        "HALF-ORC",
+    }
+    dwarf = next(item for item in species if item["name"] == "DWARF")
+    assert dwarf["artifact"]["selection_applicability"] == "not_applicable"
+    assert next(item for item in species if item["name"] == "HILL DWARF")[
+        "artifact"
+    ]["card"]["base_species"] == "DWARF"
+    assert not any(item["name"] == "ACCEPTANCE" for item in species)
+
+
+def test_background_ocr_and_inline_variant_keep_base_grants() -> None:
+    candidates = extract_content_candidates(
+        [
+            {
+                "id": "criminal",
+                "heading_path": ["Backgrounds", "CRIMINAL"],
+                "content": (
+                    "Ski1l Proficiencies: Deception, Stealth Tool Proficiencies: "
+                    "One type of gaming set Equipment: dark clothes. Feature: "
+                    "Criminal Contact."
+                ),
+            },
+            {
+                "id": "spy",
+                "heading_path": ["Backgrounds", "SUGGESTED CHARACTERISTICS"],
+                "content": (
+                    "VARIANT CRIMINAL: Spy Although your capabilities are similar, "
+                    "you practiced them as an espionage agent."
+                ),
+            },
+        ]
+    )
+
+    variant = next(item for item in candidates if item["name"] == "Criminal (Spy)")
+    reviewed = author_selection_card_from_candidate(variant)
+    assert reviewed["application_state"] == "selection_ready"
+    assert reviewed["card"]["skill_proficiencies"] == ["deception", "stealth"]
+    assert set(
+        reviewed["card"]["background_grants"]["choices"]["tool_options"]
+    ) == {"Dice", "Dragonchess", "Playing Cards", "Three-Dragon Ante"}
+
+
+def test_split_feat_heading_and_continuation_form_one_card() -> None:
+    candidates = extract_content_candidates(
+        [
+            {
+                "id": "defensive",
+                "heading_path": ["Chapter 6", "FEATS", "DEFENSIVE"],
+                "content": "",
+            },
+            {
+                "id": "duelist",
+                "heading_path": ["Chapter 6", "FEATS", "DUELIST"],
+                "content": (
+                    "Prerequisite: Dexterity 13 or higher. When wielding a finesse "
+                    "weapon, you can use your reaction to add your proficiency bonus."
+                ),
+            },
+            {
+                "id": "durable",
+                "heading_path": ["Chapter 6", "FEATS", "DURABLE"],
+                "content": "Increase your Constitution score by 1, to a maximum of 20.",
+            },
+            {
+                "id": "page-header",
+                "heading_path": ["Chapter 6", "FEATS", "PART I OPTIONS"],
+                "content": "",
+            },
+            {
+                "id": "durable-continuation",
+                "heading_path": ["Chapter 6", "FEATS", "OPTIONS"],
+                "content": (
+                    "When you roll a Hit Die, the minimum regained equals twice your "
+                    "Constitution modifier."
+                ),
+            },
+        ]
+    )
+
+    feats = {item["name"]: item for item in candidates if item["kind"] == "feat"}
+    assert set(feats) == {"DEFENSIVE DUELIST", "DURABLE"}
+    assert feats["DEFENSIVE DUELIST"]["source_chunk_ids"] == [
+        "defensive",
+        "duelist",
+    ]
+    assert "minimum regained" in feats["DURABLE"]["artifact"]["card"]["description"]
 
 
 def test_character_sheet_placeholder_is_not_a_statblock_candidate() -> None:

@@ -16,11 +16,74 @@ from sagasmith_dnd.spell_resolution import (
 from sagasmith_dnd.standard_spell_ids import (
     CORE_BLADE_WARD_MECHANIC_ID,
     CORE_BLADE_WARD_SPELL_ID,
+    CORE_DESTRUCTIVE_WAVE_SPELL_ID,
     CORE_WITCH_BOLT_MECHANIC_ID,
     CORE_WITCH_BOLT_SPELL_ID,
     STANDARD_2014_CONTENT_PACK_ID,
     STANDARD_2014_CONTENT_PACK_VERSION,
 )
+
+
+def _species_spell_grant(
+    name: str,
+    *,
+    level: int,
+    classes: list[str],
+    ability: str,
+    minimum_level: int = 1,
+    free_casts: int = 0,
+    fixed_cast_level: int | None = None,
+) -> dict[str, Any]:
+    grant: dict[str, Any] = {
+        "name": name,
+        "level": level,
+        "eligible_classes": classes,
+        "method": "limited_use" if free_casts else "known",
+        "spellcasting_ability": ability,
+        "free_casts": free_casts,
+        "recovers_on": "long_rest" if free_casts else None,
+        "allow_slot_cast": False,
+        "minimum_level": minimum_level,
+        "ritual_only": False,
+    }
+    if fixed_cast_level is not None:
+        grant["casting_overrides"] = {"fixed_cast_level": fixed_cast_level}
+    return grant
+
+
+def _standard_species_artifact(
+    slug: str,
+    name: str,
+    *,
+    page: int,
+    grants: dict[str, Any],
+    base_species: str | None = None,
+    source_names: list[str] | None = None,
+) -> dict[str, Any]:
+    artifact = {
+        "id": f"{STANDARD_2014_CONTENT_PACK_ID}.species.{slug}",
+        "kind": "species",
+        "application_state": "selection_ready",
+        "card": {
+            "name": name,
+            "base_species": base_species or name,
+            "description": (
+                "Reviewed 2014 species mechanics; the user's source printing owns "
+                "the full descriptive text."
+            ),
+            "grants": grants,
+        },
+        "rule_refs": [f"book:players-handbook-2014:p{page}"],
+        "source_citations": [
+            {
+                "source": f"book:players-handbook-2014:p{page}",
+                "locator": name,
+            }
+        ],
+    }
+    if source_names:
+        artifact["_selection_source_names"] = source_names
+    return artifact
 
 
 def build_standard2014_content() -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -158,8 +221,288 @@ def _cached_standard2014_content() -> tuple[dict[str, Any], list[dict[str, Any]]
             }
         ],
     }
+    destructive_wave = {
+        "id": CORE_DESTRUCTIVE_WAVE_SPELL_ID,
+        "kind": "spell",
+        "card": {
+            "name": "Destructive Wave",
+            "level": 5,
+            "classes": ["paladin"],
+            "grant": {
+                "source_type": "catalog",
+                "source_key": "",
+                "method": "unselected",
+            },
+            "access": {
+                "known": False,
+                "prepared": False,
+                "ritual_available": False,
+            },
+            "definition": {
+                "school": "evocation",
+                "casting_time": "1 action",
+                "range": {
+                    "kind": "self",
+                    "area": "30-foot radius",
+                },
+                "duration": {
+                    "kind": "instantaneous",
+                    "concentration": False,
+                },
+                "components": {
+                    "verbal": True,
+                    "somatic": False,
+                    "material": False,
+                    "material_description": "",
+                },
+                "effect": (
+                    "The caster chooses creatures in a 30-foot radius. Each makes "
+                    "a Constitution save against thunder plus radiant or necrotic "
+                    "damage and being knocked prone; success halves damage and "
+                    "prevents prone."
+                ),
+            },
+            "mechanic_refs": [],
+        },
+        "rule_refs": ["book:players-handbook-2014:p231"],
+        "mechanic_refs": [],
+        "source_citations": [
+            {
+                "source": "book:players-handbook-2014:p231",
+                "locator": "Destructive Wave",
+            }
+        ],
+    }
+    line_ancestries = (
+        ("black", "Black", "acid"),
+        ("blue", "Blue", "lightning"),
+        ("brass", "Brass", "fire"),
+        ("bronze", "Bronze", "lightning"),
+        ("copper", "Copper", "acid"),
+    )
+    cone_ancestries = (
+        ("gold", "Gold", "fire", "dexterity"),
+        ("green", "Green", "poison", "constitution"),
+        ("red", "Red", "fire", "dexterity"),
+        ("silver", "Silver", "cold", "constitution"),
+        ("white", "White", "cold", "constitution"),
+    )
+    dragonborn = _standard_species_artifact(
+        "dragonborn",
+        "Dragonborn",
+        page=34,
+        grants={
+            "ability_score_increases": {"strength": 2, "charisma": 1},
+            "size": "medium",
+            "walk_speed": 30,
+            "languages": ["Common", "Draconic"],
+            "damage_affinity_choice": {
+                "id": "draconic_ancestry",
+                "options": [
+                    *[
+                        {
+                            "id": identifier,
+                            "name": name,
+                            "damage_type": damage_type,
+                            "save_ability": "dexterity",
+                            "area": {
+                                "shape": "line",
+                                "length_ft": 30,
+                                "width_ft": 5,
+                            },
+                        }
+                        for identifier, name, damage_type in line_ancestries
+                    ],
+                    *[
+                        {
+                            "id": identifier,
+                            "name": name,
+                            "damage_type": damage_type,
+                            "save_ability": save_ability,
+                            "area": {"shape": "cone", "length_ft": 15},
+                        }
+                        for identifier, name, damage_type, save_ability in cone_ancestries
+                    ],
+                ],
+                "resistance": True,
+                "activity": {
+                    "id": "breath-weapon",
+                    "name": "Breath Weapon",
+                    "uses": {"max": 1, "recovers_on": "short_rest"},
+                    "save_dc": {
+                        "base": 8,
+                        "ability": "constitution",
+                        "include_proficiency": True,
+                    },
+                    "damage_by_level": {
+                        "1": "2d6",
+                        "6": "3d6",
+                        "11": "4d6",
+                        "16": "5d6",
+                    },
+                },
+            },
+            "features": [],
+            "unresolved": [],
+        },
+    )
+    drow = _standard_species_artifact(
+        "drow",
+        "Drow",
+        page=24,
+        base_species="Elf",
+        source_names=["Dark Elf (Drow)", "Drow"],
+        grants={
+            "ability_score_increases": {"dexterity": 2, "charisma": 1},
+            "size": "medium",
+            "walk_speed": 30,
+            "darkvision_ft": 120,
+            "languages": ["Common", "Elvish"],
+            "skill_proficiencies": ["perception"],
+            "weapon_proficiencies": [
+                "longsword",
+                "shortsword",
+                "shortbow",
+                "longbow",
+                "rapier",
+                "hand crossbow",
+            ],
+            "spell_grants": [
+                _species_spell_grant(
+                    "Dancing Lights",
+                    level=0,
+                    classes=["Bard", "Sorcerer", "Wizard"],
+                    ability="charisma",
+                ),
+                _species_spell_grant(
+                    "Faerie Fire",
+                    level=1,
+                    classes=["Bard", "Druid"],
+                    ability="charisma",
+                    minimum_level=3,
+                    free_casts=1,
+                ),
+                _species_spell_grant(
+                    "Darkness",
+                    level=2,
+                    classes=["Sorcerer", "Warlock", "Wizard"],
+                    ability="charisma",
+                    minimum_level=5,
+                    free_casts=1,
+                ),
+            ],
+            "features": [
+                {
+                    "name": "Fey Ancestry",
+                    "description": "Advantage against being charmed; magic cannot cause sleep.",
+                },
+                {
+                    "name": "Trance",
+                    "description": "A four-hour trance supplies the species' long-rest sleep need.",
+                },
+                {
+                    "name": "Sunlight Sensitivity",
+                    "description": (
+                        "Direct sunlight imposes disadvantage on attacks and sight-based "
+                        "Wisdom (Perception) checks."
+                    ),
+                },
+            ],
+            "unresolved": [],
+        },
+    )
+    forest_gnome = _standard_species_artifact(
+        "forest-gnome",
+        "Forest Gnome",
+        page=37,
+        base_species="Gnome",
+        grants={
+            "ability_score_increases": {"intelligence": 2, "dexterity": 1},
+            "size": "small",
+            "walk_speed": 25,
+            "darkvision_ft": 60,
+            "languages": ["Common", "Gnomish"],
+            "spell_grants": [
+                _species_spell_grant(
+                    "Minor Illusion",
+                    level=0,
+                    classes=["Bard", "Sorcerer", "Warlock", "Wizard"],
+                    ability="intelligence",
+                )
+            ],
+            "features": [
+                {
+                    "name": "Gnome Cunning",
+                    "description": (
+                        "Advantage on Intelligence, Wisdom, and Charisma saves against magic."
+                    ),
+                },
+                {
+                    "name": "Speak with Small Beasts",
+                    "description": (
+                        "Communicate simple ideas through sounds and gestures with Small "
+                        "or smaller beasts."
+                    ),
+                },
+            ],
+            "unresolved": [],
+        },
+    )
+    tiefling = _standard_species_artifact(
+        "tiefling",
+        "Tiefling",
+        page=43,
+        grants={
+            "ability_score_increases": {"intelligence": 1, "charisma": 2},
+            "size": "medium",
+            "walk_speed": 30,
+            "darkvision_ft": 60,
+            "languages": ["Common", "Infernal"],
+            "resistances": ["fire"],
+            "spell_grants": [
+                _species_spell_grant(
+                    "Thaumaturgy",
+                    level=0,
+                    classes=["Cleric"],
+                    ability="charisma",
+                ),
+                _species_spell_grant(
+                    "Hellish Rebuke",
+                    level=1,
+                    classes=["Warlock"],
+                    ability="charisma",
+                    minimum_level=3,
+                    free_casts=1,
+                    fixed_cast_level=2,
+                ),
+                _species_spell_grant(
+                    "Darkness",
+                    level=2,
+                    classes=["Sorcerer", "Warlock", "Wizard"],
+                    ability="charisma",
+                    minimum_level=5,
+                    free_casts=1,
+                ),
+            ],
+            "features": [
+                {
+                    "name": "Hellish Resistance",
+                    "description": "Resistance to fire damage.",
+                }
+            ],
+            "unresolved": [],
+        },
+    )
     artifacts = finalize_bundled_artifact_resolutions(
-        [blade_ward, witch_bolt],
+        [
+            blade_ward,
+            destructive_wave,
+            dragonborn,
+            drow,
+            forest_gnome,
+            tiefling,
+            witch_bolt,
+        ],
         source_root=Path("."),
         source_prefix="book:",
     )
@@ -167,7 +510,7 @@ def _cached_standard2014_content() -> tuple[dict[str, Any], list[dict[str, Any]]
         {
             str(mechanic_ref)
             for artifact in artifacts
-            for mechanic_ref in artifact["mechanic_refs"]
+            for mechanic_ref in artifact.get("mechanic_refs", [])
         }
     )
     manifest = {
@@ -179,7 +522,7 @@ def _cached_standard2014_content() -> tuple[dict[str, Any], list[dict[str, Any]]
         "editions": ["2014"],
         "capabilities": [],
         "native_mechanic_refs": native_mechanic_refs,
-        "content_kinds": ["spell"],
+        "content_kinds": ["species", "spell"],
         "resolution_policy": "build_time_complete",
         "resolution_readiness": audit_release_resolution_readiness(artifacts),
     }

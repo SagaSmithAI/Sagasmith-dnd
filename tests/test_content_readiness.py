@@ -469,6 +469,21 @@ def test_species_materializer_accepts_narrative_choices_and_fixed_spells() -> No
     )
 
 
+def test_species_materializer_accepts_one_bounded_feat_choice() -> None:
+    card = {
+        "name": "Variant Human",
+        "grants": {
+            "feat_choice": {"count": 1, "allowed_categories": []},
+        },
+    }
+
+    assert species_materializer_errors(card) == []
+    card["grants"]["feat_choice"]["count"] = 2
+    assert species_materializer_errors(card) == [
+        "species feat_choice.count must be 1"
+    ]
+
+
 def test_species_materializer_validates_resources_and_fixed_spell_levels() -> None:
     card = {
         "name": "Eladrin",
@@ -807,8 +822,9 @@ def test_subclass_spell_grants_keep_known_and_prepared_semantics_distinct() -> N
         ),
         ("species", {"name": "Elf", "grants": {}}, [
             "abilities",
-            "ability_scores_include_species_grants",
+                "ability_scores_include_species_grants",
                 "cantrip_artifact_id",
+                "feat_selection",
                 "feature_choices",
                 "hit_points_include_species_grants",
                 "languages",

@@ -24,6 +24,7 @@ from sagasmith_dnd.standard_content import build_standard2014_content
 from sagasmith_dnd.standard_spell_ids import (
     CORE_BLADE_WARD_MECHANIC_ID,
     CORE_BLADE_WARD_SPELL_ID,
+    CORE_DESTRUCTIVE_WAVE_SPELL_ID,
     CORE_WITCH_BOLT_MECHANIC_ID,
     CORE_WITCH_BOLT_SPELL_ID,
     STANDARD_2014_CONTENT_PACK_ID,
@@ -81,17 +82,25 @@ def test_standard_2014_mechanics_pack_is_separate_from_srd_and_native() -> None:
     manifest, artifacts = build_standard2014_content()
 
     assert manifest["id"] == STANDARD_2014_CONTENT_PACK_ID
-    assert manifest["version"] == STANDARD_2014_CONTENT_PACK_VERSION == "1.1.0"
+    assert manifest["version"] == STANDARD_2014_CONTENT_PACK_VERSION == "1.4.0"
     assert {item["id"] for item in artifacts} == {
         CORE_BLADE_WARD_SPELL_ID,
+        CORE_DESTRUCTIVE_WAVE_SPELL_ID,
         CORE_WITCH_BOLT_SPELL_ID,
+        "dnd5e.content.standard2014.species.dragonborn",
+        "dnd5e.content.standard2014.species.drow",
+        "dnd5e.content.standard2014.species.forest-gnome",
+        "dnd5e.content.standard2014.species.tiefling",
     }
     assert all(
         str(item["rule_refs"][0]).startswith("book:players-handbook-2014:")
         for item in artifacts
     )
     assert spell_resolution_path(artifacts[0]["card"]) == "engine_mechanic"
-    assert spell_resolution_path(artifacts[1]["card"]) == "structured_resolution"
+    witch_bolt = next(
+        item for item in artifacts if item["id"] == CORE_WITCH_BOLT_SPELL_ID
+    )
+    assert spell_resolution_path(witch_bolt["card"]) == "structured_resolution"
     registered = {item.id for item in get_core_rule_pack("2014").boundaries}
     assert set(manifest["native_mechanic_refs"]) <= registered
     readiness = audit_release_resolution_readiness(artifacts)
@@ -100,12 +109,39 @@ def test_standard_2014_mechanics_pack_is_separate_from_srd_and_native() -> None:
     assert readiness == {
         "schema_version": 1,
         "complete": True,
-        "artifact_count": 2,
-        "resolved_count": 2,
-        "modes": {"kernel_mechanic": 2, "static_grant": 2},
+        "artifact_count": 7,
+        "resolved_count": 7,
+        "modes": {
+            "agent_ruling": 5,
+            "kernel_mechanic": 2,
+            "static_grant": 7,
+        },
         "unresolved": [],
         "first_use_compilation_required": False,
     }
+
+    species = {
+        item["card"]["name"]: item["card"]["grants"]
+        for item in artifacts
+        if item["kind"] == "species"
+    }
+    dragonborn = species["Dragonborn"]["damage_affinity_choice"]
+    assert len(dragonborn["options"]) == 10
+    assert dragonborn["activity"]["damage_by_level"] == {
+        "1": "2d6",
+        "6": "3d6",
+        "11": "4d6",
+        "16": "5d6",
+    }
+    assert [item["name"] for item in species["Drow"]["spell_grants"]] == [
+        "Dancing Lights",
+        "Faerie Fire",
+        "Darkness",
+    ]
+    assert species["Forest Gnome"]["spell_grants"][0]["name"] == "Minor Illusion"
+    hellish_rebuke = species["Tiefling"]["spell_grants"][1]
+    assert hellish_rebuke["minimum_level"] == 3
+    assert hellish_rebuke["casting_overrides"] == {"fixed_cast_level": 2}
 
 
 def test_blade_ward_resists_only_weapon_attack_bps_until_next_turn_end() -> None:
