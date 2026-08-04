@@ -898,6 +898,66 @@ def test_agent_slot_bounds_right_column_at_the_next_decorative_title() -> None:
     assert "Young Bite" not in recovered["normalized_content"]
 
 
+def test_agent_slot_does_not_treat_an_independent_right_card_as_continuation() -> None:
+    def block(text: str, x: int, y: int) -> dict:
+        return {
+            "text": text,
+            "confidence": 0.99,
+            "bbox": [x, y, x + 400, y + 14],
+        }
+
+    left = [
+        block("REEF SHARK", 40, 90),
+        block("Medium beast, unaligned", 40, 118),
+        block("Armor Class 12 (natural armor)", 40, 136),
+        block("Hit Points 22 (4d8 + 4)", 40, 154),
+        block("Speed 0 ft., swim 40 ft.", 40, 172),
+        block("STR DEX CON INT WIS CHA", 40, 200),
+        block("14 (+2) 13 (+1) 13 (+1) 1 (-5) 10 (+0) 4 (-3)", 40, 218),
+        block("Challenge 1/2 (100 XP)", 40, 250),
+        block("ACTIONS", 40, 280),
+        block(
+            "Bite. Melee Weapon Attack: +4 to hit. "
+            "Hit: 6 (1d8 + 2) piercing damage.",
+            40,
+            310,
+        ),
+    ]
+    right = [
+        block("RIdING HORSE", 700, 90),
+        block("Large beast, unaligned", 700, 118),
+        block("Armor Class 10", 700, 136),
+        block("Hit Points 13 (2d10 + 2)", 700, 154),
+        block("Speed 60 ft.", 700, 172),
+        block("STR DEX CON INT WIS CHA", 700, 200),
+        block("16 (+3) 10 (+0) 12 (+1) 2 (-4) 11 (+0) 7 (-2)", 700, 218),
+        block("Challenge 1/4 (50 XP)", 700, 250),
+        block("ACTIONS", 700, 280),
+        block(
+            "Hooves. Melee Weapon Attack: +2 to hit. "
+            "Hit: 8 (2d4 + 3) bludgeoning damage.",
+            700,
+            310,
+        ),
+    ]
+    layout = {
+        "page_number": 337,
+        "width": 1200,
+        "height": 1400,
+        "blocks": [*left, *right],
+    }
+
+    recovered = recover_2014_statblock_from_ocr(
+        layout,
+        name="Reef Shark",
+        statblock_slot=1,
+    )
+
+    assert "Bite" in recovered["normalized_content"]
+    assert "RIdING HORSE" not in recovered["normalized_content"]
+    assert "Hooves" not in recovered["normalized_content"]
+
+
 def test_layout_discovery_rejects_size_word_lore_and_repairs_identity_separator() -> None:
     def block(text: str, y: int) -> dict:
         return {

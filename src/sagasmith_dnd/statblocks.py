@@ -38,7 +38,7 @@ class StatblockImportError(ValueError):
     """Raised when required statblock facts cannot be recovered from the source text."""
 
 
-OCR_STATBLOCK_RECOVERY_VERSION = 19
+OCR_STATBLOCK_RECOVERY_VERSION = 20
 
 
 @dataclass(frozen=True)
@@ -6490,6 +6490,7 @@ def recover_2014_statblock_from_ocr(
             fuzzy_headings.append(candidate)
     heading_match_mode = ""
     selected_slot: dict[str, Any] | None = None
+    selected_page_slots: list[dict[str, Any]] = []
     selected_slot_boundary_identity_index: int | None = None
     selected_slot_boundary_y0: float | None = None
     if statblock_slot is not None:
@@ -6503,6 +6504,7 @@ def recover_2014_statblock_from_ocr(
             layout,
             minimum_confidence=minimum_confidence,
         )
+        selected_page_slots = slots
         if statblock_slot > len(slots):
             raise StatblockImportError(
                 f"statblock_slot {statblock_slot} is absent; page exposes {len(slots)} slots"
@@ -6650,6 +6652,14 @@ def recover_2014_statblock_from_ocr(
                 _ocr_probable_peer_heading(right_ordered, index)
                 for index in range(section_index)
             )
+            if selected_slot is not None:
+                section_y0 = float(right_ordered[section_index]["y0"])
+                peer_before_section = peer_before_section or any(
+                    item["column"] != selected_slot["column"]
+                    and float(item["identity_bbox"][1]) >= float(heading["y0"]) - 10.0
+                    and float(item["identity_bbox"][1]) <= section_y0
+                    for item in selected_page_slots
+                )
             if not peer_before_section:
                 continuation_start = section_index
                 earliest_after_heading = next(
