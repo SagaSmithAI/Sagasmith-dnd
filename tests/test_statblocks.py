@@ -576,6 +576,9 @@ def test_agent_can_name_a_structural_slot_when_the_decorative_title_is_missing()
         ("Śmall monstrosity, unaligned", "Small monstrosity, unaligned"),
         ("'Medium monstrosity, unaligned", "Medium monstrosity, unaligned"),
         ("Large'monstrosity, neutral", "Large monstrosity, neutral"),
+        ("Large construict, unaligned", "Large construct, unaligned"),
+        ("Large end (demon), hac ev", "Large fiend (demon), hac ev"),
+        ("Medium plaht, unaligned", "Medium plant, unaligned"),
     ],
 )
 def test_agent_slot_repairs_bounded_identity_glyph_noise(

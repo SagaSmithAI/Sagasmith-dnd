@@ -5407,10 +5407,23 @@ def apply_reviewed_statblock_fill(
     }
 
 
-_OCR_CREATURE_TYPE_PATTERN = (
-    r"(?:aberration|beast|celestial|construct|dragon|elemental|fey|fiend|"
-    r"giant|humanoid|monstrosity|ooze|plant|undead)"
+_OCR_CREATURE_TYPES = (
+    "aberration",
+    "beast",
+    "celestial",
+    "construct",
+    "dragon",
+    "elemental",
+    "fey",
+    "fiend",
+    "giant",
+    "humanoid",
+    "monstrosity",
+    "ooze",
+    "plant",
+    "undead",
 )
+_OCR_CREATURE_TYPE_PATTERN = "(?:" + "|".join(_OCR_CREATURE_TYPES) + ")"
 _OCR_IDENTITY_RE = re.compile(
     rf"(?i)^(Tiny|Small|Medium|Large|Huge|Gargantuan)[.\s]*"
     rf"("
@@ -5433,6 +5446,29 @@ def _normalize_ocr_identity_text(text: str) -> str:
         r"\1 ",
         normalized,
     )
+    direct_match = _OCR_IDENTITY_RE.fullmatch(normalized)
+    if direct_match is None:
+        identity_prefix = re.match(
+            r"(?i)^(Tiny|Small|Medium|Large|Huge|Gargantuan)[.\s]*"
+            r"([A-Za-z]{3,14})(.*)$",
+            normalized,
+        )
+        if identity_prefix is not None:
+            observed_type = identity_prefix.group(2).lower()
+            ranked_types = sorted(
+                (
+                    SequenceMatcher(None, observed_type, creature_type).ratio(),
+                    creature_type,
+                )
+                for creature_type in _OCR_CREATURE_TYPES
+            )
+            best_score, best_type = ranked_types[-1]
+            runner_up_score = ranked_types[-2][0]
+            if best_score >= 0.72 and best_score - runner_up_score >= 0.12:
+                normalized = (
+                    f"{identity_prefix.group(1)} {best_type}"
+                    f"{identity_prefix.group(3)}"
+                )
     return " ".join(normalized.split())
 
 
