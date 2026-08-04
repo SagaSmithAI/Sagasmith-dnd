@@ -653,7 +653,7 @@ def species_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
             errors.append("species ability_score_increases contains an unknown ability")
         if isinstance(amount, bool) or not isinstance(amount, int) or amount < 0:
             errors.append("species ability_score_increases must use nonnegative integers")
-    for field in ("walk_speed", "swim_speed", "darkvision_ft"):
+    for field in ("walk_speed", "fly_speed", "swim_speed", "darkvision_ft"):
         value = grants.get(field, 0)
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             errors.append(f"species {field} must be a nonnegative integer")

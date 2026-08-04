@@ -321,6 +321,7 @@ def test_species_materializer_rejects_ocr_counts_and_unbounded_choices() -> None
 
     card["grants"].update(
         {
+            "fly_speed": 30,
             "language_choice_count": 1,
             "language_options": ["Elvish", "Vedalken"],
             "skill_options": ["Arcana", "Medicine"],
@@ -328,6 +329,11 @@ def test_species_materializer_rejects_ocr_counts_and_unbounded_choices() -> None
         }
     )
     assert species_materializer_errors(card) == []
+    card["grants"]["fly_speed"] = "30"
+    assert species_materializer_errors(card) == [
+        "species fly_speed must be a nonnegative integer"
+    ]
+    card["grants"]["fly_speed"] = 30
     card["grants"]["armor_proficiencies"] = ["Light Armor", "light armor"]
     assert species_materializer_errors(card) == [
         "species armor_proficiencies must be distinct"
