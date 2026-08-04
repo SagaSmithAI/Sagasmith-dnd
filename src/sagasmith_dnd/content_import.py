@@ -229,6 +229,8 @@ def _normalize_candidate_display_name(value: str) -> str:
 
     normalized = " ".join(str(value).strip().strip(" .:;").split())
     normalized = re.sub(r"(?i)(?<=[A-Za-z])1s\b", "'s", normalized)
+    if normalized.isupper():
+        normalized = re.sub(r"\b([A-Z]{3,})\s+S\s+(?=[A-Z])", r"\1'S ", normalized)
     normalized = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", normalized)
     return re.sub(r"([’'][sS])(?=[A-Z])", r"\1 ", normalized)
 
@@ -251,6 +253,13 @@ def _normalize_spell_ocr_text(value: str) -> str:
         normalized,
     )
     normalized = re.sub(r"(?i)\bStli\s*-\s*level\b", "5th-level", normalized)
+    normalized = re.sub(
+        r"(?i)^[A-Z0-9]\s+(?=(?:[1-9](?:st|nd|rd|th)-level|"
+        r"(?:" + "|".join(_SPELL_SCHOOLS) + r")\s+cantrip)\b)",
+        "",
+        normalized,
+    )
+    normalized = re.sub(r"(?i)\b(\d+)\s+minut\b", r"\1 minutes", normalized)
     for label in ("Casting Time", "Range", "Components", "Duration"):
         normalized = re.sub(
             rf"(?i)\b{re.escape(label)}\s*:\s*",

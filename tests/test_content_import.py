@@ -1057,6 +1057,72 @@ def test_spell_merge_keeps_source_possessive_recovered_from_ocr() -> None:
     assert spells[0]["name"] == "Melf's Minute Meteors"
 
 
+def test_inventory_repairs_leading_glyph_and_truncated_spell_duration_ocr() -> None:
+    inventory = extract_content_inventory(
+        [
+            {
+                "id": "wizard-list",
+                "heading_path": ["Spells", "Spell Lists", "Wizard Spells"],
+                "content": (
+                    "3rd Level Melfs Minute Meteors (evocation) "
+                    "6th Level Create Homunculus (transmutation) "
+                    "Investiture of Wind (transmutation)"
+                ),
+            },
+            {
+                "id": "homunculus",
+                "heading_path": ["Spells", "Spell Descriptions", "REATE HOMUNCULUS"],
+                "content": (
+                    "C 6th-level trans mutation Casting Time: 1 hour Range: Touch "
+                    "Components: V, S, M Duration: Instantaneous A homunculus forms."
+                ),
+            },
+            {
+                "id": "wind",
+                "heading_path": [
+                    "Spells",
+                    "Spell Descriptions",
+                    "I NVESTIT URE OF WIND",
+                ],
+                "content": (
+                    "6th-level transmutation Casting Time: 1 action Range: Self "
+                    "Components: V, S Duration: Concentration, up to 10 minut "
+                    "Wind whirls around you."
+                ),
+            },
+            {
+                "id": "meteors",
+                "heading_path": [
+                    "Spells",
+                    "Spell Descriptions",
+                    "MELF S MINUTE METEORS",
+                ],
+                "content": (
+                    "1 3rd-level evocation Casting Time: 1 action Range: Self "
+                    "Components: V, S Duration: Concentration, up to 10 minutes "
+                    "Six meteors orbit the caster."
+                ),
+            },
+        ]
+    )
+    spells = {
+        item["name"]: item["artifact"]["card"]
+        for item in inventory["candidates"]
+        if item["kind"] == "spell"
+    }
+
+    assert len(spells) == 3
+    assert all("definition" in card for card in spells.values())
+    assert all(card["classes"] == ["wizard"] for card in spells.values())
+    wind = next(card for name, card in spells.items() if "WIND" in name.upper())
+    assert wind["definition"]["duration"] == {
+        "kind": "timed",
+        "value": 10,
+        "unit": "minute",
+        "concentration": True,
+    }
+
+
 def test_inventory_finds_ordered_rulebook_statblock_and_flags_unclaimed_mechanics() -> None:
     chunks = [
         {

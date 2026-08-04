@@ -1120,6 +1120,8 @@ def feat_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
             "feature_forbidden",
             "feature_required",
             "level_minimum",
+            "size_required",
+            "species_or_size",
             "species_required",
         }
         for index, prerequisite in enumerate(prerequisites):
@@ -1130,6 +1132,26 @@ def feat_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
             kind = str(prerequisite.get("kind") or "")
             if kind not in supported_prerequisites:
                 errors.append(f"{prefix}.kind is unsupported")
+            if kind in {"size_required", "species_or_size"}:
+                sizes = prerequisite.get("sizes")
+                if (
+                    not isinstance(sizes, list)
+                    or not sizes
+                    or any(
+                        str(item).casefold()
+                        not in {"tiny", "small", "medium", "large", "huge", "gargantuan"}
+                        for item in sizes
+                    )
+                ):
+                    errors.append(f"{prefix}.sizes must contain supported sizes")
+            if kind == "species_or_size":
+                species = prerequisite.get("species")
+                if (
+                    not isinstance(species, list)
+                    or not species
+                    or any(not str(item).strip() for item in species)
+                ):
+                    errors.append(f"{prefix}.species must contain source species names")
 
     grants = binding.get("mechanical_grants")
     if grants is None:
@@ -1222,6 +1244,42 @@ def feat_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
                 group_ids.append(str(raw_group.get("id") or "").casefold())
         if len(group_ids) != len(set(group_ids)):
             errors.append("feat spell selection group ids must be distinct")
+    elif isinstance(requirements, Mapping) and requirements.get("kind") == (
+        "proficiency_groups"
+    ):
+        if set(requirements) - {"field", "kind", "groups"}:
+            errors.append("feat proficiency groups contain unsupported fields")
+        if not str(requirements.get("field") or "").strip():
+            errors.append("feat proficiency groups need a field")
+        groups = requirements.get("groups")
+        if not isinstance(groups, list) or not groups:
+            errors.append("feat proficiency groups need non-empty groups")
+            groups = []
+        group_ids: list[str] = []
+        for index, raw_group in enumerate(groups):
+            prefix = f"feat proficiency groups[{index}]"
+            if not isinstance(raw_group, Mapping):
+                errors.append(f"{prefix} must be an object")
+                continue
+            group_ids.append(str(raw_group.get("id") or "").casefold())
+            if str(raw_group.get("kind") or "") not in {
+                "language",
+                "skill",
+                "skill_expertise",
+                "tool",
+                "weapon",
+            }:
+                errors.append(f"{prefix}.kind is unsupported")
+            count = raw_group.get("count")
+            if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+                errors.append(f"{prefix}.count must be positive")
+            options = raw_group.get("options")
+            if not isinstance(options, list) or (
+                not options and raw_group.get("allow_unlisted") is not True
+            ):
+                errors.append(f"{prefix}.options need reviewed values")
+        if not all(group_ids) or len(group_ids) != len(set(group_ids)):
+            errors.append("feat proficiency group ids must be distinct and non-empty")
     return errors
 
 

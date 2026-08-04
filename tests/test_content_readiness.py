@@ -649,6 +649,56 @@ def test_feat_materializer_accepts_reviewed_fixed_spell_grants() -> None:
     assert feat_materializer_errors(card) == []
 
 
+def test_feat_materializer_accepts_size_or_species_and_proficiency_groups() -> None:
+    card = {
+        "name": "Reviewed Heritage Training",
+        "prerequisites": [
+            {
+                "kind": "species_or_size",
+                "species": ["Dwarf"],
+                "sizes": ["Small"],
+            }
+        ],
+        "repeatable": False,
+        "mechanical_grants": {
+            "ability_score_increases": {},
+            "maximum_ability_score": 20,
+            "languages": [],
+            "tool_proficiencies": [],
+            "weapon_proficiencies": [],
+            "spell_grants": [],
+        },
+        "selection_requirements": {
+            "field": "training_choices",
+            "kind": "proficiency_groups",
+            "groups": [
+                {
+                    "id": "skill",
+                    "kind": "skill",
+                    "count": 1,
+                    "options": ["Athletics", "History"],
+                },
+                {
+                    "id": "expertise",
+                    "kind": "skill_expertise",
+                    "count": 1,
+                    "options": [],
+                    "allow_unlisted": True,
+                },
+            ],
+        },
+    }
+
+    assert feat_materializer_errors(card) == []
+
+    invalid = copy.deepcopy(card)
+    invalid["prerequisites"][0]["sizes"] = ["Colossal"]
+    invalid["selection_requirements"]["groups"][1]["id"] = "skill"
+    errors = feat_materializer_errors(invalid)
+    assert any("supported sizes" in error for error in errors)
+    assert any("ids must be distinct" in error for error in errors)
+
+
 def test_subclass_spell_grants_keep_known_and_prepared_semantics_distinct() -> None:
     card = {
         "name": "Circle of Spores",
