@@ -152,6 +152,42 @@ def test_spell_list_heading_supplies_embedded_spell_class_eligibility() -> None:
     assert spell["artifact"]["card"]["classes"] == ["artificer"]
 
 
+def test_shared_cantrip_declaration_supplies_nested_spell_classes() -> None:
+    candidates = extract_content_candidates(
+        [
+            {
+                "id": "intro",
+                "heading_path": [
+                    "New Cantrips",
+                    "These cantrips are on the sorcerer, warlock, and wiz\ufffe",
+                ],
+                "content": "ard spell lists.",
+            },
+            {
+                "id": "spell",
+                "heading_path": [
+                    "New Cantrips",
+                    "These cantrips are on the sorcerer, warlock, and wiz\ufffe",
+                    "Booming Blade",
+                ],
+                "content": (
+                    "Evocation cantrip Casting Time: 1 action Range: 5 feet "
+                    "Components: V, M (a weapon) Duration: 1 round. On a hit, "
+                    "the target is sheathed in booming energy."
+                ),
+            },
+        ]
+    )
+
+    spell = next(item for item in candidates if item["kind"] == "spell")
+    assert spell["artifact"]["card"]["classes"] == [
+        "sorcerer",
+        "warlock",
+        "wizard",
+    ]
+    assert spell["source_chunk_ids"] == ["spell", "intro"]
+
+
 def test_nested_subclass_headers_do_not_promote_the_generic_parent() -> None:
     candidates = extract_content_candidates(
         [

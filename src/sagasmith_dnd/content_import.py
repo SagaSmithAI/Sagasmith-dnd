@@ -907,24 +907,74 @@ def _spell_class_mentions(chunks: list[dict[str, Any]], spell_name: str) -> dict
     )
     for chunk in chunks:
         content = " ".join(str(chunk.get("content") or "").split())
+        heading_text = " ".join(str(item) for item in chunk.get("heading_path") or [])
         match = name_pattern.search(content)
-        if match is None:
+        heading_match = name_pattern.search(heading_text)
+        if match is None and heading_match is None:
             continue
         prior_classes = set(classes)
-        heading_text = " ".join(str(item) for item in chunk.get("heading_path") or [])
         for class_name in _SPELL_CLASSES:
             if re.search(
                 rf"(?i)\b{re.escape(class_name)}\s+Spell(?:s|\s+List)\b",
                 heading_text + " " + content[:500],
             ):
                 classes.add(class_name.casefold())
-        sentence = content[max(0, match.start() - 250) : match.end() + 350]
+        sentence = (
+            content[max(0, match.start() - 250) : match.end() + 350]
+            if match is not None
+            else heading_text + " " + content[:500]
+        )
         if re.search(r"(?i)\bspell\s+lists?\b", sentence):
             for class_name in _SPELL_CLASSES:
                 if re.search(rf"(?i)\b{re.escape(class_name)}\b", sentence):
                     classes.add(class_name.casefold())
         if classes != prior_classes and (chunk_id := str(chunk.get("id") or "").strip()):
             source_chunk_ids.add(chunk_id)
+
+        # Some books introduce a group of spells once (for example, "These
+        # cantrips are on the sorcerer, warlock, and wizard spell lists") and
+        # then nest each spell beneath that declaration.  PDF layout can also
+        # split a word across the declaration heading and its body.  Recover
+        # that bounded ancestor context instead of requiring every spell name
+        # to be repeated in the introductory sentence.
+        heading_parts = {
+            " ".join(str(item).split()).casefold()
+            for item in chunk.get("heading_path") or []
+            if str(item).strip()
+        }
+        for context_chunk in chunks:
+            context_headings = [
+                " ".join(str(item).split())
+                for item in context_chunk.get("heading_path") or []
+                if str(item).strip()
+            ]
+            shared_declaration = any(
+                heading.casefold() in heading_parts
+                and re.search(r"(?i)\b(?:cantrips?|spells?)\b", heading)
+                for heading in context_headings
+            )
+            if not shared_declaration:
+                continue
+            declaration = " ".join(
+                [
+                    *context_headings,
+                    " ".join(str(context_chunk.get("content") or "").split()),
+                ]
+            )
+            declaration = re.sub(r"\ufffe\s*", "", declaration)
+            if not re.search(
+                r"(?i)\b(?:cantrips?|spells?)\b.{0,300}\bspell\s+lists?\b",
+                declaration,
+            ):
+                continue
+            prior_classes = set(classes)
+            for class_name in _SPELL_CLASSES:
+                if re.search(rf"(?i)\b{re.escape(class_name)}\b", declaration):
+                    classes.add(class_name.casefold())
+            if classes != prior_classes and (
+                context_id := str(context_chunk.get("id") or "").strip()
+            ):
+                source_chunk_ids.add(context_id)
     return {"classes": classes, "source_chunk_ids": source_chunk_ids}
 
 
