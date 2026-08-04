@@ -889,6 +889,143 @@ def test_inventory_reattaches_spell_section_heading_to_leading_definition() -> N
     assert card["definition"]["range"]["normal_ft"] == 60
 
 
+def test_inventory_tracks_fused_spell_list_columns_across_ocr_level_resets() -> None:
+    list_chunks = [
+        {
+            "id": "bard-start",
+            "heading_path": [
+                "Spells",
+                "Spell Lists",
+                "BARD SPELLS CLERIC SPELLS DRUID SPELLS",
+            ],
+            "content": "(ANTRIPS (o LEVEL} Thunderclap (evocation)",
+        },
+        {
+            "id": "bard-end-cleric-start",
+            "heading_path": ["Spells", "Spell Lists", "9TH LEVEL"],
+            "content": (
+                "Mass polymorph (transmutation) CANTRIPS (o LEVEL} "
+                "Toll the dead (necromancy) Word of radiance (evocation)"
+            ),
+        },
+        {
+            "id": "cleric-end-druid-start",
+            "heading_path": ["Spells", "Spell Lists", "]TH LEVEL"],
+            "content": (
+                "Temple of the gods (conjurat ion) (ANTRIPS (o LEVEL} "
+                "Magic stone (transmutation) Thunderclap (evocation)"
+            ),
+        },
+        {
+            "id": "paladin-start",
+            "heading_path": ["Spells", "Spell Lists", "PALADI N SPELLS"],
+            "content": "lST LEVEL Ceremony (abjuration, ritual)",
+        },
+        {
+            "id": "paladin-five",
+            "heading_path": ["Spells", "Spell Lists", "STH LEVEL"],
+            "content": "Holy weapon (evocation)",
+        },
+    ]
+    descriptions = [
+        {
+            "id": f"description-{name.casefold().replace(' ', '-')}",
+            "heading_path": ["Spells", "Spell Descriptions", name],
+            "content": (
+                f"{level} Casting Time: 1 action Range: 60 feet Components: V "
+                "Duration: Instantaneous The spell takes effect."
+            ),
+        }
+        for name, level in (
+            ("Thunderclap", "Evocation cantrip"),
+            ("Toll the Dead", "Necromancy cantrip"),
+            ("Temple of the Gods", "7th-level conjuration"),
+            ("Ceremony", "1st-level abjuration"),
+            ("Holy Weapon", "5th-level evocation"),
+        )
+    ]
+
+    inventory = extract_content_inventory([*list_chunks, *descriptions])
+    spells = {
+        item["name"]: item["artifact"]["card"]
+        for item in inventory["candidates"]
+        if item["kind"] == "spell"
+    }
+
+    assert spells["Thunderclap"]["classes"] == ["bard", "druid"]
+    assert spells["Toll the dead"]["classes"] == ["cleric"]
+    assert spells["Temple of the gods"]["classes"] == ["cleric"]
+    assert spells["Ceremony"]["classes"] == ["paladin"]
+    assert spells["Holy weapon"]["classes"] == ["paladin"]
+
+
+def test_inventory_repairs_spell_header_ocr_and_bounded_field_continuation() -> None:
+    inventory = extract_content_inventory(
+        [
+            {
+                "id": "sorcerer-list",
+                "heading_path": ["Spells", "Spell Lists", "Sorcerer Spells"],
+                "content": (
+                    "1st Level Chaos Bolt (evocation) 3rd Level "
+                    "Flame Arrows (transmutation) Tidal Wave (conjuration)"
+                ),
+            },
+            {
+                "id": "chaos-bolt",
+                "heading_path": ["Spells", "Spell Descriptions", "CHAOS BOLT"],
+                "content": (
+                    "I st-level evocation Casting Time: 1 action Range: 120 feet "
+                    "Components: V, S Duration: Instanta neous Chaotic energy leaps."
+                ),
+            },
+            {
+                "id": "flame-arrows",
+                "heading_path": ["Spells", "Spell Descriptions", "FLAME ARROWS"],
+                "content": (
+                    "3rd-level transmutation Casting Time: 1 action Range: Touch "
+                    "Components: V, S"
+                ),
+            },
+            {
+                "id": "misattached-continuation",
+                "heading_path": [
+                    "Spells",
+                    "Spell Descriptions",
+                    "F1NO GREATER STEED",
+                ],
+                "content": (
+                    "Duration: Concentra tion , up to 1 hour "
+                    "The ammunition burns on a hit."
+                ),
+            },
+            {
+                "id": "tidal-wave",
+                "heading_path": ["Spells", "Spell Descriptions", "1)DAL WAVE"],
+                "content": (
+                    "3rd-level conjurat ion Casting Time: 1 action Range: 120 feet "
+                    "Components: V, S, M Duration: Instantaneous Water surges."
+                ),
+            },
+        ]
+    )
+    spells = {
+        item["name"]: item["artifact"]["card"]
+        for item in inventory["candidates"]
+        if item["kind"] == "spell"
+    }
+
+    assert set(spells) == {"Chaos Bolt", "Flame Arrows", "Tidal Wave"}
+    assert spells["Chaos Bolt"]["level"] == 1
+    assert spells["Chaos Bolt"]["classes"] == ["sorcerer"]
+    assert spells["Flame Arrows"]["definition"]["duration"] == {
+        "kind": "timed",
+        "value": 1,
+        "unit": "hour",
+        "concentration": True,
+    }
+    assert spells["Tidal Wave"]["definition"]["school"] == "conjuration"
+
+
 def test_inventory_finds_ordered_rulebook_statblock_and_flags_unclaimed_mechanics() -> None:
     chunks = [
         {

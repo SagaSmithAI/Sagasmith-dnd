@@ -228,8 +228,38 @@ def _normalize_candidate_display_name(value: str) -> str:
     """Repair bounded OCR spacing mistakes without rewriting source semantics."""
 
     normalized = " ".join(str(value).strip().strip(" .:;").split())
+    normalized = re.sub(r"(?i)(?<=[A-Za-z])1s\b", "'s", normalized)
     normalized = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", normalized)
     return re.sub(r"([’'][sS])(?=[A-Z])", r"\1 ", normalized)
+
+
+def _normalize_spell_ocr_text(value: str) -> str:
+    """Repair OCR damage in the bounded, schema-bearing part of spell text."""
+
+    normalized = " ".join(str(value).replace("\x02", " ").split())
+    for token in (*_SPELL_SCHOOLS, "instantaneous", "concentration", "self"):
+        pattern = r"\s*".join(re.escape(character) for character in token)
+        normalized = re.sub(rf"(?i)\b{pattern}\b", token, normalized)
+    normalized = re.sub(
+        r"(?i)\b([1-9])\s*(st|nd|rd|th)\s*-?\s*le\s*vel\b",
+        lambda match: f"{match.group(1)}{match.group(2).lower()}-level",
+        normalized,
+    )
+    normalized = re.sub(
+        r"(?i)\b[lI1]\s*st\s*-\s*/?(?:le\s*vel|eve)/?",
+        "1st-level",
+        normalized,
+    )
+    normalized = re.sub(r"(?i)\bStli\s*-\s*level\b", "5th-level", normalized)
+    for label in ("Casting Time", "Range", "Components", "Duration"):
+        normalized = re.sub(
+            rf"(?i)\b{re.escape(label)}\s*:\s*",
+            f"{label}: ",
+            normalized,
+        )
+    normalized = re.sub(r"(?i)\bcan\s+trip\b", "cantrip", normalized)
+    normalized = re.sub(r"\s+,", ",", normalized)
+    return normalized
 
 
 def extract_content_candidates(
@@ -238,6 +268,7 @@ def extract_content_candidates(
     source_title: str = "",
 ) -> list[dict[str, Any]]:
     """Extract review-required cards; never claim unsupported mechanics are executable."""
+    spell_class_index = _spell_class_index(chunks)
     sections: dict[tuple[str, ...], dict[str, Any]] = {}
     for chunk in chunks:
         content = str(chunk.get("content") or "").strip()
@@ -335,6 +366,12 @@ def extract_content_candidates(
         if kind == "subclass" and str(candidate_name).casefold().endswith(" features"):
             candidate_name = str(candidate_name)[: -len(" Features")]
         candidate_name = _normalize_candidate_display_name(str(candidate_name))
+        if kind == "spell":
+            indexed_spell = _spell_class_record(spell_class_index, candidate_name)
+            if indexed_spell.get("name"):
+                indexed_name = str(indexed_spell["name"])
+                if "'" not in candidate_name or "'" in indexed_name:
+                    candidate_name = indexed_name
         if kind == "class" and source_class_name:
             source_chunk_ids = [
                 chunk_id
@@ -381,6 +418,8 @@ def extract_content_candidates(
                 heading_path,
                 content,
                 chunks,
+                source_chunk_ids=source_chunk_ids,
+                class_index=spell_class_index,
             )
             if structured_spell is not None:
                 artifact_card.update(structured_spell)
@@ -412,7 +451,11 @@ def extract_content_candidates(
             }
         )
     candidates.extend(
-        _embedded_spell_candidates(chunks, source_title=source_title)
+        _embedded_spell_candidates(
+            chunks,
+            source_title=source_title,
+            class_index=spell_class_index,
+        )
     )
     candidates.extend(_embedded_species_candidates(chunks))
     candidates.extend(_rulebook_statblock_candidates(chunks))
@@ -573,32 +616,107 @@ def _mechanical_source_fragment_candidates(
     return candidates
 
 
+def _spell_text_with_field_continuations(
+    content: str,
+    *,
+    source_chunk_ids: list[str],
+    chunks: list[dict[str, Any]],
+) -> str:
+    """Join only an adjacent continuation that starts with the missing field."""
+
+    by_id = {
+        str(chunk.get("id") or ""): index
+        for index, chunk in enumerate(chunks)
+        if str(chunk.get("id") or "")
+    }
+    positions = [by_id[item] for item in source_chunk_ids if item in by_id]
+    if not positions:
+        return content
+    position = max(positions)
+    result = content
+    current_path = [
+        _canonical_source_heading(item)
+        for item in chunks[position].get("heading_path") or []
+    ]
+    labels = ("Casting Time", "Range", "Components", "Duration")
+    for next_position in range(position + 1, min(len(chunks), position + 4)):
+        normalized = _normalize_spell_ocr_text(result)
+        missing = next(
+            (
+                label
+                for label in labels
+                if not re.search(rf"(?i)\b{re.escape(label)}\s*:", normalized)
+            ),
+            None,
+        )
+        if missing is None:
+            break
+        next_chunk = chunks[next_position]
+        next_path = [
+            _canonical_source_heading(item)
+            for item in next_chunk.get("heading_path") or []
+        ]
+        if current_path[:-1] != next_path[:-1]:
+            break
+        continuation = _normalize_spell_ocr_text(next_chunk.get("content") or "")
+        if not re.match(rf"(?i)^{re.escape(missing)}\s*:", continuation):
+            break
+        result = f"{result} {next_chunk.get('content') or ''}".strip()
+        position = next_position
+        current_path = next_path
+    return result
+
+
 def _spell_card_from_section(
     name: str,
     heading_path: list[str],
     content: str,
     chunks: list[dict[str, Any]],
+    *,
+    source_chunk_ids: list[str] | None = None,
+    class_index: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
+    indexed = _spell_class_record(class_index or _spell_class_index(chunks), name)
+    content = _spell_text_with_field_continuations(
+        content,
+        source_chunk_ids=list(source_chunk_ids or []),
+        chunks=chunks,
+    )
+    normalized_content = _normalize_spell_ocr_text(content)
     level_heading = next(
         (
-            str(heading).strip()
+            _normalize_spell_ocr_text(str(heading).strip())
             for heading in reversed(heading_path)
-            if _SPELL_LEVEL_RE.match(str(heading).strip())
+            if _SPELL_LEVEL_RE.match(
+                _normalize_spell_ocr_text(str(heading).strip())
+            )
         ),
         "",
     )
+    content_header = _SPELL_LEVEL_RE.match(normalized_content)
+    if not level_heading and content_header is not None:
+        level_heading = content_header.group(0)
     if not level_heading:
         return None
     level_folded = level_heading.casefold()
     school = next((item for item in _SPELL_SCHOOLS if item in level_folded), "")
     level_match = re.match(r"(?i)(\d)(?:st|nd|rd|th)", level_heading)
     level = int(level_match.group(1)) if level_match else 0
+    field_content = (
+        normalized_content[content_header.end() :].strip()
+        if content_header is not None
+        else normalized_content
+    )
+    field_content = re.sub(r"(?i)^\s*\(ritual\)\s*", "", field_content)
     fields = _SPELL_FIELDS_RE.match(
-        re.sub(r"(?i)^\s*Casting\s+Time\s*:\s*", "", content).strip()
+        re.sub(
+            r"(?i)^\s*Casting\s+Time\s*:\s*",
+            "",
+            field_content,
+        ).strip()
     )
     if not school or fields is None:
         return None
-    indexed = _spell_class_index(chunks).get(name.casefold(), {})
     mentioned = _spell_class_mentions(chunks, name)
     classes = sorted(set(indexed.get("classes", [])) | set(mentioned["classes"]))
     return {
@@ -619,11 +737,12 @@ def _embedded_spell_candidates(
     chunks: list[dict[str, Any]],
     *,
     source_title: str,
+    class_index: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    class_index = _spell_class_index(chunks)
+    class_index = class_index or _spell_class_index(chunks)
     candidates = []
     for chunk in chunks:
-        content = " ".join(str(chunk.get("content") or "").split())
+        content = _normalize_spell_ocr_text(chunk.get("content") or "")
         chunk_id = str(chunk.get("id") or "").strip()
         if not content or not chunk_id:
             continue
@@ -661,6 +780,13 @@ def _embedded_spell_candidates(
             name = " ".join(match.group("name").split()).strip(" .")
             name = re.sub(r"(?i)^spells?\s+", "", name).strip()
             name = _normalize_candidate_display_name(name)
+            if (
+                heading_name
+                and _canonical_source_heading(heading_name).endswith(
+                    _canonical_source_heading(name)
+                )
+            ):
+                name = _normalize_candidate_display_name(heading_name)
             level_text = match.group("level").casefold()
             school = next(
                 school for school in _SPELL_SCHOOLS if school in level_text
@@ -671,7 +797,9 @@ def _embedded_spell_candidates(
             )
             if fields is None:
                 continue
-            indexed = class_index.get(name.casefold(), {})
+            indexed = _spell_class_record(class_index, name)
+            if indexed.get("name"):
+                name = str(indexed["name"])
             mentioned = _spell_class_mentions(chunks, name)
             classes = sorted(
                 set(indexed.get("classes", [])) | set(mentioned.get("classes", []))
@@ -869,30 +997,214 @@ def _embedded_species_candidates(
 
 
 def _spell_class_index(chunks: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Index spell-list membership across ordinary and fused multi-column layouts."""
+
     result: dict[str, dict[str, Any]] = {}
+
+    def clean_entry_name(name: str) -> str:
+        display_name = _normalize_candidate_display_name(name)
+        level = re.search(r"(?i)\blevel\b", display_name)
+        if level is not None and level.start() <= 80:
+            display_name = display_name[level.end() :].strip()
+        cantrip = re.search(r"(?i)\bcantrips?\b[^A-Za-z]{0,20}", display_name)
+        if cantrip is not None and cantrip.start() <= 80:
+            display_name = display_name[cantrip.end() :].strip()
+        return display_name
+
+    def normalized_list_text(value: str) -> str:
+        result = value
+        result = re.sub(
+            r"(?i)(?:\(\s*A|C\s*A)\s*NTR\s*I?\s*PS",
+            "CANTRIPS",
+            result,
+        )
+        for class_name in _SPELL_CLASSES:
+            split_pattern = r"\s*".join(
+                (re.escape(class_name[:-1]), re.escape(class_name[-1:]))
+            )
+            result = re.sub(rf"(?i)\b{split_pattern}\b", class_name, result)
+        for school in _SPELL_SCHOOLS:
+            split_pattern = r"\s*".join(
+                (re.escape(school[:-3]), re.escape(school[-3:]))
+            )
+            result = re.sub(rf"(?i)\b{split_pattern}\b", school, result)
+        return result
+
+    def record(name: str, class_name: str, chunk_id: str, *, ritual: bool) -> None:
+        display_name = clean_entry_name(name)
+        key = _canonical_source_heading(display_name)
+        if not key:
+            return
+        item = result.setdefault(
+            key,
+            {
+                "name": display_name,
+                "classes": set(),
+                "source_chunk_ids": set(),
+                "ritual": False,
+            },
+        )
+        item["classes"].add(class_name.casefold())
+        if chunk_id:
+            item["source_chunk_ids"].add(chunk_id)
+        item["ritual"] = bool(item["ritual"] or ritual)
+
     for chunk in chunks:
-        content = " ".join(str(chunk.get("content") or "").split())
+        content = normalized_list_text(
+            " ".join(str(chunk.get("content") or "").split())
+        )
         chunk_id = str(chunk.get("id") or "").strip()
         sections = list(_SPELL_LIST_SECTION_RE.finditer(content))
         for index, section in enumerate(sections):
             end = sections[index + 1].start() if index + 1 < len(sections) else len(content)
             class_name = section.group("class").casefold()
             for entry in _SPELL_LIST_ENTRY_RE.finditer(content[section.end() : end]):
-                key = " ".join(entry.group("name").split()).casefold()
-                key = re.sub(
+                name = " ".join(entry.group("name").split())
+                name = re.sub(
                     r"(?i)^(?:(?:st|nd|rd|th)\s+level|cantrips?\s*\(0\s+level\))\s+",
                     "",
-                    key,
+                    name,
                 )
-                item = result.setdefault(
-                    key,
-                    {"classes": set(), "source_chunk_ids": set(), "ritual": False},
+                record(
+                    name,
+                    class_name,
+                    chunk_id,
+                    ritual=bool(entry.group("ritual")),
                 )
-                item["classes"].add(class_name)
-                if chunk_id:
-                    item["source_chunk_ids"].add(chunk_id)
-                item["ritual"] = bool(item["ritual"] or entry.group("ritual"))
+
+    # Multi-column pages can collapse all column headers into one outline
+    # heading while their bodies remain sequential chunks. Track the printed
+    # class order and advance only when the spell level resets.
+    active_classes: list[str] = []
+    active_index = 0
+    previous_level: int | None = None
+    level_marker = re.compile(
+        r"(?i)(?:cantrips?\s*[({][^)}]*[0o]\s+level[^)}]*[)}]|"
+        r"[1-9lIsS\]](?:st|nd|rd|th)\s+level)"
+    )
+    for chunk in chunks:
+        heading_parts = [
+            " ".join(str(item).split())
+            for item in chunk.get("heading_path") or []
+            if str(item).strip()
+        ]
+        heading_text = normalized_list_text(" ".join(heading_parts))
+        if not re.search(r"(?i)\bspell\s+lists?\b", heading_text):
+            active_classes = []
+            active_index = 0
+            previous_level = None
+            continue
+        header_classes = [
+            match.group("class").casefold()
+            for match in _SPELL_LIST_SECTION_RE.finditer(heading_text)
+        ]
+        if header_classes:
+            active_classes = list(dict.fromkeys(header_classes))
+            active_index = 0
+            previous_level = None
+        if not active_classes:
+            continue
+        content = normalized_list_text(
+            " ".join(str(chunk.get("content") or "").split())
+        )
+        chunk_id = str(chunk.get("id") or "").strip()
+        leaf = heading_parts[-1] if heading_parts else ""
+        scan = f"{leaf} {content}".strip()
+        markers = list(level_marker.finditer(scan))
+        if not markers:
+            segments = [(None, scan)]
+        else:
+            segments = (
+                [(None, scan[: markers[0].start()])]
+                if scan[: markers[0].start()].strip()
+                else []
+            ) + [
+                (
+                    marker.group(0),
+                    scan[
+                        marker.end() : (
+                            markers[index + 1].start()
+                            if index + 1 < len(markers)
+                            else len(scan)
+                        )
+                    ],
+                )
+                for index, marker in enumerate(markers)
+            ]
+        for raw_level, segment in segments:
+            level = previous_level
+            if raw_level is not None:
+                level = (
+                    0
+                    if raw_level.casefold().startswith("cantrip")
+                    else int(
+                        {
+                            "i": "1",
+                            "l": "1",
+                            "s": "5",
+                            "]": "7",
+                        }.get(raw_level[0].casefold(), raw_level[0])
+                    )
+                )
+                if (
+                    previous_level is not None
+                    and level <= previous_level
+                    and active_index + 1 < len(active_classes)
+                ):
+                    active_index += 1
+            for entry in _SPELL_LIST_ENTRY_RE.finditer(segment):
+                record(
+                    entry.group("name"),
+                    active_classes[active_index],
+                    chunk_id,
+                    ritual=bool(entry.group("ritual")),
+                )
+            if level is not None:
+                previous_level = level
     return result
+
+
+def _spell_class_record(
+    index: dict[str, dict[str, Any]],
+    name: str,
+) -> dict[str, Any]:
+    key = _canonical_source_heading(name)
+    exact = index.get(key)
+    if exact is not None:
+        return exact
+
+    def bounded_distance(left: str, right: str, maximum: int) -> int:
+        if abs(len(left) - len(right)) > maximum:
+            return maximum + 1
+        previous = list(range(len(right) + 1))
+        for row, left_character in enumerate(left, 1):
+            current = [row]
+            row_minimum = row
+            for column, right_character in enumerate(right, 1):
+                current.append(
+                    min(
+                        current[-1] + 1,
+                        previous[column] + 1,
+                        previous[column - 1]
+                        + (left_character != right_character),
+                    )
+                )
+                row_minimum = min(row_minimum, current[-1])
+            if row_minimum > maximum:
+                return maximum + 1
+            previous = current
+        return previous[-1]
+
+    maximum = max(1, min(3, (len(key) + 4) // 5))
+    matches = [
+        (bounded_distance(key, candidate_key, maximum), candidate_key, record)
+        for candidate_key, record in index.items()
+        if abs(len(key) - len(candidate_key)) <= maximum
+    ]
+    matches = sorted(item for item in matches if item[0] <= maximum)
+    if not matches or (len(matches) > 1 and matches[0][0] == matches[1][0]):
+        return {}
+    return matches[0][2]
 
 
 def _spell_class_mentions(chunks: list[dict[str, Any]], spell_name: str) -> dict[str, set[str]]:
@@ -912,24 +1224,32 @@ def _spell_class_mentions(chunks: list[dict[str, Any]], spell_name: str) -> dict
         heading_match = name_pattern.search(heading_text)
         if match is None and heading_match is None:
             continue
-        prior_classes = set(classes)
-        for class_name in _SPELL_CLASSES:
-            if re.search(
-                rf"(?i)\b{re.escape(class_name)}\s+Spell(?:s|\s+List)\b",
-                heading_text + " " + content[:500],
-            ):
-                classes.add(class_name.casefold())
-        sentence = (
-            content[max(0, match.start() - 250) : match.end() + 350]
-            if match is not None
-            else heading_text + " " + content[:500]
+        list_layout = any(
+            _canonical_source_heading(item) == "spelllists"
+            for item in chunk.get("heading_path") or []
         )
-        if re.search(r"(?i)\bspell\s+lists?\b", sentence):
+        prior_classes = set(classes)
+        if not list_layout:
             for class_name in _SPELL_CLASSES:
-                if re.search(rf"(?i)\b{re.escape(class_name)}\b", sentence):
+                if re.search(
+                    rf"(?i)\b{re.escape(class_name)}\s+Spell(?:s|\s+List)\b",
+                    heading_text + " " + content[:500],
+                ):
                     classes.add(class_name.casefold())
+            sentence = (
+                content[max(0, match.start() - 250) : match.end() + 350]
+                if match is not None
+                else heading_text + " " + content[:500]
+            )
+            if re.search(r"(?i)\bspell\s+lists?\b", sentence):
+                for class_name in _SPELL_CLASSES:
+                    if re.search(rf"(?i)\b{re.escape(class_name)}\b", sentence):
+                        classes.add(class_name.casefold())
         if classes != prior_classes and (chunk_id := str(chunk.get("id") or "").strip()):
             source_chunk_ids.add(chunk_id)
+
+        if list_layout:
+            continue
 
         # Some books introduce a group of spells once (for example, "These
         # cantrips are on the sorcerer, warlock, and wizard spell lists") and
@@ -951,6 +1271,12 @@ def _spell_class_mentions(chunks: list[dict[str, Any]], spell_name: str) -> dict
             shared_declaration = any(
                 heading.casefold() in heading_parts
                 and re.search(r"(?i)\b(?:cantrips?|spells?)\b", heading)
+                and heading.casefold()
+                not in {"spell", "spells", "spell lists", "spell descriptions"}
+                and not re.match(
+                    r"(?i)^(?:ch(?:apter)?\.?\s*\d+\s*[:.-]?\s*)?spells$",
+                    heading.strip(),
+                )
                 for heading in context_headings
             )
             if not shared_declaration:
