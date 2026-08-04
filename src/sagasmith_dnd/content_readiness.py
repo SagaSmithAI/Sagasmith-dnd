@@ -653,6 +653,24 @@ def species_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
             errors.append("species ability_score_increases contains an unknown ability")
         if isinstance(amount, bool) or not isinstance(amount, int) or amount < 0:
             errors.append("species ability_score_increases must use nonnegative integers")
+    fixed_decreases = grants.get("ability_score_decreases", {})
+    if not isinstance(fixed_decreases, Mapping):
+        errors.append("species ability_score_decreases must be an object")
+        fixed_decreases = {}
+    for ability, amount in fixed_decreases.items():
+        if str(ability).casefold() not in ability_names:
+            errors.append("species ability_score_decreases contains an unknown ability")
+        if isinstance(amount, bool) or not isinstance(amount, int) or amount < 0:
+            errors.append("species ability_score_decreases must use nonnegative integers")
+    for field in ("resistances", "immunities", "condition_immunities"):
+        string_list(grants.get(field, []), field)
+    natural_armor_base = grants.get("natural_armor_base", 0)
+    if (
+        isinstance(natural_armor_base, bool)
+        or not isinstance(natural_armor_base, int)
+        or not 0 <= natural_armor_base <= 30
+    ):
+        errors.append("species natural_armor_base must be an integer from 0 to 30")
     for field in ("walk_speed", "fly_speed", "swim_speed", "darkvision_ft"):
         value = grants.get(field, 0)
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -1003,7 +1021,7 @@ def feat_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
             "minimum_level",
             "ritual_only",
         }
-        supported = {*required, "casting_overrides"}
+        supported = {*required, "casting_overrides", "resource_group"}
         if choice_group:
             required.update({"id", "count"})
             supported.update({"id", "count"})
@@ -1054,6 +1072,13 @@ def feat_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
             errors.append(f"{prefix}.recovers_on must be null without free casts")
         if method == "at_will" and free_casts:
             errors.append(f"{prefix}.method at_will cannot have free casts")
+        resource_group = raw_grant.get("resource_group")
+        if resource_group is not None and (
+            not isinstance(resource_group, str) or not resource_group.strip()
+        ):
+            errors.append(f"{prefix}.resource_group must be a non-empty string")
+        if resource_group is not None and not free_casts:
+            errors.append(f"{prefix}.resource_group requires free casts")
         if not isinstance(raw_grant.get("allow_slot_cast"), bool):
             errors.append(f"{prefix}.allow_slot_cast must be a boolean")
         minimum_level = raw_grant.get("minimum_level")
@@ -1154,6 +1179,21 @@ def feat_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
             fixed_spell_names.append(str(raw_grant.get("name") or "").casefold())
     if len(fixed_spell_names) != len(set(fixed_spell_names)):
         errors.append("feat spell_grants must not repeat a spell")
+    shared_resources: dict[str, tuple[int, Any]] = {}
+    for index, raw_grant in enumerate(raw_spell_grants):
+        if not isinstance(raw_grant, Mapping):
+            continue
+        group = raw_grant.get("resource_group")
+        if not isinstance(group, str) or not group.strip():
+            continue
+        normalized_group = group.strip().casefold()
+        signature = (raw_grant.get("free_casts"), raw_grant.get("recovers_on"))
+        existing = shared_resources.setdefault(normalized_group, signature)
+        if existing != signature:
+            errors.append(
+                "feat spell_grants sharing resource_group must use the same "
+                f"free_casts and recovers_on: {group.strip()}"
+            )
 
     requirements = binding.get("selection_requirements")
     if requirements is not None and not isinstance(requirements, Mapping):

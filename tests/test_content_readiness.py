@@ -514,6 +514,43 @@ def test_species_materializer_validates_resources_and_fixed_spell_levels() -> No
     )
 
 
+def test_species_materializer_accepts_legacy_decreases_defenses_and_shared_spells() -> None:
+    card = {
+        "name": "Legacy Source Species",
+        "grants": {
+            "ability_score_increases": {"dexterity": 2},
+            "ability_score_decreases": {"strength": 2},
+            "resistances": ["cold"],
+            "immunities": ["poison"],
+            "condition_immunities": ["poisoned"],
+            "natural_armor_base": 13,
+            "spell_grants": [
+                {
+                    "name": spell_name,
+                    "level": 1,
+                    "eligible_classes": ["Wizard"],
+                    "method": "limited_use",
+                    "spellcasting_ability": "intelligence",
+                    "free_casts": 1,
+                    "recovers_on": "long_rest",
+                    "resource_group": "source_magic",
+                    "allow_slot_cast": False,
+                    "minimum_level": 1,
+                    "ritual_only": False,
+                }
+                for spell_name in ("Detect Magic", "Disguise Self")
+            ],
+        },
+    }
+
+    assert species_materializer_errors(card) == []
+    card["grants"]["spell_grants"][1]["free_casts"] = 2
+    assert any(
+        "sharing resource_group must use the same" in error
+        for error in species_materializer_errors(card)
+    )
+
+
 def test_feat_materializer_accepts_fixed_and_selected_spell_grants() -> None:
     card = {
         "name": "Aberrant Dragonmark",
