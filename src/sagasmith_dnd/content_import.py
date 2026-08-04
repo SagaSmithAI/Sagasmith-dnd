@@ -1679,6 +1679,31 @@ def _merge_extracted_candidates(
             )
             else (existing, candidate)
         )
+        if (
+            kind == "spell"
+            and "'" not in str(preferred.get("name") or "")
+            and "'" in str(other.get("name") or "")
+        ):
+            preferred_words = str(preferred.get("name") or "").split()
+            possessive_words = [
+                word for word in str(other.get("name") or "").split() if "'" in word
+            ]
+            for possessive in possessive_words:
+                possessive_key = _canonical_source_heading(possessive)
+                for index, preferred_word in enumerate(preferred_words):
+                    if _canonical_source_heading(preferred_word) != possessive_key:
+                        continue
+                    if possessive.casefold().endswith("'s") and preferred_word.casefold().endswith(
+                        "s"
+                    ):
+                        preferred_words[index] = preferred_word[:-1] + "'s"
+                    break
+            preferred["name"] = " ".join(preferred_words)
+            preferred_artifact = dict(preferred.get("artifact") or {})
+            preferred_card = dict(preferred_artifact.get("card") or {})
+            preferred_card["name"] = preferred["name"]
+            preferred_artifact["card"] = preferred_card
+            preferred["artifact"] = preferred_artifact
         preferred["source_chunk_ids"] = list(
             dict.fromkeys(
                 [

@@ -1026,6 +1026,37 @@ def test_inventory_repairs_spell_header_ocr_and_bounded_field_continuation() -> 
     assert spells["Tidal Wave"]["definition"]["school"] == "conjuration"
 
 
+def test_spell_merge_keeps_source_possessive_recovered_from_ocr() -> None:
+    inventory = extract_content_inventory(
+        [
+            {
+                "id": "list",
+                "heading_path": ["Spells", "Spell Lists", "Wizard Spells"],
+                "content": "3rd Level Melfs Minute Meteors (evocation)",
+            },
+            {
+                "id": "description",
+                "heading_path": [
+                    "Spells",
+                    "Spell Descriptions",
+                    "MELF1S MINUTE METEORS",
+                ],
+                "content": (
+                    "3rd-level evocation Casting Time: 1 action Range: Self "
+                    "Components: V, S Duration: Concentration, up to 10 minutes "
+                    "Six meteors orbit the caster."
+                ),
+            },
+        ]
+    )
+
+    spells = [
+        item for item in inventory["candidates"] if item["kind"] == "spell"
+    ]
+    assert len(spells) == 1
+    assert spells[0]["name"] == "Melf's Minute Meteors"
+
+
 def test_inventory_finds_ordered_rulebook_statblock_and_flags_unclaimed_mechanics() -> None:
     chunks = [
         {
