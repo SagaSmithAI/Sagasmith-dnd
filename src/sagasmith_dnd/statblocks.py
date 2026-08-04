@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import unicodedata
 from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import dataclass
@@ -37,7 +38,7 @@ class StatblockImportError(ValueError):
     """Raised when required statblock facts cannot be recovered from the source text."""
 
 
-OCR_STATBLOCK_RECOVERY_VERSION = 14
+OCR_STATBLOCK_RECOVERY_VERSION = 15
 
 
 @dataclass(frozen=True)
@@ -5420,10 +5421,29 @@ _OCR_IDENTITY_RE = re.compile(
 )
 
 
+def _normalize_ocr_identity_text(text: str) -> str:
+    """Repair bounded glyph noise around a printed size/type identity line."""
+
+    normalized = unicodedata.normalize("NFKD", " ".join(str(text).split()))
+    normalized = normalized.encode("ascii", "ignore").decode("ascii")
+    normalized = re.sub(r"^[^A-Za-z]{1,3}(?=[A-Za-z])", "", normalized)
+    normalized = re.sub(
+        r"(?i)^(Tiny|Small|Medium|Large|Huge|Gargantuan)[^A-Za-z0-9(),]{1,3}"
+        rf"(?={_OCR_CREATURE_TYPE_PATTERN}\b)",
+        r"\1 ",
+        normalized,
+    )
+    return " ".join(normalized.split())
+
+
+def _ocr_identity_match(text: str) -> re.Match[str] | None:
+    return _OCR_IDENTITY_RE.fullmatch(_normalize_ocr_identity_text(text))
+
+
 def is_2014_statblock_identity_line(text: str) -> bool:
     """Return whether one OCR line is a bounded 2014 size/type identity."""
 
-    return _OCR_IDENTITY_RE.fullmatch(" ".join(str(text).split())) is not None
+    return _ocr_identity_match(text) is not None
 _OCR_FIELD_LABELS = (
     "Armor Class",
     "Hit Points",
@@ -5673,9 +5693,7 @@ def _ocr_column_split(
 
     def structural_midpoint_fallback() -> float | None:
         midpoint = width / 2
-        identities = [
-            block for block in blocks if _OCR_IDENTITY_RE.fullmatch(block["text"])
-        ]
+        identities = [block for block in blocks if _ocr_identity_match(block["text"])]
         if (
             any(block["cx"] < midpoint for block in identities)
             and any(block["cx"] >= midpoint for block in identities)
@@ -5820,7 +5838,7 @@ def _ocr_heading_has_identity(
 
     return bool(
         following is not None
-        and _OCR_IDENTITY_RE.fullmatch(following["text"])
+        and _ocr_identity_match(following["text"])
         and -20 <= following["y0"] - heading["y1"] <= 80
     )
 
@@ -6179,11 +6197,103 @@ def discover_2014_statblock_names_from_layout(
     return discovered
 
 
+def discover_2014_statblock_slots_from_layout(
+    layout: dict[str, Any],
+    *,
+    minimum_confidence: float = 0.5,
+) -> list[dict[str, Any]]:
+    """Enumerate mechanically proven card slots even when a title is decorative.
+
+    A slot is anchored by one size/type identity followed, in the same detected
+    column, by Armor Class, Hit Points, and Speed.  The returned 1-based slot is
+    suitable for an Agent to name after reading the rendered page or the bounded
+    text evidence; it never asks the Agent to transcribe numeric mechanics.
+    """
+
+    if not isinstance(layout, dict):
+        raise StatblockImportError("OCR layout must be an object")
+    width = layout.get("width")
+    raw_blocks = layout.get("blocks")
+    if (
+        isinstance(width, bool)
+        or not isinstance(width, (int, float))
+        or width <= 0
+        or not isinstance(raw_blocks, list)
+    ):
+        raise StatblockImportError("OCR layout requires positive width and text blocks")
+    blocks = [_ocr_block(raw, index) for index, raw in enumerate(raw_blocks)]
+    if not blocks:
+        return []
+    split = _ocr_column_split(blocks, width=float(width))
+    columns = (
+        [blocks]
+        if split is None
+        else [
+            [block for block in blocks if block["cx"] < split],
+            [block for block in blocks if block["cx"] >= split],
+        ]
+    )
+    slots: list[dict[str, Any]] = []
+    for column_index, column in enumerate(columns):
+        ordered = sorted(column, key=lambda block: (block["y0"], block["x0"]))
+        identity_indexes = [
+            index
+            for index, block in enumerate(ordered)
+            if _ocr_identity_match(block["text"])
+            and block["confidence"] >= minimum_confidence
+        ]
+        for identity_ordinal, identity_index in enumerate(identity_indexes):
+            end = (
+                identity_indexes[identity_ordinal + 1]
+                if identity_ordinal + 1 < len(identity_indexes)
+                else len(ordered)
+            )
+            scoped = ordered[identity_index:end]
+            core: dict[str, dict[str, Any]] = {}
+            for label in _OCR_FIELD_LABELS[:3]:
+                field = _ocr_field_with_continuation(scoped, label=label)
+                if field is not None and field["confidence"] >= minimum_confidence:
+                    core[label] = field
+            if set(core) != set(_OCR_FIELD_LABELS[:3]):
+                continue
+            identity = ordered[identity_index]
+            heading = ordered[identity_index - 1] if identity_index else None
+            discovered_name = (
+                " ".join(str(heading["text"]).split())
+                if heading is not None and _ocr_heading_has_identity(heading, identity)
+                else None
+            )
+            slots.append(
+                {
+                    "slot": len(slots) + 1,
+                    "column": column_index,
+                    "identity": identity["text"],
+                    "identity_bbox": [
+                        identity["x0"],
+                        identity["y0"],
+                        identity["x1"],
+                        identity["y1"],
+                    ],
+                    "discovered_name": discovered_name,
+                    "core": {
+                        label: field["text"] for label, field in core.items()
+                    },
+                    "minimum_core_confidence": min(
+                        identity["confidence"],
+                        *(field["confidence"] for field in core.values()),
+                    ),
+                    "_identity_index": identity["index"],
+                }
+            )
+    return slots
+
+
 def recover_2014_statblock_from_ocr(
     layout: dict[str, Any],
     *,
     name: str,
     minimum_confidence: float = 0.8,
+    statblock_slot: int | None = None,
 ) -> dict[str, Any]:
     """Recover one statblock from layout OCR without requiring an image-capable model."""
 
@@ -6248,7 +6358,53 @@ def recover_2014_statblock_from_ocr(
                 continue
             fuzzy_headings.append(candidate)
     heading_match_mode = ""
-    if len(structural_headings) == 1:
+    selected_slot: dict[str, Any] | None = None
+    selected_slot_boundary_identity_index: int | None = None
+    if statblock_slot is not None:
+        if (
+            isinstance(statblock_slot, bool)
+            or not isinstance(statblock_slot, int)
+            or statblock_slot < 1
+        ):
+            raise StatblockImportError("statblock_slot must be a positive integer")
+        slots = discover_2014_statblock_slots_from_layout(
+            layout,
+            minimum_confidence=minimum_confidence,
+        )
+        if statblock_slot > len(slots):
+            raise StatblockImportError(
+                f"statblock_slot {statblock_slot} is absent; page exposes {len(slots)} slots"
+            )
+        selected_slot = slots[statblock_slot - 1]
+        same_column_slots = [
+            item for item in slots if item["column"] == selected_slot["column"]
+        ]
+        same_column_position = next(
+            index
+            for index, item in enumerate(same_column_slots)
+            if item["slot"] == selected_slot["slot"]
+        )
+        if same_column_position + 1 < len(same_column_slots):
+            selected_slot_boundary_identity_index = int(
+                same_column_slots[same_column_position + 1]["_identity_index"]
+            )
+        identity_block = next(
+            block
+            for block in blocks
+            if block["index"] == selected_slot["_identity_index"]
+        )
+        heading_height = max(12.0, float(identity_block["y1"] - identity_block["y0"]))
+        heading = {
+            **identity_block,
+            "index": max(block["index"] for block in blocks) + 1,
+            "text": name,
+            "y0": identity_block["y0"] - heading_height - 2.0,
+            "y1": identity_block["y0"] - 2.0,
+            "confidence": float(selected_slot["minimum_core_confidence"]),
+        }
+        blocks.append(heading)
+        heading_match_mode = "agent_named_structural_slot"
+    elif len(structural_headings) == 1:
         heading = structural_headings[0]
         heading_match_mode = "exact"
     elif len(fuzzy_headings) == 1:
@@ -6256,7 +6412,7 @@ def recover_2014_statblock_from_ocr(
         heading_match_mode = "bounded_structural_fuzzy"
     elif len(headings) == 1:
         identity_candidates = [
-            block for block in blocks if _OCR_IDENTITY_RE.fullmatch(block["text"])
+            block for block in blocks if _ocr_identity_match(block["text"])
         ]
         if len(identity_candidates) != 1:
             raise StatblockImportError(
@@ -6298,7 +6454,20 @@ def recover_2014_statblock_from_ocr(
         index for index, block in enumerate(ordered) if block["index"] == heading["index"]
     )
     end = len(ordered)
-    for index in range(heading_index + 1, len(ordered)):
+    if selected_slot_boundary_identity_index is not None:
+        boundary_index = next(
+            index
+            for index, block in enumerate(ordered)
+            if block["index"] == selected_slot_boundary_identity_index
+        )
+        if boundary_index > heading_index:
+            preceding = ordered[boundary_index - 1]
+            end = (
+                boundary_index - 1
+                if _ocr_peer_heading(preceding, ordered[boundary_index])
+                else boundary_index
+            )
+    for index in range(heading_index + 1, end):
         following = ordered[index + 1] if index + 1 < len(ordered) else None
         if _ocr_peer_heading(ordered[index], following):
             end = index
@@ -6433,13 +6602,13 @@ def recover_2014_statblock_from_ocr(
     ]
     scoped = _ocr_repair_section_heading_fragments(scoped)
     identity = next(
-        (block for block in scoped[1:] if _OCR_IDENTITY_RE.fullmatch(block["text"])),
+        (block for block in scoped[1:] if _ocr_identity_match(block["text"])),
         None,
     )
     if identity is None:
         raise StatblockImportError("OCR statblock has no unambiguous size/type line")
     identity_source_text = str(identity["text"])
-    identity_match = _OCR_IDENTITY_RE.fullmatch(identity_source_text)
+    identity_match = _ocr_identity_match(identity_source_text)
     assert identity_match is not None
     normalized_identity = (
         f"{identity_match.group(1)} {identity_match.group(2).strip()}"
@@ -6710,6 +6879,16 @@ def recover_2014_statblock_from_ocr(
             "matching_heading_count": len(headings),
             "structural_heading_count": len(structural_headings),
             "fuzzy_heading_count": len(fuzzy_headings),
+            "statblock_slot": statblock_slot,
+            "statblock_slot_summary": (
+                {
+                    key: value
+                    for key, value in selected_slot.items()
+                    if not key.startswith("_")
+                }
+                if selected_slot is not None
+                else None
+            ),
             "minimum_core_confidence": min(block["confidence"] for block in critical),
             "block_count": len(scoped),
             "cross_column_continuation_block_count": len(continuation_blocks),
@@ -7714,6 +7893,7 @@ __all__ = [
     "parameterized_statblock_requirements",
     "parse_2014_statblock_template_preview",
     "discover_2014_statblock_names_from_layout",
+    "discover_2014_statblock_slots_from_layout",
     "parse_2014_statblock",
     "parse_2024_statblock",
     "recover_2014_statblock_from_ocr",

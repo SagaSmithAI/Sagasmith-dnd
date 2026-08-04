@@ -20,6 +20,7 @@ from sagasmith_dnd.statblocks import (
     apply_statblock_variant,
     area_save_damage_spec,
     discover_2014_statblock_names_from_layout,
+    discover_2014_statblock_slots_from_layout,
     effective_statblock_rating,
     finalize_imported_actor_rulings,
     gazer_eye_ray_spec,
@@ -508,6 +509,176 @@ def test_layout_discovery_finds_each_column_without_prose_guesses() -> None:
         ("Tortle Druid", 0),
         ("Tortle", 1),
     ]
+
+    slots = discover_2014_statblock_slots_from_layout(layout)
+    assert [
+        (item["slot"], item["column"], item["discovered_name"])
+        for item in slots
+    ] == [(1, 0, "Tortle Druid"), (2, 1, "Tortle")]
+    assert slots[1]["core"] == {
+        "Armor Class": "Armor Class 17 (natural)",
+        "Hit Points": "Hit Points 22 (4d8 + 4)",
+        "Speed": "Speed 30 ft.",
+    }
+
+
+def test_agent_can_name_a_structural_slot_when_the_decorative_title_is_missing() -> None:
+    def block(text: str, y: int) -> dict:
+        return {
+            "text": text,
+            "confidence": 0.99,
+            "bbox": [40, y, 440, y + 14],
+        }
+
+    layout = {
+        "page_number": 63,
+        "width": 1000,
+        "height": 1400,
+        "blocks": [
+            block("ACTIONS", 90),
+            block("Large fiend (demon), chaotic evil", 118),
+            block("Armor Class 18 (natural armor)", 136),
+            block("Hit Points 184 (16d10 + 96)", 154),
+            block("Speed 20 ft., fly 30 ft.", 172),
+            block("STR DEX CON INT WIS CHA", 200),
+            block("21 (+5) 10 (+0) 22 (+6) 19 (+4) 12 (+1) 15 (+2)", 218),
+            block("Challenge 13 (10,000 XP)", 250),
+            block("ACTIONS", 280),
+            block(
+                "Bite. Melee Weapon Attack: +10 to hit, reach 5 ft., one target.",
+                310,
+            ),
+            block("Hit: 32 (5d10 + 5) piercing damage.", 330),
+        ],
+    }
+
+    slots = discover_2014_statblock_slots_from_layout(layout)
+    assert len(slots) == 1
+    assert slots[0]["discovered_name"] == "ACTIONS"
+
+    recovered = recover_2014_statblock_from_ocr(
+        layout,
+        name="Nalfeshnee",
+        statblock_slot=1,
+    )
+
+    assert recovered["validation"]["name"] == "Nalfeshnee"
+    assert recovered["validation"]["challenge_rating"] == "13"
+    assert recovered["evidence"]["heading_match_mode"] == "agent_named_structural_slot"
+    assert recovered["evidence"]["statblock_slot_summary"]["identity"].startswith(
+        "Large fiend"
+    )
+
+
+@pytest.mark.parametrize(
+    "source_identity, expected_identity",
+    [
+        ("Śmall monstrosity, unaligned", "Small monstrosity, unaligned"),
+        ("'Medium monstrosity, unaligned", "Medium monstrosity, unaligned"),
+        ("Large'monstrosity, neutral", "Large monstrosity, neutral"),
+    ],
+)
+def test_agent_slot_repairs_bounded_identity_glyph_noise(
+    source_identity: str,
+    expected_identity: str,
+) -> None:
+    def block(text: str, y: int) -> dict:
+        return {
+            "text": text,
+            "confidence": 0.99,
+            "bbox": [40, y, 440, y + 14],
+        }
+
+    layout = {
+        "page_number": 43,
+        "width": 1000,
+        "height": 1400,
+        "blocks": [
+            block("Source Creature", 90),
+            block(source_identity, 118),
+            block("Armor Class 15 (natural armor)", 136),
+            block("Hit Points 22 (3d8 + 9)", 154),
+            block("Speed 30 ft.", 172),
+            block("STR DEX CON INT WIS CHA", 200),
+            block("10 (+0) 13 (+1) 16 (+3) 1 (-5) 7 (-2) 3 (-4)", 218),
+            block("Challenge 1/2 (100 XP)", 250),
+            block("ACTIONS", 280),
+            block(
+                "Bite. Melee Weapon Attack: +3 to hit, reach 5 ft., one target. "
+                "Hit: 3 (1d6) piercing damage.",
+                310,
+            ),
+        ],
+    }
+
+    slots = discover_2014_statblock_slots_from_layout(layout)
+    assert len(slots) == 1
+    recovered = recover_2014_statblock_from_ocr(
+        layout,
+        name="Reviewed Creature",
+        statblock_slot=1,
+    )
+    assert recovered["critical_facts"]["identity"] == expected_identity
+    assert recovered["evidence"]["identity_spacing_repair"] == {
+        "source_text": source_identity,
+        "normalized_text": expected_identity,
+    }
+
+
+def test_agent_slot_uses_next_same_column_identity_as_a_hard_boundary() -> None:
+    def block(text: str, y: int) -> dict:
+        return {
+            "text": text,
+            "confidence": 0.99,
+            "bbox": [40, y, 440, y + 14],
+        }
+
+    layout = {
+        "page_number": 33,
+        "width": 1000,
+        "height": 1400,
+        "blocks": [
+            block("FIRST CREATURE", 90),
+            block("Medium plant, neutral evil", 118),
+            block("Armor Class 12 (natural armor)", 136),
+            block("Hit Points 11 (2d8 + 2)", 154),
+            block("Speed 30 ft.", 172),
+            block("STR DEX CON INT WIS CHA", 200),
+            block("12 (+1) 12 (+1) 13 (+1) 4 (-3) 8 (-1) 3 (-4)", 218),
+            block("Challenge 1/4 (50 XP)", 250),
+            block("ACTIONS", 280),
+            block(
+                "Claws. Melee Weapon Attack: +3 to hit. "
+                "Hit: 6 (2d4 + 1) piercing damage.",
+                310,
+            ),
+            # The decorative title is absent. Only the next structural identity
+            # proves that this is a new card rather than action continuation.
+            block("Small plant, neutral evil", 350),
+            block("Armor Class 17 (natural armor)", 368),
+            block("Hit Points 44 (8d6 + 16)", 386),
+            block("Speed 20 ft.", 404),
+            block("STR DEX CON INT WIS CHA", 432),
+            block("18 (+4) 10 (+0) 14 (+2) 3 (-4) 8 (-1) 3 (-4)", 450),
+            block("Challenge 2 (450 XP)", 478),
+            block("ACTIONS", 506),
+            block(
+                "Second Attack. Melee Weapon Attack: +6 to hit. "
+                "Hit: 8 (1d8 + 4) slashing damage.",
+                534,
+            ),
+        ],
+    }
+
+    recovered = recover_2014_statblock_from_ocr(
+        layout,
+        name="Reviewed First Creature",
+        statblock_slot=1,
+    )
+
+    assert recovered["validation"]["name"] == "Reviewed First Creature"
+    assert "Armor Class** 17" not in recovered["normalized_content"]
+    assert "Second Attack" not in recovered["normalized_content"]
 
 
 def test_layout_discovery_rejects_size_word_lore_and_repairs_identity_separator() -> None:
