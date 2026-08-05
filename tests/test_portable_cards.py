@@ -46,6 +46,36 @@ def test_srd_actor_presets_compile_every_statblock_to_the_unified_card() -> None
     )
 
 
+def test_srd_actor_presets_do_not_label_agent_rulings_as_engine_executable() -> None:
+    cards = [
+        *build_srd2014_preset_pack(_skill_root())["payload"]["cards"],
+        *build_srd2024_preset_pack(_skill_root())["payload"]["cards"],
+    ]
+    invalid_partial_mechanics: list[tuple[str, str, str, list[str]]] = []
+    recharge_rulings = 0
+    for card in cards:
+        sheet = card["payload"]["sheet"]
+        for bucket in ("features", "activities", "spells"):
+            for entry in sheet.get("content", {}).get(bucket, []):
+                manual_ruling = dict(entry.get("choices") or {}).get("manual_ruling")
+                mechanic_refs = list(entry.get("mechanic_refs") or [])
+                if manual_ruling and mechanic_refs:
+                    if mechanic_refs == ["dnd5e.core.activity.recharge"]:
+                        recharge_rulings += 1
+                        continue
+                    invalid_partial_mechanics.append(
+                        (
+                            card["payload"]["name"],
+                            bucket,
+                            entry["name"],
+                            mechanic_refs,
+                        )
+                    )
+
+    assert invalid_partial_mechanics == []
+    assert recharge_rulings > 100
+
+
 def test_actionless_and_speed_zero_srd_creatures_are_valid_cards() -> None:
     cards = build_srd2014_preset_pack(_skill_root())["payload"]["cards"]
     frog = next(card for card in cards if card["payload"]["name"] == "Frog")

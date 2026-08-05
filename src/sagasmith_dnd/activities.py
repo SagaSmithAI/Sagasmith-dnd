@@ -34,8 +34,25 @@ def recharge_activities_at_turn_start(
     value = deepcopy(sheet)
     results: list[dict[str, Any]] = []
     activities = list(dict(value.get("content") or {}).get("activities", []))
-    for activity in activities:
-        recharge = dict(dict(activity.get("choices") or {}).get("recharge") or {})
+    inventory_items = list(dict(value.get("inventory") or {}).get("items", []))
+    recharge_cards = [
+        (
+            "activity",
+            activity,
+            dict(dict(activity.get("choices") or {}).get("recharge") or {}),
+        )
+        for activity in activities
+    ]
+    recharge_cards.extend(
+        (
+            "item",
+            item,
+            dict(dict(item.get("mechanics") or {}).get("recharge") or {}),
+        )
+        for item in inventory_items
+        if str(item.get("kind") or "") == "weapon"
+    )
+    for source_card_kind, activity, recharge in recharge_cards:
         if recharge.get("kind") != "d6_turn_start":
             continue
         uses = dict(activity.get("uses") or {})
@@ -65,6 +82,7 @@ def recharge_activities_at_turn_start(
         results.append(
             {
                 "activity_id": str(activity.get("id") or ""),
+                "source_card_kind": source_card_kind,
                 "name": str(activity.get("name") or ""),
                 "roll": recharge_roll,
                 "minimum": minimum,
@@ -73,6 +91,7 @@ def recharge_activities_at_turn_start(
             }
         )
     value.setdefault("content", {})["activities"] = activities
+    value.setdefault("inventory", {})["items"] = inventory_items
     return {
         "sheet": value,
         "results": results,

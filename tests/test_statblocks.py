@@ -1,5 +1,3 @@
-from copy import deepcopy
-
 import pytest
 
 from sagasmith_dnd.activity_identity import (
@@ -13,23 +11,17 @@ from sagasmith_dnd.statblocks import (
     _ocr_column_split,
     _ocr_probable_peer_heading,
     _repair_layout_ocr_text,
-    _structure_gazer_eye_rays,
-    _structure_intellect_devourer_actions,
     apply_dependent_actor_template_variant,
     apply_reviewed_statblock_fill,
     apply_statblock_variant,
-    area_save_damage_spec,
     discover_2014_statblock_names_from_layout,
     discover_2014_statblock_slots_from_layout,
     effective_statblock_rating,
     finalize_imported_actor_rulings,
-    gazer_eye_ray_spec,
     materialize_parameterized_statblock_source,
     parameterized_statblock_requirements,
     parse_2014_statblock,
     recover_2014_statblock_from_ocr,
-    source_contest_effect_spec,
-    source_save_effect_spec,
 )
 
 
@@ -432,9 +424,7 @@ def test_finalize_imported_actor_rulings_eliminates_lazy_semantic_fill() -> None
         for entry in finalized["inventory"]["items"]
         if entry["id"] == "strange-blade"
     )
-    assert item["ruling_requirements"][0]["ruling_kind"] == (
-        "attack_on_hit_effect"
-    )
+    assert item["ruling_requirements"][0]["ruling_kind"] == "agent_dm_adjudication"
 
     engine_settled = finalize_imported_actor_rulings(
         sheet,
@@ -1037,128 +1027,8 @@ def test_layout_discovery_rejects_size_word_lore_and_repairs_identity_separator(
     assert discovered[0]["identity"] == "Medium.fiend, lawful evil"
 
 
-def test_point_radius_save_damage_is_structured_from_exact_source() -> None:
-    source = COMMONER.replace(
-        '***Club***. *Melee Weapon Attack:* +2 to hit, reach 5 ft., one target.\n'
-        '*Hit:* 2 (1d4) bludgeoning damage.',
-        (
-            '***Club***. *Melee Weapon Attack:* +2 to hit, reach 5 ft., one target.\n'
-            '*Hit:* 2 (1d4) bludgeoning damage.\n\n'
-            '***Lightning Strike (Recharge 5-6)***. The giant hurls a magical '
-            'lightning bolt at a point it can see within 500 feet of it. Each '
-            'creature within 10 feet of that point must make a DC 17 Dexterity '
-            'saving throw, taking 54 (12d8) lightning damage on a failed save, '
-            'or half as much damage on a successful one.'
-        ),
-    )
-
-    parsed = parse_2014_statblock(
-        source,
-        source_key="monster-manual-2014:p157",
-        name="Storm Giant",
-    )
-    activity = next(
-        item
-        for item in parsed.sheet["content"]["activities"]
-        if item["name"] == "Lightning Strike (Recharge 5-6)"
-    )
-
-    assert parsed.warnings == ()
-    assert activity["uses"]["value"] == 1
-    assert activity["uses"]["max"] == 1
-    assert activity["choices"]["recharge"] == {
-        "kind": "d6_turn_start",
-        "minimum": 5,
-        "maximum": 6,
-        "source_marker": "(Recharge 5-6)",
-    }
-    assert set(activity["mechanic_refs"]) == {
-        "dnd5e.core.activity.area_save_damage",
-        "dnd5e.core.activity.recharge",
-    }
-    assert area_save_damage_spec(parsed.sheet, activity["id"]) == {
-        "kind": "visible_point_radius_save_damage",
-        "origin": {"kind": "visible_point", "range_ft": 500},
-        "area": {"shape": "radius", "radius_ft": 10},
-        "targets": "each_creature",
-        "save_ability": "dexterity",
-        "save_dc": 17,
-        "damage_formula": "12d8",
-        "average_damage": 54,
-        "damage_type": "lightning",
-        "half_on_success": True,
-        "save_source_kind": "magical_effect",
-        "source_excerpt": (
-            "The giant hurls a magical lightning bolt at a point it can see within "
-            "500 feet of it. Each creature within 10 feet of that point must make "
-            "a DC 17 Dexterity saving throw, taking 54 (12d8) lightning damage on "
-            "a failed save, or half as much damage on a successful one."
-        ),
-    }
 
 
-def test_area_save_damage_resolves_dynamic_species_cone_contract() -> None:
-    sheet = parse_2014_statblock(
-        COMMONER,
-        source_key="species-test",
-        name="Commoner",
-    ).sheet
-    activity_id = "species.dragonborn.activity.breath-weapon"
-    sheet["content"]["activities"].append(
-        {
-            "id": activity_id,
-            "name": "Breath Weapon",
-            "source_key": "Dragonborn",
-            "description": "A source-bound 15-foot cone breath weapon.",
-            "uses": {
-                "label": "Breath Weapon",
-                "value": 1,
-                "max": 1,
-                "recovers_on": "short_rest",
-                "source_key": "Dragonborn",
-                "slot_level": 0,
-                "unlimited": False,
-            },
-            "resource_key": "",
-            "activation": {"type": "action", "cost": 1, "trigger": ""},
-            "scaling": [],
-            "resource_scaling": {},
-            "attack_scaling": {},
-            "choices": {
-                "area_save_damage": {
-                    "kind": "self_cone_save_damage",
-                    "origin": {"kind": "self"},
-                    "area": {"shape": "cone", "length_ft": 15},
-                    "targets": "each_creature",
-                    "save_ability": "dexterity",
-                    "save_dc_formula": {
-                        "base": 8,
-                        "ability": "constitution",
-                        "include_proficiency": True,
-                    },
-                    "damage_formula_by_level": {"1": "2d6", "6": "3d6"},
-                    "damage_type": "fire",
-                    "half_on_success": True,
-                    "save_source_kind": "nonmagical_effect",
-                    "source_excerpt": "A source-bound 15-foot cone breath weapon.",
-                }
-            },
-            "advancement_grants": [],
-            "pack_id": "dnd5e.content.standard2014",
-            "pack_version": "1.4.0",
-            "rule_refs": ["book:players-handbook-2014:p34"],
-            "mechanic_refs": ["dnd5e.core.activity.area_save_damage"],
-            "ruling_requirements": [],
-        }
-    )
-    sheet = validate_character_sheet(sheet)
-
-    spec = area_save_damage_spec(sheet, activity_id)
-
-    assert spec is not None
-    assert spec["kind"] == "self_cone_save_damage"
-    assert spec["save_dc"] == 10
-    assert spec["damage_formula"] == "2d6"
 
 
 TROLL = """## Troll
@@ -2081,207 +1951,14 @@ def test_weapon_damage_structures_short_two_handed_alternative() -> None:
     assert parsed.warnings == ()
 
 
-def test_trailing_page_number_is_not_imported_as_an_on_hit_effect() -> None:
-    parsed = parse_2014_statblock(
-        TROLL + "\n291\n",
-        source_key="monster-manual-page-291",
-    )
-    claw = derive_character_sheet(parsed.sheet)["inventory"]["weapon_attacks"][0]
-
-    assert claw["on_hit_effect"] == ""
-    assert parsed.warnings == ()
-    assert parsed.normalization_notes == (
-        "Claw: trailing page furniture excluded from action settlement",
-    )
 
 
-def test_gazer_eye_rays_are_structured_from_the_exact_source_action() -> None:
-    parsed = parse_2014_statblock(
-        GAZER,
-        source_key="module-review:waterdeep-gazer",
-        rule_refs=["waterdeep-page-204"],
-    )
-    reviewed_sheet = deepcopy(parsed.sheet)
-    reviewed_warnings = list(parsed.warnings)
-    _structure_gazer_eye_rays(reviewed_sheet, reviewed_warnings)
-    activities = reviewed_sheet["content"]["activities"]
-    eye_rays = next(item for item in activities if item["name"] == "Eye Rays")
-    spec = gazer_eye_ray_spec(reviewed_sheet, eye_rays["id"])
-
-    assert spec is not None
-    assert spec["save_source_kind"] == "magical_effect"
-    assert spec["draw_count"] == 2
-    assert spec["reroll_duplicates"] is True
-    assert spec["range_ft"] == 60
-    assert spec["target_count"] == {"minimum": 1, "maximum": 2}
-    assert [effect["id"] for effect in spec["effects"]] == [
-        "dazing-ray",
-        "fear-ray",
-        "frost-ray",
-        "telekinetic-ray",
-    ]
-    assert spec["effects"][0]["failure"] == {
-        "kind": "timed_condition",
-        "condition": "charmed",
-        "duration": {"period": "source_turn_start", "remaining": 1},
-        "speed_multiplier": 0.5,
-        "attack_disadvantage": True,
-    }
-    assert spec["effects"][2]["failure"] == {
-        "kind": "damage",
-        "expression": "3d6",
-        "damage_type": "cold",
-    }
-    assert spec["effects"][3]["failure"] == {
-        "kind": "forced_movement",
-        "maximum_size": "medium",
-        "distance_ft": 30,
-        "direction": "directly_away",
-    }
-    assert eye_rays["mechanic_refs"] == [
-        "dnd5e.core.activity.random_save_effects"
-    ]
-    assert not {
-        "Dazing Ray",
-        "Fear Ray",
-        "Frost Ray",
-        "Telekinetic Ray",
-    } & {item["name"] for item in activities}
-    assert reviewed_warnings == []
 
 
-def test_custom_same_named_gazer_requires_agent_semantic_review() -> None:
-    parsed = parse_2014_statblock(
-        GAZER,
-        source_key="custom:gazer-like-creation",
-        rule_refs=["waterdeep-page-204"],
-    )
-    activities = parsed.sheet["content"]["activities"]
-    eye_rays = next(item for item in activities if item["name"] == "Eye Rays")
-
-    assert gazer_eye_ray_spec(parsed.sheet, eye_rays["id"]) is None
-    assert {
-        "Dazing Ray",
-        "Fear Ray",
-        "Frost Ray",
-        "Telekinetic Ray",
-    }.issubset({item["name"] for item in activities})
-    assert eye_rays["choices"]["manual_ruling"]["default_resolver"] == "agent"
-    assert any(
-        warning.startswith("Eye Rays: descriptive action")
-        for warning in parsed.warnings
-    )
 
 
-def test_intellect_devourer_actions_are_structured_from_exact_source() -> None:
-    parsed = parse_2014_statblock(
-        INTELLECT_DEVOURER,
-        source_key="reviewed-intellect-devourer",
-        rule_refs=["monster-manual-page-191"],
-    )
-    reviewed_sheet = deepcopy(parsed.sheet)
-    reviewed_warnings = list(parsed.warnings)
-    _structure_intellect_devourer_actions(reviewed_sheet, reviewed_warnings)
-    derived = derive_character_sheet(reviewed_sheet)
-    devour = next(
-        item
-        for item in reviewed_sheet["content"]["activities"]
-        if item["name"] == "Devour Intellect"
-    )
-    body_thief = next(
-        item
-        for item in reviewed_sheet["content"]["activities"]
-        if item["name"] == "Body Thief"
-    )
-
-    assert source_save_effect_spec(reviewed_sheet, devour["id"]) == {
-        "kind": "intellect_devourer_devour_intellect_2014",
-        "range_ft": 10,
-        "target_count": 1,
-        "target_requirement": "has_brain",
-        "save": {"ability": "intelligence", "dc": 12},
-        "failure": {
-            "damage_expression": "2d10",
-            "damage_type": "psychic",
-            "secondary_roll": "3d6",
-            "secondary_threshold": "target_intelligence_score",
-            "ability_override": {"ability": "intelligence", "score": 0},
-            "condition": "stunned",
-            "ends_when": "target_intelligence_score_at_least_1",
-        },
-        "source_excerpt": " ".join(devour["description"].split()),
-    }
-    assert devour["mechanic_refs"] == [
-        "dnd5e.core.activity.source_save_effect"
-    ]
-    assert derived["multiattack_options"] == [
-        {
-            "id": "claws-and-devour-intellect",
-            "attacks": [
-                {"weapon_id": "claws", "attack_mode": "melee", "count": 1}
-            ],
-            "activities": [
-                {"activity_id": "devour-intellect-action", "count": 1}
-            ],
-        }
-    ]
-    assert source_contest_effect_spec(reviewed_sheet, body_thief["id"]) == {
-        "kind": "intellect_devourer_body_thief_2014",
-        "range_ft": 5,
-        "target_count": 1,
-        "target_requirements": ["incapacitated", "humanoid"],
-        "contest": {
-            "source_ability": "intelligence",
-            "target_ability": "intelligence",
-            "ties": "no_winner",
-        },
-        "success": {
-            "brain_consumed": True,
-            "source_inside_host": True,
-            "source_total_cover": True,
-            "source_retains": [
-                "intelligence",
-                "wisdom",
-                "charisma",
-                "deep_speech",
-                "telepathy",
-                "traits",
-            ],
-            "source_adopts": "target_statistics_otherwise",
-            "knowledge_transfer": "all_target_knowledge",
-            "host_zero_hp": "source_must_leave",
-        },
-        "source_excerpt": " ".join(body_thief["description"].split()),
-    }
-    assert body_thief["mechanic_refs"] == [
-        "dnd5e.core.activity.source_contest_effect"
-    ]
-    assert tuple(reviewed_warnings) == (
-        "Body Thief: protection, wish, and voluntary exit require DM settlement",
-    )
 
 
-def test_custom_same_named_intellect_actions_do_not_gain_core_privileges() -> None:
-    parsed = parse_2014_statblock(
-        INTELLECT_DEVOURER,
-        source_key="custom:intellect-like-creation",
-        rule_refs=["monster-manual-page-191"],
-    )
-    devour = next(
-        item
-        for item in parsed.sheet["content"]["activities"]
-        if item["name"] == "Devour Intellect"
-    )
-    body_thief = next(
-        item
-        for item in parsed.sheet["content"]["activities"]
-        if item["name"] == "Body Thief"
-    )
-
-    assert source_save_effect_spec(parsed.sheet, devour["id"]) is None
-    assert source_contest_effect_spec(parsed.sheet, body_thief["id"]) is None
-    assert devour["choices"]["manual_ruling"]["default_resolver"] == "agent"
-    assert body_thief["choices"]["manual_ruling"]["default_resolver"] == "agent"
 
 
 def test_mixed_weapon_and_special_action_multiattack_stays_a_dm_boundary() -> None:
@@ -2311,6 +1988,7 @@ def test_mixed_weapon_and_special_action_multiattack_stays_a_dm_boundary() -> No
             "The commoner makes one attack with its club and uses Devour Intellect."
         ),
     }
+    assert multiattack.get("mechanic_refs", []) == []
     assert "Multiattack: Multiattack composition requires a DM ruling" in parsed.warnings
 
 
@@ -2626,200 +2304,14 @@ def test_descriptive_statblock_sections_preserve_nonstandard_action_economies() 
     )
 
 
-def test_regeneration_statblock_trait_is_structured_without_a_descriptive_warning() -> None:
-    parsed = parse_2014_statblock(TROLL, source_key="srd-troll")
-
-    regeneration = next(
-        item
-        for item in parsed.sheet["content"]["features"]
-        if item["name"] == "Regeneration"
-    )
-
-    assert regeneration["activation"]["trigger"] == "start of its turn"
-    assert regeneration["choices"]["source_trait"] == {
-        "kind": "regeneration",
-        "trigger": "turn_start",
-        "amount": 10,
-        "suppressed_by_damage_types": ["acid", "fire"],
-        "dies_at_zero_when_suppressed": True,
-    }
-    assert parsed.warnings == ()
 
 
-def test_kobold_attack_traits_are_structured() -> None:
-    parsed = parse_2014_statblock(KOBOLD, source_key="monster-manual-2014:p195")
-    features = {
-        item["name"]: item
-        for item in parsed.sheet["content"]["features"]
-    }
-
-    assert features["Pack Tactics"]["choices"]["source_trait"] == {
-        "kind": "pack_tactics",
-        "trigger": "attack_roll",
-        "ally_within_target_ft": 5,
-        "requires_ally_not_incapacitated": True,
-        "grants": "advantage",
-        "automatic": True,
-    }
-    assert features["Sunlight Sensitivity"]["choices"]["source_trait"] == {
-        "kind": "sunlight_sensitivity",
-        "trigger": "attack_roll_or_sight_perception",
-        "environment_fact": "direct_sunlight",
-        "grants": "disadvantage",
-        "automatic": True,
-    }
-    assert parsed.warnings == ()
 
 
-def test_black_pudding_standard_traits_are_structured() -> None:
-    parsed = parse_2014_statblock(
-        BLACK_PUDDING,
-        source_key="monster-manual-2014:p241",
-    )
-    features = {
-        item["name"]: item for item in parsed.sheet["content"]["features"]
-    }
-    activities = {
-        item["name"]: item for item in parsed.sheet["content"]["activities"]
-    }
-    pseudopod = next(
-        item
-        for item in parsed.sheet["inventory"]["items"]
-        if item["name"] == "Pseudopod"
-    )
-
-    assert features["Amorphous"]["choices"]["source_trait"] == {
-        "kind": "amorphous",
-        "trigger": "movement",
-        "minimum_space_width_inches": 1,
-        "requires_squeezing": False,
-        "automatic": True,
-    }
-    assert features["Corrosive Form"]["choices"]["source_trait"][
-        "contact_damage_formula"
-    ] == "1d8"
-    assert features["Spider Climb"]["choices"]["source_trait"][
-        "ability_check_required"
-    ] is False
-    assert activities["Split"]["choices"]["source_trait"] == {
-        "kind": "split",
-        "trigger": "subjected_to_damage",
-        "damage_types": ["lightning", "slashing"],
-        "minimum_size": "medium",
-        "minimum_hit_points": 10,
-        "new_creature_count": 2,
-        "hit_points": "half_original_rounded_down",
-        "size_change": -1,
-    }
-    assert pseudopod["mechanics"]["on_hit_effect"] == ""
-    assert pseudopod["mechanics"]["on_hit_resolution"]["kind"] == (
-        "armor_corrosion"
-    )
-    assert parsed.warnings == ()
 
 
-def test_salamander_standard_traits_are_structured() -> None:
-    parsed = parse_2014_statblock(
-        SALAMANDER,
-        source_key="monster-manual-2014:p267",
-    )
-    features = {
-        item["name"]: item for item in parsed.sheet["content"]["features"]
-    }
-    weapons = {
-        item["name"]: item for item in parsed.sheet["inventory"]["items"]
-    }
-
-    assert features["Heated Body"]["choices"]["source_trait"] == {
-        "kind": "heated_body",
-        "trigger": "contact_or_melee_hit",
-        "melee_range_ft": 5,
-        "contact_damage_formula": "2d6",
-        "average_damage": 7,
-        "contact_damage_type": "fire",
-        "automatic": True,
-        "source_excerpt": (
-            "A creature that touches the salamander or hits it with a melee "
-            "attack while within 5 feet of it takes 7 (2d6) fire damage."
-        ),
-    }
-    assert features["Heated Weapons"]["choices"]["source_trait"][
-        "embedded_in_weapon_actions"
-    ] is True
-    expected_fire = {
-        "damage_formula": "1d6",
-        "damage_bonus": 0,
-        "damage_type": "fire",
-    }
-    assert weapons["Spear"]["mechanics"]["additional_damage"] == [expected_fire]
-    assert weapons["Spear"]["mechanics"]["versatile_additional_damage"] == [
-        expected_fire
-    ]
-    assert parsed.warnings == ()
 
 
-def test_magmin_standard_mechanics_are_structured() -> None:
-    parsed = parse_2014_statblock(
-        MAGMIN,
-        source_key="monster-manual-2014:p212",
-    )
-    features = {
-        item["name"]: item for item in parsed.sheet["content"]["features"]
-    }
-    activities = {
-        item["name"]: item for item in parsed.sheet["content"]["activities"]
-    }
-    touch = next(
-        item
-        for item in parsed.sheet["inventory"]["items"]
-        if item["name"] == "Touch"
-    )
-
-    assert features["Death Burst"]["id"] == "dnd5e.core.monster.death-burst"
-    assert features["Death Burst"]["choices"]["source_trait"] == {
-        "kind": "death_burst",
-        "trigger": "death",
-        "range_ft": 10,
-        "target": "each_creature_in_range",
-        "save_ability": "dexterity",
-        "save_dc": 11,
-        "damage_formula": "2d6",
-        "average_damage": 7,
-        "damage_type": "fire",
-        "failed_save": "full",
-        "successful_save": "half",
-        "ignite_flammable_unworn_objects": True,
-        "automatic": True,
-        "source_excerpt": (
-            "When the magmin dies, it explodes in a burst of fire and magma. "
-            "Each creature within 10 ft. of it must make a DC 11 Dexterity "
-            "saving throw, taking 7 (2d6) fire damage on a failed save, or "
-            "half as much damage on a successful one. Flammable objects that "
-            "aren't being worn or carried in that area are ignited."
-        ),
-    }
-    assert activities["Ignited Illumination"]["id"] == (
-        "dnd5e.core.monster.ignited-illumination"
-    )
-    assert activities["Ignited Illumination"]["activation"] == {
-        "type": "bonus_action",
-        "cost": 1,
-        "trigger": "bonus action on its turn",
-    }
-    assert activities["Ignited Illumination"]["choices"]["source_trait"] == {
-        "kind": "ignited_illumination",
-        "trigger": "bonus_action",
-        "mode": "toggle",
-        "bright_light_radius_ft": 10,
-        "additional_dim_light_ft": 10,
-        "automatic": True,
-    }
-    assert touch["mechanics"]["on_hit_effect"] == ""
-    assert touch["mechanics"]["on_hit_resolution"]["kind"] == (
-        "ignition_ongoing_damage"
-    )
-    assert touch["mechanics"]["on_hit_resolution"]["trigger_timing"] == "turn_end"
-    assert parsed.warnings == ()
 
 
 def test_magmin_illumination_heading_repairs_only_the_bounded_ocr_comma() -> None:
@@ -2833,256 +2325,16 @@ def test_magmin_illumination_heading_repairs_only_the_bounded_ocr_comma() -> Non
     )
 
 
-def test_magmin_standard_mechanics_accept_ocr_wrapped_source_wording() -> None:
-    parsed = parse_2014_statblock(
-        MAGMIN.replace("additional 10 ft.", "additional 10 feet.").replace(
-            "If the target is a creature or a flammable object,\n"
-            "it ignites. Until a creature takes an action to douse the fire, "
-            "the creature\n"
-            "takes 3 (1d6) fire damage at the end of each of its turns.",
-            "If the target is a creature or a\n\n"
-            "flammable object, it ignites. Until a creature takes an action to\n\n"
-            "douse the fire, the creature takes 3 (1d6) fire damage at the end\n\n"
-            "of each of its turns.",
-        ),
-        source_key="monster-manual-2014",
-    )
-
-    illumination = next(
-        item
-        for item in parsed.sheet["content"]["activities"]
-        if item["name"] == "Ignited Illumination"
-    )
-    touch = next(
-        item
-        for item in parsed.sheet["inventory"]["items"]
-        if item["name"] == "Touch"
-    )
-    assert illumination["choices"]["source_trait"]["kind"] == (
-        "ignited_illumination"
-    )
-    assert touch["mechanics"]["on_hit_resolution"]["kind"] == (
-        "ignition_ongoing_damage"
-    )
-    assert parsed.warnings == ()
 
 
-def test_keen_perception_trait_is_structured() -> None:
-    parsed = parse_2014_statblock(
-        COMMONER.replace(
-            "###### Actions",
-            (
-                "***Keen Hearing and Sight.*** The commoner has advantage on "
-                "Wisdom (Perception) checks that rely on hearing or sight.\n\n"
-                "###### Actions"
-            ),
-        ),
-        source_key="monster-manual-2014:p349",
-    )
-    feature = next(
-        item
-        for item in parsed.sheet["content"]["features"]
-        if item["name"] == "Keen Hearing and Sight"
-    )
-
-    assert feature["activation"]["trigger"] == (
-        "hearing- or sight-based Perception check"
-    )
-    assert feature["choices"]["source_trait"] == {
-        "kind": "keen_perception",
-        "trigger": "perception_check",
-        "senses": ["hearing", "sight"],
-        "grants": "advantage",
-        "automatic": True,
-    }
-    assert parsed.warnings == ()
 
 
-def test_orc_war_chief_standard_traits_and_multiattack_are_structured() -> None:
-    source = (
-        COMMONER.replace(
-            "**Challenge** 0 (10 XP)",
-            """**Challenge** 4 (1,100 XP)
-
-***Aggressive.*** As a bonus action, the commoner can move up to its speed
-toward a hostile creature that it can see.
-
-***Gruumsh's Fury.*** The commoner deals an extra 4 (1d8) damage when it hits
-with a weapon attack (included in the attacks).""",
-        )
-        .replace(
-            "###### Actions",
-            """###### Actions
-
-***Multiattack.*** The commoner makes two attacks with its club or its spear.
-
-***Battle Cry (1/Day).*** Each creature of the commoner's choice that is within
-30 feet of it, can hear it, and is not already affected by Battle Cry gains
-advantage on attack rolls until the start of the commoner's next turn. The
-commoner can then make one attack as a bonus action.""",
-        )
-        .replace(
-            "*Hit:* 2 (1d4) bludgeoning damage.",
-            """*Hit:* 6 (1d4 plus 1d8) bludgeoning damage.
-
-***Spear.*** *Melee or Ranged Weapon Attack:* +2 to hit, reach 5 ft. or range
-20/60 ft., one target. *Hit:* 7 (1d6 plus 1d8) piercing damage.""",
-        )
-    )
-    parsed = parse_2014_statblock(
-        source,
-        source_key="monster-manual-2014:p246",
-    )
-    activities = {
-        item["name"]: item for item in parsed.sheet["content"]["activities"]
-    }
-    features = {
-        item["name"]: item for item in parsed.sheet["content"]["features"]
-    }
-
-    assert activities["Aggressive"]["id"] == "dnd5e.core.monster.aggressive"
-    battle_cry = activities["Battle Cry (1/Day)"]
-    assert battle_cry["id"] == "dnd5e.core.monster.battle-cry"
-    assert battle_cry["uses"] == {
-        "label": "Battle Cry (1/Day)",
-        "value": 1,
-        "max": 1,
-        "recovers_on": "long_rest",
-        "source_key": "monster-manual-2014:p246",
-        "slot_level": 0,
-    }
-    assert [
-        option["id"]
-        for option in activities["Multiattack"]["choices"]["multiattack_options"]
-    ] == ["melee", "melee-2", "ranged"]
-    assert features["Gruumsh's Fury"]["choices"]["source_trait"][
-        "embedded_in_weapon_actions"
-    ] is True
-    assert parsed.warnings == ()
 
 
-def test_spy_standard_traits_are_structured_from_their_exact_text() -> None:
-    source = COMMONER.replace(
-        "###### Actions",
-        """***Cunning Action.*** On each of its turns, the commoner can use a
-bonus action to take the Dash, Disengage, or Hide action.
-
-***Sneak Attack (1/Turn).*** The commoner deals an extra 7 (2d6) damage when it
-hits a target with a weapon attack and has advantage on the attack roll, or
-when the target is within 5 feet of an ally of the commoner that isn't
-incapacitated and the commoner doesn't have disadvantage on the attack roll.
-
-###### Actions""",
-    )
-    parsed = parse_2014_statblock(
-        source,
-        source_key="monster-manual-2014:p349",
-    )
-    activities = {
-        item["name"]: item for item in parsed.sheet["content"]["activities"]
-    }
-    sneak_attack = next(
-        item
-        for item in parsed.sheet["content"]["features"]
-        if item["name"] == "Sneak Attack (1/Turn)"
-    )
-
-    assert activities["Cunning Action"]["id"] == (
-        "dnd5e.content.srd2014.feature.rogue-cunning-action"
-    )
-    assert sneak_attack["choices"]["source_trait"] == {
-        "kind": "sneak_attack",
-        "trigger": "eligible_weapon_hit",
-        "damage_formula": "2d6",
-        "average_damage": 7,
-        "uses_per_turn": 1,
-        "requires_finesse_or_ranged": False,
-        "ally_within_target_ft": 5,
-        "requires_ally_not_incapacitated": True,
-        "requires_no_disadvantage": True,
-        "alternative": "effective_advantage",
-    }
-    assert parsed.warnings == ()
 
 
-def test_magic_resistance_and_evasion_are_structured_from_exact_text() -> None:
-    source = COMMONER.replace(
-        "###### Actions",
-        """***Magic Resistance.*** The arch mage has advantage on saving throws
-against spells and other magical effects.
-
-***Evasion.*** If the assassin is subjected to an effect that allows it to make
-a Dexterity saving throw to take only half damage, the assassin instead takes
-no damage if it succeeds on the saving throw, and only half damage if it fails.
-
-###### Actions""",
-    )
-
-    parsed = parse_2014_statblock(
-        source,
-        source_key="monster-manual-2014:standard-save-traits",
-    )
-    traits = {
-        item["name"]: item["choices"]["source_trait"]
-        for item in parsed.sheet["content"]["features"]
-    }
-
-    assert traits["Magic Resistance"] == {
-        "kind": "magic_resistance",
-        "trigger": "saving_throw",
-        "save_source_kinds": ["spell", "magical_effect"],
-        "grants": "advantage",
-        "automatic": True,
-        "source_excerpt": (
-            "The arch mage has advantage on saving throws against spells "
-            "and other magical effects."
-        ),
-    }
-    assert traits["Evasion"] == {
-        "kind": "evasion",
-        "trigger": "dexterity_save_for_half_damage",
-        "save_ability": "dexterity",
-        "ordinary_successful_save": "half",
-        "successful_save": "none",
-        "failed_save": "half",
-        "automatic": True,
-        "source_excerpt": (
-            "If the assassin is subjected to an effect that allows it to make "
-            "a Dexterity saving throw to take only half damage, the assassin "
-            "instead takes no damage if it succeeds on the saving throw, and "
-            "only half damage if it fails."
-        ),
-    }
-    assert parsed.warnings == ()
 
 
-def test_dark_devotion_is_structured_from_exact_text() -> None:
-    source_excerpt = (
-        "The cultist has advantage on saving throws against being charmed or "
-        "frightened ."
-    )
-    parsed = parse_2014_statblock(
-        COMMONER.replace(
-            "###### Actions",
-            f"***Dark Devotion.*** {source_excerpt}\n\n###### Actions",
-        ),
-        source_key="monster-manual-2014:cultist",
-    )
-    feature = next(
-        item
-        for item in parsed.sheet["content"]["features"]
-        if item["name"] == "Dark Devotion"
-    )
-
-    assert feature["choices"]["source_trait"] == {
-        "kind": "save_advantage_against_conditions",
-        "trigger": "saving_throw",
-        "effect_conditions": ["charmed", "frightened"],
-        "grants": "advantage",
-        "automatic": True,
-        "source_excerpt": source_excerpt,
-    }
-    assert parsed.warnings == ()
 
 
 def test_archmage_precombat_footnote_is_not_parsed_as_a_spell_name() -> None:
@@ -3134,29 +2386,6 @@ Cantrips (at will): fire bolt, light, mage hand, prestidigitation, shocking gras
     assert "casts these spells on itself before combat" in spellcasting["description"]
 
 
-def test_source_traits_are_compiled_from_complete_text_not_feature_names() -> None:
-    parsed = parse_2014_statblock(
-        KOBOLD.replace(
-            "***Pack Tactics***.",
-            "***Coordinated Assault***.",
-        ).replace(
-            "***Sunlight Sensitivity***.",
-            "***Harsh Light***.",
-        ),
-        source_key="module-review:renamed-kobold-traits",
-    )
-    features = {
-        item["name"]: item
-        for item in parsed.sheet["content"]["features"]
-    }
-
-    assert features["Coordinated Assault"]["choices"]["source_trait"]["kind"] == (
-        "pack_tactics"
-    )
-    assert features["Harsh Light"]["choices"]["source_trait"]["kind"] == (
-        "sunlight_sensitivity"
-    )
-    assert parsed.warnings == ()
 
 
 def test_false_appearance_stays_descriptive_for_agent_adjudication() -> None:
@@ -3190,309 +2419,12 @@ def test_false_appearance_stays_descriptive_for_agent_adjudication() -> None:
     )
 
 
-def test_ancient_blue_dragon_standard_actions_are_structured() -> None:
-    parsed = parse_2014_statblock(
-        """# Ancient Blue Dragon
-
-*Gargantuan dragon, lawful evil*
-
-**Armor Class** 22 (natural armor)
-**Hit Points** 481 (26d20 + 208)
-**Speed** 40 ft., burrow 40 ft., fly 80 ft.
-
-| STR | DEX | CON | INT | WIS | CHA |
-|---|---|---|---|---|---|
-| 29 (+9) | 10 (+0) | 27 (+8) | 18 (+4) | 17 (+3) | 21 (+5) |
-
-**Saving Throws** Dex +7, Con +15, Wis +10, Cha +12
-**Skills** Perception +17, Stealth +7
-**Damage Immunities** lightning
-**Senses** blindsight 60 ft., darkvision 120 ft., passive Perception 27
-**Languages** Common, Draconic
-**Challenge** 23 (32,500 XP)
-
-***Legendary Resistance (3/Day).*** If the dragon fails a saving throw, it can
-choose to succeed instead.
-
-## Actions
-
-***Multiattack.*** The dragon can use its Frightful Presence. It then makes
-three attacks: one with its bite and two with its claws.
-
-***Bite.*** *Melee Weapon Attack:* +16 to hit, reach 15 ft., one target.
-*Hit:* 20 (2d10 + 9) piercing damage plus 11 (2d10) lightning damage.
-
-***Claw.*** *Melee Weapon Attack:* +16 to hit, reach 10 ft., one target.
-*Hit:* 16 (2d6 + 9) slashing damage.
-
-***Tail.*** *Melee Weapon Attack:* +16 to hit, reach 20 ft., one target.
-*Hit:* 18 (2d8 + 9) bludgeoning damage.
-
-***Frightful Presence.*** Each creature of the dragon's choice that is within
-120 feet of the dragon and aware of it must succeed on a DC 20 Wisdom saving
-throw or become frightened for 1 minute. A creature can repeat the saving throw
-at the end of each of its turns, ending the effect on itself on a success. If a
-creature's saving throw is successful or the effect ends for it, the creature
-is immune to the dragon's Frightful Presence for the next 24 hours.
-
-***Lightning Breath (Recharge 5-6).*** The dragon exhales lightning in a
-120-foot line that is 10 feet wide. Each creature in that line must make a DC
-23 Dexterity saving throw, taking 88 (16d10) lightning damage on a failed save,
-or half as much damage on a successful one.
-
-## Legendary Actions
-
-The dragon can take 3 legendary actions, choosing from the options below. Only
-one legendary action option can be used at a time and only at the end of
-another creature's turn. The dragon regains spent legendary actions at the
-start of its turn.
-
-***Detect.*** The dragon makes a Wisdom (Perception) check.
-
-***Tail Attack.*** The dragon makes a tail attack.
-
-***Wing Attack (Costs 2 Actions).*** The dragon beats its wings. Each creature
-within 15 feet of the dragon must succeed on a DC 24 Dexterity saving throw or
-take 16 (2d6 + 9) bludgeoning damage and be knocked prone. The dragon can then
-fly up to half its flying speed.
-""",
-        source_key="monster-manual-2014:p91",
-    )
-    activities = {
-        item["name"]: item for item in parsed.sheet["content"]["activities"]
-    }
-    legendary_resistance = next(
-        item
-        for item in parsed.sheet["content"]["features"]
-        if item["name"] == "Legendary Resistance (3/Day)"
-    )
-    assert legendary_resistance["choices"]["manual_ruling"] == {
-        "kind": "descriptive_passive",
-        "default_resolver": "agent",
-        "source_excerpt": (
-            "If the dragon fails a saving throw, it can choose to succeed instead."
-        ),
-    }
-    assert activities["Frightful Presence"]["choices"][
-        "frightful_presence"
-    ]["save_dc"] == 20
-    assert activities["Frightful Presence"]["choices"][
-        "frightful_presence"
-    ]["save_source_kind"] == "nonmagical_effect"
-    assert activities["Lightning Breath (Recharge 5-6)"]["choices"][
-        "area_save_damage"
-    ]["area"] == {
-        "shape": "line",
-        "length_ft": 120,
-        "width_ft": 10,
-    }
-    assert activities["Lightning Breath (Recharge 5-6)"]["choices"][
-        "area_save_damage"
-    ]["save_source_kind"] == "nonmagical_effect"
-    assert activities["Detect"]["choices"]["legendary_action"]["effect"] == {
-        "kind": "skill_check",
-        "ability": "wisdom",
-        "skill": "perception",
-    }
-    assert activities["Tail Attack"]["choices"]["legendary_action"]["effect"] == {
-        "kind": "weapon_attack",
-        "weapon_id": "tail",
-        "attack_mode": "melee",
-    }
-    wing = activities["Wing Attack (Costs 2 Actions)"]
-    assert wing["activation"]["cost"] == 2
-    assert wing["choices"]["legendary_action"]["effect"]["kind"] == (
-        "wing_attack_2014"
-    )
-    assert wing["choices"]["legendary_action"]["effect"][
-        "save_source_kind"
-    ] == "nonmagical_effect"
-    assert parsed.warnings == (
-        "Legendary Resistance (3/Day): descriptive passive is not automatically settled",
-    )
 
 
-def test_assassinate_is_structured_from_exact_text() -> None:
-    source_text = (
-        "During its first turn, the assassin has advantage on attack rolls "
-        "against any creature that hasn't taken a turn. Any hit the assassin "
-        "scores against a surprised creature is a critical hit."
-    )
-    parsed = parse_2014_statblock(
-        COMMONER.replace(
-            "###### Actions",
-            f"***Assassinate***. {source_text}\n\n###### Actions",
-        ),
-        source_key="monster-manual-2014:assassin",
-    )
-    feature = next(
-        item
-        for item in parsed.sheet["content"]["features"]
-        if item["name"] == "Assassinate"
-    )
-
-    assert feature["choices"]["source_trait"] == {
-        "kind": "assassinate",
-        "trigger": "attack_roll",
-        "attacker_turn": "first",
-        "advantage_if_target_has_not_taken_turn": True,
-        "critical_on_hit_if_target_surprised": True,
-        "automatic": True,
-        "source_excerpt": source_text,
-    }
-    assert parsed.warnings == ()
 
 
-def test_weapon_hit_save_damage_is_structured_from_exact_text() -> None:
-    source_excerpt = (
-        "and the target must make a DC 15 Constitution saving throw, taking "
-        "24 (7d6) poison damage on a failed save, or half as much damage on a "
-        "successful one."
-    )
-    parsed = parse_2014_statblock(
-        COMMONER.replace("### Commoner", "### Assassin").replace(
-            "***Club***. *Melee Weapon Attack:* +2 to hit, reach 5 ft., one target.\n"
-            "*Hit:* 2 (1d4) bludgeoning damage.",
-            "***Shortsword***. *Melee Weapon Attack:* +7 to hit, reach 5 ft., "
-            "one target.\n"
-            "*Hit:* 6 (1d6 + 3) piercing damage, and the target must\n\n"
-            "make a DC 15 Constitution saving throw, taking 24 (7d6)\n\n"
-            "poison damage on a failed save, or half as much damage on a\n\n"
-            "successful one.\n\n"
-            "Assassins are remorseless killers who work for anyone who can "
-            "afford them.",
-        ),
-        source_key="monster-manual-2014:assassin",
-    )
-    shortsword = next(
-        item
-        for item in parsed.sheet["inventory"]["items"]
-        if item["name"] == "Shortsword"
-    )
-
-    assert shortsword["mechanics"]["on_hit_effect"] == ""
-    assert shortsword["mechanics"]["on_hit_resolution"] == {
-        "kind": "save_damage",
-        "trigger": "weapon_hit",
-        "save_ability": "constitution",
-        "save_dc": 15,
-        "damage_formula": "7d6",
-        "average_damage": 24,
-        "damage_type": "poison",
-        "half_on_success": True,
-        "save_source_kind": "nonmagical_effect",
-        "automatic": True,
-        "source_excerpt": source_excerpt,
-    }
-    assert parsed.warnings == ()
-    assert parsed.normalization_notes == (
-        "Shortsword: trailing creature prose excluded from action settlement",
-    )
 
 
-def test_merrow_standard_traits_and_harpoon_are_fully_structured() -> None:
-    parsed = parse_2014_statblock(
-        """# Merrow
-
-*Large monstrosity, chaotic evil*
-
-**Armor Class** 13 (natural armor)
-**Hit Points** 45 (6d10 + 12)
-**Speed** 10 ft., swim 40 ft.
-
-| STR | DEX | CON | INT | WIS | CHA |
-|---|---|---|---|---|---|
-| 18 (+4) | 10 (+0) | 15 (+2) | 8 (-1) | 10 (+0) | 9 (-1) |
-
-**Senses** darkvision 60 ft., passive Perception 10
-**Languages** Abyssal, Aquan
-**Challenge** 2 (450 XP)
-
-***Amphibious***. The merrow can breathe air and water.
-
-## Actions
-
-***Multiattack***. The merrow makes two attacks: one with its bite and one with
-its claws or harpoon.
-
-***Bite***. *Melee Weapon Attack:* +6 to hit, reach 5 ft., one target.
-*Hit:* 8 (1d8 + 4) piercing damage.
-
-***Claws***. *Melee Weapon Attack:* +6 to hit, reach 5 ft., one target.
-*Hit:* 9 (2d4 + 4) slashing damage.
-
-***Harpoon***. *Melee or Ranged Weapon Attack:* +6 to hit, reach 5 ft. or range
-20/60 ft., one target. *Hit:* 11 (2d6 + 4) piercing damage. If the target is a
-Huge or smaller creature, it must succeed on a Strength contest against the
-merrow or be pulled up to 20 feet toward the merrow.
-""",
-        source_key="monster-manual-2014:p220",
-    )
-
-    amphibious = next(
-        item
-        for item in parsed.sheet["content"]["features"]
-        if item["name"] == "Amphibious"
-    )
-    assert amphibious["choices"]["source_trait"] == {
-        "kind": "breathing_media",
-        "trigger": "environmental_breathing",
-        "media": ["air", "water"],
-        "automatic": True,
-        "source_excerpt": "The merrow can breathe air and water.",
-    }
-    multiattack = next(
-        item
-        for item in parsed.sheet["content"]["activities"]
-        if item["name"] == "Multiattack"
-    )
-    assert multiattack["choices"]["multiattack_options"] == [
-        {
-            "id": "melee",
-            "attacks": [
-                {"weapon_id": "bite", "attack_mode": "melee", "count": 1},
-                {"weapon_id": "claws", "attack_mode": "melee", "count": 1},
-            ],
-        },
-        {
-            "id": "melee-2",
-            "attacks": [
-                {"weapon_id": "bite", "attack_mode": "melee", "count": 1},
-                {"weapon_id": "harpoon", "attack_mode": "melee", "count": 1},
-            ],
-        },
-        {
-            "id": "mixed",
-            "attacks": [
-                {"weapon_id": "bite", "attack_mode": "melee", "count": 1},
-                {"weapon_id": "harpoon", "attack_mode": "ranged", "count": 1},
-            ],
-        },
-    ]
-    harpoon = next(
-        item
-        for item in parsed.sheet["inventory"]["items"]
-        if item["name"] == "Harpoon"
-    )
-    assert harpoon["mechanics"]["on_hit_effect"] == ""
-    assert harpoon["mechanics"]["on_hit_resolution"] == {
-        "kind": "contest_pull",
-        "trigger": "weapon_hit",
-        "required_target_kind": "creature",
-        "maximum_target_size": "huge",
-        "source_ability": "strength",
-        "target_ability": "strength",
-        "ties": "no_movement",
-        "maximum_distance_ft": 20,
-        "direction": "toward_source",
-        "automatic": True,
-        "source_excerpt": (
-            "If the target is a Huge or smaller creature, it must succeed on a "
-            "Strength contest against the merrow or be pulled up to 20 feet "
-            "toward the merrow."
-        ),
-    }
-    assert parsed.warnings == ()
 
 
 def test_source_trait_with_unparsed_clause_stays_an_agent_ruling() -> None:
@@ -3515,32 +2447,6 @@ def test_source_trait_with_unparsed_clause_stays_an_agent_ruling() -> None:
     )
 
 
-def test_statblock_entries_accept_period_inside_emphasis() -> None:
-    markdown = (
-        KOBOLD.replace(
-            "***Sunlight Sensitivity***.",
-            "***Sunlight Sensitivity.***",
-        )
-        .replace("***Pack Tactics***.", "***Pack Tactics.***")
-        .replace("***Dagger***.", "***Dagger.***")
-        .replace("***Sling***.", "***Sling.***")
-    )
-
-    parsed = parse_2014_statblock(
-        markdown,
-        source_key="monster-manual-2014:p195-visual-review",
-    )
-
-    assert {
-        item["name"]
-        for item in parsed.sheet["inventory"]["items"]
-        if item["kind"] == "weapon"
-    } == {"Dagger", "Sling"}
-    assert {
-        item["name"]
-        for item in parsed.sheet["content"]["features"]
-    } >= {"Sunlight Sensitivity", "Pack Tactics"}
-    assert parsed.warnings == ()
 
 
 def test_effect_only_weapon_attack_preserves_web_ruling_without_fake_damage() -> None:
@@ -3556,6 +2462,13 @@ def test_effect_only_weapon_attack_preserves_web_ruling_without_fake_damage() ->
     assert web["damage_expression"] == ""
     assert web["damage_type"] == ""
     assert web["on_hit_effect"].startswith("The target is restrained by webbing")
+    assert web["uses"]["value"] == 1
+    assert web["recharge"] == {
+        "kind": "d6_turn_start",
+        "minimum": 5,
+        "maximum": 6,
+        "source_marker": "(Recharge 5-6)",
+    }
     assert parsed.warnings == ("Web (Recharge 5-6): on-hit effect requires DM settlement",)
 
 
@@ -3633,53 +2546,6 @@ def test_weapon_range_does_not_recover_ambiguous_prose_as_separator() -> None:
     assert attacks["dagger"]["thrown_range_ft"] == {"normal": 0, "long": 0}
 
 
-def test_bandit_captain_preserves_exact_overrides_and_multiattack_composition() -> None:
-    parsed = parse_2014_statblock(
-        BANDIT_CAPTAIN,
-        source_key="srd-bandit-captain",
-        rule_refs=["chunk-bandit-captain"],
-    )
-    derived = derive_character_sheet(parsed.sheet)
-
-    assert derived["armor_class"] == 15
-    assert parsed.sheet["inventory"]["equipment_slots"]["armor"] == "statblock-studded-leather"
-    assert derived["stealth_disadvantage"] is False
-    assert derived["saving_throws"]["strength"] == 4
-    assert derived["saving_throws"]["dexterity"] == 5
-    assert derived["skills"]["athletics"] == 4
-    assert derived["skills"]["deception"] == 4
-    attacks = {item["item_id"]: item for item in derived["inventory"]["weapon_attacks"]}
-    assert attacks["scimitar"]["attack_bonus"] == 5
-    assert attacks["scimitar"]["damage_expression"] == "1d6 + 3"
-    assert attacks["dagger"]["damage_expression"] == "1d4 + 2"
-    assert attacks["dagger"]["thrown_range_ft"] == {"normal": 20, "long": 60}
-    assert derived["attacks_per_action"] == 1
-    options = {item["id"]: item["attacks"] for item in derived["multiattack_options"]}
-    assert options["melee"] == [
-        {"weapon_id": "scimitar", "attack_mode": "melee", "count": 2},
-        {"weapon_id": "dagger", "attack_mode": "melee", "count": 1},
-    ]
-    assert options["ranged"] == [
-        {"weapon_id": "dagger", "attack_mode": "ranged", "count": 2}
-    ]
-    parry = next(
-        item
-        for item in parsed.sheet["content"]["activities"]
-        if item["name"] == "Parry"
-    )
-    assert parry["activation"] == {
-        "type": "reaction",
-        "cost": 1,
-        "trigger": "hit by a melee attack",
-    }
-    assert parry["choices"]["reaction_defense"] == {
-        "kind": "armor_class_bonus",
-        "bonus": 2,
-        "attack_modes": ["melee"],
-        "requires_visible_attacker": False,
-        "requires_wielded_melee_weapon": False,
-    }
-    assert parsed.warnings == ()
 
 
 def test_multiattack_parses_once_with_each_weapon_composition() -> None:
@@ -3843,20 +2709,6 @@ def test_generic_multiattack_uses_only_unambiguous_compatible_weapon() -> None:
     assert parsed.warnings == ()
 
 
-def test_generic_multiattack_requires_one_compatible_weapon() -> None:
-    parsed = parse_2014_statblock(
-        BANDIT_CAPTAIN.replace(
-            (
-                "The captain makes three melee attacks: two with its scimitar and one with its\n"
-                "dagger. Or the captain makes two ranged attacks with its daggers."
-            ),
-            "The captain makes two melee weapon attacks.",
-        ),
-        source_key="module-review:ambiguous-generic-multiattack",
-    )
-
-    assert derive_character_sheet(parsed.sheet)["multiattack_options"] == []
-    assert parsed.warnings == ("Multiattack: Multiattack composition requires a DM ruling",)
 
 
 def test_agent_review_can_fill_unresolved_multiattack_without_new_text_heuristics() -> None:
@@ -3960,7 +2812,7 @@ def test_qualified_multiattack_keeps_source_name_and_accepts_reviewed_fill() -> 
         if item["id"] == "multiattack-yuan-ti-form-only-action"
     )
     assert activity["name"] == "Multiattack (Yuan-ti Form Only)"
-    assert activity["mechanic_refs"] == [MULTIATTACK_MECHANIC_ID]
+    assert activity.get("mechanic_refs", []) == []
     assert derive_character_sheet(parsed.sheet)["multiattack_options"] == []
 
     filled = apply_reviewed_statblock_fill(
@@ -4009,6 +2861,12 @@ def test_qualified_multiattack_keeps_source_name_and_accepts_reviewed_fill() -> 
     assert [item["id"] for item in derive_character_sheet(filled["sheet"])[
         "multiattack_options"
     ]] == ["two-longbows", "bite-and-scimitar"]
+    filled_activity = next(
+        item
+        for item in filled["sheet"]["content"]["activities"]
+        if item["id"] == activity["id"]
+    )
+    assert filled_activity["mechanic_refs"] == [MULTIATTACK_MECHANIC_ID]
     assert filled["resolved_warnings"] == [
         "Multiattack (Yuan-ti Form Only): "
         "Multiattack composition requires a DM ruling"
@@ -4105,73 +2963,6 @@ def test_agent_review_can_confirm_parser_recognized_multiattack() -> None:
     assert filled["fill"]["multiattack_options"][0]["default_resolver"] == "agent"
 
 
-def test_agent_review_can_add_a_source_cited_variant_weapon_action() -> None:
-    parsed = parse_2014_statblock(
-        BANDIT_CAPTAIN,
-        source_key="rule-review:base-statblock",
-    )
-    multiattack = next(
-        item
-        for item in parsed.sheet["content"]["activities"]
-        if item["name"] == "Multiattack"
-    )
-    web_garrote = (
-        "Melee Weapon Attack: +4 to hit, reach 5 ft., one Medium or Small "
-        "creature against which the ettercap has advantage on the attack roll. "
-        "Hit: 4 (1d4 + 2) bludgeoning damage, and the target is grappled "
-        "(escape DC 12). Until this grapple ends, the target can't breathe, "
-        "and the ettercap has advantage on attack rolls against it."
-    )
-
-    filled = apply_reviewed_statblock_fill(
-        parsed.sheet,
-        {
-            "additional_actions": [
-                {
-                    "name": "Web Garrote",
-                    "source_ref": "rule-chunk:web-garrote",
-                    "source_excerpt": web_garrote,
-                    "reason": (
-                        "The reviewed adjacent-column variant grants this exact "
-                        "weapon action to an armed ettercap."
-                    ),
-                }
-            ],
-            "multiattack_options": [
-                {
-                    "activity_id": multiattack["id"],
-                    "source_excerpt": multiattack["description"],
-                    "reason": "The Agent confirmed the printed base composition.",
-                    "options": multiattack["choices"]["multiattack_options"],
-                }
-            ],
-        },
-    )
-
-    weapon = next(
-        item
-        for item in filled["sheet"]["inventory"]["items"]
-        if item["id"] == "web-garrote"
-    )
-    assert weapon["source_key"] == "agent-fill:rule-chunk:web-garrote"
-    assert weapon["mechanics"]["attack_bonus_override"] == 4
-    assert weapon["mechanics"]["damage_formula"] == "1d4"
-    assert weapon["mechanics"]["damage_bonus_override"] == 2
-    assert weapon["mechanics"]["damage_type"] == "bludgeoning"
-    assert "target is grappled" in weapon["mechanics"]["on_hit_effect"]
-    assert weapon["mechanics"]["required_target_sizes"] == ["medium", "small"]
-    assert weapon["mechanics"]["requires_attack_advantage"] is True
-    assert filled["fill"]["additional_actions"][0]["id"] == "web-garrote"
-    assert filled["added_warnings"] == [
-        "Web Garrote: on-hit effect requires DM settlement"
-    ]
-    replayed = apply_reviewed_statblock_fill(parsed.sheet, filled["fill"])
-    assert replayed["fill"] == filled["fill"]
-
-    mismatched = deepcopy(filled["fill"])
-    mismatched["additional_actions"][0]["id"] = "agent-overridden-id"
-    with pytest.raises(StatblockImportError, match="parser-derived weapon id"):
-        apply_reviewed_statblock_fill(parsed.sheet, mismatched)
 
 
 def test_agent_reviewed_additional_action_rejects_unmanaged_or_duplicate_actions() -> None:
@@ -4277,147 +3068,13 @@ def test_agent_ruling_multiattack_rejects_structured_options() -> None:
         )
 
 
-def test_source_parry_preserves_visibility_and_wielded_weapon_requirements() -> None:
-    parsed = parse_2014_statblock(
-        BANDIT_CAPTAIN.replace(
-            "The captain adds 2 to its AC against one melee attack that would hit it.",
-            (
-                "The captain adds 2 to its AC against one melee attack that would hit it. "
-                "To do so, the captain must see the attacker and be wielding a melee weapon."
-            ),
-        ),
-        source_key="module-review:nimblewright",
-    )
-
-    parry = next(
-        item
-        for item in parsed.sheet["content"]["activities"]
-        if item["name"] == "Parry"
-    )
-    assert parry["choices"]["reaction_defense"] == {
-        "kind": "armor_class_bonus",
-        "bonus": 2,
-        "attack_modes": ["melee"],
-        "requires_visible_attacker": True,
-        "requires_wielded_melee_weapon": True,
-    }
-    assert parsed.warnings == ()
 
 
-def test_source_parry_excludes_a_following_creature_lore_paragraph() -> None:
-    parsed = parse_2014_statblock(
-        BANDIT_CAPTAIN.replace(
-            "The captain adds 2 to its AC against one melee attack that would hit it.",
-            (
-                "The captain adds 2 to its AC against one melee attack that would hit it. "
-                "To do so, the captain must see the attacker and be wielding a melee weapon."
-            ),
-        )
-        + """
-
-It takes a strong personality and ruthless cunning to keep a gang of bandits
-in line. The bandit captain has these qualities in spades.
-""",
-        source_key="srd-bandit-captain-with-lore",
-    )
-
-    parry = next(
-        item
-        for item in parsed.sheet["content"]["activities"]
-        if item["name"] == "Parry"
-    )
-    assert parry["choices"]["reaction_defense"]["kind"] == "armor_class_bonus"
-    assert "strong personality" not in parry["description"]
-    assert parsed.warnings == ()
-    assert parsed.normalization_notes == (
-        "Parry: trailing creature prose excluded from reaction settlement",
-    )
 
 
-def test_source_parry_excludes_conflated_trailing_creature_lore() -> None:
-    parsed = parse_2014_statblock(
-        BANDIT_CAPTAIN.replace(
-            "The captain adds 2 to its AC against one melee attack that would hit it.",
-            (
-                "The captain adds 2 to its AC against one melee attack that would hit it. "
-                "To do so, the captain must see the attacker and be wielding a melee weapon. "
-                "It takes a strong personality, ruthless cunning, and a silver tongue to "
-                "keep a gang of bandits in line. The bandit captain has these qualities "
-                "in spades. To keep the crew in line, the captain must mete out rewards "
-                "and punishment on a regular basis."
-            ),
-        ),
-        source_key="rulebook-ocr:bandit-captain-with-conflated-lore",
-    )
-
-    parry = next(
-        item
-        for item in parsed.sheet["content"]["activities"]
-        if item["name"] == "Parry"
-    )
-    assert parry["description"] == (
-        "The captain adds 2 to its AC against one melee attack that would hit it. "
-        "To do so, the captain must see the attacker and be wielding a melee weapon."
-    )
-    assert parry["choices"]["reaction_defense"] == {
-        "kind": "armor_class_bonus",
-        "bonus": 2,
-        "attack_modes": ["melee"],
-        "requires_visible_attacker": True,
-        "requires_wielded_melee_weapon": True,
-    }
-    assert parsed.warnings == ()
-    assert parsed.normalization_notes == (
-        "Parry: trailing creature prose excluded from reaction settlement",
-    )
 
 
-@pytest.mark.parametrize(
-    "reaction",
-    [
-        (
-            "The noble adds 2 to its AC aga inst one melee attack that would hit it. "
-            "To do so, the noble mu st see the attacker and be wielding a melee weapon."
-        ),
-        (
-            "The veteran adds 3 to its AC against one melee attack that would hit it. "
-            "To do so, the veteran must se e the attacker and be wielding a melee weapon."
-        ),
-        (
-            "The hobgoblin adds 3 to its AC against one melee attack that would hit it. "
-            "To do so, the hobgoblin mus t see the attacker and be wielding a melee weapon."
-        ),
-        (
-            "Th e death kni ght add s 6 to its AC against one melee attack that wo uld "
-            "hit it. To do so, the dea th knight mu st see the attacker and be wield ing "
-            "a me lee wea pon."
-        ),
-    ],
-)
-def test_source_parry_repairs_rulebook_ocr_word_splits(reaction: str) -> None:
-    parsed = parse_2014_statblock(
-        BANDIT_CAPTAIN.replace(
-            "The captain adds 2 to its AC against one melee attack that would hit it.",
-            reaction,
-        ),
-        source_key="rulebook-ocr:parry",
-    )
 
-    parry = next(
-        item
-        for item in parsed.sheet["content"]["activities"]
-        if item["name"] == "Parry"
-    )
-    defense = parry["choices"]["reaction_defense"]
-    assert defense["kind"] == "armor_class_bonus"
-    assert defense["bonus"] in {2, 3, 6}
-    assert defense["attack_modes"] == ["melee"]
-    assert defense["requires_visible_attacker"] is True
-    assert defense["requires_wielded_melee_weapon"] is True
-    assert parsed.warnings == ()
-    assert parsed.normalization_notes == (
-        "Parry: standard reaction OCR word splits repaired",
-    )
 
 
 def test_source_parry_rejects_mismatched_requirement_subject() -> None:
@@ -4441,28 +3098,6 @@ def test_source_parry_rejects_mismatched_requirement_subject() -> None:
     assert "Parry: descriptive reaction is not automatically settled" in parsed.warnings
 
 
-def test_source_parry_excludes_noble_lore_that_uses_wield_descriptively() -> None:
-    parsed = parse_2014_statblock(
-        BANDIT_CAPTAIN.replace(
-            "The captain adds 2 to its AC against one melee attack that would hit it.",
-            (
-                "The noble adds 2 to its AC aga inst one melee attack that would hit it. "
-                "To do so, the noble mu st see the attacker and be wielding a melee weapon. "
-                "Nobles wield great authority and influence as members of the upper class, "
-                "possessing wealth and connections that can make them as powerful as generals."
-            ),
-        ),
-        source_key="rulebook-ocr:noble-with-lore",
-    )
-    parry = next(
-        item
-        for item in parsed.sheet["content"]["activities"]
-        if item["name"] == "Parry"
-    )
-
-    assert parry["choices"]["reaction_defense"]["requires_wielded_melee_weapon"] is True
-    assert "great authority" not in parry["description"]
-    assert parsed.warnings == ()
 
 
 def test_source_parry_keeps_unparsed_wielded_shield_extension_for_agent() -> None:
@@ -4483,19 +3118,6 @@ def test_source_parry_keeps_unparsed_wielded_shield_extension_for_agent() -> Non
     assert "Parry: descriptive reaction is not automatically settled" in parsed.warnings
 
 
-def test_reaction_defense_is_compiled_from_complete_text_not_activity_name() -> None:
-    parsed = parse_2014_statblock(
-        BANDIT_CAPTAIN.replace("***Parry***.", "***Deflect***."),
-        source_key="module-review:renamed-parry",
-    )
-    reaction = next(
-        item
-        for item in parsed.sheet["content"]["activities"]
-        if item["name"] == "Deflect"
-    )
-
-    assert reaction["choices"]["reaction_defense"]["kind"] == "armor_class_bonus"
-    assert parsed.warnings == ()
 
 
 def test_reaction_defense_with_unparsed_clause_stays_an_agent_ruling() -> None:
@@ -4908,13 +3530,16 @@ def test_source_bound_variant_can_apply_common_module_instance_changes() -> None
             "darkvision_ft": 60,
             "languages": ["Common", "Elvish"],
             "condition_immunities": ["Poisoned", "Exhaustion"],
-            "relentless_endurance": {
-                "feature_id": "relentless-endurance",
-                "source_excerpt": (
-                    "When reduced to 0 hit points, he drops to 1 hit point instead "
-                    "(but can't do this again until he finishes a long rest)."
-                ),
-            },
+            "add_features": [
+                {
+                    "id": "last-defiance",
+                    "name": "Last Defiance",
+                    "description": (
+                        "When reduced to 0 hit points, he drops to 1 hit point instead "
+                        "once, then must finish a long rest before doing so again."
+                    ),
+                }
+            ],
             "action_overrides": {
                 "club": {
                     "id": "gauntlet-slam",
@@ -4940,24 +3565,11 @@ def test_source_bound_variant_can_apply_common_module_instance_changes() -> None
     feature = next(
         item
         for item in sheet["content"]["features"]
-        if item["id"] == "relentless-endurance"
+        if item["id"] == "last-defiance"
     )
-    assert {
-        key: feature["uses"][key]
-        for key in ("label", "value", "max", "recovers_on")
-    } == {
-        "label": "uses",
-        "value": 1,
-        "max": 1,
-        "recovers_on": "long_rest",
-    }
-    assert feature["choices"]["source_trait"] == {
-        "kind": "relentless_endurance",
-        "trigger": "reduced_to_zero",
-        "drop_to_hit_points": 1,
-        "requires_not_killed_outright": True,
-        "automatic": True,
-    }
+    assert feature["description"].startswith("When reduced to 0 hit points")
+    assert feature["choices"] == {}
+    assert feature["mechanic_refs"] == []
     assert derived["inventory"]["weapon_attacks"][0]["item_id"] == "gauntlet-slam"
     assert derived["inventory"]["weapon_attacks"][0]["damage_type"] == "force"
     assert derived["inventory"]["weapon_attacks"][0]["reach_ft"] == 15
@@ -4967,6 +3579,22 @@ def test_source_bound_variant_can_apply_common_module_instance_changes() -> None
     assert "1d4 bludgeoning damage" not in attack["description"]
     assert "1d4 force damage" in attack["description"]
     assert "Variant source: module-scene:d12" in attack["description"]
+
+
+def test_source_bound_variant_rejects_removed_creature_specific_rule_fields() -> None:
+    parsed = parse_2014_statblock(COMMONER, source_key="srd-commoner")
+
+    with pytest.raises(StatblockImportError, match="unsupported statblock variant fields"):
+        apply_statblock_variant(
+            parsed.sheet,
+            {
+                "source_ref": "module-scene:d12",
+                "relentless_endurance": {
+                    "feature_id": "relentless-endurance",
+                    "source_excerpt": "A creature-specific rule.",
+                },
+            },
+        )
 
 
 def test_source_bound_variant_can_replace_ranged_attack_damage_and_range() -> None:

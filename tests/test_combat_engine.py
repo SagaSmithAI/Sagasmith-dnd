@@ -8,7 +8,6 @@ from sagasmith_dnd.character_schema import (
     default_character_sheet,
     derive_character_sheet,
     equip_inventory_item,
-    remove_effect,
     validate_character_sheet,
 )
 from sagasmith_dnd.combat_engine import (
@@ -30,10 +29,8 @@ from sagasmith_dnd.combat_engine import (
     consume_weapon_mastery_attack_effects,
     current_combatant,
     damage_amount_after_reduction,
-    detach_attachment,
     end_concentration_for_incapacitating_conditions,
     end_turn,
-    execute_split_reaction,
     force_move_directly_away,
     force_move_directly_toward,
     pay_activity_activation,
@@ -53,33 +50,34 @@ from sagasmith_dnd.combat_engine import (
     resolve_common_action,
     resolve_death_save_to_sheet,
     resolve_divine_spark_to_sheet,
-    resolve_heated_body_melee_hit,
     resolve_hypnotic_pattern_target,
     resolve_preserve_life_to_sheets,
-    resolve_random_save_effects,
     resolve_readied_spell_window,
     resolve_save_damage_to_sheet,
     resolve_save_damage_to_sheets,
     resolve_second_wind_to_sheet,
-    resolve_source_contest_effect,
-    resolve_source_save_effect,
-    resolve_standard_weapon_on_hit,
     resolve_turn_undead_to_sheets,
     roll_attack_action,
     settle_core_activity_effect,
-    settle_start_turn_regeneration,
     source_speed_multiplier,
     spend_movement,
     stabilize_sheet,
     standard_save_damage_reduction,
     start_encounter,
-    structured_critical_followup,
     trigger_readied_spell,
 )
+from sagasmith_dnd.content_solution import build_content_solution
 from sagasmith_dnd.engine import resolve_check, roll_d20
 from sagasmith_dnd.lifecycle import apply_rest
+from sagasmith_dnd.resolution_plan import (
+    compile_resolution_plan,
+    resolution_plan_template,
+)
 from sagasmith_dnd.rule_engine import resolution_context
 from sagasmith_dnd.spatial import compile_battle_map
+from sagasmith_dnd.standard_feature_ids import (
+    CORE_RELENTLESS_ENDURANCE_MECHANIC_ID,
+)
 from sagasmith_dnd.standard_spell_ids import (
     CORE_2024_HYPNOTIC_PATTERN_SPELL_ID,
     CORE_HYPNOTIC_PATTERN_SPELL_ID,
@@ -175,77 +173,6 @@ def test_generic_save_damage_applies_audited_per_target_save_bonuses() -> None:
     ]
 
 
-def test_magic_resistance_requires_source_kind_and_applies_advantage() -> None:
-    actor = _actor("archmage")
-    actor["sheet"]["content"]["features"].append(
-        {
-            "id": "magic-resistance-passive",
-            "name": "Magic Resistance",
-            "choices": {
-                "source_trait": {
-                    "kind": "magic_resistance",
-                    "trigger": "saving_throw",
-                    "save_source_kinds": ["spell", "magical_effect"],
-                    "grants": "advantage",
-                    "automatic": True,
-                    "source_excerpt": (
-                        "The archmage has advantage on saving throws against "
-                        "spells and other magical effects."
-                    ),
-                }
-            },
-        }
-    )
-    actor["derived"] = derive_character_sheet(actor["sheet"])
-    effective = {
-        "edition": "2014",
-        "fingerprint": "",
-        "lock": [],
-        "mechanics": [],
-    }
-
-    with pytest.raises(NeedsRulingError, match="source kind"):
-        resolve_actor_check(
-            actor,
-            kind="save",
-            ability="wisdom",
-            dc=15,
-            rules=resolution_context(effective),
-            rng=_SequenceRng(20),
-        )
-
-    magical = resolve_actor_check(
-        actor,
-        kind="save",
-        ability="wisdom",
-        dc=15,
-        rules=resolution_context(
-            effective,
-            facts={"save_source_kind": "spell"},
-        ),
-        rng=_SequenceRng(3, 17),
-    )
-    assert magical["rolls"] == [3, 17]
-    assert magical["roll_mode"] == "advantage"
-    assert magical["success"] is True
-    assert [
-        receipt["mechanic_id"] for receipt in magical["rule_receipts"]
-    ] == ["dnd5e.core.save.magic_resistance"]
-
-    nonmagical = resolve_actor_check(
-        actor,
-        kind="save",
-        ability="wisdom",
-        dc=15,
-        rules=resolution_context(
-            effective,
-            facts={"save_source_kind": "nonmagical_effect"},
-        ),
-        rng=_SequenceRng(3),
-    )
-    assert nonmagical["rolls"] == [3]
-    assert nonmagical["roll_mode"] == "normal"
-    assert nonmagical["rule_receipts"] == []
 
 
 def test_concentration_save_does_not_apply_magic_resistance() -> None:
@@ -294,90 +221,6 @@ def test_concentration_save_does_not_apply_magic_resistance() -> None:
     assert result["rule_receipts"] == []
 
 
-def test_condition_based_save_advantage_requires_effect_conditions() -> None:
-    actor = _actor("cultist")
-    actor["sheet"]["content"]["features"].append(
-        {
-            "id": "dark-devotion-passive",
-            "name": "Dark Devotion",
-            "choices": {
-                "source_trait": {
-                    "kind": "save_advantage_against_conditions",
-                    "trigger": "saving_throw",
-                    "effect_conditions": ["charmed", "frightened"],
-                    "grants": "advantage",
-                    "automatic": True,
-                    "source_excerpt": (
-                        "The cultist has advantage on saving throws against "
-                        "being charmed or frightened."
-                    ),
-                }
-            },
-        }
-    )
-    actor["derived"] = derive_character_sheet(actor["sheet"])
-    effective = {
-        "edition": "2014",
-        "fingerprint": "",
-        "lock": [],
-        "mechanics": [],
-    }
-
-    with pytest.raises(NeedsRulingError, match="condition outcomes"):
-        resolve_actor_check(
-            actor,
-            kind="save",
-            ability="wisdom",
-            dc=12,
-            rules=resolution_context(effective),
-            rng=_SequenceRng(20),
-        )
-
-    frightened = resolve_actor_check(
-        actor,
-        kind="save",
-        ability="wisdom",
-        dc=12,
-        rules=resolution_context(
-            effective,
-            facts={"save_effect_conditions": ["frightened"]},
-        ),
-        rng=_SequenceRng(4, 15),
-    )
-    assert frightened["rolls"] == [4, 15]
-    assert frightened["roll_mode"] == "advantage"
-    assert frightened["success"] is True
-    assert [
-        receipt["mechanic_id"]
-        for receipt in frightened["rule_receipts"]
-    ] == ["dnd5e.core.save.advantage_against_conditions"]
-
-    damage_only = resolve_actor_check(
-        actor,
-        kind="save",
-        ability="constitution",
-        dc=12,
-        rules=resolution_context(
-            effective,
-            facts={"save_effect_conditions": []},
-        ),
-        rng=_SequenceRng(4),
-    )
-    assert damage_only["rolls"] == [4]
-    assert damage_only["roll_mode"] == "normal"
-    assert damage_only["rule_receipts"] == []
-
-    settled_damage = resolve_save_damage_to_sheet(
-        actor,
-        save_ability="wisdom",
-        save_dc=12,
-        damage_expression="1d6",
-        damage_type="fire",
-        half_on_success=True,
-        source="pure-damage-effect",
-        rng=_SequenceRng(3, 10),
-    )
-    assert settled_damage["result"]["save"]["roll_mode"] == "normal"
 
 
 def test_evasion_rewrites_dexterity_save_for_half_damage() -> None:
@@ -403,6 +246,7 @@ def test_evasion_rewrites_dexterity_save_for_half_damage() -> None:
             "id": "evasion-passive",
             "name": "Evasion",
             "choices": {"source_trait": trait},
+            "mechanic_refs": ["dnd5e.core.save.evasion"],
         }
     )
     agile["derived"] = derive_character_sheet(agile["sheet"])
@@ -454,6 +298,17 @@ def test_evasion_rewrites_dexterity_save_for_half_damage() -> None:
     assert denied["damage_reduction"] == "half"
     assert denied["rule_receipts"] == []
 
+    counterfeit = deepcopy(agile)
+    counterfeit["sheet"]["content"]["features"][0].pop("mechanic_refs")
+    ignored = standard_save_damage_reduction(
+        counterfeit,
+        ability="dexterity",
+        success=True,
+        ordinary_successful_save="half",
+    )
+    assert ignored["damage_reduction"] == "half"
+    assert ignored["rule_receipts"] == []
+
 
 def test_generic_save_damage_rejects_conflicting_roll_states() -> None:
     with pytest.raises(
@@ -494,6 +349,47 @@ def _actor(identifier: str, *, hp: int = 12, ac: int = 10) -> dict:
         "sheet": sheet,
         "derived": derive_character_sheet(sheet),
     }
+
+
+def test_preflight_rejects_an_exhausted_recharge_weapon() -> None:
+    attacker = _actor("recharge-attacker")
+    attacker["sheet"]["inventory"]["items"] = [
+        {
+            "id": "web-recharge-5-6",
+            "name": "Web (Recharge 5-6)",
+            "kind": "weapon",
+            "mechanics": {
+                "attack_type": "ranged",
+                "attack_ability": "dexterity",
+                "damage_formula": "",
+                "damage_type": "",
+                "attack_bonus_override": 5,
+                "always_available": True,
+                "recharge": {
+                    "kind": "d6_turn_start",
+                    "minimum": 5,
+                    "maximum": 6,
+                    "source_marker": "(Recharge 5-6)",
+                },
+            },
+            "uses": {
+                "label": "Web (Recharge 5-6)",
+                "value": 0,
+                "max": 1,
+                "recovers_on": "manual",
+                "source_key": "test:web",
+            },
+        }
+    ]
+    attacker["sheet"] = validate_character_sheet(attacker["sheet"])
+    attacker["derived"] = derive_character_sheet(attacker["sheet"])
+
+    with pytest.raises(CombatEngineError, match="waiting for its Recharge roll"):
+        preflight_attack(
+            attacker,
+            _actor("target"),
+            action={"weapon_id": "web-recharge-5-6"},
+        )
 
 
 def _mastery_actor(identifier: str, mastery: str) -> dict:
@@ -953,28 +849,6 @@ def _give_magic_resistance(actor: dict) -> None:
     actor["derived"] = derive_character_sheet(actor["sheet"])
 
 
-def test_hypnotic_pattern_classifies_its_save_as_a_spell() -> None:
-    target = _actor("magic-resistant-target")
-    _give_magic_resistance(target)
-
-    resolved = resolve_hypnotic_pattern_target(
-        target,
-        caster_id="caster",
-        spell_id=CORE_HYPNOTIC_PATTERN_SPELL_ID,
-        save_dc=15,
-        rules=resolution_context(
-            {"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []}
-        ),
-        rng=_SequenceRng(3, 17),
-    )
-
-    assert resolved["result"]["outcome"] == "saved"
-    assert resolved["result"]["save"]["rolls"] == [3, 17]
-    assert resolved["result"]["save"]["roll_mode"] == "advantage"
-    assert [
-        receipt["mechanic_id"]
-        for receipt in resolved["result"]["save"]["rule_receipts"]
-    ] == ["dnd5e.core.save.magic_resistance"]
 
 
 def test_2024_hypnotic_pattern_preserves_its_exact_source_spell_id() -> None:
@@ -1192,631 +1066,23 @@ def test_source_actor_capability_dependency_uses_all_incapacitating_states() -> 
     assert reconciled["sheets"]["undead"]["conditions"] == []
 
 
-def test_corrosive_form_damages_attacker_and_corrodes_mundane_weapon() -> None:
-    attacker = _actor("attacker", hp=20)
-    attacker["sheet"]["inventory"]["items"] = [
-        {
-            "id": "longsword",
-            "name": "Longsword",
-            "kind": "weapon",
-            "equipped": True,
-            "equipped_slot": "main_hand",
-            "mechanics": {
-                "attack_type": "melee",
-                "attack_ability": "strength",
-                "damage_formula": "1d8",
-                "damage_type": "slashing",
-                "properties": [],
-            },
-        }
-    ]
-    attacker["sheet"]["inventory"]["equipment_slots"]["main_hand"] = "longsword"
-    attacker["sheet"] = validate_character_sheet(attacker["sheet"])
-    attacker["derived"] = derive_character_sheet(attacker["sheet"])
-    pudding = _actor("pudding", hp=85, ac=7)
-    pudding["sheet"]["traits"]["size"] = "large"
-    pudding["sheet"]["traits"]["immunities"] = [
-        "acid",
-        "cold",
-        "lightning",
-        "slashing",
-    ]
-    pudding["sheet"]["content"]["features"].append(
-        {
-            "id": "corrosive-form-passive",
-            "name": "Corrosive Form",
-            "activation": {"type": "passive", "cost": 0},
-            "choices": {
-                "source_trait": {
-                    "kind": "corrosive_form",
-                    "trigger": "contact_or_melee_hit",
-                    "melee_range_ft": 5,
-                    "contact_damage_formula": "1d8",
-                    "contact_damage_type": "acid",
-                    "weapon_materials": ["metal", "wood"],
-                    "requires_nonmagical_weapon": True,
-                    "weapon_damage_roll_penalty": -1,
-                    "weapon_destroyed_at_penalty": -5,
-                    "ammunition_destroyed_after_hit": True,
-                    "object_materials": ["wood", "metal"],
-                    "object_maximum_thickness_inches": 2,
-                    "object_dissolution_rounds": 1,
-                    "automatic": True,
-                }
-            },
-        }
-    )
-    pudding["sheet"]["content"]["activities"].append(
-        {
-            "id": "split-reaction",
-            "name": "Split",
-            "activation": {"type": "reaction", "cost": 1},
-            "choices": {
-                "source_trait": {
-                    "kind": "split",
-                    "trigger": "subjected_to_damage",
-                    "damage_types": ["lightning", "slashing"],
-                    "minimum_size": "medium",
-                    "minimum_hit_points": 10,
-                    "new_creature_count": 2,
-                    "hit_points": "half_original_rounded_down",
-                    "size_change": -1,
-                }
-            },
-        }
-    )
-    pudding["derived"] = derive_character_sheet(pudding["sheet"])
-
-    plan = preflight_attack(
-        attacker,
-        pudding,
-        action={"weapon_id": "longsword"},
-    )
-    updated_attacker, updated_pudding, result = resolve_attack_action(
-        attacker,
-        pudding,
-        plan=plan,
-        rng=_SequenceRng(2, 4, 5),
-    )
-
-    assert result["hit"] is True
-    assert result["damage"]["applied_amount"] == 0
-    assert updated_pudding["sheet"]["combat"]["hp"]["value"] == 85
-    assert updated_attacker["sheet"]["combat"]["hp"]["value"] == 15
-    assert result["corrosive_form"]["weapon_corrosion"]["after_penalty"] == 1
-    weapon = updated_attacker["sheet"]["inventory"]["items"][0]
-    assert weapon["mechanics"]["corrosion_penalty"] == 1
-    assert derive_character_sheet(updated_attacker["sheet"])["inventory"][
-        "weapon_attacks"
-    ][0]["damage_bonus"] == 2
-    assert result["split_reaction"]["new_hit_points_each"] == 42
-    children = execute_split_reaction(
-        updated_pudding["sheet"],
-        result["split_reaction"],
-    )
-    assert [child["traits"]["size"] for child in children] == ["medium", "medium"]
-    assert [child["combat"]["hp"]["value"] for child in children] == [42, 42]
 
 
-def test_heated_body_damages_only_a_melee_attacker_within_five_feet() -> None:
-    attacker = _actor("attacker", hp=20)
-    attacker["derived"]["inventory"]["weapon_attacks"] = [
-        {
-            "item_id": "longsword",
-            "attack_type": "melee",
-            "properties": [],
-            "attack_bonus": 6,
-            "damage_formula": "1d8",
-            "damage_bonus": 3,
-            "damage_expression": "1d8 + 3",
-            "damage_type": "slashing",
-            "additional_damage": [],
-            "reach_ft": 5,
-        }
-    ]
-    salamander = _actor("salamander", hp=90, ac=15)
-    salamander["sheet"]["content"]["features"].append(
-        {
-            "id": "heated-body-passive",
-            "name": "Heated Body",
-            "activation": {"type": "passive", "cost": 0},
-            "choices": {
-                "source_trait": {
-                    "kind": "heated_body",
-                    "trigger": "contact_or_melee_hit",
-                    "melee_range_ft": 5,
-                    "contact_damage_formula": "2d6",
-                    "average_damage": 7,
-                    "contact_damage_type": "fire",
-                    "automatic": True,
-                    "source_excerpt": (
-                        "A creature that touches the salamander or hits it with "
-                        "a melee attack while within 5 feet of it takes 7 (2d6) "
-                        "fire damage."
-                    ),
-                }
-            },
-        }
-    )
-    salamander["derived"] = derive_character_sheet(salamander["sheet"])
-    attacker.update(
-        initiative=20,
-        tie_breaker=0,
-        position={"x": 0, "y": 0},
-        disposition="friendly",
-    )
-    salamander.update(
-        initiative=10,
-        tie_breaker=0,
-        position={"x": 1, "y": 0},
-        disposition="hostile",
-    )
-    encounter = start_encounter([attacker, salamander])
-
-    plan = preflight_attack(
-        attacker,
-        salamander,
-        action={"weapon_id": "longsword"},
-        encounter=encounter,
-    )
-    updated_attacker, _, result = resolve_attack_action(
-        attacker,
-        salamander,
-        plan=plan,
-        rng=_SequenceRng(15, 4, 2, 3),
-    )
-
-    assert result["hit"] is True
-    assert result["heated_body"]["fire_damage"]["applied_amount"] == 5
-    assert updated_attacker["sheet"]["combat"]["hp"]["value"] == 15
-    assert result["heated_body"]["mechanic_id"] == (
-        "dnd5e.core.monster.heated_body"
-    )
-    beyond_range = resolve_heated_body_melee_hit(
-        attacker["sheet"],
-        salamander["sheet"],
-        plan={
-            "attack_mode": "melee",
-            "range": {"distance_ft": 10},
-            "weapon_reach_ft": 10,
-            "attacker_uses_death_saves": True,
-            "ruleset": "2014",
-        },
-    )
-    assert beyond_range["triggered"] is False
-    assert beyond_range["attacker_sheet"]["combat"]["hp"]["value"] == 20
 
 
-def test_pseudopod_corrosion_reduces_and_destroys_worn_armor() -> None:
-    pudding = _actor("pudding", hp=85, ac=7)
-    source_excerpt = (
-        "In addition, nonmagical armor worn by the target is partly dissolved "
-        "and takes a permanent and cumulative -1 penalty to the AC it offers. "
-        "The armor is destroyed if the penalty reduces its AC to 10."
-    )
-    pudding["sheet"]["inventory"]["items"] = [
-        {
-            "id": "pseudopod",
-            "name": "Pseudopod",
-            "kind": "weapon",
-            "mechanics": {
-                "attack_type": "melee",
-                "attack_ability": "strength",
-                "attack_bonus_override": 5,
-                "damage_formula": "1d4",
-                "damage_type": "bludgeoning",
-                "always_available": True,
-                "on_hit_resolution": {
-                    "kind": "armor_corrosion",
-                    "trigger": "weapon_hit",
-                    "requires_worn_armor": True,
-                    "requires_nonmagical_armor": True,
-                    "armor_class_penalty": -1,
-                    "destroyed_at_armor_class": 10,
-                    "automatic": True,
-                    "source_excerpt": source_excerpt,
-                },
-            },
-        }
-    ]
-    pudding["sheet"] = validate_character_sheet(pudding["sheet"])
-    pudding["derived"] = derive_character_sheet(pudding["sheet"])
-    target = _actor("target", hp=20)
-    target_sheet, armor_id = add_inventory_item(
-        target["sheet"],
-        {
-            "id": "corrosion-test-armor",
-            "name": "Corrosion test armor",
-            "kind": "armor",
-            "mechanics": {
-                "base_ac": 11,
-                "dexterity_mode": "none",
-                "magic_bonus": 0,
-            },
-        },
-    )
-    target["sheet"] = equip_inventory_item(target_sheet, armor_id, "armor")
-    target["derived"] = derive_character_sheet(target["sheet"])
-
-    plan = preflight_attack(
-        pudding,
-        target,
-        action={"weapon_id": "pseudopod"},
-    )
-    _updated_pudding, updated_target, result = resolve_attack_action(
-        pudding,
-        target,
-        plan=plan,
-        rng=_SequenceRng(10, 1),
-    )
-
-    assert result["structured_on_hit"]["destroyed"] is True
-    assert updated_target["sheet"]["inventory"]["equipment_slots"]["armor"] is None
-    armor = updated_target["sheet"]["inventory"]["items"][0]
-    assert armor["condition"] == "destroyed"
 
 
-def test_weapon_hit_save_damage_is_settled_inside_one_attack() -> None:
-    assassin = _actor("assassin")
-    assassin["sheet"]["inventory"]["items"] = [
-        {
-            "id": "shortsword",
-            "name": "Shortsword",
-            "kind": "weapon",
-            "mechanics": {
-                "attack_type": "melee",
-                "attack_ability": "strength",
-                "attack_bonus_override": 7,
-                "damage_formula": "1d6",
-                "damage_type": "piercing",
-                "damage_bonus_override": 3,
-                "always_available": True,
-                "on_hit_resolution": {
-                    "kind": "save_damage",
-                    "trigger": "weapon_hit",
-                    "save_ability": "constitution",
-                    "save_dc": 15,
-                    "damage_formula": "7d6",
-                    "average_damage": 24,
-                    "damage_type": "poison",
-                    "half_on_success": True,
-                    "save_source_kind": "nonmagical_effect",
-                    "automatic": True,
-                    "source_excerpt": (
-                        "and the target must make a DC 15 Constitution saving "
-                        "throw, taking 24 (7d6) poison damage on a failed save, "
-                        "or half as much damage on a successful one."
-                    ),
-                },
-            },
-        }
-    ]
-    assassin["sheet"] = validate_character_sheet(assassin["sheet"])
-    assassin["derived"] = derive_character_sheet(assassin["sheet"])
-    target = _actor("target", hp=100, ac=10)
-    rules = resolution_context(
-        {"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []}
-    )
-    plan = preflight_attack(
-        assassin,
-        target,
-        action={"weapon_id": "shortsword"},
-        rules=rules,
-    )
-
-    _updated_assassin, updated_target, result = resolve_attack_action(
-        assassin,
-        target,
-        plan=plan,
-        rules=rules,
-        rng=_SequenceRng(10, 4, 1, 1, 1, 1, 1, 1, 1, 1),
-    )
-
-    assert result["hit"] is True
-    assert result["structured_on_hit"]["success"] is False
-    assert result["structured_on_hit"]["damage_amount"] == 7
-    assert result["structured_on_hit"]["mechanic_id"] == (
-        "dnd5e.core.attack.weapon_hit_save_damage"
-    )
-    assert result["damage"]["input_amount"] == 14
-    assert result["damage"]["roll_parts"][-1] == {
-        "expression": "7d6",
-        "rolled_expression": "7d6",
-        "rolls": [1, 1, 1, 1, 1, 1, 1],
-        "detail": "7d6[1, 1, 1, 1, 1, 1, 1]",
-        "amount": 7,
-        "damage_type": "poison",
-        "source": "weapon_hit_save_damage",
-    }
-    assert updated_target["sheet"]["combat"]["hp"]["value"] == 86
-    assert "on_hit_ruling" not in result
-    assert any(
-        item["mechanic_id"] == "dnd5e.core.attack.weapon_hit_save_damage"
-        for item in result["rule_receipts"]
-    )
 
 
-def test_weapon_hit_contest_pull_is_settled_and_emits_forced_movement() -> None:
-    merrow = _actor("merrow")
-    merrow["sheet"]["abilities"]["strength"]["score"] = 18
-    merrow["sheet"]["inventory"]["items"] = [
-        {
-            "id": "harpoon",
-            "name": "Harpoon",
-            "kind": "weapon",
-            "mechanics": {
-                "attack_type": "melee",
-                "attack_ability": "strength",
-                "attack_bonus_override": 6,
-                "damage_formula": "2d6",
-                "damage_type": "piercing",
-                "damage_bonus_override": 4,
-                "always_available": True,
-                "on_hit_resolution": {
-                    "kind": "contest_pull",
-                    "trigger": "weapon_hit",
-                    "required_target_kind": "creature",
-                    "maximum_target_size": "huge",
-                    "source_ability": "strength",
-                    "target_ability": "strength",
-                    "ties": "no_movement",
-                    "maximum_distance_ft": 20,
-                    "direction": "toward_source",
-                    "automatic": True,
-                    "source_excerpt": (
-                        "If the target is a Huge or smaller creature, it must "
-                        "succeed on a Strength contest against the merrow or be "
-                        "pulled up to 20 feet toward the merrow."
-                    ),
-                },
-            },
-        }
-    ]
-    merrow["sheet"] = validate_character_sheet(merrow["sheet"])
-    merrow["derived"] = derive_character_sheet(merrow["sheet"])
-    target = _actor("target", hp=100, ac=10)
-    target["sheet"]["abilities"]["strength"]["score"] = 10
-    target["sheet"]["traits"]["size"] = "medium"
-    target["derived"] = derive_character_sheet(target["sheet"])
-    rules = resolution_context(
-        {"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []}
-    )
-    plan = preflight_attack(
-        merrow,
-        target,
-        action={"weapon_id": "harpoon"},
-        rules=rules,
-    )
-
-    _updated_merrow, updated_target, result = resolve_attack_action(
-        merrow,
-        target,
-        plan=plan,
-        rules=rules,
-        rng=_SequenceRng(10, 3, 4, 15, 10),
-    )
-
-    assert result["hit"] is True
-    assert updated_target["sheet"]["combat"]["hp"]["value"] == 89
-    settlement = result["structured_on_hit"]
-    assert settlement["kind"] == "contest_pull"
-    assert settlement["eligible"] is True
-    assert settlement["contest"]["source_check"]["total"] == 19
-    assert settlement["contest"]["target_check"]["total"] == 10
-    assert settlement["contest"]["outcome"] == "source_wins"
-    assert settlement["forced_movement"] == {
-        "source_actor_id": "merrow",
-        "target_actor_id": "target",
-        "distance_ft": 20,
-        "direction": "toward_source",
-    }
-    assert settlement["mechanic_id"] == (
-        "dnd5e.core.attack.weapon_hit_contest_pull"
-    )
-    assert "on_hit_ruling" not in result
-    assert any(
-        item["mechanic_id"] == "dnd5e.core.attack.weapon_hit_contest_pull"
-        for item in result["rule_receipts"]
-    )
 
 
-@pytest.mark.parametrize(
-    ("source_roll", "target_roll", "outcome"),
-    ((7, 10, "tie_no_change"), (5, 20, "target_wins")),
-)
-def test_weapon_hit_contest_pull_tie_or_loss_emits_no_movement(
-    source_roll: int,
-    target_roll: int,
-    outcome: str,
-) -> None:
-    source = _actor("source")
-    target = _actor("target")
-    target["sheet"]["abilities"]["strength"]["score"] = 10
-    target["sheet"]["traits"]["size"] = "medium"
-    target["derived"] = derive_character_sheet(target["sheet"])
-    resolution = {
-        "kind": "contest_pull",
-        "trigger": "weapon_hit",
-        "required_target_kind": "creature",
-        "maximum_target_size": "huge",
-        "source_ability": "strength",
-        "target_ability": "strength",
-        "ties": "no_movement",
-        "maximum_distance_ft": 20,
-        "direction": "toward_source",
-        "automatic": True,
-        "source_excerpt": (
-            "If the target is a Huge or smaller creature, it must succeed on "
-            "a Strength contest against the source or be pulled up to 20 feet "
-            "toward the source."
-        ),
-    }
-
-    _, _, result = resolve_attack_damage(
-        source,
-        target,
-        plan={"on_hit_resolution": resolution},
-        attack={
-            "natural": 10,
-            "total": 10,
-            "armor_class": 10,
-            "hit": True,
-            "critical": False,
-            "fumble": False,
-        },
-        rng=_SequenceRng(source_roll, target_roll),
-    )
-
-    settlement = result["structured_on_hit"]
-    assert settlement["contest"]["outcome"] == outcome
-    assert settlement["forced_movement"] is None
 
 
-def test_weapon_hit_contest_pull_does_not_target_an_object() -> None:
-    target = _actor("target")
-    target["kind"] = "object"
-    resolution = {
-        "kind": "contest_pull",
-        "trigger": "weapon_hit",
-        "required_target_kind": "creature",
-        "maximum_target_size": "huge",
-        "source_ability": "strength",
-        "target_ability": "strength",
-        "ties": "no_movement",
-        "maximum_distance_ft": 20,
-        "direction": "toward_source",
-        "automatic": True,
-        "source_excerpt": (
-            "If the target is a Huge or smaller creature, it must succeed on "
-            "a Strength contest against the source or be pulled up to 20 feet "
-            "toward the source."
-        ),
-    }
-
-    _, _, result = resolve_attack_damage(
-        _actor("source"),
-        target,
-        plan={"on_hit_resolution": resolution},
-        attack={
-            "natural": 10,
-            "total": 10,
-            "armor_class": 10,
-            "hit": True,
-            "critical": False,
-            "fumble": False,
-        },
-        rng=_SequenceRng(),
-    )
-
-    settlement = result["structured_on_hit"]
-    assert settlement["eligible"] is False
-    assert settlement["target_kind"] == "object"
-    assert settlement["contest"] is None
-    assert settlement["forced_movement"] is None
 
 
-def test_magmin_touch_compiles_standard_ongoing_damage() -> None:
-    target = _actor("target")
-    source_excerpt = (
-        "If the target is a creature or a flammable object, it ignites. "
-        "Until a creature takes an action to douse the fire, the creature "
-        "takes 3 (1d6) fire damage at the end of each of its turns."
-    )
-
-    result = resolve_standard_weapon_on_hit(
-        target["sheet"],
-        {
-            "kind": "ignition_ongoing_damage",
-            "trigger": "weapon_hit",
-            "creature_target_automatic": True,
-            "flammable_object_requires_scene_fact": True,
-            "damage_formula": "1d6",
-            "average_damage": 3,
-            "damage_type": "fire",
-            "trigger_timing": "turn_end",
-            "end_action": "use_object",
-            "end_action_description": "douse the fire",
-            "automatic": True,
-            "source_excerpt": source_excerpt,
-        },
-    )
-
-    assert result["sheet"] == target["sheet"]
-    assert result["ongoing_effect"] == {
-        "kind": "source_ongoing_damage",
-        "damage_formula": "1d6",
-        "average_damage": 3,
-        "damage_type": "fire",
-        "trigger_timing": "turn_end",
-        "end_action": "use_object",
-        "end_action_description": "douse the fire",
-        "active": True,
-        "source_excerpt": source_excerpt,
-        "mechanic_id": "dnd5e.core.monster.ignition_ongoing_damage",
-    }
-    assert result["scene_fact_requirement"]["required_for_creature_target"] is False
 
 
-def test_magmin_death_burst_surfaces_only_on_death_transition() -> None:
-    magmin = _actor("magmin", hp=9)
-    source_excerpt = (
-        "When the magmin dies, it explodes in a burst of fire and magma. "
-        "Each creature within 10 ft. of it must make a DC 11 Dexterity saving "
-        "throw, taking 7 (2d6) fire damage on a failed save, or half as much "
-        "damage on a successful one. Flammable objects that aren't being worn "
-        "or carried in that area are ignited."
-    )
-    magmin["sheet"]["content"]["features"].append(
-        {
-            "id": "dnd5e.core.monster.death-burst",
-            "name": "Death Burst",
-            "activation": {"type": "passive", "cost": 0},
-            "choices": {
-                "source_trait": {
-                    "kind": "death_burst",
-                    "trigger": "death",
-                    "range_ft": 10,
-                    "target": "each_creature_in_range",
-                    "save_ability": "dexterity",
-                    "save_dc": 11,
-                    "damage_formula": "2d6",
-                    "average_damage": 7,
-                    "damage_type": "fire",
-                    "failed_save": "full",
-                    "successful_save": "half",
-                    "ignite_flammable_unworn_objects": True,
-                    "automatic": True,
-                    "source_excerpt": source_excerpt,
-                }
-            },
-        }
-    )
 
-    wounded = apply_damage_to_sheet(
-        magmin["sheet"],
-        amount=8,
-        damage_type="cold",
-        death_saves=False,
-    )
-    killed = apply_damage_to_sheet(
-        wounded["sheet"],
-        amount=1,
-        damage_type="cold",
-        death_saves=False,
-    )
-    already_dead = apply_damage_to_sheet(
-        killed["sheet"],
-        amount=1,
-        damage_type="cold",
-        death_saves=False,
-    )
-
-    assert wounded["death_trigger"] is None
-    assert killed["death_trigger"] == {
-        **magmin["sheet"]["content"]["features"][0]["choices"]["source_trait"],
-        "mechanic_id": "dnd5e.core.monster.death_burst",
-    }
-    assert already_dead["death_trigger"] is None
 
 
 def test_actor_check_rejects_attack_rolls_owned_by_the_attack_engine() -> None:
@@ -1827,72 +1093,6 @@ def test_actor_check_rejects_attack_rolls_owned_by_the_attack_engine() -> None:
             ability="strength",
             dc=10,
         )
-
-
-def _gazer_eye_ray_spec() -> dict:
-    return {
-        "kind": "gazer_eye_rays_2014",
-        "save_source_kind": "magical_effect",
-        "draw_count": 2,
-        "reroll_duplicates": True,
-        "range_ft": 60,
-        "target_count": {"minimum": 1, "maximum": 2},
-        "effects": [
-            {
-                "id": "dazing-ray",
-                "source_activity_id": "dazing-ray-action",
-                "save": {"ability": "wisdom", "dc": 12},
-                "failure": {
-                    "kind": "timed_condition",
-                    "condition": "charmed",
-                    "duration": {
-                        "period": "source_turn_start",
-                        "remaining": 1,
-                    },
-                    "speed_multiplier": 0.5,
-                    "attack_disadvantage": True,
-                },
-                "source_excerpt": "Dazing Ray source text",
-            },
-            {
-                "id": "fear-ray",
-                "source_activity_id": "fear-ray-action",
-                "save": {"ability": "wisdom", "dc": 12},
-                "failure": {
-                    "kind": "timed_condition",
-                    "condition": "frightened",
-                    "duration": {
-                        "period": "source_turn_start",
-                        "remaining": 1,
-                    },
-                },
-                "source_excerpt": "Fear Ray source text",
-            },
-            {
-                "id": "frost-ray",
-                "source_activity_id": "frost-ray-action",
-                "save": {"ability": "dexterity", "dc": 12},
-                "failure": {
-                    "kind": "damage",
-                    "expression": "3d6",
-                    "damage_type": "cold",
-                },
-                "source_excerpt": "Frost Ray source text",
-            },
-            {
-                "id": "telekinetic-ray",
-                "source_activity_id": "telekinetic-ray-action",
-                "save": {"ability": "strength", "dc": 12},
-                "failure": {
-                    "kind": "forced_movement",
-                    "maximum_size": "medium",
-                    "distance_ft": 30,
-                    "direction": "directly_away",
-                },
-                "source_excerpt": "Telekinetic Ray source text",
-            },
-        ],
-    }
 
 
 def _rogue(identifier: str = "rogue") -> dict:
@@ -1922,57 +1122,32 @@ def _rogue(identifier: str = "rogue") -> dict:
     return actor
 
 
-def test_gazer_eye_rays_reroll_duplicates_and_resolve_each_save() -> None:
-    gazer = _actor("gazer")
-    first = _actor("first", hp=20)
-    second = _actor("second", hp=20)
-    _give_magic_resistance(first)
-
-    result = resolve_random_save_effects(
-        gazer,
-        [first, second],
-        spec=_gazer_eye_ray_spec(),
-        rng=_SequenceRng(1, 1, 3, 5, 5, 2, 3, 4, 2),
-    )
-
-    assert result["selected_effect_ids"] == ["dazing-ray", "frost-ray"]
-    assert [item["duplicate"] for item in result["selection_rolls"]] == [
-        False,
-        True,
-        False,
-    ]
-    assert result["targets"][0]["target_id"] == "first"
-    assert result["targets"][0]["outcome"] == "condition"
-    assert result["targets"][0]["save"]["roll_mode"] == "advantage"
-    assert result["sheets"]["first"]["conditions"] == ["charmed"]
-    assert source_speed_multiplier(result["sheets"]["first"]) == 0.5
-    assert result["targets"][1]["target_id"] == "second"
-    assert result["targets"][1]["damage_roll"]["total"] == 9
-    assert result["sheets"]["second"]["combat"]["hp"]["value"] == 11
 
 
-def test_dazing_ray_source_makes_attacks_disadvantaged_and_protects_charmer() -> None:
-    gazer = _actor("gazer")
+def test_generic_effect_changes_speed_attacks_and_preserves_charm_source() -> None:
+    source = _actor("source")
     dazed = _actor("dazed")
     other = _actor("other")
     dazed["sheet"]["conditions"] = ["charmed"]
     dazed["sheet"]["effects"] = [
         {
             "id": "dazing",
-            "name": "Dazing Ray",
+            "name": "Source-bound daze",
             "kind": "timed_conditions",
-            "source": "gazer",
+            "source": "source",
             "active": True,
             "duration": {"period": "source_turn_start", "remaining": 1},
             "changes": [
-                {"path": "conditions", "mode": "add", "value": "charmed"}
+                {"path": "conditions", "mode": "add", "value": "charmed"},
+                {"path": "combat.speed.multiplier", "mode": "multiply", "value": 0.5},
+                {"path": "rolls.attack.disadvantage", "mode": "set", "value": True},
             ],
         }
     ]
     dazed["derived"] = derive_character_sheet(dazed["sheet"])
 
     with pytest.raises(CombatEngineError, match="cannot attack its charmer"):
-        preflight_attack(dazed, gazer, action={"weapon_id": "unarmed-strike"})
+        preflight_attack(dazed, source, action={"weapon_id": "unarmed-strike"})
     plan = preflight_attack(
         dazed,
         other,
@@ -1980,7 +1155,8 @@ def test_dazing_ray_source_makes_attacks_disadvantaged_and_protects_charmer() ->
     )
 
     assert plan["disadvantage"] is True
-    assert "dazing_ray" in plan["disadvantage_sources"]
+    assert "dazing" in plan["disadvantage_sources"]
+    assert source_speed_multiplier(dazed["sheet"]) == 0.5
 
 
 def test_telekinetic_ray_moves_up_to_the_last_legal_cell_without_reactions() -> None:
@@ -2342,75 +1518,6 @@ def test_2024_group_check_fails_at_the_public_rules_boundary() -> None:
         )
 
 
-def test_keen_perception_requires_and_uses_sensory_facts() -> None:
-    scout = _actor("scout")
-    scout["sheet"]["content"]["features"] = [
-        {
-            "id": "keen-hearing-and-sight-passive",
-            "name": "Keen Hearing and Sight",
-            "activation": {
-                "type": "passive",
-                "trigger": "hearing- or sight-based Perception check",
-            },
-            "choices": {
-                "source_trait": {
-                    "kind": "keen_perception",
-                    "trigger": "perception_check",
-                    "senses": ["hearing", "sight"],
-                    "grants": "advantage",
-                    "automatic": True,
-                }
-            },
-        }
-    ]
-    scout["derived"] = derive_character_sheet(scout["sheet"])
-    base_rules = {
-        "edition": "2014",
-        "fingerprint": "",
-        "lock": [],
-        "mechanics": [],
-    }
-
-    with pytest.raises(NeedsRulingError, match="hearing or sight basis"):
-        resolve_actor_check(
-            scout,
-            kind="check",
-            ability="perception",
-            dc=12,
-            rules=resolution_context(base_rules),
-            rng=_SequenceRng(10),
-        )
-
-    hearing = resolve_actor_check(
-        scout,
-        kind="check",
-        ability="perception",
-        dc=12,
-        rules=resolution_context(
-            base_rules,
-            facts={"perception_senses": ["hearing"]},
-        ),
-        rng=_SequenceRng(4, 17),
-    )
-    assert hearing["rolls"] == [4, 17]
-    assert hearing["natural"] == 17
-    assert any(
-        receipt["mechanic_id"] == "dnd5e.core.check.keen_perception"
-        for receipt in hearing["rule_receipts"]
-    )
-
-    unrelated = resolve_actor_check(
-        scout,
-        kind="check",
-        ability="perception",
-        dc=12,
-        rules=resolution_context(
-            base_rules,
-            facts={"perception_senses": ["other"]},
-        ),
-        rng=_SequenceRng(9),
-    )
-    assert unrelated["rolls"] == [9]
 
 
 def test_2014_ability_contest_compares_totals_and_uses_no_synthetic_dc() -> None:
@@ -2757,60 +1864,6 @@ def test_ranged_attack_has_close_combat_disadvantage() -> None:
     assert safe["close_combat_threat_ids"] == []
 
 
-def test_source_weapon_targeting_requires_eligible_size_and_effective_advantage() -> None:
-    attacker = _actor("garroter")
-    attacker["derived"]["inventory"]["weapon_attacks"] = [
-        {
-            "item_id": "web-garrote",
-            "attack_type": "melee",
-            "reach_ft": 5,
-            "attack_bonus": 4,
-            "damage_expression": "1d4 + 2",
-            "damage_type": "bludgeoning",
-            "properties": [],
-            "required_target_sizes": ["small", "medium"],
-            "requires_attack_advantage": True,
-        }
-    ]
-    target = _actor("target")
-    target["sheet"]["traits"]["size"] = "medium"
-
-    with pytest.raises(CombatEngineError, match="advantage requirement"):
-        preflight_attack(attacker, target, action={"weapon_id": "web-garrote"})
-
-    plan = preflight_attack(
-        attacker,
-        target,
-        action={
-            "weapon_id": "web-garrote",
-            "context": {"advantage": True, "advantage_sources": ["attacker_unseen"]},
-        },
-        rules=resolution_context(
-            {"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []}
-        ),
-    )
-    assert plan["advantage"] is True
-    assert [receipt["mechanic_id"] for receipt in plan["rule_receipts"]] == [
-        "dnd5e.core.attack.source_targeting"
-    ]
-
-    with pytest.raises(CombatEngineError, match="advantage requirement"):
-        preflight_attack(
-            attacker,
-            target,
-            action={
-                "weapon_id": "web-garrote",
-                "context": {"advantage": True, "disadvantage": True},
-            },
-        )
-
-    target["sheet"]["traits"]["size"] = "large"
-    with pytest.raises(CombatEngineError, match="target size"):
-        preflight_attack(
-            attacker,
-            target,
-            action={"weapon_id": "web-garrote", "context": {"advantage": True}},
-        )
 
 
 def test_spell_attack_preflight_uses_source_card_and_spellcasting_override() -> None:
@@ -2962,90 +2015,6 @@ def test_2024_preserve_life_starts_at_level_three_and_can_target_undead() -> Non
         )
 
 
-def test_turn_undead_applies_and_enforces_turned() -> None:
-    cleric = _actor("cleric")
-    cleric["sheet"]["edition"] = "2014"
-    cleric["sheet"]["progression"] = {
-        "level": 2,
-        "classes": [{"name": "Cleric", "level": 2, "hit_die": 8}],
-    }
-    cleric["sheet"]["abilities"]["wisdom"]["score"] = 16
-    cleric["sheet"]["spellcasting"]["ability"] = "wisdom"
-    cleric["sheet"]["content"]["features"] = [
-        {
-            "id": "dnd5e.content.srd2014.feature.cleric-channel-divinity",
-            "name": "Channel Divinity",
-            "source_key": "Cleric",
-            "activation": {"type": "action", "cost": 1},
-            "resource_key": "channel_divinity",
-            "choices": {"options": ["Turn Undead", "selected-domain option"]},
-        }
-    ]
-    cleric["derived"] = derive_character_sheet(cleric["sheet"])
-    undead = _actor("undead")
-    undead["sheet"]["edition"] = "2014"
-    undead["sheet"]["progression"]["species"] = "undead"
-    undead["derived"] = derive_character_sheet(undead["sheet"])
-    _give_magic_resistance(undead)
-
-    resolved = resolve_turn_undead_to_sheets(
-        cleric,
-        {"undead": undead},
-        rng=_SequenceRng(1, 1),
-    )
-
-    assert resolved["save_dc"] == 13
-    assert resolved["targets"][0]["turned"] is True
-    assert resolved["targets"][0]["save"]["roll_mode"] == "advantage"
-    turned_sheet = resolved["sheets"]["undead"]
-    assert "turned" in turned_sheet["conditions"]
-    assert turned_sheet["effects"][-1]["kind"] == "turn_undead"
-    assert turned_sheet["effects"][-1]["duration"] == {
-        "period": "minute",
-        "remaining": 1,
-    }
-
-    cleric["initiative"] = 20
-    cleric["position"] = {"x": 0, "y": 0}
-    undead["sheet"] = turned_sheet
-    undead["derived"] = derive_character_sheet(turned_sheet)
-    undead["initiative"] = 10
-    undead["position"] = {"x": 2, "y": 0}
-    encounter = start_encounter([cleric, undead], ruleset="2014")
-    target_state = next(
-        item for item in encounter["combatants"] if item["actor_id"] == "undead"
-    )
-    target_state["turned"] = {
-        "source_actor_id": "cleric",
-        "effect_id": resolved["targets"][0]["effect_id"],
-    }
-    encounter = end_turn(encounter, actor_id_value="cleric")
-    assert available_actions(encounter, "undead") == ["move", "dash", "dodge"]
-    assert current_combatant(encounter)["turn_budget"]["reaction"] == 0
-    with pytest.raises(CombatEngineError, match="farther"):
-        spend_movement(encounter, "undead", 5, destination={"x": 1, "y": 0})
-    moved = spend_movement(encounter, "undead", 5, destination={"x": 3, "y": 0})
-    with pytest.raises(CombatEngineError, match="nowhere to move"):
-        resolve_common_action(moved, actor_id_value="undead", action="dodge")
-
-    restrained = deepcopy(encounter)
-    restrained_target = current_combatant(restrained)
-    assert restrained_target is not None
-    restrained_target["conditions"].append("restrained")
-    assert available_actions(restrained, "undead") == ["dash", "dodge", "escape"]
-    escaping = resolve_common_action(
-        restrained,
-        actor_id_value="undead",
-        action="escape",
-        payload={"effect_id": "net"},
-    )
-    assert current_combatant(escaping)["turn_flags"]["escape_declared"] == {
-        "effect_id": "net"
-    }
-
-    damaged = apply_damage_to_sheet(turned_sheet, amount=1, damage_type="radiant")
-    assert "turned" not in damaged["sheet"]["conditions"]
-    assert damaged["ended_effect_ids"] == [resolved["targets"][0]["effect_id"]]
 
 
 def test_2024_turn_undead_applies_frightened_and_incapacitated_until_damaged() -> None:
@@ -3544,7 +2513,7 @@ def test_effect_only_attack_surfaces_ruling_without_applying_fake_damage() -> No
     }
 
 
-def test_structured_parry_opens_after_hit_and_before_damage() -> None:
+def test_agent_compiled_reaction_defense_opens_after_hit_and_before_damage() -> None:
     attacker = _actor("attacker")
     attacker["derived"]["inventory"]["weapon_attacks"] = [
         {
@@ -3580,23 +2549,103 @@ def test_structured_parry_opens_after_hit_and_before_damage() -> None:
         }
     ]
     target["sheet"]["inventory"]["equipment_slots"]["main_hand"] = "scimitar"
-    target["sheet"]["content"]["activities"] = [
-        {
-            "id": "bandit-captain-parry",
-            "name": "Parry",
-            "source_key": "Bandit Captain",
-            "activation": {"type": "reaction"},
-            "choices": {
-                "reaction_defense": {
-                    "kind": "armor_class_bonus",
-                    "bonus": 2,
-                    "attack_modes": ["melee"],
-                    "requires_visible_attacker": True,
-                    "requires_wielded_melee_weapon": True,
-                }
-            },
+    activity = {
+        "id": "source-bound-parry",
+        "name": "Parry",
+        "source_key": "addon:test/parry",
+        "description": (
+            "The defender adds 2 to its AC against one melee attack that would hit it."
+        ),
+        "activation": {"type": "reaction"},
+        "choices": {
+            "manual_ruling": {
+                "kind": "descriptive_activity",
+                "default_resolver": "agent",
+                "source_excerpt": (
+                    "The defender adds 2 to its AC against one melee attack that "
+                    "would hit it."
+                ),
+            }
+        },
+    }
+    target["sheet"]["content"]["activities"] = [activity]
+    target["sheet"] = validate_character_sheet(target["sheet"])
+    activity = target["sheet"]["content"]["activities"][0]
+
+    legacy_target = deepcopy(target)
+    legacy_target["sheet"]["content"]["activities"][0]["choices"] = {
+        "reaction_defense": {
+            "kind": "armor_class_bonus",
+            "bonus": 99,
+            "attack_modes": ["melee"],
         }
-    ]
+    }
+    legacy_target["derived"] = derive_character_sheet(legacy_target["sheet"])
+    legacy_target.update(
+        initiative=10,
+        position={"x": 1, "y": 0},
+        disposition="friendly",
+    )
+    legacy_encounter = start_encounter([attacker, legacy_target])
+    legacy_plan = preflight_attack(
+        attacker,
+        legacy_target,
+        action={"weapon_id": "sword"},
+        encounter=legacy_encounter,
+    )
+    legacy_attack = roll_attack_action(plan=legacy_plan, rng=_SequenceRng(12))
+    assert (
+        available_attack_defenses(
+            legacy_target,
+            plan=legacy_plan,
+            attack=legacy_attack,
+            encounter=legacy_encounter,
+        )
+        == []
+    )
+
+    compiled = compile_resolution_plan(
+        {
+            "schema_version": 2,
+            "id": "addon.test.parry-defense",
+            "source_card_id": "source-bound-parry",
+            "source_card_kind": "activity",
+            "trigger": "attack.after_hit",
+            "trigger_filter": {"hit": True},
+            "slots": {},
+            "steps": [
+                {
+                    "id": "defend",
+                    "op": "attack.ac_bonus",
+                    "args": {
+                        "bonus": 2,
+                        "attack_modes": ["melee"],
+                        "requires_visible_attacker": True,
+                        "requires_wielded_melee_weapon": True,
+                    },
+                }
+            ],
+            "citations": [
+                {
+                    "source": "addon:test/parry",
+                    "source_ref": {"chunk_id": "parry-rule"},
+                    "source_excerpt": activity["description"],
+                }
+            ],
+        }
+    )
+    activity["resolution_plan"] = resolution_plan_template(compiled)
+    activity["resolution_solution"] = build_content_solution(
+        compiled,
+        source_card=activity,
+        application_id="content:activity:source-bound-parry",
+        agent_ruling={
+            "default_resolver": "agent",
+            "ruling_kind": "agent_dm_adjudication",
+            "decision": "Treat the quoted reaction as a contextual AC bonus.",
+            "reason": "The exact card text states the bonus and triggering attack mode.",
+        },
+    )
     target["derived"] = derive_character_sheet(target["sheet"])
     target.update(
         initiative=10,
@@ -3619,17 +2668,35 @@ def test_structured_parry_opens_after_hit_and_before_damage() -> None:
         attack=attack,
         encounter=encounter,
     )
-    assert defenses == [
-        {
-            "id": "bandit-captain-parry",
-            "name": "Parry",
-            "kind": "armor_class_bonus",
-            "bonus": 2,
-            "projected_hit": False,
-            "source_key": "Bandit Captain",
-            "rule_refs": [],
-        }
-    ]
+    assert len(defenses) == 1
+    assert {
+        key: defenses[0][key]
+        for key in (
+            "id",
+            "name",
+            "kind",
+            "bonus",
+            "projected_hit",
+            "source_key",
+            "rule_refs",
+            "plan_id",
+            "plan_fingerprint",
+            "solution_version",
+        )
+    } == {
+        "id": "source-bound-parry",
+        "name": "Parry",
+        "kind": "armor_class_bonus",
+        "bonus": 2,
+        "projected_hit": False,
+        "source_key": "addon:test/parry",
+        "rule_refs": [],
+        "plan_id": "addon.test.parry-defense",
+        "plan_fingerprint": compiled.fingerprint,
+        "solution_version": 1,
+    }
+    assert defenses[0]["compiled_by"]["default_resolver"] == "agent"
+    assert defenses[0]["citations"][0]["source_excerpt"] == activity["description"]
     defended = apply_attack_ac_bonus(
         attack,
         bonus=defenses[0]["bonus"],
@@ -3890,212 +2957,12 @@ def test_mixed_multiattack_pays_one_weapon_and_one_source_activity() -> None:
     assert "multiattack" not in current.get("turn_flags", {})
 
 
-def test_devour_intellect_resolves_damage_score_reduction_and_stun() -> None:
-    source = _actor("intellect-devourer", hp=21)
-    target = _actor("target", hp=30)
-    target["sheet"]["abilities"]["intelligence"]["score"] = 10
-    target["derived"] = derive_character_sheet(target["sheet"])
-    _give_magic_resistance(target)
-    spec = {
-        "kind": "intellect_devourer_devour_intellect_2014",
-        "range_ft": 10,
-        "target_count": 1,
-        "target_requirement": "has_brain",
-        "save": {"ability": "intelligence", "dc": 12},
-        "failure": {
-            "damage_expression": "2d10",
-            "damage_type": "psychic",
-            "secondary_roll": "3d6",
-            "secondary_threshold": "target_intelligence_score",
-            "ability_override": {"ability": "intelligence", "score": 0},
-            "condition": "stunned",
-            "ends_when": "target_intelligence_score_at_least_1",
-        },
-        "source_excerpt": "Exact Devour Intellect source text.",
-    }
-
-    settled = resolve_source_save_effect(
-        source,
-        target,
-        spec=spec,
-        rng=_SequenceRng(1, 5, 6, 4, 4, 4),
-    )
-    sheet = settled["sheet"]
-    result = settled["result"]
-
-    assert result["save"]["success"] is False
-    assert result["save"]["roll_mode"] == "normal"
-    assert result["damage_roll"]["total"] == 11
-    assert result["secondary_roll"]["total"] == 12
-    assert result["ability_reduced"] is True
-    assert sheet["combat"]["hp"]["value"] == 19
-    assert "stunned" in sheet["conditions"]
-    assert derive_character_sheet(sheet)["ability_scores"]["intelligence"] == 0
-    assert derive_character_sheet(sheet)["ability_modifiers"]["intelligence"] == -5
-
-    restored = remove_effect(sheet, result["effect_instance_id"])
-    assert "stunned" not in restored["conditions"]
-    assert derive_character_sheet(restored)["ability_scores"]["intelligence"] == 10
 
 
-def test_body_thief_wins_contest_and_adopts_body_with_source_mental_scores() -> None:
-    source = _actor("intellect-devourer", hp=21)
-    source["sheet"]["abilities"]["intelligence"]["score"] = 12
-    source["sheet"]["abilities"]["wisdom"]["score"] = 11
-    source["sheet"]["abilities"]["charisma"]["score"] = 10
-    source["derived"] = derive_character_sheet(source["sheet"])
-    target = _actor("target", hp=19, ac=16)
-    target["sheet"]["abilities"]["intelligence"]["score"] = 10
-    target["sheet"]["abilities"]["wisdom"]["score"] = 15
-    target["sheet"]["abilities"]["charisma"]["score"] = 8
-    target["sheet"]["conditions"] = ["stunned"]
-    target["sheet"]["effects"] = [
-        {
-            "id": "devour-intellect",
-            "name": "Devour Intellect",
-            "kind": "timed_conditions",
-            "source": source["id"],
-            "active": True,
-            "concentration": False,
-            "duration": {"period": "manual", "remaining": 0},
-            "changes": [
-                {
-                    "path": "abilities.intelligence.score",
-                    "mode": "override",
-                    "value": 0,
-                },
-                {"path": "conditions", "mode": "add", "value": "stunned"},
-            ],
-            "description": "Devour Intellect",
-        }
-    ]
-    target["derived"] = derive_character_sheet(target["sheet"])
-    spec = {
-        "kind": "intellect_devourer_body_thief_2014",
-        "range_ft": 5,
-        "target_count": 1,
-        "target_requirements": ["incapacitated", "humanoid"],
-        "contest": {
-            "source_ability": "intelligence",
-            "target_ability": "intelligence",
-            "ties": "no_winner",
-        },
-        "success": {
-            "brain_consumed": True,
-            "source_inside_host": True,
-            "source_total_cover": True,
-            "source_retains": [
-                "intelligence",
-                "wisdom",
-                "charisma",
-                "deep_speech",
-                "telepathy",
-                "traits",
-            ],
-            "source_adopts": "target_statistics_otherwise",
-            "knowledge_transfer": "all_target_knowledge",
-            "host_zero_hp": "source_must_leave",
-        },
-        "source_excerpt": "Exact Body Thief source text.",
-    }
-
-    settled = resolve_source_contest_effect(
-        source,
-        target,
-        spec=spec,
-        rng=_SequenceRng(15, 4),
-    )
-    sheet = settled["sheet"]
-    result = settled["result"]
-
-    assert result["success"] is True
-    assert result["source_check"]["total"] == 16
-    assert result["target_check"]["total"] == -1
-    assert result["brain_consumed"] is True
-    assert "stunned" not in sheet["conditions"]
-    assert sheet["combat"]["hp"]["value"] == 19
-    assert derive_character_sheet(sheet)["armor_class"] == 16
-    assert derive_character_sheet(sheet)["ability_scores"] == {
-        "strength": 16,
-        "dexterity": 10,
-        "constitution": 10,
-        "intelligence": 12,
-        "wisdom": 11,
-        "charisma": 10,
-    }
-    assert sheet["effects"][0]["active"] is False
-    assert sheet["effects"][0]["ended_reason"] == "body_thief_takeover"
 
 
-def test_body_thief_tie_has_no_winner_and_does_not_change_target() -> None:
-    source = _actor("intellect-devourer")
-    target = _actor("target")
-    spec = {
-        "kind": "intellect_devourer_body_thief_2014",
-        "range_ft": 5,
-        "target_count": 1,
-        "target_requirements": ["incapacitated", "humanoid"],
-        "contest": {
-            "source_ability": "intelligence",
-            "target_ability": "intelligence",
-            "ties": "no_winner",
-        },
-        "success": {
-            "brain_consumed": True,
-            "source_inside_host": True,
-            "source_total_cover": True,
-            "source_retains": [
-                "intelligence",
-                "wisdom",
-                "charisma",
-                "deep_speech",
-                "telepathy",
-                "traits",
-            ],
-            "source_adopts": "target_statistics_otherwise",
-            "knowledge_transfer": "all_target_knowledge",
-            "host_zero_hp": "source_must_leave",
-        },
-        "source_excerpt": "Exact Body Thief source text.",
-    }
-    source["sheet"]["abilities"]["intelligence"]["score"] = 12
-    source["derived"] = derive_character_sheet(source["sheet"])
-    target["sheet"]["abilities"]["intelligence"]["score"] = 10
-    target["derived"] = derive_character_sheet(target["sheet"])
-
-    settled = resolve_source_contest_effect(
-        source,
-        target,
-        spec=spec,
-        rng=_SequenceRng(9, 10),
-    )
-
-    assert settled["result"]["tie"] is True
-    assert settled["result"]["success"] is False
-    assert settled["result"]["outcome"] == "contest_not_won"
-    assert settled["sheet"] == target["sheet"]
 
 
-def test_attack_cannot_target_intellect_devourer_inside_host() -> None:
-    attacker = _actor("attacker")
-    target = _actor("intellect-devourer")
-    attacker.update(initiative=20, tie_breaker=0)
-    target.update(initiative=10, tie_breaker=0)
-    encounter = start_encounter([attacker, target])
-    target_combatant = next(
-        item
-        for item in encounter["combatants"]
-        if item["actor_id"] == target["id"]
-    )
-    target_combatant["inside_host"] = {"host_actor_id": "host"}
-
-    with pytest.raises(CombatEngineError, match="total cover inside its host"):
-        preflight_attack(
-            attacker,
-            target,
-            action={"weapon_id": "unarmed-strike"},
-            encounter=encounter,
-        )
 
 
 def test_unstructured_multiattack_does_not_block_an_ordinary_weapon_attack() -> None:
@@ -4689,6 +3556,115 @@ def test_damage_at_zero_equal_to_maximum_causes_instant_death() -> None:
     assert result["sheet"]["combat"]["death_saves"]["failures"] == 0
 
 
+def _standard_relentless_endurance_feature(*, mechanic_ref: bool = True) -> dict:
+    return {
+        "id": "srd2014-half-orc-relentless-endurance",
+        "name": "Relentless Endurance",
+        "source_key": "Half-Orc",
+        "description": "Drop to 1 hit point instead.",
+        "activation": {"type": "passive"},
+        "uses": {
+            "label": "Relentless Endurance",
+            "value": 1,
+            "max": 1,
+            "recovers_on": "long_rest",
+            "source_key": "Half-Orc",
+            "slot_level": 0,
+            "unlimited": False,
+        },
+        "choices": {
+            "source_trait": {
+                "kind": "relentless_endurance",
+                "trigger": "reduced_to_zero_not_killed_outright",
+                "result_hp": 1,
+                "automatic": True,
+                "source_excerpt": "Drop to 1 hit point instead.",
+            }
+        },
+        "mechanic_refs": (
+            [CORE_RELENTLESS_ENDURANCE_MECHANIC_ID] if mechanic_ref else []
+        ),
+    }
+
+
+def test_standard_relentless_endurance_is_core_card_bound_and_once_per_rest() -> None:
+    actor = _actor("half-orc", hp=10)
+    actor["sheet"]["content"]["features"] = [
+        _standard_relentless_endurance_feature()
+    ]
+    sheet = validate_character_sheet(actor["sheet"])
+
+    recovered = apply_damage_to_sheet(sheet, amount=10, damage_type="force")
+
+    assert recovered["after_hp"] == 1
+    assert not ({"prone", "unconscious", "dead"} & set(recovered["sheet"]["conditions"]))
+    assert recovered["zero_hp_recovery"] == {
+        "mechanic_id": CORE_RELENTLESS_ENDURANCE_MECHANIC_ID,
+        "feature_id": "srd2014-half-orc-relentless-endurance",
+        "result_hp": 1,
+        "spent": 1,
+        "remaining": 0,
+    }
+
+    exhausted = apply_damage_to_sheet(
+        recovered["sheet"], amount=1, damage_type="force"
+    )
+    assert exhausted["after_hp"] == 0
+    assert exhausted["zero_hp_recovery"] is None
+    assert {"prone", "unconscious"} <= set(exhausted["sheet"]["conditions"])
+
+    rested = apply_rest(recovered["sheet"], rest_type="long_rest")
+    refreshed_feature = rested["sheet"]["content"]["features"][0]
+    assert refreshed_feature["uses"]["value"] == 1
+    assert rested["recovered"]["features:0:uses"] == 1
+
+    killed_outright = apply_damage_to_sheet(
+        rested["sheet"], amount=20, damage_type="force"
+    )
+    assert killed_outright["after_hp"] == 0
+    assert killed_outright["zero_hp_recovery"] is None
+    assert "dead" in killed_outright["sheet"]["conditions"]
+    assert killed_outright["sheet"]["content"]["features"][0]["uses"]["value"] == 1
+
+
+def test_counterfeit_relentless_endurance_prose_cannot_inject_core_behavior() -> None:
+    actor = _actor("counterfeit", hp=10)
+    actor["sheet"]["content"]["features"] = [
+        _standard_relentless_endurance_feature(mechanic_ref=False)
+    ]
+
+    damaged = apply_damage_to_sheet(
+        validate_character_sheet(actor["sheet"]),
+        amount=10,
+        damage_type="force",
+        death_saves=False,
+    )
+
+    assert damaged["after_hp"] == 0
+    assert damaged["zero_hp_recovery"] is None
+    assert "dead" in damaged["sheet"]["conditions"]
+    assert damaged["sheet"]["content"]["features"][0]["uses"]["value"] == 1
+
+
+def test_standard_relentless_endurance_applies_to_direct_hit_point_loss() -> None:
+    actor = _actor("half-orc-hp-loss", hp=6)
+    actor["sheet"]["content"]["features"] = [
+        _standard_relentless_endurance_feature()
+    ]
+
+    result = apply_hit_point_loss_to_sheet(
+        validate_character_sheet(actor["sheet"]),
+        amount=6,
+        death_saves=False,
+    )
+
+    assert result["after_hp"] == 1
+    assert result["zero_hp_recovery"]["mechanic_id"] == (
+        CORE_RELENTLESS_ENDURANCE_MECHANIC_ID
+    )
+    assert not ({"prone", "unconscious", "dead"} & set(result["sheet"]["conditions"]))
+
+
 def test_falling_unconscious_also_leaves_actor_prone_after_healing() -> None:
     actor = _actor("target", hp=5)
     dropped = apply_damage_to_sheet(actor["sheet"], amount=5, damage_type="force")
@@ -4783,84 +3759,6 @@ def test_massive_damage_uses_excess_over_zero_hp() -> None:
     assert "dead" in result["sheet"]["conditions"]
 
 
-def test_relentless_endurance_drops_to_one_unless_damage_kills_outright() -> None:
-    actor = _actor("target", hp=10)
-    actor["sheet"]["content"]["features"].append(
-        {
-            "id": "relentless-endurance",
-            "name": "Relentless Endurance",
-            "source_key": "module-chunk:test",
-            "description": (
-                "When reduced to 0 hit points, he drops to 1 hit point instead "
-                "(but can't do this again until he finishes a long rest)."
-            ),
-            "activation": {
-                "type": "passive",
-                "cost": 0,
-                "trigger": "reduced to 0 hit points",
-            },
-            "uses": {
-                "label": "uses",
-                "value": 1,
-                "max": 1,
-                "recovers_on": "long_rest",
-            },
-            "choices": {
-                "source_trait": {
-                    "kind": "relentless_endurance",
-                    "trigger": "reduced_to_zero",
-                    "drop_to_hit_points": 1,
-                    "requires_not_killed_outright": True,
-                    "automatic": True,
-                }
-            },
-            "rule_refs": ["module-chunk:test"],
-        }
-    )
-
-    endured = apply_damage_to_sheet(
-        actor["sheet"],
-        amount=10,
-        damage_type="cold",
-        death_saves=False,
-    )
-    killed = apply_damage_to_sheet(
-        actor["sheet"],
-        amount=20,
-        damage_type="cold",
-        death_saves=False,
-    )
-    spent = apply_damage_to_sheet(
-        endured["sheet"],
-        amount=1,
-        damage_type="cold",
-        death_saves=False,
-    )
-    recovered = apply_rest(endured["sheet"], rest_type="long_rest")
-
-    assert endured["after_hp"] == 1
-    assert endured["relentless_endurance_triggered"] is True
-    assert endured["relentless_endurance_use"] == {
-        "feature_id": "relentless-endurance",
-        "before_uses": 1,
-        "after_uses": 0,
-        "recovers_on": "long_rest",
-    }
-    assert endured["sheet"]["conditions"] == []
-    assert killed["after_hp"] == 0
-    assert killed["relentless_endurance_triggered"] is False
-    assert "dead" in killed["sheet"]["conditions"]
-    assert spent["after_hp"] == 0
-    assert spent["relentless_endurance_triggered"] is False
-    assert "dead" in spent["sheet"]["conditions"]
-    recovered_feature = next(
-        item
-        for item in recovered["sheet"]["content"]["features"]
-        if item["id"] == "relentless-endurance"
-    )
-    assert recovered_feature["uses"]["value"] == 1
-
-
 def test_stunned_and_unconscious_cannot_move() -> None:
     encounter = start_encounter([_actor("a"), _actor("b")], rng=random.Random(1))
     current = encounter["combatants"][encounter["turn_index"]]
@@ -4953,85 +3851,6 @@ def test_paralyzed_target_is_automatic_critical_within_five_feet() -> None:
     assert result["critical"] is True
 
 
-def test_assassinate_uses_authoritative_turn_and_surprise_state() -> None:
-    assassin = _actor("assassin")
-    assassin.update(initiative=20, disposition="hostile")
-    assassin["sheet"]["content"]["features"] = [
-        {
-            "id": "assassinate-passive",
-            "name": "Assassinate",
-            "activation": {"type": "passive"},
-            "choices": {
-                "source_trait": {
-                    "kind": "assassinate",
-                    "trigger": "attack_roll",
-                    "attacker_turn": "first",
-                    "advantage_if_target_has_not_taken_turn": True,
-                    "critical_on_hit_if_target_surprised": True,
-                    "automatic": True,
-                    "source_excerpt": (
-                        "During its first turn, the assassin has advantage on "
-                        "attack rolls against any creature that hasn't taken a "
-                        "turn. Any hit the assassin scores against a surprised "
-                        "creature is a critical hit."
-                    ),
-                }
-            },
-        }
-    ]
-    assassin["derived"] = derive_character_sheet(assassin["sheet"])
-    target = _actor("target")
-    target.update(initiative=10, disposition="friendly", surprised=True)
-    encounter = start_encounter([assassin, target], ruleset="2014")
-    rules = resolution_context(
-        {"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []}
-    )
-
-    opening = preflight_attack(
-        assassin,
-        target,
-        action={},
-        encounter=encounter,
-        rules=rules,
-    )
-
-    assert opening["advantage"] is True
-    assert "assassinate" in opening["advantage_sources"]
-    assert opening["automatic_critical_on_hit"] is True
-    assert opening["assassinate"] == {
-        "applied": ["opening_advantage", "surprised_critical"],
-        "automatic_critical_on_hit": True,
-    }
-    assert any(
-        item["mechanic_id"] == "dnd5e.core.attack.assassinate"
-        for item in opening["rule_receipts"]
-    )
-    attack = roll_attack_action(plan=opening, rng=_SequenceRng(10, 11))
-    assert attack["hit"] is True
-    assert attack["critical"] is True
-
-    encounter = end_turn(encounter, actor_id_value="assassin")
-    encounter = end_turn(encounter, actor_id_value="target")
-    assassin_state = next(
-        item for item in encounter["combatants"] if item["actor_id"] == "assassin"
-    )
-    target_state = next(
-        item for item in encounter["combatants"] if item["actor_id"] == "target"
-    )
-    assert assassin_state["turns_completed"] == 1
-    assert target_state["turns_completed"] == 1
-    assert target_state["surprised"] is False
-
-    later = preflight_attack(
-        assassin,
-        target,
-        action={},
-        encounter=encounter,
-        rules=rules,
-    )
-    assert "assassinate" not in later["advantage_sources"]
-    assert later["automatic_critical_on_hit"] is False
-    assert later["assassinate"] is None
 
 
 def test_unseen_attacker_and_target_apply_opposed_attack_modifiers() -> None:
@@ -5084,103 +3903,8 @@ def _kobold_attack_trait_actor(identifier: str) -> dict:
     return actor
 
 
-def test_pack_tactics_uses_a_conscious_adjacent_ally() -> None:
-    kobold = _kobold_attack_trait_actor("kobold")
-    kobold.update(
-        initiative=20,
-        position={"x": 0, "y": 0},
-        disposition="hostile",
-    )
-    ally = _actor("ally")
-    ally.update(
-        initiative=10,
-        position={"x": 2, "y": 0},
-        disposition="hostile",
-    )
-    target = _actor("target")
-    target.update(
-        initiative=5,
-        position={"x": 1, "y": 0},
-        disposition="friendly",
-    )
-    encounter = start_encounter([kobold, ally, target])
-    rules = resolution_context(
-        {"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []}
-    )
-
-    plan = preflight_attack(
-        kobold,
-        target,
-        action={"context": {"direct_sunlight": False}},
-        encounter=encounter,
-        rules=rules,
-    )
-    assert plan["advantage"] is True
-    assert plan["pack_tactics_ally_id"] == "ally"
-    assert "pack_tactics" in plan["advantage_sources"]
-    assert any(
-        item["mechanic_id"] == "dnd5e.core.attack.pack_tactics"
-        for item in plan["rule_receipts"]
-    )
-
-    ally_state = next(
-        item
-        for item in encounter["combatants"]
-        if item["actor_id"] == "ally"
-    )
-    ally_state["conditions"] = ["stunned"]
-    without_ally = preflight_attack(
-        kobold,
-        target,
-        action={"context": {"direct_sunlight": False}},
-        encounter=encounter,
-        rules=rules,
-    )
-    assert without_ally["advantage"] is False
-    assert without_ally["pack_tactics_ally_id"] is None
 
 
-def test_sunlight_sensitivity_requires_and_uses_the_environment_fact() -> None:
-    kobold = _kobold_attack_trait_actor("kobold")
-    kobold.update(
-        initiative=20,
-        position={"x": 0, "y": 0},
-        disposition="hostile",
-    )
-    target = _actor("target")
-    target.update(
-        initiative=10,
-        position={"x": 1, "y": 0},
-        disposition="friendly",
-    )
-    encounter = start_encounter([kobold, target])
-    rules = resolution_context(
-        {"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []}
-    )
-
-    with pytest.raises(NeedsRulingError, match="direct sunlight"):
-        preflight_attack(
-            kobold,
-            target,
-            action={},
-            encounter=encounter,
-            rules=rules,
-        )
-
-    plan = preflight_attack(
-        kobold,
-        target,
-        action={"context": {"direct_sunlight": True}},
-        encounter=encounter,
-        rules=rules,
-    )
-    assert plan["disadvantage"] is True
-    assert "sunlight_sensitivity" in plan["disadvantage_sources"]
-    assert any(
-        item["mechanic_id"]
-        == "dnd5e.core.attack.sunlight_sensitivity"
-        for item in plan["rule_receipts"]
-    )
 
 
 @pytest.mark.parametrize(
@@ -5679,282 +4403,14 @@ def test_cunning_action_settles_dash_and_disengage_but_not_hide_outcome() -> Non
     assert dashed_2024["combatants"][0]["turn_budget"]["movement"] == 60
 
 
-def test_aggressive_grants_only_separately_paid_movement_toward_visible_hostile() -> None:
-    orc = _actor("orc")
-    target = _actor("target")
-    orc.update(
-        initiative=20,
-        tie_breaker=0,
-        position={"x": 0, "y": 0},
-        disposition="hostile",
-    )
-    target.update(
-        initiative=10,
-        tie_breaker=0,
-        position={"x": 6, "y": 0},
-        disposition="friendly",
-    )
-    encounter = start_encounter([orc, target])
-    paid = pay_activity_activation(
-        encounter,
-        actor_id_value="orc",
-        activation_type="bonus_action",
-    )
-    aggressive, effect = settle_core_activity_effect(
-        paid,
-        actor_id_value="orc",
-        activity_id="dnd5e.core.monster.aggressive",
-        declaration={"target_id": "target"},
-    )
-
-    assert effect == {
-        "kind": "aggressive",
-        "target_id": "target",
-        "movement_granted_ft": 30,
-    }
-    assert aggressive["combatants"][0]["turn_budget"]["movement"] == 30
-    ordinary = spend_movement(
-        aggressive,
-        "orc",
-        5,
-        destination={"x": -1, "y": 0},
-    )
-    assert ordinary["combatants"][0]["turn_budget"]["movement"] == 25
-    with pytest.raises(CombatEngineError, match="must move toward"):
-        spend_movement(
-            ordinary,
-            "orc",
-            5,
-            destination={"x": -2, "y": 0},
-            movement_mode="aggressive",
-        )
-    moved = spend_movement(
-        ordinary,
-        "orc",
-        5,
-        destination={"x": 0, "y": 0},
-        movement_mode="aggressive",
-    )
-    assert moved["combatants"][0]["turn_budget"]["movement"] == 25
-    assert moved["combatants"][0]["turn_flags"]["aggressive_movement"][
-        "remaining_ft"
-    ] == 25
 
 
-def test_magmin_illumination_toggles_with_a_paid_bonus_action() -> None:
-    magmin = _actor("magmin")
-    other = _actor("other")
-    magmin["initiative"] = 20
-    other["initiative"] = 10
-    encounter = start_encounter([magmin, other])
-
-    paid = pay_activity_activation(
-        encounter,
-        actor_id_value="magmin",
-        activation_type="bonus_action",
-    )
-    lit, lit_effect = settle_core_activity_effect(
-        paid,
-        actor_id_value="magmin",
-        activity_id="dnd5e.core.monster.ignited-illumination",
-    )
-    assert lit_effect == {
-        "kind": "ignited_illumination",
-        "ablaze": True,
-        "bright_light_radius_ft": 10,
-        "dim_light_radius_ft": 20,
-    }
-    assert lit["combatants"][0]["emitted_light"]["ignited_illumination"] is True
-
-    other_turn = end_turn(lit, actor_id_value="magmin")
-    returned = end_turn(other_turn, actor_id_value="other")
-    paid_again = pay_activity_activation(
-        returned,
-        actor_id_value="magmin",
-        activation_type="bonus_action",
-    )
-    dark, dark_effect = settle_core_activity_effect(
-        paid_again,
-        actor_id_value="magmin",
-        activity_id="dnd5e.core.monster.ignited-illumination",
-    )
-    assert dark_effect["ablaze"] is False
-    assert dark["combatants"][0]["emitted_light"] == {}
 
 
-def test_battle_cry_grants_temporary_attack_advantage_and_bonus_attack() -> None:
-    war_chief = _actor("war-chief")
-    ally = _actor("ally")
-    target = _actor("target")
-    for actor, initiative, position, disposition in (
-        (war_chief, 20, {"x": 0, "y": 0}, "hostile"),
-        (ally, 15, {"x": 1, "y": 0}, "hostile"),
-        (target, 10, {"x": 2, "y": 0}, "friendly"),
-    ):
-        actor.update(
-            initiative=initiative,
-            tie_breaker=0,
-            position=position,
-            disposition=disposition,
-        )
-        actor["derived"]["inventory"]["weapon_attacks"] = [
-            {
-                "item_id": "sword",
-                "attack_type": "melee",
-                "properties": [],
-                "attack_bonus": 5,
-                "damage_expression": "1",
-                "damage_type": "slashing",
-            }
-        ]
-    encounter = start_encounter([war_chief, ally, target])
-    paid = pay_activity_activation(
-        encounter,
-        actor_id_value="war-chief",
-        activation_type="action",
-    )
-    affected, effect = settle_core_activity_effect(
-        paid,
-        actor_id_value="war-chief",
-        activity_id="dnd5e.core.monster.battle-cry",
-        declaration={
-            "targets": [
-                {
-                    "actor_id": "ally",
-                    "can_hear": True,
-                    "reason": "The ally is five feet away in the same open area.",
-                }
-            ]
-        },
-    )
-
-    assert effect == {
-        "kind": "battle_cry",
-        "target_ids": ["ally"],
-        "bonus_attack_available": True,
-    }
-    plan = preflight_attack(
-        ally,
-        target,
-        action={"weapon_id": "sword"},
-        encounter=affected,
-        allow_out_of_turn=True,
-        require_attack_action=False,
-    )
-    assert plan["advantage"] is True
-    assert "battle_cry" in plan["advantage_sources"]
-    attacked, payment = pay_attack_action(
-        affected,
-        war_chief,
-        weapon_id="sword",
-        attack_mode="melee",
-    )
-    assert payment == {
-        "kind": "battle_cry_bonus_attack",
-        "payment": "bonus_action",
-        "attack_count": 1,
-    }
-    assert attacked["combatants"][0]["turn_budget"]["bonus_action"] == 0
-
-    ally_turn = end_turn(attacked, actor_id_value="war-chief")
-    assert "battle_cry_advantage" in ally_turn["combatants"][1]["turn_flags"]
-    target_turn = end_turn(ally_turn, actor_id_value="ally")
-    returned = end_turn(target_turn, actor_id_value="target")
-    assert "battle_cry_advantage" not in returned["combatants"][1].get(
-        "turn_flags", {}
-    )
 
 
-def test_battle_cry_requires_agent_supplied_hearing_fact() -> None:
-    war_chief = _actor("war-chief")
-    ally = _actor("ally")
-    war_chief.update(
-        initiative=20,
-        tie_breaker=0,
-        position={"x": 0, "y": 0},
-    )
-    ally.update(
-        initiative=10,
-        tie_breaker=0,
-        position={"x": 1, "y": 0},
-    )
-    encounter = start_encounter([war_chief, ally])
-    paid = pay_activity_activation(
-        encounter,
-        actor_id_value="war-chief",
-        activation_type="action",
-    )
-
-    with pytest.raises(CombatEngineError, match="can_hear scene fact"):
-        settle_core_activity_effect(
-            paid,
-            actor_id_value="war-chief",
-            activity_id="dnd5e.core.monster.battle-cry",
-            declaration={"targets": [{"actor_id": "ally"}]},
-        )
 
 
-def test_statblock_sneak_attack_uses_recorded_formula_without_rogue_levels() -> None:
-    spy = _actor("spy")
-    ally = _actor("ally")
-    target = _actor("target")
-    spy["sheet"]["content"]["features"] = [
-        {
-            "id": "sneak-attack-1-turn-passive",
-            "name": "Sneak Attack (1/Turn)",
-            "choices": {
-                "source_trait": {
-                    "kind": "sneak_attack",
-                    "damage_formula": "2d6",
-                    "uses_per_turn": 1,
-                    "requires_finesse_or_ranged": False,
-                    "ally_within_target_ft": 5,
-                    "requires_ally_not_incapacitated": True,
-                    "requires_no_disadvantage": True,
-                }
-            },
-        }
-    ]
-    spy["derived"] = derive_character_sheet(spy["sheet"])
-    spy["derived"]["inventory"]["weapon_attacks"] = [
-        {
-            "item_id": "shortsword",
-            "attack_type": "melee",
-            "properties": [],
-            "attack_bonus": 5,
-            "damage_expression": "1d6 + 2",
-            "damage_type": "piercing",
-        }
-    ]
-    spy.update(
-        initiative=20,
-        tie_breaker=0,
-        position={"x": 0, "y": 0},
-        disposition="friendly",
-    )
-    ally.update(
-        initiative=15,
-        tie_breaker=0,
-        position={"x": 1, "y": 0},
-        disposition="friendly",
-    )
-    target.update(
-        initiative=10,
-        tie_breaker=0,
-        position={"x": 1, "y": 0},
-        disposition="hostile",
-    )
-    encounter = start_encounter([spy, ally, target])
-
-    plan = preflight_attack(
-        spy,
-        target,
-        action={"weapon_id": "shortsword", "use_sneak_attack": True},
-        encounter=encounter,
-    )
-
-    assert plan["sneak_attack"]["expression"] == "2d6"
-    assert plan["sneak_attack"]["eligibility"] == "adjacent_enemy"
 
 
 def test_versatile_weapon_grip_uses_exact_alternate_damage_once() -> None:
@@ -6543,84 +4999,8 @@ def test_hit_point_loss_bypasses_temporary_hp_and_damage_traits() -> None:
     assert result["sheet"]["combat"]["hp"]["temp"] == 7
 
 
-def test_regenerating_zero_hp_creature_is_buffered_until_its_turn() -> None:
-    actor = _actor("troll", hp=12)
-
-    dropped = apply_hit_point_loss_to_sheet(
-        actor["sheet"],
-        amount=12,
-        death_saves=False,
-        zero_hp_recovery=True,
-    )
-
-    assert dropped["after_hp"] == 0
-    assert "unconscious" in dropped["sheet"]["conditions"]
-    assert "dead" not in dropped["sheet"]["conditions"]
-
-    regenerated = settle_start_turn_regeneration(
-        dropped["sheet"],
-        amount=10,
-        suppressed=False,
-    )
-
-    assert regenerated["after_hp"] == 10
-    assert regenerated["died"] is False
-    assert "unconscious" not in regenerated["sheet"]["conditions"]
-    assert "prone" in regenerated["sheet"]["conditions"]
 
 
-def test_suppressed_regeneration_kills_a_creature_that_starts_at_zero_hp() -> None:
-    actor = _actor("troll", hp=12)
-    dropped = apply_hit_point_loss_to_sheet(
-        actor["sheet"],
-        amount=12,
-        death_saves=False,
-        zero_hp_recovery=True,
-    )
-
-    result = settle_start_turn_regeneration(
-        dropped["sheet"],
-        amount=10,
-        suppressed=True,
-    )
-
-    assert result["after_hp"] == 0
-    assert result["died"] is True
-    assert "dead" in result["sheet"]["conditions"]
-    assert "unconscious" not in result["sheet"]["conditions"]
-
-
-def test_attachment_blocks_attacks_and_can_be_removed_by_the_target_action() -> None:
-    target = _actor("target")
-    target.update(initiative=20, position={"x": 0, "y": 0})
-    stirge = _actor("stirge")
-    stirge.update(initiative=10, position={"x": 0, "y": 0})
-    encounter = start_encounter([target, stirge])
-    encounter["ongoing_effects"] = [
-        {
-            "id": "attachment-1",
-            "kind": "attachment",
-            "source_actor_id": "stirge",
-            "target_id": "target",
-            "self_detach_movement_ft": 5,
-            "active": True,
-        }
-    ]
-
-    detached = detach_attachment(
-        encounter,
-        actor_id_value="target",
-        effect_id="attachment-1",
-    )
-
-    target_combatant = detached["combatants"][0]
-    assert target_combatant["turn_budget"]["main_action"] == 0
-    assert detached["ongoing_effects"][0]["active"] is False
-    assert detached["ongoing_effects"][0]["ended_reason"] == "detached_by_action"
-
-    stirge_turn = end_turn(encounter, actor_id_value="target")
-    assert "attack" not in available_actions(stirge_turn, "stirge")
-    assert "detach_attachment" in available_actions(stirge_turn, "stirge")
 
 
 def test_common_use_object_action_preserves_the_reviewed_source_payload() -> None:
@@ -6679,110 +5059,5 @@ def test_lookalike_critical_text_does_not_gain_an_automatic_attack_contract() ->
         action={"weapon_id": "lookalike-sword"},
     )
 
-    assert plan["critical_followup"] is None
+    assert "critical_followup" not in plan
     assert plan["on_hit_effect"] == effect
-
-
-def test_grimvault_fixed_critical_followup_is_conditional_and_simultaneous() -> None:
-    effect = (
-        "If the target is an object, the hit instead deals 16 slashing damage. "
-        "If the target is a creature and Durnan rolls a 20 on the d20 for the "
-        "attack roll, the target takes an extra 14 slashing damage, and Durnan "
-        "rolls another d20. On a roll of 20, he lops off one of the target's "
-        "limbs, or some other part of its body if it is limbless."
-    )
-    parsed = structured_critical_followup(effect)
-
-    assert parsed == {
-        "kind": "critical_followup",
-        "trigger_natural": 20,
-        "extra_damage": 14,
-        "damage_type": "slashing",
-        "followup_expression": "1d20",
-        "anatomical_loss_natural": 20,
-        "source_excerpt": effect,
-    }
-
-    attacker = _actor("durnan")
-    target = _actor("troll")
-    target["sheet"]["combat"]["hp"] = {"value": 84, "max": 84, "temp": 0}
-    target["sheet"]["traits"]["resistances"] = ["slashing"]
-    plan = {
-        "damage_expression": "2d6 + 4",
-        "damage_type": "slashing",
-        "additional_damage": [],
-        "critical_followup": parsed,
-        "target_uses_death_saves": False,
-        "ruleset": "2014",
-    }
-    _, updated_target, result = resolve_attack_damage(
-        attacker,
-        target,
-        plan=plan,
-        attack={
-            "natural": 20,
-            "total": 28,
-            "armor_class": 15,
-            "hit": True,
-            "critical": True,
-            "fumble": False,
-        },
-        rng=_SequenceRng(3, 4, 3, 4, 20),
-    )
-
-    # The doubled 2d6 (14), +4, and fixed +14 rider are one slashing
-    # instance: floor((14 + 4 + 14) / 2) = 16 after resistance.
-    assert updated_target["sheet"]["combat"]["hp"]["value"] == 68
-    assert result["damage"]["input_amount"] == 32
-    assert result["damage"]["applied_amount"] == 16
-    assert result["critical_followup"]["triggered"] is True
-    assert result["critical_followup"]["followup_roll"]["total"] == 20
-    assert result["critical_followup"]["anatomical_loss_triggered"] is True
-    assert result["critical_followup"]["requires_dm_ruling"] is True
-    assert result["critical_followup"]["ruling_requirement"] == {
-        "default_resolver": "agent",
-        "ruling_kind": "source_or_scene_fact",
-        "reason": (
-            "Determine from the target and scene facts whether the triggered "
-            "anatomical loss can apply."
-        ),
-    }
-
-
-def test_grimvault_followup_does_not_trigger_on_an_ordinary_hit() -> None:
-    effect = (
-        "If the target is a creature and Durnan rolls a 20 on the d20 for the "
-        "attack roll, the target takes an extra 14 slashing damage, and Durnan "
-        "rolls another d20. On a roll of 20, he lops off one of the target's "
-        "limbs, or some other part of its body if it is limbless."
-    )
-    plan = {
-        "damage_expression": "2d6 + 4",
-        "damage_type": "slashing",
-        "additional_damage": [],
-        "critical_followup": structured_critical_followup(effect),
-        "target_uses_death_saves": False,
-        "ruleset": "2014",
-    }
-
-    _, _, result = resolve_attack_damage(
-        _actor("durnan"),
-        _actor("troll"),
-        plan=plan,
-        attack={
-            "natural": 19,
-            "total": 27,
-            "armor_class": 15,
-            "hit": True,
-            "critical": False,
-            "fumble": False,
-        },
-        rng=_SequenceRng(3, 4),
-    )
-
-    assert result["critical_followup"]["triggered"] is False
-    assert result["critical_followup"]["followup_roll"] is None
-    assert result["critical_followup"]["requires_dm_ruling"] is False
-    assert result["critical_followup"]["ruling_requirement"] is None
-    assert "on_hit_ruling" not in result
-    damage_amount_after_reduction,

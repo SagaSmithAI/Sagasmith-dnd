@@ -23,6 +23,10 @@ from sagasmith_dnd.standard_spell_ids import (
     STANDARD_2014_CONTENT_PACK_VERSION,
 )
 
+CORE_DRAGONBORN_BREATH_MECHANIC_ID = (
+    "dnd5e.core.activity.dragonborn_breath_weapon"
+)
+
 
 def _species_spell_grant(
     name: str,
@@ -59,6 +63,7 @@ def _standard_species_artifact(
     grants: dict[str, Any],
     base_species: str | None = None,
     source_names: list[str] | None = None,
+    mechanic_refs: list[str] | None = None,
 ) -> dict[str, Any]:
     artifact = {
         "id": f"{STANDARD_2014_CONTENT_PACK_ID}.species.{slug}",
@@ -74,6 +79,7 @@ def _standard_species_artifact(
             "grants": grants,
         },
         "rule_refs": [f"book:players-handbook-2014:p{page}"],
+        "mechanic_refs": list(mechanic_refs or []),
         "source_citations": [
             {
                 "source": f"book:players-handbook-2014:p{page}",
@@ -291,6 +297,7 @@ def _cached_standard2014_content() -> tuple[dict[str, Any], list[dict[str, Any]]
         "dragonborn",
         "Dragonborn",
         page=34,
+        mechanic_refs=[CORE_DRAGONBORN_BREATH_MECHANIC_ID],
         grants={
             "ability_score_increases": {"strength": 2, "charisma": 1},
             "size": "medium",

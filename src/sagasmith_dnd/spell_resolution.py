@@ -42,6 +42,14 @@ SPELL_RESOLUTION_PATHS = frozenset(
         "structured_resolution",
     }
 )
+STANDARD_SPELL_ON_HIT_MECHANICS = frozenset(
+    {
+        "next_attack_advantage_until_source_turn_end",
+        "healing_prevention_until_source_turn_start",
+        "healing_prevention_until_source_turn_end",
+        "undead_attack_disadvantage_against_source_until_source_turn_start",
+    }
+)
 
 _DICE = re.compile(r"(?i)^([1-9]\d*)d([1-9]\d*)$")
 _SRD2014_SPELL_PREFIX = "dnd5e.content.srd2014.spell."
@@ -282,6 +290,7 @@ def normalize_spell_resolution(value: Any, field: str = "spell.resolution") -> d
                 "attack_bonus_override",
                 "range_ft_override",
                 "on_hit_ruling",
+                "on_hit_mechanics",
             },
         )
         attack_mode = _text(attack.get("mode"), f"{field}.attack.mode").casefold()
@@ -312,6 +321,21 @@ def normalize_spell_resolution(value: Any, field: str = "spell.resolution") -> d
         }
         if normalized_count["per_slot_above"] and normalized_count["slot_base_level"] < 1:
             raise ValueError(f"{field}.attack.count.slot_base_level is required")
+        raw_on_hit_mechanics = attack.get("on_hit_mechanics") or []
+        if not isinstance(raw_on_hit_mechanics, list) or any(
+            not isinstance(item, str) or not item.strip()
+            for item in raw_on_hit_mechanics
+        ):
+            raise ValueError(f"{field}.attack.on_hit_mechanics must be a string list")
+        on_hit_mechanics = [item.strip() for item in raw_on_hit_mechanics]
+        unknown_on_hit_mechanics = set(on_hit_mechanics) - STANDARD_SPELL_ON_HIT_MECHANICS
+        if unknown_on_hit_mechanics:
+            raise ValueError(
+                f"{field}.attack.on_hit_mechanics contains unsupported standard mechanics: "
+                f"{sorted(unknown_on_hit_mechanics)}"
+            )
+        if len(on_hit_mechanics) != len(set(on_hit_mechanics)):
+            raise ValueError(f"{field}.attack.on_hit_mechanics must not contain duplicates")
         normalized["attack"] = {
             "mode": attack_mode,
             "count": normalized_count,
@@ -333,6 +357,7 @@ def normalize_spell_resolution(value: Any, field: str = "spell.resolution") -> d
             "on_hit_ruling": _text(
                 attack.get("on_hit_ruling"), f"{field}.attack.on_hit_ruling"
             ),
+            "on_hit_mechanics": on_hit_mechanics,
         }
     elif kind == "saving_throw":
         save = _object(resolution.get("save") or {}, f"{field}.save")
@@ -505,10 +530,7 @@ def known_spell_resolution(name: str) -> dict[str, Any] | None:
                     "per_slot_dice": "1d6",
                     "slot_base_level": 1,
                 },
-                "on_hit_ruling": (
-                    "The next attack against the target before the end of the caster's next "
-                    "turn has advantage."
-                ),
+                "on_hit_mechanics": ["next_attack_advantage_until_source_turn_end"],
             },
         },
         "chill-touch": {
@@ -522,10 +544,10 @@ def known_spell_resolution(name: str) -> dict[str, Any] | None:
                     "damage_type": "necrotic",
                     "cantrip_dice": {"1": "1d8", "5": "2d8", "11": "3d8", "17": "4d8"},
                 },
-                "on_hit_ruling": (
-                    "The target cannot regain hit points until the start of the caster's next "
-                    "turn; an undead target also has disadvantage on attacks against the caster."
-                ),
+                "on_hit_mechanics": [
+                    "healing_prevention_until_source_turn_start",
+                    "undead_attack_disadvantage_against_source_until_source_turn_start",
+                ],
             },
         },
         "sacred-flame": {
@@ -643,10 +665,7 @@ def known_2024_spell_resolution(name: str) -> dict[str, Any] | None:
                     "per_slot_dice": "1d6",
                     "slot_base_level": 1,
                 },
-                "on_hit_ruling": (
-                    "The next attack roll against the target before the end of the "
-                    "caster's next turn has Advantage."
-                ),
+                "on_hit_mechanics": ["next_attack_advantage_until_source_turn_end"],
             },
         },
         "chill-touch": {
@@ -665,10 +684,7 @@ def known_2024_spell_resolution(name: str) -> dict[str, Any] | None:
                         "17": "4d10",
                     },
                 },
-                "on_hit_ruling": (
-                    "The target can't regain Hit Points until the end of the "
-                    "caster's next turn."
-                ),
+                "on_hit_mechanics": ["healing_prevention_until_source_turn_end"],
             },
         },
         "sacred-flame": {

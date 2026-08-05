@@ -111,10 +111,10 @@ def test_standard_2014_mechanics_pack_is_separate_from_srd_and_native() -> None:
         "complete": True,
         "artifact_count": 7,
         "resolved_count": 7,
-        "modes": {
-            "agent_ruling": 5,
-            "kernel_mechanic": 2,
-            "static_grant": 7,
+            "modes": {
+                "agent_ruling": 4,
+                "kernel_mechanic": 3,
+                "static_grant": 7,
         },
         "unresolved": [],
         "first_use_compilation_required": False,

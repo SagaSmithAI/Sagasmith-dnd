@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.63.0"
+CORE_RULE_PACK_VERSION = "1.65.0"
 
 
 @dataclass(frozen=True)
@@ -241,7 +241,10 @@ BOUNDARIES = (
         "dnd5e.core.activity.turn_undead",
         ("2014", "2024"),
         "combat_engine.resolve_turn_undead_to_sheets|spend_movement|available_actions",
-        ("tests/test_combat_engine.py::test_turn_undead_applies_and_enforces_turned",),
+        (
+            "SagaSmith-dnd-mcp/tests/test_turn_undead_mcp.py::"
+            "test_turn_undead_preflights_then_commits_all_actors_atomically",
+        ),
         "bundled:srd2014/02_Classes/Cleric.md#channel-divinity-turn-undead",
     ),
     CoreBoundary(
@@ -265,50 +268,6 @@ BOUNDARIES = (
         "bundled:srd2024/DND5eSRD_036-046.md#level-5-sear-undead",
     ),
     CoreBoundary(
-        "dnd5e.core.activity.random_save_effects",
-        ("2014",),
-        (
-            "statblocks.gazer_eye_ray_spec|"
-            "combat_engine.resolve_random_save_effects|force_move_directly_away"
-        ),
-        (
-            "tests/test_statblocks.py::"
-            "test_gazer_eye_rays_are_structured_from_the_exact_source_action",
-            "tests/test_combat_engine.py::"
-            "test_gazer_eye_rays_reroll_duplicates_and_resolve_each_save",
-            "SagaSmith-dnd-mcp/tests/test_gazer_eye_rays_mcp.py",
-        ),
-        "module-source:Waterdeep-Dragon-Heist/page-204/gazer-eye-rays",
-    ),
-    CoreBoundary(
-        "dnd5e.core.activity.area_save_damage",
-        ("2014",),
-        (
-            "statblocks.area_save_damage_spec|"
-            "combat_engine.resolve_save_damage_to_sheets"
-        ),
-        (
-            "tests/test_statblocks.py::"
-            "test_point_radius_save_damage_is_structured_from_exact_source",
-            "SagaSmith-dnd-mcp/tests/test_area_save_damage_mcp.py",
-        ),
-        "rulebook:mm2014/page-157/storm-giant#lightning-strike",
-    ),
-    CoreBoundary(
-        "dnd5e.core.activity.frightful_presence",
-        ("2014",),
-        (
-            "statblocks.frightful_presence_spec|"
-            "combat_engine.resolve_actor_check|conditions.apply_condition_change"
-        ),
-        (
-            "tests/test_statblocks.py::"
-            "test_ancient_blue_dragon_standard_actions_are_structured",
-            "SagaSmith-dnd-mcp/tests/test_dragon_standard_actions_mcp.py",
-        ),
-        "rulebook:mm2014/page-91/ancient-blue-dragon#frightful-presence",
-    ),
-    CoreBoundary(
         "dnd5e.core.activity.legendary_action",
         ("2014",),
         (
@@ -318,11 +277,10 @@ BOUNDARIES = (
         (
             "tests/test_combat_engine.py::"
             "test_legendary_action_pool_and_weapon_followup_follow_2014_timing",
-            "tests/test_statblocks.py::"
-            "test_ancient_blue_dragon_standard_actions_are_structured",
-            "SagaSmith-dnd-mcp/tests/test_dragon_standard_actions_mcp.py",
+            "tests/test_portable_monster_semantics.py::"
+            "test_generic_legendary_weapon_action_is_structured",
         ),
-        "rulebook:mm2014/page-91/ancient-blue-dragon#legendary-actions",
+        "bundled:srd2014/10_Monsters/Monsters.md#legendary-actions",
     ),
     CoreBoundary(
         "dnd5e.core.activity.recharge",
@@ -331,43 +289,18 @@ BOUNDARIES = (
         (
             "tests/test_activities.py::"
             "test_recharge_activities_roll_only_while_unavailable",
-            "SagaSmith-dnd-mcp/tests/test_area_save_damage_mcp.py",
         ),
         "rulebook:mm2014/introduction/limited-usage#recharge-x-y",
     ),
     CoreBoundary(
-        "dnd5e.core.activity.source_save_effect",
+        "dnd5e.core.activity.dragonborn_breath_weapon",
         ("2014",),
+        "combat_engine.resolve_save_damage_to_sheets",
         (
-            "statblocks.source_save_effect_spec|"
-            "combat_engine.resolve_source_save_effect|pay_multiattack_activity"
+            "tests/test_standard_content.py::"
+            "test_standard_2014_mechanics_pack_is_separate_from_srd_and_native",
         ),
-        (
-            "tests/test_statblocks.py::"
-            "test_intellect_devourer_actions_are_structured_from_exact_source",
-            "tests/test_combat_engine.py::"
-            "test_devour_intellect_resolves_damage_score_reduction_and_stun",
-            "SagaSmith-dnd-mcp/tests/test_intellect_devourer_mcp.py",
-        ),
-        "rulebook:mm2014/page-191/intellect-devourer",
-    ),
-    CoreBoundary(
-        "dnd5e.core.activity.source_contest_effect",
-        ("2014",),
-        (
-            "statblocks.source_contest_effect_spec|"
-            "combat_engine.resolve_source_contest_effect|"
-            "core.state.ActorKnowledgeTransfer"
-        ),
-        (
-            "tests/test_statblocks.py::"
-            "test_intellect_devourer_actions_are_structured_from_exact_source",
-            "tests/test_combat_engine.py::"
-            "test_body_thief_wins_contest_and_adopts_body_with_source_mental_scores",
-            "SagaSmith-dnd-mcp/tests/test_intellect_devourer_mcp.py::"
-            "test_public_body_thief_takes_host_and_atomically_copies_knowledge",
-        ),
-        "rulebook:mm2014/page-191/intellect-devourer",
+        "book:players-handbook-2014:p34",
     ),
     CoreBoundary(
         "dnd5e.core.activity.action_surge",
@@ -389,18 +322,6 @@ BOUNDARIES = (
         "combat_engine.settle_core_activity_effect",
         ("tests/test_combat_engine.py",),
         "bundled:srd2014/02_Classes/Rogue.md#cunning-action",
-    ),
-    CoreBoundary(
-        "dnd5e.core.activity.battle_cry",
-        ("2014",),
-        "combat_engine.settle_core_activity_effect",
-        (
-            "tests/test_combat_engine.py::"
-            "test_battle_cry_grants_temporary_attack_advantage_and_bonus_attack",
-            "tests/test_statblocks.py::"
-            "test_orc_war_chief_standard_traits_and_multiattack_are_structured",
-        ),
-        "source:monster-manual-2014:p246",
     ),
     CoreBoundary(
         "dnd5e.core.activity.preserve_life",
@@ -570,140 +491,14 @@ BOUNDARIES = (
         "bundled:srd/help",
     ),
     CoreBoundary(
-        "dnd5e.core.attack.pack_tactics",
-        ("2014",),
-        "combat_engine.preflight_attack",
-        (
-            "tests/test_combat_engine.py::"
-            "test_pack_tactics_uses_a_conscious_adjacent_ally",
-            "tests/test_statblocks.py::"
-            "test_kobold_attack_traits_are_structured",
-        ),
-        "source:monster-manual-2014:p195",
-    ),
-    CoreBoundary(
-        "dnd5e.core.attack.sunlight_sensitivity",
-        ("2014",),
-        "combat_engine.preflight_attack",
-        (
-            "tests/test_combat_engine.py::"
-            "test_sunlight_sensitivity_requires_and_uses_the_environment_fact",
-            "tests/test_statblocks.py::"
-            "test_kobold_attack_traits_are_structured",
-        ),
-        "source:monster-manual-2014:p195",
-    ),
-    CoreBoundary(
-        "dnd5e.core.attack.battle_cry",
-        ("2014",),
-        "combat_engine.preflight_attack",
-        (
-            "tests/test_combat_engine.py::"
-            "test_battle_cry_grants_temporary_attack_advantage_and_bonus_attack",
-        ),
-        "source:monster-manual-2014:p246",
-    ),
-    CoreBoundary(
         "dnd5e.core.attack.sneak_attack",
         ("2014", "2024"),
         "combat_engine._sneak_attack_plan|combat_engine.resolve_attack_action",
         (
             "tests/test_combat_engine.py::"
             "test_sneak_attack_requires_card_feature_and_records_critical_bonus_damage",
-            "tests/test_combat_engine.py::"
-            "test_statblock_sneak_attack_uses_recorded_formula_without_rogue_levels",
-            "tests/test_statblocks.py::"
-            "test_spy_standard_traits_are_structured_from_their_exact_text",
         ),
-        "bundled:srd2014/02_Classes/Rogue.md#sneak-attack|"
-        "source:monster-manual-2014:p349",
-    ),
-    CoreBoundary(
-        "dnd5e.core.monster.corrosive_form",
-        ("2014",),
-        "statblocks._corrosive_form_source_trait|combat_engine.resolve_corrosive_form_melee_hit",
-        (
-            "tests/test_statblocks.py::test_black_pudding_standard_traits_are_structured",
-            "tests/test_combat_engine.py::test_corrosive_form_damages_attacker_and_corrodes_mundane_weapon",
-        ),
-        "source:monster-manual-2014:p241",
-    ),
-    CoreBoundary(
-        "dnd5e.core.monster.heated_body",
-        ("2014",),
-        "statblocks._heated_body_source_trait|combat_engine.resolve_heated_body_melee_hit",
-        (
-            "tests/test_statblocks.py::test_salamander_standard_traits_are_structured",
-            "tests/test_combat_engine.py::test_heated_body_damages_only_a_melee_attacker_within_five_feet",
-        ),
-        "source:monster-manual-2014:p267",
-    ),
-    CoreBoundary(
-        "dnd5e.core.monster.heated_weapons",
-        ("2014",),
-        "statblocks._heated_weapons_source_trait|statblocks._parse_weapon",
-        (
-            "tests/test_statblocks.py::test_salamander_standard_traits_are_structured",
-            "tests/test_combat_engine.py::test_versatile_weapon_retains_damage_printed_after_alternate_formula",
-        ),
-        "source:monster-manual-2014:p267",
-    ),
-    CoreBoundary(
-        "dnd5e.core.monster.armor_corrosion",
-        ("2014",),
-        "statblocks._armor_corrosion_on_hit|combat_engine.resolve_standard_weapon_on_hit",
-        (
-            "tests/test_statblocks.py::test_black_pudding_standard_traits_are_structured",
-            "tests/test_combat_engine.py::test_pseudopod_corrosion_reduces_and_destroys_worn_armor",
-        ),
-        "source:monster-manual-2014:p241",
-    ),
-    CoreBoundary(
-        "dnd5e.core.monster.death_burst",
-        ("2014",),
-        "statblocks._death_burst_source_trait|combat_engine.standard_death_trigger_for_sheet",
-        (
-            "tests/test_statblocks.py::test_magmin_standard_mechanics_are_structured",
-            "tests/test_combat_engine.py::test_magmin_death_burst_surfaces_only_on_death_transition",
-        ),
-        "source:monster-manual-2014:p212",
-    ),
-    CoreBoundary(
-        "dnd5e.core.monster.ignition_ongoing_damage",
-        ("2014",),
-        "statblocks._ignition_ongoing_damage_on_hit|combat_engine.resolve_standard_weapon_on_hit",
-        (
-            "tests/test_statblocks.py::test_magmin_standard_mechanics_are_structured",
-            "tests/test_combat_engine.py::test_magmin_touch_compiles_standard_ongoing_damage",
-        ),
-        "source:monster-manual-2014:p212",
-    ),
-    CoreBoundary(
-        "dnd5e.core.monster.ignited_illumination",
-        ("2014",),
-        "statblocks._ignited_illumination_source_trait|combat_engine.settle_core_activity_effect",
-        (
-            "tests/test_statblocks.py::test_magmin_standard_mechanics_are_structured",
-            "tests/test_combat_engine.py::test_magmin_illumination_toggles_with_a_paid_bonus_action",
-        ),
-        "source:monster-manual-2014:p212",
-    ),
-    CoreBoundary(
-        "dnd5e.core.monster.split",
-        ("2014",),
-        "statblocks._split_source_trait|combat_engine.split_reaction_eligibility|combat_engine.execute_split_reaction",
-        (
-            "tests/test_statblocks.py::test_black_pudding_standard_traits_are_structured",
-            "tests/test_combat_engine.py::test_black_pudding_split_uses_raw_immune_damage_trigger",
-        ),
-        "source:monster-manual-2014:p241",
-    ),
-    CoreBoundary(
-        "dnd5e.core.monster.ooze_movement",
-        ("2014",),
-        "statblocks._amorphous_source_trait|statblocks._spider_climb_source_trait",
-        ("tests/test_statblocks.py::test_black_pudding_standard_traits_are_structured",),
-        "source:monster-manual-2014:p241",
+        "bundled:srd2014/02_Classes/Rogue.md#sneak-attack",
     ),
     CoreBoundary(
         "dnd5e.core.attack.weapon_grip",
@@ -727,79 +522,6 @@ BOUNDARIES = (
         "bundled:srd2024/DND5eSRD_087-103.md#mastery-properties",
     ),
     CoreBoundary(
-        "dnd5e.core.attack.assassinate",
-        ("2014",),
-        "combat_engine.preflight_attack|roll_attack_action",
-        (
-            "tests/test_combat_engine.py::"
-            "test_assassinate_uses_authoritative_turn_and_surprise_state",
-            "tests/test_statblocks.py::"
-            "test_assassinate_is_structured_from_exact_text",
-        ),
-        "source:monster-manual-2014:assassin",
-    ),
-    CoreBoundary(
-        "dnd5e.core.attack.weapon_hit_save_damage",
-        ("2014", "2024"),
-        "statblocks._saving_throw_damage_on_hit|combat_engine.resolve_attack_damage",
-        (
-            "tests/test_combat_engine.py::"
-            "test_weapon_hit_save_damage_is_settled_inside_one_attack",
-            "tests/test_statblocks.py::"
-            "test_weapon_hit_save_damage_is_structured_from_exact_text",
-        ),
-        "bundled:srd/combat/saving-throws-and-damage",
-    ),
-    CoreBoundary(
-        "dnd5e.core.attack.weapon_hit_contest_pull",
-        ("2014",),
-        (
-            "statblocks._contest_pull_on_hit|"
-            "combat_engine.resolve_attack_damage|force_move_directly_toward"
-        ),
-        (
-            "tests/test_combat_engine.py::"
-            "test_weapon_hit_contest_pull_is_settled_and_emits_forced_movement",
-            "tests/test_combat_engine.py::"
-            "test_force_move_directly_toward_stops_before_the_source",
-            "tests/test_statblocks.py::"
-            "test_merrow_standard_traits_and_harpoon_are_fully_structured",
-        ),
-        "source:monster-manual-2014:p220",
-    ),
-    CoreBoundary(
-        "dnd5e.core.monster.aggressive",
-        ("2014",),
-        "combat_engine.settle_core_activity_effect",
-        (
-            "tests/test_combat_engine.py::"
-            "test_aggressive_grants_only_toward_visible_hostile_movement",
-        ),
-        "source:monster-manual-2014:p246",
-    ),
-    CoreBoundary(
-        "dnd5e.core.check.keen_perception",
-        ("2014",),
-        "combat_engine.resolve_actor_check",
-        (
-            "tests/test_combat_engine.py::"
-            "test_keen_perception_requires_and_uses_sensory_facts",
-            "tests/test_statblocks.py::"
-            "test_keen_perception_trait_is_structured",
-        ),
-        "source:monster-manual-2014:p349",
-    ),
-    CoreBoundary(
-        "dnd5e.core.attack.source_targeting",
-        ("2014", "2024"),
-        "combat_engine.preflight_attack",
-        (
-            "tests/test_combat_engine.py::"
-            "test_source_weapon_targeting_requires_eligible_size_and_effective_advantage",
-        ),
-        "source:reviewed-statblock-action-targeting",
-    ),
-    CoreBoundary(
         "dnd5e.core.attack.hidden_reveal",
         ("2014", "2024"),
         "combat_engine.resolve_attack_action",
@@ -812,6 +534,16 @@ BOUNDARIES = (
         "combat_engine._apply_adjusted_damage",
         ("tests/test_combat_engine.py",),
         "bundled:srd/damage-and-healing",
+    ),
+    CoreBoundary(
+        "dnd5e.core.damage.relentless_endurance",
+        ("2014",),
+        "combat_engine._apply_adjusted_damage|apply_hit_point_loss_to_sheet",
+        (
+            "tests/test_combat_engine.py::"
+            "test_standard_relentless_endurance_is_core_card_bound_and_once_per_rest",
+        ),
+        "bundled:srd2014/01_Races/Races_Each/Half-Orc.md#relentless-endurance",
     ),
     CoreBoundary(
         "dnd5e.core.damage.knockout",
@@ -873,7 +605,10 @@ BOUNDARIES = (
         "dnd5e.core.reaction.post_hit_defense",
         ("2014", "2024"),
         "combat_engine.available_attack_defenses|apply_attack_ac_bonus",
-        ("tests/test_combat_engine.py::test_structured_parry_opens_after_hit_and_before_damage",),
+        (
+            "tests/test_combat_engine.py::"
+            "test_agent_compiled_reaction_defense_opens_after_hit_and_before_damage",
+        ),
         "bundled:srd/reactions",
     ),
     CoreBoundary(
@@ -977,7 +712,7 @@ BOUNDARIES = (
         ),
         (
             "tests/test_combat_engine.py::"
-            "test_hypnotic_pattern_classifies_its_save_as_a_spell",
+            "test_hypnotic_pattern_effect_lifecycle_preserves_other_condition_sources",
             "tests/test_combat_engine.py::"
             "test_hypnotic_pattern_effect_lifecycle_preserves_other_condition_sources",
         ),
@@ -1081,47 +816,16 @@ BOUNDARIES = (
         "bundled:srd/restrained",
     ),
     CoreBoundary(
-        "dnd5e.core.save.magic_resistance",
-        ("2014",),
-        "combat_engine.resolve_actor_check",
-        (
-            "tests/test_combat_engine.py::"
-            "test_magic_resistance_requires_source_kind_and_applies_advantage",
-            "tests/test_combat_engine.py::"
-            "test_concentration_save_does_not_apply_magic_resistance",
-            "tests/test_combat_engine.py::"
-            "test_hypnotic_pattern_classifies_its_save_as_a_spell",
-            "tests/test_statblocks.py::"
-            "test_magic_resistance_and_evasion_are_structured_from_exact_text",
-        ),
-        "source:monster-manual-2014:magic-resistance",
-    ),
-    CoreBoundary(
-        "dnd5e.core.save.advantage_against_conditions",
-        ("2014",),
-        (
-            "statblocks._save_advantage_against_conditions_source_trait|"
-            "combat_engine.resolve_actor_check"
-        ),
-        (
-            "tests/test_combat_engine.py::"
-            "test_condition_based_save_advantage_requires_effect_conditions",
-            "tests/test_statblocks.py::"
-            "test_dark_devotion_is_structured_from_exact_text",
-        ),
-        "source:monster-manual-2014:dark-devotion",
-    ),
-    CoreBoundary(
         "dnd5e.core.save.evasion",
         ("2014", "2024"),
         "combat_engine.standard_save_damage_reduction",
         (
             "tests/test_combat_engine.py::"
             "test_evasion_rewrites_dexterity_save_for_half_damage",
-            "tests/test_statblocks.py::"
-            "test_magic_resistance_and_evasion_are_structured_from_exact_text",
+            "tests/test_core_content.py::"
+            "test_srd2014_content_uses_leaf_records_and_structured_eligibility",
         ),
-        "source:monster-manual-2014:evasion",
+        "bundled:srd2014/02_Classes/Rogue.md#evasion",
     ),
     CoreBoundary(
         "dnd5e.core.rest.hit_dice",

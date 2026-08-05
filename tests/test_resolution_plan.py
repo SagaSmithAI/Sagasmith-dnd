@@ -329,6 +329,73 @@ def test_trigger_filter_is_v2_only_and_rejects_unknown_event_fields() -> None:
         compile_resolution_plan(plan)
 
 
+def _attack_ac_bonus_plan(arguments: dict) -> dict:
+    return {
+        "schema_version": 2,
+        "id": "addon.parry.after-hit",
+        "source_card_id": "parry",
+        "source_card_kind": "activity",
+        "trigger": "attack.after_hit",
+        "trigger_filter": {"hit": True},
+        "slots": {},
+        "steps": [
+            {
+                "id": "defend",
+                "op": "attack.ac_bonus",
+                "args": arguments,
+            }
+        ],
+        "citations": [_citation()],
+    }
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        ({"bonus": 0, "attack_modes": ["melee"]}, "range 1..20"),
+        ({"bonus": 21, "attack_modes": ["melee"]}, "range 1..20"),
+        ({"bonus": True, "attack_modes": ["melee"]}, "range 1..20"),
+        ({"bonus": 2, "attack_modes": []}, "unique melee/ranged"),
+        (
+            {"bonus": 2, "attack_modes": ["melee", "melee"]},
+            "unique melee/ranged",
+        ),
+        ({"bonus": 2, "attack_modes": ["spell"]}, "unique melee/ranged"),
+        (
+            {
+                "bonus": 2,
+                "attack_modes": ["melee"],
+                "requires_visible_attacker": 1,
+            },
+            "must be boolean",
+        ),
+    ],
+)
+def test_attack_ac_bonus_plan_rejects_nonstatic_or_invalid_semantics(
+    arguments: dict,
+    message: str,
+) -> None:
+    with pytest.raises(ResolutionPlanCompilationError, match=message):
+        compile_resolution_plan(_attack_ac_bonus_plan(arguments))
+
+
+def test_attack_ac_bonus_plan_rejects_agent_bound_bonus_slots() -> None:
+    plan = _attack_ac_bonus_plan(
+        {"bonus": {"$slot": "bonus"}, "attack_modes": ["melee"]}
+    )
+    plan["slots"] = {
+        "bonus": {
+            "kind": "integer",
+            "owner": "agent",
+            "description": "Untrusted contextual bonus.",
+            "minimum": 1,
+            "maximum": 20,
+        }
+    }
+    with pytest.raises(ResolutionPlanCompilationError, match="range 1..20"):
+        compile_resolution_plan(plan)
+
+
 def test_duration_and_random_exclusions_are_source_bounded() -> None:
     plan = _plan()
     plan["steps"].extend(

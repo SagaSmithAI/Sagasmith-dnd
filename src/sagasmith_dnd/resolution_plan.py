@@ -126,6 +126,7 @@ PLAN_OPS = frozenset(
         "actor.control",
         "actor.link",
         "actor.unlink",
+        "attack.ac_bonus",
         "attack.resolve",
         "check.ability",
         "check.contest",
@@ -182,6 +183,17 @@ _SAFE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._:-]{0,199}$")
 _RESULT_REF_RE = re.compile(r"^[a-zA-Z0-9_.:-]+$")
 
 _STEP_FIELDS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
+    "attack.ac_bonus": (
+        frozenset({"bonus", "attack_modes"}),
+        frozenset(
+            {
+                "bonus",
+                "attack_modes",
+                "requires_visible_attacker",
+                "requires_wielded_melee_weapon",
+            }
+        ),
+    ),
     "roll.table": (
         frozenset({"table"}),
         frozenset({"table", "roll_id", "exclude"}),
@@ -952,6 +964,13 @@ def _validate_step_template(
         prior_step_ids=prior_step_ids,
         used_slots=used_slots,
     )
+    if opcode == "attack.ac_bonus":
+        try:
+            _validate_common_concrete_arguments(opcode, arguments, index=index)
+        except ResolutionPlanBindingError as error:
+            raise ResolutionPlanCompilationError(
+                f"plan step {step_id}: {error}"
+            ) from error
     step = {"id": step_id, "op": opcode, "args": deepcopy(arguments)}
     if "when" in value:
         when = value["when"]
@@ -1082,6 +1101,35 @@ def _validate_common_concrete_arguments(
     if "dc" in arguments and not _is_result_ref(arguments["dc"]):
         if not 1 <= int(arguments["dc"]) <= 40:
             raise ResolutionPlanBindingError("dc must be in the range 1..40")
+    if opcode == "attack.ac_bonus":
+        bonus = arguments["bonus"]
+        attack_modes = arguments["attack_modes"]
+        if (
+            _is_result_ref(bonus)
+            or isinstance(bonus, bool)
+            or not isinstance(bonus, int)
+            or not 1 <= bonus <= 20
+        ):
+            raise ResolutionPlanBindingError(
+                "attack.ac_bonus bonus must be in the range 1..20"
+            )
+        if (
+            _is_result_ref(attack_modes)
+            or not isinstance(attack_modes, list)
+            or not attack_modes
+            or any(not isinstance(mode, str) for mode in attack_modes)
+            or len(attack_modes) != len({str(mode) for mode in attack_modes})
+            or any(str(mode) not in {"melee", "ranged"} for mode in attack_modes)
+        ):
+            raise ResolutionPlanBindingError(
+                "attack.ac_bonus attack_modes must contain unique melee/ranged modes"
+            )
+        for field in (
+            "requires_visible_attacker",
+            "requires_wielded_melee_weapon",
+        ):
+            if field in arguments and not isinstance(arguments[field], bool):
+                raise ResolutionPlanBindingError(f"attack.ac_bonus {field} must be boolean")
     if "success_damage" in arguments and not _is_result_ref(
         arguments["success_damage"]
     ):

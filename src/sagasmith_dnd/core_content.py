@@ -16,6 +16,9 @@ from sagasmith_dnd.spell_resolution import (
     SPELL_RESOLUTION_MECHANIC_ID,
     known_spell_resolution,
 )
+from sagasmith_dnd.standard_feature_ids import (
+    CORE_RELENTLESS_ENDURANCE_MECHANIC_ID,
+)
 from sagasmith_dnd.standard_spell_ids import (
     CORE_FLY_MECHANIC_ID,
     CORE_HYPNOTIC_PATTERN_MECHANIC_ID,
@@ -23,7 +26,7 @@ from sagasmith_dnd.standard_spell_ids import (
 )
 
 PACK_ID = "dnd5e.content.srd2014"
-PACK_VERSION = "1.20.0"
+PACK_VERSION = "1.21.0"
 
 _SUBCLASS_LEVELS = {
     "barbarian": 3,
@@ -382,6 +385,14 @@ def _species_artifact(
         "description": "\n\n".join(f"{title}. {body}" for title, body in traits)[:4000],
         "grants": grants,
     }
+    card["mechanic_refs"] = list(
+        dict.fromkeys(
+            str(mechanic_ref)
+            for feature in grants.get("features", [])
+            for mechanic_ref in feature.get("mechanic_refs", [])
+            if str(mechanic_ref)
+        )
+    )
     artifact = _artifact("species", name, path, card)
     if grants.get("unresolved"):
         artifact["application_state"] = "catalog_only"
@@ -495,15 +506,37 @@ def _species_grants(name: str, traits: list[tuple[str, str]]) -> dict[str, Any]:
             "extra language",
             "ability score increase",
         }:
-            grants["features"].append(
-                {
-                    "id": f"{PACK_ID}.species-feature.{slug}-{_name_key(title)}",
-                    "name": title,
-                    "source_key": name,
-                    "description": body[:2000],
-                    "activation": {"type": "passive"},
-                }
-            )
+            feature = {
+                "id": f"{PACK_ID}.species-feature.{slug}-{_name_key(title)}",
+                "name": title,
+                "source_key": name,
+                "description": body[:2000],
+                "activation": {"type": "passive"},
+                "mechanic_refs": [],
+            }
+            if name == "Half-Orc" and key == "relentless endurance":
+                feature.update(
+                    uses={
+                        "label": title,
+                        "value": 1,
+                        "max": 1,
+                        "recovers_on": "long_rest",
+                        "source_key": name,
+                        "slot_level": 0,
+                        "unlimited": False,
+                    },
+                    choices={
+                        "source_trait": {
+                            "kind": "relentless_endurance",
+                            "trigger": "reduced_to_zero_not_killed_outright",
+                            "result_hp": 1,
+                            "automatic": True,
+                            "source_excerpt": body[:2000],
+                        }
+                    },
+                    mechanic_refs=[CORE_RELENTLESS_ENDURANCE_MECHANIC_ID],
+                )
+            grants["features"].append(feature)
     for list_key in (
         "skill_proficiencies",
         "armor_proficiencies",

@@ -18,8 +18,6 @@ REQUIRED_BOUNDARIES = {
     "dnd5e.core.attack.help",
     "dnd5e.core.attack.hidden_reveal",
     "dnd5e.core.attack.ranged_close_combat",
-    "dnd5e.core.attack.source_targeting",
-    "dnd5e.core.attack.weapon_hit_save_damage",
     "dnd5e.core.damage.zero_hp",
     "dnd5e.core.damage.knockout",
     "dnd5e.core.damage.stable_recovery",
@@ -52,10 +50,9 @@ REQUIRED_BOUNDARIES = {
 
 EDITION_BOUNDARIES = {
     "2014": {
-        "dnd5e.core.activity.area_save_damage",
-        "dnd5e.core.activity.random_save_effects",
         "dnd5e.core.activity.recharge",
         "dnd5e.core.check.jack_of_all_trades",
+        "dnd5e.core.damage.relentless_endurance",
         "dnd5e.core.rest.natural_recovery",
         "dnd5e.core.rest.song_of_rest",
         "dnd5e.core.rest.sorcerous_restoration",
@@ -63,9 +60,6 @@ EDITION_BOUNDARIES = {
         "dnd5e.core.spell.fly",
         "dnd5e.core.progression.hp_hit_dice",
         "dnd5e.core.progression.spellcasting",
-        "dnd5e.core.attack.assassinate",
-        "dnd5e.core.save.advantage_against_conditions",
-        "dnd5e.core.save.magic_resistance",
         "dnd5e.core.save.evasion",
     },
     "2024": {

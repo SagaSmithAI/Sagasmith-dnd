@@ -129,6 +129,9 @@ ENGINE_SETTLED_NON_AC_EFFECT_PATHS = {
     "combat.hp.current_multiplier_on_apply",
     "combat.hp.excess_on_end",
     "combat.melee_reach.bonus_ft",
+    "combat.speed.multiplier",
+    "rolls.attack.advantage",
+    "rolls.attack.disadvantage",
     "rolls.weapon_damage.dice_multiplier",
     "traits.size",
 }
@@ -325,6 +328,45 @@ def _damage_parts(value: Any, field: str) -> list[dict[str, Any]]:
             }
         )
     return parts
+
+
+def _normalize_recharge_contract(value: Any, field: str) -> dict[str, Any]:
+    recharge = _object(value or {}, field)
+    if not recharge:
+        return {}
+    _reject_unknown(
+        recharge,
+        field,
+        {"kind", "minimum", "maximum", "source_marker"},
+    )
+    kind = _text(recharge.get("kind"), f"{field}.kind")
+    minimum = _integer(
+        recharge.get("minimum"),
+        f"{field}.minimum",
+        minimum=1,
+        maximum=6,
+    )
+    maximum = _integer(
+        recharge.get("maximum"),
+        f"{field}.maximum",
+        minimum=1,
+        maximum=6,
+    )
+    source_marker = _text(
+        recharge.get("source_marker"),
+        f"{field}.source_marker",
+        maximum=100,
+    )
+    if kind != "d6_turn_start" or minimum > maximum or not source_marker:
+        raise ValueError(
+            f"{field} requires a d6_turn_start range and exact source marker"
+        )
+    return {
+        "kind": kind,
+        "minimum": minimum,
+        "maximum": maximum,
+        "source_marker": source_marker,
+    }
 
 
 def _reject_unknown(value: dict[str, Any], field: str, allowed: set[str]) -> None:
@@ -779,300 +821,6 @@ def _normalize_resource_scaling(value: Any, field: str) -> dict[str, Any]:
     }
 
 
-def _normalize_weapon_on_hit_resolution(value: Any, field: str) -> dict[str, Any] | None:
-    if value is None:
-        return None
-    resolution = _object(value, field)
-    kind = _text(resolution.get("kind"), f"{field}.kind")
-    trigger = _text(resolution.get("trigger"), f"{field}.trigger")
-    if trigger != "weapon_hit":
-        raise ValueError(f"{field}.trigger is unsupported")
-    if kind == "contest_pull":
-        _reject_unknown(
-            resolution,
-            field,
-            {
-                "kind",
-                "trigger",
-                "required_target_kind",
-                "maximum_target_size",
-                "source_ability",
-                "target_ability",
-                "ties",
-                "maximum_distance_ft",
-                "direction",
-                "automatic",
-                "source_excerpt",
-            },
-        )
-        if (
-            _text(
-                resolution.get("required_target_kind"),
-                f"{field}.required_target_kind",
-            )
-            != "creature"
-        ):
-            raise ValueError(f"{field}.required_target_kind is unsupported")
-        maximum_target_size = _text(
-            resolution.get("maximum_target_size"),
-            f"{field}.maximum_target_size",
-        ).casefold()
-        if maximum_target_size not in {
-            "tiny",
-            "small",
-            "medium",
-            "large",
-            "huge",
-            "gargantuan",
-        }:
-            raise ValueError(f"{field}.maximum_target_size is invalid")
-        source_ability = _text(
-            resolution.get("source_ability"),
-            f"{field}.source_ability",
-        ).casefold()
-        target_ability = _text(
-            resolution.get("target_ability"),
-            f"{field}.target_ability",
-        ).casefold()
-        if source_ability not in ABILITY_NAMES or target_ability not in ABILITY_NAMES:
-            raise ValueError(f"{field} contest abilities are invalid")
-        if _text(resolution.get("ties"), f"{field}.ties") != "no_movement":
-            raise ValueError(f"{field}.ties is unsupported")
-        if _text(resolution.get("direction"), f"{field}.direction") != "toward_source":
-            raise ValueError(f"{field}.direction is unsupported")
-        maximum_distance_ft = _integer(
-            resolution.get("maximum_distance_ft"),
-            f"{field}.maximum_distance_ft",
-            minimum=5,
-            maximum=500,
-        )
-        if maximum_distance_ft % 5:
-            raise ValueError(f"{field}.maximum_distance_ft must use five-foot increments")
-        return {
-            "kind": kind,
-            "trigger": trigger,
-            "required_target_kind": "creature",
-            "maximum_target_size": maximum_target_size,
-            "source_ability": source_ability,
-            "target_ability": target_ability,
-            "ties": "no_movement",
-            "maximum_distance_ft": maximum_distance_ft,
-            "direction": "toward_source",
-            "automatic": _boolean(
-                resolution.get("automatic"),
-                f"{field}.automatic",
-            ),
-            "source_excerpt": _text(
-                resolution.get("source_excerpt"),
-                f"{field}.source_excerpt",
-                maximum=1200,
-            ),
-        }
-    if kind == "save_damage":
-        _reject_unknown(
-            resolution,
-            field,
-            {
-                "kind",
-                "trigger",
-                "save_ability",
-                "save_dc",
-                "damage_formula",
-                "average_damage",
-                "damage_type",
-                "half_on_success",
-                "save_source_kind",
-                "automatic",
-                "source_excerpt",
-            },
-        )
-        save_ability = _text(
-            resolution.get("save_ability"),
-            f"{field}.save_ability",
-        ).casefold()
-        if save_ability not in ABILITY_NAMES:
-            raise ValueError(f"{field}.save_ability is invalid")
-        damage_formula = re.sub(
-            r"\s+",
-            "",
-            _text(
-                resolution.get("damage_formula"),
-                f"{field}.damage_formula",
-                maximum=100,
-            ).casefold(),
-        )
-        if not re.fullmatch(r"\d+d\d+(?:[+-]\d+)?", damage_formula):
-            raise ValueError(f"{field}.damage_formula is invalid")
-        save_source_kind = _text(
-            resolution.get("save_source_kind"),
-            f"{field}.save_source_kind",
-        ).casefold()
-        if save_source_kind not in {
-            "spell",
-            "magical_effect",
-            "nonmagical_effect",
-        }:
-            raise ValueError(f"{field}.save_source_kind is invalid")
-        return {
-            "kind": kind,
-            "trigger": trigger,
-            "save_ability": save_ability,
-            "save_dc": _integer(
-                resolution.get("save_dc"),
-                f"{field}.save_dc",
-                minimum=1,
-                maximum=40,
-            ),
-            "damage_formula": damage_formula,
-            "average_damage": _integer(
-                resolution.get("average_damage"),
-                f"{field}.average_damage",
-                minimum=1,
-            ),
-            "damage_type": _text(
-                resolution.get("damage_type"),
-                f"{field}.damage_type",
-            ).casefold(),
-            "half_on_success": _boolean(
-                resolution.get("half_on_success"),
-                f"{field}.half_on_success",
-            ),
-            "save_source_kind": save_source_kind,
-            "automatic": _boolean(
-                resolution.get("automatic"),
-                f"{field}.automatic",
-            ),
-            "source_excerpt": _text(
-                resolution.get("source_excerpt"),
-                f"{field}.source_excerpt",
-                maximum=1200,
-            ),
-        }
-    if kind == "ignition_ongoing_damage":
-        _reject_unknown(
-            resolution,
-            field,
-            {
-                "kind",
-                "trigger",
-                "creature_target_automatic",
-                "flammable_object_requires_scene_fact",
-                "damage_formula",
-                "average_damage",
-                "damage_type",
-                "trigger_timing",
-                "end_action",
-                "end_action_description",
-                "automatic",
-                "source_excerpt",
-            },
-        )
-        timing = _text(
-            resolution.get("trigger_timing"),
-            f"{field}.trigger_timing",
-        )
-        if timing not in {"turn_start", "turn_end"}:
-            raise ValueError(f"{field}.trigger_timing is unsupported")
-        end_action = _text(
-            resolution.get("end_action"),
-            f"{field}.end_action",
-        )
-        if end_action != "use_object":
-            raise ValueError(f"{field}.end_action is unsupported")
-        damage_formula = _text(
-            resolution.get("damage_formula"),
-            f"{field}.damage_formula",
-            maximum=100,
-        ).casefold()
-        if not re.fullmatch(r"\d+d\d+(?:[+-]\d+)?", damage_formula):
-            raise ValueError(f"{field}.damage_formula is invalid")
-        return {
-            "kind": kind,
-            "trigger": trigger,
-            "creature_target_automatic": _boolean(
-                resolution.get("creature_target_automatic"),
-                f"{field}.creature_target_automatic",
-            ),
-            "flammable_object_requires_scene_fact": _boolean(
-                resolution.get("flammable_object_requires_scene_fact"),
-                f"{field}.flammable_object_requires_scene_fact",
-            ),
-            "damage_formula": damage_formula,
-            "average_damage": _integer(
-                resolution.get("average_damage"),
-                f"{field}.average_damage",
-                minimum=1,
-            ),
-            "damage_type": _text(
-                resolution.get("damage_type"),
-                f"{field}.damage_type",
-            ).casefold(),
-            "trigger_timing": timing,
-            "end_action": end_action,
-            "end_action_description": _text(
-                resolution.get("end_action_description"),
-                f"{field}.end_action_description",
-                maximum=200,
-            ),
-            "automatic": _boolean(
-                resolution.get("automatic"),
-                f"{field}.automatic",
-            ),
-            "source_excerpt": _text(
-                resolution.get("source_excerpt"),
-                f"{field}.source_excerpt",
-                maximum=1200,
-            ),
-        }
-    if kind != "armor_corrosion":
-        raise ValueError(f"{field}.kind is unsupported")
-    _reject_unknown(
-        resolution,
-        field,
-        {
-            "kind",
-            "trigger",
-            "requires_worn_armor",
-            "requires_nonmagical_armor",
-            "armor_class_penalty",
-            "destroyed_at_armor_class",
-            "automatic",
-            "source_excerpt",
-        },
-    )
-    penalty = _integer(
-        resolution.get("armor_class_penalty"),
-        f"{field}.armor_class_penalty",
-    )
-    if penalty >= 0:
-        raise ValueError(f"{field}.armor_class_penalty must be negative")
-    return {
-        "kind": kind,
-        "trigger": trigger,
-        "requires_worn_armor": _boolean(
-            resolution.get("requires_worn_armor"),
-            f"{field}.requires_worn_armor",
-        ),
-        "requires_nonmagical_armor": _boolean(
-            resolution.get("requires_nonmagical_armor"),
-            f"{field}.requires_nonmagical_armor",
-        ),
-        "armor_class_penalty": penalty,
-        "destroyed_at_armor_class": _integer(
-            resolution.get("destroyed_at_armor_class"),
-            f"{field}.destroyed_at_armor_class",
-            minimum=0,
-        ),
-        "automatic": _boolean(
-            resolution.get("automatic"),
-            f"{field}.automatic",
-        ),
-        "source_excerpt": _text(
-            resolution.get("source_excerpt"),
-            f"{field}.source_excerpt",
-            maximum=1200,
-        ),
-    }
 
 
 def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, Any]:
@@ -1090,11 +838,9 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
                 "additional_damage",
                 "versatile_additional_damage",
                 "on_hit_effect",
-                "on_hit_resolution",
                 "versatile_damage_formula",
                 "properties",
                 "materials",
-                "corrosion_penalty",
                 "normal_range_ft",
                 "long_range_ft",
                 "thrown_normal_range_ft",
@@ -1106,9 +852,8 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
                 "attack_bonus_override",
                 "damage_bonus_override",
                 "always_available",
-                "required_target_sizes",
-                "requires_attack_advantage",
                 "mastery",
+                "recharge",
             },
         )
         category = _text(mechanics.get("category"), f"{field}.category", default="other")
@@ -1123,18 +868,6 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
         if attack_ability not in ATTACK_ABILITIES:
             raise ValueError(f"{field}.attack_ability is invalid")
         properties = _string_list(mechanics.get("properties"), f"{field}.properties")
-        required_target_sizes = [
-            item.casefold()
-            for item in _string_list(
-                mechanics.get("required_target_sizes"),
-                f"{field}.required_target_sizes",
-            )
-        ]
-        valid_sizes = {"tiny", "small", "medium", "large", "huge", "gargantuan"}
-        if len(required_target_sizes) != len(set(required_target_sizes)) or any(
-            item not in valid_sizes for item in required_target_sizes
-        ):
-            raise ValueError(f"{field}.required_target_sizes is invalid")
         mastery = _text(mechanics.get("mastery"), f"{field}.mastery").casefold()
         if mastery not in {"", "cleave", "graze", "nick", "push", "sap", "slow", "topple", "vex"}:
             raise ValueError(f"{field}.mastery is invalid")
@@ -1156,10 +889,6 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
             "on_hit_effect": _text(
                 mechanics.get("on_hit_effect"), f"{field}.on_hit_effect", maximum=4000
             ),
-            "on_hit_resolution": _normalize_weapon_on_hit_resolution(
-                mechanics.get("on_hit_resolution"),
-                f"{field}.on_hit_resolution",
-            ),
             "versatile_damage_formula": _text(
                 mechanics.get("versatile_damage_formula"),
                 f"{field}.versatile_damage_formula",
@@ -1173,11 +902,6 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
                     f"{field}.materials",
                 )
             ],
-            "corrosion_penalty": _integer(
-                mechanics.get("corrosion_penalty"),
-                f"{field}.corrosion_penalty",
-                minimum=0,
-            ),
             "normal_range_ft": _integer(
                 mechanics.get("normal_range_ft"), f"{field}.normal_range_ft", minimum=0
             ),
@@ -1222,12 +946,11 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
             "always_available": _boolean(
                 mechanics.get("always_available"), f"{field}.always_available"
             ),
-            "required_target_sizes": required_target_sizes,
-            "requires_attack_advantage": _boolean(
-                mechanics.get("requires_attack_advantage"),
-                f"{field}.requires_attack_advantage",
-            ),
             "mastery": mastery,
+            "recharge": _normalize_recharge_contract(
+                mechanics.get("recharge"),
+                f"{field}.recharge",
+            ),
         }
     if kind == "container":
         _reject_unknown(
@@ -1297,7 +1020,6 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
                 "dexterity_max",
                 "magic_bonus",
                 "stealth_disadvantage",
-                "corrosion_penalty",
             },
         )
         if "base_ac" not in mechanics:
@@ -1319,11 +1041,6 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
             "dexterity_mode": dexterity_mode,
             "dexterity_max": dexterity_max,
             "magic_bonus": _integer(mechanics.get("magic_bonus"), f"{field}.magic_bonus"),
-            "corrosion_penalty": _integer(
-                mechanics.get("corrosion_penalty"),
-                f"{field}.corrosion_penalty",
-                minimum=0,
-            ),
             "stealth_disadvantage": _boolean(
                 mechanics.get("stealth_disadvantage"),
                 f"{field}.stealth_disadvantage",
@@ -2369,6 +2086,19 @@ def _normalize_effect(value: Any, field: str) -> dict[str, Any]:
             or change_value < 0
         ):
             raise ValueError(f"{field} {path} requires a non-negative integer bonus")
+        if path == "combat.speed.multiplier" and (
+            mode != "multiply"
+            or isinstance(change_value, bool)
+            or not isinstance(change_value, (int, float))
+            or not 0 <= float(change_value) <= 10
+        ):
+            raise ValueError(
+                f"{field} combat.speed.multiplier requires a multiplier from 0 to 10"
+            )
+        if path in {"rolls.attack.advantage", "rolls.attack.disadvantage"} and (
+            mode != "set" or not isinstance(change_value, bool)
+        ):
+            raise ValueError(f"{field} {path} requires a boolean set value")
         if path == "traits.size" and (
             mode != "override"
             or not isinstance(change_value, str)
@@ -4061,8 +3791,7 @@ def _derive_armor_class(
                 dexterity_bonus = dexterity_modifier
             else:
                 dexterity_bonus = min(dexterity_modifier, mechanics["dexterity_max"])
-            corrosion_penalty = int(mechanics.get("corrosion_penalty", 0) or 0)
-            total = mechanics["base_ac"] - corrosion_penalty + dexterity_bonus + magic_bonus
+            total = mechanics["base_ac"] + dexterity_bonus + magic_bonus
             breakdown["mode"] = "armor"
             breakdown["base"] = mechanics["base_ac"]
             breakdown["armor"] = {
@@ -4070,7 +3799,6 @@ def _derive_armor_class(
                 "name": armor["name"],
                 "dexterity_bonus": dexterity_bonus,
                 "magic_bonus": magic_bonus,
-                "corrosion_penalty": corrosion_penalty,
                 "magic_suppressed_by_attunement": (
                     armor.get("attunement") == "required" and mechanics["magic_bonus"] != 0
                 ),
@@ -4309,7 +4037,6 @@ def _weapon_attacks(
         damage_bonus = mechanics.get("damage_bonus_override")
         if damage_bonus is None:
             damage_bonus = modifier + magic_bonus
-        damage_bonus -= int(mechanics.get("corrosion_penalty", 0) or 0)
         damage_formula = _multiply_weapon_damage_dice(
             mechanics["damage_formula"],
             weapon_dice_multiplier,
@@ -4365,11 +4092,6 @@ def _weapon_attacks(
                     )
                 ],
                 "on_hit_effect": (mechanics["on_hit_effect"] if magic_properties_active else ""),
-                "on_hit_resolution": (
-                    copy.deepcopy(mechanics["on_hit_resolution"])
-                    if magic_properties_active
-                    else None
-                ),
                 "resolution_plan": (
                     copy.deepcopy(item.get("resolution_plan")) if magic_properties_active else None
                 ),
@@ -4381,7 +4103,6 @@ def _weapon_attacks(
                         or bool(mechanics["additional_damage"])
                         or bool(mechanics["versatile_additional_damage"])
                         or bool(mechanics["on_hit_effect"])
-                        or bool(mechanics["on_hit_resolution"])
                     )
                 ),
                 "versatile_damage_formula": _multiply_weapon_damage_dice(
@@ -4390,7 +4111,6 @@ def _weapon_attacks(
                 ),
                 "properties": mechanics["properties"],
                 "materials": mechanics["materials"],
-                "corrosion_penalty": int(mechanics.get("corrosion_penalty", 0) or 0),
                 "range_ft": {
                     "normal": mechanics["normal_range_ft"],
                     "long": mechanics["long_range_ft"],
@@ -4400,9 +4120,9 @@ def _weapon_attacks(
                     "long": mechanics["thrown_long_range_ft"],
                 },
                 "ammunition_item_id": mechanics["ammunition_item_id"],
-                "required_target_sizes": list(mechanics["required_target_sizes"]),
-                "requires_attack_advantage": mechanics["requires_attack_advantage"],
                 "mastery": mechanics["mastery"],
+                "uses": copy.deepcopy(item.get("uses") or {}),
+                "recharge": copy.deepcopy(mechanics.get("recharge") or {}),
                 "attack_ability_modifier": modifier,
             }
         )
@@ -4843,6 +4563,48 @@ def consume_weapon_ammunition(
         "name": ammunition["name"],
         "quantity": count,
         "remaining": ammunition["quantity"],
+    }
+
+
+def consume_weapon_limited_use(
+    sheet: dict[str, Any],
+    weapon_id: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Spend one use of a weapon carrying the standard Recharge contract."""
+
+    value = validate_character_sheet(sheet)
+    weapon = next(
+        (
+            item
+            for item in value["inventory"]["items"]
+            if item["id"] == weapon_id
+        ),
+        None,
+    )
+    if weapon is None or weapon["kind"] != "weapon":
+        raise ValueError("weapon_id must reference a weapon in inventory")
+    recharge = dict(weapon["mechanics"].get("recharge") or {})
+    if recharge.get("kind") != "d6_turn_start":
+        raise ValueError("weapon does not use the standard Recharge rule")
+    uses = dict(weapon.get("uses") or {})
+    if (
+        int(uses.get("max", 0) or 0) != 1
+        or int(uses.get("value", 0) or 0) not in {0, 1}
+        or bool(uses.get("unlimited", False))
+        or str(uses.get("recovers_on") or "") != "manual"
+    ):
+        raise ValueError("Recharge weapon must use one bounded card use")
+    if int(uses["value"]) == 0:
+        raise ValueError("weapon activity is waiting for its Recharge roll")
+    before = int(uses["value"])
+    uses["value"] = 0
+    weapon["uses"] = uses
+    return validate_character_sheet(value), {
+        "item_id": weapon_id,
+        "name": weapon["name"],
+        "before": before,
+        "remaining": 0,
+        "recharge": recharge,
     }
 
 

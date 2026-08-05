@@ -21,7 +21,6 @@ from sagasmith_dnd.activity_identity import (
 )
 from sagasmith_dnd.character_schema import (
     default_character_sheet,
-    derive_character_sheet,
     validate_character_sheet,
 )
 from sagasmith_dnd.engine import ability_modifier
@@ -611,20 +610,7 @@ def _parse_weapon(
             raw_on_hit_effect = raw_on_hit_effect[
                 : actor_lore_match.start()
             ].strip()
-        complete_structured_on_hit = (
-            _armor_corrosion_on_hit(
-                raw_on_hit_effect.strip().lstrip(". ,;").strip()
-            )
-            or _ignition_ongoing_damage_on_hit(
-                raw_on_hit_effect.strip().lstrip(". ,;").strip()
-            )
-            or _saving_throw_damage_on_hit(
-                raw_on_hit_effect.strip().lstrip(". ,;").strip()
-            )
-            or _contest_pull_on_hit(
-                raw_on_hit_effect.strip().lstrip(". ,;").strip()
-            )
-        )
+        complete_structured_on_hit = None
         trailing_paragraph_match = re.search(r"\n\s*\n", raw_on_hit_effect)
         if trailing_paragraph_match and complete_structured_on_hit is None:
             trailing_paragraph_prose = raw_on_hit_effect[
@@ -754,40 +740,9 @@ def _parse_weapon(
         "reach_ft": int(reach.group(1)) if reach else 5,
         "always_available": True,
     }
-    structured_on_hit = (
-        _armor_corrosion_on_hit(on_hit_effect)
-        or _ignition_ongoing_damage_on_hit(on_hit_effect)
-        or _saving_throw_damage_on_hit(on_hit_effect)
-        or _contest_pull_on_hit(on_hit_effect)
-    )
-    if structured_on_hit is not None:
-        mechanics["on_hit_resolution"] = structured_on_hit
-        mechanics["on_hit_effect"] = ""
-    advantage_target = re.search(
-        (
-            r"(?i)\bone\s+"
-            r"(?P<sizes>Tiny|Small|Medium|Large|Huge|Gargantuan)"
-            r"(?:\s+or\s+(?P<second_size>Tiny|Small|Medium|Large|Huge|Gargantuan))?"
-            r"\s+creature\s+against\s+which\s+"
-            r"(?:the\s+[a-z][a-z '\-]*|it|he|she|they)\s+has\s+advantage\s+"
-            r"on\s+the\s+attack\s+roll\b"
-        ),
-        description,
-    )
-    if advantage_target:
-        mechanics["required_target_sizes"] = list(
-            dict.fromkeys(
-                [
-                    advantage_target.group("sizes").casefold(),
-                    *(
-                        [advantage_target.group("second_size").casefold()]
-                        if advantage_target.group("second_size")
-                        else []
-                    ),
-                ]
-            )
-        )
-        mechanics["requires_attack_advantage"] = True
+    recharge = _recharge_contract(name)
+    if recharge is not None:
+        mechanics["recharge"] = recharge
     if ranges:
         mechanics["normal_range_ft"] = int(ranges.group(1))
         mechanics["long_range_ft"] = int(ranges.group(2) or ranges.group(1))
@@ -808,6 +763,14 @@ def _parse_weapon(
         "source_key": source_key,
         "mechanics": mechanics,
     }
+    if recharge is not None:
+        result["uses"] = {
+            "label": name,
+            "value": 1,
+            "max": 1,
+            "recovers_on": "manual",
+            "source_key": source_key,
+        }
     if trailing_prose:
         result["_normalization_note"] = trailing_warning
     if ammunition_item is not None:
@@ -828,125 +791,12 @@ def _looks_like_mechanical_on_hit_suffix(description: str) -> bool:
     )
 
 
-def _armor_corrosion_on_hit(description: str) -> dict[str, Any] | None:
-    normalized = " ".join(description.split())
-    match = re.fullmatch(
-        r"In addition, non\s*magical armor worn by the target is partly dissolved "
-        r"and takes a permanent and cumulative (?P<penalty>-\s*\d+) penalty "
-        r"to the AC it offers\. The armor is destroyed if the penalty reduces "
-        r"its AC\s*to (?P<destroyed_ac>\d+)\.",
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    if match is None:
-        return None
-    penalty = int(match.group("penalty").replace(" ", ""))
-    if penalty >= 0:
-        return None
-    return {
-        "kind": "armor_corrosion",
-        "trigger": "weapon_hit",
-        "requires_worn_armor": True,
-        "requires_nonmagical_armor": True,
-        "armor_class_penalty": penalty,
-        "destroyed_at_armor_class": int(match.group("destroyed_ac")),
-        "automatic": True,
-        "source_excerpt": normalized,
-    }
 
 
-def _ignition_ongoing_damage_on_hit(
-    description: str,
-) -> dict[str, Any] | None:
-    """Compile the complete standard ignite-and-douse weapon rider."""
-
-    normalized = " ".join(description.split())
-    match = re.fullmatch(
-        r"If the target is a creature or a flammable object, it ignites\. "
-        r"Until a (?:creature|target) takes an action to douse the fire, "
-        r"the (?:creature|target) takes (?P<average>\d+) "
-        r"\((?P<formula>\d+d\d+)\) (?P<damage_type>[a-z]+) damage at the "
-        r"(?P<timing>start|end) of each of its turns\.",
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    if match is None:
-        return None
-    return {
-        "kind": "ignition_ongoing_damage",
-        "trigger": "weapon_hit",
-        "creature_target_automatic": True,
-        "flammable_object_requires_scene_fact": True,
-        "damage_formula": match.group("formula").casefold(),
-        "average_damage": int(match.group("average")),
-        "damage_type": match.group("damage_type").casefold(),
-        "trigger_timing": f"turn_{match.group('timing').casefold()}",
-        "end_action": "use_object",
-        "end_action_description": "douse the fire",
-        "automatic": True,
-        "source_excerpt": normalized,
-    }
 
 
-def _saving_throw_damage_on_hit(description: str) -> dict[str, Any] | None:
-    """Compile a weapon rider that deals save-for-half damage on a hit."""
-
-    normalized = " ".join(description.split())
-    match = re.fullmatch(
-        r"and the target must make a DC (?P<dc>\d+) "
-        r"(?P<ability>Strength|Dexterity|Constitution|Intelligence|Wisdom|Charisma) "
-        r"saving throw, taking (?P<average>\d+) "
-        r"\((?P<formula>\d+d\d+(?:\s*[+\-]\s*\d+)?)\) "
-        r"(?P<damage_type>[a-z]+) damage on a failed save, or half as much "
-        r"damage on a successful one\.",
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    if match is None:
-        return None
-    return {
-        "kind": "save_damage",
-        "trigger": "weapon_hit",
-        "save_ability": match.group("ability").casefold(),
-        "save_dc": int(match.group("dc")),
-        "damage_formula": re.sub(r"\s+", "", match.group("formula")).casefold(),
-        "average_damage": int(match.group("average")),
-        "damage_type": match.group("damage_type").casefold(),
-        "half_on_success": True,
-        "save_source_kind": "nonmagical_effect",
-        "automatic": True,
-        "source_excerpt": normalized,
-    }
 
 
-def _contest_pull_on_hit(description: str) -> dict[str, Any] | None:
-    """Compile a size-limited Strength contest that pulls toward the attacker."""
-
-    normalized = " ".join(description.split())
-    match = re.fullmatch(
-        r"If the target is a (?P<maximum_size>Tiny|Small|Medium|Large|Huge|Gargantuan) "
-        r"or smaller creature, it must succeed on a (?P<ability>Strength|Dexterity|"
-        r"Constitution|Intelligence|Wisdom|Charisma) contest against the "
-        r"[A-Za-z][A-Za-z '\-]* or be pulled up to (?P<distance>\d+) feet "
-        r"toward the [A-Za-z][A-Za-z '\-]*\.",
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    if match is None:
-        return None
-    return {
-        "kind": "contest_pull",
-        "trigger": "weapon_hit",
-        "required_target_kind": "creature",
-        "maximum_target_size": match.group("maximum_size").casefold(),
-        "source_ability": match.group("ability").casefold(),
-        "target_ability": match.group("ability").casefold(),
-        "ties": "no_movement",
-        "maximum_distance_ft": int(match.group("distance")),
-        "direction": "toward_source",
-        "automatic": True,
-        "source_excerpt": normalized,
-    }
 
 
 def _count(value: str) -> int | None:
@@ -1423,8 +1273,8 @@ def _parse_multiattack(description: str, items: list[dict[str, Any]]) -> list[di
                 continue
         if attacks:
             if sum(int(item["count"]) for item in attacks) < 2:
-                # A source Multiattack can combine one weapon attack with a
-                # special action (for example, Claws plus Devour Intellect).
+                # A source Multiattack can combine one weapon attack with an
+                # unstructured special action.
                 # Until every constituent action is structured, exposing the
                 # lone weapon as executable Multiattack would misrepresent the
                 # authored action and is rejected by the combat engine anyway.
@@ -1597,1014 +1447,94 @@ def _spell_action_name(value: str) -> str:
     return re.sub(r"\s*\([^)]*\)\s*$", "", value).strip().casefold()
 
 
-def _regeneration_source_trait(description: str) -> dict[str, Any] | None:
-    normalized = " ".join(description.split())
-    match = re.fullmatch(
-        r"The (?P<subject>[A-Za-z][A-Za-z '\-]*) regains "
-        r"(?P<amount>\d+) hit points at the start of its turn\. "
-        r"If the (?P=subject) takes "
-        r"(?P<damage_types>[a-z]+(?:\s+or\s+[a-z]+)+) damage, "
-        r"this trait doesn't function at the start of the "
-        r"(?P=subject)'s next turn\. The (?P=subject) dies only if it starts "
-        r"its turn with 0 hit points and doesn't regenerate\.",
-        normalized,
-        flags=re.IGNORECASE,
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def _recharge_contract(entry_name: str) -> dict[str, Any] | None:
+    """Recover only the shared printed ``Recharge X-Y`` usage marker.
+
+    The marker controls availability and a turn-start d6 roll. It deliberately
+    says nothing about the source action's unique effect, which remains on the
+    portable card for an Agent-authored content solution.
+    """
+
+    match = re.search(
+        r"(?i)\(\s*Recharge\s+([1-6])(?:\s*[-\u2013\u2014\u6bcf]\s*([1-6]))?\s*\)",
+        entry_name,
     )
     if match is None:
         return None
-    damage_types = [
-        item.strip().casefold()
-        for item in re.split(r"\s+or\s+", match.group("damage_types"))
-        if item.strip()
-    ]
-    if not damage_types or len(damage_types) != len(set(damage_types)):
-        return None
-    return {
-        "kind": "regeneration",
-        "trigger": "turn_start",
-        "amount": int(match.group("amount")),
-        "suppressed_by_damage_types": damage_types,
-        "dies_at_zero_when_suppressed": True,
-    }
-
-
-def _pack_tactics_source_trait(description: str) -> dict[str, Any] | None:
-    normalized = " ".join(description.split())
-    match = re.fullmatch(
-        r"The (?P<subject>[A-Za-z][A-Za-z '\-]*) has advantage on an attack "
-        r"roll against a creature if at least one of the "
-        r"(?P=subject)'s allies is within (?P<distance>\d+) feet of the creature "
-        r"and the ally isn't incapacitated\.",
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    if match is None:
-        return None
-    return {
-        "kind": "pack_tactics",
-        "trigger": "attack_roll",
-        "ally_within_target_ft": int(match.group("distance")),
-        "requires_ally_not_incapacitated": True,
-        "grants": "advantage",
-        "automatic": True,
-    }
-
-
-def _sunlight_sensitivity_source_trait(description: str) -> dict[str, Any] | None:
-    normalized = " ".join(description.split())
-    if not re.fullmatch(
-        r"While in sunlight, the [A-Za-z][A-Za-z '\-]* has disadvantage on "
-        r"attack rolls, as well as on Wisdom \(Perception\) checks that rely "
-        r"on sight\.",
-        normalized,
-        flags=re.IGNORECASE,
-    ):
-        return None
-    return {
-        "kind": "sunlight_sensitivity",
-        "trigger": "attack_roll_or_sight_perception",
-        "environment_fact": "direct_sunlight",
-        "grants": "disadvantage",
-        "automatic": True,
-    }
-
-
-def _keen_perception_source_trait(description: str) -> dict[str, Any] | None:
-    normalized = " ".join(description.split())
-    match = re.fullmatch(
-        r"The [A-Za-z][A-Za-z '\-]* has advantage on Wisdom "
-        r"\(Perception\) checks that rely on "
-        r"(?P<senses>hearing|sight|hearing or sight)\.",
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    if match is None:
-        return None
-    senses = [
-        value.strip().casefold()
-        for value in re.split(r"\s+or\s+", match.group("senses"))
-    ]
-    return {
-        "kind": "keen_perception",
-        "trigger": "perception_check",
-        "senses": senses,
-        "grants": "advantage",
-        "automatic": True,
-    }
-
-
-def _magic_resistance_source_trait(description: str) -> dict[str, Any] | None:
-    """Compile the complete standard Magic Resistance saving-throw rule."""
-
-    normalized = " ".join(description.split())
-    if not re.fullmatch(
-        r"The [A-Za-z][A-Za-z '\-]* has advantage on saving throws against "
-        r"spells and other magical effects\.",
-        normalized,
-        flags=re.IGNORECASE,
-    ):
-        return None
-    return {
-        "kind": "magic_resistance",
-        "trigger": "saving_throw",
-        "save_source_kinds": ["spell", "magical_effect"],
-        "grants": "advantage",
-        "automatic": True,
-        "source_excerpt": normalized,
-    }
-
-
-def _evasion_source_trait(description: str) -> dict[str, Any] | None:
-    """Compile the complete 2014 monster Evasion damage settlement."""
-
-    normalized = " ".join(description.split())
-    match = re.fullmatch(
-        r"If the (?P<subject>[A-Za-z][A-Za-z '\-]*) is subjected to an effect "
-        r"that allows it to make a Dexterity saving throw to take only half "
-        r"damage, the (?P=subject) instead takes no damage if it succeeds on "
-        r"the saving throw, and only half damage if it fails\.",
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    if match is None:
-        return None
-    return {
-        "kind": "evasion",
-        "trigger": "dexterity_save_for_half_damage",
-        "save_ability": "dexterity",
-        "ordinary_successful_save": "half",
-        "successful_save": "none",
-        "failed_save": "half",
-        "automatic": True,
-        "source_excerpt": normalized,
-    }
-
-
-def _save_advantage_against_conditions_source_trait(
-    description: str,
-) -> dict[str, Any] | None:
-    """Compile a standard trait granting save advantage against named states."""
-
-    normalized = " ".join(description.split())
-    match = re.fullmatch(
-        r"The [A-Za-z][A-Za-z '\-]* has advantage on saving throws against "
-        r"being (?P<first>charmed|frightened)"
-        r"(?: or (?P<second>charmed|frightened))?\s*\.",
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    if match is None:
-        return None
-    conditions = [
-        match.group("first").casefold(),
-        *(
-            [match.group("second").casefold()]
-            if match.group("second")
-            else []
-        ),
-    ]
-    return {
-        "kind": "save_advantage_against_conditions",
-        "trigger": "saving_throw",
-        "effect_conditions": conditions,
-        "grants": "advantage",
-        "automatic": True,
-        "source_excerpt": normalized,
-    }
-
-
-def _breathing_media_source_trait(description: str) -> dict[str, Any] | None:
-    """Compile an exact standard breathing capability for environment rulings."""
-
-    normalized = " ".join(description.split())
-    if (
-        re.fullmatch(
-            r"The [A-Za-z][A-Za-z '\-]* can breathe air and water\.",
-            normalized,
-            flags=re.IGNORECASE,
+    minimum = int(match.group(1))
+    maximum = int(match.group(2) or match.group(1))
+    if minimum > maximum:
+        raise StatblockImportError(
+            f"{entry_name!r} has an invalid Recharge success range"
         )
-        is None
-    ):
-        return None
     return {
-        "kind": "breathing_media",
-        "trigger": "environmental_breathing",
-        "media": ["air", "water"],
-        "automatic": True,
-        "source_excerpt": normalized,
+        "kind": "d6_turn_start",
+        "minimum": minimum,
+        "maximum": maximum,
+        "source_marker": match.group(0),
     }
-
-
-def _assassinate_source_trait(description: str) -> dict[str, Any] | None:
-    """Compile the complete standard Assassin opening-turn rule."""
-
-    normalized = " ".join(description.split())
-    match = re.fullmatch(
-        r"During its first turn, the (?P<subject>[A-Za-z][A-Za-z '\-]*) has "
-        r"advantage on attack rolls against any creature that hasn't taken a "
-        r"turn\. Any hit the (?P=subject) scores against a surprised creature "
-        r"is a critical hit\.",
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    if match is None:
-        return None
-    return {
-        "kind": "assassinate",
-        "trigger": "attack_roll",
-        "attacker_turn": "first",
-        "advantage_if_target_has_not_taken_turn": True,
-        "critical_on_hit_if_target_surprised": True,
-        "automatic": True,
-        "source_excerpt": normalized,
-    }
-
-
-def _aggressive_source_trait(description: str) -> dict[str, Any] | None:
-    normalized = " ".join(description.split())
-    if not re.fullmatch(
-        r"As a bonus action, the [A-Za-z][A-Za-z '\-]* can move up to its "
-        r"speed toward a hostile creature that it can see\.",
-        normalized,
-        flags=re.IGNORECASE,
-    ):
-        return None
-    return {
-        "kind": "aggressive",
-        "trigger": "bonus_action",
-        "maximum_movement": "speed",
-        "requires_visible_hostile_target": True,
-        "direction": "toward_target",
-    }
-
-
-def _cunning_action_source_trait(description: str) -> dict[str, Any] | None:
-    normalized = " ".join(description.split())
-    if not re.fullmatch(
-        r"On each of its turns, the [A-Za-z][A-Za-z '\-]* can use a bonus "
-        r"action to take the Dash, Disengage, or Hide action\.",
-        normalized,
-        flags=re.IGNORECASE,
-    ):
-        return None
-    return {
-        "kind": "cunning_action",
-        "trigger": "bonus_action",
-        "options": ["dash", "disengage", "hide"],
-    }
-
-
-def _included_weapon_damage_source_trait(description: str) -> dict[str, Any] | None:
-    normalized = " ".join(description.split())
-    match = re.fullmatch(
-        r"The [A-Za-z][A-Za-z '\-]* deals an extra (?P<average>\d+) "
-        r"\((?P<formula>\d+d\d+)\) damage when it hits with a weapon attack "
-        r"\(included in the attacks?\)\.",
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    if match is None:
-        return None
-    return {
-        "kind": "included_weapon_damage",
-        "trigger": "weapon_hit",
-        "damage_formula": match.group("formula").casefold(),
-        "average_damage": int(match.group("average")),
-        "embedded_in_weapon_actions": True,
-    }
-
-
-def _heated_body_source_trait(description: str) -> dict[str, Any] | None:
-    """Compile a complete standard contact-retaliation trait from its card."""
-
-    normalized = " ".join(description.split())
-    match = re.fullmatch(
-        r"A creature that touches the (?P<subject>[A-Za-z][A-Za-z '\-]*) or hits "
-        r"it with a melee attack while within (?P<range>\d+) feet of it takes "
-        r"(?P<average>\d+) \((?P<formula>\d+d\d+)\) "
-        r"(?P<damage_type>[a-z]+) damage\.",
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    if match is None:
-        return None
-    return {
-        "kind": "heated_body",
-        "trigger": "contact_or_melee_hit",
-        "melee_range_ft": int(match.group("range")),
-        "contact_damage_formula": match.group("formula").casefold(),
-        "average_damage": int(match.group("average")),
-        "contact_damage_type": match.group("damage_type").casefold(),
-        "automatic": True,
-        "source_excerpt": normalized,
-    }
-
-
-def _heated_weapons_source_trait(description: str) -> dict[str, Any] | None:
-    """Compile extra damage already printed into a card's weapon action."""
-
-    normalized = " ".join(description.split())
-    match = re.fullmatch(
-        r"Any (?P<material>[a-z]+) melee weapon the "
-        r"(?P<subject>[A-Za-z][A-Za-z '\-]*) wields deals an extra "
-        r"(?P<average>\d+) \((?P<formula>\d+d\d+)\) "
-        r"(?P<damage_type>[a-z]+) damage on a hit "
-        r"\(included in the attack\)\.",
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    if match is None:
-        return None
-    return {
-        "kind": "heated_weapons",
-        "trigger": "weapon_hit",
-        "required_weapon_material": match.group("material").casefold(),
-        "required_weapon_category": "melee",
-        "damage_formula": match.group("formula").casefold(),
-        "average_damage": int(match.group("average")),
-        "damage_type": match.group("damage_type").casefold(),
-        "embedded_in_weapon_actions": True,
-        "automatic": True,
-        "source_excerpt": normalized,
-    }
-
-
-def _battle_cry_source_trait(description: str) -> dict[str, Any] | None:
-    normalized = " ".join(description.split())
-    match = re.fullmatch(
-        r"Each creature of the [^.]{1,80}?'s choice that is within "
-        r"(?P<distance>\d+) feet of it, can hear it, and is not already "
-        r"affected by Battle Cry gains advantage on attack rolls until the "
-        r"start of the [^.]{1,80}?'s next turn\. The "
-        r"[^.]{1,80}? can then make one attack as a bonus action\.",
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    if match is None:
-        return None
-    return {
-        "kind": "battle_cry",
-        "trigger": "action",
-        "uses": 1,
-        "recovers_on": "long_rest",
-        "range_ft": int(match.group("distance")),
-        "requires_hearing": True,
-        "grants": "attack_advantage",
-        "duration": "until_source_next_turn_start",
-        "grants_source_bonus_attack": True,
-    }
-
-
-def _death_burst_source_trait(description: str) -> dict[str, Any] | None:
-    """Compile the standard death-triggered area save and damage grammar."""
-
-    normalized = " ".join(description.split())
-    match = re.fullmatch(
-        r"When the (?P<subject>[A-Za-z][A-Za-z '\-]*) dies, "
-        r"(?P<preamble>[^.]{1,180}\.) "
-        r"Each creature within (?P<range>\d+) (?:feet|ft\.) of it must make a "
-        r"DC (?P<dc>\d+) (?P<ability>Strength|Dexterity|Constitution|"
-        r"Intelligence|Wisdom|Charisma) saving throw, taking "
-        r"(?P<average>\d+) \((?P<formula>\d+d\d+(?:\s*[+\-]\s*\d+)?)\) "
-        r"(?P<damage_type>[a-z]+) damage on a failed save, or half as much "
-        r"damage on a successful one\. "
-        r"Flammable objects that aren't being worn or carried in that area "
-        r"are ignited\.",
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    if match is None:
-        return None
-    return {
-        "kind": "death_burst",
-        "trigger": "death",
-        "range_ft": int(match.group("range")),
-        "target": "each_creature_in_range",
-        "save_ability": match.group("ability").casefold(),
-        "save_dc": int(match.group("dc")),
-        "damage_formula": re.sub(r"\s+", "", match.group("formula")).casefold(),
-        "average_damage": int(match.group("average")),
-        "damage_type": match.group("damage_type").casefold(),
-        "failed_save": "full",
-        "successful_save": "half",
-        "ignite_flammable_unworn_objects": True,
-        "automatic": True,
-        "source_excerpt": normalized,
-    }
-
-
-def _ignited_illumination_source_trait(
-    description: str,
-) -> dict[str, Any] | None:
-    """Compile the Magmin's standard bonus-action light toggle."""
-
-    normalized = " ".join(description.split())
-    match = re.fullmatch(
-        r"As a bonus action, the (?P<subject>[A-Za-z][A-Za-z '\-]*) can set "
-        r"itself ablaze or extinguish its flames\. While ablaze, the "
-        r"(?P=subject) sheds bright light in a (?P<bright>\d+)-foot radius "
-        r"and dim light for an additional (?P<dim>\d+) (?:feet|ft)\.",
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    if match is None:
-        return None
-    return {
-        "kind": "ignited_illumination",
-        "trigger": "bonus_action",
-        "mode": "toggle",
-        "bright_light_radius_ft": int(match.group("bright")),
-        "additional_dim_light_ft": int(match.group("dim")),
-        "automatic": True,
-    }
-
-
-def _sneak_attack_source_trait(description: str) -> dict[str, Any] | None:
-    normalized = " ".join(description.split())
-    match = re.fullmatch(
-        r"The [A-Za-z][A-Za-z '\-]* deals an extra (?P<average>\d+) "
-        r"\((?P<formula>\d+d6)\) damage when it hits a target with a weapon "
-        r"attack and has advantage on the attack roll, or when the target is "
-        r"within (?P<distance>\d+) feet of an ally of the "
-        r"[A-Za-z][A-Za-z '\-]* that isn't incapacitated and the "
-        r"[A-Za-z][A-Za-z '\-]* doesn't have disadvantage on the attack roll\.",
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    if match is None:
-        return None
-    return {
-        "kind": "sneak_attack",
-        "trigger": "eligible_weapon_hit",
-        "damage_formula": match.group("formula").casefold(),
-        "average_damage": int(match.group("average")),
-        "uses_per_turn": 1,
-        "requires_finesse_or_ranged": False,
-        "ally_within_target_ft": int(match.group("distance")),
-        "requires_ally_not_incapacitated": True,
-        "requires_no_disadvantage": True,
-        "alternative": "effective_advantage",
-    }
-
-
-def _amorphous_source_trait(description: str) -> dict[str, Any] | None:
-    normalized = " ".join(description.split())
-    match = re.fullmatch(
-        r"The [A-Za-z][A-Za-z '\-]* can move through a space as narrow as "
-        r"(?P<width>\d+) inch wide without squeezing\.",
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    if match is None:
-        return None
-    return {
-        "kind": "amorphous",
-        "trigger": "movement",
-        "minimum_space_width_inches": int(match.group("width")),
-        "requires_squeezing": False,
-        "automatic": True,
-    }
-
-
-def _spider_climb_source_trait(description: str) -> dict[str, Any] | None:
-    normalized = " ".join(description.split())
-    if not re.fullmatch(
-        r"The [A-Za-z][A-Za-z '\-]* can climb difficult surfaces, including "
-        r"upside down on ceilings, without needing to make an ability check\.",
-        normalized,
-        flags=re.IGNORECASE,
-    ):
-        return None
-    return {
-        "kind": "spider_climb",
-        "trigger": "climb_movement",
-        "difficult_surfaces": True,
-        "ceilings": True,
-        "ability_check_required": False,
-        "automatic": True,
-    }
-
-
-def _corrosive_form_source_trait(description: str) -> dict[str, Any] | None:
-    normalized = " ".join(description.split())
-    match = re.fullmatch(
-        r"A creature that touches the (?P<subject>[A-Za-z][A-Za-z '\-]*) or hits "
-        r"it with a melee attack while within (?P<range>\d+) feet of it takes "
-        r"\d+ \((?P<damage>\d+\s*d\s*\d+)\) acid damage\. Any non\s*magical "
-        r"weapon made of metal or wood that hits the (?P=subject) corrodes\. "
-        r"After dealing damage, the weapon takes a permanent (?:and )?cumulative "
-        r"(?P<penalty>-\s*(?:\d+|~)) penalty to damage r[0o]lls\. If its penalty drops "
-        r"to (?P<destroyed>-\s*\d+), the weapon is [de]estroyed\. Non\s*magical "
-        r"ammunition made of metal (?:or|br) wood that hits the (?P=subject) is "
-        r"destroyed after dealing damage\. The (?P=subject) can eat through "
-        r"(?P<thickness>\d+)-inch-thick, non\s*magical wood or metal in "
-        r"(?P<rounds>\d+) round\s*\.",
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    if match is None:
-        return None
-    raw_penalty = match.group("penalty").replace(" ", "")
-    penalty = -1 if raw_penalty == "-~" else int(raw_penalty)
-    destroyed_at = int(match.group("destroyed").replace(" ", ""))
-    if penalty >= 0 or destroyed_at >= 0:
-        return None
-    return {
-        "kind": "corrosive_form",
-        "trigger": "contact_or_melee_hit",
-        "melee_range_ft": int(match.group("range")),
-        "contact_damage_formula": re.sub(r"\s+", "", match.group("damage")).casefold(),
-        "contact_damage_type": "acid",
-        "weapon_materials": ["metal", "wood"],
-        "requires_nonmagical_weapon": True,
-        "weapon_damage_roll_penalty": penalty,
-        "weapon_destroyed_at_penalty": destroyed_at,
-        "ammunition_destroyed_after_hit": True,
-        "object_materials": ["wood", "metal"],
-        "object_maximum_thickness_inches": int(match.group("thickness")),
-        "object_dissolution_rounds": int(match.group("rounds")),
-        "automatic": True,
-    }
-
-
-def _split_source_trait(description: str) -> dict[str, Any] | None:
-    normalized = " ".join(description.split())
-    match = re.fullmatch(
-        r"When a [A-Za-z][A-Za-z '\-]* that is Medium or larger is subjected "
-        r"to (?P<damage_types>[a-z]+(?:\s+or\s+[a-z]+)+) damage, it splits "
-        r"into (?P<count>\w+) new [A-Za-z][A-Za-z '\-]* if it has at least "
-        r"(?P<hit_points>\d+) hit points\. Each new [A-Za-z][A-Za-z '\-]* "
-        r"has hit points equal to half the original [A-Za-z][A-Za-z '\-]*'s, "
-        r"rounded down\s*\. New [A-Za-z][A-Za-z '\-]* are one size smaller than "
-        r"the original [A-Za-z][A-Za-z '\-]*\.",
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    if match is None:
-        return None
-    count = _count(match.group("count"))
-    damage_types = [
-        item.strip().casefold()
-        for item in re.split(r"\s+or\s+", match.group("damage_types"))
-        if item.strip()
-    ]
-    if count is None or count < 2 or len(damage_types) != len(set(damage_types)):
-        return None
-    return {
-        "kind": "split",
-        "trigger": "subjected_to_damage",
-        "damage_types": damage_types,
-        "minimum_size": "medium",
-        "minimum_hit_points": int(match.group("hit_points")),
-        "new_creature_count": count,
-        "hit_points": "half_original_rounded_down",
-        "size_change": -1,
-    }
-
-
-def _source_trait_from_description(description: str) -> dict[str, Any] | None:
-    matches = [
-        parsed
-        for parser in (
-            _regeneration_source_trait,
-            _pack_tactics_source_trait,
-            _sunlight_sensitivity_source_trait,
-            _keen_perception_source_trait,
-            _magic_resistance_source_trait,
-            _evasion_source_trait,
-            _save_advantage_against_conditions_source_trait,
-            _breathing_media_source_trait,
-            _assassinate_source_trait,
-            _aggressive_source_trait,
-            _cunning_action_source_trait,
-            _included_weapon_damage_source_trait,
-            _heated_body_source_trait,
-            _heated_weapons_source_trait,
-            _battle_cry_source_trait,
-            _death_burst_source_trait,
-            _ignited_illumination_source_trait,
-            _sneak_attack_source_trait,
-            _amorphous_source_trait,
-            _spider_climb_source_trait,
-            _corrosive_form_source_trait,
-            _split_source_trait,
-        )
-        if (parsed := parser(description)) is not None
-    ]
-    return matches[0] if len(matches) == 1 else None
-
-
-def parry_reaction_settlement(
-    description: str,
-) -> tuple[dict[str, Any], str, str, bool] | None:
-    """Structure a complete standard post-hit reaction and isolate adjacent lore."""
-
-    normalized = " ".join(description.split())
-    repaired = normalized
-    for word in (
-        "against",
-        "attacker",
-        "attack",
-        "melee",
-        "weapon",
-        "wielding",
-        "would",
-        "must",
-        "adds",
-        "see",
-        "the",
-    ):
-        fragmented_word = (
-            r"\b(?:"
-            + "|".join(
-                re.escape(word[:split_at])
-                + r"\s+"
-                + re.escape(word[split_at:])
-                for split_at in range(1, len(word))
-            )
-            + r")\b"
-        )
-        repaired = re.sub(
-            fragmented_word,
-            lambda match: word.capitalize() if match.group(0)[0].isupper() else word,
-            repaired,
-            flags=re.IGNORECASE,
-        )
-    ocr_repaired = repaired != normalized
-    normalized = repaired
-    match = re.match(
-        r"The (?P<subject>[A-Za-z][A-Za-z '\-]*?) adds? "
-        r"(?P<bonus>\d+) to (?:its|his|her|their) AC against one melee attack "
-        r"that would hit (?:it|him|her|them)\."
-        r"(?: To do so, the (?P<requirement_subject>[A-Za-z][A-Za-z '\-]*?) "
-        r"must see the attacker and be wielding "
-        r"a melee weapon\.)?",
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    if match is None:
-        return None
-    requirement_subject = match.group("requirement_subject")
-    if requirement_subject is not None:
-        compact_subject = re.sub(r"[^a-z]", "", match.group("subject").casefold())
-        compact_requirement_subject = re.sub(
-            r"[^a-z]",
-            "",
-            requirement_subject.casefold(),
-        )
-        if compact_subject != compact_requirement_subject:
-            return None
-    mechanics_text = normalized[: match.end()].strip()
-    trailing_text = normalized[match.end() :].strip()
-    trailing_lead = trailing_text.split(".", 1)[0]
-    subject_plural = re.compile(
-        rf"(?i)^{re.escape(match.group('subject').strip())}(?:s|es)\b"
-    )
-    trailing_is_subject_lore = subject_plural.match(trailing_lead) is not None
-    if trailing_text and not trailing_is_subject_lore and re.search(
-        (
-            r"(?i)\b(?:AC|action|advantage|attack|attacker|bonus|can|creature|"
-            r"damage|DC|disadvantage|feet|ft|hit|may|move|movement|must|range|"
-            r"reach|reaction|roll|round|save|speed|target|turn|weapon)\b"
-            r"|\bwield(?:s|ing)?\b.{0,40}\b(?:shield|weapon)\b"
-            r"|\b\d+\b|\b\d*d\d+\b"
-        ),
-        trailing_lead,
-    ):
-        # A mechanically meaningful trailing clause remains part of the
-        # reaction and must not be silently discarded.
-        return None
-    bonus = int(match.group("bonus"))
-    if bonus <= 0:
-        return None
-    return (
-        {
-            "kind": "armor_class_bonus",
-            "bonus": bonus,
-            "attack_modes": ["melee"],
-            "requires_visible_attacker": bool(
-                re.search(
-                    r"\bmust\s+see\s+the\s+attacker\b",
-                    mechanics_text,
-                    re.IGNORECASE,
-                )
-            ),
-            "requires_wielded_melee_weapon": bool(
-                re.search(
-                    r"\b(?:be\s+)?wielding\s+a\s+melee\s+weapon\b",
-                    mechanics_text,
-                    re.IGNORECASE,
-                )
-            ),
-        },
-        mechanics_text,
-        trailing_text,
-        ocr_repaired,
-    )
-
-
-def _parry_reaction_defense(description: str) -> dict[str, Any] | None:
-    """Return the engine contract for a complete standard Parry reaction."""
-
-    settlement = parry_reaction_settlement(description)
-    return settlement[0] if settlement is not None else None
-
-
-def gazer_eye_ray_spec(
-    sheet: dict[str, Any],
-    activity_id: str = "eye-rays-action",
-) -> dict[str, Any] | None:
-    """Return only a previously reviewed and recorded random-ray contract."""
-
-    activities = {
-        str(item.get("id") or ""): item
-        for item in dict(sheet.get("content") or {}).get("activities", [])
-        if isinstance(item, dict)
-    }
-    parent = activities.get(activity_id)
-    if parent is None or str(parent.get("name") or "").strip().casefold() != "eye rays":
-        return None
-    recorded = dict(dict(parent.get("choices") or {}).get("random_save_effects") or {})
-    return deepcopy(recorded) if recorded else None
-
-
-def _compile_gazer_eye_ray_spec(
-    sheet: dict[str, Any],
-    activity_id: str = "eye-rays-action",
-) -> dict[str, Any] | None:
-    """Compile the legacy contract only at a trusted-source review boundary."""
-
-    activities = {
-        str(item.get("id") or ""): item
-        for item in dict(sheet.get("content") or {}).get("activities", [])
-        if isinstance(item, dict)
-    }
-    parent = activities.get(activity_id)
-    if parent is None or str(parent.get("name") or "").strip().casefold() != "eye rays":
-        return None
-    parent_description = " ".join(str(parent.get("description") or "").split())
-    parent_match = re.search(
-        r"(?i)\bshoots\s+(one|two|three|four|\d+)\s+of\s+the\s+following\s+"
-        r"magical\s+eye\s+rays\s+at\s+random\s+\(reroll\s+duplicates\),\s+"
-        r"choosing\s+one\s+or\s+two\s+targets\s+it\s+can\s+see\s+within\s+"
-        r"(\d+)\s+feet\b",
-        parent_description,
-    )
-    if parent_match is None:
-        return None
-    draw_count = _count(parent_match.group(1))
-    if draw_count is None or draw_count < 1:
-        return None
-    by_name = {
-        str(item.get("name") or "").strip().casefold(): item
-        for item in activities.values()
-    }
-    required_names = ("dazing ray", "fear ray", "frost ray", "telekinetic ray")
-    if any(name not in by_name for name in required_names):
-        return None
-
-    descriptions = {
-        name: " ".join(str(by_name[name].get("description") or "").split())
-        for name in required_names
-    }
-    dazing = re.search(
-        r"(?i)\bDC\s+(\d+)\s+Wisdom\s+saving\s+throw\s+or\s+be\s+charmed\s+"
-        r"until\s+the\s+start\s+of\s+the\s+gazer's\s+next\s+turn\.\s+While\s+"
-        r"the\s+target\s+is\s+charmed\s+in\s+this\s+way,\s+its\s+speed\s+is\s+"
-        r"halved,\s+and\s+it\s+has\s+disadvantage\s+on\s+attack\s+rolls\b",
-        descriptions["dazing ray"],
-    )
-    fear = re.search(
-        r"(?i)\bDC\s+(\d+)\s+Wisdom\s+saving\s+throw\s+or\s+be\s+frightened\s+"
-        r"until\s+the\s+start\s+of\s+the\s+gazer's\s+next\s+turn\b",
-        descriptions["fear ray"],
-    )
-    frost = re.search(
-        r"(?i)\bDC\s+(\d+)\s+Dexterity\s+saving\s+throw\s+or\s+take\s+"
-        r"\d+\s+\((\d+d\d+(?:\s*[+\-]\s*\d+)?)\)\s+([a-z]+)\s+damage\b",
-        descriptions["frost ray"],
-    )
-    telekinetic = re.search(
-        r"(?i)\btarget\s+is\s+a\s+creature\s+that\s+is\s+(Tiny|Small|Medium)\s+"
-        r"or\s+smaller,\s+it\s+must\s+succeed\s+on\s+a\s+DC\s+(\d+)\s+Strength\s+"
-        r"saving\s+throw\s+or\s+be\s+moved\s+up\s+to\s+(\d+)\s+feet\s+directly\s+"
-        r"away\s+from\s+the\s+gazer\b",
-        descriptions["telekinetic ray"],
-    )
-    if any(match is None for match in (dazing, fear, frost, telekinetic)):
-        return None
-    assert dazing is not None
-    assert fear is not None
-    assert frost is not None
-    assert telekinetic is not None
-    effects = [
-        {
-            "id": "dazing-ray",
-            "source_activity_id": str(by_name["dazing ray"]["id"]),
-            "save": {"ability": "wisdom", "dc": int(dazing.group(1))},
-            "failure": {
-                "kind": "timed_condition",
-                "condition": "charmed",
-                "duration": {"period": "source_turn_start", "remaining": 1},
-                "speed_multiplier": 0.5,
-                "attack_disadvantage": True,
-            },
-            "source_excerpt": descriptions["dazing ray"],
-        },
-        {
-            "id": "fear-ray",
-            "source_activity_id": str(by_name["fear ray"]["id"]),
-            "save": {"ability": "wisdom", "dc": int(fear.group(1))},
-            "failure": {
-                "kind": "timed_condition",
-                "condition": "frightened",
-                "duration": {"period": "source_turn_start", "remaining": 1},
-            },
-            "source_excerpt": descriptions["fear ray"],
-        },
-        {
-            "id": "frost-ray",
-            "source_activity_id": str(by_name["frost ray"]["id"]),
-            "save": {"ability": "dexterity", "dc": int(frost.group(1))},
-            "failure": {
-                "kind": "damage",
-                "expression": frost.group(2).replace(" ", ""),
-                "damage_type": frost.group(3).casefold(),
-            },
-            "source_excerpt": descriptions["frost ray"],
-        },
-        {
-            "id": "telekinetic-ray",
-            "source_activity_id": str(by_name["telekinetic ray"]["id"]),
-            "save": {"ability": "strength", "dc": int(telekinetic.group(2))},
-            "failure": {
-                "kind": "forced_movement",
-                "maximum_size": telekinetic.group(1).casefold(),
-                "distance_ft": int(telekinetic.group(3)),
-                "direction": "directly_away",
-            },
-            "source_excerpt": descriptions["telekinetic ray"],
-        },
-    ]
-    return {
-        "kind": "gazer_eye_rays_2014",
-        "save_source_kind": "magical_effect",
-        "draw_count": draw_count,
-        "reroll_duplicates": True,
-        "range_ft": int(parent_match.group(2)),
-        "target_count": {"minimum": 1, "maximum": 2},
-        "effects": effects,
-        "source_excerpt": parent_description,
-    }
-
-
-def _structure_gazer_eye_rays(
-    sheet: dict[str, Any],
-    warnings: list[str],
-) -> None:
-    spec = _compile_gazer_eye_ray_spec(sheet)
-    if spec is None:
-        return
-    activities = list(sheet["content"]["activities"])
-    parent = next(item for item in activities if item.get("id") == "eye-rays-action")
-    parent["choices"] = {"random_save_effects": spec}
-    parent["mechanic_refs"] = sorted(
-        {
-            *list(parent.get("mechanic_refs") or []),
-            "dnd5e.core.activity.random_save_effects",
-        }
-    )
-    component_ids = {
-        str(item["source_activity_id"]) for item in spec["effects"]
-    }
-    sheet["content"]["activities"] = [
-        item for item in activities if str(item.get("id") or "") not in component_ids
-    ]
-    structured_names = {"Eye Rays", "Dazing Ray", "Fear Ray", "Frost Ray", "Telekinetic Ray"}
-    warnings[:] = [
-        warning
-        for warning in warnings
-        if not any(warning.startswith(f"{name}:") for name in structured_names)
-    ]
-
-
-def source_save_effect_spec(
-    sheet: dict[str, Any],
-    activity_id: str,
-) -> dict[str, Any] | None:
-    """Return a reviewed, deterministic source saving-throw action contract."""
-
-    activity = next(
-        (
-            item
-            for item in dict(sheet.get("content") or {}).get("activities", [])
-            if str(item.get("id") or "") == activity_id
-        ),
-        None,
-    )
-    if activity is None:
-        return None
-    recorded = dict(
-        dict(activity.get("choices") or {}).get("source_save_effect") or {}
-    )
-    if not recorded:
-        return None
-    if recorded.get("kind") != "intellect_devourer_devour_intellect_2014":
-        raise StatblockImportError("unsupported source saving-throw action contract")
-    return deepcopy(recorded)
-
-
-def area_save_damage_spec(
-    sheet: dict[str, Any],
-    activity_id: str,
-) -> dict[str, Any] | None:
-    """Return a strict source-derived area save-damage contract."""
-
-    activity = next(
-        (
-            item
-            for item in dict(sheet.get("content") or {}).get("activities", [])
-            if str(item.get("id") or "") == activity_id
-        ),
-        None,
-    )
-    if activity is None:
-        return None
-    recorded = dict(
-        dict(activity.get("choices") or {}).get("area_save_damage") or {}
-    )
-    if not recorded:
-        return None
-    if recorded.get("kind") not in {
-        "visible_point_radius_save_damage",
-        "self_line_save_damage",
-        "self_cone_save_damage",
-    }:
-        raise StatblockImportError("unsupported area saving-throw damage contract")
-    save_formula = recorded.get("save_dc_formula")
-    if save_formula is not None:
-        if not isinstance(save_formula, Mapping) or set(save_formula) != {
-            "base",
-            "ability",
-            "include_proficiency",
-        }:
-            raise StatblockImportError("area save DC formula is invalid")
-        ability = str(save_formula.get("ability") or "").casefold()
-        derived = derive_character_sheet(sheet)
-        modifiers = dict(derived.get("ability_modifiers") or {})
-        if ability not in modifiers:
-            raise StatblockImportError("area save DC formula references an unknown ability")
-        recorded["save_dc"] = (
-            int(save_formula.get("base", 0) or 0)
-            + int(modifiers[ability])
-            + (
-                int(derived.get("proficiency_bonus", 0) or 0)
-                if save_formula.get("include_proficiency") is True
-                else 0
-            )
-        )
-    damage_by_level = recorded.get("damage_formula_by_level")
-    if damage_by_level is not None:
-        if not isinstance(damage_by_level, Mapping) or not damage_by_level:
-            raise StatblockImportError("area damage scaling must be a non-empty object")
-        total_level = int(dict(sheet.get("progression") or {}).get("level", 0) or 0)
-        thresholds = sorted(
-            int(level)
-            for level in damage_by_level
-            if str(level).isdigit() and 1 <= int(level) <= 20
-        )
-        if len(thresholds) != len(damage_by_level) or not thresholds:
-            raise StatblockImportError("area damage scaling levels are invalid")
-        eligible = [level for level in thresholds if level <= max(1, total_level)]
-        threshold = max(eligible or [min(thresholds)])
-        recorded["damage_formula"] = str(damage_by_level[str(threshold)])
-    return deepcopy(recorded)
-
-
-def frightful_presence_spec(
-    sheet: dict[str, Any],
-    activity_id: str,
-) -> dict[str, Any] | None:
-    """Return the exact standard Frightful Presence contract."""
-
-    activity = next(
-        (
-            item
-            for item in dict(sheet.get("content") or {}).get("activities", [])
-            if str(item.get("id") or "") == activity_id
-        ),
-        None,
-    )
-    if activity is None:
-        return None
-    recorded = dict(
-        dict(activity.get("choices") or {}).get("frightful_presence") or {}
-    )
-    if not recorded:
-        return None
-    if recorded.get("kind") != "frightful_presence_2014":
-        raise StatblockImportError("unsupported Frightful Presence contract")
-    return deepcopy(recorded)
 
 
 def legendary_action_spec(
@@ -2633,168 +1563,10 @@ def legendary_action_spec(
     return deepcopy(recorded)
 
 
-def _compile_area_save_damage(description: str) -> dict[str, Any] | None:
-    """Compile the common 2014 point/radius saving-throw damage grammar."""
-
-    source_excerpt = " ".join(str(description or "").split())
-    match = re.fullmatch(
-        (
-            r".+?\bat a point (?:it|he|she|they) can see within "
-            r"(?P<range>\d+) feet of (?:it|him|her|them)\. "
-            r"Each creature within (?P<radius>\d+) feet of that point must "
-            r"make a DC (?P<dc>\d+) "
-            r"(?P<ability>Strength|Dexterity|Constitution|Intelligence|Wisdom|Charisma) "
-            r"saving throw, taking (?P<average>\d+) "
-            r"\((?P<damage>\d+d\d+(?:\s*[+\-]\s*\d+)?)\) "
-            r"(?P<damage_type>[A-Za-z]+) damage on a failed save, or half as "
-            r"much damage on a successful one\."
-        ),
-        source_excerpt,
-        flags=re.IGNORECASE,
-    )
-    if match is None:
-        return None
-    damage_type = match.group("damage_type").casefold()
-    if damage_type not in DAMAGE_TYPES:
-        return None
-    source_range = int(match.group("range"))
-    radius = int(match.group("radius"))
-    save_dc = int(match.group("dc"))
-    average = int(match.group("average"))
-    if (
-        not 1 <= source_range <= 5_000
-        or not 1 <= radius <= 1_000
-        or not 1 <= save_dc <= 40
-        or average < 1
-    ):
-        return None
-    return {
-        "kind": "visible_point_radius_save_damage",
-        "origin": {
-            "kind": "visible_point",
-            "range_ft": source_range,
-        },
-        "area": {
-            "shape": "radius",
-            "radius_ft": radius,
-        },
-        "targets": "each_creature",
-        "save_ability": match.group("ability").casefold(),
-        "save_dc": save_dc,
-        "damage_formula": match.group("damage").replace(" ", "").casefold(),
-        "average_damage": average,
-        "damage_type": damage_type,
-        "half_on_success": True,
-        "save_source_kind": "magical_effect",
-        "source_excerpt": source_excerpt,
-    }
 
 
-def _compile_self_line_save_damage(description: str) -> dict[str, Any] | None:
-    """Compile the standard breath-weapon line/save/half-damage grammar."""
-
-    source_excerpt = " ".join(str(description or "").split())
-    match = re.fullmatch(
-        (
-            r".+?\b(?:in|into) a (?P<length>\d+)-foot line that is "
-            r"(?P<width>\d+) feet wide\. Each creature in that line must make "
-            r"a DC (?P<dc>\d+) "
-            r"(?P<ability>Strength|Dexterity|Constitution|Intelligence|Wisdom|Charisma) "
-            r"saving throw, taking (?P<average>\d+) "
-            r"\((?P<damage>\d+d\d+(?:\s*[+\-]\s*\d+)?)\) "
-            r"(?P<damage_type>[A-Za-z]+) damage on a failed save, or half as "
-            r"much damage on a successful one\."
-        ),
-        source_excerpt,
-        flags=re.IGNORECASE,
-    )
-    if match is None:
-        return None
-    damage_type = match.group("damage_type").casefold()
-    if damage_type not in DAMAGE_TYPES:
-        return None
-    length = int(match.group("length"))
-    width = int(match.group("width"))
-    save_dc = int(match.group("dc"))
-    average = int(match.group("average"))
-    if (
-        not 1 <= length <= 5_000
-        or not 1 <= width <= 1_000
-        or not 1 <= save_dc <= 40
-        or average < 1
-    ):
-        return None
-    return {
-        "kind": "self_line_save_damage",
-        "origin": {"kind": "self"},
-        "area": {
-            "shape": "line",
-            "length_ft": length,
-            "width_ft": width,
-        },
-        "targets": "each_creature",
-        "save_ability": match.group("ability").casefold(),
-        "save_dc": save_dc,
-        "damage_formula": match.group("damage").replace(" ", "").casefold(),
-        "average_damage": average,
-        "damage_type": damage_type,
-        "half_on_success": True,
-        "save_source_kind": "nonmagical_effect",
-        "source_excerpt": source_excerpt,
-    }
 
 
-def _compile_frightful_presence(description: str) -> dict[str, Any] | None:
-    """Compile the 2014 dragon Frightful Presence action."""
-
-    source_excerpt = " ".join(str(description or "").split())
-    match = re.fullmatch(
-        (
-            r"Each creature of the [A-Za-z][A-Za-z '\-]*'s choice that is within "
-            r"(?P<range>\d+) feet of the [A-Za-z][A-Za-z '\-]* and aware of it "
-            r"must succeed on a DC (?P<dc>\d+) Wisdom saving throw or become "
-            r"frightened for (?P<duration>\d+) minute(?:s)?\. A creature can "
-            r"repeat the saving throw at the end of each of its turns, ending "
-            r"the effect on itself on a success\. If a creature's saving throw "
-            r"is successful or the effect ends for it, the creature is immune "
-            r"to the [A-Za-z][A-Za-z '\-]*'s Frightful Presence for the next "
-            r"(?P<immunity>\d+) hours\."
-        ),
-        source_excerpt,
-        flags=re.IGNORECASE,
-    )
-    if match is None:
-        return None
-    range_ft = int(match.group("range"))
-    save_dc = int(match.group("dc"))
-    duration_minutes = int(match.group("duration"))
-    immunity_hours = int(match.group("immunity"))
-    if (
-        not 1 <= range_ft <= 5_000
-        or not 1 <= save_dc <= 40
-        or not 1 <= duration_minutes <= 1_440
-        or not 1 <= immunity_hours <= 24 * 365
-    ):
-        return None
-    return {
-        "kind": "frightful_presence_2014",
-        "range_ft": range_ft,
-        "targets": "source_choice",
-        "requires_awareness": True,
-        "save_ability": "wisdom",
-        "save_dc": save_dc,
-        "save_source_kind": "nonmagical_effect",
-        "condition": "frightened",
-        "duration": {"period": "minute", "remaining": duration_minutes},
-        "repeat_save_timing": "turn_end",
-        "ends_on_repeat_save_success": True,
-        "immunity_on_success_or_end": {
-            "period": "hour",
-            "remaining": immunity_hours,
-            "source_scoped": True,
-        },
-        "source_excerpt": source_excerpt,
-    }
 
 
 def _legendary_action_pool(markdown: str) -> dict[str, Any] | None:
@@ -2834,7 +1606,7 @@ def _compile_legendary_action(
     pool: dict[str, Any],
     weapons: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
-    """Compile standard check, weapon, and wing legendary-action options."""
+    """Compile generic check and weapon legendary-action options."""
 
     cost_match = re.search(
         r"\(\s*Costs?\s+(?P<cost>\d+)\s+Actions?\s*\)",
@@ -2885,39 +1657,6 @@ def _compile_legendary_action(
                     or "melee"
                 ),
             }
-    wing = re.fullmatch(
-        (
-            r"The [A-Za-z][A-Za-z '\-]* beats its wings\. Each creature within "
-            r"(?P<radius>\d+) feet of the [A-Za-z][A-Za-z '\-]* must succeed "
-            r"on a DC (?P<dc>\d+) Dexterity saving throw or take "
-            r"(?P<average>\d+) \((?P<damage>\d+d\d+(?:\s*[+\-]\s*\d+)?)\) "
-            r"(?P<damage_type>[A-Za-z]+) damage and be knocked prone\. The "
-            r"[A-Za-z][A-Za-z '\-]* can then fly up to half its flying speed\s*\."
-        ),
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    if wing is not None and wing.group("damage_type").casefold() in DAMAGE_TYPES:
-        effect = {
-            "kind": "wing_attack_2014",
-            "area": {
-                "shape": "self_radius",
-                "radius_ft": int(wing.group("radius")),
-                "targets": "each_other_creature",
-            },
-            "save_ability": "dexterity",
-            "save_dc": int(wing.group("dc")),
-            "save_source_kind": "nonmagical_effect",
-            "damage_formula": wing.group("damage").replace(" ", "").casefold(),
-            "average_damage": int(wing.group("average")),
-            "damage_type": wing.group("damage_type").casefold(),
-            "damage_on_success": "none",
-            "condition_on_failure": "prone",
-            "movement_after": {
-                "mode": "fly",
-                "maximum": "half_fly_speed",
-            },
-        }
     if effect is None:
         return None
     return {
@@ -2929,260 +1668,10 @@ def _compile_legendary_action(
     }
 
 
-def _recharge_contract(entry_name: str) -> dict[str, Any] | None:
-    match = re.search(
-        r"\(\s*Recharge\s+(?P<minimum>[1-6])(?:\s*[-–]\s*(?P<maximum>[1-6]))?\s*\)",
-        entry_name,
-        flags=re.IGNORECASE,
-    )
-    if match is None:
-        return None
-    minimum = int(match.group("minimum"))
-    maximum = int(match.group("maximum") or minimum)
-    if minimum > maximum:
-        raise StatblockImportError("Recharge action has a descending d6 success range")
-    return {
-        "kind": "d6_turn_start",
-        "minimum": minimum,
-        "maximum": maximum,
-        "source_marker": match.group(0),
-    }
 
 
-def source_contest_effect_spec(
-    sheet: dict[str, Any],
-    activity_id: str,
-) -> dict[str, Any] | None:
-    """Return a reviewed, deterministic source ability-contest action contract."""
-
-    activity = next(
-        (
-            item
-            for item in dict(sheet.get("content") or {}).get("activities", [])
-            if str(item.get("id") or "") == activity_id
-        ),
-        None,
-    )
-    if activity is None:
-        return None
-    recorded = dict(
-        dict(activity.get("choices") or {}).get("source_contest_effect") or {}
-    )
-    if not recorded:
-        return None
-    if recorded.get("kind") != "intellect_devourer_body_thief_2014":
-        raise StatblockImportError("unsupported source ability-contest action contract")
-    return deepcopy(recorded)
 
 
-def _structure_intellect_devourer_actions(
-    sheet: dict[str, Any],
-    warnings: list[str],
-) -> None:
-    """Structure the 2014 Intellect Devourer actions and mixed Multiattack."""
-
-    activities = list(sheet["content"]["activities"])
-    devour = next(
-        (
-            item
-            for item in activities
-            if str(item.get("name") or "").strip().casefold() == "devour intellect"
-        ),
-        None,
-    )
-    multiattack = next(
-        (
-            item
-            for item in activities
-            if is_multiattack_activity(item)
-        ),
-        None,
-    )
-    claws = next(
-        (
-            item
-            for item in sheet["inventory"]["items"]
-            if str(item.get("name") or "").strip().casefold() == "claws"
-            and item.get("kind") == "weapon"
-        ),
-        None,
-    )
-    body_thief = next(
-        (
-            item
-            for item in activities
-            if str(item.get("name") or "").strip().casefold() == "body thief"
-        ),
-        None,
-    )
-    if body_thief is not None:
-        body_description = " ".join(
-            str(body_thief.get("description") or "").split()
-        )
-        body_match_text = body_description.replace("*", "")
-        body_match = re.fullmatch(
-            r"The intellect devourer initiates an Intelligence contest with an "
-            r"incapacitated humanoid within (?P<range>\d+) feet of it\. If it "
-            r"wins the contest, the intellect devourer magically consumes the "
-            r"target's brain, teleports into the target's skull, and takes control "
-            r"of the target's body\. While inside a creature, the intellect "
-            r"devourer has total cover against attacks and other effects originating "
-            r"outside its host\. The intellect devourer retains its Intelligence, "
-            r"Wisdom, and Charisma scores, as well as its understanding of Deep "
-            r"Speech, its telepathy, and its traits\. It otherwise adopts the "
-            r"target's statistics\. It knows everything the creature knew, including "
-            r"spells and languages\. If the host body drops to 0 hit points, the "
-            r"intellect devourer must leave it\. A protection from evil and good "
-            r"spell cast on the body drives the intellect devourer out\. The "
-            r"intellect devourer is also forced out if the target regains its "
-            r"devoured brain by means of a wish\. By spending 5 feet of its movement, "
-            r"the intellect devourer can voluntarily leave the body, teleporting to "
-            r"the nearest unoccupied space within 5 feet of it\. The body then dies, "
-            r"unless its brain is restored within 1 round\.",
-            body_match_text,
-            flags=re.IGNORECASE,
-        )
-        if body_match is not None:
-            choices = dict(body_thief.get("choices") or {})
-            choices.pop("manual_ruling", None)
-            body_thief["choices"] = {
-                **choices,
-                "source_contest_effect": {
-                    "kind": "intellect_devourer_body_thief_2014",
-                    "range_ft": int(body_match.group("range")),
-                    "target_count": 1,
-                    "target_requirements": ["incapacitated", "humanoid"],
-                    "contest": {
-                        "source_ability": "intelligence",
-                        "target_ability": "intelligence",
-                        "ties": "no_winner",
-                    },
-                    "success": {
-                        "brain_consumed": True,
-                        "source_inside_host": True,
-                        "source_total_cover": True,
-                        "source_retains": [
-                            "intelligence",
-                            "wisdom",
-                            "charisma",
-                            "deep_speech",
-                            "telepathy",
-                            "traits",
-                        ],
-                        "source_adopts": "target_statistics_otherwise",
-                        "knowledge_transfer": "all_target_knowledge",
-                        "host_zero_hp": "source_must_leave",
-                    },
-                    "source_excerpt": body_description,
-                },
-            }
-            body_thief["mechanic_refs"] = sorted(
-                {
-                    *list(body_thief.get("mechanic_refs") or []),
-                    "dnd5e.core.activity.source_contest_effect",
-                }
-            )
-            warnings[:] = [
-                warning
-                for warning in warnings
-                if warning
-                != "Body Thief: descriptive action is not automatically settled"
-            ]
-            warnings.append(
-                "Body Thief: protection, wish, and voluntary exit require DM settlement"
-            )
-    if devour is None:
-        return
-    description = " ".join(str(devour.get("description") or "").split())
-    match = re.fullmatch(
-        r"The intellect devourer targets one creature it can see within "
-        r"(?P<range>\d+) feet of it that has a brain\. The target must succeed "
-        r"on a DC (?P<dc>\d+) Intelligence saving throw against this magic or "
-        r"take \d+ \((?P<damage>\d+d\d+)\) psychic damage\. Also on a failure, "
-        r"roll (?P<secondary>\d+d\d+): If the total equals or exceeds the target's "
-        r"Intelligence score, that score is reduced to 0\. The target is stunned "
-        r"until it regains at least one point of Intelligence\.",
-        description,
-        flags=re.IGNORECASE,
-    )
-    if match is None:
-        return
-    choices = dict(devour.get("choices") or {})
-    choices.pop("manual_ruling", None)
-    devour["choices"] = {
-        **choices,
-        "source_save_effect": {
-            "kind": "intellect_devourer_devour_intellect_2014",
-            "range_ft": int(match.group("range")),
-            "target_count": 1,
-            "target_requirement": "has_brain",
-            "save": {
-                "ability": "intelligence",
-                "dc": int(match.group("dc")),
-            },
-            "failure": {
-                "damage_expression": match.group("damage").lower(),
-                "damage_type": "psychic",
-                "secondary_roll": match.group("secondary").lower(),
-                "secondary_threshold": "target_intelligence_score",
-                "ability_override": {
-                    "ability": "intelligence",
-                    "score": 0,
-                },
-                "condition": "stunned",
-                "ends_when": "target_intelligence_score_at_least_1",
-            },
-            "source_excerpt": description,
-        },
-    }
-    devour["mechanic_refs"] = sorted(
-        {
-            *list(devour.get("mechanic_refs") or []),
-            "dnd5e.core.activity.source_save_effect",
-        }
-    )
-    warnings[:] = [
-        warning
-        for warning in warnings
-        if warning != "Devour Intellect: descriptive action is not automatically settled"
-    ]
-    if multiattack is None or claws is None:
-        return
-    multiattack_description = " ".join(
-        str(multiattack.get("description") or "").split()
-    )
-    if not re.fullmatch(
-        r"The intellect devourer makes one attack with its claws and uses "
-        r"Devour Intellect\.",
-        multiattack_description,
-        flags=re.IGNORECASE,
-    ):
-        return
-    multiattack["choices"] = {
-        "multiattack_options": [
-            {
-                "id": "claws-and-devour-intellect",
-                "attacks": [
-                    {
-                        "weapon_id": str(claws["id"]),
-                        "attack_mode": "melee",
-                        "count": 1,
-                    }
-                ],
-                "activities": [
-                    {
-                        "activity_id": str(devour["id"]),
-                        "count": 1,
-                    }
-                ],
-            }
-        ]
-    }
-    warnings[:] = [
-        warning
-        for warning in warnings
-        if warning != "Multiattack: Multiattack composition requires a DM ruling"
-    ]
 
 
 def _parse_srd_statblock(
@@ -3489,6 +1978,7 @@ def _parse_srd_statblock(
             unresolved_multiattacks.add(entry_name)
             descriptive.append(("actions", entry_name, description))
     for section, entry_name, description in descriptive:
+        recharge = _recharge_contract(entry_name)
         if "reaction" in section:
             activation = "reaction"
         elif "bonus action" in section:
@@ -3500,6 +1990,11 @@ def _parse_srd_statblock(
             activation = "special"
         elif "action" in section:
             activation = "action"
+        elif recharge is not None:
+            # A page or column boundary can separate an action from its heading.
+            # The strict printed d6 Recharge marker is itself sufficient to show
+            # that this is a usable activity, without interpreting its effect.
+            activation = "action"
         else:
             activation = "passive"
         entry = {
@@ -3510,166 +2005,6 @@ def _parse_srd_statblock(
             "activation": {"type": activation, "cost": 1 if activation != "passive" else 0},
             "rule_refs": refs,
         }
-        if entry_name in unresolved_multiattacks:
-            entry["mechanic_refs"] = [MULTIATTACK_MECHANIC_ID]
-        source_trait_description = (
-            description.split("\n\n", 1)[0].strip()
-            if activation == "reaction"
-            else description
-        )
-        source_trait = (
-            _source_trait_from_description(source_trait_description)
-            if edition == "2014"
-            else None
-        )
-        if source_trait is not None:
-            if source_trait_description != description:
-                entry["description"] = source_trait_description
-                normalization_notes.append(
-                    f"{entry_name}: trailing creature prose excluded from trait settlement"
-                )
-            if source_trait["kind"] in {
-                "aggressive",
-                "cunning_action",
-                "ignited_illumination",
-            }:
-                activation = "bonus_action"
-                entry["activation"] = {"type": activation, "cost": 1}
-            elif source_trait["kind"] == "battle_cry":
-                activation = "action"
-                entry["activation"] = {"type": activation, "cost": 1}
-            if source_trait["kind"] == "aggressive":
-                entry["id"] = "dnd5e.core.monster.aggressive"
-            elif source_trait["kind"] == "cunning_action":
-                entry["id"] = "dnd5e.content.srd2014.feature.rogue-cunning-action"
-            elif source_trait["kind"] == "battle_cry":
-                entry["id"] = "dnd5e.core.monster.battle-cry"
-                daily_uses = re.search(
-                    r"\((?P<count>\d+)\s*/\s*Day\)",
-                    entry_name,
-                    flags=re.IGNORECASE,
-                )
-                if daily_uses is None:
-                    raise StatblockImportError(
-                        "Battle Cry needs an explicit uses-per-day source marker"
-                    )
-                count = int(daily_uses.group("count"))
-                entry["uses"] = {
-                    "label": entry_name,
-                    "value": count,
-                    "max": count,
-                    "recovers_on": "long_rest",
-                    "source_key": source_key,
-                }
-            elif source_trait["kind"] == "death_burst":
-                entry["id"] = "dnd5e.core.monster.death-burst"
-            elif source_trait["kind"] == "ignited_illumination":
-                entry["id"] = "dnd5e.core.monster.ignited-illumination"
-            entry["activation"]["trigger"] = {
-                "regeneration": "start of its turn",
-                "pack_tactics": "attack roll",
-                "sunlight_sensitivity": "attack roll or sight-based Perception check",
-                "keen_perception": "hearing- or sight-based Perception check",
-                "magic_resistance": "saving throw against a spell or magical effect",
-                "evasion": "Dexterity saving throw for half damage",
-                "save_advantage_against_conditions": (
-                    "saving throw against a named condition"
-                ),
-                "breathing_media": "environmental breathing requirement",
-                "assassinate": "attack roll during its first turn",
-                "aggressive": "bonus action on its turn",
-                "cunning_action": "bonus action on its turn",
-                "included_weapon_damage": "weapon hit; included in weapon actions",
-                "heated_body": "contact or a melee hit within range",
-                "heated_weapons": "qualifying weapon hit; included in weapon actions",
-                "battle_cry": "action on its turn",
-                "death_burst": "when it dies",
-                "ignited_illumination": "bonus action on its turn",
-                "sneak_attack": "eligible weapon hit once per turn",
-                "amorphous": "movement through narrow spaces",
-                "spider_climb": "climb movement",
-                "corrosive_form": "contact or a melee hit within range",
-                "split": "subjected to a listed damage type",
-            }[str(source_trait["kind"])]
-            entry["choices"] = {"source_trait": source_trait}
-        reaction_description = (
-            description.split("\n\n", 1)[0].strip()
-            if activation == "reaction"
-            else description
-        )
-        reaction_settlement = (
-            parry_reaction_settlement(reaction_description)
-            if activation == "reaction" and edition == "2014"
-            else None
-        )
-        reaction_defense = (
-            reaction_settlement[0] if reaction_settlement is not None else None
-        )
-        if reaction_defense is not None:
-            settled_description = reaction_settlement[1]
-            trailing_reaction_prose = reaction_settlement[2]
-            if reaction_settlement[3]:
-                normalization_notes.append(
-                    f"{entry_name}: standard reaction OCR word splits repaired"
-                )
-            if (
-                trailing_reaction_prose
-                or reaction_description != description
-                or reaction_settlement[3]
-            ):
-                entry["description"] = settled_description
-            if trailing_reaction_prose or reaction_description != description:
-                normalization_notes.append(
-                    f"{entry_name}: trailing creature prose excluded from reaction settlement"
-                )
-            entry["activation"]["trigger"] = "hit by a melee attack"
-            entry["choices"] = {"reaction_defense": reaction_defense}
-        area_save_damage = None
-        if activation == "action" and edition == "2014":
-            area_save_damage = (
-                _compile_area_save_damage(description)
-                or _compile_self_line_save_damage(description)
-            )
-        if area_save_damage is not None:
-            choices = dict(entry.get("choices") or {})
-            choices["area_save_damage"] = area_save_damage
-            recharge = _recharge_contract(entry_name)
-            if recharge is not None:
-                choices["recharge"] = recharge
-                entry["uses"] = {
-                    "label": entry_name,
-                    "value": 1,
-                    "max": 1,
-                    "recovers_on": "manual",
-                    "source_key": source_key,
-                }
-            entry["choices"] = choices
-            entry["mechanic_refs"] = sorted(
-                {
-                    *list(entry.get("mechanic_refs") or []),
-                    "dnd5e.core.activity.area_save_damage",
-                    *(
-                        ["dnd5e.core.activity.recharge"]
-                        if recharge is not None
-                        else []
-                    ),
-                }
-            )
-        frightful_presence = (
-            _compile_frightful_presence(description)
-            if activation == "action" and edition == "2014"
-            else None
-        )
-        if frightful_presence is not None:
-            choices = dict(entry.get("choices") or {})
-            choices["frightful_presence"] = frightful_presence
-            entry["choices"] = choices
-            entry["mechanic_refs"] = sorted(
-                {
-                    *list(entry.get("mechanic_refs") or []),
-                    "dnd5e.core.activity.frightful_presence",
-                }
-            )
         legendary_action = (
             _compile_legendary_action(
                 entry_name,
@@ -3696,13 +2031,7 @@ def _parse_srd_statblock(
                     "dnd5e.core.activity.legendary_action",
                 }
             )
-        if (
-            source_trait is None
-            and reaction_defense is None
-            and area_save_damage is None
-            and frightful_presence is None
-            and legendary_action is None
-        ):
+        if legendary_action is None:
             entry["choices"] = {
                 "manual_ruling": {
                     "kind": (
@@ -3714,14 +2043,18 @@ def _parse_srd_statblock(
                     "source_excerpt": description,
                 }
             }
+            if recharge is not None:
+                entry["choices"]["recharge"] = recharge
+                entry["uses"] = {
+                    "label": entry_name,
+                    "value": 1,
+                    "max": 1,
+                    "recovers_on": "manual",
+                    "source_key": source_key,
+                }
+                entry["mechanic_refs"] = ["dnd5e.core.activity.recharge"]
         sheet["content"]["activities" if activation != "passive" else "features"].append(entry)
-        if (
-            source_trait is None
-            and reaction_defense is None
-            and area_save_damage is None
-            and frightful_presence is None
-            and legendary_action is None
-        ):
+        if legendary_action is None:
             warnings.append(
                 f"{entry_name}: Multiattack composition requires a DM ruling"
                 if entry_name in unresolved_multiattacks
@@ -3731,72 +2064,7 @@ def _parse_srd_statblock(
                 )
             )
 
-    included_damage_traits = [
-        dict(dict(item.get("choices") or {}).get("source_trait") or {})
-        for item in sheet["content"]["features"]
-        if dict(dict(item.get("choices") or {}).get("source_trait") or {}).get(
-            "kind"
-        )
-        == "included_weapon_damage"
-    ]
-    for source_trait in included_damage_traits:
-        formula = str(source_trait.get("damage_formula") or "")
-        if not weapons or any(
-            formula
-            not in {
-                str(part.get("damage_formula") or "").casefold()
-                for part in dict(weapon.get("mechanics") or {}).get(
-                    "additional_damage", []
-                )
-            }
-            for weapon in weapons
-        ):
-            raise StatblockImportError(
-                "included weapon damage is missing from one or more weapon actions"
-            )
-
     validated = validate_character_sheet(sheet)
-    validated_weapons = [
-        item
-        for item in dict(validated.get("inventory") or {}).get("items", [])
-        if isinstance(item, dict) and item.get("kind") == "weapon"
-    ]
-    heated_weapon_traits = [
-        dict(dict(item.get("choices") or {}).get("source_trait") or {})
-        for item in sheet["content"]["features"]
-        if dict(dict(item.get("choices") or {}).get("source_trait") or {}).get(
-            "kind"
-        )
-        == "heated_weapons"
-    ]
-    for source_trait in heated_weapon_traits:
-        material = str(source_trait.get("required_weapon_material") or "")
-        expected_part = {
-            "damage_formula": str(source_trait.get("damage_formula") or ""),
-            "damage_bonus": 0,
-            "damage_type": str(source_trait.get("damage_type") or ""),
-        }
-        qualifying_weapons = [
-            weapon
-            for weapon in validated_weapons
-            if material
-            in {
-                str(item).casefold()
-                for item in dict(weapon.get("mechanics") or {}).get("materials", [])
-            }
-            and str(
-                dict(weapon.get("mechanics") or {}).get("attack_type") or ""
-            ).casefold()
-            == "melee"
-        ]
-        if not qualifying_weapons or any(
-            expected_part
-            not in dict(weapon.get("mechanics") or {}).get("additional_damage", [])
-            for weapon in qualifying_weapons
-        ):
-            raise StatblockImportError(
-                "heated weapon damage is missing from a qualifying weapon action"
-            )
 
     summary = f"{identity_text}; CR {challenge or 'unrecorded'}"
     return ParsedStatblock(
@@ -4214,7 +2482,6 @@ def apply_statblock_variant(
         "spell_replacements",
         "expend_all_spell_slots",
         "add_features",
-        "relentless_endurance",
         "remove_actions",
         "remove_items",
         "remove_activities",
@@ -4548,83 +2815,6 @@ def apply_statblock_variant(
                 }
             )
             added_feature_ids.add(feature_id)
-
-    if "relentless_endurance" in variant:
-        raw_feature = variant["relentless_endurance"]
-        if not isinstance(raw_feature, dict):
-            raise StatblockImportError("relentless_endurance must be an object")
-        unknown_feature_fields = set(raw_feature) - {
-            "feature_id",
-            "source_excerpt",
-        }
-        if unknown_feature_fields:
-            raise StatblockImportError(
-                "unsupported relentless_endurance fields: "
-                f"{sorted(unknown_feature_fields)}"
-            )
-        feature_id = str(raw_feature.get("feature_id") or "").strip()
-        source_excerpt = str(raw_feature.get("source_excerpt") or "").strip()
-        if not feature_id or _slug(feature_id) != feature_id:
-            raise StatblockImportError(
-                "relentless_endurance feature_id must be a lowercase slug"
-            )
-        normalized_excerpt = " ".join(source_excerpt.split())
-        mechanically_complete = (
-            re.search(
-                r"(?i)\bwhen reduced to 0 hit points?\b",
-                normalized_excerpt,
-            )
-            is not None
-            and re.search(
-                r"(?i)\bdrops? to 1 hit point instead\b",
-                normalized_excerpt,
-            )
-            is not None
-            and re.search(
-                r"(?i)\bcan(?:no|'?t) do this again until "
-                r"(?:he|she|it|they) finishes? a long rest\b",
-                normalized_excerpt,
-            )
-            is not None
-        )
-        if not mechanically_complete:
-            raise StatblockImportError(
-                "relentless_endurance source_excerpt is not mechanically complete"
-            )
-        features = result["content"]["features"]
-        if any(str(item.get("id") or "") == feature_id for item in features):
-            raise StatblockImportError(
-                "relentless_endurance feature_id duplicates an existing feature"
-            )
-        features.append(
-            {
-                "id": feature_id,
-                "name": "Relentless Endurance",
-                "source_key": source_ref,
-                "description": source_excerpt,
-                "activation": {
-                    "type": "passive",
-                    "cost": 0,
-                    "trigger": "reduced to 0 hit points",
-                },
-                "uses": {
-                    "label": "uses",
-                    "value": 1,
-                    "max": 1,
-                    "recovers_on": "long_rest",
-                },
-                "choices": {
-                    "source_trait": {
-                        "kind": "relentless_endurance",
-                        "trigger": "reduced_to_zero",
-                        "drop_to_hit_points": 1,
-                        "requires_not_killed_outright": True,
-                        "automatic": True,
-                    }
-                },
-                "rule_refs": list(source_refs),
-            }
-        )
 
     items = list(result["inventory"]["items"])
     remove_actions = variant.get("remove_actions", [])
@@ -5370,6 +3560,14 @@ def apply_reviewed_statblock_fill(
                 )
             options.append({"id": option_id, "attacks": attacks})
         activity["choices"] = {"multiattack_options": options}
+        activity["mechanic_refs"] = list(
+            dict.fromkeys(
+                [
+                    *list(activity.get("mechanic_refs") or []),
+                    MULTIATTACK_MECHANIC_ID,
+                ]
+            )
+        )
         if manual_ruling.get("kind") == "descriptive_activity":
             resolved_warnings.append(
                 f"{activity['name']}: Multiattack composition requires a DM ruling"
@@ -7175,10 +5373,10 @@ def finalize_imported_actor_rulings(
     """Persist direct Agent-ruling boundaries on imported actor content.
 
     Statblock normalization deliberately does not guess arbitrary passive,
-    spell, or action semantics from prose.  A portable addon nevertheless must
-    not postpone deciding *how* those entries are resolved until first use.
-    This pass records the exact excerpt and the already-reviewed Agent boundary
-    while leaving engine-native mechanics and authored primitive plans intact.
+    spell, or action semantics from prose. This pass records the exact excerpt
+    and the first-use Agent boundary while leaving engine-native standard
+    mechanics and already-authored generic plans intact. The first Agent that
+    needs the card can compile and persist one source-bound resolution plan.
     """
 
     value = deepcopy(sheet)
@@ -7238,8 +5436,9 @@ def finalize_imported_actor_rulings(
                     "reason": (
                         "This imported actor-card entry has source-specific semantics "
                         "without an exact registered kernel mechanic or primitive plan. "
-                        "Resolve the cited text through the Agent-as-DM boundary and "
-                        "ordinary public engine tools."
+                        "Have the Agent compile the cited text into a source-bound "
+                        "content solution, then execute it through ordinary public "
+                        "engine tools."
                     ),
                     "source_excerpt": " ".join(effect.split())[:4000],
                     "default_resolver": "agent",
@@ -7260,7 +5459,7 @@ def finalize_imported_actor_rulings(
     for item in items:
         mechanics = dict(item.get("mechanics") or {})
         effect = str(mechanics.get("on_hit_effect") or "").strip()
-        if not effect or mechanics.get("on_hit_resolution") is not None:
+        if not effect:
             continue
         if str(item.get("id") or "") in settled_cards:
             continue
@@ -7290,13 +5489,13 @@ def finalize_imported_actor_rulings(
                 "kind": "source_bound_import_resolution",
                 "reason": (
                     "This imported item has a source-specific on-hit effect without "
-                    "an exact registered kernel mechanic or primitive plan. Resolve "
-                    "the cited text through the Agent-as-DM on-hit ruling boundary "
-                    "and ordinary public engine tools."
+                    "an exact registered kernel mechanic or persisted resolution plan. "
+                    "Have the Agent compile the cited source into a source-bound "
+                    "content solution, then execute it through ordinary public tools."
                 ),
                 "source_excerpt": " ".join(effect.split())[:4000],
                 "default_resolver": "agent",
-                "ruling_kind": "attack_on_hit_effect",
+                "ruling_kind": "agent_dm_adjudication",
                 "policy_ref": "actor_card.import.v1",
                 "requires_external_input_only_for": [],
             }
