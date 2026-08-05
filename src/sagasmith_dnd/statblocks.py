@@ -6014,7 +6014,9 @@ def _ocr_ability_table(
     table cell, boxes such as ``DEX CON``, or one box containing the whole
     score row.  The printed left-to-right order is authoritative; this helper
     never supplies a missing score or reorders a noncanonical row unless an
-    upstream, source-corroborated Agent review names the exact missing column.
+    upstream, source-corroborated Agent review names an exact missing or damaged
+    column. Reviewed values replace only their named columns; every other source
+    cell must still form one complete canonical row.
     """
 
     label_blocks: list[tuple[dict[str, Any], list[str]]] = []
@@ -6066,7 +6068,11 @@ def _ocr_ability_table(
             )
         reviewed_values[ability] = parsed[0][0]
     scores = [value for _block, values in score_blocks for value in values]
-    if len(scores) + len(reviewed_values) != len(_OCR_ABILITY_ORDER):
+    complete_source_row = len(scores) == len(_OCR_ABILITY_ORDER)
+    fills_missing_source_cells = (
+        len(scores) + len(reviewed_values) == len(_OCR_ABILITY_ORDER)
+    )
+    if not complete_source_row and not fills_missing_source_cells:
         raise StatblockImportError(
             "OCR statblock requires exactly six source ability scores"
         )
@@ -6076,9 +6082,11 @@ def _ocr_ability_table(
         for token in tokens:
             label_by_ability[token] = block
     value_by_ability: dict[str, dict[str, Any]] = {}
-    remaining_abilities = [
-        ability for ability in _OCR_ABILITY_ORDER if ability not in reviewed_values
-    ]
+    remaining_abilities = (
+        list(_OCR_ABILITY_ORDER)
+        if complete_source_row
+        else [ability for ability in _OCR_ABILITY_ORDER if ability not in reviewed_values]
+    )
     if reviewed_values and all(len(values) == 1 for _block, values in score_blocks):
         for block, values in score_blocks:
             available = [

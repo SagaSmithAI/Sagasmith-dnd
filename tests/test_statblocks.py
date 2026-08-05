@@ -721,6 +721,56 @@ def test_agent_can_supply_one_source_reviewed_missing_ability_score() -> None:
     }
 
 
+def test_agent_can_replace_named_cells_in_a_complete_ocr_ability_row() -> None:
+    def block(text: str, y: int) -> dict:
+        return {
+            "text": text,
+            "confidence": 0.99,
+            "bbox": [40, y, 540, y + 14],
+        }
+
+    layout = {
+        "page_number": 170,
+        "width": 1000,
+        "height": 1400,
+        "blocks": [
+            block("0RTHON", 90),
+            block("Large fiend (devil), lawful evil", 118),
+            block("Armor Class 17 (half plate)", 136),
+            block("Hit Points 105 (10d10 + 50)", 154),
+            block("Speed 30 ft., climb 30 ft.", 172),
+            block("STR DEX CON INT WIS CHA", 200),
+            block("22 (+6) 16 (+3) 20 (+5) 15 (+2) 15 (+2) 16 (+3)", 218),
+            block("Challenge 10 (5,900 XP)", 250),
+            block("ACTIONS", 280),
+            block(
+                "Infernal Dagger. Melee Weapon Attack: +10 to hit, reach 5 ft., "
+                "one target. Hit: 11 (2d4 + 6) slashing damage.",
+                310,
+            ),
+        ],
+    }
+
+    recovered = recover_2014_statblock_from_ocr(
+        layout,
+        name="Orthon",
+        statblock_slot=1,
+        reviewed_ability_scores={"con": "21 (+5)"},
+    )
+
+    assert recovered["critical_facts"]["abilities"] == {
+        "str": "22 (+6)",
+        "dex": "16 (+3)",
+        "con": "21 (+5)",
+        "int": "15 (+2)",
+        "wis": "15 (+2)",
+        "cha": "16 (+3)",
+    }
+    assert recovered["evidence"]["reviewed_ocr_corrections"] == {
+        "abilities": {"con": "21 (+5)"}
+    }
+
+
 def test_agent_can_replace_one_exact_source_reviewed_ocr_line() -> None:
     def block(text: str, y: int) -> dict:
         return {
