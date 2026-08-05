@@ -3,6 +3,8 @@ from copy import deepcopy
 import pytest
 
 from sagasmith_dnd.content_import import (
+    _merge_species_grants,
+    _species_replaced_base_traits,
     _trim_trailing_statblock_lore,
     artifact_with_direct_resolution,
     audit_release_resolution_readiness,
@@ -1318,6 +1320,127 @@ def test_trusted_base_species_fills_subrace_defaults_without_overwriting_differe
     assert artifact["selection_schema_references"][0]["artifact_id"].endswith(
         ".species.dwarf"
     )
+
+
+def test_species_grant_merge_deduplicates_text_by_materializer_identity() -> None:
+    merged = _merge_species_grants(
+        {
+            "skill_proficiencies": ["perception"],
+            "weapon_proficiencies": ["battleaxe"],
+            "tool_options": ["smith's tools"],
+        },
+        {
+            "skill_proficiencies": [" Perception "],
+            "weapon_proficiencies": ["Battleaxe"],
+            "tool_options": ["Smith's Tools"],
+        },
+    )
+
+    assert merged["skill_proficiencies"] == ["perception"]
+    assert merged["weapon_proficiencies"] == ["battleaxe"]
+    assert merged["tool_options"] == ["smith's tools"]
+
+
+def test_species_grant_merge_honors_explicit_base_trait_replacements() -> None:
+    description = (
+        "These traits replace the half-elf's Ability Score Increase, "
+        "Skill Versatility, and Languages given in the Player's Handbook."
+    )
+    replaced = _species_replaced_base_traits(description)
+    merged = _merge_species_grants(
+        {
+            "ability_score_increases": {"charisma": 2},
+            "ability_choice": {"count": 2, "amount": 1, "exclude": ["charisma"]},
+            "languages": ["Common", "Elvish"],
+            "language_choice_count": 1,
+            "language_options": [],
+            "allow_any_language": True,
+            "skill_choice_count": 2,
+            "skill_options": ["Acrobatics", "Arcana"],
+            "allow_any_skill": True,
+            "features": [
+                {"name": "Skill Versatility", "description": "Choose two skills."},
+                {"name": "Fey Ancestry", "description": "Reviewed base trait."},
+            ],
+        },
+        {
+            "ability_score_increases": {"wisdom": 2},
+            "ability_choice": {"count": 1, "amount": 1, "exclude": ["wisdom"]},
+            "languages": ["Common", "Elvish"],
+            "language_choice_count": 1,
+            "language_options": [],
+            "allow_any_language": True,
+            "skill_choice_count": 0,
+            "skill_options": [],
+            "allow_any_skill": False,
+        },
+        replaced_base_traits=replaced,
+    )
+
+    assert {"ability score increase", "skill versatility", "languages"} <= replaced
+    assert merged["ability_score_increases"] == {"wisdom": 2}
+    assert merged["skill_choice_count"] == 0
+    assert merged["skill_options"] == []
+    assert merged["allow_any_skill"] is False
+    assert [item["name"] for item in merged["features"]] == ["Fey Ancestry"]
+
+
+def test_species_replacement_parser_accepts_singular_trait_clause() -> None:
+    replaced = _species_replaced_base_traits(
+        "This trait replaces the Ability Score Increase trait."
+    )
+
+    assert "ability score increase" in replaced
+
+
+def test_species_card_can_replace_named_base_feature_and_owned_grants() -> None:
+    candidate = {
+        "kind": "species",
+        "name": "Tiefling (Hellfire)",
+        "artifact": {
+            "kind": "species",
+            "card": {
+                "name": "Tiefling (Hellfire)",
+                "base_species": "Tiefling",
+                "replaces_base_traits": ["Infernal Legacy"],
+                "description": "This trait replaces one spell of Infernal Legacy.",
+                "grants": {
+                    "features": [{"name": "Hellfire", "description": "Reviewed variant."}],
+                    "spell_grants": [{"name": "Burning Hands", "level": 1}],
+                },
+            },
+        },
+    }
+    reference = {
+        "id": "tiefling",
+        "kind": "species",
+        "card": {
+            "name": "Tiefling",
+            "grants": {
+                "features": [
+                    {"name": "Infernal Legacy", "description": "Base spells."},
+                    {"name": "Hellish Resistance", "description": "Base resistance."},
+                ],
+                "spell_grants": [
+                    {"name": "Thaumaturgy", "level": 0},
+                    {"name": "Hellish Rebuke", "level": 1},
+                    {"name": "Darkness", "level": 2},
+                ],
+            },
+        },
+    }
+
+    artifact = author_selection_card_from_candidate(
+        candidate,
+        reference_artifacts=[reference],
+    )
+
+    grants = artifact["card"]["grants"]
+    assert [item["name"] for item in grants["features"]] == [
+        "Hellish Resistance",
+        "Hellfire",
+    ]
+    assert [item["name"] for item in grants["spell_grants"]] == ["Burning Hands"]
 
 
 def test_variant_human_replaces_base_ability_grant_and_requires_skill_and_feat() -> None:
@@ -4196,6 +4319,54 @@ def test_class_selection_parses_choose_any_skill_count() -> None:
     assert artifact["application_state"] == "selection_ready"
     assert artifact["card"]["class_definition"]["skill_choice_count"] == 3
     assert len(artifact["card"]["class_definition"]["skill_options"]) == 18
+
+
+def test_revised_class_reuses_named_base_selection_schema_without_losing_identity() -> None:
+    candidate = {
+        "kind": "class",
+        "name": "Revised Ranger",
+        "artifact": {
+            "kind": "class",
+            "card": {
+                "name": "Revised Ranger",
+                "base_class": "Ranger",
+                "description": "A source-reviewed revision of the ranger class.",
+            },
+        },
+    }
+    reference = {
+        "id": "dnd5e.content.srd2014.class.ranger",
+        "kind": "class",
+        "card": {
+            "name": "Ranger",
+            "class_definition": {
+                "hit_die": 10,
+                "saving_throw_proficiencies": ["strength", "dexterity"],
+                "armor_proficiencies": ["Light armor", "medium armor", "shields"],
+                "weapon_proficiencies": ["Simple weapons", "martial weapons"],
+                "tool_proficiencies": [],
+                "skill_choice_count": 3,
+                "skill_options": ["animal_handling", "athletics", "survival"],
+            },
+        },
+        "_selection_schema_reference": {
+            "pack_id": "dnd5e.content.srd2014",
+            "pack_version": "1.20.0",
+            "artifact_id": "dnd5e.content.srd2014.class.ranger",
+        },
+    }
+
+    artifact = author_selection_card_from_candidate(
+        candidate,
+        reference_artifacts=[reference],
+    )
+
+    assert artifact["application_state"] == "selection_ready"
+    assert artifact["card"]["name"] == "Revised Ranger"
+    assert artifact["card"]["class_definition"] == reference["card"]["class_definition"]
+    assert artifact["selection_schema_references"] == [
+        reference["_selection_schema_reference"]
+    ]
 
 
 def test_flat_plural_subclass_container_does_not_promote_features() -> None:

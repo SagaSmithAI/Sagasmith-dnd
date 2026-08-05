@@ -4607,11 +4607,66 @@ def _record_selection_schema_reference(
         value["selection_schema_references"] = [*existing, identity]
 
 
+def _merged_grant_identity(value: Any) -> str:
+    """Use the same case-insensitive identity enforced by materializers."""
+
+    if isinstance(value, str):
+        return "text:" + " ".join(value.split()).casefold()
+    return "json:" + json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+_REPLACED_SPECIES_TRAIT_FIELDS: dict[str, tuple[str, ...]] = {
+    "ability score increase": ("ability_score_increases", "ability_choice"),
+    "darkvision": ("darkvision_ft",),
+    "dwarven combat training": ("weapon_proficiencies",),
+    "dwarven resilience": ("resistances",),
+    "infernal legacy": ("spell_grants",),
+    "keen senses": ("skill_proficiencies",),
+    "languages": (
+        "languages",
+        "language_choice_count",
+        "language_options",
+        "allow_any_language",
+    ),
+    "skill versatility": ("skill_choice_count", "skill_options", "allow_any_skill"),
+    "tool proficiency": ("tool_choices", "tool_choice_count", "tool_options"),
+}
+
+
+def _species_replaced_base_traits(description: str) -> set[str]:
+    """Read an explicit subrace/variant replacement clause from reviewed text."""
+
+    normalized = " ".join(_normalize_species_ocr_text(description).split())
+    replaced: set[str] = set()
+    for match in re.finditer(
+        r"(?i)\b(?:this|these|the following) traits? replaces?\b"
+        r"(?P<traits>.{1,500}?)(?:\bgiven in\b|\bfrom the\b|[.;])",
+        normalized,
+    ):
+        trait_list = _canonical_source_heading(match.group("traits"))
+        for trait_name in _REPLACED_SPECIES_TRAIT_FIELDS:
+            if _canonical_source_heading(trait_name) in trait_list:
+                replaced.add(trait_name)
+        # Named base features can be removed even when they have no dedicated
+        # scalar/list grant. Preserve the reviewed wording as the identity.
+        for raw_name in re.split(r",|\band\b", match.group("traits"), flags=re.IGNORECASE):
+            name = re.sub(
+                r"(?i)^the\s+[\w'-]+'s\s+",
+                "",
+                raw_name.strip(),
+            )
+            name = re.sub(r"(?i)\s+traits?$", "", name).strip(" ,")
+            if name:
+                replaced.add(name.casefold())
+    return replaced
+
+
 def _merge_species_grants(
     base: Mapping[str, Any],
     specific: Mapping[str, Any],
     *,
     replaces_base_ability_scores: bool = False,
+    replaced_base_traits: set[str] | None = None,
 ) -> dict[str, Any]:
     """Combine one trusted base species with source-local variant grants.
 
@@ -4621,9 +4676,22 @@ def _merge_species_grants(
     additive grants without double-counting repeated evidence.
     """
 
-    merged = deepcopy(dict(base))
+    base_value = deepcopy(dict(base))
     specific_value = deepcopy(dict(specific))
-    base_increases = dict(base.get("ability_score_increases") or {})
+    replacement_keys = {
+        _canonical_source_heading(value)
+        for value in (replaced_base_traits or set())
+        if str(value).strip()
+    }
+    if replaces_base_ability_scores:
+        replacement_keys.add(_canonical_source_heading("Ability Score Increase"))
+    for trait_name, fields in _REPLACED_SPECIES_TRAIT_FIELDS.items():
+        if _canonical_source_heading(trait_name) not in replacement_keys:
+            continue
+        for field in fields:
+            base_value.pop(field, None)
+    merged = deepcopy(base_value)
+    base_increases = dict(base_value.get("ability_score_increases") or {})
     specific_increases = dict(specific_value.get("ability_score_increases") or {})
     merged["ability_score_increases"] = (
         specific_increases
@@ -4655,19 +4723,24 @@ def _merge_species_grants(
         "weapon_proficiencies",
     )
     for field in list_fields:
-        base_values = list(base.get(field) or [])
+        base_values = list(base_value.get(field) or [])
         specific_values = list(specific_value.get(field) or [])
         combined: list[Any] = []
         seen: set[str] = set()
         for item in [*base_values, *specific_values]:
-            key = json.dumps(item, ensure_ascii=False, sort_keys=True)
+            key = _merged_grant_identity(item)
             if key in seen:
                 continue
             seen.add(key)
             combined.append(deepcopy(item))
         merged[field] = combined
 
-    base_features = [deepcopy(dict(item)) for item in base.get("features") or []]
+    base_features = [
+        deepcopy(dict(item))
+        for item in base_value.get("features") or []
+        if _canonical_source_heading(str(dict(item).get("name") or ""))
+        not in replacement_keys
+    ]
     feature_keys = {
         _canonical_source_heading(str(item.get("name") or item.get("id") or ""))
         for item in base_features
@@ -4705,13 +4778,13 @@ def _merge_species_grants(
         if specific_text:
             merged[field] = specific_text
     for field in ("allow_any_language", "allow_any_skill", "allow_any_proficient_tool_expertise"):
-        merged[field] = bool(base.get(field)) or bool(specific_value.get(field))
+        merged[field] = bool(base_value.get(field)) or bool(specific_value.get(field))
     for field in ("cantrip_choice", "feat_choice"):
         specific_mapping = specific_value.get(field)
         if isinstance(specific_mapping, Mapping) and specific_mapping:
             merged[field] = deepcopy(dict(specific_mapping))
     merged["resources"] = {
-        **deepcopy(dict(base.get("resources") or {})),
+        **deepcopy(dict(base_value.get("resources") or {})),
         **deepcopy(dict(specific_value.get("resources") or {})),
     }
     for field, field_value in specific_value.items():
@@ -4769,6 +4842,19 @@ def author_selection_card_from_candidate(
             card=card,
             reference_artifacts=reference_artifacts,
         )
+        class_base_reference = False
+        if reference is None and kind == "class":
+            base_class = " ".join(str(card.get("base_class") or "").split())
+            if base_class and _canonical_source_heading(base_class) != (
+                _canonical_source_heading(name)
+            ):
+                reference = _selection_schema_reference(
+                    kind="class",
+                    name=base_class,
+                    card=card,
+                    reference_artifacts=reference_artifacts,
+                )
+                class_base_reference = reference is not None
         if reference is not None:
             _hydrate_character_selection_schema(
                 value,
@@ -4776,6 +4862,11 @@ def author_selection_card_from_candidate(
                 kind=kind,
                 reference=reference,
             )
+            if class_base_reference:
+                # A revised/homebrew class can deliberately reuse the trusted
+                # starting proficiency schema of a named base class while
+                # retaining its own source identity and feature progression.
+                card["name"] = name
         elif kind == "species":
             base_species = " ".join(str(card.get("base_species") or "").split())
             if base_species and _canonical_source_heading(base_species) != (
@@ -4982,6 +5073,14 @@ def author_selection_card_from_candidate(
                     else None
                 )
                 if isinstance(base_grants, Mapping):
+                    replaced_base_traits = _species_replaced_base_traits(description)
+                    raw_replaced_base_traits = card.get("replaces_base_traits") or []
+                    if isinstance(raw_replaced_base_traits, list):
+                        replaced_base_traits.update(
+                            str(item).strip().casefold()
+                            for item in raw_replaced_base_traits
+                            if str(item).strip()
+                        )
                     card["grants"] = _merge_species_grants(
                         base_grants,
                         card["grants"],
@@ -4992,6 +5091,7 @@ def author_selection_card_from_candidate(
                                 _normalize_species_ocr_text(description),
                             )
                         ),
+                        replaced_base_traits=replaced_base_traits,
                     )
                     reference_name = " ".join(
                         str(reference_card.get("name") or "").split()
