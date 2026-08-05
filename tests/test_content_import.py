@@ -3,6 +3,7 @@ from copy import deepcopy
 import pytest
 
 from sagasmith_dnd.content_import import (
+    _candidate_artifact_disambiguator,
     _merge_species_grants,
     _species_replaced_base_traits,
     _trim_trailing_statblock_lore,
@@ -70,9 +71,7 @@ def test_item_candidates_accept_typed_parenthetical_categories(
         ]
     )
 
-    assert [(item["kind"], item["name"]) for item in candidates] == [
-        ("item", name)
-    ]
+    assert [(item["kind"], item["name"]) for item in candidates] == [("item", name)]
 
 
 def test_item_candidate_does_not_promote_a_descriptive_parent_heading() -> None:
@@ -91,9 +90,7 @@ def test_item_candidate_does_not_promote_a_descriptive_parent_heading() -> None:
         ]
     )
 
-    assert [(item["kind"], item["name"]) for item in candidates] == [
-        ("item", "Weapon of Warning")
-    ]
+    assert [(item["kind"], item["name"]) for item in candidates] == [("item", "Weapon of Warning")]
 
 
 @pytest.mark.parametrize(
@@ -156,18 +153,14 @@ def test_item_candidates_recover_a_fused_magic_item_heading_from_prior_prose() -
         ]
     )
 
-    recovered = next(
-        item for item in candidates if "SHACKLES" in item["name"].upper()
-    )
+    recovered = next(item for item in candidates if "SHACKLES" in item["name"].upper())
     assert recovered["kind"] == "item"
     assert recovered["source_chunk_ids"] == ["demon-armor"]
     assert recovered["source_heading_path"] == [
         "Magic Items",
         "IM ENSIONAL SHACKLES",
     ]
-    assert recovered["artifact"]["card"]["description"].startswith(
-        '"\\ondrous item, rare'
-    )
+    assert recovered["artifact"]["card"]["description"].startswith('"\\ondrous item, rare')
 
 
 def test_same_named_features_under_different_subclasses_do_not_merge() -> None:
@@ -332,12 +325,9 @@ def test_split_single_letter_spell_field_label_still_extracts_the_spell() -> Non
 
     spell = next(item for item in candidates if item["kind"] == "spell")
     assert spell["name"] == "SPIRIT SHROUD"
-    assert spell["artifact"]["card"]["definition"]["casting_time"] == (
-        "1 bonus action"
-    )
+    assert spell["artifact"]["card"]["definition"]["casting_time"] == ("1 bonus action")
     assert spell["artifact"]["card"]["definition"]["effect"] == (
-        "Spirits surround you for 11th-level and deal 1d8 damage; "
-        "a critical hit deals 8d12 damage."
+        "Spirits surround you for 11th-level and deal 1d8 damage; a critical hit deals 8d12 damage."
     )
 
 
@@ -679,21 +669,15 @@ def test_primary_review_authors_safe_typed_selection_cards(
             "Shell Defense",
             "Survival Instinct",
         ]
-        shell = next(
-            item for item in grants["features"] if item["name"] == "Shell Defense"
-        )
+        shell = next(item for item in grants["features"] if item["name"] == "Shell Defense")
         assert "cannot take reactions" in shell["description"]
     elif kind == "background":
         assert artifact["card"]["skill_proficiencies"] == [
             "investigation",
             "persuasion",
         ]
-        assert artifact["card"]["background_grants"]["choices"][
-            "language_count"
-        ] == 2
-        assert artifact["card"]["background_grants"]["choices"][
-            "allow_any_language"
-        ] is True
+        assert artifact["card"]["background_grants"]["choices"]["language_count"] == 2
+        assert artifact["card"]["background_grants"]["choices"]["allow_any_language"] is True
     elif kind == "item":
         assert artifact["card"]["inventory_template"]["attunement"] == "required"
     elif kind == "subclass":
@@ -799,9 +783,7 @@ def test_primary_review_recovers_printed_2014_background_tool_contracts() -> Non
             ],
         }
     ]
-    assert grants["choices"]["equipment_description"].startswith(
-        "A musical instrument"
-    )
+    assert grants["choices"]["equipment_description"].startswith("A musical instrument")
 
 
 def test_primary_review_hydrates_official_spell_schema_from_exact_dependency() -> None:
@@ -863,19 +845,13 @@ def test_primary_review_hydrates_official_spell_schema_from_exact_dependency() -
     assert artifact["card"]["name"] == "Otiluke's Freezing Sphere"
     assert artifact["card"]["level"] == 6
     assert artifact["card"]["classes"] == ["Wizard"]
-    assert artifact["card"]["definition"]["effect"] == (
-        "6th-level evocation source text."
-    )
+    assert artifact["card"]["definition"]["effect"] == ("6th-level evocation source text.")
     assert artifact["card"]["resolution"] == {
         "kind": "saving_throw",
         "save_ability": "constitution",
     }
-    assert artifact["mechanic_refs"] == [
-        "dnd5e.core.spell.structured_resolution"
-    ]
-    assert artifact["card"]["mechanic_refs"] == [
-        "dnd5e.core.spell.structured_resolution"
-    ]
+    assert artifact["mechanic_refs"] == ["dnd5e.core.spell.structured_resolution"]
+    assert artifact["card"]["mechanic_refs"] == ["dnd5e.core.spell.structured_resolution"]
     directly_resolved = artifact_with_direct_resolution(
         {
             "id": "candidate:freezing-sphere",
@@ -1103,9 +1079,7 @@ def test_primary_review_preserves_agent_authored_species_and_item_cards() -> Non
     assert species["card"]["grants"]["walk_speed"] == 25
     assert species["card"]["grants"]["language_options"] == []
     assert item["card"]["inventory_template"]["mechanics"] == {"reviewed": True}
-    assert item["card"]["inventory_template"]["description"] == (
-        "Reviewer-normalized description."
-    )
+    assert item["card"]["inventory_template"]["description"] == ("Reviewer-normalized description.")
     assert source_specific_species["application_state"] == "selection_ready"
 
 
@@ -1258,9 +1232,7 @@ def test_trusted_species_reference_prefers_complete_standard_mechanics() -> None
     assert artifact["application_state"] == "selection_ready"
     assert artifact["card"]["grants"]["unresolved"] == []
     assert artifact["card"]["grants"]["spell_grants"][0]["name"] == "Thaumaturgy"
-    assert artifact["selection_schema_references"] == [
-        complete["_selection_schema_reference"]
-    ]
+    assert artifact["selection_schema_references"] == [complete["_selection_schema_reference"]]
 
 
 def test_trusted_base_species_fills_subrace_defaults_without_overwriting_differences() -> None:
@@ -1317,9 +1289,7 @@ def test_trusted_base_species_fills_subrace_defaults_without_overwriting_differe
     assert grants["darkvision_ft"] == 60
     assert grants["armor_proficiencies"] == ["light armor", "medium armor"]
     assert grants["weapon_proficiencies"] == ["battleaxe", "handaxe"]
-    assert artifact["selection_schema_references"][0]["artifact_id"].endswith(
-        ".species.dwarf"
-    )
+    assert artifact["selection_schema_references"][0]["artifact_id"].endswith(".species.dwarf")
 
 
 def test_species_grant_merge_deduplicates_text_by_materializer_identity() -> None:
@@ -1708,9 +1678,7 @@ def test_parameterized_statblock_persists_its_lobby_template_contract() -> None:
         "owner_spell_attack_modifier",
     ]
     assert requirement["runtime_ready"] is True
-    assert artifact["card"]["normalized_content"].startswith(
-        "# Alchemical Homunculus"
-    )
+    assert artifact["card"]["normalized_content"].startswith("# Alchemical Homunculus")
     assert artifact["selection_applicability"] == "not_applicable"
     assert artifact["application_state"] == "catalog_only"
 
@@ -1929,8 +1897,7 @@ def test_inventory_repairs_spell_header_ocr_and_bounded_field_continuation() -> 
                 "id": "flame-arrows",
                 "heading_path": ["Spells", "Spell Descriptions", "FLAME ARROWS"],
                 "content": (
-                    "3rd-level transmutation Casting Time: 1 action Range: Touch "
-                    "Components: V, S"
+                    "3rd-level transmutation Casting Time: 1 action Range: Touch Components: V, S"
                 ),
             },
             {
@@ -1941,8 +1908,7 @@ def test_inventory_repairs_spell_header_ocr_and_bounded_field_continuation() -> 
                     "F1NO GREATER STEED",
                 ],
                 "content": (
-                    "Duration: Concentra tion , up to 1 hour "
-                    "The ammunition burns on a hit."
+                    "Duration: Concentra tion , up to 1 hour The ammunition burns on a hit."
                 ),
             },
             {
@@ -2035,14 +2001,8 @@ def test_inventory_recovers_embedded_spells_split_across_page_headers() -> None:
         ]
     )
 
-    spells = {
-        item["name"].casefold(): item
-        for item in candidates
-        if item["kind"] == "spell"
-    }
-    dispel = next(
-        item for name, item in spells.items() if "evil and good" in name
-    )
+    spells = {item["name"].casefold(): item for item in candidates if item["kind"] == "spell"}
+    dispel = next(item for name, item in spells.items() if "evil and good" in name)
     gaseous = spells["gaseous form"]
     assert dispel["source_chunk_ids"][:2] == [
         "disintegrate",
@@ -2065,9 +2025,7 @@ def test_generic_equipment_heading_is_not_a_magic_item() -> None:
             {
                 "id": "equipment",
                 "heading_path": ["Class Features", "EQUIPMENT"],
-                "content": (
-                    "Weapon, simple and martial. You start with a shield and a pack."
-                ),
+                "content": ("Weapon, simple and martial. You start with a shield and a pack."),
             }
         ]
     )
@@ -2179,9 +2137,7 @@ def test_spell_merge_keeps_source_possessive_recovered_from_ocr() -> None:
         ]
     )
 
-    spells = [
-        item for item in inventory["candidates"] if item["kind"] == "spell"
-    ]
+    spells = [item for item in inventory["candidates"] if item["kind"] == "spell"]
     assert len(spells) == 1
     assert spells[0]["name"] == "Melf's Minute Meteors"
 
@@ -2296,9 +2252,7 @@ def test_inventory_finds_ordered_rulebook_statblock_and_flags_unclaimed_mechanic
     ]
     inventory = extract_content_inventory(chunks, source_title="Example Bestiary")
 
-    statblocks = [
-        item for item in inventory["candidates"] if item["kind"] == "statblock"
-    ]
+    statblocks = [item for item in inventory["candidates"] if item["kind"] == "statblock"]
     assert len(statblocks) == 1
     assert statblocks[0]["name"] == "Clockwork Guard"
     assert statblocks[0]["execution_state"] == "review_ready"
@@ -2309,9 +2263,7 @@ def test_inventory_finds_ordered_rulebook_statblock_and_flags_unclaimed_mechanic
     )
     assert fallback["source_chunk_ids"] == ["unclaimed"]
     assert fallback["execution_state"] == "agent_resolution_required"
-    assert inventory["unresolved_mechanical_chunks"][0]["candidate_ids"] == [
-        fallback["id"]
-    ]
+    assert inventory["unresolved_mechanical_chunks"][0]["candidate_ids"] == [fallback["id"]]
 
 
 def test_inventory_does_not_misclassify_dense_random_effect_tables_as_prose() -> None:
@@ -2378,10 +2330,7 @@ def test_inventory_does_not_misclassify_dense_random_effect_tables_as_prose() ->
     )
 
     assert inventory["unresolved_mechanical_count"] == 4
-    unresolved = {
-        item["chunk_id"]: item
-        for item in inventory["unresolved_mechanical_chunks"]
-    }
+    unresolved = {item["chunk_id"]: item for item in inventory["unresolved_mechanical_chunks"]}
     assert "random effect table" in unresolved["random-effects"]["signals"]
     assert "random effect table" in unresolved["duration-table"]["signals"]
     assert "rule procedure" in unresolved["adjudication-procedure"]["signals"]
@@ -2402,14 +2351,10 @@ def test_inventory_does_not_misclassify_dense_random_effect_tables_as_prose() ->
         for item in inventory["candidates"]
         if item.get("coverage_fallback") is True
     )
-    ordinary = next(
-        item for item in inventory["ledger"] if item["chunk_id"] == "ordinary-prose"
-    )
+    ordinary = next(item for item in inventory["ledger"] if item["chunk_id"] == "ordinary-prose")
     assert ordinary["disposition"] == "descriptive_context"
     damaged = next(
-        item
-        for item in inventory["ledger"]
-        if item["chunk_id"] == "damaged-condition-bullets"
+        item for item in inventory["ledger"] if item["chunk_id"] == "damaged-condition-bullets"
     )
     assert damaged["disposition"] == "descriptive_context"
 
@@ -2427,8 +2372,7 @@ def test_rulebook_statblock_ignores_ocr_chapter_footer_inside_heading_path() -> 
                 "C HAPTER 6 I FRIENDS AND FOES",
             ],
             "content": (
-                "Medium aberration, lawful evil Armor Class 16 "
-                "Hit Points 33 (6d8 + 6) Speed 40 ft."
+                "Medium aberration, lawful evil Armor Class 16 Hit Points 33 (6d8 + 6) Speed 40 ft."
             ),
             "page_start": 291,
             "page_end": 291,
@@ -2507,9 +2451,7 @@ def test_rulebook_statblock_recovers_name_and_sibling_abilities_from_spell_evide
             "section_ordinal": 1,
             "ordinal": 0,
             "heading_path": [*parent, "I IO CHAPTER 3 I MAGICAL MISCELLANY"],
-            "content": (
-                "Large celestial Armor Class 13 Hit Points 50 Speed 30 ft., fly 40 ft."
-            ),
+            "content": ("Large celestial Armor Class 13 Hit Points 50 Speed 30 ft., fly 40 ft."),
             "page_start": 111,
             "page_end": 111,
         },
@@ -2546,9 +2488,7 @@ def test_rulebook_statblock_recovers_name_and_sibling_abilities_from_spell_evide
     ]
 
     inventory = extract_content_inventory(chunks, source_title="Summoning Rules")
-    statblock = next(
-        item for item in inventory["candidates"] if item["kind"] == "statblock"
-    )
+    statblock = next(item for item in inventory["candidates"] if item["kind"] == "statblock")
 
     assert statblock["name"] == "Celestial Spirit"
     assert statblock["source_heading_path"] == parent
@@ -2563,9 +2503,7 @@ def test_rulebook_statblock_repairs_spaced_single_ability_heading() -> None:
             "section_ordinal": 0,
             "ordinal": 0,
             "heading_path": ["Bestiary", "Fey Spirit"],
-            "content": (
-                "Small fey Armor Class 14 Hit Points 30 Speed 40 ft."
-            ),
+            "content": ("Small fey Armor Class 14 Hit Points 30 Speed 40 ft."),
             "page_start": 10,
             "page_end": 10,
         },
@@ -2596,9 +2534,7 @@ def test_rulebook_statblock_repairs_spaced_single_ability_heading() -> None:
     )
 
     assert statblock["execution_state"] == "review_ready"
-    assert "| 13 (+1) | 16 (+3) | 14 (+2) | 14 (+2)" in (
-        statblock["normalized_content"]
-    )
+    assert "| 13 (+1) | 16 (+3) | 14 (+2) | 14 (+2)" in (statblock["normalized_content"])
 
 
 def test_rulebook_statblock_uses_combined_sibling_ability_row_without_parent_duplicate() -> None:
@@ -2608,9 +2544,7 @@ def test_rulebook_statblock_uses_combined_sibling_ability_row_without_parent_dup
             "section_ordinal": 0,
             "ordinal": 0,
             "heading_path": ["Circle", "Summon Spirit"],
-            "content": (
-                "You summon your spirit. See the Wildfire Spirit stat block."
-            ),
+            "content": ("You summon your spirit. See the Wildfire Spirit stat block."),
             "page_start": 3,
             "page_end": 3,
         },
@@ -2619,9 +2553,7 @@ def test_rulebook_statblock_uses_combined_sibling_ability_row_without_parent_dup
             "section_ordinal": 1,
             "ordinal": 0,
             "heading_path": ["Circle", "Summon Spirit", "Wildfire Spirit"],
-            "content": (
-                "Small elemental Armor Class 13 Hit Points 10 Speed 20 ft., fly 30 ft."
-            ),
+            "content": ("Small elemental Armor Class 13 Hit Points 10 Speed 20 ft., fly 30 ft."),
             "page_start": 3,
             "page_end": 3,
         },
@@ -2728,13 +2660,12 @@ def test_rulebook_statblock_uses_fragmented_sibling_ability_headings() -> None:
         "wis",
         "cha",
     ]
-    assert "| 10 (+0) | 14 (+2) | 14 (+2) | 13 (+1) | 15 (+2) | 11 (+0) |" in (
-        statblock["normalized_content"]
+    assert (
+        "| 10 (+0) | 14 (+2) | 14 (+2) | 13 (+1) | 15 (+2) | 11 (+0) |"
+        in (statblock["normalized_content"])
     )
     assert "Enhanced Bond" not in statblock["normalized_content"]
-    assert "**Languages** understands the languages you speak" in (
-        statblock["normalized_content"]
-    )
+    assert "**Languages** understands the languages you speak" in (statblock["normalized_content"])
     assert "***Soul Bond***." in statblock["normalized_content"]
     assert "## Actions" in statblock["normalized_content"]
     assert "***Flame Seed***. Ranged Weapon Attack" in statblock["normalized_content"]
@@ -2829,15 +2760,9 @@ def test_named_statblock_lore_is_trimmed_only_after_a_complete_attack() -> None:
         "Dagger. Melee or Ranged Weapon Attack: +6 to hit, reach 5 ft. or "
         "range 20/60 ft., one target. Hit: 4 (1d4 + 2) piercing damage."
     )
-    content = (
-        action
-        + " Archmages are powerful spellcasters who study throughout their lives."
-    )
+    content = action + " Archmages are powerful spellcasters who study throughout their lives."
 
-    assert (
-        _trim_trailing_statblock_lore(content, creature_name="Archmage")
-        == action
-    )
+    assert _trim_trailing_statblock_lore(content, creature_name="Archmage") == action
     assert _trim_trailing_statblock_lore(
         "Bite. Hit: 3 piercing damage. The target is poisoned.",
         creature_name="Archmage",
@@ -2927,9 +2852,7 @@ def test_extractor_requires_structural_signals_instead_of_loose_keywords() -> No
         ]
     )
 
-    assert [(item["kind"], item["name"]) for item in candidates] == [
-        ("statblock", "Goblin")
-    ]
+    assert [(item["kind"], item["name"]) for item in candidates] == [("statblock", "Goblin")]
 
 
 def test_module_statblock_chunks_become_review_ready_without_guessing_ocr() -> None:
@@ -3072,9 +2995,7 @@ def test_module_statblock_keeps_effect_only_hit_clause_inside_its_attack() -> No
         source_key="module-review:giant-spider",
     )
     web = next(
-        item
-        for item in parsed.sheet["inventory"]["items"]
-        if item["id"] == "web-recharge-5-6"
+        item for item in parsed.sheet["inventory"]["items"] if item["id"] == "web-recharge-5-6"
     )
     assert web["mechanics"]["on_hit_effect"].endswith(
         "immune to bludgeoning, poison, and psychic damage)."
@@ -3131,8 +3052,7 @@ def test_text_layout_recovery_scopes_split_guard_without_images() -> None:
             "ordinal": 3845,
             "heading_path": [*base, "WIS"],
             "content": (
-                "11 (+0) Languages any one language (usually Common) "
-                "Challenge 1/8 (25 XP)"
+                "11 (+0) Languages any one language (usually Common) Challenge 1/8 (25 XP)"
             ),
         },
         {
@@ -3223,8 +3143,7 @@ def test_text_layout_recovery_does_not_turn_trait_saves_into_a_field() -> None:
                     "CON": "10 (+0) Senses passive Perception 10",
                     "INT": "10 (+0)",
                     "WIS": (
-                        "11 (+0) Languages any one language (usually Common) "
-                        "Challenge 1/8 (25 XP)"
+                        "11 (+0) Languages any one language (usually Common) Challenge 1/8 (25 XP)"
                     ),
                     "CHA": (
                         "10 (+0) Dark Devotion. The cultist has advantage on "
@@ -3251,15 +3170,11 @@ def test_text_layout_recovery_does_not_turn_trait_saves_into_a_field() -> None:
         source_key="rule-source:monster-manual",
     )
     dark_devotion = next(
-        item
-        for item in parsed.sheet["content"]["features"]
-        if item["name"] == "Dark Devotion"
+        item for item in parsed.sheet["content"]["features"] if item["name"] == "Dark Devotion"
     )
 
     assert "**Saving Throws**" not in candidate["normalized_content"]
-    assert dark_devotion["choices"]["source_trait"]["kind"] == (
-        "save_advantage_against_conditions"
-    )
+    assert dark_devotion["choices"]["source_trait"]["kind"] == ("save_advantage_against_conditions")
     assert parsed.warnings == ()
 
 
@@ -3327,16 +3242,13 @@ def test_text_layout_preserves_and_splits_explicit_action_set_variants() -> None
             "ordinal": 11,
             "heading_path": ["Bestiary", "YUAN-TI PUREBLOOD"],
             "content": (
-                "Medium humanoid, neutral evil Armor Class 11 "
-                "Hit Points 40 (9d8) Speed 30 ft."
+                "Medium humanoid, neutral evil Armor Class 11 Hit Points 40 (9d8) Speed 30 ft."
             ),
         },
     ]
 
     candidate = normalize_2014_statblock_candidate("YUAN-TI MALISON", chunks)
-    variants = split_2014_statblock_action_variants(
-        candidate["normalized_content"]
-    )
+    variants = split_2014_statblock_action_variants(candidate["normalized_content"])
 
     assert "Purebloods form" not in candidate["normalized_content"]
     assert [item["name"] for item in variants] == [
@@ -3344,17 +3256,16 @@ def test_text_layout_preserves_and_splits_explicit_action_set_variants() -> None
         "YUAN-TI MALISON (Type 2)",
     ]
     parsed = [
-        parse_2014_statblock(item["normalized_content"], source_key="test")
-        for item in variants
+        parse_2014_statblock(item["normalized_content"], source_key="test") for item in variants
     ]
     assert [item.name for item in parsed] == [
         "YUAN-TI MALISON (Type 1)",
         "YUAN-TI MALISON (Type 2)",
     ]
-    assert [
-        [weapon["name"] for weapon in item.sheet["inventory"]["items"]]
-        for item in parsed
-    ] == [["Bite"], ["Constrict"]]
+    assert [[weapon["name"] for weapon in item.sheet["inventory"]["items"]] for item in parsed] == [
+        ["Bite"],
+        ["Constrict"],
+    ]
 
 
 def test_text_layout_recovery_moves_complete_noble_parry_out_of_traits() -> None:
@@ -3468,8 +3379,7 @@ def test_text_layout_recovery_ignores_ocr_noise_inside_creature_heading() -> Non
                     "CON": "17 (+3)",
                     "INT": "9 (-1)",
                     "WIS": (
-                        "11 (+0) Languages any one language (usually Common) "
-                        "Challenge 2 (450 XP)"
+                        "11 (+0) Languages any one language (usually Common) Challenge 2 (450 XP)"
                     ),
                     "CHA": (
                         "9 (-1) Reckless. At the start of its turn, the berserker "
@@ -3569,10 +3479,7 @@ def test_text_layout_recovery_repairs_generic_action_bracket_and_range_ocr() -> 
     assert set(attacks) == {"Bite", "Web (Recharge 5-6)"}
     assert attacks["Web (Recharge 5-6)"]["normal_range_ft"] == 30
     assert attacks["Web (Recharge 5-6)"]["long_range_ft"] == 60
-    assert any(
-        warning.startswith("Web (Recharge 5-6):")
-        for warning in parsed.warnings
-    )
+    assert any(warning.startswith("Web (Recharge 5-6):") for warning in parsed.warnings)
 
 
 def test_module_statblock_recovers_flattened_actions_and_ranged_distance() -> None:
@@ -3646,13 +3553,10 @@ def test_module_statblock_recovers_flattened_actions_and_ranged_distance() -> No
         item for item in parsed.sheet["content"]["activities"] if item["name"] == "Multiattack"
     )
     options = {
-        option["id"]: option["attacks"]
-        for option in multiattack["choices"]["multiattack_options"]
+        option["id"]: option["attacks"] for option in multiattack["choices"]["multiattack_options"]
     }
     assert options == {
-        "melee": [
-            {"weapon_id": "greatsword", "attack_mode": "melee", "count": 2}
-        ],
+        "melee": [{"weapon_id": "greatsword", "attack_mode": "melee", "count": 2}],
         "melee-2": [{"weapon_id": "spear", "attack_mode": "melee", "count": 2}],
         "ranged": [{"weapon_id": "spear", "attack_mode": "ranged", "count": 2}],
     }
@@ -3730,9 +3634,7 @@ def test_named_statblock_recovery_repairs_merrow_layout_without_losing_rules() -
         source_key="monster-manual-2014:p220",
     )
 
-    assert "| 18 (+4) | 10 (+0) | 15 (+2) | 8 (-1)" in (
-        recovered["normalized_content"]
-    )
+    assert "| 18 (+4) | 10 (+0) | 15 (+2) | 8 (-1)" in (recovered["normalized_content"])
     assert "harpoon." in recovered["normalized_content"].casefold()
     assert recovered["source_chunk_ids"] == [
         "merrow-core",
@@ -3747,15 +3649,10 @@ def test_named_statblock_recovery_repairs_merrow_layout_without_losing_rules() -
     assert parsed.warnings == ()
     assert parsed.normalization_notes == ()
     assert any(
-        item["name"] == "Multiattack"
-        and item["choices"].get("multiattack_options")
+        item["name"] == "Multiattack" and item["choices"].get("multiattack_options")
         for item in parsed.sheet["content"]["activities"]
     )
-    harpoon = next(
-        item
-        for item in parsed.sheet["inventory"]["items"]
-        if item["name"] == "Harpoon"
-    )
+    harpoon = next(item for item in parsed.sheet["inventory"]["items"] if item["name"] == "Harpoon")
     assert harpoon["mechanics"]["on_hit_resolution"]["kind"] == "contest_pull"
 
 
@@ -3768,7 +3665,7 @@ def test_module_statblock_marks_named_actor_spellcasting_trait() -> None:
             "heading_path": base,
             "content": (
                 "Medium humanoid (elf), neutral evil Armor Class 11 "
-            "Hit Points 27 (6dS) Speed 30 ft."
+                "Hit Points 27 (6dS) Speed 30 ft."
             ),
             "page_start": 59,
             "page_end": 59,
@@ -3830,9 +3727,9 @@ def test_module_statblock_marks_named_actor_spellcasting_trait() -> None:
     )
 
     assert candidate["execution_state"] == "review_ready", candidate.get("review_error")
-    assert "***Spellcasting***. Nezznar is a 4th-level spellcaster" in candidate[
-        "normalized_content"
-    ]
+    assert (
+        "***Spellcasting***. Nezznar is a 4th-level spellcaster" in candidate["normalized_content"]
+    )
     assert "***Demon Queen of Spiders***" not in candidate["normalized_content"]
     assert "Drow are a subterranean race" not in candidate["normalized_content"]
     assert "**Hit Points** 27 (6d8)" in candidate["normalized_content"]
@@ -3967,11 +3864,7 @@ def test_module_statblock_candidate_keeps_ambiguous_ocr_blocked() -> None:
         (13, 12, 12, 10, 10, 9),
         strict=True,
     ):
-        suffix = (
-            " Challenge 1/2 (100 XP)"
-            if ability == "CHA"
-            else ""
-        )
+        suffix = " Challenge 1/2 (100 XP)" if ability == "CHA" else ""
         chunks.append(
             {
                 "id": ability,
@@ -4246,8 +4139,7 @@ def test_flat_phb_class_feature_siblings_recover_distinct_base_classes() -> None
     classes = [item for item in candidates if item["kind"] == "class"]
     assert [item["name"] for item in classes] == ["Barbarian", "Cleric"]
     assert [
-        author_selection_card_from_candidate(item)["application_state"]
-        for item in classes
+        author_selection_card_from_candidate(item)["application_state"] for item in classes
     ] == ["selection_ready", "selection_ready"]
     assert classes[0]["source_chunk_ids"] == [
         "barbarian",
@@ -4364,9 +4256,7 @@ def test_revised_class_reuses_named_base_selection_schema_without_losing_identit
     assert artifact["application_state"] == "selection_ready"
     assert artifact["card"]["name"] == "Revised Ranger"
     assert artifact["card"]["class_definition"] == reference["card"]["class_definition"]
-    assert artifact["selection_schema_references"] == [
-        reference["_selection_schema_reference"]
-    ]
+    assert artifact["selection_schema_references"] == [reference["_selection_schema_reference"]]
 
 
 def test_flat_plural_subclass_container_does_not_promote_features() -> None:
@@ -4425,9 +4315,12 @@ def test_flat_plural_subclass_container_does_not_promote_features() -> None:
         ]
     )
 
-    assert {
-        item["name"] for item in candidates if item["kind"] == "subclass"
-    } == {"THIEF", "The Archfey", "WAR DOMAIN", "LIGHT DOMAIN"}
+    assert {item["name"] for item in candidates if item["kind"] == "subclass"} == {
+        "THIEF",
+        "The Archfey",
+        "WAR DOMAIN",
+        "LIGHT DOMAIN",
+    }
     light = next(item for item in candidates if item["name"] == "LIGHT DOMAIN")
     assert light["source_chunk_ids"] == ["light-domain", "light-domain-spells"]
     assert not any(item["name"] == "FAST HANDS" for item in candidates)
@@ -4484,9 +4377,12 @@ def test_ordered_species_traits_recover_subraces_and_drifted_parent() -> None:
     }
     dwarf = next(item for item in species if item["name"] == "DWARF")
     assert dwarf["artifact"]["selection_applicability"] == "not_applicable"
-    assert next(item for item in species if item["name"] == "HILL DWARF")[
-        "artifact"
-    ]["card"]["base_species"] == "DWARF"
+    assert (
+        next(item for item in species if item["name"] == "HILL DWARF")["artifact"]["card"][
+            "base_species"
+        ]
+        == "DWARF"
+    )
     assert not any(item["name"] == "ACCEPTANCE" for item in species)
 
 
@@ -4517,9 +4413,12 @@ def test_background_ocr_and_inline_variant_keep_base_grants() -> None:
     reviewed = author_selection_card_from_candidate(variant)
     assert reviewed["application_state"] == "selection_ready"
     assert reviewed["card"]["skill_proficiencies"] == ["deception", "stealth"]
-    assert set(
-        reviewed["card"]["background_grants"]["choices"]["tool_options"]
-    ) == {"Dice", "Dragonchess", "Playing Cards", "Three-Dragon Ante"}
+    assert set(reviewed["card"]["background_grants"]["choices"]["tool_options"]) == {
+        "Dice",
+        "Dragonchess",
+        "Playing Cards",
+        "Three-Dragon Ante",
+    }
 
 
 def test_split_feat_heading_and_continuation_form_one_card() -> None:
@@ -4576,10 +4475,7 @@ def test_character_sheet_placeholder_is_not_a_statblock_candidate() -> None:
                 "section_ordinal": 0,
                 "ordinal": 0,
                 "heading_path": ["Character Sheet", "Character Name"],
-                "content": (
-                    "Medium humanoid, unaligned Armor Class 10 "
-                    "Hit Points 1 Speed 30 ft."
-                ),
+                "content": ("Medium humanoid, unaligned Armor Class 10 Hit Points 1 Speed 30 ft."),
                 "page_start": 1,
                 "page_end": 1,
             }
@@ -4639,9 +4535,7 @@ def test_source_title_recovers_flat_ocr_class_headings() -> None:
         source_title="D&D 5E - UA - Blood Hunter Class 1.2",
     )
 
-    assert [(item["kind"], item["name"]) for item in candidates] == [
-        ("class", "Blood Hunter")
-    ]
+    assert [(item["kind"], item["name"]) for item in candidates] == [("class", "Blood Hunter")]
     assert candidates[0]["source_chunk_ids"] == ["class-features", "hit-points"]
 
 
@@ -4661,9 +4555,7 @@ def test_parent_catalog_does_not_duplicate_a_descendant_spell() -> None:
         ]
     )
 
-    assert [(item["kind"], item["name"]) for item in candidates] == [
-        ("spell", "Spark")
-    ]
+    assert [(item["kind"], item["name"]) for item in candidates] == [("spell", "Spark")]
 
 
 def test_compiler_requires_review_and_selection_ready_structure() -> None:
@@ -4759,9 +4651,7 @@ def test_compiler_stably_disambiguates_same_named_generated_ids() -> None:
             "artifact": {
                 "kind": "feat",
                 "card": {"name": "Lucky", "description": "First source entry."},
-                "source_citations": [
-                    {"source_id": "runtime-source", "chunk_id": "one"}
-                ],
+                "source_citations": [{"source_id": "runtime-source", "chunk_id": "one"}],
             },
         },
         {
@@ -4776,17 +4666,13 @@ def test_compiler_stably_disambiguates_same_named_generated_ids() -> None:
             "artifact": {
                 "kind": "feat",
                 "card": {"name": "Lucky", "description": "Second source entry."},
-                "source_citations": [
-                    {"source_id": "runtime-source", "chunk_id": "two"}
-                ],
+                "source_citations": [{"source_id": "runtime-source", "chunk_id": "two"}],
             },
         },
     ]
 
     forward = compiled_artifacts_from_candidates(candidates, pack_id="dnd5e.xgte")
-    reverse = compiled_artifacts_from_candidates(
-        list(reversed(candidates)), pack_id="dnd5e.xgte"
-    )
+    reverse = compiled_artifacts_from_candidates(list(reversed(candidates)), pack_id="dnd5e.xgte")
 
     assert len({item["id"] for item in forward}) == 2
     assert all(item["id"].startswith("dnd5e.xgte.feat.lucky-") for item in forward)
@@ -4799,12 +4685,37 @@ def test_compiler_stably_disambiguates_same_named_generated_ids() -> None:
             "source_id": "fresh-runtime-source",
             "chunk_id": chunk_id,
         }
-    rebound_artifacts = compiled_artifacts_from_candidates(
-        rebound, pack_id="dnd5e.xgte"
-    )
-    assert {item["id"] for item in forward} == {
-        item["id"] for item in rebound_artifacts
+    rebound_artifacts = compiled_artifacts_from_candidates(rebound, pack_id="dnd5e.xgte")
+    assert {item["id"] for item in forward} == {item["id"] for item in rebound_artifacts}
+
+
+def test_candidate_disambiguator_ignores_review_attestation_hashes() -> None:
+    candidate = {
+        "kind": "feature",
+        "name": "Bonus Cantrip",
+        "source_heading_path": ["Divine Domain", "Bonus Cantrip"],
+        "page_start": 60,
+        "page_end": 60,
+        "artifact": {
+            "kind": "feature",
+            "card": {"name": "Bonus Cantrip", "description": "Learn one cantrip."},
+            "catalog_review": {"reviewed_content_hash": "first-local-hash"},
+            "selection_contract": {
+                "reviewed_content_hash": "first-local-hash",
+                "references": ["rule-source-chunk:first-local-id"],
+            },
+        },
     }
+    rebound = deepcopy(candidate)
+    rebound["artifact"]["catalog_review"]["reviewed_content_hash"] = "second-local-hash"
+    rebound["artifact"]["selection_contract"] = {
+        "reviewed_content_hash": "second-local-hash",
+        "references": ["rule-source-chunk:second-local-id"],
+    }
+
+    assert _candidate_artifact_disambiguator(candidate) == (
+        _candidate_artifact_disambiguator(rebound)
+    )
 
 
 def test_compiler_rejects_duplicate_explicit_ids() -> None:
@@ -4900,9 +4811,7 @@ def test_reviewed_extension_spell_resolution_binds_to_core_executor() -> None:
 
     assert validate_selection_ready_artifacts(artifacts) == []
     assert artifacts[0]["mechanic_refs"] == ["dnd5e.core.spell.structured_resolution"]
-    assert artifacts[0]["card"]["mechanic_refs"] == [
-        "dnd5e.core.spell.structured_resolution"
-    ]
+    assert artifacts[0]["card"]["mechanic_refs"] == ["dnd5e.core.spell.structured_resolution"]
 
 
 def test_custom_mechanical_artifact_persists_a_source_bound_plan_template() -> None:
@@ -4958,9 +4867,7 @@ def test_custom_mechanical_artifact_persists_a_source_bound_plan_template() -> N
                             "expression": "3d8",
                             "damage_type": "radiant",
                             "source": "Prismatic Pulse",
-                            "reduction": {
-                                "$result": "save.damage_reduction_by_actor_id"
-                            },
+                            "reduction": {"$result": "save.damage_reduction_by_actor_id"},
                         },
                     },
                 ],
@@ -4984,12 +4891,8 @@ def test_custom_mechanical_artifact_persists_a_source_bound_plan_template() -> N
     assert artifacts[0]["execution_state"] == "plan_ready"
     assert artifacts[0]["resolution_plan"]["source_card_id"] == artifact_id
     assert artifacts[0]["resolution_plan"]["fingerprint"]
-    assert artifacts[0]["mechanic_refs"] == [
-        "dnd5e.extension.plan.prismatic-pulse"
-    ]
-    assert artifacts[0]["embedded_mechanic_refs"] == [
-        "dnd5e.extension.plan.prismatic-pulse"
-    ]
+    assert artifacts[0]["mechanic_refs"] == ["dnd5e.extension.plan.prismatic-pulse"]
+    assert artifacts[0]["embedded_mechanic_refs"] == ["dnd5e.extension.plan.prismatic-pulse"]
 
 
 def test_static_grant_rule_clause_makes_non_plan_content_selection_ready() -> None:
@@ -5020,9 +4923,7 @@ def test_static_grant_rule_clause_makes_non_plan_content_selection_ready() -> No
                         {
                             "source": "rule-source:extension",
                             "source_ref": {"chunk_id": "chunk:sage"},
-                            "source_excerpt": (
-                                "Skill Proficiencies: Arcana and History."
-                            ),
+                            "source_excerpt": ("Skill Proficiencies: Arcana and History."),
                         }
                     ],
                     "settlement": {
@@ -5092,15 +4993,9 @@ def test_direct_import_resolution_persists_source_bound_agent_clause() -> None:
     assert artifact["execution_state"] == "ruling_ready"
     clause = artifact["rule_clauses"][0]
     assert clause["settlement"]["mode"] == "agent_ruling"
-    assert artifact["card"]["ruling_requirements"][0]["policy_ref"] == (
-        "rule_clause.v1"
-    )
-    assert clause["source_citations"][0]["source_ref"] == {
-        "chunk_id": "chunk:odd-device"
-    }
-    assert clause["source_citations"][0]["source"] == (
-        "rule-source:example.odd-device"
-    )
+    assert artifact["card"]["ruling_requirements"][0]["policy_ref"] == ("rule_clause.v1")
+    assert clause["source_citations"][0]["source_ref"] == {"chunk_id": "chunk:odd-device"}
+    assert clause["source_citations"][0]["source"] == ("rule-source:example.odd-device")
     assert clause["source_citations"][0]["source_excerpt"] == exact_source
     assert validate_selection_ready_artifacts(artifacts) == []
 
@@ -5129,6 +5024,39 @@ def test_direct_import_resolution_keeps_descriptive_content_nonmechanical() -> N
     assert resolved["rule_clauses"][0]["settlement"] == {"mode": "descriptive"}
     assert resolved["execution_state"] == "descriptive_ready"
     assert resolved["semantic_resolution"]["mode"] == "descriptive"
+
+
+def test_direct_import_resolution_identity_ignores_local_candidate_and_chunk_ids() -> None:
+    source_text = "The reviewed source procedure applies to the selected creature."
+
+    def resolved(candidate_id: str, chunk_id: str) -> dict:
+        candidate = {
+            "id": candidate_id,
+            "kind": "feature",
+            "name": "Stable Ward",
+            "source_chunk_ids": [chunk_id],
+            "source_heading_path": ["Wards", "Stable Ward"],
+            "page_start": 12,
+            "page_end": 12,
+            "mechanical_scope": "review_required",
+            "artifact": {
+                "kind": "feature",
+                "application_state": "catalog_only",
+                "mechanical_scope": "review_required",
+                "card": {"name": "Stable Ward", "description": source_text},
+            },
+        }
+        return artifact_with_direct_resolution(
+            candidate,
+            citation_source="rule-source:stable-ward",
+            source_chunks_by_id={chunk_id: source_text},
+        )
+
+    first = resolved("candidate:first-local-id", "chunk:first-local-id")
+    second = resolved("candidate:second-local-id", "chunk:second-local-id")
+
+    assert first["rule_clauses"][0]["id"] == second["rule_clauses"][0]["id"]
+    assert first["semantic_resolution"]["clause_ids"] == second["semantic_resolution"]["clause_ids"]
 
 
 def test_release_resolution_audit_rejects_first_use_placeholders() -> None:
@@ -5201,8 +5129,7 @@ def test_release_resolution_audit_rejects_stale_lazy_state_even_with_clause() ->
         {
             "artifact_id": "dnd5e.extension.feature.stale",
             "reason": (
-                "artifact still declares deferred semantic authoring: "
-                "agent_resolution_required"
+                "artifact still declares deferred semantic authoring: agent_resolution_required"
             ),
         }
     ]
@@ -5261,9 +5188,7 @@ def test_rule_clause_cannot_claim_a_plan_that_the_artifact_does_not_store() -> N
                         {
                             "source": "rule-source:extension",
                             "source_ref": {"chunk_id": "chunk:feature"},
-                            "source_excerpt": (
-                                "The feature produces a source-defined effect."
-                            ),
+                            "source_excerpt": ("The feature produces a source-defined effect."),
                         }
                     ],
                     "settlement": {
