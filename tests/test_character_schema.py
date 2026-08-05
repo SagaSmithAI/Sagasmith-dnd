@@ -675,6 +675,30 @@ def test_inventory_weight_supports_rule_book_fractional_ounce_units() -> None:
     assert derive_character_sheet(sheet)["inventory"]["total_weight_oz"] == 40
 
 
+def test_inventory_preserves_long_published_action_descriptions() -> None:
+    published_action = "Numbered ammunition effect. " * 100
+    sheet, item_id = add_inventory_item(
+        validate_character_sheet({}),
+        {
+            "name": "Reviewed multi-effect action",
+            "kind": "equipment",
+            "description": published_action,
+        },
+    )
+
+    assert sheet["inventory"]["items"][0]["id"] == item_id
+    assert sheet["inventory"]["items"][0]["description"] == published_action
+    with pytest.raises(ValueError, match="exceeds 12000 characters"):
+        add_inventory_item(
+            validate_character_sheet({}),
+            {
+                "name": "Unbounded description",
+                "kind": "equipment",
+                "description": "x" * 12001,
+            },
+        )
+
+
 def test_spellbook_inventory_preserves_structured_copy_sources() -> None:
     sheet, item_id = add_inventory_item(
         validate_character_sheet({}),

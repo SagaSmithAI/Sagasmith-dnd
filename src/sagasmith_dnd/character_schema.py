@@ -1579,7 +1579,11 @@ def _normalize_item(value: Any, field: str, *, generate_id: bool = True) -> dict
         ),
         "weight_oz": _number(item.get("weight_oz"), f"{field}.weight_oz", minimum=0),
         "price_cp": _integer(item.get("price_cp"), f"{field}.price_cp", minimum=0),
-        "description": _text(item.get("description"), f"{field}.description", maximum=1200),
+        # Published statblock actions can include a numbered suite of effects
+        # (for example, one ammunition entry with several outcomes). Keep the
+        # entire reviewed rule on the portable actor card instead of truncating
+        # or rejecting an otherwise valid official action.
+        "description": _text(item.get("description"), f"{field}.description", maximum=12000),
         "source_key": _text(item.get("source_key"), f"{field}.source_key", maximum=300),
         "container_id": (
             _text(item.get("container_id"), f"{field}.container_id", maximum=100)
