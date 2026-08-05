@@ -4831,6 +4831,17 @@ def _merge_inferred_defaults(
 
 
 def _candidate_class_name(candidate: dict[str, Any], description: str) -> str:
+    explicit_owner = re.search(
+        r"(?i)\b\d{1,2}(?:st|nd|rd|th)\s*[- ]?\s*level\s+"
+        r"(?P<owner>[a-z][a-z' -]{1,40}?)\s+feature\b",
+        description[:2400],
+    )
+    if explicit_owner is not None:
+        owner = _normalize_candidate_display_name(explicit_owner.group("owner"))
+        if owner.casefold() in _CLASS_NAMES:
+            return owner.title()
+        if owner.casefold() == "revised ranger":
+            return "Revised Ranger"
     source_class_name = " ".join(str(candidate.get("source_class_name") or "").split())
     if source_class_name:
         return source_class_name

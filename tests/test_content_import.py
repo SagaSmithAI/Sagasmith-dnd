@@ -1566,6 +1566,37 @@ def test_contextual_feature_is_not_promoted_without_character_binding() -> None:
     assert artifact["selection_applicability"] == "not_applicable"
 
 
+def test_explicit_feature_owner_overrides_stale_heading_class_context() -> None:
+    artifact = author_selection_card_from_candidate(
+        {
+            "id": "candidate:instinctive-pounce",
+            "kind": "feature",
+            "name": "Instinctive Pounce",
+            "source_heading_path": [
+                "Character Options",
+                "Artificer Infusions",
+                "Optional Class Features",
+                "Instinctive Pounce",
+            ],
+            "artifact": {
+                "kind": "feature",
+                "application_state": "catalog_only",
+                "card": {
+                    "name": "Instinctive Pounce",
+                    "description": (
+                        "7th-level barbarian feature. As part of the bonus action "
+                        "you take to enter your rage, you can move up to half your speed."
+                    ),
+                },
+            },
+        }
+    )
+
+    assert artifact["application_state"] == "selection_ready"
+    assert artifact["card"]["class_name"] == "Barbarian"
+    assert artifact["card"]["minimum_level"] == 7
+
+
 def test_reviewed_generic_feature_requires_explicit_character_applicability() -> None:
     artifact = author_selection_card_from_candidate(
         {
