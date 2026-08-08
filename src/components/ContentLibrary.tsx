@@ -1,6 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 
-type Entry = { kind: string; id: string; version: string; checksum: string; title: string; edition?: string; license?: string; component_counts: Record<string, number>; image_count: number; path: string };
+type ReadinessBlocker = { code: string; message: string; source_refs: Record<string, any>[] };
+type ReadinessDimension = { complete: boolean; item_count: number; blockers: ReadinessBlocker[] };
+type Readiness = { level: string; dimensions: Record<string, ReadinessDimension>; complete: boolean };
+type Entry = {
+  kind: string; id: string; version: string; checksum: string; title: string;
+  edition?: string; license?: string; classification?: string;
+  component_counts: Record<string, number>; image_count: number; path: string;
+  download_path?: string; play_profile?: Record<string, any>;
+  continuity?: Record<string, any>; readiness?: Readiness;
+};
 type Index = { schema: string; system_id: string; packages: Entry[] };
 type Portable = { kind: string; id: string; version: string; checksum: string; metadata: Record<string, any>; payload: Record<string, any> };
 const defaultUrl = import.meta.env.PUBLIC_SAGASMITH_LIBRARY_URL || 'https://sagasmithai.github.io/content-library/index.json';
@@ -9,14 +18,12 @@ const cardsOf = (pack: Portable | null): Portable[] => {
   if (!pack) return [];
   if (pack.kind === 'preset_pack') return pack.payload.cards || [];
   if (pack.kind === 'module_pack') return pack.payload.actors || [];
-  return (pack.payload.components || []).flatMap((item: Portable) => {
-    if (item.kind === 'preset_pack') return item.payload.cards || [];
-    if (item.kind === 'module_pack') return item.payload.actors || [];
-    return [];
-  });
+  return (pack.payload.components || []).flatMap((item: Portable) => item.kind === 'preset_pack' ? item.payload.cards || [] : []);
 };
 const recordsOf = (component: Portable) => ['artifacts', 'mechanics', 'entries', 'definitions', 'sources', 'scene_atlas', 'actors', 'assets']
   .flatMap((key) => Array.isArray(component.payload?.[key]) ? component.payload[key].map((item: any) => ({ ...item, _collection: key })) : []);
+const partyRange = (value: any) => value?.minimum == null || value?.maximum == null ? 'SOURCE REVIEW' : value.minimum === value.maximum ? String(value.minimum) : `${value.minimum}–${value.maximum}`;
+const levelRange = (profile: any) => profile?.starting_level?.value == null || profile?.expected_end_level?.value == null ? 'SOURCE REVIEW' : `${profile.starting_level.value}–${profile.expected_end_level.value}`;
 
 export default function ContentLibrary() {
   const [source, setSource] = useState(defaultUrl), [index, setIndex] = useState<Index | null>(null);
@@ -27,15 +34,22 @@ export default function ContentLibrary() {
     fetch(url).then((r) => { if (!r.ok) throw new Error(`${r.status} ${r.statusText}`); return r.json(); })
       .then((data: Index) => { setIndex(data); setSelected(data.packages[0] || null); }).catch((e) => setError(String(e)));
   }, []);
-  useEffect(() => { if (selected) fetch(new URL(selected.path, source)).then((r) => { if (!r.ok) throw new Error(`${r.status} ${r.statusText}`); return r.json(); }).then(setPack).catch((e) => setError(String(e))); }, [selected, source]);
-  const visible = useMemo(() => (index?.packages || []).filter((entry) => (kind === 'all' || entry.kind === kind) && `${entry.title} ${entry.id} ${entry.edition || ''}`.toLowerCase().includes(query.toLowerCase())), [index, kind, query]);
+  useEffect(() => {
+    if (!selected) return;
+    setPack(null); setError('');
+    fetch(new URL(selected.path, source)).then((r) => { if (!r.ok) throw new Error(`${r.status} ${r.statusText}`); return r.json(); }).then(setPack).catch((e) => setError(String(e)));
+  }, [selected, source]);
+  const visible = useMemo(() => (index?.packages || []).filter((entry) => (kind === 'all' || entry.kind === kind) && `${entry.title} ${entry.id} ${entry.edition || ''} ${entry.classification || ''}`.toLowerCase().includes(query.toLowerCase())), [index, kind, query]);
   const cards = cardsOf(pack), components: Portable[] = pack?.kind === 'addon_pack' ? pack.payload.components || [] : pack ? [pack] : [];
+  const moduleManifest = pack?.kind === 'module_pack' ? pack.payload.manifest : null;
+  const readiness: Readiness | null = pack?.kind === 'module_pack' ? pack.payload.readiness : null;
   return <section className="content-library">
-    <header className="library-hero"><div><span>PORTABLE CONTENT / READ-ONLY</span><h2>Preset & Addon Library</h2><p>浏览包、规则组件、来源、角色卡与图片。安装和战役启用仍由 MCP 分别审批。</p></div><dl><div><dt>PACKAGES</dt><dd>{index?.packages.length ?? '—'}</dd></div><div><dt>ACTORS</dt><dd>{index?.packages.reduce((n, x) => n + (x.component_counts.actor_card || 0), 0) ?? '—'}</dd></div></dl></header>
+    <header className="library-hero"><div><span>PORTABLE CONTENT / READ-ONLY</span><h2>Preset, Addon & Module Library</h2><p>浏览独立的预设、扩展规则与 v2 模组包。模组下载为可校验归档；安装和战役激活仍由 MCP 分别审批。</p></div><dl><div><dt>PACKAGES</dt><dd>{index?.packages.length ?? '—'}</dd></div><div><dt>ACTORS</dt><dd>{index?.packages.reduce((n, x) => n + (x.component_counts.actor_card || 0), 0) ?? '—'}</dd></div></dl></header>
     {error && <p className="library-error">Library unavailable: {error}</p>}
     <div className="library-controls"><input aria-label="Search packages" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search title, id, edition…"/><select aria-label="Package kind" value={kind} onChange={(e) => setKind(e.target.value)}><option value="all">All packages</option><option value="preset_pack">Presets</option><option value="addon_pack">Addons</option><option value="module_pack">Modules</option></select><code>{source}</code></div>
-    <div className="library-layout"><nav className="library-packages" aria-label="Content packages">{visible.map((entry) => <button className={selected?.checksum === entry.checksum ? 'selected' : ''} key={entry.checksum} onClick={() => setSelected(entry)}><small>{entry.kind.replace('_pack', '').toUpperCase()} · {entry.edition || 'ALL'}</small><strong>{entry.title}</strong><span>{entry.id}@{entry.version}</span><footer><b>{entry.component_counts.actor_card || Object.values(entry.component_counts).reduce((a,b) => a+b, 0)} records</b><em>{entry.license}</em></footer></button>)}</nav>
-      <main className="library-detail">{pack && <><header><div><small>{pack.kind} / {pack.version}</small><h2>{pack.metadata.title || pack.id}</h2><p>{pack.id}</p></div><div className="checksum"><span>SHA-256</span>{pack.checksum}</div></header><div className="library-meta"><span>LICENSE <b>{pack.metadata.license || '—'}</b></span><span>DISTRIBUTION <b>{pack.metadata.distribution || '—'}</b></span><span>COMPONENTS <b>{components.length}</b></span><span>IMAGES <b>{cards.filter((x) => x.payload.image).length}</b></span></div>
+    <div className="library-layout"><nav className="library-packages" aria-label="Content packages">{visible.map((entry) => <button className={selected?.checksum === entry.checksum ? 'selected' : ''} key={entry.checksum} onClick={() => setSelected(entry)}><small>{entry.kind.replace('_pack', '').toUpperCase()} · {entry.edition || 'ALL'}{entry.readiness ? ` · ${entry.readiness.level.toUpperCase()}` : ''}</small><strong>{entry.title}</strong><span>{entry.id}@{entry.version}</span><footer><b>{entry.component_counts.actor_card || Object.values(entry.component_counts).reduce((a,b) => a+b, 0)} records</b><em>{entry.license}</em></footer></button>)}</nav>
+      <main className="library-detail">{pack && <><header><div><small>{pack.kind} / {pack.version}{selected?.classification ? ` / ${selected.classification}` : ''}</small><h2>{pack.metadata.title || pack.id}</h2><p>{pack.id}</p></div><div className="checksum"><span>SHA-256</span>{pack.checksum}</div></header><div className="library-meta"><span>LICENSE <b>{pack.metadata.license || '—'}</b></span><span>DISTRIBUTION <b>{pack.metadata.distribution || '—'}</b></span><span>COMPONENTS <b>{components.length}</b></span><span>IMAGES <b>{cards.filter((x) => x.payload.image).length}</b></span></div>
+        {moduleManifest && <section className="module-contract"><header><div><small>MODULE PACK V2</small><h3>Play contract & readiness</h3></div>{selected?.download_path && <a className="module-download" href={new URL(selected.download_path, source).href} download>Download .sagasmith-module</a>}</header><div className="module-stats"><span>READINESS<b>{readiness?.level || '—'}</b></span><span>PARTY SIZE<b>{partyRange(moduleManifest.play_profile?.party_size)}</b></span><span>LEVELS<b>{levelRange(moduleManifest.play_profile)}</b></span><span>ADVANCEMENT<b>{moduleManifest.play_profile?.advancement?.recommended || 'SOURCE REVIEW'}</b></span><span>SERIES<b>{moduleManifest.continuity?.series_id || 'STANDALONE'}</b></span></div>{readiness && <div className="readiness-grid">{Object.entries(readiness.dimensions).map(([name, dimension]) => <article className={`readiness-${dimension.complete ? 'complete' : 'blocked'}`} key={name}><small>{name}</small><strong>{dimension.complete ? 'complete' : 'blocked'}</strong>{dimension.blockers.length > 0 && <ul>{dimension.blockers.map((blocker) => <li key={blocker.code}>{blocker.message}</li>)}</ul>}</article>)}</div>}</section>}
         {components.map((component) => <section className="library-component" key={component.checksum}><header><div><small>{component.kind}</small><h3>{component.metadata?.title || component.id}</h3></div><code>{component.id}@{component.version}</code></header>{component.kind !== 'preset_pack' && <div className="artifact-grid">{recordsOf(component).map((item, i) => <article key={`${item.id || item.key || item.name}-${i}`}><small>{item.kind || item._collection || 'entry'}</small><strong>{item.name || item.title || item.id || item.key || `Record ${i+1}`}</strong><p>{item.summary || item.description || item.content || ''}</p></article>)}</div>}</section>)}
         {cards.length > 0 && <section className="actor-gallery"><header><small>UNIFIED ACTOR CARDS</small><h3>PC / NPC / Monster</h3></header><div>{cards.map((card) => { const image = card.payload.image; return <article key={card.checksum}>{image ? <img loading="lazy" src={`data:${image.media_type};base64,${image.data_base64}`} alt={image.alt}/> : <div className="actor-placeholder" aria-hidden="true">{String(card.payload.name).slice(0,1)}</div>}<small>{card.payload.actor_type}</small><strong>{card.payload.name}</strong><p>{card.payload.summary}</p><footer>{image ? `${image.license} · ${image.attribution}` : 'No redistributable image supplied'}</footer></article>; })}</div></section>}
         <details className="library-raw"><summary>完整 portable JSON</summary><pre>{JSON.stringify(pack, null, 2)}</pre></details></>}</main></div>
