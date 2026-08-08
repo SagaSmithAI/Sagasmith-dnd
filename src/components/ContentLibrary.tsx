@@ -5,9 +5,16 @@ type Index = { schema: string; system_id: string; packages: Entry[] };
 type Portable = { kind: string; id: string; version: string; checksum: string; metadata: Record<string, any>; payload: Record<string, any> };
 const defaultUrl = import.meta.env.PUBLIC_SAGASMITH_LIBRARY_URL || 'https://sagasmithai.github.io/content-library/index.json';
 
-const cardsOf = (pack: Portable | null): Portable[] => !pack ? [] : pack.kind === 'preset_pack'
-  ? pack.payload.cards || []
-  : (pack.payload.components || []).filter((item: Portable) => item.kind === 'preset_pack').flatMap((item: Portable) => item.payload.cards || []);
+const cardsOf = (pack: Portable | null): Portable[] => {
+  if (!pack) return [];
+  if (pack.kind === 'preset_pack') return pack.payload.cards || [];
+  if (pack.kind === 'module_pack') return pack.payload.actors || [];
+  return (pack.payload.components || []).flatMap((item: Portable) => {
+    if (item.kind === 'preset_pack') return item.payload.cards || [];
+    if (item.kind === 'module_pack') return item.payload.actors || [];
+    return [];
+  });
+};
 const recordsOf = (component: Portable) => ['artifacts', 'mechanics', 'entries', 'definitions', 'sources', 'scene_atlas', 'actors', 'assets']
   .flatMap((key) => Array.isArray(component.payload?.[key]) ? component.payload[key].map((item: any) => ({ ...item, _collection: key })) : []);
 
@@ -26,7 +33,7 @@ export default function ContentLibrary() {
   return <section className="content-library">
     <header className="library-hero"><div><span>PORTABLE CONTENT / READ-ONLY</span><h2>Preset & Addon Library</h2><p>浏览包、规则组件、来源、角色卡与图片。安装和战役启用仍由 MCP 分别审批。</p></div><dl><div><dt>PACKAGES</dt><dd>{index?.packages.length ?? '—'}</dd></div><div><dt>ACTORS</dt><dd>{index?.packages.reduce((n, x) => n + (x.component_counts.actor_card || 0), 0) ?? '—'}</dd></div></dl></header>
     {error && <p className="library-error">Library unavailable: {error}</p>}
-    <div className="library-controls"><input aria-label="Search packages" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search title, id, edition…"/><select aria-label="Package kind" value={kind} onChange={(e) => setKind(e.target.value)}><option value="all">All packages</option><option value="preset_pack">Presets</option><option value="addon_pack">Addons</option></select><code>{source}</code></div>
+    <div className="library-controls"><input aria-label="Search packages" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search title, id, edition…"/><select aria-label="Package kind" value={kind} onChange={(e) => setKind(e.target.value)}><option value="all">All packages</option><option value="preset_pack">Presets</option><option value="addon_pack">Addons</option><option value="module_pack">Modules</option></select><code>{source}</code></div>
     <div className="library-layout"><nav className="library-packages" aria-label="Content packages">{visible.map((entry) => <button className={selected?.checksum === entry.checksum ? 'selected' : ''} key={entry.checksum} onClick={() => setSelected(entry)}><small>{entry.kind.replace('_pack', '').toUpperCase()} · {entry.edition || 'ALL'}</small><strong>{entry.title}</strong><span>{entry.id}@{entry.version}</span><footer><b>{entry.component_counts.actor_card || Object.values(entry.component_counts).reduce((a,b) => a+b, 0)} records</b><em>{entry.license}</em></footer></button>)}</nav>
       <main className="library-detail">{pack && <><header><div><small>{pack.kind} / {pack.version}</small><h2>{pack.metadata.title || pack.id}</h2><p>{pack.id}</p></div><div className="checksum"><span>SHA-256</span>{pack.checksum}</div></header><div className="library-meta"><span>LICENSE <b>{pack.metadata.license || '—'}</b></span><span>DISTRIBUTION <b>{pack.metadata.distribution || '—'}</b></span><span>COMPONENTS <b>{components.length}</b></span><span>IMAGES <b>{cards.filter((x) => x.payload.image).length}</b></span></div>
         {components.map((component) => <section className="library-component" key={component.checksum}><header><div><small>{component.kind}</small><h3>{component.metadata?.title || component.id}</h3></div><code>{component.id}@{component.version}</code></header>{component.kind !== 'preset_pack' && <div className="artifact-grid">{recordsOf(component).map((item, i) => <article key={`${item.id || item.key || item.name}-${i}`}><small>{item.kind || item._collection || 'entry'}</small><strong>{item.name || item.title || item.id || item.key || `Record ${i+1}`}</strong><p>{item.summary || item.description || item.content || ''}</p></article>)}</div>}</section>)}
