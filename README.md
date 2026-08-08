@@ -70,8 +70,6 @@ Campaign and character detail pages use query IDs so a static Astro build can op
 /combat?campaign=<campaign-id>
 ```
 
-Legacy dynamic demo routes remain temporarily in source but new navigation uses the static-safe paths above.
-
 ## Development notes
 
 - Shared layout and visual tokens live in `src/layouts/BaseLayout.astro` and `src/styles/global.css`.
