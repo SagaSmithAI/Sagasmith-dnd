@@ -5,5 +5,7 @@ import react from '@astrojs/react';
 
 // https://astro.build/config
 export default defineConfig({
-  integrations: [react()]
+  integrations: [react()],
+  base: process.env.SAGASMITH_UI_BASE || '/',
+  site: process.env.SAGASMITH_UI_SITE || 'http://localhost:4321',
 });

@@ -1,5 +1,11 @@
 # SagaSmith D&D UI
 
+`/library` 是统一的 preset/addon 浏览器：它显示包 checksum、许可、组件、来源、
+规则记录、场景/资产、统一 PC/NPC/怪物卡及卡内角色图，并保留完整 portable JSON
+供审计。默认读取 `https://sagasmithai.github.io/content-library/index.json`；可用
+`PUBLIC_SAGASMITH_LIBRARY_URL` 或 `?source=` 指向另一份兼容索引。浏览器只读，
+不会安装或启用规则内容。
+
 **Alpha DM Workbench for the SagaSmithAI D&D reference stack.** The interface brings live-table continuity, current scenes, actors, scoped knowledge, rule provenance, and snapshot lineage into one local operations view.
 
 ## Product boundary
