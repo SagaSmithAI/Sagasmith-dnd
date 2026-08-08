@@ -10,6 +10,7 @@ from typing import Any, Iterable, Mapping
 from sagasmith_core.portable import (
     canonical_json,
     validate_addon_pack,
+    validate_module_pack,
     validate_preset_pack,
 )
 
@@ -34,7 +35,7 @@ def _package_summary(package: Mapping[str, Any], path: str) -> dict[str, Any]:
             counts[actor_type] = counts.get(actor_type, 0) + 1
             image_count += int(card["payload"].get("image") is not None)
         component_counts = {"actor_card": len(cards), **counts}
-    else:
+    elif package["kind"] == "addon_pack":
         components = list(payload["components"])
         component_counts = {}
         image_count = 0
@@ -44,6 +45,16 @@ def _package_summary(package: Mapping[str, Any], path: str) -> dict[str, Any]:
             if kind == "preset_pack":
                 for card in component["payload"]["cards"]:
                     image_count += int(card["payload"].get("image") is not None)
+    else:
+        actors = list(payload["actors"])
+        component_counts = {
+            "scene": len(payload["scene_atlas"]),
+            "asset": len(payload["assets"]),
+            "actor_card": len(actors),
+        }
+        image_count = sum(
+            card["payload"].get("image") is not None for card in actors
+        )
     metadata = dict(package.get("metadata") or {})
     return {
         "kind": package["kind"],
@@ -68,8 +79,12 @@ def validate_public_package(package: Mapping[str, Any]) -> dict[str, Any]:
         value = validate_preset_pack(package, expected_system_id="dnd5e")
     elif kind == "addon_pack":
         value = validate_addon_pack(package, expected_system_id="dnd5e")
+    elif kind == "module_pack":
+        value = validate_module_pack(package, expected_system_id="dnd5e")
     else:
-        raise ValueError("public library accepts only preset_pack and addon_pack")
+        raise ValueError(
+            "public library accepts only preset_pack, addon_pack, and module_pack"
+        )
     metadata = dict(value.get("metadata") or {})
     distribution = str(metadata.get("distribution") or "").casefold()
     license_name = str(metadata.get("license") or "").strip()
@@ -87,11 +102,9 @@ def validate_public_package(package: Mapping[str, Any]) -> dict[str, Any]:
         component_license = str(component_metadata.get("license") or license_name).strip()
         if component_license.casefold() in NON_PUBLIC_LICENSES:
             raise ValueError(f"{component['id']} has no redistributable license")
-        cards = (
-            list(component["payload"].get("cards") or [])
-            if component["kind"] == "preset_pack"
-            else []
-        )
+        cards = list(component["payload"].get("cards") or [])
+        if component["kind"] == "module_pack":
+            cards = list(component["payload"].get("actors") or [])
         for card in cards:
             card_metadata = dict(card.get("metadata") or {})
             card_distribution = str(card_metadata.get("distribution") or distribution).casefold()
@@ -146,12 +159,15 @@ def main() -> None:
     parser.add_argument("--skill-root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--addon", action="append", type=Path, default=[])
+    parser.add_argument("--module", action="append", type=Path, default=[])
     args = parser.parse_args()
     packages: list[dict[str, Any]] = [
         build_srd2014_preset_pack(args.skill_root),
         build_srd2024_preset_pack(args.skill_root),
     ]
     for path in args.addon:
+        packages.append(json.loads(path.read_text(encoding="utf-8")))
+    for path in args.module:
         packages.append(json.loads(path.read_text(encoding="utf-8")))
     index = build_public_library(args.output, packages)
     print(json.dumps(index, ensure_ascii=False, indent=2))
