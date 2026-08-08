@@ -87,7 +87,8 @@ ruling boundary; runtime does not author a solution on first use.
 - Objective world facts belong to Core CampaignMemory and use stable `fact_key`
   identities; the CLI exposes `memory upsert/revise` for diagnostics.
 - A PC or NPC's memories, beliefs, rumors, and misconceptions belong to ActorKnowledge.
-- `character.notes.memories` remains only for legacy character documents.
+- Actor knowledge is stored only in the campaign memory subsystem; character notes
+  never carry memories.
   `character memory migrate` emits ActorKnowledge candidates; new features must
   not treat the embedded list as authoritative memory.
 - `continuity commit --payload ...` atomically persists a scene event, fact

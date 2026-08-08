@@ -1982,13 +1982,13 @@ def test_mixed_weapon_and_special_action_multiattack_stays_a_dm_boundary() -> No
         if activity["name"] == "Multiattack"
     )
     assert multiattack["choices"]["manual_ruling"] == {
-        "kind": "descriptive_activity",
+        "kind": "multiattack_composition",
         "default_resolver": "agent",
         "source_excerpt": (
             "The commoner makes one attack with its club and uses Devour Intellect."
         ),
     }
-    assert multiattack.get("mechanic_refs", []) == []
+    assert multiattack["mechanic_refs"] == []
     assert "Multiattack: Multiattack composition requires a DM ruling" in parsed.warnings
 
 
@@ -2090,7 +2090,7 @@ def test_agent_can_compile_a_custom_statblock_action_without_a_python_branch() -
                         "from the reviewed source action."
                     ),
                     "resolution_plan": {
-                        "schema_version": 1,
+                            "schema_version": 2,
                         "id": plan_id,
                         "source_card_id": activity["id"],
                         "source_card_kind": "monster_action",
@@ -2182,7 +2182,7 @@ def test_agent_can_compile_a_weapon_on_hit_plan_from_the_exact_statblock_text() 
                         "source-bound condition plan."
                     ),
                     "resolution_plan": {
-                        "schema_version": 1,
+                        "schema_version": 2,
                         "id": "module.giant-spider.web.on-hit",
                         "source_card_id": web["id"],
                         "source_card_kind": "item",
@@ -2812,7 +2812,8 @@ def test_qualified_multiattack_keeps_source_name_and_accepts_reviewed_fill() -> 
         if item["id"] == "multiattack-yuan-ti-form-only-action"
     )
     assert activity["name"] == "Multiattack (Yuan-ti Form Only)"
-    assert activity.get("mechanic_refs", []) == []
+    assert activity["mechanic_refs"] == []
+    assert activity["choices"]["manual_ruling"]["kind"] == "multiattack_composition"
     assert derive_character_sheet(parsed.sheet)["multiattack_options"] == []
 
     filled = apply_reviewed_statblock_fill(
@@ -3029,10 +3030,11 @@ def test_agent_review_can_keep_custom_multiattack_as_agent_ruling() -> None:
         if item["id"] == multiattack["id"]
     )
     assert retained["choices"]["manual_ruling"] == {
-        "kind": "descriptive_activity",
+        "kind": "multiattack_composition",
         "default_resolver": "agent",
         "source_excerpt": multiattack["description"],
     }
+    assert retained["mechanic_refs"] == []
     assert filled["resolved_warnings"] == []
     assert filled["added_warnings"] == [
         "Multiattack: Multiattack composition requires a DM ruling"

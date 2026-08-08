@@ -14,14 +14,12 @@ from sagasmith_dnd.character_schema import (
     derive_character_sheet,
     effective_ability_modifier,
     equip_inventory_item,
-    legacy_memory_candidates,
     receive_inventory_item,
     remove_effect,
     remove_inventory_item,
     set_exhaustion_level,
     set_spell_prepared,
     validate_character_notes,
-    validate_character_notes_update,
     validate_character_sheet,
     validate_party_state,
     validate_world_time,
@@ -29,6 +27,14 @@ from sagasmith_dnd.character_schema import (
 from sagasmith_dnd.content_solution import build_content_solution
 from sagasmith_dnd.resolution_plan import compile_resolution_plan
 from sagasmith_dnd.vocabulary import DENOMINATION_CP_VALUES
+
+
+def test_runtime_sheet_rejects_portable_portrait_fields() -> None:
+    sheet = default_character_sheet()
+    sheet["identity"]["portrait_uri"] = "asset://portraits/mira.png"
+
+    with pytest.raises(ValueError, match="portrait_uri"):
+        validate_character_sheet(sheet)
 
 
 def test_effective_ability_modifier_uses_the_shared_override_projection() -> None:
@@ -198,15 +204,7 @@ def _caster_sheet() -> dict:
 
 
 def test_world_time_requires_one_canonical_elapsed_instant() -> None:
-    assert validate_world_time(
-        {
-            "day": 3,
-            "hour": 7,
-            "minute": 15,
-            "elapsed_minutes": 3315,
-            "label": "Morning",
-        }
-    ) == {
+    expected = {
         "schema_version": 2,
         "tick_seconds": 6,
         "calendar_offset_ticks": 33150,
@@ -218,18 +216,10 @@ def test_world_time_requires_one_canonical_elapsed_instant() -> None:
         "round_remainder": 0,
         "label": "Morning",
     }
+    assert validate_world_time(expected) == expected
 
-    with pytest.raises(ValueError, match="must match day/hour/minute"):
-        validate_party_state(
-            {
-                "world_time": {
-                    "day": 3,
-                    "hour": 7,
-                    "minute": 15,
-                    "elapsed_minutes": 3314,
-                }
-            }
-        )
+    with pytest.raises(ValueError, match="must match game_time"):
+        validate_party_state({"world_time": {**expected, "elapsed_minutes": 3314}})
 
 
 @pytest.mark.parametrize(
@@ -251,7 +241,7 @@ def test_world_time_rejects_invalid_or_noncanonical_fields(world_time: dict) -> 
         validate_party_state({"world_time": world_time})
 
 
-def test_effect_duration_migrates_legacy_minutes_to_tick_remainder() -> None:
+def test_effect_duration_rejects_retired_minute_remainder() -> None:
     sheet = default_character_sheet()
     sheet["effects"] = [
         {
@@ -280,19 +270,10 @@ def test_effect_duration_migrates_legacy_minutes_to_tick_remainder() -> None:
         ]
     }
 
-    normalized_sheet = validate_character_sheet(sheet)
-    normalized_state = validate_party_state(state)
-
-    assert normalized_sheet["effects"][0]["duration"] == {
-        "period": "hour",
-        "remaining": 1,
-        "elapsed_ticks_remainder": 300,
-    }
-    assert normalized_state["world_effects"][0]["duration"] == {
-        "period": "day",
-        "remaining": 1,
-        "elapsed_ticks_remainder": 600,
-    }
+    with pytest.raises(ValueError, match="unsupported fields"):
+        validate_character_sheet(sheet)
+    with pytest.raises(ValueError, match="unsupported fields"):
+        validate_party_state(state)
 
 
 def test_world_effect_creation_time_has_one_canonical_tick_field() -> None:
@@ -307,23 +288,9 @@ def test_world_effect_creation_time_has_one_canonical_tick_field() -> None:
             ]
         }
     )
-    legacy = validate_party_state(
-        {
-            "world_effects": [
-                {
-                    "id": "legacy",
-                    "name": "Legacy",
-                    "created_at_elapsed_minutes": 2,
-                }
-            ]
-        }
-    )
-
     assert canonical["world_effects"][0]["created_at_elapsed_ticks"] == 15
     assert "created_at_elapsed_minutes" not in canonical["world_effects"][0]
-    assert legacy["world_effects"][0]["created_at_elapsed_ticks"] == 20
-    assert "created_at_elapsed_minutes" not in legacy["world_effects"][0]
-    with pytest.raises(ValueError, match="must match"):
+    with pytest.raises(ValueError, match="unsupported fields"):
         validate_party_state(
             {
                 "world_effects": [
@@ -338,32 +305,27 @@ def test_world_effect_creation_time_has_one_canonical_tick_field() -> None:
         )
 
 
-def test_party_state_keeps_combat_authority_only_on_the_active_encounter() -> None:
-    normalized = validate_party_state(
-        {"game_phase": "combat", "combat": {"active": True}}
-    )
-
-    assert normalized["game_phase"] == "play"
-    assert normalized["combat"] == {"active": True}
+def test_party_state_rejects_retired_combat_phase_copy() -> None:
+    with pytest.raises(ValueError, match="game_phase must be lobby or play"):
+        validate_party_state({"game_phase": "combat", "combat": {"active": True}})
     with pytest.raises(ValueError, match="game_phase must be lobby or play"):
         validate_party_state({"game_phase": "paused"})
 
 
-def test_party_state_drops_legacy_module_activation_projection() -> None:
-    normalized = validate_party_state(
-        {
-            "module_imports": {
-                "active": {
-                    "module-key": {
-                        "module_id": "stale-module",
-                        "checksum": "stale-checksum",
+def test_party_state_rejects_retired_module_activation_projection() -> None:
+    with pytest.raises(ValueError, match="module_imports is retired"):
+        validate_party_state(
+            {
+                "module_imports": {
+                    "active": {
+                        "module-key": {
+                            "module_id": "stale-module",
+                            "checksum": "stale-checksum",
+                        }
                     }
                 }
             }
-        }
-    )
-
-    assert "module_imports" not in normalized
+        )
 
 
 def test_character_conditions_are_canonical_identifiers() -> None:
@@ -512,7 +474,7 @@ def test_class_prepared_spell_does_not_have_to_be_known() -> None:
     assert normalized["content"]["spells"][0]["access"]["prepared"] is True
 
 
-def test_inventory_wallet_effect_and_memory_contracts() -> None:
+def test_inventory_wallet_and_effect_contracts() -> None:
     sheet, item_id = add_inventory_item(
         validate_character_sheet({}),
         {
@@ -540,53 +502,6 @@ def test_inventory_wallet_effect_and_memory_contracts() -> None:
     assert moved["quantity"] == 1
     assert remaining["inventory"]["items"][0]["quantity"] == 1
 
-    memory_id = "legacy-promise"
-    notes = validate_character_notes(
-        {
-            "memories": [
-                {
-                    "id": memory_id,
-                    "kind": "promise",
-                    "summary": "Mira promised to return the signet ring.",
-                    "importance": 4,
-                    "visibility": "dm",
-                }
-            ]
-        }
-    )
-    assert notes["memories"][0]["id"] == memory_id
-    with pytest.raises(ValueError, match="import-only"):
-        validate_character_notes_update(
-            notes,
-            {
-                **notes,
-                "memories": [
-                    *notes["memories"],
-                    {"id": "new-memory", "summary": "Must use ActorKnowledge."},
-                ],
-            },
-        )
-    candidates = legacy_memory_candidates(notes, actor_id="mira")
-    assert candidates == [
-        {
-            "action": "add",
-            "actor_id": "mira",
-            "knowledge_key": f"legacy-memory:{memory_id}",
-            "subject_ref": "",
-            "proposition": "Mira promised to return the signet ring.",
-            "epistemic_status": "known",
-            "confidence": 4,
-            "source_event_id": None,
-            "cause": "legacy_character_note",
-            "disclosure_scope": "dm",
-            "legacy_memory": {
-                "id": memory_id,
-                "kind": "promise",
-                "participants": [],
-                "status": "active",
-            },
-        }
-    ]
 
 
 def test_wallet_valuation_uses_the_shared_denomination_contract() -> None:
@@ -1035,7 +950,7 @@ def test_weapon_cards_preserve_reviewed_source_bound_resolution_plans() -> None:
                 "on_hit_effect": source_excerpt,
             },
             "resolution_plan": {
-                "schema_version": 1,
+                "schema_version": 2,
                 "id": "module.binding-blade.on-hit",
                 "source_card_id": "binding-blade",
                 "source_card_kind": "item",
@@ -1348,7 +1263,6 @@ def test_complete_card_supports_identity_weapons_spells_encumbrance_and_adventur
                 "hair": "black",
                 "skin": "olive",
                 "eyes": "brown",
-                "portrait_uri": "asset://portraits/mira.png",
             },
             "progression": {
                 "background": "Soldier",
@@ -1506,7 +1420,6 @@ def test_complete_card_supports_identity_weapons_spells_encumbrance_and_adventur
             },
         }
     )
-    assert "portrait_uri" not in sheet["identity"]
     assert sheet["progression"]["background_grants"]["spell_list_expansion"] == [
         {
             "artifact_id": "dnd5e.content.example.spell.command",
@@ -1633,12 +1546,10 @@ def test_schema_rejects_legacy_fields_and_invalid_container_cycles() -> None:
         )
     with pytest.raises(ValueError, match="npc notes.profile.summary"):
         validate_character_notes({}, character_type="npc")
-    repaired = validate_character_notes({"profile": {"summary": "Reviewed NPC."}})
-    assert validate_character_notes_update(
-        {},
-        repaired,
-        character_type="npc",
-    )["profile"]["summary"] == "Reviewed NPC."
+    repaired = validate_character_notes(
+        {"profile": {"summary": "Reviewed NPC."}}, character_type="npc"
+    )
+    assert repaired["profile"]["summary"] == "Reviewed NPC."
 
 
 def test_content_selection_provenance_is_normalized_and_unique() -> None:
@@ -1700,7 +1611,7 @@ def test_whole_sheet_validation_enforces_exhaustion_death() -> None:
     assert normalized["conditions"] == ["dead"]
 
 
-def test_legacy_rest_minute_positions_migrate_to_game_ticks() -> None:
+def test_rest_history_rejects_retired_minute_positions() -> None:
     sheet = default_character_sheet()
     sheet["combat"]["rest_history"] = {
         "last_rest_type": "long_rest",
@@ -1709,11 +1620,5 @@ def test_legacy_rest_minute_positions_migrate_to_game_ticks() -> None:
         "last_long_rest_elapsed_minutes": 540,
     }
 
-    validated = validate_character_sheet(sheet)
-
-    assert validated["combat"]["rest_history"] == {
-        "last_rest_type": "long_rest",
-        "last_rest_started_elapsed_ticks": 600,
-        "last_rest_completed_elapsed_ticks": 5400,
-        "last_long_rest_elapsed_ticks": 5400,
-    }
+    with pytest.raises(ValueError, match="unsupported fields"):
+        validate_character_sheet(sheet)

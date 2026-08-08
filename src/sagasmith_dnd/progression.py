@@ -818,7 +818,6 @@ def synchronize_class_feature_resources(sheet: dict[str, Any]) -> dict[str, Any]
                     "unlimited": unlimited,
                 }
             )
-    _remove_unreferenced_shadow_resources(value, changes)
     current_attacks = int(value.setdefault("combat", {}).get("attacks_per_action", 1) or 1)
     scaled_attacks = 1
     attack_sources: list[str] = []
@@ -859,74 +858,6 @@ def synchronize_class_feature_resources(sheet: dict[str, Any]) -> dict[str, Any]
     if preparation_sync["change"] is not None:
         changes.append(preparation_sync["change"])
     return {"sheet": value, "changes": changes}
-
-
-def _remove_unreferenced_shadow_resources(
-    sheet: dict[str, Any],
-    changes: list[dict[str, Any]],
-) -> None:
-    """Remove legacy top-level counters shadowed by authoritative card-local uses.
-
-    Early callers could manually seed ``sheet.resources`` for a class feature
-    and later apply the structured feature card.  A local-use card deliberately
-    leaves ``resource_key`` empty, so the card's ``uses`` counter is the only
-    counter consumed by :func:`consume_activity`.  Keeping an unreferenced
-    top-level counter with the same label and class creates two independently
-    recoverable representations of one rules concept.
-
-    The migration is intentionally conservative: a top-level counter is removed
-    only when no card or spell references its key and exactly one scaling
-    feature owns an identically labelled, identically sourced local counter.
-    """
-
-    content = dict(sheet.get("content") or {})
-    referenced_keys: set[str] = set()
-    for section in ("activities", "features", "feats"):
-        for card in content.get(section, []):
-            resource_key = str(card.get("resource_key") or "")
-            if resource_key:
-                referenced_keys.add(resource_key)
-    for spell in content.get("spells", []):
-        access = dict(spell.get("access") or {})
-        innate_key = str(access.get("innate_resource_key") or "")
-        if innate_key:
-            referenced_keys.add(innate_key)
-
-    local_owners: dict[tuple[str, str], list[str]] = {}
-    for feature in content.get("features", []):
-        scaling = dict(feature.get("resource_scaling") or {})
-        if str(scaling.get("target") or "") != "uses":
-            continue
-        uses = dict(feature.get("uses") or {})
-        label = str(uses.get("label") or scaling.get("label") or "").strip().casefold()
-        source_key = (
-            str(uses.get("source_key") or scaling.get("class_name") or "").strip().casefold()
-        )
-        if not label or not source_key:
-            continue
-        local_owners.setdefault((label, source_key), []).append(str(feature.get("id") or ""))
-
-    resources = sheet.setdefault("resources", {})
-    for resource_key, raw_resource in list(resources.items()):
-        if resource_key in referenced_keys:
-            continue
-        resource = dict(raw_resource or {})
-        semantic_key = (
-            str(resource.get("label") or "").strip().casefold(),
-            str(resource.get("source_key") or "").strip().casefold(),
-        )
-        owners = local_owners.get(semantic_key, [])
-        if len(owners) != 1:
-            continue
-        del resources[resource_key]
-        changes.append(
-            {
-                "feature_id": owners[0],
-                "target": f"resources.{resource_key}",
-                "operation": "remove_shadow",
-                "old_resource": resource,
-            }
-        )
 
 
 def _scaled_resource_capacity(
@@ -982,8 +913,8 @@ def _advance_spellcasting(
         mode = str(profile["preparation_mode"])
     else:
         assert config is not None
-        ability, legacy_mode, kind = config
-        mode = "spellbook" if key == "wizard" else "prepared" if edition == "2024" else legacy_mode
+        ability, base_mode, kind = config
+        mode = "spellbook" if key == "wizard" else "prepared" if edition == "2024" else base_mode
     spellcasting = sheet.setdefault("spellcasting", {})
     spellcasting["ability"] = spellcasting.get("ability") or ability
     preparation = spellcasting.setdefault("preparation", {})

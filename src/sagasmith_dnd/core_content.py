@@ -331,11 +331,14 @@ def _subclasses(folder: Path) -> list[dict[str, Any]]:
                         "class_name": class_name,
                         "minimum_level": _SUBCLASS_LEVELS.get(class_name.casefold(), 1),
                         "description": body[:1200],
-                        "always_prepared_spells": (
-                            _subclass_spell_grants(body)
-                            if class_name.casefold() in {"cleric", "paladin"}
-                            else []
-                        ),
+                        "spell_grants": [
+                            {**grant, "method": "always_prepared"}
+                            for grant in (
+                                _subclass_spell_grants(body)
+                                if class_name.casefold() in {"cleric", "paladin"}
+                                else []
+                            )
+                        ],
                     },
                 )
             )

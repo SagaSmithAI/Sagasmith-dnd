@@ -300,31 +300,15 @@ def record_rest_completion(
     rest_type: str,
     started_elapsed_ticks: int | None = None,
     completed_elapsed_ticks: int | None = None,
-    started_elapsed_minutes: int | None = None,
-    completed_elapsed_minutes: int | None = None,
     rest_schedule: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Validate game-time rest timing and preserve canonical tick positions."""
     normalized = str(rest_type).strip().lower().replace("-", "_")
     minimum_rest_minutes(normalized)
-    using_ticks = started_elapsed_ticks is not None or completed_elapsed_ticks is not None
-    using_legacy_minutes = (
-        started_elapsed_minutes is not None or completed_elapsed_minutes is not None
-    )
-    if using_ticks == using_legacy_minutes:
-        raise CombatEngineError(
-            "provide exactly one complete rest interval in elapsed ticks or legacy minutes"
-        )
-    if using_ticks:
-        if started_elapsed_ticks is None or completed_elapsed_ticks is None:
-            raise CombatEngineError("rest tick bounds must be supplied together")
-        started = int(started_elapsed_ticks)
-        completed = int(completed_elapsed_ticks)
-    else:
-        if started_elapsed_minutes is None or completed_elapsed_minutes is None:
-            raise CombatEngineError("rest minute bounds must be supplied together")
-        started = int(started_elapsed_minutes) * TICKS_PER_MINUTE
-        completed = int(completed_elapsed_minutes) * TICKS_PER_MINUTE
+    if started_elapsed_ticks is None or completed_elapsed_ticks is None:
+        raise CombatEngineError("rest tick bounds must be supplied together")
+    started = int(started_elapsed_ticks)
+    completed = int(completed_elapsed_ticks)
     if started < 0 or completed < started:
         raise CombatEngineError("rest clock bounds are invalid")
     allows_trance = allows_trance_rest(sheet)
@@ -349,18 +333,11 @@ def record_rest_completion(
         raise CombatEngineError("a creature must have at least 1 hit point at the start of a rest")
     history = dict(dict(sheet.get("combat") or {}).get("rest_history") or {})
     previous_completed = history.get("last_rest_completed_elapsed_ticks")
-    if (
-        previous_completed is None
-        and history.get("last_rest_completed_elapsed_minutes") is not None
-    ):
-        previous_completed = int(history["last_rest_completed_elapsed_minutes"]) * TICKS_PER_MINUTE
     if previous_completed is not None and completed <= int(previous_completed):
         raise CombatEngineError(
             "a creature cannot benefit from more than one rest ending at the same campaign time"
         )
     previous_long = history.get("last_long_rest_elapsed_ticks")
-    if previous_long is None and history.get("last_long_rest_elapsed_minutes") is not None:
-        previous_long = int(history["last_long_rest_elapsed_minutes"]) * TICKS_PER_MINUTE
     if (
         normalized == "long_rest"
         and previous_long is not None
@@ -371,12 +348,6 @@ def record_rest_completion(
         )
     value = deepcopy(sheet)
     next_history = value.setdefault("combat", {}).setdefault("rest_history", {})
-    for legacy_key in (
-        "last_rest_started_elapsed_minutes",
-        "last_rest_completed_elapsed_minutes",
-        "last_long_rest_elapsed_minutes",
-    ):
-        next_history.pop(legacy_key, None)
     next_history.update(
         {
             "last_rest_type": normalized,
@@ -490,23 +461,14 @@ def expire_combat_bound_effects(sheet: dict[str, Any]) -> dict[str, Any]:
 
 def _elapsed_duration_ticks(
     *,
-    elapsed_ticks: int | None,
-    elapsed_minutes: int | None,
+    elapsed_ticks: int,
     subject: str,
 ) -> int:
-    """Normalize a duration delta while retaining the legacy minute input."""
+    """Validate one duration delta on the canonical tick stream."""
 
-    using_ticks = elapsed_ticks is not None
-    using_minutes = elapsed_minutes is not None
-    if using_ticks == using_minutes:
-        raise CombatEngineError(
-            f"elapsed {subject} duration requires exactly one tick or legacy minute delta"
-        )
-    raw = elapsed_ticks if using_ticks else elapsed_minutes
-    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
-        unit = "ticks" if using_ticks else "minutes"
-        raise CombatEngineError(f"elapsed {subject} duration {unit} must be positive")
-    return raw if using_ticks else raw * TICKS_PER_MINUTE
+    if isinstance(elapsed_ticks, bool) or not isinstance(elapsed_ticks, int) or elapsed_ticks < 1:
+        raise CombatEngineError(f"elapsed {subject} duration ticks must be positive")
+    return elapsed_ticks
 
 
 def _advance_elapsed_effect_collection(
@@ -533,15 +495,7 @@ def _advance_elapsed_effect_collection(
         unit = unit_ticks.get(period)
         if unit is None:
             continue
-        legacy_remainder = int(duration.get("elapsed_minutes_remainder", 0) or 0)
-        previous_remainder = int(
-            duration.get(
-                "elapsed_ticks_remainder",
-                legacy_remainder * TICKS_PER_MINUTE,
-            )
-            or 0
-        )
-        duration.pop("elapsed_minutes_remainder", None)
+        previous_remainder = int(duration.get("elapsed_ticks_remainder", 0) or 0)
         elapsed_units, remainder = divmod(previous_remainder + elapsed_ticks, unit)
         if elapsed_units == 0:
             if remainder != previous_remainder:
@@ -570,14 +524,12 @@ def _advance_elapsed_effect_collection(
 def advance_elapsed_effect_durations(
     sheet: dict[str, Any],
     *,
-    elapsed_ticks: int | None = None,
-    elapsed_minutes: int | None = None,
+    elapsed_ticks: int,
 ) -> dict[str, Any]:
     """Advance actor effects by an exact interval on the canonical tick stream."""
 
     delta_ticks = _elapsed_duration_ticks(
         elapsed_ticks=elapsed_ticks,
-        elapsed_minutes=elapsed_minutes,
         subject="effect",
     )
     value, advanced, expired = _advance_elapsed_effect_collection(
@@ -632,14 +584,12 @@ def advance_world_effect_durations(
 def advance_elapsed_world_effect_durations(
     state: dict[str, Any],
     *,
-    elapsed_ticks: int | None = None,
-    elapsed_minutes: int | None = None,
+    elapsed_ticks: int,
 ) -> dict[str, Any]:
     """Advance campaign-space effects with the actor tick algorithm."""
 
     delta_ticks = _elapsed_duration_ticks(
         elapsed_ticks=elapsed_ticks,
-        elapsed_minutes=elapsed_minutes,
         subject="world effect",
     )
     value, advanced, expired = _advance_elapsed_effect_collection(
@@ -811,7 +761,6 @@ def apply_rest(
     rules: ResolutionContext | None = None,
     rng: Any = None,
     game_day: int | None = None,
-    world_day: int | None = None,
 ) -> dict[str, Any]:
     """Settle a short or long rest without inventing player-choice allocations."""
     rest_type = str(rest_type).strip().lower().replace("-", "_")
@@ -845,7 +794,6 @@ def apply_rest(
             sheet,
             arcane_recovery,
             game_day=game_day,
-            world_day=world_day,
         )
         validate_natural_recovery_choice(
             sheet,
@@ -933,7 +881,6 @@ def apply_rest(
                 value,
                 arcane_recovery,
                 game_day=game_day,
-                world_day=world_day,
             )
             for level, amount in arcane_recovery_result["recovered"].items():
                 recovered[f"spell_slot:{level}"] = amount
@@ -1238,7 +1185,6 @@ def validate_arcane_recovery_choice(
     choice: dict[str, int] | None,
     *,
     game_day: int | None = None,
-    world_day: int | None = None,
 ) -> dict[str, Any] | None:
     """Validate Arcane Recovery using the edition's source-defined reset."""
     if not choice:
@@ -1248,9 +1194,7 @@ def validate_arcane_recovery_choice(
     feature = _arcane_recovery_feature(sheet)
     if feature is None:
         raise CombatEngineError("the actor does not have Arcane Recovery")
-    if game_day is not None and world_day is not None and game_day != world_day:
-        raise CombatEngineError("Arcane Recovery legacy world_day must match canonical game_day")
-    resolved_game_day = game_day if game_day is not None else world_day
+    resolved_game_day = game_day
     edition = _sheet_edition(sheet)
     choices = dict(feature.get("choices") or {})
     uses = dict(feature.get("uses") or {})
@@ -1261,25 +1205,9 @@ def validate_arcane_recovery_choice(
             or resolved_game_day < 1
         ):
             raise CombatEngineError("2014 Arcane Recovery requires the current game day")
-        canonical_last_day = choices.get("_arcane_recovery_last_used_game_day")
-        legacy_last_day = choices.get("_arcane_recovery_last_used_day")
-        if (
-            canonical_last_day is not None
-            and legacy_last_day is not None
-            and int(canonical_last_day) != int(legacy_last_day)
-        ):
-            raise CombatEngineError("Arcane Recovery day markers disagree")
-        last_used_day = canonical_last_day if canonical_last_day is not None else legacy_last_day
+        last_used_day = choices.get("_arcane_recovery_last_used_game_day")
         if last_used_day is not None and int(last_used_day) == resolved_game_day:
             raise CombatEngineError("Arcane Recovery has already been used on this game day")
-        if (
-            last_used_day is None
-            and int(uses.get("max", 0) or 0) == 1
-            and int(uses.get("value", 0) or 0) == 0
-        ):
-            raise CombatEngineError(
-                "Arcane Recovery has a legacy used marker without a game day; reconcile it first"
-            )
     elif int(uses.get("max", 0) or 0) != 1 or int(uses.get("value", 0) or 0) < 1:
         raise CombatEngineError(
             "2024 Arcane Recovery has already been used since the last long rest"
@@ -1341,14 +1269,12 @@ def apply_arcane_recovery_choice(
     choice: dict[str, int],
     *,
     game_day: int | None = None,
-    world_day: int | None = None,
 ) -> dict[str, Any]:
     """Apply one previously validated Arcane Recovery allocation in place."""
     result = validate_arcane_recovery_choice(
         sheet,
         choice,
         game_day=game_day,
-        world_day=world_day,
     )
     assert result is not None
     slots = sheet["spellcasting"]["spell_slots"]
@@ -1365,7 +1291,6 @@ def apply_arcane_recovery_choice(
         "slot_level": 0,
     }
     feature_choices = dict(feature.get("choices") or {})
-    feature_choices.pop("_arcane_recovery_last_used_day", None)
     feature_choices.pop("_arcane_recovery_last_used_game_day", None)
     if result["edition"] == "2014":
         feature_choices["_arcane_recovery_last_used_game_day"] = result["game_day"]

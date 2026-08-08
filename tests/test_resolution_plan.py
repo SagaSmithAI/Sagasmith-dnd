@@ -35,7 +35,7 @@ def _citation() -> dict:
 
 def _plan() -> dict:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "id": "module.custom-monster.prismatic-pulse",
         "source_card_id": "custom-monster.prismatic-pulse",
         "source_card_kind": "monster_action",
@@ -313,11 +313,11 @@ def test_v2_trigger_filter_binds_a_plan_to_the_paid_attack_event() -> None:
     assert compile_resolution_plan(resolution_plan_template(compiled)) == compiled
 
 
-def test_trigger_filter_is_v2_only_and_rejects_unknown_event_fields() -> None:
-    legacy = _plan()
-    legacy["trigger_filter"] = {"actor_id": "prism-beast"}
-    with pytest.raises(ResolutionPlanCompilationError, match="schema_version 2"):
-        compile_resolution_plan(legacy)
+def test_retired_plan_schema_and_unknown_event_fields_are_rejected() -> None:
+    retired = _plan()
+    retired["schema_version"] = 1
+    with pytest.raises(ResolutionPlanCompilationError, match="schema_version must be 2"):
+        compile_resolution_plan(retired)
 
     plan = _plan()
     plan["schema_version"] = 2

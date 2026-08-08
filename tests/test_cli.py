@@ -685,7 +685,7 @@ def test_cli_character_v2_inventory_party_and_memory_workflow(
     assert set(mira["data"]["derived"]["spellcasting"]["prepared_spell_ids"]) == {"cure", "bless"}
     _, nox = _call(capsys, "character", "show", "--id", nox_id)
     assert nox["data"]["notes"]["profile"]["summary"] == "A cautious innkeeper."
-    assert nox["data"]["notes"]["memories"] == []
+    assert nox["data"]["notes"]["schema_version"] == 3
     _, nox_knowledge = _call(
         capsys,
         "knowledge",
@@ -839,41 +839,8 @@ def test_cli_long_term_memory_v2_and_atomic_continuity_commit(
         campaign_id,
         "--name",
         "Witness",
-        "--notes",
-        '{"memories":[{"id":"old-promise","kind":"promise",'
-        '"summary":"The witness promised to return.","importance":4}]}',
     )
     actor_id = actor["data"]["id"]
-
-    retired_code, retired = _call(
-        capsys,
-        "character",
-        "memory",
-        "add",
-        "--id",
-        actor_id,
-        "--payload",
-        '{"summary":"This must not become a second knowledge store."}',
-    )
-    assert retired_code == 2
-    assert retired["error"]["code"] == "retired_character_memory"
-
-    replacement_code, replacement = _call(
-        capsys,
-        "character",
-        "update",
-        "--id",
-        actor_id,
-        "--notes",
-        '{"memories":[{"id":"new-memory","summary":"A bypass."}]}',
-    )
-    assert replacement_code == 2
-    assert replacement["error"]["code"] == "invalid_value"
-    assert "import-only" in replacement["error"]["message"]
-
-    _, migration = _call(capsys, "character", "memory", "migrate", "--id", actor_id)
-    assert migration["data"]["target"] == "actor_knowledge"
-    assert migration["data"]["candidates"][0]["knowledge_key"] == ("legacy-memory:old-promise")
 
     _, created = _call(
         capsys,

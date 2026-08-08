@@ -32,15 +32,11 @@ def is_multiattack_source_name(value: object) -> bool:
 
 
 def is_multiattack_activity(activity: Mapping[str, Any]) -> bool:
-    """Return whether an activity has the canonical Multiattack identity.
-
-    New cards carry an explicit mechanic reference. Strict source-name
-    recognition remains as a compatibility path for existing actor cards.
-    """
+    """Return whether an activity has the canonical Multiattack identity."""
 
     mechanic_refs = activity.get("mechanic_refs") or []
     if isinstance(mechanic_refs, (list, tuple)) and MULTIATTACK_MECHANIC_ID in {
         str(item).strip() for item in mechanic_refs
     }:
         return True
-    return is_multiattack_source_name(activity.get("name"))
+    return False

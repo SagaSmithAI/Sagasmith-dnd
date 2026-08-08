@@ -49,7 +49,6 @@ from sagasmith_dnd.vocabulary import (
     DENOMINATION_CP_VALUES,
     DENOMINATIONS,
     GAMEPLAY_VISIBILITY_SCOPES,
-    PLAYER_GAMEPLAY_VISIBILITY_SCOPES,
     PREPARATION_MODES,
     PREPARED_SELECTION_MODES,
     REST_TYPES,
@@ -121,9 +120,6 @@ EFFECT_PERIODS = REST_TYPES | {
     "hour",
     "day",
 }
-# Compatibility names retained for callers that imported these from the card schema.
-EFFECT_VISIBILITY_SCOPES = GAMEPLAY_VISIBILITY_SCOPES
-PLAYER_EFFECT_VISIBILITY_SCOPES = PLAYER_GAMEPLAY_VISIBILITY_SCOPES
 ENGINE_SETTLED_NON_AC_EFFECT_PATHS = {
     "combat.hp.maximum_multiplier",
     "combat.hp.current_multiplier_on_apply",
@@ -517,7 +513,7 @@ def default_character_sheet() -> dict[str, Any]:
 
 def default_character_notes() -> dict[str, Any]:
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "profile": {
             "summary": "",
             "appearance": "",
@@ -529,7 +525,6 @@ def default_character_notes() -> dict[str, Any]:
             "backstory": "",
             "dm_notes": "",
         },
-        "memories": [],
         "relationships": [],
         "goals": [],
     }
@@ -1371,10 +1366,9 @@ def validate_inventory(value: Any) -> dict[str, Any]:
         raise ValueError("a character cannot be attuned to more than three magic items")
     # source_key records provenance and can legitimately differ between two
     # copies acquired from different adventure chunks.  The 2014 attunement
-    # restriction is about copies of the same item, so the item name is the
-    # stable identity unless a legacy nameless record needs the source fallback.
+    # restriction is about copies of the same named item.
     attuned_identities = [
-        str(item.get("name") or item.get("source_key") or "").strip().casefold()
+        str(item["name"]).strip().casefold()
         for item in attuned_items
     ]
     if len(attuned_identities) != len(set(attuned_identities)):
@@ -2187,7 +2181,6 @@ def _normalize_effect_duration(
             "period",
             "remaining",
             "elapsed_ticks_remainder",
-            "elapsed_minutes_remainder",
         },
     )
     period = _text(duration.get("period"), f"{field}.period", default="manual")
@@ -2201,23 +2194,11 @@ def _normalize_effect_duration(
             minimum=0,
         ),
     }
-    legacy_minutes = _integer(
-        duration.get("elapsed_minutes_remainder"),
-        f"{field}.elapsed_minutes_remainder",
-        minimum=0,
-    )
     elapsed_ticks = _integer(
         duration.get("elapsed_ticks_remainder"),
         f"{field}.elapsed_ticks_remainder",
-        default=legacy_minutes * TICKS_PER_MINUTE,
         minimum=0,
     )
-    if (
-        "elapsed_ticks_remainder" in duration
-        and "elapsed_minutes_remainder" in duration
-        and elapsed_ticks != legacy_minutes * TICKS_PER_MINUTE
-    ):
-        raise ValueError(f"{field}.elapsed_minutes_remainder must match elapsed_ticks_remainder")
     if elapsed_ticks:
         period_ticks = {
             "minute": TICKS_PER_MINUTE,
@@ -2277,9 +2258,6 @@ def validate_character_sheet(
             "hair",
             "skin",
             "eyes",
-            # Accepted only to migrate legacy sheets; normalization deliberately
-            # drops it because actor art belongs to portable actor-card v2.
-            "portrait_uri",
         },
     )
 
@@ -2552,9 +2530,6 @@ def validate_character_sheet(
             "last_rest_started_elapsed_ticks",
             "last_rest_completed_elapsed_ticks",
             "last_long_rest_elapsed_ticks",
-            "last_rest_started_elapsed_minutes",
-            "last_rest_completed_elapsed_minutes",
-            "last_long_rest_elapsed_minutes",
         },
     )
     last_rest_type = _text(
@@ -2563,41 +2538,24 @@ def validate_character_sheet(
     if last_rest_type not in REST_TYPES | {""}:
         raise ValueError("sheet.combat.rest_history.last_rest_type is invalid")
 
-    def optional_elapsed_ticks(tick_key: str, legacy_minute_key: str) -> int | None:
+    def optional_elapsed_ticks(tick_key: str) -> int | None:
         raw_ticks = rest_history.get(tick_key)
-        raw_minutes = rest_history.get(legacy_minute_key)
-        ticks = (
+        return (
             _integer(raw_ticks, f"sheet.combat.rest_history.{tick_key}", minimum=0)
             if raw_ticks is not None
             else None
         )
-        legacy_ticks = (
-            _integer(
-                raw_minutes,
-                f"sheet.combat.rest_history.{legacy_minute_key}",
-                minimum=0,
-            )
-            * 10
-            if raw_minutes is not None
-            else None
-        )
-        if ticks is not None and legacy_ticks is not None and ticks != legacy_ticks:
-            raise ValueError(f"sheet.combat.rest_history.{legacy_minute_key} must match {tick_key}")
-        return ticks if ticks is not None else legacy_ticks
 
     normalized_rest_history = {
         "last_rest_type": last_rest_type,
         "last_rest_started_elapsed_ticks": optional_elapsed_ticks(
-            "last_rest_started_elapsed_ticks",
-            "last_rest_started_elapsed_minutes",
+            "last_rest_started_elapsed_ticks"
         ),
         "last_rest_completed_elapsed_ticks": optional_elapsed_ticks(
-            "last_rest_completed_elapsed_ticks",
-            "last_rest_completed_elapsed_minutes",
+            "last_rest_completed_elapsed_ticks"
         ),
         "last_long_rest_elapsed_ticks": optional_elapsed_ticks(
-            "last_long_rest_elapsed_ticks",
-            "last_long_rest_elapsed_minutes",
+            "last_long_rest_elapsed_ticks"
         ),
     }
     started = normalized_rest_history["last_rest_started_elapsed_ticks"]
@@ -3417,10 +3375,10 @@ def validate_character_notes(
 ) -> dict[str, Any]:
     value = _merge_defaults(default_character_notes(), _object(notes, "notes"))
     _reject_unknown(
-        value, "notes", {"schema_version", "profile", "memories", "relationships", "goals"}
+        value, "notes", {"schema_version", "profile", "relationships", "goals"}
     )
-    if _integer(value["schema_version"], "notes.schema_version") != 2:
-        raise ValueError("notes.schema_version must be 2")
+    if _integer(value["schema_version"], "notes.schema_version") != 3:
+        raise ValueError("notes.schema_version must be 3")
     profile = _object(value["profile"], "notes.profile")
     _reject_unknown(
         profile,
@@ -3437,63 +3395,8 @@ def validate_character_notes(
             "dm_notes",
         },
     )
-    memories = []
-    for index, item in enumerate(_array(value["memories"], "notes.memories")):
-        memory = _object(item, f"notes.memories[{index}]")
-        _reject_unknown(
-            memory,
-            f"notes.memories[{index}]",
-            {
-                "id",
-                "kind",
-                "summary",
-                "importance",
-                "participants",
-                "source_event_id",
-                "visibility",
-                "status",
-            },
-        )
-        visibility = _text(
-            memory.get("visibility"), f"notes.memories[{index}].visibility", default="dm"
-        )
-        if visibility not in GAMEPLAY_VISIBILITY_SCOPES:
-            raise ValueError("memory visibility is invalid")
-        status = _text(memory.get("status"), f"notes.memories[{index}].status", default="active")
-        if status not in {"active", "resolved", "superseded"}:
-            raise ValueError("memory status is invalid")
-        memories.append(
-            {
-                "id": _text(
-                    memory.get("id"), f"notes.memories[{index}].id", default=_uuid(), maximum=100
-                ),
-                "kind": _text(
-                    memory.get("kind"), f"notes.memories[{index}].kind", default="fact", maximum=100
-                ),
-                "summary": _text(
-                    memory.get("summary"), f"notes.memories[{index}].summary", maximum=1200
-                ),
-                "importance": _integer(
-                    memory.get("importance"),
-                    f"notes.memories[{index}].importance",
-                    default=3,
-                    minimum=1,
-                    maximum=5,
-                ),
-                "participants": _string_list(
-                    memory.get("participants") or [], f"notes.memories[{index}].participants"
-                ),
-                "source_event_id": _text(
-                    memory.get("source_event_id"),
-                    f"notes.memories[{index}].source_event_id",
-                    maximum=100,
-                ),
-                "visibility": visibility,
-                "status": status,
-            }
-        )
     normalized = {
-        "schema_version": 2,
+        "schema_version": 3,
         "profile": {
             "summary": _text(profile["summary"], "notes.profile.summary", maximum=1200),
             "appearance": _text(profile["appearance"], "notes.profile.appearance", maximum=1200),
@@ -3507,7 +3410,6 @@ def validate_character_notes(
             "backstory": _text(profile["backstory"], "notes.profile.backstory", maximum=8000),
             "dm_notes": _text(profile["dm_notes"], "notes.profile.dm_notes", maximum=4000),
         },
-        "memories": memories,
         "relationships": [
             _object(item, "notes.relationships[]")
             for item in _array(value["relationships"], "notes.relationships")
@@ -3517,23 +3419,6 @@ def validate_character_notes(
     if character_type in NON_PLAYER_CHARACTER_TYPES and not normalized["profile"]["summary"]:
         raise ValueError(f"{character_type} notes.profile.summary is required")
     return normalized
-
-
-def validate_character_notes_update(
-    current: dict[str, Any],
-    candidate: dict[str, Any],
-    *,
-    character_type: str | None = None,
-) -> dict[str, Any]:
-    """Validate mutable notes while keeping legacy embedded memories import-only."""
-
-    # Legacy actor rows may predate the required NPC/monster profile summary.
-    # They remain readable so a canonical update can repair them in place.
-    before = validate_character_notes(current)
-    after = validate_character_notes(candidate, character_type=character_type)
-    if after["memories"] != before["memories"]:
-        raise ValueError("notes.memories is import-only; use ActorKnowledge for subjective memory")
-    return after
 
 
 def validate_party_state(state: dict[str, Any]) -> dict[str, Any]:
@@ -3546,28 +3431,19 @@ def validate_party_state(state: dict[str, Any]) -> dict[str, Any]:
     from sagasmith_dnd.random_stream import validate_random_stream_state
 
     value = copy.deepcopy(_object(state, "campaign.state"))
-    # ModuleService owns the active immutable module revision. Older MCP
-    # releases copied that fact into campaign state, where it could drift
-    # across activation, restore, and branch operations.
-    value.pop("module_imports", None)
+    if "module_imports" in value:
+        raise ValueError(
+            "campaign.state.module_imports is retired; module activation is owned by ModuleService"
+        )
     game_phase = str(value.get("game_phase") or "lobby").strip().casefold()
-    if game_phase == "combat":
-        # Legacy state duplicated the active encounter as a second combat flag.
-        # Combat exposure is now derived only from campaign.state.combat.active.
-        game_phase = "play"
     if game_phase not in CAMPAIGN_GAME_PHASES:
         raise ValueError("campaign.state.game_phase must be lobby or play")
     value["game_phase"] = game_phase
-    if "game_time" in value:
-        game_time = validate_game_time(value["game_time"])
-    else:
-        legacy_clock = _object(value.get("world_time") or {}, "campaign.state.world_time")
-        legacy_elapsed = legacy_clock.get("elapsed_minutes")
-        game_time = game_time_from_ticks(
-            int(legacy_elapsed) * 10
-            if isinstance(legacy_elapsed, int) and not isinstance(legacy_elapsed, bool)
-            else 0
-        )
+    game_time = (
+        validate_game_time(value["game_time"])
+        if "game_time" in value
+        else game_time_from_ticks()
+    )
     value["game_time"] = game_time
     party = _object(value.get("party") or {}, "campaign.state.party")
     _reject_unknown(party, "campaign.state.party", {"inventory", "notes"})
@@ -3632,7 +3508,6 @@ def validate_world_effect(value: Any, *, field: str = "world_effect") -> dict[st
             "duration",
             "description",
             "created_at_elapsed_ticks",
-            "created_at_elapsed_minutes",
             "metadata",
             "ended_reason",
         },
@@ -3650,17 +3525,7 @@ def validate_world_effect(value: Any, *, field: str = "world_effect") -> dict[st
     target_id = _text(target.get("id"), f"{field}.target.id", maximum=300)
     if target_kind != "campaign" and not target_id:
         raise ValueError(f"{field}.target.id is required for {target_kind} effects")
-    raw_created_minutes = effect.get("created_at_elapsed_minutes")
     raw_created_ticks = effect.get("created_at_elapsed_ticks")
-    created_at_elapsed_minutes = (
-        _integer(
-            raw_created_minutes,
-            f"{field}.created_at_elapsed_minutes",
-            minimum=0,
-        )
-        if raw_created_minutes is not None
-        else None
-    )
     created_at_elapsed_ticks = (
         _integer(
             raw_created_ticks,
@@ -3668,13 +3533,8 @@ def validate_world_effect(value: Any, *, field: str = "world_effect") -> dict[st
             minimum=0,
         )
         if raw_created_ticks is not None
-        else (created_at_elapsed_minutes or 0) * TICKS_PER_MINUTE
+        else 0
     )
-    if (
-        created_at_elapsed_minutes is not None
-        and created_at_elapsed_minutes != created_at_elapsed_ticks // TICKS_PER_MINUTE
-    ):
-        raise ValueError(f"{field}.created_at_elapsed_minutes must match created_at_elapsed_ticks")
     normalized = {
         "id": _text(effect.get("id"), f"{field}.id", default=_uuid(), maximum=100),
         "name": _text(effect.get("name"), f"{field}.name", maximum=300),
@@ -3698,7 +3558,7 @@ def validate_world_effect(value: Any, *, field: str = "world_effect") -> dict[st
         "created_at_elapsed_ticks": created_at_elapsed_ticks,
         "metadata": _object(effect.get("metadata") or {}, f"{field}.metadata"),
     }
-    if normalized["visibility"] not in EFFECT_VISIBILITY_SCOPES:
+    if normalized["visibility"] not in GAMEPLAY_VISIBILITY_SCOPES:
         raise ValueError(f"{field}.visibility is invalid")
     ended_reason = _text(effect.get("ended_reason"), f"{field}.ended_reason", maximum=300)
     if ended_reason:
@@ -4742,38 +4602,3 @@ def set_exhaustion_level(sheet: dict[str, Any], value: int) -> dict[str, Any]:
     if level >= 6 and "dead" not in condition_ids(result["conditions"]):
         result["conditions"].append("dead")
     return validate_character_sheet(result)
-
-
-def legacy_memory_candidates(
-    notes: dict[str, Any],
-    *,
-    actor_id: str,
-    include_inactive: bool = False,
-) -> list[dict[str, Any]]:
-    """Convert embedded v2 memories into explicit ActorKnowledge add payloads."""
-    normalized = validate_character_notes(notes)
-    candidates = []
-    for memory in normalized["memories"]:
-        if not include_inactive and memory["status"] != "active":
-            continue
-        candidates.append(
-            {
-                "action": "add",
-                "actor_id": actor_id,
-                "knowledge_key": f"legacy-memory:{memory['id']}",
-                "subject_ref": "",
-                "proposition": memory["summary"],
-                "epistemic_status": "known",
-                "confidence": memory["importance"],
-                "source_event_id": memory.get("source_event_id") or None,
-                "cause": "legacy_character_note",
-                "disclosure_scope": memory["visibility"],
-                "legacy_memory": {
-                    "id": memory["id"],
-                    "kind": memory["kind"],
-                    "participants": list(memory["participants"]),
-                    "status": memory["status"],
-                },
-            }
-        )
-    return candidates

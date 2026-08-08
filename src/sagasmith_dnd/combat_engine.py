@@ -186,10 +186,10 @@ class CombatEngineError(ValueError):
     """Base error for a rejected or incomplete combat operation."""
 
 
-def clear_ended_invisibility_spell_condition(
+def reconcile_ended_effect_condition_ids(
     sheet: dict[str, Any], *, ended_effect_ids: Iterable[str]
 ) -> bool:
-    """Compatibility wrapper around the shared effect-condition projection."""
+    """Reconcile condition projections for a selected set of ended effects."""
 
     ids = {str(item) for item in ended_effect_ids if str(item)}
     if not ids:
@@ -220,7 +220,7 @@ def end_concentration_for_incapacitating_conditions(
         effect_id = str(effect.get("id") or "")
         if effect_id:
             ended.append(effect_id)
-    clear_ended_invisibility_spell_condition(sheet, ended_effect_ids=ended)
+    reconcile_ended_effect_condition_ids(sheet, ended_effect_ids=ended)
     return ended
 
 
@@ -666,7 +666,6 @@ def reconcile_effect_dependencies(
     }
 
 
-_SRD2014_JACK_OF_ALL_TRADES_ID = "dnd5e.content.srd2014.feature.bard-jack-of-all-trades"
 _JACK_OF_ALL_TRADES_BOUNDARY_ID = "dnd5e.core.check.jack_of_all_trades"
 
 
@@ -682,15 +681,7 @@ def _has_content_mechanic(sheet: dict[str, Any], mechanic_id: str) -> bool:
 
 
 def _jack_of_all_trades_bonus(sheet: dict[str, Any]) -> int:
-    edition = str(sheet.get("edition") or "")
-    has_legacy_feature = edition == "2014" and any(
-        isinstance(feature, dict) and str(feature.get("id") or "") == _SRD2014_JACK_OF_ALL_TRADES_ID
-        for feature in dict(sheet.get("content") or {}).get("features", [])
-    )
-    has_feature = has_legacy_feature or _has_content_mechanic(
-        sheet, _JACK_OF_ALL_TRADES_BOUNDARY_ID
-    )
-    if not has_feature:
+    if not _has_content_mechanic(sheet, _JACK_OF_ALL_TRADES_BOUNDARY_ID):
         return 0
     level = int(dict(sheet.get("progression") or {}).get("level", 1) or 1)
     return proficiency_bonus(level) // 2
@@ -4004,7 +3995,7 @@ def apply_concentration_result(
                 effect["active"] = False
                 effect["ended_reason"] = "failed_concentration_save"
                 ended_effect_ids.append(str(effect.get("id") or ""))
-        clear_ended_invisibility_spell_condition(value, ended_effect_ids=ended_effect_ids)
+        reconcile_ended_effect_condition_ids(value, ended_effect_ids=ended_effect_ids)
     return value
 
 

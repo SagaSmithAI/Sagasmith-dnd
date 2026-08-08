@@ -15,7 +15,6 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 SEMANTIC_PLAN_VERSION = 2
-SUPPORTED_SEMANTIC_PLAN_VERSIONS = frozenset({1, 2})
 
 SOURCE_CARD_KINDS = frozenset(
     {
@@ -499,14 +498,9 @@ def compile_resolution_plan(value: dict[str, Any]) -> CompiledResolutionPlan:
     source_card_id = str(value.get("source_card_id") or "").strip()
     source_card_kind = str(value.get("source_card_kind") or "").strip()
     trigger = str(value.get("trigger") or "").strip()
-    if schema_version not in SUPPORTED_SEMANTIC_PLAN_VERSIONS:
+    if schema_version != SEMANTIC_PLAN_VERSION:
         raise ResolutionPlanCompilationError(
-            "resolution plan schema_version must be one of "
-            f"{sorted(SUPPORTED_SEMANTIC_PLAN_VERSIONS)}"
-        )
-    if schema_version == 1 and "trigger_filter" in value:
-        raise ResolutionPlanCompilationError(
-            "resolution plan trigger_filter requires schema_version 2"
+            f"resolution plan schema_version must be {SEMANTIC_PLAN_VERSION}"
         )
     for field, candidate in (
         ("id", plan_id),
@@ -569,12 +563,11 @@ def compile_resolution_plan(value: dict[str, Any]) -> CompiledResolutionPlan:
         "source_card_id": source_card_id,
         "source_card_kind": source_card_kind,
         "trigger": trigger,
+        "trigger_filter": trigger_filter,
         "slots": slots,
         "steps": steps,
         "citations": list(citations),
     }
-    if schema_version >= 2:
-        canonical["trigger_filter"] = trigger_filter
     fingerprint = _fingerprint(canonical)
     supplied_fingerprint = str(value.get("fingerprint") or "")
     if supplied_fingerprint and supplied_fingerprint != fingerprint:
@@ -732,38 +725,34 @@ def execute_resolution_plan(
 def resolution_plan_contract(plan: CompiledResolutionPlan) -> dict[str, Any]:
     """Return the bounded Agent/external-input contract without executable internals."""
 
-    contract = {
+    return {
         "schema_version": plan.schema_version,
         "plan_id": plan.id,
         "plan_fingerprint": plan.fingerprint,
         "source_card_id": plan.source_card_id,
         "source_card_kind": plan.source_card_kind,
         "trigger": plan.trigger,
+        "trigger_filter": deepcopy(plan.trigger_filter),
         "slots": deepcopy(plan.slots),
         "citations": [deepcopy(item) for item in plan.citations],
     }
-    if plan.schema_version >= 2:
-        contract["trigger_filter"] = deepcopy(plan.trigger_filter)
-    return contract
 
 
 def resolution_plan_template(plan: CompiledResolutionPlan) -> dict[str, Any]:
     """Serialize the canonical rule-card template for durable content storage."""
 
-    template = {
+    return {
         "schema_version": plan.schema_version,
         "id": plan.id,
         "source_card_id": plan.source_card_id,
         "source_card_kind": plan.source_card_kind,
         "trigger": plan.trigger,
+        "trigger_filter": deepcopy(plan.trigger_filter),
         "slots": deepcopy(plan.slots),
         "steps": [deepcopy(item) for item in plan.steps],
         "citations": [deepcopy(item) for item in plan.citations],
         "fingerprint": plan.fingerprint,
     }
-    if plan.schema_version >= 2:
-        template["trigger_filter"] = deepcopy(plan.trigger_filter)
-    return template
 
 
 def resolution_plan_trigger_matches(
@@ -1619,7 +1608,6 @@ __all__ = [
     "SEMANTIC_PLAN_VERSION",
     "SLOT_KINDS",
     "SOURCE_CARD_KINDS",
-    "SUPPORTED_SEMANTIC_PLAN_VERSIONS",
     "TRIGGER_EVENT_FIELDS",
     "bind_resolution_plan",
     "compile_resolution_plan",

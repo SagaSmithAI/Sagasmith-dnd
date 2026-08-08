@@ -452,7 +452,7 @@ def test_feature_resource_formula_reacts_to_ability_changes_and_unlimited_levels
     }
 
 
-def test_feature_resource_sync_removes_only_unreferenced_shadow_counter() -> None:
+def test_feature_resource_sync_does_not_guess_that_top_level_resources_are_shadows() -> None:
     sheet = _single_class_sheet("Bard", hit_die=8, constitution=12, hp=(8, 8))
     sheet["abilities"]["charisma"]["score"] = 20
     sheet["resources"] = {
@@ -517,20 +517,9 @@ def test_feature_resource_sync_removes_only_unreferenced_shadow_counter() -> Non
         "source_key": "Bard",
         "slot_level": 0,
     }
-    assert "bardic_inspiration" not in synchronized["sheet"]["resources"]
+    assert synchronized["sheet"]["resources"]["bardic_inspiration"]["value"] == 3
     assert synchronized["sheet"]["resources"]["shared_inspiration"]["value"] == 1
-    assert synchronized["changes"][-1] == {
-        "feature_id": "bardic-inspiration",
-        "target": "resources.bardic_inspiration",
-        "operation": "remove_shadow",
-        "old_resource": {
-            "label": "Bardic Inspiration",
-            "value": 3,
-            "max": 3,
-            "recovers_on": "long_rest",
-            "source_key": "Bard",
-        },
-    }
+    assert all(change.get("operation") != "remove_shadow" for change in synchronized["changes"])
 
 
 def test_zero_capacity_and_unlimited_class_resources_remain_distinct() -> None:

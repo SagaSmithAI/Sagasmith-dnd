@@ -58,21 +58,20 @@ def test_manifest_records_every_required_resume_section() -> None:
     assert state["playthrough_manifest"] == manifest
 
 
-def test_manifest_migrates_legacy_chunk_hash_name_to_canonical_source_ref() -> None:
-    legacy = {key: value for key, value in SOURCE_REF.items() if key != "content_sha256"}
-    legacy["chunk_content_sha256"] = SOURCE_REF["content_sha256"]
-    manifest = new_playthrough_manifest(
-        run_id="legacy-source-ref",
-        campaign_line_id="campaign-1",
-        module_ids=["module-1"],
-        recommended_party_minimum=4,
-        recommended_party_maximum=4,
-        selected_party_size=4,
-        source_refs=[legacy],
-    )
+def test_manifest_rejects_retired_chunk_hash_name() -> None:
+    invalid = {key: value for key, value in SOURCE_REF.items() if key != "content_sha256"}
+    invalid["chunk_content_sha256"] = SOURCE_REF["content_sha256"]
 
-    assert manifest["source_refs"][0]["content_sha256"] == "b" * 64
-    assert "chunk_content_sha256" not in manifest["source_refs"][0]
+    with pytest.raises(ValueError, match="unsupported fields"):
+        new_playthrough_manifest(
+            run_id="invalid-source-ref",
+            campaign_line_id="campaign-1",
+            module_ids=["module-1"],
+            recommended_party_minimum=4,
+            recommended_party_maximum=4,
+            selected_party_size=4,
+            source_refs=[invalid],
+        )
 
 
 def test_source_ref_uses_canonical_ordered_heading_paths() -> None:
@@ -398,11 +397,11 @@ def test_manifest_cannot_leave_lobby_before_quality_gate_passes() -> None:
         manifest["party"]["members"].append(current)
     validated = validate_party_state({"playthrough_manifest": manifest})
     assert validated["playthrough_manifest"]["party"]["members"][0]["wallet"] == {"gp": 10}
-    legacy = deepcopy(manifest)
-    for legacy_member in legacy["party"]["members"]:
-        legacy_member.pop("wallet")
-    validated_legacy = validate_party_state({"playthrough_manifest": legacy})
-    assert validated_legacy["playthrough_manifest"]["party"]["members"][0]["wallet"] == {}
+    missing_wallet = deepcopy(manifest)
+    for member in missing_wallet["party"]["members"]:
+        member.pop("wallet")
+    with pytest.raises(ValueError, match="wallet must be an object"):
+        validate_party_state({"playthrough_manifest": missing_wallet})
 
     manifest["status"] = "in_progress"
     with pytest.raises(ValueError, match="current scene"):

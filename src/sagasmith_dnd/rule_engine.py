@@ -232,7 +232,7 @@ class RuleEventResult:
 
 
 class CoreRuleProvider:
-    """Compatibility adapter around the current hard-coded 2014/2024 behavior."""
+    """Expose the selected hard-coded 2014/2024 core pack to rule settlement."""
 
     def __init__(self, edition: str) -> None:
         self.pack = get_core_rule_pack(edition)

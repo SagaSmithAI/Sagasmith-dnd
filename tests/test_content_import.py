@@ -1656,7 +1656,7 @@ def test_agent_added_subclass_keeps_its_reviewed_parent_class() -> None:
                     "description": "A master engineer who forges a magical firearm.",
                     "class_name": "Artificer",
                     "minimum_level": 1,
-                    "always_prepared_spells": [],
+                    "spell_grants": [],
                 },
             },
         }
@@ -4635,7 +4635,7 @@ def test_custom_mechanical_artifact_persists_a_source_bound_plan_template() -> N
             "mechanical_scope": "mechanical",
             "card": {"name": "Prismatic Pulse"},
             "resolution_plan": {
-                "schema_version": 1,
+                "schema_version": 2,
                 "id": "dnd5e.extension.plan.prismatic-pulse",
                 "source_card_id": artifact_id,
                 "source_card_kind": "feature",
@@ -5024,7 +5024,7 @@ def test_custom_mechanical_artifact_cannot_escape_its_reviewed_source_chunks() -
             "mechanical_scope": "mechanical",
             "card": {"name": "Unsafe"},
             "resolution_plan": {
-                "schema_version": 1,
+                "schema_version": 2,
                 "id": "dnd5e.extension.plan.unsafe",
                 "source_card_id": "dnd5e.extension.feature.unsafe",
                 "source_card_kind": "feature",

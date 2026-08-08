@@ -169,15 +169,15 @@ def test_rest_completion_enforces_duration_and_daily_limit() -> None:
         record_rest_completion(
             sheet,
             rest_type="long_rest",
-            started_elapsed_minutes=0,
-            completed_elapsed_minutes=479,
+            started_elapsed_ticks=0,
+            completed_elapsed_ticks=4790,
         )
 
     recorded = record_rest_completion(
         sheet,
         rest_type="long_rest",
-        started_elapsed_minutes=0,
-        completed_elapsed_minutes=480,
+        started_elapsed_ticks=0,
+        completed_elapsed_ticks=4800,
         rest_schedule=long_schedule,
     )
     assert recorded["combat"]["rest_history"]["last_long_rest_elapsed_ticks"] == 4800
@@ -185,24 +185,24 @@ def test_rest_completion_enforces_duration_and_daily_limit() -> None:
         record_rest_completion(
             recorded,
             rest_type="long_rest",
-            started_elapsed_minutes=1000,
-            completed_elapsed_minutes=1480,
+            started_elapsed_ticks=10000,
+            completed_elapsed_ticks=14800,
             rest_schedule=long_schedule,
         )
     with pytest.raises(CombatEngineError, match="same campaign time"):
         record_rest_completion(
             recorded,
             rest_type="short_rest",
-            started_elapsed_minutes=420,
-            completed_elapsed_minutes=480,
+            started_elapsed_ticks=4200,
+            completed_elapsed_ticks=4800,
             rest_schedule=short_schedule,
         )
 
     next_day = record_rest_completion(
         recorded,
         rest_type="long_rest",
-        started_elapsed_minutes=1440,
-        completed_elapsed_minutes=1920,
+        started_elapsed_ticks=14400,
+        completed_elapsed_ticks=19200,
         rest_schedule=long_schedule,
     )
     assert next_day["combat"]["rest_history"]["last_long_rest_elapsed_ticks"] == 19200
@@ -214,15 +214,15 @@ def test_rest_completion_rejects_incomplete_or_interrupted_schedules() -> None:
         record_rest_completion(
             sheet,
             rest_type="short_rest",
-            started_elapsed_minutes=0,
-            completed_elapsed_minutes=60,
+            started_elapsed_ticks=0,
+            completed_elapsed_ticks=600,
         )
     with pytest.raises(CombatEngineError, match="more strenuous"):
         record_rest_completion(
             sheet,
             rest_type="short_rest",
-            started_elapsed_minutes=0,
-            completed_elapsed_minutes=60,
+            started_elapsed_ticks=0,
+            completed_elapsed_ticks=600,
             rest_schedule={
                 "sleep_minutes": 0,
                 "light_activity_minutes": 59,
@@ -233,8 +233,8 @@ def test_rest_completion_rejects_incomplete_or_interrupted_schedules() -> None:
         record_rest_completion(
             sheet,
             rest_type="long_rest",
-            started_elapsed_minutes=0,
-            completed_elapsed_minutes=480,
+            started_elapsed_ticks=0,
+            completed_elapsed_ticks=4800,
             rest_schedule={
                 "sleep_minutes": 359,
                 "light_activity_minutes": 121,
@@ -245,8 +245,8 @@ def test_rest_completion_rejects_incomplete_or_interrupted_schedules() -> None:
         record_rest_completion(
             sheet,
             rest_type="long_rest",
-            started_elapsed_minutes=0,
-            completed_elapsed_minutes=480,
+            started_elapsed_ticks=0,
+            completed_elapsed_ticks=4800,
             rest_schedule={
                 "sleep_minutes": 360,
                 "light_activity_minutes": 60,
@@ -275,8 +275,8 @@ def test_source_granted_trance_completes_a_long_rest_in_four_hours() -> None:
     recorded = record_rest_completion(
         sheet,
         rest_type="long_rest",
-        started_elapsed_minutes=0,
-        completed_elapsed_minutes=240,
+        started_elapsed_ticks=0,
+        completed_elapsed_ticks=2400,
         rest_schedule=schedule,
     )
 
@@ -285,8 +285,8 @@ def test_source_granted_trance_completes_a_long_rest_in_four_hours() -> None:
         record_rest_completion(
             default_character_sheet(),
             rest_type="long_rest",
-            started_elapsed_minutes=0,
-            completed_elapsed_minutes=240,
+            started_elapsed_ticks=0,
+            completed_elapsed_ticks=2400,
             rest_schedule=schedule,
         )
 

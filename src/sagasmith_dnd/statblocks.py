@@ -2035,9 +2035,13 @@ def _parse_srd_statblock(
             entry["choices"] = {
                 "manual_ruling": {
                     "kind": (
-                        "descriptive_passive"
-                        if activation == "passive"
-                        else "descriptive_activity"
+                        "multiattack_composition"
+                        if entry_name in unresolved_multiattacks
+                        else (
+                            "descriptive_passive"
+                            if activation == "passive"
+                            else "descriptive_activity"
+                        )
                     ),
                     "default_resolver": "agent",
                     "source_excerpt": description,
@@ -2052,7 +2056,12 @@ def _parse_srd_statblock(
                     "recovers_on": "manual",
                     "source_key": source_key,
                 }
-                entry["mechanic_refs"] = ["dnd5e.core.activity.recharge"]
+                entry["mechanic_refs"] = sorted(
+                    {
+                        *list(entry.get("mechanic_refs") or []),
+                        "dnd5e.core.activity.recharge",
+                    }
+                )
         sheet["content"]["activities" if activation != "passive" else "features"].append(entry)
         if legendary_action is None:
             warnings.append(
@@ -3430,13 +3439,13 @@ def apply_reviewed_statblock_fill(
         choices = dict(activity.get("choices") or {})
         manual_ruling = dict(choices.get("manual_ruling") or {})
         parsed_options = choices.get("multiattack_options")
-        if (
-            not is_multiattack_activity(activity)
-            or (
-                manual_ruling.get("kind") != "descriptive_activity"
-                and not isinstance(parsed_options, list)
-            )
-        ):
+        unresolved_multiattack = (
+            manual_ruling.get("kind") == "multiattack_composition"
+        )
+        structured_multiattack = is_multiattack_activity(activity) and isinstance(
+            parsed_options, list
+        )
+        if not unresolved_multiattack and not structured_multiattack:
             raise StatblockImportError(
                 "reviewed multiattack fill may target only a parsed Multiattack activity"
             )
@@ -3465,11 +3474,16 @@ def apply_reviewed_statblock_fill(
                 )
             activity["choices"] = {
                 "manual_ruling": {
-                    "kind": "descriptive_activity",
+                    "kind": "multiattack_composition",
                     "default_resolver": "agent",
                     "source_excerpt": source_excerpt,
                 }
             }
+            activity["mechanic_refs"] = [
+                ref
+                for ref in activity.get("mechanic_refs") or []
+                if ref != MULTIATTACK_MECHANIC_ID
+            ]
             normalized_declarations.append(
                 {
                     "activity_id": activity_id,
@@ -3568,7 +3582,7 @@ def apply_reviewed_statblock_fill(
                 ]
             )
         )
-        if manual_ruling.get("kind") == "descriptive_activity":
+        if unresolved_multiattack:
             resolved_warnings.append(
                 f"{activity['name']}: Multiattack composition requires a DM ruling"
             )

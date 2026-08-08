@@ -47,7 +47,6 @@ from sagasmith_dnd.character_schema import (
     default_character_sheet,
     derive_character_sheet,
     equip_inventory_item,
-    legacy_memory_candidates,
     receive_inventory_item,
     remove_effect,
     remove_inventory_item,
@@ -55,7 +54,6 @@ from sagasmith_dnd.character_schema import (
     set_spell_prepared,
     update_inventory_item,
     validate_character_notes,
-    validate_character_notes_update,
     validate_character_sheet,
     validate_party_state,
 )
@@ -269,11 +267,7 @@ def _persist_character(
         sheet_value["edition"] = profile.edition
     validated_sheet = validate_character_sheet(sheet_value)
     validated_notes = (
-        validate_character_notes_update(
-            before.notes,
-            notes,
-            character_type=before.character_type,
-        )
+        validate_character_notes(notes, character_type=before.character_type)
         if notes is not None
         else before.notes
     )
@@ -594,10 +588,8 @@ def _dispatch(args) -> Any:
                     summary=args.summary,
                     sheet=validate_character_sheet(sheet) if sheet is not None else None,
                     notes=(
-                        validate_character_notes_update(
-                            before.notes,
-                            _dict(args.notes),
-                            character_type=before.character_type,
+                        validate_character_notes(
+                            _dict(args.notes), character_type=before.character_type
                         )
                         if args.notes
                         else None
@@ -785,29 +777,6 @@ def _dispatch(args) -> Any:
                             operation="character.effect.remove",
                         )
                     )
-            if args.action == "memory":
-                before = characters.get(_require(args.id, "id"))
-                if args.subaction == "list":
-                    return validate_character_notes(
-                        before.notes, character_type=before.character_type
-                    )["memories"]
-                if args.subaction in {"add", "resolve"}:
-                    raise CliError(
-                        "retired_character_memory",
-                        "embedded character memory writes are retired; use the "
-                        "actor-knowledge add/revise commands",
-                        exit_code=2,
-                    )
-                if args.subaction == "migrate":
-                    return {
-                        "actor_id": before.id,
-                        "target": "actor_knowledge",
-                        "candidates": legacy_memory_candidates(
-                            before.notes,
-                            actor_id=before.id,
-                            include_inactive=args.include_inactive,
-                        ),
-                    }
             if args.action == "spell":
                 before = characters.get(_require(args.id, "id"))
                 if args.subaction == "list":

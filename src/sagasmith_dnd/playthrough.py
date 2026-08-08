@@ -7,7 +7,7 @@ from typing import Any
 
 from sagasmith_core.modules import EXACT_MODULE_SOURCE_FIELDS, canonical_heading_path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 PLAYTHROUGH_STATUSES = {
     "lobby",
     "ready",
@@ -36,7 +36,6 @@ PLAYTHROUGH_SOURCE_FIELDS = EXACT_MODULE_SOURCE_FIELDS | {
     "purpose",
     "asset_path",
     "asset_sha256",
-    "chunk_content_sha256",
     "excerpt",
 }
 
@@ -220,16 +219,8 @@ def validate_source_ref(value: Any, *, field: str = "source_ref") -> dict[str, A
     page_start = _integer(ref.get("page_start"), f"{field}.page_start", minimum=1)
     page_end = _integer(ref.get("page_end"), f"{field}.page_end", minimum=page_start)
     asset_sha = _required_text(ref.get("asset_sha256"), f"{field}.asset_sha256").casefold()
-    canonical_chunk_sha = ref.get("content_sha256")
-    legacy_chunk_sha = ref.get("chunk_content_sha256")
-    if (
-        canonical_chunk_sha is not None
-        and legacy_chunk_sha is not None
-        and str(canonical_chunk_sha).casefold() != str(legacy_chunk_sha).casefold()
-    ):
-        raise ValueError(f"{field} content SHA-256 aliases must match")
     chunk_sha = _required_text(
-        canonical_chunk_sha if canonical_chunk_sha is not None else legacy_chunk_sha,
+        ref.get("content_sha256"),
         f"{field}.content_sha256",
     ).casefold()
     if not _is_sha256(asset_sha) or not _is_sha256(chunk_sha):
@@ -491,9 +482,7 @@ def _validate_party_member(value: Any, index: int) -> dict[str, Any]:
         "xp": _integer(item.get("xp"), f"{field}.xp", minimum=0),
         "hit_points": _json_object(item.get("hit_points"), f"{field}.hit_points"),
         "resources": _json_object(item.get("resources"), f"{field}.resources"),
-        # Schema v1 manifests created before wallet projection remain readable;
-        # the next public runtime sync fills the authoritative denominations.
-        "wallet": _json_object(item.get("wallet") or {}, f"{field}.wallet"),
+        "wallet": _json_object(item.get("wallet"), f"{field}.wallet"),
         "equipment": _unique_strings(item.get("equipment"), f"{field}.equipment"),
         "knowledge_scope_actor_id": knowledge_actor,
     }

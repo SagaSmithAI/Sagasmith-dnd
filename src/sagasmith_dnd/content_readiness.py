@@ -1,8 +1,9 @@
 """Evidence-bound catalog and character-selection readiness for D&D content.
 
-Portable checksums prove that bytes did not change.  These contracts prove a
-different fact: reviewers examined the same semantic content that is about to
-be catalogued or materialized.  Runtime settlement remains independent; a
+Portable checksums prove that bytes did not change. These contracts record
+which checks were performed against the same semantic content that is about to
+be catalogued or materialized. Reviewer labels are provenance, not authenticated
+identities. Runtime settlement remains independent; a
 card can be safe to add to a character while its source-specific effect is
 still resolved by the Agent-as-DM boundary.
 """
@@ -116,7 +117,6 @@ _CARD_BINDINGS = {
         "name",
         "class_name",
         "minimum_level",
-        "always_prepared_spells",
         "spell_grants",
         "spell_list_expansion",
     ),
@@ -225,20 +225,9 @@ def catalog_review_errors(artifact: Mapping[str, Any]) -> list[str]:
             errors.append(f"{field}.notes must be a string up to 2000 characters")
         normalized_decisions.append((role, reviewer, checks_pass))
 
-    identities = [(role, reviewer) for role, reviewer, _passed in normalized_decisions]
-    if len(identities) != len(set(identities)):
-        errors.append(f"{prefix}.decisions must not repeat a reviewer role")
     if status == "approved":
-        passed = {
-            role: reviewer for role, reviewer, checks_pass in normalized_decisions if checks_pass
-        }
-        if "primary" not in passed:
-            errors.append(f"{prefix} approved status requires a passing primary review")
-        independent_role = "critic" if "critic" in passed else "dm" if "dm" in passed else ""
-        if not independent_role:
-            errors.append(f"{prefix} approved status requires a passing critic or DM review")
-        elif passed.get("primary") == passed[independent_role]:
-            errors.append(f"{prefix} independent reviewer must differ from primary")
+        if not any(checks_pass for _role, _reviewer, checks_pass in normalized_decisions):
+            errors.append(f"{prefix} approved status requires at least one passing review")
     return errors
 
 
@@ -1454,11 +1443,6 @@ def subclass_spell_grant_errors(binding: Mapping[str, Any]) -> list[str]:
 
     errors: list[str] = []
     normalized_names: list[str] = []
-    legacy = binding.get("always_prepared_spells")
-    if legacy is None:
-        legacy = []
-    if not isinstance(legacy, list):
-        return ["subclass always_prepared_spells must be an array"]
     grants = binding.get("spell_grants")
     if grants is None:
         grants = []
@@ -1475,42 +1459,36 @@ def subclass_spell_grant_errors(binding: Mapping[str, Any]) -> list[str]:
     expansion_names = [str(item).strip().casefold() for item in expansion]
     if len(expansion_names) != len(set(expansion_names)):
         errors.append("subclass spell_list_expansion must not repeat a spell")
-    for label, entries, legacy_mode in (
-        ("always_prepared_spells", legacy, True),
-        ("spell_grants", grants, False),
-    ):
-        for index, raw_grant in enumerate(entries):
-            prefix = f"subclass {label}[{index}]"
-            if not isinstance(raw_grant, Mapping):
-                errors.append(f"{prefix} must be an object")
-                continue
-            expected = {"minimum_level", "name"}
-            if not legacy_mode:
-                expected.add("method")
-            unsupported = set(raw_grant) - expected
-            missing = expected - set(raw_grant)
-            if unsupported:
-                errors.append(f"{prefix} has unsupported fields: {sorted(unsupported)}")
-            if missing:
-                errors.append(f"{prefix} has missing fields: {sorted(missing)}")
-            name = str(raw_grant.get("name") or "").strip()
-            if not name:
-                errors.append(f"{prefix}.name must not be empty")
-            else:
-                normalized_names.append(name.casefold())
-            minimum_level = raw_grant.get("minimum_level")
-            if (
-                isinstance(minimum_level, bool)
-                or not isinstance(minimum_level, int)
-                or not 1 <= minimum_level <= 20
-            ):
-                errors.append(f"{prefix}.minimum_level must be an integer from 1 to 20")
-            if not legacy_mode and raw_grant.get("method") not in {
-                "always_prepared",
-                "known",
-                "spellbook",
-            }:
-                errors.append(f"{prefix}.method must be always_prepared, known, or spellbook")
+    for index, raw_grant in enumerate(grants):
+        prefix = f"subclass spell_grants[{index}]"
+        if not isinstance(raw_grant, Mapping):
+            errors.append(f"{prefix} must be an object")
+            continue
+        expected = {"minimum_level", "name", "method"}
+        unsupported = set(raw_grant) - expected
+        missing = expected - set(raw_grant)
+        if unsupported:
+            errors.append(f"{prefix} has unsupported fields: {sorted(unsupported)}")
+        if missing:
+            errors.append(f"{prefix} has missing fields: {sorted(missing)}")
+        name = str(raw_grant.get("name") or "").strip()
+        if not name:
+            errors.append(f"{prefix}.name must not be empty")
+        else:
+            normalized_names.append(name.casefold())
+        minimum_level = raw_grant.get("minimum_level")
+        if (
+            isinstance(minimum_level, bool)
+            or not isinstance(minimum_level, int)
+            or not 1 <= minimum_level <= 20
+        ):
+            errors.append(f"{prefix}.minimum_level must be an integer from 1 to 20")
+        if raw_grant.get("method") not in {
+            "always_prepared",
+            "known",
+            "spellbook",
+        }:
+            errors.append(f"{prefix}.method must be always_prepared, known, or spellbook")
     if len(normalized_names) != len(set(normalized_names)):
         errors.append("subclass spell grants must not repeat a spell")
     if set(normalized_names).intersection(expansion_names):

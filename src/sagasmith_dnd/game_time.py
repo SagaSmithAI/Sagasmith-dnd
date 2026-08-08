@@ -183,7 +183,7 @@ def validate_calendar_minute_point(
     *,
     field: str = "world time",
 ) -> dict[str, int]:
-    """Validate the legacy/public minute-resolution calendar projection."""
+    """Validate a public minute-resolution calendar projection."""
 
     if not isinstance(value, dict):
         raise ValueError(f"{field} must be an object")
@@ -281,7 +281,7 @@ def anchor_world_time(
 
 
 def validate_world_time(value: Any, *, game_time: Any) -> dict[str, Any]:
-    """Validate and migrate a v1/v2 calendar projection at ``game_time``."""
+    """Validate the current calendar projection at ``game_time``."""
 
     if not isinstance(value, dict):
         raise ValueError("campaign.state.world_time must be an object")
@@ -289,44 +289,13 @@ def validate_world_time(value: Any, *, game_time: Any) -> dict[str, Any]:
         return {}
     clock = deepcopy(value)
     timeline = validate_game_time(game_time)
-    schema_version = clock.get("schema_version", 1)
+    schema_version = clock.get("schema_version")
     if isinstance(schema_version, bool) or not isinstance(schema_version, int):
         raise ValueError("campaign.state.world_time.schema_version must be an integer")
-    if schema_version == 1:
-        allowed = {
-            "schema_version",
-            "day",
-            "hour",
-            "minute",
-            "elapsed_minutes",
-            "label",
-        }
-        unknown = sorted(set(clock) - allowed)
-        if unknown:
-            raise ValueError(
-                "campaign.state.world_time contains unsupported fields: "
-                + ", ".join(unknown)
-            )
-        calendar_ticks = _calendar_ticks(
-            day=clock.get("day"),
-            hour=clock.get("hour"),
-            minute=clock.get("minute"),
-        )
-        elapsed_minutes = _integer(
-            clock.get("elapsed_minutes"),
-            "campaign.state.world_time.elapsed_minutes",
-        )
-        if elapsed_minutes != calendar_ticks // TICKS_PER_MINUTE:
-            raise ValueError(
-                "campaign.state.world_time.elapsed_minutes must match day/hour/minute"
-            )
-        return project_world_time(
-            timeline,
-            calendar_offset_ticks=calendar_ticks - timeline["elapsed_ticks"],
-            label=_label(clock.get("label")),
-        )
     if schema_version != WORLD_TIME_SCHEMA_VERSION:
-        raise ValueError("campaign.state.world_time.schema_version must be 1 or 2")
+        raise ValueError(
+            f"campaign.state.world_time.schema_version must be {WORLD_TIME_SCHEMA_VERSION}"
+        )
 
     required = {
         "schema_version",

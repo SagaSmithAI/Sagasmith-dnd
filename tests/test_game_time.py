@@ -16,30 +16,20 @@ from sagasmith_dnd.game_time import (
 )
 
 
-def test_v1_clock_migrates_without_changing_its_calendar_position() -> None:
+def test_retired_world_clock_schema_is_rejected() -> None:
     timeline = game_time_from_ticks(33150)
-    assert validate_world_time(
-        {
-            "schema_version": 1,
-            "day": 3,
-            "hour": 7,
-            "minute": 15,
-            "elapsed_minutes": 3315,
-            "label": "Trade Way",
-        },
-        game_time=timeline,
-    ) == {
-        "schema_version": 2,
-        "tick_seconds": 6,
-        "calendar_offset_ticks": 0,
-        "day": 3,
-        "hour": 7,
-        "minute": 15,
-        "second": 0,
-        "elapsed_minutes": 3315,
-        "round_remainder": 0,
-        "label": "Trade Way",
-    }
+    with pytest.raises(ValueError, match="schema_version must be 2"):
+        validate_world_time(
+            {
+                "schema_version": 1,
+                "day": 3,
+                "hour": 7,
+                "minute": 15,
+                "elapsed_minutes": 3315,
+                "label": "Trade Way",
+            },
+            game_time=timeline,
+        )
 
 
 def test_calendar_anchor_does_not_reset_unanchored_elapsed_game_time() -> None:

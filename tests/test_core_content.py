@@ -189,24 +189,28 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
         for item in artifacts
         if item["kind"] == "subclass" and item["card"]["name"] == "Life Domain"
     )
-    assert life_domain["card"]["always_prepared_spells"][:2] == [
-        {"name": "bless", "minimum_level": 1},
-        {"name": "cure wounds", "minimum_level": 1},
+    assert life_domain["card"]["spell_grants"][:2] == [
+        {"name": "bless", "minimum_level": 1, "method": "always_prepared"},
+        {"name": "cure wounds", "minimum_level": 1, "method": "always_prepared"},
     ]
     fiend = next(
         item
         for item in artifacts
         if item["kind"] == "subclass" and item["card"]["name"] == "The Fiend"
     )
-    assert fiend["card"]["always_prepared_spells"] == []
+    assert fiend["card"]["spell_grants"] == []
     oath_of_devotion = next(
         item
         for item in artifacts
         if item["kind"] == "subclass" and item["card"]["name"] == "Oath of Devotion"
     )
-    assert oath_of_devotion["card"]["always_prepared_spells"][:2] == [
-        {"name": "protection from evil and good", "minimum_level": 3},
-        {"name": "sanctuary", "minimum_level": 3},
+    assert oath_of_devotion["card"]["spell_grants"][:2] == [
+        {
+            "name": "protection from evil and good",
+            "minimum_level": 3,
+            "method": "always_prepared",
+        },
+        {"name": "sanctuary", "minimum_level": 3, "method": "always_prepared"},
     ]
     purity = next(
         item

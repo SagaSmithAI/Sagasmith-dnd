@@ -77,7 +77,7 @@ def _decisions() -> list[dict]:
     ]
 
 
-def test_catalog_review_is_dual_and_content_bound() -> None:
+def test_catalog_review_is_check_and_content_bound() -> None:
     artifact = _artifact()
     artifact["catalog_review"] = build_catalog_review(
         artifact,
@@ -95,15 +95,14 @@ def test_catalog_review_is_dual_and_content_bound() -> None:
 
     same_reviewer = _decisions()
     same_reviewer[1]["reviewer"] = same_reviewer[0]["reviewer"]
-    with pytest.raises(ValueError, match="independent reviewer"):
-        build_catalog_review(_artifact(), decisions=same_reviewer)
+    assert build_catalog_review(_artifact(), decisions=same_reviewer)["status"] == "approved"
 
 
 def test_catalog_review_cannot_approve_a_failed_boundary_check() -> None:
     decisions = _decisions()
     decisions[0]["checks"]["entry_boundary"] = False
 
-    with pytest.raises(ValueError, match="passing primary"):
+    with pytest.raises(ValueError, match="at least one passing review"):
         build_catalog_review(_artifact(), decisions=decisions)
 
 
@@ -529,7 +528,7 @@ def test_species_materializer_validates_resources_and_fixed_spell_levels() -> No
     )
 
 
-def test_species_materializer_accepts_legacy_decreases_defenses_and_shared_spells() -> None:
+def test_species_materializer_accepts_decreases_defenses_and_shared_spell_resources() -> None:
     card = {
         "name": "Legacy Source Species",
         "grants": {
@@ -719,22 +718,20 @@ def test_subclass_spell_grants_keep_known_and_prepared_semantics_distinct() -> N
         "name": "Circle of Spores",
         "class_name": "Druid",
         "minimum_level": 2,
-        "always_prepared_spells": [
-            {"name": "Blindness/Deafness", "minimum_level": 3}
-        ],
         "spell_grants": [
-            {"name": "Chill Touch", "minimum_level": 2, "method": "known"}
+            {"name": "Blindness/Deafness", "minimum_level": 3, "method": "always_prepared"},
+            {"name": "Chill Touch", "minimum_level": 2, "method": "known"},
         ],
         "spell_list_expansion": ["Aid"],
     }
     assert subclass_spell_grant_errors(card) == []
 
-    card["spell_grants"][0]["method"] = "prepared"
+    card["spell_grants"][1]["method"] = "prepared"
     assert subclass_spell_grant_errors(card) == [
-        "subclass spell_grants[0].method must be always_prepared, known, or spellbook"
+        "subclass spell_grants[1].method must be always_prepared, known, or spellbook"
     ]
 
-    card["spell_grants"][0]["method"] = "known"
+    card["spell_grants"][1]["method"] = "known"
     card["spell_list_expansion"] = ["Aid", "aid"]
     assert subclass_spell_grant_errors(card) == [
         "subclass spell_list_expansion must not repeat a spell"

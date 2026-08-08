@@ -4276,7 +4276,6 @@ def _hydrate_character_selection_schema(
         "subclass": (
             "class_name",
             "minimum_level",
-            "always_prepared_spells",
             "spell_grants",
         ),
     }
@@ -4800,7 +4799,6 @@ def author_selection_card_from_candidate(
                 _candidate_minimum_level(description)
                 or _SUBCLASS_MINIMUM_LEVELS_2014.get(class_name.casefold(), 3)
             )
-            card.setdefault("always_prepared_spells", [])
             card.setdefault("spell_grants", [])
             value["application_state"] = "selection_ready"
         return value

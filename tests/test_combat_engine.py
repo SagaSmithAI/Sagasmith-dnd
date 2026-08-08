@@ -1341,6 +1341,7 @@ def test_2014_jack_of_all_trades_applies_only_to_unproficient_ability_checks() -
             "id": "dnd5e.content.srd2014.feature.bard-jack-of-all-trades",
             "name": "Jack of All Trades",
             "source_key": "Bard",
+            "mechanic_refs": ["dnd5e.core.check.jack_of_all_trades"],
         }
     ]
     bard["derived"] = derive_character_sheet(bard["sheet"])
@@ -1399,8 +1400,8 @@ def test_2014_jack_of_all_trades_applies_only_to_unproficient_ability_checks() -
         dc=14,
         rng=_SequenceRng(10),
     )
-    assert revised_check["bonus"] == 0
-    assert revised_check["total"] == 13
+    assert revised_check["bonus"] == 1
+    assert revised_check["total"] == 14
 
 
 def test_2024_jack_of_all_trades_uses_skill_proficiency_but_not_initiative() -> None:
@@ -1579,6 +1580,7 @@ def test_2014_jack_of_all_trades_applies_to_initiative() -> None:
             "id": "dnd5e.content.srd2014.feature.bard-jack-of-all-trades",
             "name": "Jack of All Trades",
             "source_key": "Bard",
+            "mechanic_refs": ["dnd5e.core.check.jack_of_all_trades"],
         }
     ]
     bard["derived"] = derive_character_sheet(bard["sheet"])
@@ -2804,6 +2806,7 @@ def test_qualified_multiattack_preserves_recorded_weapon_composition() -> None:
             "name": "Multiattack (Armed Form Only)",
             "source_key": "Bandit Captain",
             "activation": {"type": "action"},
+            "mechanic_refs": ["dnd5e.core.action.multiattack_choice"],
             "choices": {
                 "multiattack_options": [
                     {
@@ -2899,6 +2902,7 @@ def test_mixed_multiattack_pays_one_weapon_and_one_source_activity() -> None:
             "id": "multiattack-activity",
             "name": "Multiattack",
             "activation": {"type": "action"},
+            "mechanic_refs": ["dnd5e.core.action.multiattack_choice"],
             "choices": {
                 "multiattack_options": [
                     {
@@ -2973,6 +2977,7 @@ def test_unstructured_multiattack_does_not_block_an_ordinary_weapon_attack() -> 
             "name": "Multiattack",
             "activation": {"type": "action"},
             "description": "The actor attacks and uses a descriptive command.",
+            "mechanic_refs": ["dnd5e.core.action.multiattack_choice"],
         }
     ]
     attacker["derived"] = derive_character_sheet(attacker["sheet"])
