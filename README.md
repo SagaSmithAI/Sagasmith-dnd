@@ -126,6 +126,11 @@ lock 的 rule pack；其中预设 PC、NPC、怪物或召唤物使用 portable
 `preset_pack`；若附带冒险、地图或场景则另用 `module_pack`。不要把三者压成
 一个可绕过规则安装审批的巨型包；用显式 dependency 将它们组合即可。
 
+模组只使用 v2 `.sagasmith-module` 归档：描述文件声明 edition compatibility、
+推荐队伍/等级/升级方式、连续战役、内容与叙事目录及 readiness，资产作为
+content-addressed blobs 随归档分发。D&D 插件校验精确规则依赖和角色卡；只有
+`playable`/`complete` 可进入激活事务。addon 不内嵌模组，旧 module-pack v1 不读取。
+
 跨安装迁移时，rule pack 会同时携带完整的已索引来源，并把本地
 `source_id`/`chunk_id` 改写为稳定 locator。接收端验证 checksum、system、edition
 与精确依赖后，以新本地 id 重建来源和引用；规则依赖使用不受本地 UUID 影响的

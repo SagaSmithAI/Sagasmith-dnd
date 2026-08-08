@@ -127,6 +127,13 @@ monsters, and summons in a portable `preset_pack`; place adventures, maps, and
 scenes in a separate `module_pack`. Link them with explicit dependencies instead
 of one giant package that bypasses rule-install approval.
 
+Modules use only the v2 `.sagasmith-module` archive. Its descriptor declares
+edition compatibility, party/level/advancement guidance, continuity, content and
+narrative catalogs, and readiness; content-addressed blobs travel in the archive.
+The D&D plugin validates exact rule dependencies and actor cards, and only
+`playable`/`complete` packages may enter the activation transaction. Addons do
+not embed modules, and the removed module-pack v1 shape is not read.
+
 For cross-installation migration, a rule pack carries its complete indexed
 sources and replaces local `source_id`/`chunk_id` values with stable locators.
 The receiver validates checksums, system, edition, and exact dependencies, then

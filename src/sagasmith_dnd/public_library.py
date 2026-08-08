@@ -9,6 +9,7 @@ from typing import Any, Iterable, Mapping
 
 from sagasmith_core.portable import (
     canonical_json,
+    loads_module_archive,
     validate_addon_pack,
     validate_module_pack,
     validate_preset_pack,
@@ -19,12 +20,14 @@ from sagasmith_dnd.portable_cards import (
     build_srd2024_preset_pack,
 )
 
-LIBRARY_SCHEMA = "sagasmith.public-content-library.v1"
+LIBRARY_SCHEMA = "sagasmith.public-content-library.v2"
 PUBLIC_DISTRIBUTIONS = frozenset({"public", "shareable"})
 NON_PUBLIC_LICENSES = frozenset({"", "private", "proprietary", "user-supplied"})
 
 
-def _package_summary(package: Mapping[str, Any], path: str) -> dict[str, Any]:
+def _package_summary(
+    package: Mapping[str, Any], path: str, download_path: str | None = None
+) -> dict[str, Any]:
     payload = dict(package["payload"])
     if package["kind"] == "preset_pack":
         cards = list(payload["cards"])
@@ -56,7 +59,7 @@ def _package_summary(package: Mapping[str, Any], path: str) -> dict[str, Any]:
             card["payload"].get("image") is not None for card in actors
         )
     metadata = dict(package.get("metadata") or {})
-    return {
+    result = {
         "kind": package["kind"],
         "id": package["id"],
         "version": package["version"],
@@ -69,6 +72,18 @@ def _package_summary(package: Mapping[str, Any], path: str) -> dict[str, Any]:
         "image_count": image_count,
         "path": path,
     }
+    if package["kind"] == "module_pack":
+        manifest = payload["manifest"]
+        result.update(
+            {
+                "classification": manifest["classification"],
+                "play_profile": manifest["play_profile"],
+                "continuity": manifest["continuity"],
+                "readiness": payload["readiness"],
+                "download_path": download_path,
+            }
+        )
+    return result
 
 
 def validate_public_package(package: Mapping[str, Any]) -> dict[str, Any]:
@@ -122,6 +137,8 @@ def validate_public_package(package: Mapping[str, Any]) -> dict[str, Any]:
 def build_public_library(
     output_dir: Path,
     packages: Iterable[Mapping[str, Any]],
+    *,
+    module_archives: Mapping[str, bytes] | None = None,
 ) -> dict[str, Any]:
     """Write validated packages and a compact index for static web clients."""
 
@@ -136,12 +153,24 @@ def build_public_library(
         if identity in seen:
             raise ValueError(f"duplicate public package: {identity}")
         seen.add(identity)
-        filename = f"{package['id'].replace('/', '-')}-{package['version']}.json"
+        stem = f"{package['id'].replace('/', '-')}-{package['version']}"
+        filename = f"{stem}.json"
         relative_path = f"packages/{filename}"
         (package_dir / filename).write_text(
             canonical_json(package) + "\n", encoding="utf-8"
         )
-        entries.append(_package_summary(package, relative_path))
+        download_path = None
+        if package["kind"] == "module_pack":
+            archive_content = dict(module_archives or {}).get(package["checksum"])
+            if archive_content is None:
+                raise ValueError(f"{package['id']} has no verified module archive")
+            archived_package, _blobs = loads_module_archive(archive_content)
+            if archived_package != package:
+                raise ValueError(f"{package['id']} archive descriptor differs from index package")
+            archive_name = f"{stem}.sagasmith-module"
+            (package_dir / archive_name).write_bytes(archive_content)
+            download_path = f"packages/{archive_name}"
+        entries.append(_package_summary(package, relative_path, download_path))
     entries.sort(key=lambda item: (item["kind"], item["id"], item["version"]))
     index = {
         "schema": LIBRARY_SCHEMA,
@@ -165,11 +194,17 @@ def main() -> None:
         build_srd2014_preset_pack(args.skill_root),
         build_srd2024_preset_pack(args.skill_root),
     ]
+    module_archives: dict[str, bytes] = {}
     for path in args.addon:
         packages.append(json.loads(path.read_text(encoding="utf-8")))
     for path in args.module:
-        packages.append(json.loads(path.read_text(encoding="utf-8")))
-    index = build_public_library(args.output, packages)
+        content = path.read_bytes()
+        package, _blobs = loads_module_archive(content)
+        packages.append(package)
+        module_archives[package["checksum"]] = content
+    index = build_public_library(
+        args.output, packages, module_archives=module_archives
+    )
     print(json.dumps(index, ensure_ascii=False, indent=2))
 
 

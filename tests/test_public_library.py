@@ -1,7 +1,12 @@
 import hashlib
 
 import pytest
-from sagasmith_core.portable import build_module_pack, build_preset_pack, portable_checksum
+from sagasmith_core.portable import (
+    build_module_pack,
+    build_preset_pack,
+    dumps_module_archive,
+    portable_checksum,
+)
 
 from sagasmith_dnd.character_schema import default_character_notes, default_character_sheet
 from sagasmith_dnd.portable_cards import build_dnd_actor_card
@@ -35,7 +40,7 @@ def test_public_library_writes_index_and_package(tmp_path) -> None:
     )
     index = build_public_library(tmp_path, [package])
 
-    assert index["schema"] == "sagasmith.public-content-library.v1"
+    assert index["schema"] == "sagasmith.public-content-library.v2"
     assert index["packages"][0]["component_counts"] == {
         "actor_card": 1,
         "monster": 1,
@@ -85,6 +90,37 @@ def test_public_library_indexes_module_scenes_assets_and_actors(tmp_path) -> Non
         portable_id="example.public-module",
         version="1.0.0",
         system_id="dnd5e",
+        manifest={
+            "title": "Public Module",
+            "classification": "adventure",
+            "compatibility": {
+                "editions": ["2014"],
+                "required_capabilities": ["module_pack_v2"],
+            },
+            "play_profile": {
+                "party_size": {"minimum": None, "maximum": None, "source_refs": []},
+                "starting_level": {"value": None, "source_refs": []},
+                "expected_end_level": {"value": None, "source_refs": []},
+                "advancement": {
+                    "modes": ["unknown"],
+                    "recommended": "unknown",
+                    "source_refs": [],
+                },
+                "pregenerated_characters": {
+                    "available": False,
+                    "applicability": "Not reviewed",
+                    "source_refs": [],
+                },
+            },
+            "continuity": {
+                "series_id": None,
+                "order": None,
+                "continues_from": None,
+                "state_policy": {},
+            },
+            "activation": {"mode": "campaign_attach", "default_active": False},
+            "content_summary": {},
+        },
         source={
             "source_key": "example.public-module",
             "title": "Public Module",
@@ -126,11 +162,47 @@ def test_public_library_indexes_module_scenes_assets_and_actors(tmp_path) -> Non
             }
         ],
         actors=[_monster_card()],
+        readiness={
+            "schema_version": 1,
+            "level": "indexed",
+            "dimensions": {
+                name: {
+                    "complete": name in {"source", "structure", "portability"},
+                    "item_count": 1 if name in {"source", "structure"} else 0,
+                    "blockers": []
+                    if name in {"source", "structure", "portability"}
+                    else [
+                        {
+                            "code": f"{name}_unreviewed",
+                            "message": f"{name} requires review",
+                            "source_refs": [],
+                        }
+                    ],
+                }
+                for name in (
+                    "source",
+                    "structure",
+                    "play_profile",
+                    "catalog",
+                    "narrative",
+                    "runtime",
+                    "portability",
+                )
+            },
+            "complete": False,
+        },
         metadata={"distribution": "public", "license": "CC0-1.0"},
     )
-    index = build_public_library(tmp_path, [package])
+    archive = dumps_module_archive(package, {})
+    index = build_public_library(
+        tmp_path,
+        [package],
+        module_archives={package["checksum"]: archive},
+    )
     assert index["packages"][0]["component_counts"] == {
         "scene": 1,
         "asset": 0,
         "actor_card": 1,
     }
+    assert index["packages"][0]["readiness"]["level"] == "indexed"
+    assert (tmp_path / index["packages"][0]["download_path"]).is_file()
