@@ -1506,6 +1506,7 @@ def test_complete_card_supports_identity_weapons_spells_encumbrance_and_adventur
             },
         }
     )
+    assert "portrait_uri" not in sheet["identity"]
     assert sheet["progression"]["background_grants"]["spell_list_expansion"] == [
         {
             "artifact_id": "dnd5e.content.example.spell.command",

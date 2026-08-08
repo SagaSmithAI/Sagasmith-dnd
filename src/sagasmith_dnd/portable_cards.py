@@ -40,9 +40,9 @@ from sagasmith_dnd.statblocks import (
 
 DND5E_SYSTEM_ID = "dnd5e"
 SRD2014_PRESET_PACK_ID = "dnd5e.presets.srd2014"
-SRD2014_PRESET_PACK_VERSION = "1.1.0"
+SRD2014_PRESET_PACK_VERSION = "1.2.0"
 SRD2024_PRESET_PACK_ID = "dnd5e.presets.srd2024"
-SRD2024_PRESET_PACK_VERSION = "1.1.0"
+SRD2024_PRESET_PACK_VERSION = "1.2.0"
 PORTABLE_CARD_COMPILER = "sagasmith-dnd.portable-card.v1"
 
 
@@ -58,6 +58,7 @@ def build_dnd_actor_card(
     summary: str = "",
     provenance: Mapping[str, Any] | None = None,
     bindings: Sequence[Mapping[str, Any]] | None = None,
+    image: Mapping[str, Any] | None = None,
     metadata: Mapping[str, Any] | None = None,
     dependencies: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
@@ -82,6 +83,7 @@ def build_dnd_actor_card(
         notes=normalized_notes,
         provenance=provenance,
         bindings=bindings,
+        image=image,
         metadata=metadata,
         dependencies=dependencies,
     )
@@ -159,6 +161,7 @@ def bind_actor_catalog_review(
         notes=dict(payload["notes"]),
         provenance=provenance,
         bindings=list(payload.get("bindings") or []),
+        image=(dict(payload["image"]) if payload.get("image") is not None else None),
         metadata=dict(value.get("metadata") or {}),
         dependencies=list(value.get("dependencies") or []),
     )
@@ -180,6 +183,7 @@ def actor_card_from_statblock(
     attribution: str = "",
     tags: Sequence[str] | None = None,
     semantic_fill: dict[str, Any] | None = None,
+    image: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compile one source-bound statblock into a fully portable actor card."""
 
@@ -192,6 +196,7 @@ def actor_card_from_statblock(
         actor_type=actor_type,
         name=parsed.name,
         summary=parsed.summary,
+        image=image,
         sheet=finalize_imported_actor_rulings(parsed.sheet),
         notes=notes,
         provenance={
@@ -294,6 +299,7 @@ def _cached_srd2014_preset_pack(skill_root: str) -> dict[str, Any]:
         metadata={
             "title": "D&D 5e SRD 5.1 Actor Presets",
             "edition": "2014",
+            "distribution": "shareable",
             "license": "CC-BY-4.0",
             "attribution": (
                 "Includes material from the System Reference Document 5.1 by "
@@ -361,6 +367,7 @@ def _cached_srd2024_preset_pack(skill_root: str) -> dict[str, Any]:
         metadata={
             "title": "D&D 5e SRD 5.2.1 Actor Presets",
             "edition": "2024",
+            "distribution": "shareable",
             "license": "CC-BY-4.0",
             "attribution": (
                 "Includes material from the System Reference Document 5.2.1 by "

@@ -406,7 +406,6 @@ def default_character_sheet() -> dict[str, Any]:
             "hair": "",
             "skin": "",
             "eyes": "",
-            "portrait_uri": "",
         },
         "progression": {
             "level": 1,
@@ -2278,6 +2277,8 @@ def validate_character_sheet(
             "hair",
             "skin",
             "eyes",
+            # Accepted only to migrate legacy sheets; normalization deliberately
+            # drops it because actor art belongs to portable actor-card v2.
             "portrait_uri",
         },
     )
@@ -3222,9 +3223,6 @@ def validate_character_sheet(
             "hair": _text(identity["hair"], "sheet.identity.hair", maximum=100),
             "skin": _text(identity["skin"], "sheet.identity.skin", maximum=100),
             "eyes": _text(identity["eyes"], "sheet.identity.eyes", maximum=100),
-            "portrait_uri": _text(
-                identity["portrait_uri"], "sheet.identity.portrait_uri", maximum=2000
-            ),
         },
         "ability_generation": ability_generation,
         "progression": {

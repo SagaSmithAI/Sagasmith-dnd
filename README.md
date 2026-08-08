@@ -148,3 +148,8 @@ ruff check .
 ## 内容与许可
 
 原创代码使用 Apache-2.0。D&D 5e SRD 派生内容遵循对应 CC-BY-4.0 条款；中文便利翻译保留原项目许可和署名。非 SRD 商业内容必须由用户自行合法导入。
+统一 actor card v2 允许 PC、NPC、怪物各自携带一张自包含角色图。图片必须声明
+许可、署名和来源，且只随 portable card/preset/addon 迁移；创建运行时角色时不会
+写入角色实例或 Snapshot。`python -m sagasmith_dnd.public_library` 可将 SRD 预设
+和显式标记为 `public`/`shareable` 的 addon 编译为 GitHub Pages 可读取的静态库；
+私有或 `user-supplied` 内容会被拒绝发布。
