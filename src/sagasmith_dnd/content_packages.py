@@ -806,7 +806,7 @@ def build_rule_content_package(
     dependencies: Sequence[Mapping[str, Any]] = (),
     kind: str = "addon",
 ) -> tuple[dict[str, Any], dict[str, bytes]]:
-    """Build a unified Pack directly from installed rule descriptors and cards."""
+    """Build a unified Pack directly from stored rule descriptors and cards."""
 
     package_metadata = copy.deepcopy(dict(metadata or {}))
     normalized_manifest = copy.deepcopy(dict(manifest))
