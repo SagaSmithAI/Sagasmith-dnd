@@ -1221,19 +1221,18 @@ def build_preset_content_package(
 
 
 def _module_source_bundle(
-    package: Mapping[str, Any],
+    descriptor: Mapping[str, Any],
     *,
     license: str,
     attribution: str,
 ) -> tuple[dict[str, Any], dict[str, Any], bytes, dict[str, str]]:
-    payload = dict(package["payload"])
-    source_value = dict(payload["source"])
-    document = str(payload["document"]["content"])
+    source_value = dict(descriptor["source"])
+    document = str(descriptor["document"]["content"])
     source_key = str(source_value["source_key"])
     sections = []
     chunk_hash_keys: dict[str, str] = {}
     cursor = 0
-    for ordinal, scene in enumerate(payload["scene_atlas"]):
+    for ordinal, scene in enumerate(descriptor["scene_atlas"]):
         scene_content = str(scene["content"])
         scene_metadata = dict(scene.get("metadata") or {})
         scene_start = scene_metadata.get("absolute_start")
@@ -1360,29 +1359,28 @@ def _translate_module_refs(
 
 
 def build_module_content_package(
-    package: Mapping[str, Any],
+    descriptor: Mapping[str, Any],
     archive_blobs: Mapping[str, bytes],
     *,
     metadata: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, bytes]]:
-    """Build a unified module without reparsing its signed Scene Atlas."""
+    """Normalize one Core module descriptor directly into the unified v2 Pack."""
 
-    payload = dict(package["payload"])
     package_metadata = {
-        **copy.deepcopy(dict(package.get("metadata") or {})),
+        **copy.deepcopy(dict(descriptor.get("metadata") or {})),
         **copy.deepcopy(dict(metadata or {})),
     }
     license = str(package_metadata.get("license") or "private")
     attribution = str(package_metadata.get("attribution") or "User supplied source")
     source, document_asset, document_blob, hash_keys = _module_source_bundle(
-        package,
+        descriptor,
         license=license,
         attribution=attribution,
     )
     assets = [document_asset]
     blobs = {document_asset["checksum"]: document_blob}
     original_asset_keys = []
-    for raw_asset in payload.get("assets") or []:
+    for raw_asset in descriptor.get("assets") or []:
         checksum = str(raw_asset["checksum"])
         raw = archive_blobs[checksum]
         kind = str(dict(raw_asset.get("metadata") or {}).get("asset_kind") or "source_asset")
@@ -1402,12 +1400,14 @@ def build_module_content_package(
             original_asset_keys.append(asset["asset_key"])
     source["original_asset_keys"] = original_asset_keys
     translated_manifest = _translate_module_refs(
-        payload["manifest"],
+        descriptor["manifest"],
         source_key=source["source_key"],
         chunk_hash_keys=hash_keys,
     )
     scenes = []
-    for raw_scene, source_section in zip(payload["scene_atlas"], source["sections"], strict=True):
+    for raw_scene, source_section in zip(
+        descriptor["scene_atlas"], source["sections"], strict=True
+    ):
         scene = {
             key: copy.deepcopy(value)
             for key, value in raw_scene.items()
@@ -1437,11 +1437,11 @@ def build_module_content_package(
             default_license=license,
             default_attribution=attribution,
         )
-        for card in payload.get("actors") or []
+        for card in descriptor.get("actors") or []
     ]
     actors = [_repair_reviewed_actor_transcription(actor) for actor in actors]
     reviews = []
-    for index, raw_review in enumerate(payload.get("content_reviews") or []):
+    for index, raw_review in enumerate(descriptor.get("content_reviews") or []):
         evidence = dict(raw_review.get("evidence") or {})
         refs = [
             source_ref(
@@ -1483,31 +1483,24 @@ def build_module_content_package(
         "activation": translated_manifest["activation"],
         "scene_atlas": scenes,
         "catalogs": _translate_module_refs(
-            payload["catalogs"],
+            descriptor["catalogs"],
             source_key=source["source_key"],
             chunk_hash_keys=hash_keys,
         ),
         "narrative": _translate_module_refs(
-            payload["narrative"],
+            descriptor["narrative"],
             source_key=source["source_key"],
             chunk_hash_keys=hash_keys,
         ),
     }
     package_result = build_content_package(
         kind="module",
-        package_id=str(package["id"]),
-        version=str(package["version"]),
-        system_id=str(package["system_id"]),
+        package_id=str(descriptor["id"]),
+        version=str(descriptor["version"]),
+        system_id=str(descriptor["system_id"]),
         manifest=translated_manifest,
         dependencies=[
-            {
-                "kind": "core_rules" if item["kind"] == "rule_pack" else "module",
-                "id": item["id"],
-                "version": item["version"],
-                "checksum": item["checksum"],
-                "optional": item["optional"],
-            }
-            for item in package.get("dependencies") or []
+            copy.deepcopy(dict(item)) for item in descriptor.get("dependencies") or []
         ],
         sources=[source],
         assets=assets,
