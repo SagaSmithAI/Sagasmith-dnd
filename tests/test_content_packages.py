@@ -19,8 +19,8 @@ from sagasmith_dnd.content_packages import (
     _refresh_reviewed_content_hashes,
     attach_actor_portraits,
     attach_auxiliary_assets,
-    build_addon_content_package,
     build_preset_content_package,
+    build_rule_content_package,
     canonicalize_dnd_content_package,
     compose_addon_content_package,
     validate_dnd_content_package,
@@ -275,13 +275,17 @@ def test_addon_content_package_flattens_rules_and_stores_source_once() -> None:
         ],
         metadata={"distribution": "private"},
     )
+    component = {
+        "id": component["id"],
+        "version": component["version"],
+        "system_id": component["system_id"],
+        **component["payload"],
+        "metadata": component["metadata"],
+        "dependencies": component["dependencies"],
+    }
     stale_chunk_key = "example.source/section-0/chunk-0-deadbeefdeadbeef"
-    component["payload"]["sources"][0]["sections"][0]["chunks"][0]["key"] = (
-        stale_chunk_key
-    )
-    component["payload"]["artifacts"][0]["source_citations"][0]["chunk_key"] = (
-        stale_chunk_key
-    )
+    component["sources"][0]["sections"][0]["chunks"][0]["key"] = stale_chunk_key
+    component["artifacts"][0]["source_citations"][0]["chunk_key"] = stale_chunk_key
     notes = default_character_notes()
     notes["profile"]["summary"] = "A source-backed test actor."
     card = build_dnd_actor_card(
@@ -297,7 +301,7 @@ def test_addon_content_package_flattens_rules_and_stores_source_once() -> None:
             ]
         },
     )
-    package, blobs = build_addon_content_package(
+    package, blobs = build_rule_content_package(
         package_id="dnd5e.example.addon",
         version="1.0.0",
         system_id="dnd5e",
@@ -314,7 +318,7 @@ def test_addon_content_package_flattens_rules_and_stores_source_once() -> None:
                 "module_policy": "none",
             },
         },
-        rule_components=[component],
+        rule_descriptors=[component],
         preset_cards=[card],
         metadata={
             "license": "CC-BY-4.0",
@@ -586,7 +590,15 @@ def test_addon_content_package_preserves_existing_unified_source_refs() -> None:
         metadata={"distribution": "private"},
     )
 
-    package, _blobs = build_addon_content_package(
+    component = {
+        "id": component["id"],
+        "version": component["version"],
+        "system_id": component["system_id"],
+        **component["payload"],
+        "metadata": component["metadata"],
+        "dependencies": component["dependencies"],
+    }
+    package, _blobs = build_rule_content_package(
         package_id="dnd5e.example.imported.addon",
         version="1.0.0",
         system_id="dnd5e",
@@ -600,7 +612,7 @@ def test_addon_content_package_preserves_existing_unified_source_refs() -> None:
                 "module_policy": "none",
             },
         },
-        rule_components=[component],
+        rule_descriptors=[component],
     )
 
     assert package["content"]["artifacts"][0]["source_refs"] == [

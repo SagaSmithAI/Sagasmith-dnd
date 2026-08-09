@@ -277,7 +277,7 @@ def canonicalize_dnd_content_package(package: Mapping[str, Any]) -> dict[str, An
     for raw_definition in content.get("rule_definitions") or []:
         definition = copy.deepcopy(dict(raw_definition))
         definition_id = str(definition["id"])
-        definition["definition_checksum"] = _content_definition_checksum(
+        definition["definition_checksum"] = content_definition_checksum(
             manifest=definition["manifest"],
             artifacts=[
                 artifact
@@ -536,7 +536,7 @@ def _replace_chunk_keys(value: Any, key_map: Mapping[str, str]) -> Any:
     return {key: _replace_chunk_keys(item, key_map) for key, item in value.items()}
 
 
-def _content_definition_checksum(
+def content_definition_checksum(
     *,
     manifest: Mapping[str, Any],
     artifacts: Sequence[Mapping[str, Any]],
@@ -794,19 +794,19 @@ def actor_from_statblock(
     )
 
 
-def build_addon_content_package(
+def build_rule_content_package(
     *,
     package_id: str,
     version: str,
     system_id: str,
     manifest: Mapping[str, Any],
-    rule_components: Sequence[Mapping[str, Any]],
+    rule_descriptors: Sequence[Mapping[str, Any]],
     preset_cards: Sequence[Mapping[str, Any]] = (),
     metadata: Mapping[str, Any] | None = None,
     dependencies: Sequence[Mapping[str, Any]] = (),
     kind: str = "addon",
 ) -> tuple[dict[str, Any], dict[str, bytes]]:
-    """Build a flat addon package from installed rule definitions and cards."""
+    """Build a unified Pack directly from installed rule descriptors and cards."""
 
     package_metadata = copy.deepcopy(dict(metadata or {}))
     normalized_manifest = copy.deepcopy(dict(manifest))
@@ -819,8 +819,8 @@ def build_addon_content_package(
     artifacts = []
     mechanics = []
     rule_definitions = []
-    for component in rule_components:
-        payload = dict(component["payload"])
+    for descriptor in rule_descriptors:
+        payload = dict(descriptor)
         component_chunk_keys: dict[str, str] = {}
         for raw_source in payload["sources"]:
             source, asset, blob, chunk_keys = source_bundle_from_rule_source(
@@ -858,22 +858,22 @@ def build_addon_content_package(
             final_item = {
                 **cleaned_item,
                 "card": card,
-                "rule_definition_id": component["id"],
+                "rule_definition_id": descriptor["id"],
             }
             final_component_artifacts.append(
                 _refresh_reviewed_content_hashes(final_item)
             )
         final_component_mechanics = [
-            {**item, "rule_definition_id": component["id"]}
+            {**item, "rule_definition_id": descriptor["id"]}
             for item in component_mechanics
         ]
         artifacts.extend(final_component_artifacts)
         mechanics.extend(final_component_mechanics)
         rule_definitions.append(
             {
-                "id": component["id"],
-                "version": component["version"],
-                "definition_checksum": _content_definition_checksum(
+                "id": descriptor["id"],
+                "version": descriptor["version"],
+                "definition_checksum": content_definition_checksum(
                     manifest=payload["manifest"],
                     artifacts=final_component_artifacts,
                     mechanics=final_component_mechanics,
