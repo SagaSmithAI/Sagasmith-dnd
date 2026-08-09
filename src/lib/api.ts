@@ -124,6 +124,7 @@ export const MOCK_SCENE: CurrentScene = {
 
 export const MOCK_COMBAT: CombatStatus = {
   active: true,
+  positioning_mode: 'grid',
   round: 3,
   turn_index: 1,
   current_actor_id: 'char-sera',

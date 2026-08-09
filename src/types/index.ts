@@ -241,6 +241,7 @@ export interface CombatantView {
 
 export interface CombatStatus {
   active: boolean;
+  positioning_mode: 'grid' | 'agent';
   round?: number;
   turn_index?: number;
   current_actor_id?: string;

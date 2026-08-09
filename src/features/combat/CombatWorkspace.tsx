@@ -61,8 +61,8 @@ export default function CombatWorkspace() {
   };
 
   if (!combat) return <div className="page"><div className="empty">正在读取战斗状态…</div></div>;
-  if (!combat.battle_map) return <div className="page"><div className="page-heading"><div><div className="eyebrow">COMBAT WORKSPACE</div><h1>当前没有战斗地图</h1><p>战斗开始时，MCP 会从当前 Scene Spatial 证据创建一张临时地图。</p></div></div><div className="combat-boundary card">Scene Spatial 不会直接当作地图。没有显式证据时，系统也不会猜测墙体、掩体或视线。</div></div>;
-
+  if (combat.positioning_mode === 'agent') return <div className="page"><div className="page-heading"><div><div className="eyebrow">COMBAT WORKSPACE / AGENT POSITIONING</div><h1>Agent spatial adjudication</h1><p>This encounter deliberately has no coordinates or battle map. The Agent decides range, line of sight, obstruction, and friendly-fire inclusion from the current fiction, then sends structured spatial facts with each action.</p></div></div><div className="combat-boundary card">The browser is read-only in Agent mode. It never invents token positions or converts narrative text into hidden geometry.</div></div>;
+  if (!combat.battle_map) return <div className="page"><div className="page-heading"><div><div className="eyebrow">COMBAT WORKSPACE / GRID POSITIONING</div><h1>Grid contract violation</h1><p>A grid encounter must include a compiled temporary map and coordinates for every participant.</p></div></div><div className="combat-boundary card">Return to the Agent and restart or repair the encounter; the browser cannot synthesize missing geometry.</div></div>;
   return (
     <div className="page combat-page">
       <div className="page-heading">
@@ -88,7 +88,7 @@ export default function CombatWorkspace() {
           <div className="card-header"><strong>INSPECTOR</strong><span>SERVER VIEW</span></div>
           {selected ? <div className="token-dossier"><img src={`/placeholders/tokens/${selected.disposition === 'hostile' ? 'hostile' : selected.disposition === 'neutral' ? 'neutral' : 'pc'}.svg`} alt="" /><span>{selected.disposition || 'VISIBLE'}</span><h2>{selected.name}</h2><dl><div><dt>INITIATIVE</dt><dd>{selected.initiative}</dd></div><div><dt>POSITION</dt><dd>{selected.position ? `${selected.position.x}, ${selected.position.y}` : 'UNSET'}</dd></div><div><dt>REACH</dt><dd>{selected.reach_ft ? `${selected.reach_ft} FT` : 'SERVER SEALED'}</dd></div><div><dt>HP</dt><dd>{selected.hp?.current != null ? `${selected.hp.current} / ${selected.hp.max ?? '?'}` : 'SERVER SEALED'}</dd></div></dl></div> : <div className="empty">选择一个 Token。</div>}
           <div className="map-legend"><strong>MAP LEGEND</strong><span><i className="friendly"></i>友方 / 玩家</span><span><i className="hostile"></i>敌对</span><span><i className="neutral"></i>中立</span><span><i className="difficult"></i>困难地形（仅显示）</span><span><i className="blocked"></i>不可进入</span></div>
-          <div className="combat-boundary"><strong>NOT AUTOMATED</strong><p>墙体、视线、掩体、高度、体型占位与困难地形移动消耗仍需 DM 判定；界面不会伪造这些机制。</p></div>
+          <div className="combat-boundary"><strong>GRID AUTHORITY</strong><p>The engine applies explicit map geometry, coordinates, distance, blocking, and reaction windows. Unknown facts must be resolved through the Agent contract before the action; this UI never invents them.</p></div>
         </aside>
       </div>
       <div className="combat-accessibility card"><strong>ACCESSIBLE TOKEN LIST</strong>{combat.combatants.map((actor) => <span key={actor.actor_id}>{actor.name}: initiative {actor.initiative}, position {actor.position ? `${actor.position.x},${actor.position.y}` : 'unset'}</span>)}</div>
