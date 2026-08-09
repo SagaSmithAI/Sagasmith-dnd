@@ -430,6 +430,36 @@ def test_agent_positioned_attack_requires_and_consumes_structured_spatial_facts(
     assert plan["spatial_ruling"]["decision_id"] == "spatial:test-attack"
 
 
+def test_agent_positioned_movement_consumes_distance_and_opportunity_facts() -> None:
+    mover = _actor("mover")
+    threat = _actor("threat")
+    mover.update({"initiative": 20, "disposition": "friendly"})
+    threat.update({"initiative": 10, "disposition": "hostile"})
+    encounter = start_encounter([mover, threat], positioning_mode="agent")
+
+    with pytest.raises(NeedsRulingError, match="structured movement decision"):
+        spend_movement(encounter, "mover", 10)
+
+    facts = {
+        "decision_id": "spatial:test-move",
+        "reason": "The mover crosses open ground and leaves the threat's reach.",
+        "destination_legal": True,
+        "distance_ft": 10,
+        "difficult_terrain_extra_ft": 5,
+        "moves_farther_from_turn_source": True,
+        "enters_turn_source_30_ft": False,
+        "moves_closer_to_visible_fear_source": False,
+        "opportunity_attack_actor_ids": ["threat"],
+    }
+    moved = spend_movement(encounter, "mover", 10, spatial_facts=facts)
+    current = current_combatant(moved)
+
+    assert current["turn_budget"]["movement"] == 15
+    assert moved["pending"][0]["actor_id"] == "threat"
+    assert moved["pending"][0]["target_position"] is None
+    assert moved["log"][-1]["decision"]["decision_id"] == "spatial:test-move"
+
+
 def test_preflight_rejects_an_exhausted_recharge_weapon() -> None:
     attacker = _actor("recharge-attacker")
     attacker["sheet"]["inventory"]["items"] = [

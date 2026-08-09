@@ -4002,6 +4002,7 @@ def spend_movement(
     path: list[Any] | None = None,
     movement_mode: str = "voluntary",
     crawl: bool = False,
+    spatial_facts: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Consume movement and open opportunity-reaction windows from known geometry.
 
@@ -4017,6 +4018,24 @@ def spend_movement(
     if movement_mode not in {"voluntary", "forced", "teleport"}:
         raise CombatEngineError("movement_mode must be voluntary, forced, or teleport")
     willing_movement = movement_mode == "voluntary"
+    positioning_mode = str(value.get("positioning_mode") or "grid")
+    agent_facts: dict[str, Any] | None = None
+    if positioning_mode == "agent":
+        if not isinstance(spatial_facts, dict):
+            raise NeedsRulingError(
+                "agent positioning requires a structured movement decision",
+                missing=("movement.spatial_facts",),
+                ruling_kind="agent_spatial_decision",
+            )
+        if destination is not None or path is not None:
+            raise CombatEngineError("agent positioning does not accept coordinates or paths")
+        agent_facts = dict(spatial_facts)
+        if agent_facts.get("destination_legal") is not True:
+            raise CombatEngineError("the Agent ruled the movement destination illegal")
+        if agent_facts.get("distance_ft") != distance:
+            raise CombatEngineError("movement distance does not match the Agent spatial decision")
+    elif spatial_facts is not None:
+        raise CombatEngineError("grid positioning does not accept agent spatial facts")
     combatant = next(
         (item for item in value.get("combatants", []) if item.get("actor_id") == actor_id_value),
         None,
@@ -4089,6 +4108,17 @@ def spend_movement(
     battle_map = dict(value.get("battle_map") or {})
     difficult_cells = set(battle_map.get("difficult_cells") or [])
     terrain_cost = 0
+    if agent_facts is not None:
+        terrain_cost = agent_facts.get("difficult_terrain_extra_ft", 0)
+        if (
+            isinstance(terrain_cost, bool)
+            or not isinstance(terrain_cost, int)
+            or terrain_cost < 0
+            or terrain_cost % 5
+        ):
+            raise CombatEngineError(
+                "difficult_terrain_extra_ft must be a non-negative five-foot increment"
+            )
     if willing_movement and difficult_cells and distance > 0:
         if path is None and distance > 5:
             raise NeedsRulingError(
@@ -4131,6 +4161,15 @@ def spend_movement(
                 missing=("occupied_destination_resolution",),
             )
     turning = dict(combatant.get("turned") or {})
+    if willing_movement and "turned" in conditions and agent_facts is not None:
+        if agent_facts.get("moves_farther_from_turn_source") is not True:
+            raise CombatEngineError(
+                "a turned creature must voluntarily move farther from the turning source"
+            )
+        if agent_facts.get("enters_turn_source_30_ft") is True:
+            raise CombatEngineError(
+                "a turned creature cannot willingly move within 30 feet of the turning source"
+            )
     if (
         willing_movement
         and "turned" in conditions
@@ -4205,6 +4244,15 @@ def spend_movement(
                 raise CombatEngineError(
                     "a frightened creature cannot willingly move closer to its visible fear source"
                 )
+    if (
+        willing_movement
+        and "frightened" in conditions
+        and agent_facts is not None
+        and agent_facts.get("moves_closer_to_visible_fear_source") is True
+    ):
+        raise CombatEngineError(
+            "a frightened creature cannot willingly move closer to its visible fear source"
+        )
     budget["movement"] = available - movement_cost
     combatant["turn_budget"] = budget
     if destination is not None:
@@ -4268,6 +4316,55 @@ def spend_movement(
                         "status": "pending",
                     },
                 ]
+    if willing_movement and agent_facts is not None and not _disengaged(combatant):
+        combatants = {
+            str(item.get("actor_id") or ""): item for item in value.get("combatants", [])
+        }
+        for threat_id in agent_facts.get("opportunity_attack_actor_ids", []):
+            threat_id = str(threat_id)
+            threat = combatants.get(threat_id)
+            if threat is None or threat_id == actor_id_value:
+                raise CombatEngineError(
+                    "opportunity_attack_actor_ids contains an unknown threat"
+                )
+            if not _can_make_opportunity_attack(threat, combatant):
+                raise CombatEngineError(
+                    "the Agent selected a threat that cannot make an opportunity attack"
+                )
+            key = ("movement.leave_reach", threat_id, actor_id_value)
+            existing = {
+                (item.get("event"), item.get("actor_id"), item.get("target_id"))
+                for item in value.get("pending", [])
+                if item.get("status", "pending") == "pending"
+            }
+            if key in existing:
+                continue
+            value["pending"] = [
+                *list(value.get("pending") or []),
+                {
+                    "id": f"reaction-{uuid4().hex}",
+                    "kind": "reaction",
+                    "actor_id": threat_id,
+                    "target_id": actor_id_value,
+                    "target_position": None,
+                    "target_visible": True,
+                    "event": "movement.leave_reach",
+                    "trigger": "opportunity_attack",
+                    "candidates": [{"id": "opportunity_attack"}, {"id": "decline"}],
+                    "deadline": "before_commit",
+                    "status": "pending",
+                    "spatial_ruling_id": agent_facts.get("decision_id"),
+                },
+            ]
+    if agent_facts is not None:
+        value["log"] = [
+            *list(value.get("log") or []),
+            {
+                "type": "agent_spatial_movement",
+                "actor_id": actor_id_value,
+                "decision": deepcopy(agent_facts),
+            },
+        ]
     return reconcile_witch_bolt_range(value)["encounter"]
 
 
