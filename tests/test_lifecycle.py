@@ -20,6 +20,7 @@ from sagasmith_dnd.lifecycle import (
     recover_stable_creature,
     roll_rest_hit_dice,
     stand_outside_combat,
+    validate_rest_schedule,
 )
 from sagasmith_dnd.rule_engine import resolution_context
 
@@ -153,16 +154,6 @@ def test_raise_dead_rejects_source_conditions_that_make_the_spell_fail(
 
 def test_rest_completion_enforces_duration_and_daily_limit() -> None:
     sheet = default_character_sheet()
-    long_schedule = {
-        "sleep_minutes": 360,
-        "light_activity_minutes": 120,
-        "strenuous_activity_minutes": 0,
-    }
-    short_schedule = {
-        "sleep_minutes": 0,
-        "light_activity_minutes": 60,
-        "strenuous_activity_minutes": 0,
-    }
     with pytest.raises(CombatEngineError, match="at least 480"):
         record_rest_completion(
             sheet,
@@ -176,7 +167,6 @@ def test_rest_completion_enforces_duration_and_daily_limit() -> None:
         rest_type="long_rest",
         started_elapsed_ticks=0,
         completed_elapsed_ticks=4800,
-        rest_schedule=long_schedule,
     )
     assert recorded["combat"]["rest_history"]["last_long_rest_elapsed_ticks"] == 4800
     with pytest.raises(CombatEngineError, match="in 24 hours"):
@@ -185,7 +175,6 @@ def test_rest_completion_enforces_duration_and_daily_limit() -> None:
             rest_type="long_rest",
             started_elapsed_ticks=10000,
             completed_elapsed_ticks=14800,
-            rest_schedule=long_schedule,
         )
     with pytest.raises(CombatEngineError, match="same campaign time"):
         record_rest_completion(
@@ -193,7 +182,6 @@ def test_rest_completion_enforces_duration_and_daily_limit() -> None:
             rest_type="short_rest",
             started_elapsed_ticks=4200,
             completed_elapsed_ticks=4800,
-            rest_schedule=short_schedule,
         )
 
     next_day = record_rest_completion(
@@ -201,56 +189,23 @@ def test_rest_completion_enforces_duration_and_daily_limit() -> None:
         rest_type="long_rest",
         started_elapsed_ticks=14400,
         completed_elapsed_ticks=19200,
-        rest_schedule=long_schedule,
     )
     assert next_day["combat"]["rest_history"]["last_long_rest_elapsed_ticks"] == 19200
 
 
-def test_rest_completion_rejects_incomplete_or_interrupted_schedules() -> None:
-    sheet = default_character_sheet()
-    with pytest.raises(CombatEngineError, match="explicit rest_schedule"):
-        record_rest_completion(
-            sheet,
-            rest_type="short_rest",
-            started_elapsed_ticks=0,
-            completed_elapsed_ticks=600,
-        )
-    with pytest.raises(CombatEngineError, match="more strenuous"):
-        record_rest_completion(
-            sheet,
-            rest_type="short_rest",
-            started_elapsed_ticks=0,
-            completed_elapsed_ticks=600,
-            rest_schedule={
-                "sleep_minutes": 0,
-                "light_activity_minutes": 59,
-                "strenuous_activity_minutes": 1,
-            },
-        )
-    with pytest.raises(CombatEngineError, match="at least 6 hours"):
-        record_rest_completion(
-            sheet,
-            rest_type="long_rest",
-            started_elapsed_ticks=0,
-            completed_elapsed_ticks=4800,
-            rest_schedule={
-                "sleep_minutes": 359,
-                "light_activity_minutes": 121,
-                "strenuous_activity_minutes": 0,
-            },
-        )
-    with pytest.raises(CombatEngineError, match="interrupts"):
-        record_rest_completion(
-            sheet,
-            rest_type="long_rest",
-            started_elapsed_ticks=0,
-            completed_elapsed_ticks=4800,
-            rest_schedule={
-                "sleep_minutes": 360,
-                "light_activity_minutes": 60,
-                "strenuous_activity_minutes": 60,
-            },
-        )
+def test_rest_schedule_is_derived_instead_of_required_from_the_agent() -> None:
+    assert validate_rest_schedule(rest_type="short_rest", duration_minutes=60) == {
+        "sleep_minutes": 0,
+        "light_activity_minutes": 60,
+        "strenuous_activity_minutes": 0,
+        "trance_minutes": 0,
+    }
+    assert validate_rest_schedule(rest_type="long_rest", duration_minutes=480) == {
+        "sleep_minutes": 480,
+        "light_activity_minutes": 0,
+        "strenuous_activity_minutes": 0,
+        "trance_minutes": 0,
+    }
 
 
 def test_source_granted_trance_completes_a_long_rest_in_four_hours() -> None:
@@ -263,19 +218,11 @@ def test_source_granted_trance_completes_a_long_rest_in_four_hours() -> None:
             "description": "Four hours of trance grants the benefit of eight hours of sleep.",
         }
     ]
-    schedule = {
-        "sleep_minutes": 0,
-        "trance_minutes": 240,
-        "light_activity_minutes": 0,
-        "strenuous_activity_minutes": 0,
-    }
-
     recorded = record_rest_completion(
         sheet,
         rest_type="long_rest",
         started_elapsed_ticks=0,
         completed_elapsed_ticks=2400,
-        rest_schedule=schedule,
     )
 
     assert recorded["combat"]["rest_history"]["last_long_rest_elapsed_ticks"] == 2400
@@ -285,7 +232,6 @@ def test_source_granted_trance_completes_a_long_rest_in_four_hours() -> None:
             rest_type="long_rest",
             started_elapsed_ticks=0,
             completed_elapsed_ticks=2400,
-            rest_schedule=schedule,
         )
 
 

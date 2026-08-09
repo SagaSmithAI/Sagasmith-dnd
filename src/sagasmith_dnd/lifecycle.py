@@ -36,19 +36,10 @@ from sagasmith_dnd.vocabulary import REST_TYPES
 SHORT_REST_MINIMUM_MINUTES = 60
 LONG_REST_MINIMUM_MINUTES = 480
 TRANCE_LONG_REST_MINUTES = 240
-LONG_REST_SLEEP_MINUTES = 360
-LONG_REST_LIGHT_ACTIVITY_MAX_MINUTES = 120
-LONG_REST_INTERRUPTION_MINUTES = 60
 REST_MINIMUM_MINUTES = {
     "short_rest": SHORT_REST_MINIMUM_MINUTES,
     "long_rest": LONG_REST_MINIMUM_MINUTES,
 }
-REST_SCHEDULE_FIELDS = {
-    "sleep_minutes",
-    "light_activity_minutes",
-    "strenuous_activity_minutes",
-}
-REST_SCHEDULE_OPTIONAL_FIELDS = {"trance_minutes"}
 COMBAT_BOUND_EFFECT_PERIODS = frozenset(
     {"source_turn_start", "turn_start", "turn_end", "round", "encounter"}
 )
@@ -238,10 +229,9 @@ def validate_rest_schedule(
     *,
     rest_type: str,
     duration_minutes: int,
-    rest_schedule: dict[str, int] | None,
     allows_trance: bool = False,
 ) -> dict[str, int]:
-    """Require a complete rest schedule matching the 2014 rest definition."""
+    """Derive the mechanical rest allocation from duration and actor features."""
     normalized_type = str(rest_type).strip().lower().replace("-", "_")
     minimum_minutes = minimum_rest_minutes(
         normalized_type,
@@ -253,44 +243,26 @@ def validate_rest_schedule(
         or duration_minutes < minimum_minutes
     ):
         raise CombatEngineError(f"{normalized_type} requires at least {minimum_minutes} minutes")
-    if not isinstance(rest_schedule, dict):
-        raise CombatEngineError("rest requires an explicit rest_schedule")
-    unknown = set(rest_schedule) - REST_SCHEDULE_FIELDS - REST_SCHEDULE_OPTIONAL_FIELDS
-    missing = REST_SCHEDULE_FIELDS - set(rest_schedule)
-    if unknown or missing:
-        raise CombatEngineError(
-            "rest_schedule requires exactly sleep_minutes, "
-            "light_activity_minutes, strenuous_activity_minutes, and optional "
-            "trance_minutes"
-        )
-    normalized: dict[str, int] = {}
-    for field in sorted(REST_SCHEDULE_FIELDS | REST_SCHEDULE_OPTIONAL_FIELDS):
-        value = rest_schedule.get(field, 0)
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            raise CombatEngineError(f"rest_schedule.{field} must be a nonnegative integer")
-        normalized[field] = value
-    if sum(normalized.values()) != duration_minutes:
-        raise CombatEngineError("rest_schedule minutes must equal the campaign-clock rest duration")
     if normalized_type == "short_rest":
-        if normalized["strenuous_activity_minutes"] != 0:
-            raise CombatEngineError(
-                "a short rest permits no activity more strenuous than light activity"
-            )
-    else:
-        trance_satisfies_sleep = (
-            allows_trance and normalized["trance_minutes"] >= TRANCE_LONG_REST_MINUTES
-        )
-        if not trance_satisfies_sleep and normalized["sleep_minutes"] < LONG_REST_SLEEP_MINUTES:
-            raise CombatEngineError(
-                "a long rest requires at least 6 hours of sleep or a source-granted 4-hour trance"
-            )
-        if not trance_satisfies_sleep and duration_minutes < LONG_REST_MINIMUM_MINUTES:
-            raise CombatEngineError("a long rest requires at least 8 hours")
-        if normalized["light_activity_minutes"] > LONG_REST_LIGHT_ACTIVITY_MAX_MINUTES:
-            raise CombatEngineError("a long rest permits no more than 2 hours of light activity")
-        if normalized["strenuous_activity_minutes"] >= LONG_REST_INTERRUPTION_MINUTES:
-            raise CombatEngineError("at least 1 hour of strenuous activity interrupts a long rest")
-    return normalized
+        return {
+            "sleep_minutes": 0,
+            "light_activity_minutes": duration_minutes,
+            "strenuous_activity_minutes": 0,
+            "trance_minutes": 0,
+        }
+    if allows_trance:
+        return {
+            "sleep_minutes": max(0, duration_minutes - TRANCE_LONG_REST_MINUTES),
+            "light_activity_minutes": 0,
+            "strenuous_activity_minutes": 0,
+            "trance_minutes": TRANCE_LONG_REST_MINUTES,
+        }
+    return {
+        "sleep_minutes": duration_minutes,
+        "light_activity_minutes": 0,
+        "strenuous_activity_minutes": 0,
+        "trance_minutes": 0,
+    }
 
 
 def record_rest_completion(
@@ -299,7 +271,6 @@ def record_rest_completion(
     rest_type: str,
     started_elapsed_ticks: int | None = None,
     completed_elapsed_ticks: int | None = None,
-    rest_schedule: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Validate game-time rest timing and preserve canonical tick positions."""
     normalized = str(rest_type).strip().lower().replace("-", "_")
@@ -323,7 +294,6 @@ def record_rest_completion(
     validate_rest_schedule(
         rest_type=normalized,
         duration_minutes=duration_ticks // TICKS_PER_MINUTE,
-        rest_schedule=rest_schedule,
         allows_trance=allows_trance,
     )
     hp = int(dict(sheet.get("combat", {}).get("hp") or {}).get("value", 0) or 0)
