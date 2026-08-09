@@ -383,6 +383,53 @@ def test_encounter_positioning_modes_are_explicit_engine_state() -> None:
         )
 
 
+def test_agent_positioned_attack_requires_and_consumes_structured_spatial_facts() -> None:
+    attacker = _actor("attacker")
+    target = _actor("target")
+    attacker["initiative"] = 20
+    target["initiative"] = 10
+    encounter = start_encounter(
+        [attacker, target],
+        positioning_mode="agent",
+    )
+
+    with pytest.raises(NeedsRulingError, match="structured spatial facts"):
+        preflight_attack(
+            attacker,
+            target,
+            action={"weapon_id": "unarmed-strike"},
+            encounter=encounter,
+        )
+
+    spatial_facts = {
+        "decision_id": "spatial:test-attack",
+        "reason": "The target is beside the attacker with no intervening obstacle.",
+        "targetable": True,
+        "in_range": True,
+        "long_range": False,
+        "cover_degree": "none",
+        "attacker_can_see_target": True,
+        "target_can_see_attacker": True,
+        "target_within_5_ft": True,
+        "close_threat_actor_ids": [],
+        "helper_actor_ids": [],
+        "target_adjacent_ally_actor_ids": [],
+    }
+    plan = preflight_attack(
+        attacker,
+        target,
+        action={
+            "weapon_id": "unarmed-strike",
+            "context": {"spatial_facts": spatial_facts},
+        },
+        encounter=encounter,
+    )
+
+    assert plan["status"] == "ready"
+    assert plan["range"]["source"] == "agent_spatial_facts"
+    assert plan["spatial_ruling"]["decision_id"] == "spatial:test-attack"
+
+
 def test_preflight_rejects_an_exhausted_recharge_weapon() -> None:
     attacker = _actor("recharge-attacker")
     attacker["sheet"]["inventory"]["items"] = [
@@ -592,7 +639,7 @@ def test_2024_push_and_slow_masteries_update_encounter_state() -> None:
     slow_target = _actor("slow-target", hp=20, ac=1)
     slower.update(initiative=20, position={"x": 0, "y": 0}, disposition="friendly")
     slow_target.update(initiative=10, position={"x": 1, "y": 0}, disposition="hostile")
-    slow_encounter = start_encounter([slower, slow_target], ruleset="2024")
+    slow_encounter = _grid_encounter([slower, slow_target], ruleset="2024")
     slow_plan = preflight_attack(
         slower,
         slow_target,
@@ -624,7 +671,7 @@ def test_2024_sap_and_vex_apply_only_to_the_next_eligible_attack_roll() -> None:
     sapper.update(initiative=20, position={"x": 0, "y": 0}, disposition="friendly")
     target.update(initiative=10, position={"x": 1, "y": 0}, disposition="hostile")
     third.update(initiative=5, position={"x": 2, "y": 0}, disposition="friendly")
-    encounter = start_encounter([sapper, target, third], ruleset="2024")
+    encounter = _grid_encounter([sapper, target, third], ruleset="2024")
     sap_plan = preflight_attack(
         sapper,
         target,
@@ -656,7 +703,7 @@ def test_2024_sap_and_vex_apply_only_to_the_next_eligible_attack_roll() -> None:
     vex_target = _actor("vex-target", hp=20, ac=1)
     vexer.update(initiative=20, position={"x": 0, "y": 0}, disposition="friendly")
     vex_target.update(initiative=10, position={"x": 1, "y": 0}, disposition="hostile")
-    vex_encounter = start_encounter([vexer, vex_target], ruleset="2024")
+    vex_encounter = _grid_encounter([vexer, vex_target], ruleset="2024")
     vex_plan = preflight_attack(
         vexer,
         vex_target,
@@ -778,7 +825,7 @@ def test_2024_nick_moves_the_light_extra_attack_into_the_attack_action() -> None
     target = _actor("target", hp=20, ac=1)
     attacker.update(initiative=20, position={"x": 0, "y": 0}, disposition="friendly")
     target.update(initiative=10, position={"x": 1, "y": 0}, disposition="hostile")
-    encounter = start_encounter([attacker, target], ruleset="2024")
+    encounter = _grid_encounter([attacker, target], ruleset="2024")
     encounter, _ = pay_attack_action(
         encounter,
         attacker,
@@ -832,7 +879,7 @@ def test_two_weapon_fighting_retains_the_light_extra_attack_modifier() -> None:
     target = _actor("target", hp=20, ac=1)
     attacker.update(initiative=20, position={"x": 0, "y": 0}, disposition="friendly")
     target.update(initiative=10, position={"x": 1, "y": 0}, disposition="hostile")
-    encounter = start_encounter([attacker, target], ruleset="2024")
+    encounter = _grid_encounter([attacker, target], ruleset="2024")
     encounter, _ = pay_attack_action(
         encounter,
         attacker,
@@ -2572,7 +2619,7 @@ def test_agent_compiled_reaction_defense_opens_after_hit_and_before_damage() -> 
         position={"x": 1, "y": 0},
         disposition="friendly",
     )
-    legacy_encounter = start_encounter([attacker, legacy_target])
+    legacy_encounter = _grid_encounter([attacker, legacy_target])
     legacy_plan = preflight_attack(
         attacker,
         legacy_target,
@@ -2638,7 +2685,7 @@ def test_agent_compiled_reaction_defense_opens_after_hit_and_before_damage() -> 
         position={"x": 1, "y": 0},
         disposition="friendly",
     )
-    encounter = start_encounter([attacker, target])
+    encounter = _grid_encounter([attacker, target])
     plan = preflight_attack(
         attacker,
         target,
@@ -3201,7 +3248,7 @@ def test_next_attack_advantage_uses_active_target_effect() -> None:
         position={"x": 1, "y": 0},
         disposition="hostile",
     )
-    encounter = start_encounter([attacker, target])
+    encounter = _grid_encounter([attacker, target])
     encounter["ongoing_effects"] = [
         {
             "id": "guiding-bolt-mark",
@@ -3264,7 +3311,7 @@ def test_sneak_attack_enforces_once_per_turn_weapon_and_disadvantage_boundaries(
     rogue.update(initiative=20, tie_breaker=0, position={"x": 0, "y": 0}, disposition="friendly")
     ally.update(initiative=15, tie_breaker=0, position={"x": 1, "y": 0}, disposition="friendly")
     target.update(initiative=10, tie_breaker=0, position={"x": 1, "y": 0}, disposition="hostile")
-    encounter = start_encounter([rogue, ally, target])
+    encounter = _grid_encounter([rogue, ally, target])
     turn_token = f"1:0:{rogue['id']}"
     encounter["combatants"][0]["turn_flags"] = {"sneak_attack_turn_token": turn_token}
     with pytest.raises(Exception, match="already been used"):
@@ -3782,7 +3829,7 @@ def test_dodge_lasts_until_start_of_next_turn_and_affects_attacks() -> None:
     attacker = _actor("attacker")
     attacker.update(initiative=10, position={"x": 1, "y": 0})
     dodger["position"] = {"x": 0, "y": 0}
-    encounter = start_encounter([dodger, attacker])
+    encounter = _grid_encounter([dodger, attacker])
     encounter = resolve_common_action(encounter, actor_id_value="dodger", action="dodge")
     encounter = end_turn(encounter, actor_id_value="dodger")
     plan = preflight_attack(attacker, dodger, action={}, encounter=encounter)
@@ -3813,7 +3860,7 @@ def test_unseen_attacker_and_target_apply_opposed_attack_modifiers() -> None:
     attacker.update(initiative=20, position={"x": 0, "y": 0}, hidden=True)
     target = _actor("target")
     target.update(initiative=10, position={"x": 1, "y": 0}, hidden=True)
-    encounter = start_encounter([attacker, target])
+    encounter = _grid_encounter([attacker, target])
     plan = preflight_attack(attacker, target, action={}, encounter=encounter)
     assert plan["advantage"] is True
     assert plan["disadvantage"] is True
@@ -3906,9 +3953,12 @@ def test_2024_exhaustion_reduces_speed_attacks_and_death_saves() -> None:
     exhausted["sheet"]["edition"] = "2024"
     exhausted["sheet"]["combat"]["exhaustion"] = 1
     exhausted["derived"] = derive_character_sheet(exhausted["sheet"])
-    encounter = start_encounter([exhausted], ruleset="2024", rng=random.Random(1))
+    target = _actor("target")
+    exhausted.update(initiative=20, position={"x": 0, "y": 0})
+    target.update(initiative=10, position={"x": 1, "y": 0})
+    encounter = _grid_encounter([exhausted, target], ruleset="2024")
     assert encounter["combatants"][0]["turn_budget"]["speed"] == 25
-    plan = preflight_attack(exhausted, _actor("target"), action={}, encounter=encounter)
+    plan = preflight_attack(exhausted, target, action={}, encounter=encounter)
     assert plan["attack_bonus"] == 3
 
     exhausted["sheet"]["combat"]["hp"]["value"] = 0
@@ -4392,7 +4442,7 @@ def test_versatile_weapon_grip_uses_exact_alternate_damage_once() -> None:
         position={"x": 1, "y": 0},
         disposition="friendly",
     )
-    encounter = start_encounter([orc, target])
+    encounter = _grid_encounter([orc, target])
 
     one_handed = preflight_attack(
         orc,

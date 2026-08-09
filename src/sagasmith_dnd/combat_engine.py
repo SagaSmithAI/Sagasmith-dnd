@@ -1792,6 +1792,30 @@ def preflight_attack(
     effect_roll_bonus = active_effect_roll_bonus(actor_sheet(attacker), "attack")
     attack_bonus = int(weapon.get("attack_bonus", 0)) + effect_roll_bonus
     context = dict(action.get("context") or {})
+    positioning_mode = (
+        str(encounter.get("positioning_mode") or "grid") if encounter is not None else "grid"
+    )
+    spatial_facts: dict[str, Any] | None = None
+    if positioning_mode == "agent":
+        raw_spatial_facts = context.get("spatial_facts")
+        if not isinstance(raw_spatial_facts, dict):
+            raise NeedsRulingError(
+                "agent-positioned attacks require structured spatial facts",
+                missing=("attack.spatial_facts",),
+                ruling_kind="agent_dm_adjudication",
+            )
+        spatial_facts = dict(raw_spatial_facts)
+        if spatial_facts.get("targetable") is not True:
+            raise CombatEngineError("target is not targetable in the Agent spatial ruling")
+        if spatial_facts.get("in_range") is not True:
+            raise CombatEngineError("target is outside range in the Agent spatial ruling")
+        context["cover"] = {"degree": str(spatial_facts.get("cover_degree") or "none")}
+        context["attacker_can_see_target"] = bool(
+            spatial_facts.get("attacker_can_see_target")
+        )
+        context["target_can_see_attacker"] = bool(
+            spatial_facts.get("target_can_see_attacker")
+        )
     raw_cover = context.get("cover")
     if raw_cover is not None and not isinstance(raw_cover, dict):
         raise CombatEngineError("cover context must be an object")
@@ -1971,15 +1995,21 @@ def preflight_attack(
             secondary_position = _position((secondary or {}).get("position"))
             attacker_position = _position(attacker.get("position"))
             reach = int(weapon.get("reach_ft", 5) or 5)
-            if (
-                secondary is None
-                or secondary_target_id in {actor_id(attacker), actor_id(target)}
-                or primary_position is None
-                or secondary_position is None
-                or attacker_position is None
-                or _grid_distance(primary_position, secondary_position) > 5
-                or _grid_distance(attacker_position, secondary_position) > reach
-            ):
+            agent_cleave_eligible = bool(
+                spatial_facts is not None
+                and spatial_facts.get("cleave_secondary_eligible") is True
+            )
+            grid_cleave_eligible = bool(
+                primary_position is not None
+                and secondary_position is not None
+                and attacker_position is not None
+                and _grid_distance(primary_position, secondary_position) <= 5
+                and _grid_distance(attacker_position, secondary_position) <= reach
+            )
+            if secondary is None or secondary_target_id in {
+                actor_id(attacker),
+                actor_id(target),
+            } or not (agent_cleave_eligible or grid_cleave_eligible):
                 raise CombatEngineError(
                     "Cleave second target must be another creature within 5 feet of "
                     "the first target and within weapon reach"
@@ -2014,13 +2044,28 @@ def preflight_attack(
                 missing=("multiple_on_hit_effects",),
             )
         on_hit_effect = str(ammunition_slaying["source_excerpt"])
-    range_result = _attack_range(attacker, target, weapon, attack_mode=attack_mode)
+    range_result = _attack_range(
+        attacker,
+        target,
+        weapon,
+        attack_mode=attack_mode,
+        spatial_facts=spatial_facts,
+    )
     if range_result["disadvantage"]:
         context["disadvantage"] = True
         context.setdefault("disadvantage_sources", []).append("weapon_long_range")
     close_combat_threat_ids: list[str] = []
     attacker_position = _position(attacker.get("position"))
-    if attack_mode == "ranged" and encounter is not None and attacker_position is not None:
+    if attack_mode == "ranged" and spatial_facts is not None:
+        close_combat_threat_ids = [
+            str(item) for item in spatial_facts.get("close_threat_actor_ids", [])
+        ]
+        if close_combat_threat_ids:
+            context["disadvantage"] = True
+            context.setdefault("disadvantage_sources", []).append(
+                "hostile_creature_within_5_ft"
+            )
+    elif attack_mode == "ranged" and encounter is not None and attacker_position is not None:
         for candidate in encounter.get("combatants", []):
             candidate_id = str(candidate.get("actor_id") or "")
             candidate_position = _position(candidate.get("position"))
@@ -2155,8 +2200,15 @@ def preflight_attack(
             )
         )
     distance = range_result.get("distance_ft")
-    if target_conditions & {"prone", "unconscious"} and distance is not None:
-        if int(distance) <= 5:
+    target_within_5_ft = (
+        bool(spatial_facts.get("target_within_5_ft"))
+        if spatial_facts is not None
+        else distance is not None and int(distance) <= 5
+    )
+    if target_conditions & {"prone", "unconscious"} and (
+        spatial_facts is not None or distance is not None
+    ):
+        if target_within_5_ft:
             context["advantage"] = True
             context.setdefault("advantage_sources", []).append("target_prone_within_5_ft")
         else:
@@ -2186,15 +2238,24 @@ def preflight_attack(
     next_attack_disadvantage_effect_id = None
     if encounter is not None:
         target_position = _position(target.get("position"))
+        agent_helper_ids = (
+            {str(item) for item in spatial_facts.get("helper_actor_ids", [])}
+            if spatial_facts is not None
+            else None
+        )
         for helper in encounter.get("combatants", []):
             helping = dict(helper.get("turn_flags") or {}).get("helping")
             helper_position = _position(helper.get("position"))
             if (
                 isinstance(helping, dict)
                 and helping.get("target_id") == actor_id(attacker)
-                and target_position is not None
-                and helper_position is not None
-                and _grid_distance(helper_position, target_position) <= 5
+                and (
+                    str(helper.get("actor_id") or "") in agent_helper_ids
+                    if agent_helper_ids is not None
+                    else target_position is not None
+                    and helper_position is not None
+                    and _grid_distance(helper_position, target_position) <= 5
+                )
                 and not _condition_set(helper.get("conditions")) & INCAPACITATING_STATE_IDS
             ):
                 context["advantage"] = True
@@ -2242,9 +2303,7 @@ def preflight_attack(
                 context.setdefault("disadvantage_sources", []).append(effect_id)
                 break
     automatic_critical = bool(
-        distance is not None
-        and int(distance) <= 5
-        and target_conditions & {"paralyzed", "unconscious"}
+        target_within_5_ft and target_conditions & {"paralyzed", "unconscious"}
     )
     extension = apply_rule_event(actor_sheet(attacker), "attack.preflight", rules)
     if extension.status != "committed":
@@ -2315,6 +2374,7 @@ def preflight_attack(
             "armor_class_bonus": cover_bonus,
         },
         "context_ruling": deepcopy(context.get("agent_ruling")),
+        "spatial_ruling": deepcopy(spatial_facts),
         "damage_expression": str(expression),
         "damage_modifiers": (
             [{"source": "Fighting Style: Dueling", "value": dueling_bonus}] if dueling_bonus else []
@@ -3102,6 +3162,12 @@ def _sneak_attack_plan(
         )
         if target_state is None:
             raise CombatEngineError("Sneak Attack target is not in the encounter")
+        spatial_facts = context.get("spatial_facts")
+        ruled_adjacent_ids = (
+            {str(item) for item in spatial_facts.get("target_adjacent_ally_actor_ids", [])}
+            if isinstance(spatial_facts, dict)
+            else None
+        )
         target_position = _position(target_state.get("position"))
         target_disposition = _normalize_disposition(target_state.get("disposition"))
         for candidate in encounter.get("combatants", []):
@@ -3110,13 +3176,16 @@ def _sneak_attack_plan(
             if _condition_set(candidate.get("conditions")) & INCAPACITATING_STATE_IDS:
                 continue
             candidate_position = _position(candidate.get("position"))
-            if target_position is None or candidate_position is None:
+            if ruled_adjacent_ids is not None:
+                if str(candidate.get("actor_id") or "") not in ruled_adjacent_ids:
+                    continue
+            elif target_position is None or candidate_position is None:
                 continue
             candidate_disposition = _normalize_disposition(candidate.get("disposition"))
-            if {target_disposition, candidate_disposition} == {
-                "friendly",
-                "hostile",
-            } and _grid_distance(target_position, candidate_position) <= 5:
+            if {target_disposition, candidate_disposition} == {"friendly", "hostile"} and (
+                ruled_adjacent_ids is not None
+                or _grid_distance(target_position, candidate_position) <= 5
+            ):
                 nearby_enemy = True
                 break
     if not effective_advantage and not nearby_enemy:
@@ -6733,8 +6802,18 @@ def _attack_range(
     weapon: dict[str, Any],
     *,
     attack_mode: str,
+    spatial_facts: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Validate only deterministic range facts when both combatants are positioned."""
+    """Validate grid distance or consume one explicit Agent spatial ruling."""
+    if spatial_facts is not None:
+        return {
+            "enforced": True,
+            "distance_ft": None,
+            "normal_ft": None,
+            "long_ft": None,
+            "disadvantage": bool(spatial_facts.get("long_range", False)),
+            "source": "agent_spatial_facts",
+        }
     attacker_position = _position(attacker.get("position"))
     target_position = _position(target.get("position"))
     if attacker_position is None or target_position is None:
