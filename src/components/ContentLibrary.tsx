@@ -1,8 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 
-type Blocker = { code: string; message: string; source_refs?: Record<string, unknown>[] };
-type Dimension = { complete: boolean; item_count: number; blockers: Blocker[] };
-type Readiness = { common: Record<string, unknown>; kind: Record<string, unknown>; complete: boolean };
 type Asset = {
   asset_key: string; kind: string; name: string; media_type: string; checksum: string;
   size: number; alt?: string; license: string; attribution: string;
@@ -24,7 +21,6 @@ type Entry = {
   editions: string[]; license?: string; classification?: string; distribution?: string;
   component_counts: Record<string, number>; image_count: number; path: string;
   download_path: string; archive_checksum: string; archive_size: number;
-  readiness: Readiness;
 };
 type Index = {
   schema: string; visibility: 'private' | 'public'; system_id: string; package_format: string;
@@ -33,7 +29,7 @@ type Index = {
 type ContentPackage = {
   format: string; kind: string; id: string; version: string; checksum: string;
   manifest: Record<string, any>; metadata: Record<string, any>;
-  content: Record<string, any>; readiness: Readiness;
+  content: Record<string, any>;
   actors: Actor[]; assets: Asset[]; sources: Source[]; content_reviews: Record<string, any>[];
 };
 
@@ -141,7 +137,7 @@ export default function ContentLibrary() {
     <div className="library-controls"><input aria-label="Search packages" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search title, id, edition…"/><select aria-label="Package kind" value={kind} onChange={(event) => setKind(event.target.value)}><option value="all">All packages</option><option value="core_rules">Core rules</option><option value="addon">Addons</option><option value="module">Modules</option><option value="preset">Presets</option></select><code>{source}</code></div>
     <div className="library-layout"><nav className="library-packages" aria-label="Content packages">{visible.map((entry) => <button className={selected?.checksum === entry.checksum ? 'selected' : ''} key={entry.checksum} onClick={() => setSelected(entry)}><small>{entry.kind.toUpperCase()} · {(entry.editions || []).join('/') || 'ALL'}</small><strong>{entry.title}</strong><span>{entry.id}@{entry.version}</span><footer><b>{entry.component_counts.actor_card || Object.values(entry.component_counts).reduce((a, b) => a + b, 0)} records</b><em>{entry.license}</em></footer></button>)}</nav>
       <main className="library-detail">{pack && <><header><div><small>{pack.kind} / {pack.version}{selected?.classification ? ` / ${selected.classification}` : ''}</small><h2>{pack.manifest.title || pack.metadata.title || pack.id}</h2><p>{pack.id}</p></div><div className="checksum"><span>DESCRIPTOR SHA-256</span>{pack.checksum}<span>ARCHIVE SHA-256 · {Math.ceil((selected?.archive_size || 0) / 1024)} KiB</span>{selected?.archive_checksum}</div></header><div className="library-meta"><span>LICENSE <b>{pack.metadata.license || '—'}</b></span><span>DISTRIBUTION <b>{pack.metadata.distribution || '—'}</b></span><span>RECORDS <b>{records.length}</b></span><span>IMAGES <b>{pack.actors.filter((actor) => actor.image).length}</b></span></div>
-        <section className="module-contract"><header><div><small>CONTENT PACKAGE V1</small><h3>Contract & readiness</h3></div><a className="module-download" href={new URL(selected?.download_path || '', source).href} download>Download .sagasmith-pack</a></header>{profile && <div className="module-stats"><span>READINESS<b>{pack.readiness.complete ? 'COMPLETE' : 'REVIEW'}</b></span><span>PARTY SIZE<b>{partyRange(profile.party_size)}</b></span><span>LEVELS<b>{levelRange(profile)}</b></span><span>ADVANCEMENT<b>{profile.advancement?.recommended || 'SOURCE REVIEW'}</b></span><span>SERIES<b>{continuity?.series_id || 'STANDALONE'}</b></span></div>}</section>
+        <section className="module-contract"><header><div><small>CONTENT PACKAGE V2</small><h3>Immutable Pack contract</h3></div><a className="module-download" href={new URL(selected?.download_path || '', source).href} download>Download .sagasmith-pack</a></header>{profile && <div className="module-stats"><span>PARTY SIZE<b>{partyRange(profile.party_size)}</b></span><span>LEVELS<b>{levelRange(profile)}</b></span><span>ADVANCEMENT<b>{profile.advancement?.recommended || 'SOURCE REVIEW'}</b></span><span>SERIES<b>{continuity?.series_id || 'STANDALONE'}</b></span></div>}</section>
         {records.length > 0 && <section className="library-component"><header><div><small>STRUCTURED CONTENT</small><h3>Rules, scenes, reviews and resolution records</h3></div><code>{records.length} records</code></header><div className="artifact-grid">{records.map((item: any, position) => {
           const image = item.card?.image;
           const imageAsset = image ? assets.get(image.asset_key) : null;
