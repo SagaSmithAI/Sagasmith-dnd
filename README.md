@@ -37,7 +37,7 @@ D&D runtime + SagaSmith Core
 - **Scene Atlas** — stable module/chapter order, deep links, scoped progress, source pages, and a graph of only the spatial evidence actually present in the module.
 - **Combat map** — encounter-local five-foot grid, audience-filtered tokens, initiative, blocked/difficult cell rendering, drag-to-propose movement, and MCP rejection feedback.
 - **Actor dossier** — abilities, combat values, skills, spell resources, equipment, and an explicit actor-knowledge boundary.
-- **Rule evidence** — installed sources, edition filters, hybrid-search candidates, provenance, and the reminder that retrieval is not authoritative state.
+- **Rule evidence** — indexed sources, edition filters, hybrid-search candidates, provenance, and the reminder that retrieval is not authoritative state.
 - **Demo mode** — coherent local data when no compatible gateway answers, visibly labeled throughout the interface.
 
 ## Run
