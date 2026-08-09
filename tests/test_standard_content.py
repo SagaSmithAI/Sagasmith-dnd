@@ -18,6 +18,7 @@ from sagasmith_dnd.combat_engine import (
 from sagasmith_dnd.content_import import audit_release_semantic_validation
 from sagasmith_dnd.core_rule_pack import get_core_rule_pack
 from sagasmith_dnd.lifecycle import advance_effect_durations
+from sagasmith_dnd.spatial import compile_battle_map
 from sagasmith_dnd.spell_resolution import scaled_roll_expression, spell_resolution_path
 from sagasmith_dnd.spells import consume_spell_cast
 from sagasmith_dnd.standard_content import build_standard2014_content
@@ -207,12 +208,18 @@ def test_witch_bolt_uses_scaled_initial_damage_and_fixed_repeat_action() -> None
         for item in cast["sheet"]["effects"]
         if item.get("active") and item.get("concentration")
     )
+    battle_map = compile_battle_map(
+        {"scene_id": "witch-bolt", "spatial": {}},
+        {"width_cells": 12, "height_cells": 6},
+    )
     encounter = start_encounter(
         [
             _actor("caster", initiative=20, position={"x": 0, "y": 0}),
             _actor("target", initiative=10, position={"x": 4, "y": 0}),
         ],
         ruleset="2014",
+        battle_map=battle_map,
+        positioning_mode="grid",
     )
     tethered = start_witch_bolt_tether(
         encounter,
@@ -241,6 +248,8 @@ def test_witch_bolt_uses_scaled_initial_damage_and_fixed_repeat_action() -> None
             _actor("target", initiative=10, position={"x": 4, "y": 0}),
         ],
         ruleset="2014",
+        battle_map=battle_map,
+        positioning_mode="grid",
     )
     another_tether = start_witch_bolt_tether(
         another_encounter,

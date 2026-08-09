@@ -4175,7 +4175,11 @@ def test_stabilize_sheet_requires_zero_hp_and_clears_death_saves() -> None:
 
 
 def test_movement_and_choice_window_are_explicit() -> None:
-    encounter = start_encounter([_actor("a"), _actor("b")], rng=random.Random(1))
+    first = _actor("a")
+    first["position"] = {"x": 0, "y": 2}
+    second = _actor("b")
+    second["position"] = {"x": 3, "y": 2}
+    encounter = _grid_encounter([first, second])
     current = encounter["combatants"][encounter["turn_index"]]["actor_id"]
     moved = spend_movement(encounter, current, 10, destination={"x": 1, "y": 2})
     assert moved["combatants"][encounter["turn_index"]]["turn_budget"]["movement"] == 20
@@ -4816,7 +4820,7 @@ def test_space_sharing_trait_allows_an_occupied_destination() -> None:
     )
     occupant = _actor("occupant")
     occupant.update(initiative=10, position={"x": 1, "y": 0})
-    encounter = start_encounter([mover, occupant])
+    encounter = _grid_encounter([mover, occupant])
 
     moved = spend_movement(encounter, "swarm", 5, destination={"x": 1, "y": 0})
 
@@ -4852,7 +4856,7 @@ def test_hidden_mover_does_not_automatically_reveal_itself_with_a_reaction_windo
     )
     threat = _actor("threat")
     threat.update(initiative=10, position={"x": 1, "y": 0}, disposition="hostile")
-    encounter = start_encounter([mover, threat])
+    encounter = _grid_encounter([mover, threat])
     moved = spend_movement(encounter, "mover", 15, destination={"x": 3, "y": 0})
     assert available_reactions(moved, "threat") == []
 

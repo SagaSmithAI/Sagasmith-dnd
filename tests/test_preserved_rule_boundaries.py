@@ -24,6 +24,7 @@ from sagasmith_dnd.combat_engine import (
 )
 from sagasmith_dnd.lifecycle import apply_rest
 from sagasmith_dnd.rule_engine import resolution_context
+from sagasmith_dnd.spatial import compile_battle_map
 
 
 def _rules(edition: str = "2014"):
@@ -130,9 +131,18 @@ def test_core_pack_preserves_hidden_reveal_and_2024_knockout() -> None:
 def test_core_pack_preserves_prone_grapple_and_ready_boundaries() -> None:
     actor = _actor("actor", initiative=20)
     other = _actor("other", initiative=10)
+    actor["position"] = {"x": 0, "y": 0}
+    other["position"] = {"x": 3, "y": 0}
     actor["sheet"]["conditions"] = ["prone"]
     actor["derived"] = derive_character_sheet(actor["sheet"])
-    encounter = start_encounter([actor, other])
+    encounter = start_encounter(
+        [actor, other],
+        positioning_mode="grid",
+        battle_map=compile_battle_map(
+            {"scene_id": "preserved-prone", "spatial": {}},
+            {"width_cells": 10, "height_cells": 10},
+        ),
+    )
     with pytest.raises(ValueError, match="must crawl or stand"):
         spend_movement(encounter, "actor", 5)
     crawled = spend_movement(encounter, "actor", 5, crawl=True)
