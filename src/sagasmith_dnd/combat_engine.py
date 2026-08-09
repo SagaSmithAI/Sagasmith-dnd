@@ -681,6 +681,7 @@ def start_encounter(
     scene_id: str | None = None,
     name: str = "Combat",
     battle_map: dict[str, Any] | None = None,
+    positioning_mode: str | None = None,
     rng: Any = None,
 ) -> dict[str, Any]:
     """Create encounter state from actor references and derived values.
@@ -690,6 +691,24 @@ def start_encounter(
     """
     if not participants:
         raise CombatEngineError("combat requires at least one participant")
+    normalized_positioning_mode = str(
+        positioning_mode or ("grid" if battle_map is not None else "agent")
+    ).strip().casefold()
+    if normalized_positioning_mode not in {"grid", "agent"}:
+        raise CombatEngineError("positioning_mode must be grid or agent")
+    if normalized_positioning_mode == "grid":
+        if not isinstance(battle_map, dict):
+            raise CombatEngineError("grid combat requires a battle map")
+        from sagasmith_dnd.spatial import validate_position
+
+        for actor in participants:
+            if not isinstance(actor.get("position"), dict):
+                raise CombatEngineError(
+                    f"grid combat requires a position for actor {actor_id(actor)}"
+                )
+            validate_position(battle_map, actor["position"])
+    elif battle_map is not None:
+        raise CombatEngineError("agent-positioned combat does not accept a battle map")
     normalized_ruleset = _normalize_ruleset(ruleset)
     validated_participants: list[
         tuple[int, dict[str, Any], str, dict[str, Any], dict[str, Any], set[str], int]
@@ -780,7 +799,11 @@ def start_encounter(
                 "condition_sources": timed_condition_sources(sheet),
                 "speed_multiplier": speed_multiplier,
                 "base_speed": speed,
-                "position": deepcopy(actor.get("position")),
+                "position": (
+                    deepcopy(actor.get("position"))
+                    if normalized_positioning_mode == "grid"
+                    else None
+                ),
                 "hidden": bool(actor.get("hidden", False)),
                 "visible_to_actor_ids": deepcopy(actor.get("visible_to_actor_ids")),
                 "disposition": _normalize_disposition(actor.get("disposition")),
@@ -840,6 +863,7 @@ def start_encounter(
         "name": name or "Combat",
         "scene_id": scene_id,
         "battle_map": deepcopy(battle_map) if battle_map is not None else None,
+        "positioning_mode": normalized_positioning_mode,
         "ruleset": normalized_ruleset,
         "round": 1,
         "turn_index": 0,
@@ -882,6 +906,10 @@ def queue_combatant(
     generated_encounter = start_encounter(
         [actor],
         ruleset=value.get("ruleset"),
+        battle_map=(
+            value.get("battle_map") if value.get("positioning_mode") == "grid" else None
+        ),
+        positioning_mode=str(value.get("positioning_mode") or "agent"),
         rng=rng,
     )
     generated = generated_encounter["combatants"][0]

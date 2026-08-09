@@ -340,6 +340,49 @@ def _actor(identifier: str, *, hp: int = 12, ac: int = 10) -> dict:
     }
 
 
+def _grid_encounter(
+    participants: list[dict],
+    *,
+    ruleset: str = "2014",
+) -> dict:
+    positions = [dict(actor["position"]) for actor in participants]
+    battle_map = compile_battle_map(
+        {"scene_id": "test-grid", "spatial": {}},
+        {
+            "width_cells": max(int(item["x"]) for item in positions) + 10,
+            "height_cells": max(int(item["y"]) for item in positions) + 10,
+        },
+    )
+    return start_encounter(
+        participants,
+        ruleset=ruleset,
+        battle_map=battle_map,
+        positioning_mode="grid",
+    )
+
+
+def test_encounter_positioning_modes_are_explicit_engine_state() -> None:
+    agent = start_encounter([_actor("agent")], positioning_mode="agent")
+    assert agent["positioning_mode"] == "agent"
+    assert agent["battle_map"] is None
+    assert agent["combatants"][0]["position"] is None
+
+    positioned = _actor("grid")
+    positioned["position"] = {"x": 1, "y": 1}
+    grid = _grid_encounter([positioned])
+    assert grid["positioning_mode"] == "grid"
+    assert grid["combatants"][0]["position"] == {"x": 1, "y": 1}
+
+    with pytest.raises(CombatEngineError, match="requires a battle map"):
+        start_encounter([positioned], positioning_mode="grid")
+    with pytest.raises(CombatEngineError, match="does not accept a battle map"):
+        start_encounter(
+            [_actor("agent-map")],
+            positioning_mode="agent",
+            battle_map=grid["battle_map"],
+        )
+
+
 def test_preflight_rejects_an_exhausted_recharge_weapon() -> None:
     attacker = _actor("recharge-attacker")
     attacker["sheet"]["inventory"]["items"] = [
@@ -522,7 +565,7 @@ def test_2024_push_and_slow_masteries_update_encounter_state() -> None:
     target = _actor("target", hp=20, ac=1)
     pusher.update(initiative=20, position={"x": 0, "y": 0}, disposition="friendly")
     target.update(initiative=10, position={"x": 1, "y": 0}, disposition="hostile")
-    encounter = start_encounter([pusher, target], ruleset="2024")
+    encounter = _grid_encounter([pusher, target], ruleset="2024")
     rules = resolution_context({"edition": "2024", "fingerprint": "", "lock": []})
     plan = preflight_attack(
         pusher,
@@ -648,7 +691,7 @@ def test_2024_cleave_grants_one_restricted_attack_only_after_a_hit() -> None:
     attacker.update(initiative=20, position={"x": 0, "y": 0}, disposition="friendly")
     primary.update(initiative=10, position={"x": 1, "y": 0}, disposition="hostile")
     secondary.update(initiative=5, position={"x": 1, "y": 1}, disposition="hostile")
-    encounter = start_encounter([attacker, primary, secondary], ruleset="2024")
+    encounter = _grid_encounter([attacker, primary, secondary], ruleset="2024")
     plan = preflight_attack(
         attacker,
         primary,
@@ -1132,7 +1175,7 @@ def test_telekinetic_ray_moves_up_to_the_last_legal_cell_without_reactions() -> 
         position={"x": 2, "y": 1},
         disposition="friendly",
     )
-    encounter = start_encounter([source, target])
+    encounter = _grid_encounter([source, target])
     encounter["battle_map"] = compile_battle_map(
         {"scene_id": "gazer-rays", "spatial": {}},
         {"width_cells": 6, "height_cells": 4},
@@ -1164,7 +1207,7 @@ def test_telekinetic_ray_projects_noncardinal_bearings_onto_the_square_grid() ->
         position={"x": 1, "y": 4},
         disposition="friendly",
     )
-    encounter = start_encounter([source, target])
+    encounter = _grid_encounter([source, target])
     encounter["battle_map"] = compile_battle_map(
         {"scene_id": "gazer-rays", "spatial": {}},
         {"width_cells": 4, "height_cells": 7},
@@ -1196,7 +1239,7 @@ def test_force_move_directly_toward_stops_before_the_source() -> None:
         position={"x": 5, "y": 1},
         disposition="friendly",
     )
-    encounter = start_encounter([source, target])
+    encounter = _grid_encounter([source, target])
     encounter["battle_map"] = compile_battle_map(
         {"scene_id": "merrow-harpoon", "spatial": {}},
         {"width_cells": 7, "height_cells": 3},
@@ -1242,7 +1285,7 @@ def test_frightened_creature_cannot_willingly_move_closer_to_visible_source() ->
     target.update(initiative=20, position={"x": 2, "y": 1})
     source = _actor("gazer")
     source.update(initiative=10, position={"x": 0, "y": 1})
-    encounter = start_encounter([target, source])
+    encounter = _grid_encounter([target, source])
 
     with pytest.raises(CombatEngineError, match="cannot willingly move closer"):
         spend_movement(
@@ -1793,7 +1836,7 @@ def test_ranged_attack_has_close_combat_disadvantage() -> None:
             "range_ft": {"normal": 80, "long": 320},
         }
     ]
-    encounter = start_encounter([attacker, target])
+    encounter = _grid_encounter([attacker, target])
 
     plan = preflight_attack(
         attacker,
@@ -1856,7 +1899,7 @@ def test_spell_attack_preflight_uses_source_card_and_spellcasting_override() -> 
         position={"x": 5, "y": 0},
         disposition="hostile",
     )
-    encounter = start_encounter([attacker, target])
+    encounter = _grid_encounter([attacker, target])
 
     plan = preflight_spell_attack(
         attacker,
@@ -3128,7 +3171,7 @@ def test_help_grants_and_then_consumes_attack_advantage() -> None:
     attacker["derived"]["inventory"]["weapon_attacks"] = [
         {"item_id": "sword", "attack_bonus": 5, "damage_expression": "1", "damage_type": "slashing"}
     ]
-    encounter = start_encounter([attacker, helper, target])
+    encounter = _grid_encounter([attacker, helper, target])
     encounter["combatants"][1]["turn_flags"] = {"helping": {"target_id": "attacker"}}
     plan = preflight_attack(attacker, target, action={"weapon_id": "sword"}, encounter=encounter)
     assert plan["helped_by"] == "helper"
@@ -3188,7 +3231,7 @@ def test_sneak_attack_requires_card_feature_and_records_critical_bonus_damage() 
     rogue.update(initiative=20, tie_breaker=0, position={"x": 0, "y": 0}, disposition="friendly")
     ally.update(initiative=15, tie_breaker=0, position={"x": 1, "y": 0}, disposition="friendly")
     target.update(initiative=10, tie_breaker=0, position={"x": 1, "y": 0}, disposition="hostile")
-    encounter = start_encounter([rogue, ally, target])
+    encounter = _grid_encounter([rogue, ally, target])
 
     plan = preflight_attack(
         rogue,
@@ -3757,7 +3800,7 @@ def test_paralyzed_target_is_automatic_critical_within_five_feet() -> None:
     target.update(initiative=10, position={"x": 1, "y": 0})
     target["sheet"]["conditions"] = ["paralyzed"]
     target["derived"] = derive_character_sheet(target["sheet"])
-    encounter = start_encounter([attacker, target])
+    encounter = _grid_encounter([attacker, target])
     plan = preflight_attack(attacker, target, action={}, encounter=encounter)
     assert plan["automatic_critical_on_hit"] is True
     _, _, result = resolve_attack_action(attacker, target, plan=plan, rng=random.Random(1))
@@ -4622,7 +4665,7 @@ def test_grid_movement_opens_opportunity_window_only_when_leaving_hostile_reach(
     mover.update(initiative=20, position={"x": 0, "y": 0}, disposition="friendly")
     threat = _actor("threat")
     threat.update(initiative=10, position={"x": 1, "y": 0}, disposition="hostile", reach_ft=5)
-    encounter = start_encounter([mover, threat])
+    encounter = _grid_encounter([mover, threat])
 
     moved = spend_movement(encounter, "mover", 15, destination={"x": 3, "y": 0})
     reaction = available_reactions(moved, "threat")
@@ -4639,7 +4682,7 @@ def test_positioned_movement_rejects_declared_distance_that_disagrees_with_grid(
     mover.update(initiative=20, position={"x": 0, "y": 0})
     threat = _actor("threat")
     threat.update(initiative=10, position={"x": 4, "y": 0})
-    encounter = start_encounter([mover, threat])
+    encounter = _grid_encounter([mover, threat])
     with pytest.raises(ValueError, match="grid distance"):
         spend_movement(encounter, "mover", 5, destination={"x": 2, "y": 0})
 
@@ -4649,7 +4692,7 @@ def test_explicit_path_pays_difficult_terrain_cost() -> None:
     mover.update(initiative=20, position={"x": 0, "y": 0})
     other = _actor("other")
     other.update(initiative=10, position={"x": 4, "y": 0})
-    encounter = start_encounter([mover, other])
+    encounter = _grid_encounter([mover, other])
     encounter["battle_map"] = compile_battle_map(
         {"scene_id": "terrain", "spatial": {}},
         {
@@ -4678,7 +4721,7 @@ def test_voluntary_movement_cannot_end_in_another_living_creatures_space() -> No
     mover.update(initiative=20, position={"x": 0, "y": 0})
     occupant = _actor("occupant")
     occupant.update(initiative=10, position={"x": 1, "y": 0})
-    encounter = start_encounter([mover, occupant])
+    encounter = _grid_encounter([mover, occupant])
 
     with pytest.raises(ValueError, match="cannot willingly end"):
         spend_movement(encounter, "mover", 5, destination={"x": 1, "y": 0})
@@ -4705,7 +4748,7 @@ def test_forced_movement_into_occupied_space_requires_effect_specific_ruling() -
     mover.update(initiative=20, position={"x": 0, "y": 0})
     occupant = _actor("occupant")
     occupant.update(initiative=10, position={"x": 1, "y": 0})
-    encounter = start_encounter([mover, occupant])
+    encounter = _grid_encounter([mover, occupant])
 
     with pytest.raises(NeedsRulingError) as error:
         spend_movement(
@@ -4746,7 +4789,7 @@ def test_recorded_visibility_can_open_reaction_window_for_invisible_mover() -> N
     )
     threat = _actor("threat")
     threat.update(initiative=10, position={"x": 1, "y": 0}, disposition="hostile")
-    encounter = start_encounter([mover, threat])
+    encounter = _grid_encounter([mover, threat])
     moved = spend_movement(encounter, "mover", 15, destination={"x": 3, "y": 0})
     assert available_reactions(moved, "threat")[0]["target_id"] == "mover"
 

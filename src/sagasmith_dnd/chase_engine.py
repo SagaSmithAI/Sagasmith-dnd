@@ -125,6 +125,7 @@ def start_chase(
         scene_id=scene_id,
         name=name,
         battle_map=None,
+        positioning_mode="agent",
         rng=rng,
     )
     actors = {actor_id(actor): actor for actor in participants}
