@@ -25,10 +25,10 @@ Agents should normally connect through [SagaSmith-dnd-mcp](https://github.com/Sa
 - **Character creation** — standard array, point buy, rolling, edition differences, and structured core class/species/background/feat content.
 - **Spells** — spell data, casting resources, preparation, concentration, readied spells, targets, saves, and timing boundaries.
 - **Structured combat** — initiative, turns, action economy, attack preflight/commit, typed damage, resistance/immunity, unconsciousness, death saves, reactions, and choice windows.
-- **Spatial semantics** — module location evidence, temporary maps created when combat starts, movement, distance, reach, and opportunity attacks.
+- **Spatial semantics** — explicit grid combat with temporary maps and coordinates, plus Agent-positioned combat with per-action structured spatial facts.
 - **Non-combat activities** — checks, rests, resources, and common activities with guards against bypassing the combat state machine.
 - **Content ingestion** — D&D module profiles, structured core content, and extension rulebook draft/validation flows.
-- **Portable actors** — one D&D actor-card validator for PCs/NPCs/monsters, plus bundled SRD 2014/2024 creature preset packs.
+- **Unified actor cards** — one D&D actor-card validator for PCs/NPCs/monsters, plus bundled SRD 2014/2024 creature preset Packs.
 
 ## Unified actor cards and bundled creature packs
 
@@ -137,7 +137,7 @@ Distributed maps, player handouts, and character-reference sheets that were
 not indexed remain typed `map` / `player_reference` auxiliary assets with their
 logical paths. They are never mislabeled as rules evidence; authorized public
 libraries may expose them by content hash while the archive remains the only
-installation boundary.
+cross-installation transport boundary.
 
 PCs, NPCs, and monsters use `sagasmith.actor-card.v3`; owner-dependent statblock
 templates use the same optional card-level image reference until instantiated.
@@ -146,7 +146,7 @@ snapshots. Source-backed extraction distinguishes a proven illustration absence
 from an invalid reference or uncertain crop; uncertainty blocks release.
 
 On import, the receiver verifies all hashes and dependencies, rebuilds source
-and citation ids locally, installs rule definitions globally, and creates fresh
+and citation ids locally, stores rule definitions inactive, and creates fresh
 runtime actor identities. Addon and module campaign activation remain explicit,
 revision-safe Owner/DM operations. Embedded rule definitions use a stable
 definition checksum; whole-package dependencies use the descriptor checksum.

@@ -25,10 +25,10 @@ flowchart LR
 - **角色创建** — 标准数组、购点、掷骰与版本差异；核心职业、物种/种族、背景和专长内容。
 - **法术** — 法术数据、施法资源、准备法术、专注、Ready spell 与目标/豁免边界。
 - **结构化战斗** — 先攻、回合、动作经济、攻击预检与提交、伤害类型、抗性/免疫、倒地、死亡豁免、反应和选择窗口。
-- **空间语义** — 模组房间/地点证据，战斗开始时生成临时 map，移动、距离、触及和机会攻击。
+- **空间语义** — 带临时地图和完整坐标的 grid 战斗，以及逐动作提交结构化空间事实的 Agent 战斗。
 - **非战斗活动** — 检定、休息、资源与常见角色活动；战斗中禁止绕过战斗状态机修改同一状态。
 - **内容导入** — D&D 模组 profile、结构化规则内容、扩展规则书草稿与校验路径。
-- **可移植角色内容** — PC/NPC/怪物共用 actor-card validator；SRD 2014/2024 怪物与 NPC 生成默认 preset pack。
+- **统一角色卡** — PC/NPC/怪物共用 actor-card validator；SRD 2014/2024 怪物与 NPC 生成默认 Preset Pack。
 
 ## 统一角色卡与默认怪物包
 
@@ -125,21 +125,21 @@ sagasmith-dnd database upgrade --json
 
 所有可分享内容统一使用 `sagasmith.content-package` v2 与
 `.sagasmith-pack` 归档。`core_rules`、`addon`、`module`、`preset` 共享同一套
-来源、证据、资产和角色卡物理结构，但保留不同的安装与激活权限。来源只保存一份
+来源、证据、资产和角色卡物理结构，但保留不同的存储与激活权限。来源只保存一份
 规范化文档 blob，section/chunk 通过 offset 与 hash 引用；原始文档和图片都是
 content-addressed asset。不再接受松散 portable JSON、release manifest 或
 `.sagasmith-module`。
 
 未参与索引的随附地图、玩家手册和角色参考表会作为 `map` / `player_reference`
 辅助资产保留逻辑路径；它们不会被伪装成规则证据。公开库可按内容哈希直接展示这些
-经授权的浏览资产，完整归档仍是唯一安装边界。
+经授权的浏览资产，完整归档仍是唯一跨安装传输边界。
 
 PC、NPC、怪物统一使用 `sagasmith.actor-card.v3`；依赖主人属性的 statblock 模板在
 实例化前也使用同一套可选卡级图片引用。角色图只引用包内 `actor_image`，不会写入
 运行时角色或 Snapshot。来源图提取会区分“原文确实无插图”与页码、标题或裁剪不确定；
 后者必须复核并阻止发布。
 
-跨安装导入会验证全部 hash 和依赖，以新本地 id 重建来源与引用，安装规则定义并为
+跨安装导入会验证全部 hash 和依赖，以新本地 id 重建来源与引用，将规则定义保存为未激活状态并为
 角色创建全新运行时身份。Addon 与模组的战役激活仍是独立、revision-safe 的
 Owner/DM 操作。包内规则定义使用稳定 definition checksum，包依赖使用完整 descriptor
 checksum。
