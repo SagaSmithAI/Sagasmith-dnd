@@ -7,7 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from sagasmith_dnd.content_import import audit_release_resolution_readiness
+from sagasmith_dnd.content_import import audit_release_semantic_validation
 from sagasmith_dnd.content_resolution import finalize_bundled_artifact_resolutions
 from sagasmith_dnd.spell_resolution import (
     SPELL_RESOLUTION_MECHANIC_ID,
@@ -23,9 +23,7 @@ from sagasmith_dnd.standard_spell_ids import (
     STANDARD_2014_CONTENT_PACK_VERSION,
 )
 
-CORE_DRAGONBORN_BREATH_MECHANIC_ID = (
-    "dnd5e.core.activity.dragonborn_breath_weapon"
-)
+CORE_DRAGONBORN_BREATH_MECHANIC_ID = "dnd5e.core.activity.dragonborn_breath_weapon"
 
 
 def _species_spell_grant(
@@ -531,7 +529,7 @@ def _cached_standard2014_content() -> tuple[dict[str, Any], list[dict[str, Any]]
         "native_mechanic_refs": native_mechanic_refs,
         "content_kinds": ["species", "spell"],
         "resolution_policy": "build_time_complete",
-        "resolution_readiness": audit_release_resolution_readiness(artifacts),
+        "semantic_validation": audit_release_semantic_validation(artifacts),
     }
     return manifest, artifacts
 

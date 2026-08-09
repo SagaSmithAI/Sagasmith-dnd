@@ -168,9 +168,7 @@ _OCR_INLINE_ROOM_ONE = re.compile(
     r"(?=\s+[A-Z][a-z]{2,}\b)",
     re.MULTILINE,
 )
-_OCR_HEADING_ROOM_ONE = re.compile(
-    r"^[1IlL]\s+(?P<title>(?:[A-Za-z]{1,3}\s+){3,}[A-Za-z]{1,3})$"
-)
+_OCR_HEADING_ROOM_ONE = re.compile(r"^[1IlL]\s+(?P<title>(?:[A-Za-z]{1,3}\s+){3,}[A-Za-z]{1,3})$")
 
 
 def _canonical_ocr_room_one_heading(title: str) -> str:
@@ -230,10 +228,7 @@ def _location_heading_kind(title: str, body: str = "") -> str | None:
     physical_location = bool(
         _ROOM.match(text)
         or _OCR_HEADING_ROOM_ONE.fullmatch(text)
-        or (
-            1 <= len(text.split()) <= 10
-            and _contains_location_title_signal(folded)
-        )
+        or (1 <= len(text.split()) <= 10 and _contains_location_title_signal(folded))
         or (
             folded not in _NON_LOCATION_HEADINGS
             and 1 <= len(text.split()) <= 6
@@ -379,19 +374,13 @@ def _runtime_manifest_metadata(content: str) -> dict[str, object]:
                 errors.append(f"runtime manifest contains duplicate id: {item_id}")
             seen.add(item_id)
             if collection == "secrets" and not isinstance(item.get("initial_knowers", []), list):
-                errors.append(
-                    f"runtime manifest secrets[{index}].initial_knowers must be a list"
-                )
-            if collection in {"clues", "plot_nodes", "branches"} and not item.get(
-                "trigger"
-            ):
+                errors.append(f"runtime manifest secrets[{index}].initial_knowers must be a list")
+            if collection in {"clues", "plot_nodes", "branches"} and not item.get("trigger"):
                 errors.append(f"runtime manifest {collection}[{index}].trigger is required")
             if collection in {"plot_nodes", "branches"} and not isinstance(
                 item.get("consequences", []), list
             ):
-                errors.append(
-                    f"runtime manifest {collection}[{index}].consequences must be a list"
-                )
+                errors.append(f"runtime manifest {collection}[{index}].consequences must be a list")
     return {"runtime_manifest": manifest, "runtime_manifest_errors": errors}
 
 
@@ -530,14 +519,12 @@ def _location_key(title: str, ordinal: int) -> str:
     source = title
     matched = _ROOM_CODE.match(title.strip())
     if matched is not None:
-        source = f"{_normalized_room_code(matched.group('code'))} {title.strip()[matched.end():]}"
+        source = f"{_normalized_room_code(matched.group('code'))} {title.strip()[matched.end() :]}"
     folded = ascii_slug(source)
     return folded[:72] or f"location-{ordinal + 1}"
 
 
-def _explicit_connections(
-    text: str, locations: list[dict[str, object]]
-) -> list[dict[str, object]]:
+def _explicit_connections(text: str, locations: list[dict[str, object]]) -> list[dict[str, object]]:
     """Extract only prose that explicitly states one room leads to another.
 
     Room-number order and generic cross-references are deliberately ignored: an
@@ -549,9 +536,7 @@ def _explicit_connections(
     for location in locations:
         matched = _ROOM_CODE.match(str(location.get("title") or "").strip())
         if matched:
-            key_by_code[_normalized_room_code(matched.group("code"))] = str(
-                location["key"]
-            )
+            key_by_code[_normalized_room_code(matched.group("code"))] = str(location["key"])
     if len(key_by_code) < 2:
         return []
 
@@ -567,9 +552,7 @@ def _explicit_connections(
         section = text[heading.end() : end]
         for pattern in _EXPLICIT_ROUTE_PATTERNS:
             for route in pattern.finditer(section):
-                target_key = key_by_code.get(
-                    _normalized_room_code(route.group("target"))
-                )
+                target_key = key_by_code.get(_normalized_room_code(route.group("target")))
                 if target_key is None or target_key == source_key:
                     continue
                 edge = tuple(sorted((source_key, target_key)))
@@ -643,11 +626,7 @@ def _spatial_manifest(
         label_tokens = set(re.findall(r"[a-z0-9]+", label.casefold()))
         if label_tokens == scene_title_tokens:
             continue
-        if (
-            not _ROOM.match(label)
-            and len(label_tokens) == 1
-            and label_tokens <= scene_title_tokens
-        ):
+        if not _ROOM.match(label) and len(label_tokens) == 1 and label_tokens <= scene_title_tokens:
             continue
         base_key = _location_key(label, ordinal)
         location_key_counts[base_key] = location_key_counts.get(base_key, 0) + 1
@@ -699,9 +678,7 @@ def _spatial_manifest(
             continuation = _OCR_HEADING_CONTINUATION.match(text, section_start)
             if continuation is not None:
                 candidate = f"{label} {continuation.group('title').strip()}"
-                if _ROOM.match(candidate) and _contains_location_title_signal(
-                    candidate.casefold()
-                ):
+                if _ROOM.match(candidate) and _contains_location_title_signal(candidate.casefold()):
                     label = candidate
                     section_start = continuation.end()
             section_end = (
@@ -807,9 +784,7 @@ def _spatial_manifest(
                     if dimensions
                     else None
                 ),
-                "confidence": (
-                    "explicit_heading" if location_heading else "scene_fallback"
-                ),
+                "confidence": ("explicit_heading" if location_heading else "scene_fallback"),
             }
         )
     return {
@@ -854,9 +829,7 @@ class DndModuleProfile(GenericModuleProfile):
     ) -> list[SceneBoundary]:
         headings = list(re.finditer(r"^(#{1,6})\s+(.+?)\s*$", chapter_content, re.MULTILINE))
         plausible_headings = [
-            heading
-            for heading in headings
-            if _looks_like_scene_heading(heading.group(2))
+            heading for heading in headings if _looks_like_scene_heading(heading.group(2))
         ]
         counts = {
             level: sum(len(match.group(1)) == level for match in plausible_headings)
@@ -873,9 +846,7 @@ class DndModuleProfile(GenericModuleProfile):
         sub_level = scene_level + 1 if scene_level < 6 else None
         room_level = scene_level + 2 if scene_level < 5 else None
         scene_headings = [
-            heading
-            for heading in plausible_headings
-            if len(heading.group(1)) == scene_level
+            heading for heading in plausible_headings if len(heading.group(1)) == scene_level
         ]
         reference_chapter = _is_reference_chapter(chapter_title)
         if not scene_headings:
@@ -1035,11 +1006,7 @@ class DndModuleProfile(GenericModuleProfile):
                 if location_level is not None and level >= location_level
                 else None
             )
-            if (
-                location_level is not None
-                and level >= location_level
-                and location_kind is not None
-            ):
+            if location_level is not None and level >= location_level and location_kind is not None:
                 dimensions = _DIMENSIONS.search(section_body)
                 item = {
                     "title": title,

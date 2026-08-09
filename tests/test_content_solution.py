@@ -54,9 +54,7 @@ def _plan():
                         "module_id": "module-1",
                         "scene_id": "scene-1",
                     },
-                    "source_excerpt": (
-                        "On a hit, the binding blade restrains the target."
-                    ),
+                    "source_excerpt": ("On a hit, the binding blade restrains the target."),
                 }
             ],
         }
@@ -67,12 +65,8 @@ def _ruling() -> dict:
     return {
         "default_resolver": "agent",
         "ruling_kind": "module_specific_procedure",
-        "decision": (
-            "Compile the quoted on-hit clause into the stored condition plan."
-        ),
-        "reason": (
-            "The quoted source defines a deterministic restrained condition."
-        ),
+        "decision": ("Compile the quoted on-hit clause into the stored condition plan."),
+        "reason": ("The quoted source defines a deterministic restrained condition."),
     }
 
 
@@ -101,10 +95,7 @@ def test_build_time_solution_locks_plan_identity_evidence_and_agent_reason() -> 
     assert solution["plan_fingerprint"] == plan.fingerprint
     assert len(solution["source_fingerprint"]) == 64
     assert len(solution["source_card_fingerprint"]) == 64
-    assert (
-        normalize_content_solution(solution, plan=plan, source_card=card)
-        == solution
-    )
+    assert normalize_content_solution(solution, plan=plan, source_card=card) == solution
 
 
 def test_solution_cannot_be_reused_with_changed_plan_or_evidence() -> None:

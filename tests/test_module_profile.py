@@ -82,18 +82,18 @@ Text.
 
     metadata = MarkdownModuleParser(profile=DndModuleProfile()).document_metadata(content)
 
-    assert "runtime manifest module_key must be a stable lowercase id" in metadata[
-        "runtime_manifest_errors"
-    ]
-    assert "runtime manifest contains duplicate id: npc:keeper" in metadata[
-        "runtime_manifest_errors"
-    ]
-    assert "runtime manifest secrets[0].initial_knowers must be a list" in metadata[
-        "runtime_manifest_errors"
-    ]
-    assert "runtime manifest clues[0].trigger is required" in metadata[
-        "runtime_manifest_errors"
-    ]
+    assert (
+        "runtime manifest module_key must be a stable lowercase id"
+        in metadata["runtime_manifest_errors"]
+    )
+    assert (
+        "runtime manifest contains duplicate id: npc:keeper" in metadata["runtime_manifest_errors"]
+    )
+    assert (
+        "runtime manifest secrets[0].initial_knowers must be a list"
+        in metadata["runtime_manifest_errors"]
+    )
+    assert "runtime manifest clues[0].trigger is required" in metadata["runtime_manifest_errors"]
 
 
 def test_dnd_scene_parser_promotes_h3_when_it_dominates_h2() -> None:
@@ -206,8 +206,7 @@ def test_deep_numbered_adventure_areas_populate_scene_atlas() -> None:
         "3-kennel",
     ]
     assert all(
-        item["confidence"] == "explicit_heading"
-        for item in scene.metadata["spatial"]["locations"]
+        item["confidence"] == "explicit_heading" for item in scene.metadata["spatial"]["locations"]
     )
 
 
@@ -327,9 +326,7 @@ def test_scene_atlas_recovers_ocr_room_one_heading_without_period() -> None:
 
 def test_scene_atlas_orders_mixed_heading_evidence_by_scene_offset() -> None:
     content = (
-        "# Episode 2\n"
-        + ("Campaign preamble.\n" * 50)
-        + "## Ice Caves\n"
+        "# Episode 2\n" + ("Campaign preamble.\n" * 50) + "## Ice Caves\n"
         "##### 3. L a r d e r\nFrozen fish is stored here.\n"
         "7. H a l l o f G i a n t s\nFrozen giants line the walls.\n"
         "##### 12. Ic e T r o l l s\nThe trolls lair here.\n"
@@ -418,9 +415,7 @@ def test_uncoded_location_heading_can_be_a_room_outside_reference_chapter() -> N
         if item.title == "Conyberry"
     )
 
-    assert [item["title"] for item in scene.metadata["spatial"]["locations"]] == [
-        "AGATHA'S LAIR"
-    ]
+    assert [item["title"] for item in scene.metadata["spatial"]["locations"]] == ["AGATHA'S LAIR"]
 
 
 def test_proper_named_destination_uses_authored_arrival_prose_as_location_evidence() -> None:
@@ -595,9 +590,7 @@ def test_named_house_subsection_is_a_physical_scene_location() -> None:
         "house-of-inspired-hands",
         "inside-the-temple",
     ]
-    assert all(
-        item["kind"] == "room" for item in scene.metadata["spatial"]["locations"]
-    )
+    assert all(item["kind"] == "room" for item in scene.metadata["spatial"]["locations"])
 
 
 def test_ocr_split_house_subsection_remains_a_physical_location() -> None:
@@ -658,7 +651,7 @@ def test_named_windmill_season_populates_scene_atlas_as_a_location() -> None:
             "line": 4,
             "dimensions_ft": None,
             "confidence": "explicit_heading",
-        }
+        },
     ]
 
 
@@ -810,10 +803,7 @@ def test_ocr_room_codes_split_scenes_without_treating_words_as_codes() -> None:
         "Xl7. PROMENADE",
         "Xl9. XANATHAR'S SANCTUM",
     ]
-    assert all(
-        scene.metadata["spatial"]["locations"][0]["kind"] == "room"
-        for scene in room_scenes
-    )
+    assert all(scene.metadata["spatial"]["locations"][0]["kind"] == "room" for scene in room_scenes)
     ordinary = next(scene for scene in scenes if scene.title == "FOO. Ordinary Section")
     assert ordinary.metadata["spatial"]["locations"][0]["kind"] != "room"
     fragment = next(scene for scene in scenes if scene.title.startswith("BOW1."))

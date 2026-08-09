@@ -63,11 +63,7 @@ def spend_heroic_inspiration_reroll(
 ) -> dict[str, Any]:
     """Spend Heroic Inspiration and replace one just-rolled die with a new result."""
 
-    if (
-        isinstance(die_sides, bool)
-        or not isinstance(die_sides, int)
-        or not 2 <= die_sides <= 1000
-    ):
+    if isinstance(die_sides, bool) or not isinstance(die_sides, int) or not 2 <= die_sides <= 1000:
         raise HeroicInspirationError("die_sides must be an integer between 2 and 1000")
     if (
         isinstance(original_roll, bool)

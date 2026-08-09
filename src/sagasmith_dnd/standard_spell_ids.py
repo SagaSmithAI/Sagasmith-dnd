@@ -89,17 +89,13 @@ CORE_INVISIBILITY_SPELL_IDS = frozenset(
 )
 CORE_HYPNOTIC_PATTERN_MECHANIC_ID = "dnd5e.core.spell.hypnotic_pattern"
 CORE_HYPNOTIC_PATTERN_SPELL_ID = "dnd5e.content.srd2014.spell.hypnotic-pattern"
-CORE_2024_HYPNOTIC_PATTERN_SPELL_ID = (
-    "dnd5e.content.srd2024.spell.hypnotic-pattern"
-)
+CORE_2024_HYPNOTIC_PATTERN_SPELL_ID = "dnd5e.content.srd2024.spell.hypnotic-pattern"
 CORE_HYPNOTIC_PATTERN_SPELL_IDS = frozenset(
     {CORE_HYPNOTIC_PATTERN_SPELL_ID, CORE_2024_HYPNOTIC_PATTERN_SPELL_ID}
 )
 CORE_WITCH_BOLT_MECHANIC_ID = "dnd5e.core.spell.witch_bolt"
 CORE_WITCH_BOLT_SPELL_ID = f"{STANDARD_2014_CONTENT_PACK_ID}.spell.witch-bolt"
-CORE_DESTRUCTIVE_WAVE_SPELL_ID = (
-    f"{STANDARD_2014_CONTENT_PACK_ID}.spell.destructive-wave"
-)
+CORE_DESTRUCTIVE_WAVE_SPELL_ID = f"{STANDARD_2014_CONTENT_PACK_ID}.spell.destructive-wave"
 
 __all__ = [
     "CORE_BLADE_WARD_MECHANIC_ID",

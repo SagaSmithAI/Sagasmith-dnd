@@ -10,17 +10,9 @@ def test_dnd_layout_excludes_rule_fields_and_attack_lines_only_in_system_profile
         "Club. Melee Weapon Attack: +2 to hit",
     )
 
-    assert all(
-        DND5E_DOCUMENT_LAYOUT_PROFILE.excludes_visual_heading(value)
-        for value in examples
-    )
+    assert all(DND5E_DOCUMENT_LAYOUT_PROFILE.excludes_visual_heading(value) for value in examples)
     assert not any(
-        GENERIC_DOCUMENT_LAYOUT_PROFILE.excludes_visual_heading(value)
-        for value in examples
+        GENERIC_DOCUMENT_LAYOUT_PROFILE.excludes_visual_heading(value) for value in examples
     )
-    assert DND5E_DOCUMENT_LAYOUT_PROFILE.excludes_repeated_margin(
-        "Casting Time: 1 action"
-    )
-    assert not GENERIC_DOCUMENT_LAYOUT_PROFILE.excludes_repeated_margin(
-        "Casting Time: 1 action"
-    )
+    assert DND5E_DOCUMENT_LAYOUT_PROFILE.excludes_repeated_margin("Casting Time: 1 action")
+    assert not GENERIC_DOCUMENT_LAYOUT_PROFILE.excludes_repeated_margin("Casting Time: 1 action")

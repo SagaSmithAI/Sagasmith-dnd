@@ -132,9 +132,7 @@ def _calendar_ticks(
     if normalized_minute > 59:
         raise ValueError("campaign.state.world_time.minute must be from 0 to 59")
     if normalized_second > 59 or normalized_second % TICK_SECONDS:
-        raise ValueError(
-            "campaign.state.world_time.second must be a multiple of 6 from 0 to 54"
-        )
+        raise ValueError("campaign.state.world_time.second must be a multiple of 6 from 0 to 54")
     return (
         (normalized_day - 1) * TICKS_PER_DAY
         + normalized_hour * TICKS_PER_HOUR
@@ -317,9 +315,7 @@ def validate_world_time(value: Any, *, game_time: Any) -> dict[str, Any]:
             details.append("missing " + ", ".join(missing))
         if unknown:
             details.append("unsupported " + ", ".join(unknown))
-        raise ValueError(
-            "campaign.state.world_time v2 fields are invalid: " + "; ".join(details)
-        )
+        raise ValueError("campaign.state.world_time v2 fields are invalid: " + "; ".join(details))
     tick_seconds = _integer(
         clock.get("tick_seconds"),
         "campaign.state.world_time.tick_seconds",
@@ -336,9 +332,7 @@ def validate_world_time(value: Any, *, game_time: Any) -> dict[str, Any]:
         label=_label(clock.get("label")),
     )
     if clock != projected:
-        raise ValueError(
-            "campaign.state.world_time calendar fields must match game_time"
-        )
+        raise ValueError("campaign.state.world_time calendar fields must match game_time")
     return projected
 
 
@@ -363,11 +357,7 @@ def advance_game_time(
     """Advance the authority and its optional calendar projection together."""
 
     before = validate_game_time(game_time)
-    before_world = (
-        validate_world_time(world_time, game_time=before)
-        if world_time
-        else None
-    )
+    before_world = validate_world_time(world_time, game_time=before) if world_time else None
     if (period is None) == (elapsed_ticks is None):
         raise ValueError("provide exactly one of period or elapsed_ticks")
     delta_ticks = (

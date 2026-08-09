@@ -171,9 +171,7 @@ class CampaignRandomStream:
         while True:
             counter = self.position
             self.position += 1
-            digest = hashlib.sha256(
-                f"{ALGORITHM}\0{self.seed}\0{counter}".encode("utf-8")
-            ).digest()
+            digest = hashlib.sha256(f"{ALGORITHM}\0{self.seed}\0{counter}".encode("utf-8")).digest()
             sample = int.from_bytes(digest, "big")
             if sample < rejection_limit:
                 return start + sample % span

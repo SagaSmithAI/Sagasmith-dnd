@@ -25,9 +25,7 @@ def resize_bounded_resource(
     if not isinstance(unlimited, bool):
         raise ValueError("resource unlimited must be a boolean")
     prior_maximum = (
-        previous_maximum
-        if previous_maximum is not None
-        else int(resource.get("max", 0) or 0)
+        previous_maximum if previous_maximum is not None else int(resource.get("max", 0) or 0)
     )
     prior_value = int(resource.get("value", prior_maximum) or 0)
     if prior_value < 0 or prior_value > prior_maximum:

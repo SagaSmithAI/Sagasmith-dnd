@@ -36,9 +36,7 @@ def compile_battle_map(
     width_ft = int(dimensions.get("width", 0) or 0)
     height_ft = int(dimensions.get("height", 0) or 0)
     width = int(request.get("width_cells") or (max(6, width_ft // cell_ft) if width_ft else 12))
-    height = int(
-        request.get("height_cells") or (max(6, height_ft // cell_ft) if height_ft else 12)
-    )
+    height = int(request.get("height_cells") or (max(6, height_ft // cell_ft) if height_ft else 12))
     if not 1 <= width <= 200 or not 1 <= height <= 200:
         raise BattleMapError("battle-map bounds must be between 1 and 200 cells")
     blocked = _cells(request.get("blocked_cells") or [], width, height, "blocked_cells")
@@ -67,9 +65,7 @@ def compile_battle_map(
     return value
 
 
-def patch_battle_map(
-    battle_map: dict[str, Any], patches: list[dict[str, Any]]
-) -> dict[str, Any]:
+def patch_battle_map(battle_map: dict[str, Any], patches: list[dict[str, Any]]) -> dict[str, Any]:
     """Append reviewed world patches and refresh the immutable map identity.
 
     Patches document scene-runtime changes. They do not create walls, cover,

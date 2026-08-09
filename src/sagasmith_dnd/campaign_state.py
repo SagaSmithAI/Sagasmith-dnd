@@ -27,9 +27,7 @@ SYSTEM_OWNED_CAMPAIGN_STATE_FIELDS = frozenset(
         "world_time",
     }
 )
-SYSTEM_OWNED_CAMPAIGN_SETTING_FIELDS = frozenset(
-    {"advancement", "edition", "locale"}
-)
+SYSTEM_OWNED_CAMPAIGN_SETTING_FIELDS = frozenset({"advancement", "edition", "locale"})
 
 
 def merge_reviewed_campaign_settings(
@@ -39,8 +37,7 @@ def merge_reviewed_campaign_settings(
     protected = sorted(set(patch) & SYSTEM_OWNED_CAMPAIGN_SETTING_FIELDS)
     if protected:
         raise ValueError(
-            "campaign update cannot write system-owned settings fields: "
-            + ", ".join(protected)
+            "campaign update cannot write system-owned settings fields: " + ", ".join(protected)
         )
     return {**deepcopy(dict(current)), **deepcopy(dict(patch))}
 
@@ -54,8 +51,7 @@ def merge_reviewed_campaign_state(
     protected = sorted(set(patch) & SYSTEM_OWNED_CAMPAIGN_STATE_FIELDS)
     if protected:
         raise ValueError(
-            "campaign update cannot write system-owned state fields: "
-            + ", ".join(protected)
+            "campaign update cannot write system-owned state fields: " + ", ".join(protected)
         )
     normalized_patch = deepcopy(dict(patch))
     party_patch = normalized_patch.pop("party", None)

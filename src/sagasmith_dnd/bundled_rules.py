@@ -93,10 +93,7 @@ def _cached_bundled_rule_sources(resolved_root: str) -> tuple[BundledRuleSource,
                     root,
                     files=files,
                     source_slug=_slug(category.name),
-                    title=(
-                        f"D&D 5e SRD 2014 ({locale}) — "
-                        f"{category.name.replace('_', ' ')}"
-                    ),
+                    title=(f"D&D 5e SRD 2014 ({locale}) — {category.name.replace('_', ' ')}"),
                     edition="2014",
                     locale=locale,
                     publication_id="srd2014",
@@ -130,9 +127,7 @@ def bundled_rule_corpus_inventory(
             "locale": locale,
             "files": len(paths),
             "sources": sum(
-                1
-                for source in catalog
-                if source.edition == edition and source.locale == locale
+                1 for source in catalog if source.edition == edition and source.locale == locale
             ),
         }
     digest = hashlib.sha256("\n".join(expected).encode("utf-8")).hexdigest()
@@ -209,10 +204,7 @@ def _expected_files(root: Path) -> list[str]:
         corpus = root / corpus_dir
         if not corpus.is_dir():
             raise FileNotFoundError(f"bundled SRD corpus is unavailable: {corpus}")
-        expected.extend(
-            path.relative_to(root).as_posix()
-            for path in sorted(corpus.rglob("*.md"))
-        )
+        expected.extend(path.relative_to(root).as_posix() for path in sorted(corpus.rglob("*.md")))
     return sorted(expected)
 
 
@@ -222,9 +214,7 @@ def _require_complete_partition(
 ) -> None:
     expected = _expected_files(root)
     covered = [relative for source in sources for relative in source.relative_paths]
-    duplicates = sorted(
-        relative for relative, count in Counter(covered).items() if count > 1
-    )
+    duplicates = sorted(relative for relative, count in Counter(covered).items() if count > 1)
     missing = sorted(set(expected) - set(covered))
     unexpected = sorted(set(covered) - set(expected))
     if missing or unexpected or duplicates:

@@ -67,9 +67,7 @@ READ_ONLY_OPS = {
     "ruling.require",
 }
 ATOMIC_AFTER_EVENTS = {"attack.after", "turn.end", "duration.advance"}
-DERIVED_STAT_MODIFIER_TARGETS = frozenset(
-    {"armor_class", "initiative", "passive_perception"}
-)
+DERIVED_STAT_MODIFIER_TARGETS = frozenset({"armor_class", "initiative", "passive_perception"})
 EXTERNAL_RULING_KIND_ORDER = (
     "player_owned_choice",
     "owner_approval",
@@ -338,9 +336,7 @@ def validate_source_bound_mechanics(
             page_start = citation.get("page_start")
             page_end = citation.get("page_end")
             if page_start is not None and (
-                isinstance(page_start, bool)
-                or not isinstance(page_start, int)
-                or page_start < 1
+                isinstance(page_start, bool) or not isinstance(page_start, int) or page_start < 1
             ):
                 raise RuleCompilationError(f"{mechanic.id} citation page_start is invalid")
             if page_end is not None and (
@@ -348,9 +344,7 @@ def validate_source_bound_mechanics(
             ):
                 raise RuleCompilationError(f"{mechanic.id} citation page_end is invalid")
             if page_start is not None and page_end is not None and page_end < page_start:
-                raise RuleCompilationError(
-                    f"{mechanic.id} citation page range is reversed"
-                )
+                raise RuleCompilationError(f"{mechanic.id} citation page range is reversed")
     return compiled
 
 
@@ -365,10 +359,7 @@ def resolution_context(effective: Any, *, facts: dict[str, Any] | None = None) -
         edition = effective.get("edition", "")
     else:
         edition = getattr(effective, "edition", "")
-    options = {
-        str(item["pack_id"]): dict(item.get("options") or {})
-        for item in lock or []
-    }
+    options = {str(item["pack_id"]): dict(item.get("options") or {}) for item in lock or []}
     core_pack = get_core_rule_pack(str(edition or ""))
     combined_fingerprint = _combined_fingerprint(core_pack.fingerprint, str(fingerprint or ""))
     return ResolutionContext(
@@ -380,9 +371,7 @@ def resolution_context(effective: Any, *, facts: dict[str, Any] | None = None) -
     )
 
 
-def context_with_facts(
-    context: ResolutionContext | None, **facts: Any
-) -> ResolutionContext | None:
+def context_with_facts(context: ResolutionContext | None, **facts: Any) -> ResolutionContext | None:
     if context is None:
         return None
     return replace(context, facts={**context.facts, **facts})
@@ -462,11 +451,7 @@ def run_mechanic_tests(
     mechanic_ids = {str(item.get("id") or "") for item in mechanics}
     uncovered = sorted(mechanic_ids - exercised)
     return {
-        "passed": (
-            bool(cases)
-            and all(case["passed"] for case in cases)
-            and not uncovered
-        ),
+        "passed": (bool(cases) and all(case["passed"] for case in cases) and not uncovered),
         "total": len(cases),
         "cases": cases,
         "mechanics_exercised": sorted(exercised),
@@ -498,14 +483,10 @@ def apply_rule_event(
                         ruling_kind="player_owned_choice",
                     )
                 else:
-                    ruling_kind = str(
-                        operation.get("ruling_kind") or "agent_dm_adjudication"
-                    )
+                    ruling_kind = str(operation.get("ruling_kind") or "agent_dm_adjudication")
                     pending_operation.update(
                         default_resolver=(
-                            "external_input"
-                            if ruling_kind in EXTERNAL_RULING_KINDS
-                            else "agent"
+                            "external_input" if ruling_kind in EXTERNAL_RULING_KINDS else "agent"
                         ),
                         ruling_kind=ruling_kind,
                     )
@@ -542,11 +523,7 @@ def _validate_operation(operation: dict[str, Any]) -> None:
     opcode = operation["op"]
     if opcode.startswith("resource."):
         path = str(operation.get("path") or "")
-        if (
-            not path.startswith("resources.")
-            or not path.removeprefix("resources.")
-            or ".." in path
-        ):
+        if not path.startswith("resources.") or not path.removeprefix("resources.") or ".." in path:
             raise RuleCompilationError("resource operations require a resources.<key> path")
     if opcode.startswith("spell_slot."):
         level = operation.get("level")
@@ -576,9 +553,7 @@ def _validate_operation(operation: dict[str, Any]) -> None:
     if opcode in {"effect.add", "condition.add", "condition.remove", "effect.remove"}:
         if not str(operation.get("id") or ""):
             raise RuleCompilationError(f"{opcode} requires id")
-    if opcode in {"choice.require", "ruling.require"} and not str(
-        operation.get("id") or ""
-    ):
+    if opcode in {"choice.require", "ruling.require"} and not str(operation.get("id") or ""):
         raise RuleCompilationError(f"{opcode} requires id")
     if opcode in {"choice.require", "ruling.require"}:
         declared_kind = str(operation.get("ruling_kind") or "")
@@ -588,9 +563,7 @@ def _validate_operation(operation: dict[str, Any]) -> None:
             "",
             "player_owned_choice",
         }:
-            raise RuleCompilationError(
-                "choice.require ruling_kind must be player_owned_choice"
-            )
+            raise RuleCompilationError("choice.require ruling_kind must be player_owned_choice")
         declared_resolver = str(operation.get("default_resolver") or "")
         expected_resolver = (
             "external_input"
@@ -598,9 +571,7 @@ def _validate_operation(operation: dict[str, Any]) -> None:
             else "agent"
         )
         if declared_resolver and declared_resolver != expected_resolver:
-            raise RuleCompilationError(
-                f"{opcode} default_resolver must be {expected_resolver}"
-            )
+            raise RuleCompilationError(f"{opcode} default_resolver must be {expected_resolver}")
 
 
 def _object_sequence(value: Any, field: str) -> tuple[dict[str, Any], ...]:
@@ -646,9 +617,7 @@ def _validate_predicate(predicate: dict[str, Any]) -> None:
         if not str(predicate.get("id") or ""):
             raise RuleCompilationError("has_condition requires id")
     elif kind == "option_equals":
-        if not str(predicate.get("pack_id") or "") or not str(
-            predicate.get("key") or ""
-        ):
+        if not str(predicate.get("pack_id") or "") or not str(predicate.get("key") or ""):
             raise RuleCompilationError("option_equals requires pack_id and key")
     else:
         raise RuleCompilationError(f"unsupported predicate: {kind}")
@@ -755,6 +724,4 @@ def _read_path(value: dict[str, Any], path: str) -> Any:
 def _combined_fingerprint(core_fingerprint: str, extension_fingerprint: str) -> str:
     import hashlib
 
-    return hashlib.sha256(
-        f"{core_fingerprint}:{extension_fingerprint}".encode("utf-8")
-    ).hexdigest()
+    return hashlib.sha256(f"{core_fingerprint}:{extension_fingerprint}".encode("utf-8")).hexdigest()

@@ -104,9 +104,9 @@ def apply_raise_dead_to_sheet(
     exact_source_ref = str(source_ref).strip()
     if not exact_source_ref:
         raise CombatEngineError("Raise Dead requires an exact source_ref")
-    creature_type = str(
-        dict(value.get("progression") or {}).get("species") or ""
-    ).strip().casefold()
+    creature_type = (
+        str(dict(value.get("progression") or {}).get("species") or "").strip().casefold()
+    )
     if "undead" in creature_type.split():
         raise CombatEngineError("Raise Dead cannot return an undead creature to life")
     conditions = condition_ids(value.get("conditions"))
@@ -149,8 +149,7 @@ def apply_raise_dead_to_sheet(
             "concentration": False,
             "duration": {"period": "long_rest", "remaining": 4},
             "changes": [
-                {"path": path, "mode": "add", "value": -4}
-                for path in REVIVAL_ORDEAL_ROLL_PATHS
+                {"path": path, "mode": "add", "value": -4} for path in REVIVAL_ORDEAL_ROLL_PATHS
             ],
             "description": (
                 "2014 Raise Dead: -4 to attack rolls, saving throws, and ability "
@@ -923,9 +922,7 @@ def apply_rest(
         recovery_amounts = dict(resource.get("recovery_amounts") or {})
         recovery_amount = recovery_amounts.get(rest_type, "all")
         amount = (
-            int(resource.get("max", 0) or 0)
-            if recovery_amount == "all"
-            else int(recovery_amount)
+            int(resource.get("max", 0) or 0) if recovery_amount == "all" else int(recovery_amount)
         )
         mutation = mutate_bounded_resource(
             resource,
@@ -1020,11 +1017,15 @@ def apply_rest(
         recover_resource(item.get("uses"), f"inventory:{index}:uses")
         recover_resource(item.get("charges"), f"inventory:{index}:charges")
     value["combat"] = combat | {"hp": hp}
-    if rest_type == "long_rest" and edition == "2024" and any(
-        str(dict(feature.get("choices") or {}).get("grant_heroic_inspiration_on") or "")
-        == "long_rest"
-        for feature in value.get("content", {}).get("features", [])
-        if isinstance(feature, dict)
+    if (
+        rest_type == "long_rest"
+        and edition == "2024"
+        and any(
+            str(dict(feature.get("choices") or {}).get("grant_heroic_inspiration_on") or "")
+            == "long_rest"
+            for feature in value.get("content", {}).get("features", [])
+            if isinstance(feature, dict)
+        )
     ):
         heroic_inspiration_result = grant_heroic_inspiration(value)
         value = heroic_inspiration_result["sheet"]
@@ -1367,29 +1368,22 @@ def apply_natural_recovery_choice(
     return result
 
 
-def validate_sorcerous_restoration_choice(
-    sheet: dict[str, Any], points: int | None
-) -> None:
+def validate_sorcerous_restoration_choice(sheet: dict[str, Any], points: int | None) -> None:
     """Preflight the optional SRD 5.2.1 short-rest Sorcery Point recovery."""
 
     if points is None:
         return
     if isinstance(points, bool) or not isinstance(points, int) or points < 1:
-        raise CombatEngineError(
-            "Sorcerous Restoration points must be a positive integer"
-        )
+        raise CombatEngineError("Sorcerous Restoration points must be a positive integer")
     if _sheet_edition(sheet) != "2024":
-        raise CombatEngineError(
-            "declared Sorcerous Restoration points require the 2024 feature"
-        )
+        raise CombatEngineError("declared Sorcerous Restoration points require the 2024 feature")
     feature = _sorcerous_restoration_feature(sheet)
     if feature is None:
         raise CombatEngineError("Sorcerous Restoration is not on the actor card")
     sorcerer_level = sum(
         int(item.get("level", 0) or 0)
         for item in sheet.get("progression", {}).get("classes", [])
-        if isinstance(item, dict)
-        and str(item.get("name") or "").strip().casefold() == "sorcerer"
+        if isinstance(item, dict) and str(item.get("name") or "").strip().casefold() == "sorcerer"
     )
     if sorcerer_level < 5:
         raise CombatEngineError("Sorcerous Restoration requires 5 Sorcerer levels")
@@ -1424,9 +1418,7 @@ def apply_sorcerous_restoration(
     if edition == "2024" and points is None:
         return None
     if edition == "2014" and points is not None:
-        raise CombatEngineError(
-            "the 2014 Sorcerous Restoration recovery is automatic"
-        )
+        raise CombatEngineError("the 2014 Sorcerous Restoration recovery is automatic")
     sorcerer_level = sum(
         int(item.get("level", 0) or 0)
         for item in sheet.get("progression", {}).get("classes", [])
@@ -1434,9 +1426,7 @@ def apply_sorcerous_restoration(
     )
     required_level = 20 if edition == "2014" else 5
     if sorcerer_level < required_level:
-        raise CombatEngineError(
-            f"Sorcerous Restoration requires {required_level} Sorcerer levels"
-        )
+        raise CombatEngineError(f"Sorcerous Restoration requires {required_level} Sorcerer levels")
     resource = sheet.get("resources", {}).get("sorcery_points")
     if not isinstance(resource, dict):
         raise CombatEngineError("Sorcerous Restoration requires the Sorcery Points resource")

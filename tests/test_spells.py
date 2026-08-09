@@ -97,8 +97,7 @@ def test_ordinary_mage_armor_cast_applies_its_engine_owned_effect() -> None:
     assert result["automatic_effect"] == "mage_armor"
     assert result["effect_id"]
     assert any(
-        item["id"] == result["effect_id"] and item["active"]
-        for item in result["sheet"]["effects"]
+        item["id"] == result["effect_id"] and item["active"] for item in result["sheet"]["effects"]
     )
 
 
@@ -124,9 +123,7 @@ def test_2024_mage_armor_uses_the_same_mechanic_without_borrowing_its_card_id() 
     )
 
     assert result["automatic_effect"] == "mage_armor"
-    effect = next(
-        item for item in result["sheet"]["effects"] if item["id"] == result["effect_id"]
-    )
+    effect = next(item for item in result["sheet"]["effects"] if item["id"] == result["effect_id"])
     assert effect["source_spell_id"] == CORE_2024_MAGE_ARMOR_SPELL_ID
 
 
@@ -141,9 +138,7 @@ def test_fly_applies_willing_target_speed_and_tracks_concentration() -> None:
             "source_key": "wizard",
         }
     }
-    caster["content"]["spells"] = [
-        _spell(CORE_FLY_SPELL_ID, level=3, concentration=True)
-    ]
+    caster["content"]["spells"] = [_spell(CORE_FLY_SPELL_ID, level=3, concentration=True)]
     target = default_character_sheet()
     paid = consume_spell_cast(
         validate_character_sheet(caster),
@@ -235,16 +230,22 @@ def test_2024_fly_and_invisibility_preserve_the_exact_source_spell_ids() -> None
         concentration_effect_id="invisibility-source",
     )
 
-    assert next(
-        effect
-        for effect in flew["sheets"]["target"]["effects"]
-        if effect["id"] == flew["effect_ids"]["target"]
-    )["source_spell_id"] == CORE_2024_FLY_SPELL_ID
-    assert next(
-        effect
-        for effect in invisible["sheets"]["target"]["effects"]
-        if effect["id"] == invisible["effect_ids"]["target"]
-    )["source_spell_id"] == CORE_2024_INVISIBILITY_SPELL_ID
+    assert (
+        next(
+            effect
+            for effect in flew["sheets"]["target"]["effects"]
+            if effect["id"] == flew["effect_ids"]["target"]
+        )["source_spell_id"]
+        == CORE_2024_FLY_SPELL_ID
+    )
+    assert (
+        next(
+            effect
+            for effect in invisible["sheets"]["target"]["effects"]
+            if effect["id"] == invisible["effect_ids"]["target"]
+        )["source_spell_id"]
+        == CORE_2024_INVISIBILITY_SPELL_ID
+    )
 
 
 def test_fly_upcast_target_limit_and_source_dependency_are_hard_settled() -> None:
@@ -265,10 +266,7 @@ def test_fly_upcast_target_limit_and_source_dependency_are_hard_settled() -> Non
     ]
     sheets = {
         "caster": validate_character_sheet(caster),
-        **{
-            f"target-{index}": default_character_sheet()
-            for index in range(1, 5)
-        },
+        **{f"target-{index}": default_character_sheet() for index in range(1, 5)},
     }
     with pytest.raises(CombatEngineError, match="target count exceeds"):
         apply_core_fly_effects(
@@ -297,9 +295,7 @@ def test_fly_upcast_target_limit_and_source_dependency_are_hard_settled() -> Non
     )
     assert applied["target_limit"] == 3
     applied["sheets"]["caster"]["effects"][0]["active"] = False
-    applied["sheets"]["caster"]["effects"][0][
-        "ended_reason"
-    ] = "failed_concentration_save"
+    applied["sheets"]["caster"]["effects"][0]["ended_reason"] = "failed_concentration_save"
     reconciled = reconcile_source_effect_dependencies(applied["sheets"])
 
     assert reconciled["changed_actor_ids"] == [
@@ -308,9 +304,9 @@ def test_fly_upcast_target_limit_and_source_dependency_are_hard_settled() -> Non
         "target-3",
     ]
     assert all(
-        derive_character_sheet(
-            validate_character_sheet(reconciled["sheets"][target_id])
-        )["speed"]["fly"]
+        derive_character_sheet(validate_character_sheet(reconciled["sheets"][target_id]))["speed"][
+            "fly"
+        ]
         == 0
         for target_id in reconciled["changed_actor_ids"]
     )
@@ -366,9 +362,7 @@ def test_invisibility_applies_to_explicit_targets_and_tracks_concentration() -> 
     assert invisibility_target_limit(2) == 1
     assert "invisible" in target["conditions"]
     effect = next(
-        item
-        for item in target["effects"]
-        if item["id"] == applied["effect_ids"]["target"]
+        item for item in target["effects"] if item["id"] == applied["effect_ids"]["target"]
     )
     assert effect["duration"] == {"period": "hour", "remaining": 1}
     assert effect["dependency"] == "source_effect_active"
@@ -405,26 +399,19 @@ def test_upcast_invisibility_targets_end_independently_and_with_the_source() -> 
         concentration_effect_id="invisibility-concentration",
     )
 
-    ended = _end_attack_broken_invisibility(
-        applied["sheets"]["target-1"]
-    )
+    ended = _end_attack_broken_invisibility(applied["sheets"]["target-1"])
     assert ended == [applied["effect_ids"]["target-1"]]
     assert "invisible" not in applied["sheets"]["target-1"]["conditions"]
     assert "invisible" in applied["sheets"]["target-2"]["conditions"]
     assert applied["sheets"]["caster"]["effects"][0]["active"] is True
 
     applied["sheets"]["caster"]["effects"][0]["active"] = False
-    applied["sheets"]["caster"]["effects"][0][
-        "ended_reason"
-    ] = "failed_concentration_save"
+    applied["sheets"]["caster"]["effects"][0]["ended_reason"] = "failed_concentration_save"
     reconciled = reconcile_source_effect_dependencies(applied["sheets"])
 
     assert reconciled["changed_actor_ids"] == ["target-2"]
     assert "invisible" not in reconciled["sheets"]["target-2"]["conditions"]
-    assert (
-        reconciled["sheets"]["target-2"]["effects"][0]["ended_reason"]
-        == "source_effect_ended"
-    )
+    assert reconciled["sheets"]["target-2"]["effects"][0]["ended_reason"] == "source_effect_ended"
 
 
 def test_innate_spell_cast_spends_per_spell_daily_use_and_starts_concentration() -> None:
@@ -1136,12 +1123,10 @@ def test_costly_material_component_requires_dm_confirmation() -> None:
         sheet, spell_id="chromatic-orb", component_ruling={"material_confirmed": True}
     )
     assert "material_component" in result["ruling_required"]
-    assert {
-        item["default_resolver"] for item in result["ruling_requirements"]
-    } == {"agent"}
-    assert {
-        item["ruling_kind"] for item in result["ruling_requirements"]
-    } == {"generic_spell_effect"}
+    assert {item["default_resolver"] for item in result["ruling_requirements"]} == {"agent"}
+    assert {item["ruling_kind"] for item in result["ruling_requirements"]} == {
+        "generic_spell_effect"
+    }
 
 
 def test_source_bound_spell_with_unknown_components_requires_confirmation_before_payment() -> None:
@@ -1171,9 +1156,7 @@ def test_source_bound_spell_with_unknown_components_requires_confirmation_before
     assert result["sheet"]["spellcasting"]["spell_slots"]["1"]["value"] == 0
     assert "source_components" in result["ruling_required"]
     assert next(
-        item
-        for item in result["ruling_requirements"]
-        if item["kind"] == "source_components"
+        item for item in result["ruling_requirements"] if item["kind"] == "source_components"
     ) == {
         "kind": "source_components",
         "default_resolver": "agent",
@@ -1429,10 +1412,7 @@ def test_reviewed_feature_spell_uses_its_own_ability_and_resource() -> None:
         "level": 1,
         "ritual": False,
     }
-    assert (
-        result["sheet"]["resources"]["feat_spell:aberrant:burning-hands"]["value"]
-        == 0
-    )
+    assert result["sheet"]["resources"]["feat_spell:aberrant:burning-hands"]["value"] == 0
     with pytest.raises(ValueError, match="unavailable"):
         consume_spell_cast(
             result["sheet"],
@@ -1573,15 +1553,11 @@ def test_feature_spell_supports_fixed_upcast_and_at_will_sources() -> None:
     )
     assert at_will["payment"]["economy"] == "feature_spell_at_will"
     assert at_will["payment"]["resource_key"] is None
-    assert at_will["casting_overrides_applied"] == {
-        "ignore_material_components": True
-    }
+    assert at_will["casting_overrides_applied"] == {"ignore_material_components": True}
 
     componentless = deepcopy(nondetection)
     componentless["id"] = "gith-jump"
-    componentless["access"]["feature_casting_sources"][0]["source_key"] = (
-        "Githyanki Psionics"
-    )
+    componentless["access"]["feature_casting_sources"][0]["source_key"] = "Githyanki Psionics"
     componentless["access"]["feature_casting_sources"][0]["casting_overrides"] = {
         "ignore_components": True
     }
@@ -1602,9 +1578,7 @@ def test_feature_spell_supports_fixed_upcast_and_at_will_sources() -> None:
         feature_cast_source="Githyanki Psionics",
     )
     assert no_components["ruling_required"] == ["targets_and_effect"]
-    assert no_components["casting_overrides_applied"] == {
-        "ignore_components": True
-    }
+    assert no_components["casting_overrides_applied"] == {"ignore_components": True}
 
 
 def test_2024_ranger_long_rest_replaces_only_one_spell() -> None:

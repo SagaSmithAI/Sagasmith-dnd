@@ -174,10 +174,7 @@ def _active_effect_hit_point_maximum(sheet: dict[str, Any]) -> int:
         if not isinstance(effect, dict) or not effect.get("active", False):
             continue
         for change in effect.get("changes", []):
-            if (
-                not isinstance(change, dict)
-                or change.get("path") != "combat.hp.maximum_multiplier"
-            ):
+            if not isinstance(change, dict) or change.get("path") != "combat.hp.maximum_multiplier":
                 continue
             multiplier = change.get("value")
             if (

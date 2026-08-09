@@ -596,9 +596,7 @@ def bind_resolution_plan(
 ) -> BoundResolutionPlan:
     """Fill only declared slots and produce a fully validated immutable plan."""
 
-    compiled = (
-        plan if isinstance(plan, CompiledResolutionPlan) else compile_resolution_plan(plan)
-    )
+    compiled = plan if isinstance(plan, CompiledResolutionPlan) else compile_resolution_plan(plan)
     if not isinstance(bindings, dict):
         raise ResolutionPlanBindingError("resolution plan bindings must be an object")
     if set(bindings) != set(compiled.slots):
@@ -620,9 +618,7 @@ def bind_resolution_plan(
         bound_trigger_filter,
         trigger=compiled.trigger,
     )
-    bound_steps = tuple(
-        _bind_value(step, normalized_bindings) for step in compiled.steps
-    )
+    bound_steps = tuple(_bind_value(step, normalized_bindings) for step in compiled.steps)
     prior_step_ids: set[str] = set()
     for index, step in enumerate(bound_steps):
         _validate_concrete_step(
@@ -792,15 +788,12 @@ def _validate_trigger_filter_template(
     used_slots: set[str],
 ) -> dict[str, Any]:
     if not isinstance(value, dict):
-        raise ResolutionPlanCompilationError(
-            "resolution plan trigger_filter must be an object"
-        )
+        raise ResolutionPlanCompilationError("resolution plan trigger_filter must be an object")
     allowed_fields = TRIGGER_EVENT_FIELDS[trigger]
     unknown = set(value) - allowed_fields
     if unknown:
         raise ResolutionPlanCompilationError(
-            "resolution plan trigger_filter has unsupported event fields: "
-            f"{sorted(unknown)}"
+            f"resolution plan trigger_filter has unsupported event fields: {sorted(unknown)}"
         )
     normalized: dict[str, Any] = {}
     for field, expected in value.items():
@@ -815,8 +808,7 @@ def _validate_trigger_filter_template(
             continue
         if not _is_trigger_filter_literal(expected):
             raise ResolutionPlanCompilationError(
-                "resolution plan trigger_filter values must be bounded literals "
-                "or declared slots"
+                "resolution plan trigger_filter values must be bounded literals or declared slots"
             )
         normalized[field] = deepcopy(expected)
     return normalized
@@ -828,12 +820,8 @@ def _validate_trigger_filter_values(
     trigger: str,
 ) -> None:
     unknown = set(value) - TRIGGER_EVENT_FIELDS[trigger]
-    if unknown or any(
-        not _is_trigger_filter_literal(expected) for expected in value.values()
-    ):
-        raise ResolutionPlanBindingError(
-            "bound resolution plan trigger_filter is invalid"
-        )
+    if unknown or any(not _is_trigger_filter_literal(expected) for expected in value.values()):
+        raise ResolutionPlanBindingError("bound resolution plan trigger_filter is invalid")
 
 
 def _is_trigger_filter_literal(value: Any) -> bool:
@@ -842,12 +830,8 @@ def _is_trigger_filter_literal(value: Any) -> bool:
     if isinstance(value, str):
         return 0 < len(value) <= 500
     if isinstance(value, list):
-        return (
-            len(value) <= 100
-            and all(
-                item is None or isinstance(item, (bool, int, str))
-                for item in value
-            )
+        return len(value) <= 100 and all(
+            item is None or isinstance(item, (bool, int, str)) for item in value
         )
     return False
 
@@ -957,9 +941,7 @@ def _validate_step_template(
         try:
             _validate_common_concrete_arguments(opcode, arguments, index=index)
         except ResolutionPlanBindingError as error:
-            raise ResolutionPlanCompilationError(
-                f"plan step {step_id}: {error}"
-            ) from error
+            raise ResolutionPlanCompilationError(f"plan step {step_id}: {error}") from error
     step = {"id": step_id, "op": opcode, "args": deepcopy(arguments)}
     if "when" in value:
         when = value["when"]
@@ -1099,9 +1081,7 @@ def _validate_common_concrete_arguments(
             or not isinstance(bonus, int)
             or not 1 <= bonus <= 20
         ):
-            raise ResolutionPlanBindingError(
-                "attack.ac_bonus bonus must be in the range 1..20"
-            )
+            raise ResolutionPlanBindingError("attack.ac_bonus bonus must be in the range 1..20")
         if (
             _is_result_ref(attack_modes)
             or not isinstance(attack_modes, list)
@@ -1119,13 +1099,9 @@ def _validate_common_concrete_arguments(
         ):
             if field in arguments and not isinstance(arguments[field], bool):
                 raise ResolutionPlanBindingError(f"attack.ac_bonus {field} must be boolean")
-    if "success_damage" in arguments and not _is_result_ref(
-        arguments["success_damage"]
-    ):
+    if "success_damage" in arguments and not _is_result_ref(arguments["success_damage"]):
         if arguments["success_damage"] not in {"full", "half", "none"}:
-            raise ResolutionPlanBindingError(
-                "success_damage must be full, half, or none"
-            )
+            raise ResolutionPlanBindingError("success_damage must be full, half, or none")
     for field in (
         "advantage",
         "critical",
@@ -1153,9 +1129,7 @@ def _validate_common_concrete_arguments(
             raise ResolutionPlanBindingError(
                 f"{opcode} requires exactly one of expression or amount"
             )
-    if opcode == "condition.apply" and isinstance(
-        arguments.get("duration"), dict
-    ):
+    if opcode == "condition.apply" and isinstance(arguments.get("duration"), dict):
         _normalize_duration(
             arguments["duration"],
             field="condition.apply",
@@ -1181,14 +1155,10 @@ def _validate_common_concrete_arguments(
                 for entry in table
             )
         ):
-            raise ResolutionPlanBindingError(
-                "roll.table requires weighted value entries"
-            )
+            raise ResolutionPlanBindingError("roll.table requires weighted value entries")
         excluded = arguments.get("exclude", [])
         if not _is_result_ref(excluded) and not isinstance(excluded, list):
-            raise ResolutionPlanBindingError(
-                "roll.table exclude must be a list or prior result"
-            )
+            raise ResolutionPlanBindingError("roll.table exclude must be a list or prior result")
         if not _is_result_ref(excluded):
             values = [entry["value"] for entry in table]
             if any(item not in values for item in excluded):
@@ -1206,9 +1176,7 @@ def _validate_common_concrete_arguments(
                     for item in excluded
                 }
             ):
-                raise ResolutionPlanBindingError(
-                    "roll.table exclude values must be unique"
-                )
+                raise ResolutionPlanBindingError("roll.table exclude values must be unique")
             if len(excluded) >= len(table):
                 raise ResolutionPlanBindingError(
                     "roll.table exclude cannot remove every source result"
@@ -1221,8 +1189,7 @@ def _validate_common_concrete_arguments(
             if (
                 not isinstance(values, list)
                 or any(not str(item).strip() for item in values)
-                or len({str(item).strip().casefold() for item in values})
-                != len(values)
+                or len({str(item).strip().casefold() for item in values}) != len(values)
             ):
                 raise ResolutionPlanBindingError(
                     f"target.validate {field} must contain unique condition ids"
@@ -1233,9 +1200,7 @@ def _validate_common_concrete_arguments(
             and not _is_result_ref(maximum_range)
             and int(maximum_range) < 0
         ):
-            raise ResolutionPlanBindingError(
-                "target.validate maximum_range_ft cannot be negative"
-            )
+            raise ResolutionPlanBindingError("target.validate maximum_range_ft cannot be negative")
     if opcode == "knowledge.transfer":
         knowledge_ids = arguments["knowledge_ids"]
         if not _is_result_ref(knowledge_ids):
@@ -1257,16 +1222,12 @@ def _validate_citations(value: Any) -> tuple[dict[str, Any], ...]:
         or not value
         or any(not isinstance(item, dict) for item in value)
     ):
-        raise ResolutionPlanCompilationError(
-            "resolution plan needs at least one source citation"
-        )
+        raise ResolutionPlanCompilationError("resolution plan needs at least one source citation")
     result: list[dict[str, Any]] = []
     for citation in value:
         source = str(citation.get("source") or "").strip()
         source_ref = citation.get("source_ref")
-        source_excerpt = " ".join(
-            str(citation.get("source_excerpt") or "").split()
-        )
+        source_excerpt = " ".join(str(citation.get("source_excerpt") or "").split())
         if (
             not source
             or not isinstance(source_ref, dict)
@@ -1310,9 +1271,7 @@ def _normalize_slot_value(
         normalized = value
     elif kind == "enum":
         if value not in definition["choices"]:
-            raise ResolutionPlanBindingError(
-                f"slot {name} must be one of its rule-card choices"
-            )
+            raise ResolutionPlanBindingError(f"slot {name} must be one of its rule-card choices")
         normalized = deepcopy(value)
     elif kind == "dice":
         normalized = "".join(str(value or "").split()).casefold()
@@ -1331,8 +1290,7 @@ def _normalize_slot_value(
             not isinstance(value, dict)
             or set(value) != {"x", "y"}
             or any(
-                isinstance(value[key], bool)
-                or not isinstance(value[key], (int, float))
+                isinstance(value[key], bool) or not isinstance(value[key], (int, float))
                 for key in ("x", "y")
             )
         ):
@@ -1406,9 +1364,7 @@ def _normalize_actor_ids(value: Any, *, field: str) -> list[str]:
 
 def _normalize_knowledge_ids(value: Any) -> list[str]:
     if not isinstance(value, list) or not value:
-        raise ResolutionPlanBindingError(
-            "knowledge transfer needs explicit knowledge ids"
-        )
+        raise ResolutionPlanBindingError("knowledge transfer needs explicit knowledge ids")
     normalized = [_require_safe_text(item, "knowledge_ids") for item in value]
     if len(normalized) != len(set(normalized)):
         raise ResolutionPlanBindingError("knowledge ids must be unique")
@@ -1438,9 +1394,7 @@ def _normalize_agent_ruling(value: Any) -> dict[str, Any] | None:
         "decision": " ".join(str(value.get("decision") or "").split()),
         "reason": " ".join(str(value.get("reason") or "").split()),
         "source_ref": deepcopy(value.get("source_ref")),
-        "source_excerpt": " ".join(
-            str(value.get("source_excerpt") or "").split()
-        ),
+        "source_excerpt": " ".join(str(value.get("source_excerpt") or "").split()),
     }
     if (
         not normalized["application_id"]
@@ -1477,9 +1431,7 @@ def _bind_value(value: Any, bindings: dict[str, Any]) -> Any:
 
 def _validate_result_ref(value: Any, prior_step_ids: set[str]) -> None:
     if _parse_result_ref(value, prior_step_ids) is None:
-        raise ResolutionPlanCompilationError(
-            "result references must point to an earlier plan step"
-        )
+        raise ResolutionPlanCompilationError("result references must point to an earlier plan step")
 
 
 def _validate_result_references(value: Any, prior_step_ids: set[str]) -> None:
@@ -1528,9 +1480,7 @@ def _resolve_result_refs(value: Any, results: dict[str, dict[str, Any]]) -> Any:
                         )
                     result = result[part]
             return deepcopy(result)
-        return {
-            key: _resolve_result_refs(item, results) for key, item in value.items()
-        }
+        return {key: _resolve_result_refs(item, results) for key, item in value.items()}
     if isinstance(value, list):
         return [_resolve_result_refs(item, results) for item in value]
     return deepcopy(value)

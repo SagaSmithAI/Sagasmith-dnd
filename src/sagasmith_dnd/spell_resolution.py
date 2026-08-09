@@ -198,9 +198,7 @@ def normalize_spell_resolution(value: Any, field: str = "spell.resolution") -> d
     if not isinstance(raw_types, list) or any(not isinstance(item, str) for item in raw_types):
         raise ValueError(f"{field}.targeting.excluded_creature_types must be a text list")
     excluded_types = [item.strip().casefold() for item in raw_types]
-    if any(not item for item in excluded_types) or len(excluded_types) != len(
-        set(excluded_types)
-    ):
+    if any(not item for item in excluded_types) or len(excluded_types) != len(set(excluded_types)):
         raise ValueError(
             f"{field}.targeting.excluded_creature_types must contain unique non-empty values"
         )
@@ -215,9 +213,7 @@ def normalize_spell_resolution(value: Any, field: str = "spell.resolution") -> d
         shape = _text(area.get("shape"), f"{field}.targeting.area.shape").casefold()
         if shape == "sphere":
             if area.get("length_ft") is not None or area.get("width_ft") is not None:
-                raise ValueError(
-                    f"{field}.targeting.area sphere cannot define length or width"
-                )
+                raise ValueError(f"{field}.targeting.area sphere cannot define length or width")
             normalized_area = {
                 "shape": shape,
                 "radius_ft": _integer(
@@ -229,9 +225,7 @@ def normalize_spell_resolution(value: Any, field: str = "spell.resolution") -> d
             }
         elif shape == "line":
             if area.get("radius_ft") is not None:
-                raise ValueError(
-                    f"{field}.targeting.area line cannot define a radius"
-                )
+                raise ValueError(f"{field}.targeting.area line cannot define a radius")
             normalized_area = {
                 "shape": shape,
                 "length_ft": _integer(
@@ -248,9 +242,7 @@ def normalize_spell_resolution(value: Any, field: str = "spell.resolution") -> d
                 ),
             }
         else:
-            raise ValueError(
-                f"{field}.targeting.area.shape currently supports sphere or line"
-            )
+            raise ValueError(f"{field}.targeting.area.shape currently supports sphere or line")
     elif area:
         raise ValueError(f"{field}.targeting.area requires area mode")
     normalized_targeting = {
@@ -323,8 +315,7 @@ def normalize_spell_resolution(value: Any, field: str = "spell.resolution") -> d
             raise ValueError(f"{field}.attack.count.slot_base_level is required")
         raw_on_hit_mechanics = attack.get("on_hit_mechanics") or []
         if not isinstance(raw_on_hit_mechanics, list) or any(
-            not isinstance(item, str) or not item.strip()
-            for item in raw_on_hit_mechanics
+            not isinstance(item, str) or not item.strip() for item in raw_on_hit_mechanics
         ):
             raise ValueError(f"{field}.attack.on_hit_mechanics must be a string list")
         on_hit_mechanics = [item.strip() for item in raw_on_hit_mechanics]
@@ -354,9 +345,7 @@ def normalize_spell_resolution(value: Any, field: str = "spell.resolution") -> d
                 minimum=0,
                 maximum=10000,
             ),
-            "on_hit_ruling": _text(
-                attack.get("on_hit_ruling"), f"{field}.attack.on_hit_ruling"
-            ),
+            "on_hit_ruling": _text(attack.get("on_hit_ruling"), f"{field}.attack.on_hit_ruling"),
             "on_hit_mechanics": on_hit_mechanics,
         }
     elif kind == "saving_throw":
@@ -391,9 +380,7 @@ def normalize_spell_resolution(value: Any, field: str = "spell.resolution") -> d
                 minimum=0,
                 maximum=99,
             ),
-            "ignores_cover": _boolean(
-                save.get("ignores_cover"), f"{field}.save.ignores_cover"
-            ),
+            "ignores_cover": _boolean(save.get("ignores_cover"), f"{field}.save.ignores_cover"),
             "on_failed_save_ruling": _text(
                 save.get("on_failed_save_ruling"),
                 f"{field}.save.on_failed_save_ruling",
@@ -416,11 +403,7 @@ def normalize_spell_resolution(value: Any, field: str = "spell.resolution") -> d
         )
         normalized["healing"] = {
             **_normalize_roll(
-                {
-                    key: item
-                    for key, item in healing.items()
-                    if key != "add_spellcasting_modifier"
-                },
+                {key: item for key, item in healing.items() if key != "add_spellcasting_modifier"},
                 f"{field}.healing",
                 damage=False,
             ),
@@ -759,9 +742,7 @@ def effective_spell_resolution(spell: dict[str, Any]) -> dict[str, Any] | None:
     if spell_id.startswith(_SRD2014_SPELL_PREFIX):
         return known_spell_resolution(spell_id.removeprefix(_SRD2014_SPELL_PREFIX))
     if spell_id.startswith(_SRD2024_SPELL_PREFIX):
-        return known_2024_spell_resolution(
-            spell_id.removeprefix(_SRD2024_SPELL_PREFIX)
-        )
+        return known_2024_spell_resolution(spell_id.removeprefix(_SRD2024_SPELL_PREFIX))
     return None
 
 
@@ -777,9 +758,7 @@ def spell_resolution_path(spell: dict[str, Any]) -> str:
     if str(spell.get("id") or "") in CORE_FLY_SPELL_IDS:
         return "engine_mechanic"
     mechanic_refs = {
-        str(item).strip()
-        for item in spell.get("mechanic_refs", [])
-        if str(item).strip()
+        str(item).strip() for item in spell.get("mechanic_refs", []) if str(item).strip()
     }
     if mechanic_refs & ENGINE_SETTLED_SPELL_MECHANIC_IDS:
         return "engine_mechanic"
@@ -877,9 +856,7 @@ def spell_attack_action_resolution(description: str) -> dict[str, Any] | None:
     )
 
 
-def overlay_spell_attack_action(
-    resolution: dict[str, Any], description: str
-) -> dict[str, Any]:
+def overlay_spell_attack_action(resolution: dict[str, Any], description: str) -> dict[str, Any]:
     """Overlay actor-specific attack facts while retaining the spell's ray/scaling rules."""
     parsed = spell_attack_action_resolution(description)
     if parsed is None or resolution.get("kind") != "spell_attack":

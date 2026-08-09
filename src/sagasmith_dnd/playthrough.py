@@ -203,9 +203,7 @@ def validate_playthrough_manifest(value: Any) -> dict[str, Any]:
     if status in {"in_progress", "completed"} and not current["scene_id"]:
         raise ValueError("active playthrough requires a current scene")
     if (status == "completed") != (ending["status"] == "completed"):
-        raise ValueError(
-            "playthrough status and ending.status must enter completed together"
-        )
+        raise ValueError("playthrough status and ending.status must enter completed together")
     return normalized
 
 

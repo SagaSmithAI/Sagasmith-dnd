@@ -112,9 +112,7 @@ def _finalize_bundled_artifact(
         )
 
     has_unsettled_prose = bool(card.get("ruling_requirements")) or (
-        not mechanic_refs
-        and card.get("resolution") is None
-        and _has_unsettled_prose(card)
+        not mechanic_refs and card.get("resolution") is None and _has_unsettled_prose(card)
     )
     descriptive_only = (
         str(artifact.get("application_state") or "") == "catalog_only"
@@ -186,8 +184,7 @@ def _finalize_bundled_artifact(
     )
     if errors:
         raise ValueError(
-            f"bundled artifact {artifact_id} has invalid resolution coverage: "
-            + "; ".join(errors)
+            f"bundled artifact {artifact_id} has invalid resolution coverage: " + "; ".join(errors)
         )
     normalized_clauses = rule_clause_templates(compiled)
     modes = {str(clause["settlement"]["mode"]) for clause in normalized_clauses}
@@ -207,9 +204,7 @@ def _finalize_bundled_artifact(
         if modes == {"descriptive"}
         else "clause_ready"
     )
-    artifact["mechanical_scope"] = (
-        "descriptive" if modes == {"descriptive"} else "mechanical"
-    )
+    artifact["mechanical_scope"] = "descriptive" if modes == {"descriptive"} else "mechanical"
     return artifact
 
 
@@ -285,12 +280,8 @@ def _settled_ruling_requirements(
     for raw in requirements:
         requirement = deepcopy(dict(raw))
         requirement["default_resolver"] = "agent"
-        requirement["ruling_kind"] = str(
-            requirement.get("ruling_kind") or ruling_kind
-        )
-        requirement["source_excerpt"] = str(
-            requirement.get("source_excerpt") or excerpt
-        )[:4000]
+        requirement["ruling_kind"] = str(requirement.get("ruling_kind") or ruling_kind)
+        requirement["source_excerpt"] = str(requirement.get("source_excerpt") or excerpt)[:4000]
         requirement["reason"] = str(requirement.get("reason") or reason)[:1000]
         requirement["policy_ref"] = "rule_clause.v1"
         requirement.setdefault("requires_external_input_only_for", [])
@@ -325,9 +316,7 @@ def _artifact_evidence(
         )
     source_ref = dict(raw_citation.get("source_ref") or {})
     if not source_ref:
-        source_ref = {
-            "locator": str(raw_citation.get("locator") or source).strip()
-        }
+        source_ref = {"locator": str(raw_citation.get("locator") or source).strip()}
 
     candidates = [
         *(
@@ -339,11 +328,7 @@ def _artifact_evidence(
         *(str(card.get(field) or "") for field in _PROSE_FIELDS),
     ]
     excerpt = next(
-        (
-            _bounded_text(value)
-            for value in candidates
-            if len(_bounded_text(value)) >= 10
-        ),
+        (_bounded_text(value) for value in candidates if len(_bounded_text(value)) >= 10),
         "",
     )
     if not excerpt:
@@ -354,9 +339,7 @@ def _artifact_evidence(
             source_prefix=source_prefix,
         )
     if len(excerpt) < 10:
-        raise ValueError(
-            f"bundled artifact {artifact.get('id')} has no bounded source excerpt"
-        )
+        raise ValueError(f"bundled artifact {artifact.get('id')} has no bounded source excerpt")
     return excerpt, {"source": source, "source_ref": source_ref}
 
 

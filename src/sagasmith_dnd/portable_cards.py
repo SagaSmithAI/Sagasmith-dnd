@@ -8,6 +8,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from sagasmith_core.content_pack import ACTOR_CARD_SCHEMA
 from sagasmith_core.portable import (
     PortableContentError,
     build_actor_card,
@@ -23,7 +24,7 @@ from sagasmith_dnd.character_schema import (
     validate_character_notes,
     validate_character_sheet,
 )
-from sagasmith_dnd.content_readiness import build_catalog_review
+from sagasmith_dnd.content_validation import build_catalog_review
 from sagasmith_dnd.core_content import PACK_ID as SRD2014_CONTENT_PACK_ID
 from sagasmith_dnd.core_content import PACK_VERSION as SRD2014_CONTENT_PACK_VERSION
 from sagasmith_dnd.core_content_2024 import PACK_ID as SRD2024_CONTENT_PACK_ID
@@ -40,9 +41,9 @@ from sagasmith_dnd.statblocks import (
 
 DND5E_SYSTEM_ID = "dnd5e"
 SRD2014_PRESET_PACK_ID = "dnd5e.presets.srd2014"
-SRD2014_PRESET_PACK_VERSION = "1.2.0"
+SRD2014_PRESET_PACK_VERSION = "2.0.0"
 SRD2024_PRESET_PACK_ID = "dnd5e.presets.srd2024"
-SRD2024_PRESET_PACK_VERSION = "1.2.0"
+SRD2024_PRESET_PACK_VERSION = "2.0.0"
 PORTABLE_CARD_COMPILER = "sagasmith-dnd.portable-card.v1"
 
 
@@ -100,15 +101,34 @@ def validate_dnd_actor_card(card: Mapping[str, Any]) -> dict[str, Any]:
         raise PortableContentError(f"unsupported D&D actor_type: {actor_type}")
     try:
         sheet = validate_character_sheet(copy.deepcopy(payload["sheet"]))
-        notes = validate_character_notes(
-            copy.deepcopy(payload["notes"]), character_type=actor_type
-        )
+        notes = validate_character_notes(copy.deepcopy(payload["notes"]), character_type=actor_type)
     except ValueError as exc:
         raise PortableContentError(f"invalid D&D actor card: {exc}") from exc
     if sheet != payload["sheet"]:
         raise PortableContentError("D&D actor card sheet must use the canonical v2 form")
     if notes != payload["notes"]:
         raise PortableContentError("D&D actor card notes must use the canonical v2 form")
+    return value
+
+
+def validate_dnd_content_actor(actor: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate a package-owned v3 actor with the full D&D sheet contracts."""
+
+    value = copy.deepcopy(dict(actor))
+    if value.get("schema") != ACTOR_CARD_SCHEMA or value.get("system_id") != DND5E_SYSTEM_ID:
+        raise PortableContentError("invalid D&D content actor schema or system")
+    actor_type = str(value.get("actor_type") or "").casefold()
+    if actor_type not in CHARACTER_TYPES:
+        raise PortableContentError(f"unsupported D&D actor_type: {actor_type}")
+    try:
+        sheet = validate_character_sheet(copy.deepcopy(dict(value["sheet"])))
+        notes = validate_character_notes(
+            copy.deepcopy(dict(value["notes"])), character_type=actor_type
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise PortableContentError(f"invalid D&D content actor: {exc}") from exc
+    if sheet != value["sheet"] or notes != value["notes"]:
+        raise PortableContentError("D&D content actor must use canonical sheet and notes")
     return value
 
 
@@ -210,9 +230,7 @@ def actor_card_from_statblock(
             "experience_points": parsed.experience_points,
             "warnings": list(parsed.warnings),
             "normalization_notes": list(parsed.normalization_notes),
-            "semantic_fill": (
-                copy.deepcopy(semantic_fill) if semantic_fill is not None else None
-            ),
+            "semantic_fill": (copy.deepcopy(semantic_fill) if semantic_fill is not None else None),
         },
         metadata={
             "title": parsed.name,
@@ -260,9 +278,7 @@ def _cached_srd2014_preset_pack(skill_root: str) -> dict[str, Any]:
             # The folder also contains this prose-only guide, which is not an actor.
             continue
         slug = ascii_slug(path.stem.replace("_", " ")) or "actor"
-        source_ref = (
-            "bundled:srd2014/10_Monsters/Monsters_Each/" + path.name
-        )
+        source_ref = "bundled:srd2014/10_Monsters/Monsters_Each/" + path.name
         actor_type = "npc" if "(npc)" in path.stem.casefold() else "monster"
         parsed = parse_2014_statblock(
             source_text,
@@ -410,8 +426,7 @@ def preset_pack_catalog_definition(
                 "rule_refs": list(provenance.get("source_refs") or []),
                 "mechanic_refs": [],
                 "source_citations": [
-                    {"source": source_ref}
-                    for source_ref in provenance.get("source_refs") or []
+                    {"source": source_ref} for source_ref in provenance.get("source_refs") or []
                 ],
             }
         )

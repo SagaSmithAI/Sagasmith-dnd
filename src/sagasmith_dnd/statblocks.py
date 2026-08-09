@@ -24,6 +24,7 @@ from sagasmith_dnd.character_schema import (
     validate_character_sheet,
 )
 from sagasmith_dnd.engine import ability_modifier
+from sagasmith_dnd.parsing_rule_registry import registered_parsing_rule
 from sagasmith_dnd.resolution_plan import (
     ResolutionPlanCompilationError,
     compile_resolution_plan,
@@ -122,9 +123,7 @@ def _slug(value: str) -> str:
 
 
 def _field(markdown: str, label: str, *, required: bool = False) -> str:
-    match = re.search(
-        rf"(?im)^\*\*{re.escape(label)}\*\*\s+(.+?)\s*$", markdown
-    )
+    match = re.search(rf"(?im)^\*\*{re.escape(label)}\*\*\s+(.+?)\s*$", markdown)
     if match:
         return match.group(1).strip()
     if required:
@@ -165,9 +164,7 @@ def _parse_armor_equipment(
         None,
     )
     if armor_name is not None:
-        base_ac, dexterity_mode, dexterity_max, stealth_disadvantage = _2014_ARMOR[
-            armor_name
-        ]
+        base_ac, dexterity_mode, dexterity_max, stealth_disadvantage = _2014_ARMOR[armor_name]
         armor_id = f"statblock-{_slug(armor_name)}"
         mechanics: dict[str, Any] = {
             "base_ac": base_ac,
@@ -265,9 +262,7 @@ def _parse_senses(value: str, sheet: dict[str, Any], ability_scores: dict[str, i
         wisdom_modifier = ability_modifier(ability_scores["wisdom"])
         perception = sheet["skills"]["perception"]
         calculated = 10 + wisdom_modifier + int(perception.get("bonus", 0) or 0)
-        sheet["traits"]["senses"]["passive_perception_bonus"] = (
-            int(passive.group(1)) - calculated
-        )
+        sheet["traits"]["senses"]["passive_perception_bonus"] = int(passive.group(1)) - calculated
 
 
 def _base_statblock_markdown(markdown: str) -> str:
@@ -299,9 +294,9 @@ def split_2014_statblock_action_variants(
         )
         if match is not None:
             variants.append((heading, " ".join(match.group(1).split())))
-    if len(variants) < 2 or len(
-        {label.casefold() for _heading, label in variants}
-    ) != len(variants):
+    if len(variants) < 2 or len({label.casefold() for _heading, label in variants}) != len(
+        variants
+    ):
         return []
     root = re.search(r"(?m)^#{1,6}\s+(.+?)\s*$", markdown)
     if root is None:
@@ -419,11 +414,7 @@ def _trailing_standard_ammunition(
         ),
         None,
     )
-    actor_tokens = [
-        token
-        for token in re.findall(r"[A-Za-z][A-Za-z'\-]*", actor_name)
-        if token
-    ]
+    actor_tokens = [token for token in re.findall(r"[A-Za-z][A-Za-z'\-]*", actor_name) if token]
     aliases = list(
         dict.fromkeys(
             [
@@ -506,16 +497,12 @@ def _parse_weapon(
     if hit:
         expression_parts = re.split(
             r"(?i)\s+plus\s+",
-            hit.group("formula")
-            or hit.group("bare_formula")
-            or hit.group("average"),
+            hit.group("formula") or hit.group("bare_formula") or hit.group("average"),
         )
         expression = re.sub(r"\s+", "", expression_parts[0])
         damage = re.fullmatch(r"(\d+d\d+)(?:([+\-]\d+))?", expression)
         if (hit.group("formula") or hit.group("bare_formula")) and not damage:
-            raise StatblockImportError(
-                f"weapon action {name!r} has an invalid damage expression"
-            )
+            raise StatblockImportError(f"weapon action {name!r} has an invalid damage expression")
         for raw_extra_expression in expression_parts[1:]:
             extra_expression = re.sub(r"\s+", "", raw_extra_expression)
             parsed_extra = re.fullmatch(
@@ -546,9 +533,7 @@ def _parse_weapon(
             description[hit.end() :],
         )
         if versatile:
-            versatile_bonus = int(
-                f"{versatile.group(2) or '+'}{versatile.group(3) or '0'}"
-            )
+            versatile_bonus = int(f"{versatile.group(2) or '+'}{versatile.group(3) or '0'}")
             if versatile_bonus == (int(damage.group(2) or 0) if damage else 0):
                 versatile_damage_formula = re.sub(r"\s+", "", versatile.group(1))
                 last_damage_end = hit.end() + versatile.end()
@@ -604,18 +589,12 @@ def _parse_weapon(
                 raw_on_hit_effect[actor_lore_match.start() :]
             )
         ):
-            trailing_paragraph_prose = raw_on_hit_effect[
-                actor_lore_match.start() :
-            ].strip()
-            raw_on_hit_effect = raw_on_hit_effect[
-                : actor_lore_match.start()
-            ].strip()
+            trailing_paragraph_prose = raw_on_hit_effect[actor_lore_match.start() :].strip()
+            raw_on_hit_effect = raw_on_hit_effect[: actor_lore_match.start()].strip()
         complete_structured_on_hit = None
         trailing_paragraph_match = re.search(r"\n\s*\n", raw_on_hit_effect)
         if trailing_paragraph_match and complete_structured_on_hit is None:
-            trailing_paragraph_prose = raw_on_hit_effect[
-                trailing_paragraph_match.end() :
-            ].strip()
+            trailing_paragraph_prose = raw_on_hit_effect[trailing_paragraph_match.end() :].strip()
             raw_on_hit_effect = raw_on_hit_effect[: trailing_paragraph_match.start()]
         on_hit_effect = raw_on_hit_effect.strip().lstrip(". ,;").strip()
         damage_formula = damage.group(1) if damage else expression
@@ -647,8 +626,7 @@ def _parse_weapon(
         trailing_prose = on_hit_effect[ammunition_start:].strip()
         on_hit_effect = on_hit_effect[:ammunition_start].rstrip(" .;,")
         trailing_warning = (
-            f"{name}: trailing ammunition inventory structured separately "
-            "from action settlement"
+            f"{name}: trailing ammunition inventory structured separately from action settlement"
         )
     normalized_actor_name = actor_name.strip()
     unformatted_on_hit_effect = re.sub(
@@ -692,11 +670,8 @@ def _parse_weapon(
         trailing_prose = on_hit_effect
         on_hit_effect = ""
         trailing_warning = f"{name}: trailing page furniture excluded from action settlement"
-    elif (
-        actor_lore_match
-        and not _looks_like_mechanical_on_hit_suffix(
-            on_hit_effect[actor_lore_match.start() :]
-        )
+    elif actor_lore_match and not _looks_like_mechanical_on_hit_suffix(
+        on_hit_effect[actor_lore_match.start() :]
     ):
         trailing_prose = on_hit_effect[actor_lore_match.start() :].strip()
         on_hit_effect = on_hit_effect[: actor_lore_match.start()].strip()
@@ -791,14 +766,6 @@ def _looks_like_mechanical_on_hit_suffix(description: str) -> bool:
     )
 
 
-
-
-
-
-
-
-
-
 def _count(value: str) -> int | None:
     value = value.casefold().strip()
     if value.isdigit():
@@ -871,10 +838,7 @@ def _parse_multiattack(description: str, items: list[dict[str, Any]]) -> list[di
         weapon = next(item for item in items if item["id"] == weapon_id)
         mechanics = dict(weapon.get("mechanics") or {})
         modes = [str(mechanics.get("attack_type") or "melee")]
-        if "thrown" in {
-            str(value).casefold()
-            for value in mechanics.get("properties") or []
-        }:
+        if "thrown" in {str(value).casefold() for value in mechanics.get("properties") or []}:
             modes.append("ranged")
         return list(dict.fromkeys(modes))
 
@@ -922,24 +886,12 @@ def _parse_multiattack(description: str, items: list[dict[str, Any]]) -> list[di
         )
         if complete_alternatives is not None:
             total = _count(complete_alternatives.group("total"))
-            required_count = _count(
-                complete_alternatives.group("required_count")
-            )
-            secondary_count = _count(
-                complete_alternatives.group("secondary_count")
-            )
-            alternative_count = _count(
-                complete_alternatives.group("alternative_count")
-            )
-            required_id = _weapon_id(
-                complete_alternatives.group("required"), weapons
-            )
-            secondary_id = _weapon_id(
-                complete_alternatives.group("secondary"), weapons
-            )
-            alternative_id = _weapon_id(
-                complete_alternatives.group("alternative"), weapons
-            )
+            required_count = _count(complete_alternatives.group("required_count"))
+            secondary_count = _count(complete_alternatives.group("secondary_count"))
+            alternative_count = _count(complete_alternatives.group("alternative_count"))
+            required_id = _weapon_id(complete_alternatives.group("required"), weapons)
+            secondary_id = _weapon_id(complete_alternatives.group("secondary"), weapons)
+            alternative_id = _weapon_id(complete_alternatives.group("alternative"), weapons)
             if (
                 total is None
                 or required_count is None
@@ -956,11 +908,7 @@ def _parse_multiattack(description: str, items: list[dict[str, Any]]) -> list[di
                 for secondary_mode in weapon_modes(secondary_id):
                     options.append(
                         {
-                            "id": (
-                                required_mode
-                                if required_mode == secondary_mode
-                                else "mixed"
-                            ),
+                            "id": (required_mode if required_mode == secondary_mode else "mixed"),
                             "attacks": [
                                 {
                                     "weapon_id": required_id,
@@ -1001,12 +949,8 @@ def _parse_multiattack(description: str, items: list[dict[str, Any]]) -> list[di
         )
         if required_plus_alternative is not None:
             total = _count(required_plus_alternative.group("total"))
-            required_count = _count(
-                required_plus_alternative.group("required_count")
-            )
-            alternative_count = _count(
-                required_plus_alternative.group("alternative_count")
-            )
+            required_count = _count(required_plus_alternative.group("required_count"))
+            alternative_count = _count(required_plus_alternative.group("alternative_count"))
             required_id = _weapon_id(
                 required_plus_alternative.group("required"),
                 weapons,
@@ -1029,9 +973,7 @@ def _parse_multiattack(description: str, items: list[dict[str, Any]]) -> list[di
                     assert alternative_id is not None
                     for alternative_mode in weapon_modes(alternative_id):
                         option_mode = (
-                            required_mode
-                            if required_mode == alternative_mode
-                            else "mixed"
+                            required_mode if required_mode == alternative_mode else "mixed"
                         )
                         options.append(
                             {
@@ -1102,10 +1044,7 @@ def _parse_multiattack(description: str, items: list[dict[str, Any]]) -> list[di
                     _weapon_id(repeated_action_alternatives.group("second"), weapons),
                 ),
             ]
-            if any(
-                count is None or weapon_id is None
-                for count, weapon_id in declarations
-            ):
+            if any(count is None or weapon_id is None for count, weapon_id in declarations):
                 return []
             for count, weapon_id in declarations:
                 assert count is not None and weapon_id is not None
@@ -1213,9 +1152,7 @@ def _parse_multiattack(description: str, items: list[dict[str, Any]]) -> list[di
                 if count is None or weapon_id is None:
                     break
                 weapon = next(item for item in items if item["id"] == weapon_id)
-                weapon_mode = str(
-                    dict(weapon.get("mechanics") or {}).get("attack_type") or "melee"
-                )
+                weapon_mode = str(dict(weapon.get("mechanics") or {}).get("attack_type") or "melee")
                 attacks.append(
                     {
                         "weapon_id": weapon_id,
@@ -1227,7 +1164,7 @@ def _parse_multiattack(description: str, items: list[dict[str, Any]]) -> list[di
             generic_attacks = list(
                 re.finditer(
                     r"(?i)\b"
-                r"(one|two|three|four|five|six|\d+)\s+"
+                    r"(one|two|three|four|five|six|\d+)\s+"
                     r"(melee|ranged)\s+(?:weapon\s+)?attacks?\b",
                     group,
                 )
@@ -1241,15 +1178,13 @@ def _parse_multiattack(description: str, items: list[dict[str, Any]]) -> list[di
                     for item in items:
                         mechanics = dict(item.get("mechanics") or {})
                         properties = {
-                            str(value).casefold()
-                            for value in mechanics.get("properties") or []
+                            str(value).casefold() for value in mechanics.get("properties") or []
                         }
                         if generic_mode == "melee":
                             supported = mechanics.get("attack_type") == "melee"
                         else:
                             supported = (
-                                mechanics.get("attack_type") == "ranged"
-                                or "thrown" in properties
+                                mechanics.get("attack_type") == "ranged" or "thrown" in properties
                             )
                         if supported:
                             compatible.append(item)
@@ -1355,16 +1290,10 @@ def _parse_spellcasting(
             re.sub(r"(?:\s*[-*]\s*)+$", "", item.strip()).lstrip("-* ")
             for item in spell_list_text.split(",")
         ]
-        names = [
-            re.sub(r"(?i)\bo\s+f\b", "of", item)
-            for item in names
-            if item
-        ]
+        names = [re.sub(r"(?i)\bo\s+f\b", "of", item) for item in names if item]
         if innate:
             at_will = header.group(1).casefold() == "at will"
-            uses_per_day = (
-                None if at_will else int(header.group("uses"))
-            )
+            uses_per_day = None if at_will else int(header.group("uses"))
             for source_name in names:
                 canonical_name = re.sub(
                     r"\s+\((?P<qualifier>[^()]*)\)\s*$",
@@ -1380,19 +1309,14 @@ def _parse_spellcasting(
                         "name": canonical_name,
                         "source_name": source_name,
                         "source_qualifier": (
-                            qualifier_match.group("qualifier").strip()
-                            if qualifier_match
-                            else ""
+                            qualifier_match.group("qualifier").strip() if qualifier_match else ""
                         ),
                         "level": None,
                         "at_will": at_will,
                         "uses_per_day": uses_per_day,
-                        "uses_are_independent": bool(header.group("each"))
-                        or len(names) == 1,
+                        "uses_are_independent": bool(header.group("each")) or len(names) == 1,
                         "usage_group": (
-                            ""
-                            if uses_per_day is None
-                            else f"daily-{uses_per_day}-{index + 1}"
+                            "" if uses_per_day is None else f"daily-{uses_per_day}-{index + 1}"
                         ),
                     }
                 )
@@ -1414,9 +1338,7 @@ def _parse_spellcasting(
                         ),
                         "source_name": source_name,
                         "source_qualifier": (
-                            qualifier_match.group("qualifier").strip()
-                            if qualifier_match
-                            else ""
+                            qualifier_match.group("qualifier").strip() if qualifier_match else ""
                         ),
                         "level": level,
                         "at_will": level == 0,
@@ -1447,68 +1369,6 @@ def _spell_action_name(value: str) -> str:
     return re.sub(r"\s*\([^)]*\)\s*$", "", value).strip().casefold()
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def _recharge_contract(entry_name: str) -> dict[str, Any] | None:
     """Recover only the shared printed ``Recharge X-Y`` usage marker.
 
@@ -1526,9 +1386,7 @@ def _recharge_contract(entry_name: str) -> dict[str, Any] | None:
     minimum = int(match.group(1))
     maximum = int(match.group(2) or match.group(1))
     if minimum > maximum:
-        raise StatblockImportError(
-            f"{entry_name!r} has an invalid Recharge success range"
-        )
+        raise StatblockImportError(f"{entry_name!r} has an invalid Recharge success range")
     return {
         "kind": "d6_turn_start",
         "minimum": minimum,
@@ -1553,20 +1411,12 @@ def legendary_action_spec(
     )
     if activity is None:
         return None
-    recorded = dict(
-        dict(activity.get("choices") or {}).get("legendary_action") or {}
-    )
+    recorded = dict(dict(activity.get("choices") or {}).get("legendary_action") or {})
     if not recorded:
         return None
     if recorded.get("kind") != "legendary_action_2014":
         raise StatblockImportError("unsupported legendary-action contract")
     return deepcopy(recorded)
-
-
-
-
-
-
 
 
 def _legendary_action_pool(markdown: str) -> dict[str, Any] | None:
@@ -1651,10 +1501,7 @@ def _compile_legendary_action(
                 "kind": "weapon_attack",
                 "weapon_id": str(matches[0]["id"]),
                 "attack_mode": str(
-                    dict(matches[0].get("mechanics") or {}).get(
-                        "attack_type"
-                    )
-                    or "melee"
+                    dict(matches[0].get("mechanics") or {}).get("attack_type") or "melee"
                 ),
             }
     if effect is None:
@@ -1666,12 +1513,6 @@ def _compile_legendary_action(
         "effect": effect,
         "source_excerpt": normalized,
     }
-
-
-
-
-
-
 
 
 def _parse_srd_statblock(
@@ -1699,9 +1540,7 @@ def _parse_srd_statblock(
     identity = re.search(r"(?m)^\*([^*\n]+)\*\s*$", markdown)
     if not identity and heading:
         preamble_end = re.search(r"(?im)^\*\*Armor Class\*\*", markdown)
-        preamble = markdown[
-            heading.end() : preamble_end.start() if preamble_end else len(markdown)
-        ]
+        preamble = markdown[heading.end() : preamble_end.start() if preamble_end else len(markdown)]
         identity = re.search(
             (
                 r"(?im)^\s*"
@@ -1779,9 +1618,7 @@ def _parse_srd_statblock(
                 "performance": "charisma",
                 "persuasion": "charisma",
             }[skill]
-            sheet["skills"][skill]["bonus"] = target - ability_modifier(
-                ability_scores[ability]
-            )
+            sheet["skills"][skill]["bonus"] = target - ability_modifier(ability_scores[ability])
 
     for label, key in (
         ("Damage Resistances", "resistances"),
@@ -1815,14 +1652,10 @@ def _parse_srd_statblock(
     # slot progression and only use innate casting as the primary model when it
     # is the sole parseable source. Any additional trait remains source-bound
     # descriptive content instead of silently borrowing the wrong ability.
-    spellcasting_entries.sort(
-        key=lambda entry: entry[1].strip().casefold() != "spellcasting"
-    )
+    spellcasting_entries.sort(key=lambda entry: entry[1].strip().casefold() != "spellcasting")
     spellcasting_entry: tuple[str, str, str] | None = None
     for candidate in spellcasting_entries:
-        candidate_innate = (
-            candidate[1].strip().casefold().startswith("innate spellcasting")
-        )
+        candidate_innate = candidate[1].strip().casefold().startswith("innate spellcasting")
         parsed_spellcasting = _parse_spellcasting(
             candidate[2],
             innate=candidate_innate,
@@ -1837,8 +1670,7 @@ def _parse_srd_statblock(
         sheet["spellcasting"]["attack_bonus_override"] = spellcasting.get("attack_bonus")
         sheet["spellcasting"]["save_dc_override"] = spellcasting.get("save_dc")
     spell_specs = {
-        str(item["name"]).casefold(): item
-        for item in (spellcasting or {}).get("spells", [])
+        str(item["name"]).casefold(): item for item in (spellcasting or {}).get("spells", [])
     }
     weapons: list[dict[str, Any]] = []
     ammunition_items: dict[str, dict[str, Any]] = {}
@@ -1868,9 +1700,7 @@ def _parse_srd_statblock(
         if spell_spec is not None:
             spell_spec["action_name"] = entry_name
             spell_spec["action_description"] = description
-            structured_spell_attack_markers += len(
-                attack_marker_pattern.findall(description)
-            )
+            structured_spell_attack_markers += len(attack_marker_pattern.findall(description))
             continue
         weapon = _parse_weapon(
             entry_name,
@@ -1893,21 +1723,13 @@ def _parse_srd_statblock(
             weapons.append(weapon)
         else:
             descriptive.append((section, entry_name, description))
-            descriptive_attack_markers += len(
-                attack_marker_pattern.findall(description)
-            )
-    source_attack_markers = len(
-        attack_marker_pattern.findall(_base_statblock_markdown(markdown))
-    )
+            descriptive_attack_markers += len(attack_marker_pattern.findall(description))
+    source_attack_markers = len(attack_marker_pattern.findall(_base_statblock_markdown(markdown)))
     settled_attack_markers = (
-        len(weapons)
-        + structured_spell_attack_markers
-        + descriptive_attack_markers
+        len(weapons) + structured_spell_attack_markers + descriptive_attack_markers
     )
     if source_attack_markers != settled_attack_markers:
-        raise StatblockImportError(
-            "statblock contains unparsed weapon action markers"
-        )
+        raise StatblockImportError("statblock contains unparsed weapon action markers")
     if not weapons:
         if not entries:
             raise StatblockImportError(
@@ -1921,9 +1743,7 @@ def _parse_srd_statblock(
     if len(ids) != len(set(ids)):
         raise StatblockImportError("statblock contains duplicate weapon action names")
     armor_items, armor_slots = (
-        _parse_armor_equipment(ac_text, source_key)
-        if edition == "2014"
-        else ([], {})
+        _parse_armor_equipment(ac_text, source_key) if edition == "2014" else ([], {})
     )
     sheet["inventory"]["items"] = [
         *armor_items,
@@ -1934,11 +1754,7 @@ def _parse_srd_statblock(
 
     refs = list(dict.fromkeys(str(item) for item in rule_refs if str(item)))
     if spellcasting is not None:
-        feature_name = (
-            spellcasting_entry[1]
-            if spellcasting_entry is not None
-            else "Spellcasting"
-        )
+        feature_name = spellcasting_entry[1] if spellcasting_entry is not None else "Spellcasting"
         sheet["content"]["features"].append(
             {
                 "id": (
@@ -1954,9 +1770,7 @@ def _parse_srd_statblock(
             }
         )
     for weapon in weapons:
-        on_hit_effect = str(
-            dict(weapon.get("mechanics") or {}).get("on_hit_effect") or ""
-        ).strip()
+        on_hit_effect = str(dict(weapon.get("mechanics") or {}).get("on_hit_effect") or "").strip()
         if on_hit_effect:
             warnings.append(f"{weapon['name']}: on-hit effect requires DM settlement")
     for entry_name, description in multiattacks:
@@ -2012,11 +1826,7 @@ def _parse_srd_statblock(
                 pool=legendary_pool,
                 weapons=weapons,
             )
-            if (
-                activation == "special"
-                and legendary_pool is not None
-                and edition == "2014"
-            )
+            if (activation == "special" and legendary_pool is not None and edition == "2014")
             else None
         )
         if legendary_action is not None:
@@ -2182,9 +1992,7 @@ def _normalize_2024_statblock(markdown: str) -> tuple[str, bool]:
                 # exact modifier with the lowest even representative score
                 # (and score 1 for -5). No mechanic may infer an omitted odd
                 # score from this representation.
-                ability_scores[abbreviation] = (
-                    1 if modifier == -5 else 10 + 2 * modifier
-                )
+                ability_scores[abbreviation] = 1 if modifier == -5 else 10 + 2 * modifier
                 saving_throws[abbreviation] = save
             modifiers_only = True
     table = re.search(
@@ -2339,9 +2147,7 @@ def _variant_attack_description(item: dict[str, Any], source_ref: str) -> str:
     mode = str(mechanics.get("attack_type") or "melee").strip().casefold()
     attack_kind = "Spell" if mechanics.get("attack_ability") == "spell" else "Weapon"
     attack_bonus = mechanics.get("attack_bonus_override")
-    attack_bonus_text = (
-        f"{int(attack_bonus):+d}" if attack_bonus is not None else "derived bonus"
-    )
+    attack_bonus_text = f"{int(attack_bonus):+d}" if attack_bonus is not None else "derived bonus"
     if mode == "ranged":
         normal = int(mechanics.get("normal_range_ft", 0) or 0)
         long = int(mechanics.get("long_range_ft", 0) or 0)
@@ -2355,19 +2161,11 @@ def _variant_attack_description(item: dict[str, Any], source_ref: str) -> str:
     damage_type = str(mechanics.get("damage_type") or "untyped")
     damage_text = f"{formula} {damage_type} damage"
     for part in mechanics.get("additional_damage", []):
-        part_formula = str(
-            part.get("damage_formula") or "structured damage"
-        )
+        part_formula = str(part.get("damage_formula") or "structured damage")
         part_bonus = int(part.get("damage_bonus", 0) or 0)
         if part_bonus:
-            part_formula = (
-                f"{part_formula} {'+' if part_bonus > 0 else '-'} "
-                f"{abs(part_bonus)}"
-            )
-        damage_text += (
-            f" plus {part_formula} "
-            f"{str(part.get('damage_type') or 'untyped')} damage"
-        )
+            part_formula = f"{part_formula} {'+' if part_bonus > 0 else '-'} {abs(part_bonus)}"
+        damage_text += f" plus {part_formula} {str(part.get('damage_type') or 'untyped')} damage"
     return (
         f"*{mode.title()} {attack_kind} Attack:* {attack_bonus_text} to hit, "
         f"{range_text}, one target. *Hit:* {damage_text}. "
@@ -2438,9 +2236,7 @@ def effective_statblock_rating(
         ),
     }
     if overridden_challenge not in challenge_xp:
-        raise StatblockImportError(
-            "challenge_rating must be a D&D 5e challenge from 0 through 30"
-        )
+        raise StatblockImportError("challenge_rating must be a D&D 5e challenge from 0 through 30")
     overridden_experience = variant["experience_points"]
     if (
         not isinstance(overridden_experience, int)
@@ -2449,9 +2245,7 @@ def effective_statblock_rating(
     ):
         raise StatblockImportError("experience_points must be a non-negative integer")
     if overridden_experience != challenge_xp[overridden_challenge]:
-        raise StatblockImportError(
-            "experience_points must match the D&D 5e challenge XP table"
-        )
+        raise StatblockImportError("experience_points must match the D&D 5e challenge XP table")
     return overridden_challenge, overridden_experience
 
 
@@ -2508,9 +2302,7 @@ def apply_statblock_variant(
         raise StatblockImportError("statblock variant source_refs must be a list")
     source_refs.extend(str(item).strip() for item in additional_source_refs)
     if any(not item for item in source_refs):
-        raise StatblockImportError(
-            "statblock variant source_refs must contain non-empty strings"
-        )
+        raise StatblockImportError("statblock variant source_refs must contain non-empty strings")
     if not source_refs:
         raise StatblockImportError("statblock variant source_ref or source_refs is required")
     if len(source_refs) != len(set(source_refs)):
@@ -2540,9 +2332,7 @@ def apply_statblock_variant(
             or isinstance(walking_speed, bool)
             or not 0 <= walking_speed <= 1000
         ):
-            raise StatblockImportError(
-                "walking_speed_ft must be an integer between 0 and 1000"
-            )
+            raise StatblockImportError("walking_speed_ft must be an integer between 0 and 1000")
         result["combat"]["speed"]["walk"] = walking_speed
 
     hp = result["combat"]["hp"]
@@ -2582,15 +2372,10 @@ def apply_statblock_variant(
         unknown_abilities = set(ability_scores) - set(ABILITY_NAMES)
         if unknown_abilities:
             raise StatblockImportError(
-                "ability_scores contains unsupported abilities: "
-                f"{sorted(unknown_abilities)}"
+                f"ability_scores contains unsupported abilities: {sorted(unknown_abilities)}"
             )
         for ability, score in ability_scores.items():
-            if (
-                not isinstance(score, int)
-                or isinstance(score, bool)
-                or not 1 <= score <= 30
-            ):
+            if not isinstance(score, int) or isinstance(score, bool) or not 1 <= score <= 30:
                 raise StatblockImportError(
                     f"ability_scores.{ability} must be an integer between 1 and 30"
                 )
@@ -2611,9 +2396,7 @@ def apply_statblock_variant(
             or isinstance(darkvision_ft, bool)
             or not 0 <= darkvision_ft <= 1000
         ):
-            raise StatblockImportError(
-                "darkvision_ft must be an integer between 0 and 1000"
-            )
+            raise StatblockImportError("darkvision_ft must be an integer between 0 and 1000")
         result["traits"]["senses"]["darkvision"] = darkvision_ft
 
     if "languages" in variant:
@@ -2621,9 +2404,8 @@ def apply_statblock_variant(
         if not isinstance(languages, list):
             raise StatblockImportError("languages must be a list")
         normalized_languages = [str(item).strip() for item in languages]
-        if (
-            any(not item for item in normalized_languages)
-            or len(normalized_languages) != len(set(normalized_languages))
+        if any(not item for item in normalized_languages) or len(normalized_languages) != len(
+            set(normalized_languages)
         ):
             raise StatblockImportError("languages must contain unique non-empty strings")
         result["traits"]["languages"] = normalized_languages
@@ -2639,12 +2421,9 @@ def apply_statblock_variant(
         raw_damage_types = variant[variant_field]
         if not isinstance(raw_damage_types, list):
             raise StatblockImportError(f"{variant_field} must be a list")
-        normalized_damage_types = [
-            str(item).strip().casefold() for item in raw_damage_types
-        ]
-        if (
-            any(not item for item in normalized_damage_types)
-            or len(normalized_damage_types) != len(set(normalized_damage_types))
+        normalized_damage_types = [str(item).strip().casefold() for item in raw_damage_types]
+        if any(not item for item in normalized_damage_types) or len(normalized_damage_types) != len(
+            set(normalized_damage_types)
         ):
             raise StatblockImportError(
                 f"{variant_field} must contain unique non-empty damage types"
@@ -2665,10 +2444,9 @@ def apply_statblock_variant(
             str(item).strip().casefold().replace("-", "_").replace(" ", "_")
             for item in raw_condition_ids
         ]
-        if (
-            any(not item for item in normalized_condition_ids)
-            or len(normalized_condition_ids) != len(set(normalized_condition_ids))
-        ):
+        if any(not item for item in normalized_condition_ids) or len(
+            normalized_condition_ids
+        ) != len(set(normalized_condition_ids)):
             raise StatblockImportError(
                 "condition_immunities must contain unique non-empty condition ids"
             )
@@ -2681,17 +2459,14 @@ def apply_statblock_variant(
         normalized_replacements: list[tuple[str, str]] = []
         for index, raw in enumerate(replacements):
             if not isinstance(raw, dict):
-                raise StatblockImportError(
-                    f"spell_replacements[{index}] must be an object"
-                )
+                raise StatblockImportError(f"spell_replacements[{index}] must be an object")
             unknown_replacement_fields = set(raw) - {
                 "remove_spell_id",
                 "add_spell_id",
             }
             if unknown_replacement_fields:
                 raise StatblockImportError(
-                    "unsupported spell replacement fields: "
-                    f"{sorted(unknown_replacement_fields)}"
+                    f"unsupported spell replacement fields: {sorted(unknown_replacement_fields)}"
                 )
             remove_spell_id = str(raw.get("remove_spell_id") or "").strip()
             add_spell_id = str(raw.get("add_spell_id") or "").strip()
@@ -2717,9 +2492,7 @@ def apply_statblock_variant(
 
         spells = list(result["content"]["spells"])
         spells_by_id = {
-            str(item.get("id") or ""): item
-            for item in spells
-            if str(item.get("id") or "")
+            str(item.get("id") or ""): item for item in spells if str(item.get("id") or "")
         }
         preparation = result["spellcasting"]["preparation"]
         selected_ids = list(preparation.get("selected_spell_ids") or [])
@@ -2742,9 +2515,7 @@ def apply_statblock_variant(
                 raise StatblockImportError(
                     f"spell replacement target is already prepared: {add_spell_id}"
                 )
-            if int(removed_spell.get("level", 0) or 0) != int(
-                added_spell.get("level", 0) or 0
-            ):
+            if int(removed_spell.get("level", 0) or 0) != int(added_spell.get("level", 0) or 0):
                 raise StatblockImportError(
                     "spell replacements must preserve the printed spell level"
                 )
@@ -2782,9 +2553,7 @@ def apply_statblock_variant(
         features = variant["add_features"]
         if not isinstance(features, list) or not features:
             raise StatblockImportError("add_features must be a non-empty list")
-        existing_feature_ids = {
-            str(item.get("id") or "") for item in result["content"]["features"]
-        }
+        existing_feature_ids = {str(item.get("id") or "") for item in result["content"]["features"]}
         added_feature_ids: set[str] = set()
         for index, raw in enumerate(features):
             if not isinstance(raw, dict):
@@ -2798,13 +2567,9 @@ def apply_statblock_variant(
             name = str(raw.get("name") or "").strip()
             description = str(raw.get("description") or "").strip()
             if not feature_id or _slug(feature_id) != feature_id:
-                raise StatblockImportError(
-                    f"add_features[{index}].id must be a lowercase slug"
-                )
+                raise StatblockImportError(f"add_features[{index}].id must be a lowercase slug")
             if not name or not description:
-                raise StatblockImportError(
-                    f"add_features[{index}] requires name and description"
-                )
+                raise StatblockImportError(f"add_features[{index}] requires name and description")
             if len(name) > 200 or len(description) > 4000:
                 raise StatblockImportError(
                     f"add_features[{index}] exceeds the supported text length"
@@ -2924,35 +2689,27 @@ def apply_statblock_variant(
         if "additional_damage" in raw_patch:
             raw_additional_damage = raw_patch["additional_damage"]
             if not isinstance(raw_additional_damage, list):
-                raise StatblockImportError(
-                    "action override additional_damage must be a list"
-                )
+                raise StatblockImportError("action override additional_damage must be a list")
             additional_damage: list[dict[str, Any]] = []
             for index, raw_damage in enumerate(raw_additional_damage):
-                if (
-                    not isinstance(raw_damage, dict)
-                    or set(raw_damage)
-                    - {"damage_formula", "damage_bonus", "damage_type"}
-                ):
+                if not isinstance(raw_damage, dict) or set(raw_damage) - {
+                    "damage_formula",
+                    "damage_bonus",
+                    "damage_type",
+                }:
                     raise StatblockImportError(
                         "each action override additional_damage entry accepts only "
                         "damage_formula, damage_bonus, and damage_type"
                     )
-                damage_formula = str(
-                    raw_damage.get("damage_formula") or ""
-                ).replace(" ", "")
+                damage_formula = str(raw_damage.get("damage_formula") or "").replace(" ", "")
                 damage_bonus = raw_damage.get("damage_bonus", 0)
-                damage_type = str(
-                    raw_damage.get("damage_type") or ""
-                ).strip().casefold()
+                damage_type = str(raw_damage.get("damage_type") or "").strip().casefold()
                 if not re.fullmatch(r"\d+d\d+", damage_formula):
                     raise StatblockImportError(
                         "action override additional_damage damage_formula "
                         f"at index {index} must be NdM dice"
                     )
-                if not isinstance(damage_bonus, int) or isinstance(
-                    damage_bonus, bool
-                ):
+                if not isinstance(damage_bonus, int) or isinstance(damage_bonus, bool):
                     raise StatblockImportError(
                         "action override additional_damage damage_bonus "
                         f"at index {index} must be an integer"
@@ -2992,19 +2749,12 @@ def apply_statblock_variant(
             if field not in raw_patch:
                 continue
             value = raw_patch[field]
-            if (
-                not isinstance(value, int)
-                or isinstance(value, bool)
-                or not 0 <= value <= 10_000
-            ):
+            if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 10_000:
                 raise StatblockImportError(
                     f"action override {field} must be an integer from 0 through 10000"
                 )
             mechanics[field] = value
-        if (
-            "normal_range_ft" in raw_patch
-            or "long_range_ft" in raw_patch
-        ):
+        if "normal_range_ft" in raw_patch or "long_range_ft" in raw_patch:
             if str(mechanics.get("attack_type") or "") != "ranged":
                 raise StatblockImportError(
                     "action override ranged distances require a ranged weapon action"
@@ -3025,9 +2775,7 @@ def apply_statblock_variant(
         if "remove_on_hit_effect" in raw_patch:
             remove_on_hit_effect = raw_patch["remove_on_hit_effect"]
             if remove_on_hit_effect is not True:
-                raise StatblockImportError(
-                    "action override remove_on_hit_effect must be true"
-                )
+                raise StatblockImportError("action override remove_on_hit_effect must be true")
             mechanics["on_hit_effect"] = ""
         item["description"] = _variant_attack_description(item, source_ref)
 
@@ -3046,9 +2794,7 @@ def apply_statblock_variant(
     if any(not item for item in remove_activity_keys) or len(remove_activity_keys) != len(
         set(remove_activity_keys)
     ):
-        raise StatblockImportError(
-            "remove_activities must contain unique non-empty ids or names"
-        )
+        raise StatblockImportError("remove_activities must contain unique non-empty ids or names")
     activities = list(result["content"]["activities"])
     for key in remove_activity_keys:
         matches = [
@@ -3118,9 +2864,7 @@ def apply_reviewed_statblock_fill(
         "resolution_plans",
     }
     if unknown:
-        raise StatblockImportError(
-            f"unsupported reviewed statblock fill fields: {sorted(unknown)}"
-        )
+        raise StatblockImportError(f"unsupported reviewed statblock fill fields: {sorted(unknown)}")
     declarations = fill.get("multiattack_options", [])
     additional_actions = fill.get("additional_actions", [])
     resolution_plans = fill.get("resolution_plans", [])
@@ -3156,9 +2900,7 @@ def apply_reviewed_statblock_fill(
     ]
     for declaration in resolution_plans:
         if not isinstance(declaration, dict):
-            raise StatblockImportError(
-                "each reviewed resolution plan fill must be an object"
-            )
+            raise StatblockImportError("each reviewed resolution plan fill must be an object")
         allowed = {
             "source_card_id",
             "resolution_plan",
@@ -3168,26 +2910,20 @@ def apply_reviewed_statblock_fill(
         }
         if set(declaration) - allowed:
             raise StatblockImportError(
-                "unsupported reviewed resolution plan fields: "
-                f"{sorted(set(declaration) - allowed)}"
+                f"unsupported reviewed resolution plan fields: {sorted(set(declaration) - allowed)}"
             )
         if declaration.get("default_resolver", "agent") != "agent":
-            raise StatblockImportError(
-                "reviewed resolution plan default_resolver must be agent"
-            )
+            raise StatblockImportError("reviewed resolution plan default_resolver must be agent")
         if (
             declaration.get("ruling_kind", "module_specific_procedure")
             != "module_specific_procedure"
         ):
             raise StatblockImportError(
-                "reviewed resolution plan ruling_kind must be "
-                "module_specific_procedure"
+                "reviewed resolution plan ruling_kind must be module_specific_procedure"
             )
         source_card_id = str(declaration.get("source_card_id") or "").strip()
         matching_cards = [
-            card
-            for card in content_cards
-            if str(card.get("id") or "") == source_card_id
+            card for card in content_cards if str(card.get("id") or "") == source_card_id
         ]
         if len(matching_cards) != 1:
             raise StatblockImportError(
@@ -3205,9 +2941,7 @@ def apply_reviewed_statblock_fill(
         try:
             compiled_plan = compile_resolution_plan(raw_plan)
         except ResolutionPlanCompilationError as error:
-            raise StatblockImportError(
-                f"reviewed resolution plan is invalid: {error}"
-            ) from error
+            raise StatblockImportError(f"reviewed resolution plan is invalid: {error}") from error
         if compiled_plan.source_card_id != source_card_id:
             raise StatblockImportError(
                 "reviewed resolution plan source_card_id must match its parsed card"
@@ -3217,22 +2951,17 @@ def apply_reviewed_statblock_fill(
             if is_weapon_card
             else (
                 {"feature", "trait"}
-                if str(dict(card.get("activation") or {}).get("type") or "")
-                == "passive"
+                if str(dict(card.get("activation") or {}).get("type") or "") == "passive"
                 else {"activity", "monster_action"}
             )
         )
         if compiled_plan.source_card_kind not in expected_kinds:
             raise StatblockImportError(
-                "reviewed resolution plan source_card_kind does not match its "
-                "parsed activity type"
+                "reviewed resolution plan source_card_kind does not match its parsed activity type"
             )
-        source_description = " ".join(
-            str(card.get("description") or "").split()
-        )
+        source_description = " ".join(str(card.get("description") or "").split())
         if not any(
-            " ".join(str(citation.get("source_excerpt") or "").split())
-            == source_description
+            " ".join(str(citation.get("source_excerpt") or "").split()) == source_description
             for citation in compiled_plan.citations
         ):
             raise StatblockImportError(
@@ -3258,15 +2987,12 @@ def apply_reviewed_statblock_fill(
             card["choices"] = choices
         else:
             manual_ruling = {}
-        activation = str(
-            dict(card.get("activation") or {}).get("type") or "passive"
-        )
-        if is_weapon_card and str(
-            dict(card.get("mechanics") or {}).get("on_hit_effect") or ""
-        ).strip():
-            resolved_warnings.append(
-                f"{card['name']}: on-hit effect requires DM settlement"
-            )
+        activation = str(dict(card.get("activation") or {}).get("type") or "passive")
+        if (
+            is_weapon_card
+            and str(dict(card.get("mechanics") or {}).get("on_hit_effect") or "").strip()
+        ):
+            resolved_warnings.append(f"{card['name']}: on-hit effect requires DM settlement")
         elif manual_ruling:
             resolved_warnings.append(
                 (
@@ -3290,9 +3016,7 @@ def apply_reviewed_statblock_fill(
 
     for declaration in additional_actions:
         if not isinstance(declaration, dict):
-            raise StatblockImportError(
-                "each reviewed additional action fill must be an object"
-            )
+            raise StatblockImportError("each reviewed additional action fill must be an object")
         declaration_unknown = set(declaration) - {
             "id",
             "name",
@@ -3304,26 +3028,20 @@ def apply_reviewed_statblock_fill(
         }
         if declaration_unknown:
             raise StatblockImportError(
-                "unsupported reviewed additional action fields: "
-                f"{sorted(declaration_unknown)}"
+                f"unsupported reviewed additional action fields: {sorted(declaration_unknown)}"
             )
         if declaration.get("default_resolver", "agent") != "agent":
-            raise StatblockImportError(
-                "reviewed additional action default_resolver must be agent"
-            )
+            raise StatblockImportError("reviewed additional action default_resolver must be agent")
         if (
             declaration.get("ruling_kind", "module_specific_procedure")
             != "module_specific_procedure"
         ):
             raise StatblockImportError(
-                "reviewed additional action ruling_kind must be "
-                "module_specific_procedure"
+                "reviewed additional action ruling_kind must be module_specific_procedure"
             )
         name = " ".join(str(declaration.get("name") or "").split())
         source_ref = str(declaration.get("source_ref") or "").strip()
-        source_excerpt = " ".join(
-            str(declaration.get("source_excerpt") or "").split()
-        )
+        source_excerpt = " ".join(str(declaration.get("source_excerpt") or "").split())
         reason = " ".join(str(declaration.get("reason") or "").split())
         if not name or len(name) > 200:
             raise StatblockImportError(
@@ -3341,8 +3059,7 @@ def apply_reviewed_statblock_fill(
             )
         if not source_excerpt or len(source_excerpt) > 4_000:
             raise StatblockImportError(
-                "reviewed additional action source_excerpt must contain "
-                "1 to 4000 characters"
+                "reviewed additional action source_excerpt must contain 1 to 4000 characters"
             )
         if not reason or len(reason) > 500:
             raise StatblockImportError(
@@ -3355,8 +3072,7 @@ def apply_reviewed_statblock_fill(
         )
         if weapon is None:
             raise StatblockImportError(
-                "reviewed additional action source_excerpt must contain one "
-                "parseable weapon attack"
+                "reviewed additional action source_excerpt must contain one parseable weapon attack"
             )
         parser_warning = str(weapon.pop("_parser_warning", "") or "")
         if parser_warning:
@@ -3368,18 +3084,12 @@ def apply_reviewed_statblock_fill(
                 "reviewed additional action id must match the parser-derived weapon id"
             )
         if weapon_id in weapons:
-            raise StatblockImportError(
-                "reviewed additional action duplicates a parsed weapon id"
-            )
+            raise StatblockImportError("reviewed additional action duplicates a parsed weapon id")
         result["inventory"]["items"].append(weapon)
         weapons[weapon_id] = weapon
-        on_hit_effect = str(
-            dict(weapon.get("mechanics") or {}).get("on_hit_effect") or ""
-        ).strip()
+        on_hit_effect = str(dict(weapon.get("mechanics") or {}).get("on_hit_effect") or "").strip()
         if on_hit_effect:
-            added_warnings.append(
-                f"{weapon['name']}: on-hit effect requires DM settlement"
-            )
+            added_warnings.append(f"{weapon['name']}: on-hit effect requires DM settlement")
         normalized_additional_actions.append(
             {
                 "id": weapon_id,
@@ -3406,13 +3116,10 @@ def apply_reviewed_statblock_fill(
         }
         if declaration_unknown:
             raise StatblockImportError(
-                "unsupported reviewed multiattack fill fields: "
-                f"{sorted(declaration_unknown)}"
+                f"unsupported reviewed multiattack fill fields: {sorted(declaration_unknown)}"
             )
         if declaration.get("default_resolver", "agent") != "agent":
-            raise StatblockImportError(
-                "reviewed multiattack default_resolver must be agent"
-            )
+            raise StatblockImportError("reviewed multiattack default_resolver must be agent")
         if (
             declaration.get("ruling_kind", "module_specific_procedure")
             != "module_specific_procedure"
@@ -3427,9 +3134,7 @@ def apply_reviewed_statblock_fill(
             )
         used_activity_ids.add(activity_id)
         matches = [
-            activity
-            for activity in activities
-            if str(activity.get("id") or "") == activity_id
+            activity for activity in activities if str(activity.get("id") or "") == activity_id
         ]
         if len(matches) != 1:
             raise StatblockImportError(
@@ -3439,9 +3144,7 @@ def apply_reviewed_statblock_fill(
         choices = dict(activity.get("choices") or {})
         manual_ruling = dict(choices.get("manual_ruling") or {})
         parsed_options = choices.get("multiattack_options")
-        unresolved_multiattack = (
-            manual_ruling.get("kind") == "multiattack_composition"
-        )
+        unresolved_multiattack = manual_ruling.get("kind") == "multiattack_composition"
         structured_multiattack = is_multiattack_activity(activity) and isinstance(
             parsed_options, list
         )
@@ -3449,9 +3152,7 @@ def apply_reviewed_statblock_fill(
             raise StatblockImportError(
                 "reviewed multiattack fill may target only a parsed Multiattack activity"
             )
-        source_excerpt = " ".join(
-            str(declaration.get("source_excerpt") or "").split()
-        )
+        source_excerpt = " ".join(str(declaration.get("source_excerpt") or "").split())
         source_description = " ".join(str(activity.get("description") or "").split())
         if not source_excerpt or source_excerpt != source_description:
             raise StatblockImportError(
@@ -3480,9 +3181,7 @@ def apply_reviewed_statblock_fill(
                 }
             }
             activity["mechanic_refs"] = [
-                ref
-                for ref in activity.get("mechanic_refs") or []
-                if ref != MULTIATTACK_MECHANIC_ID
+                ref for ref in activity.get("mechanic_refs") or [] if ref != MULTIATTACK_MECHANIC_ID
             ]
             normalized_declarations.append(
                 {
@@ -3497,9 +3196,7 @@ def apply_reviewed_statblock_fill(
             continue
         raw_options = declaration.get("options")
         if not isinstance(raw_options, list) or not raw_options:
-            raise StatblockImportError(
-                "reviewed multiattack options must be a non-empty list"
-            )
+            raise StatblockImportError("reviewed multiattack options must be a non-empty list")
         option_ids: set[str] = set()
         options: list[dict[str, Any]] = []
         for raw_option in raw_options:
@@ -3515,9 +3212,7 @@ def apply_reviewed_statblock_fill(
             option_ids.add(option_id)
             raw_attacks = raw_option.get("attacks")
             if not isinstance(raw_attacks, list) or not raw_attacks:
-                raise StatblockImportError(
-                    "reviewed multiattack attacks must be a non-empty list"
-                )
+                raise StatblockImportError("reviewed multiattack attacks must be a non-empty list")
             attacks: list[dict[str, Any]] = []
             total_attacks = 0
             for raw_attack in raw_attacks:
@@ -3542,9 +3237,7 @@ def apply_reviewed_statblock_fill(
                         "reviewed multiattack attack_mode must be melee or ranged"
                     )
                 mechanics = dict(weapon.get("mechanics") or {})
-                properties = {
-                    str(item).casefold() for item in mechanics.get("properties") or []
-                }
+                properties = {str(item).casefold() for item in mechanics.get("properties") or []}
                 if attack_mode != str(mechanics.get("attack_type") or "melee") and not (
                     attack_mode == "ranged" and "thrown" in properties
                 ):
@@ -3552,11 +3245,7 @@ def apply_reviewed_statblock_fill(
                         "reviewed multiattack attack_mode is incompatible with its weapon"
                     )
                 count = raw_attack.get("count")
-                if (
-                    not isinstance(count, int)
-                    or isinstance(count, bool)
-                    or not 1 <= count <= 20
-                ):
+                if not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= 20:
                     raise StatblockImportError(
                         "reviewed multiattack count must be an integer from 1 through 20"
                     )
@@ -3691,10 +3380,7 @@ def _normalize_ocr_identity_text(text: str) -> str:
             best_score, best_type = ranked_types[-1]
             runner_up_score = ranked_types[-2][0]
             if best_score >= 0.72 and best_score - runner_up_score >= 0.12:
-                normalized = (
-                    f"{identity_prefix.group(1)} {best_type}"
-                    f"{identity_prefix.group(3)}"
-                )
+                normalized = f"{identity_prefix.group(1)} {best_type}{identity_prefix.group(3)}"
     return " ".join(normalized.split())
 
 
@@ -3706,6 +3392,8 @@ def is_2014_statblock_identity_line(text: str) -> bool:
     """Return whether one OCR line is a bounded 2014 size/type identity."""
 
     return _ocr_identity_match(text) is not None
+
+
 _OCR_FIELD_LABELS = (
     "Armor Class",
     "Hit Points",
@@ -3720,9 +3408,7 @@ _OCR_FIELD_LABELS = (
     "Languages",
     "Challenge",
 )
-_OCR_ENTRY_RE = re.compile(
-    r"^([A-Z][A-Za-z0-9 '/();\-–—]{1,80})\.\s*(.*)$"
-)
+_OCR_ENTRY_RE = re.compile(r"^([A-Z][A-Za-z0-9 '/();\-–—]{1,80})\.\s*(.*)$")
 
 
 # Printed recharge qualifiers can make an otherwise ordinary action or reaction
@@ -3760,11 +3446,7 @@ def _ocr_statblock_section_heading(text: str) -> tuple[str, str] | None:
         normalized,
     )
     if action is not None:
-        qualifier = (
-            "The following actions require your bonus action."
-            if action.group(1)
-            else ""
-        )
+        qualifier = "The following actions require your bonus action." if action.group(1) else ""
         return "Actions", qualifier
     compact = re.sub(r"[^A-Z]", "", normalized.upper())
     section = {
@@ -3798,6 +3480,7 @@ def _strip_ocr_label(text: str, label: str) -> str:
     return re.sub(rf"(?i)^{re.escape(label)}\s+", "", text)
 
 
+@registered_parsing_rule("dnd.ocr.bounded_schema_field_repairs")
 def _repair_layout_ocr_text(text: str) -> str:
     """Repair only mechanically bounded OCR substitutions before statblock parsing."""
 
@@ -3810,13 +3493,9 @@ def _repair_layout_ocr_text(text: str) -> str:
         r"(?i)(?<![A-Za-z0-9])(?P<count>(?:[0-9]+|[lI]\s*[0-9]+))\s*d\s*"
         r"(?P<size>[0-9lIOS](?:\s*[0-9lIOS]){0,2})(?![A-Za-z0-9])",
         lambda match: (
-            re.sub(r"\s+", "", match.group("count")).translate(
-                _OCR_ABILITY_DIGITS
-            )
+            re.sub(r"\s+", "", match.group("count")).translate(_OCR_ABILITY_DIGITS)
             + "d"
-            + re.sub(r"\s+", "", match.group("size")).translate(
-                _OCR_ABILITY_DIGITS
-            )
+            + re.sub(r"\s+", "", match.group("size")).translate(_OCR_ABILITY_DIGITS)
         ),
         normalized,
     )
@@ -3863,11 +3542,6 @@ def _repair_layout_ocr_text(text: str) -> str:
         r"((?:(?:lawful|neutral|chaotic)\s+(?:good|neutral|evil))|neutral|"
         r"unaligned|any(?:\s+[A-Za-z-]+){0,4}\s+alignment)$",
         r"\1, \2",
-        normalized,
-    )
-    normalized = re.sub(
-        r"(?i)\b(Ignited\s+Illumination),\s+(?=As\s+a\s+bonus\s+action\b)",
-        r"\1. ",
         normalized,
     )
     normalized = re.sub(
@@ -3928,24 +3602,17 @@ def _ocr_column_split(
     width: float,
 ) -> float | None:
     ability_rows: list[list[dict[str, Any]]] = []
-    ability_blocks = [
-        block for block in blocks if _ocr_ability_tokens(block["text"]) is not None
-    ]
+    ability_blocks = [block for block in blocks if _ocr_ability_tokens(block["text"]) is not None]
     for anchor in ability_blocks:
         row = sorted(
             (
                 block
                 for block in ability_blocks
-                if abs(block["y0"] - anchor["y0"]) <= 12
-                and abs(block["y1"] - anchor["y1"]) <= 12
+                if abs(block["y0"] - anchor["y0"]) <= 12 and abs(block["y1"] - anchor["y1"]) <= 12
             ),
             key=lambda block: block["x0"],
         )
-        tokens = [
-            token
-            for block in row
-            for token in (_ocr_ability_tokens(block["text"]) or [])
-        ]
+        tokens = [token for block in row for token in (_ocr_ability_tokens(block["text"]) or [])]
         if tokens == list(_OCR_ABILITY_ORDER) and row not in ability_rows:
             ability_rows.append(row)
 
@@ -3961,27 +3628,17 @@ def _ocr_column_split(
     def structural_midpoint_fallback() -> float | None:
         midpoint = width / 2
         identities = [block for block in blocks if _ocr_identity_match(block["text"])]
-        if (
-            any(block["cx"] < midpoint for block in identities)
-            and any(block["cx"] >= midpoint for block in identities)
+        if any(block["cx"] < midpoint for block in identities) and any(
+            block["cx"] >= midpoint for block in identities
         ):
             return midpoint
         for identity in identities:
             identity_is_left = identity["cx"] < midpoint
-            same_side = [
-                block
-                for block in blocks
-                if (block["cx"] < midpoint) == identity_is_left
-            ]
-            other_side = [
-                block
-                for block in blocks
-                if (block["cx"] < midpoint) != identity_is_left
-            ]
+            same_side = [block for block in blocks if (block["cx"] < midpoint) == identity_is_left]
+            other_side = [block for block in blocks if (block["cx"] < midpoint) != identity_is_left]
             if all(
                 any(
-                    re.match(rf"(?i)^{re.escape(label)}\s+\S", block["text"])
-                    for block in same_side
+                    re.match(rf"(?i)^{re.escape(label)}\s+\S", block["text"]) for block in same_side
                 )
                 for label in ("Armor Class", "Hit Points", "Speed")
             ) and any(
@@ -4000,18 +3657,11 @@ def _ocr_column_split(
                 for block in other_side
                 if (match := re.match(r"^(\d{1,2})\.\s+", block["text"]))
             ]
-            if (
-                same_ordinals
-                and other_ordinals
-                and max(same_ordinals) + 1 == min(other_ordinals)
-            ):
+            if same_ordinals and other_ordinals and max(same_ordinals) + 1 == min(other_ordinals):
                 return midpoint
         return None
 
-    candidates = [
-        width * fraction / 100
-        for fraction in range(30, 71)
-    ]
+    candidates = [width * fraction / 100 for fraction in range(30, 71)]
     ranked: list[tuple[int, float, float]] = []
     content_top = min(block["y0"] for block in blocks)
     content_bottom = max(block["y1"] for block in blocks)
@@ -4019,24 +3669,18 @@ def _ocr_column_split(
     for split in candidates:
         if cuts_complete_ability_row(split):
             continue
-        crossing = sum(
-            1
-            for block in blocks
-            if block["x0"] < split < block["x1"]
-        )
+        crossing = sum(1 for block in blocks if block["x0"] < split < block["x1"])
         left = sum(1 for block in blocks if block["cx"] < split)
         right = len(blocks) - left
         left_blocks = [block for block in blocks if block["cx"] < split]
         right_blocks = [block for block in blocks if block["cx"] >= split]
         left_span = (
-            max(block["y1"] for block in left_blocks)
-            - min(block["y0"] for block in left_blocks)
+            max(block["y1"] for block in left_blocks) - min(block["y0"] for block in left_blocks)
             if left_blocks
             else 0.0
         )
         right_span = (
-            max(block["y1"] for block in right_blocks)
-            - min(block["y0"] for block in right_blocks)
+            max(block["y1"] for block in right_blocks) - min(block["y0"] for block in right_blocks)
             if right_blocks
             else 0.0
         )
@@ -4078,21 +3722,13 @@ def _ocr_probable_peer_heading(
     following = ordered[index + 1] if index + 1 < len(ordered) else None
     if _ocr_peer_heading(block, following):
         return True
-    if not (
-        block["text"] == block["text"].upper()
-        and 3 <= len(block["text"]) <= 80
-    ):
+    if not (block["text"] == block["text"].upper() and 3 <= len(block["text"]) <= 80):
         return False
     nearby = [
-        candidate
-        for candidate in ordered[index + 1 :]
-        if candidate["y0"] - block["y1"] <= 220
+        candidate for candidate in ordered[index + 1 :] if candidate["y0"] - block["y1"] <= 220
     ]
     return all(
-        any(
-            re.match(rf"(?i)^{re.escape(label)}\s+\S", candidate["text"])
-            for candidate in nearby
-        )
+        any(re.match(rf"(?i)^{re.escape(label)}\s+\S", candidate["text"]) for candidate in nearby)
         for label in ("Armor Class", "Hit Points", "Speed")
     )
 
@@ -4127,9 +3763,7 @@ def _ocr_decorative_heading_has_identity(
 
 
 _OCR_ABILITY_ORDER = ("STR", "DEX", "CON", "INT", "WIS", "CHA")
-_OCR_ABILITY_DIGITS = str.maketrans(
-    {"l": "1", "I": "1", "O": "0", "S": "5"}
-)
+_OCR_ABILITY_DIGITS = str.maketrans({"l": "1", "I": "1", "O": "0", "S": "5"})
 _OCR_ABILITY_SCORE_RE = re.compile(
     r"(?<![A-Za-z0-9])(?P<score>[0-9lIOS](?:\s*[0-9lIOS]){0,2})\s*[({]\s*"
     r"(?P<sign>[+\-])\s*(?P<modifier>[0-9lIOS](?:\s*[0-9lIOS])?)\s*[)}]"
@@ -4171,26 +3805,18 @@ def _ocr_ability_score_matches(
             continue
         values: list[tuple[str, str]] = []
         for match in matches:
-            score = int(
-                re.sub(r"\s+", "", match.group("score")).translate(
-                    _OCR_ABILITY_DIGITS
-                )
-            )
+            score = int(re.sub(r"\s+", "", match.group("score")).translate(_OCR_ABILITY_DIGITS))
             if preserve_source and not 1 <= score <= 30:
                 return None
             normalized_value = f"{score} ({(score - 10) // 2:+d})"
             if preserve_source:
-                source_value = (
-                    text.strip() if len(matches) == 1 else match.group(0).strip()
-                )
+                source_value = text.strip() if len(matches) == 1 else match.group(0).strip()
             else:
                 source_value = (
                     str(score)
                     + " ("
                     + match.group("sign")
-                    + re.sub(r"\s+", "", match.group("modifier")).translate(
-                        _OCR_ABILITY_DIGITS
-                    )
+                    + re.sub(r"\s+", "", match.group("modifier")).translate(_OCR_ABILITY_DIGITS)
                     + ")"
                 )
             values.append((normalized_value, source_value))
@@ -4243,8 +3869,7 @@ def _ocr_ability_table(
         len(missing) == 1
         and len(labels) == 5
         and len(set(labels)) == 5
-        and labels
-        == [ability for ability in _OCR_ABILITY_ORDER if ability != missing[0]]
+        and labels == [ability for ability in _OCR_ABILITY_ORDER if ability != missing[0]]
     )
     if labels != list(_OCR_ABILITY_ORDER) and not can_repair_one_label:
         if missing:
@@ -4281,13 +3906,9 @@ def _ocr_ability_table(
         reviewed_values[ability] = parsed[0][0]
     scores = [value for _block, values in score_blocks for value in values]
     complete_source_row = len(scores) == len(_OCR_ABILITY_ORDER)
-    fills_missing_source_cells = (
-        len(scores) + len(reviewed_values) == len(_OCR_ABILITY_ORDER)
-    )
+    fills_missing_source_cells = len(scores) + len(reviewed_values) == len(_OCR_ABILITY_ORDER)
     if not complete_source_row and not fills_missing_source_cells:
-        raise StatblockImportError(
-            "OCR statblock requires exactly six source ability scores"
-        )
+        raise StatblockImportError("OCR statblock requires exactly six source ability scores")
 
     label_by_ability: dict[str, dict[str, Any]] = {}
     for block, tokens in label_blocks:
@@ -4308,9 +3929,7 @@ def _ocr_ability_table(
                 raise StatblockImportError("reviewed OCR ability scores are ambiguous")
             ability = min(
                 available,
-                key=lambda item: abs(
-                    float(block["cx"]) - float(label_by_ability[item]["cx"])
-                ),
+                key=lambda item: abs(float(block["cx"]) - float(label_by_ability[item]["cx"])),
             )
             value, source_value = values[0]
             value_by_ability[ability] = {
@@ -4369,19 +3988,19 @@ def _ocr_field_with_continuation(
     parts = [ordered[field_index]]
     current = parts[0]
     for following in ordered[field_index + 1 :]:
-        if (
-            following["x1"] < current["x0"] - 40
-            or following["x0"] > current["x1"] + 40
-        ):
+        if following["x1"] < current["x0"] - 40 or following["x0"] > current["x1"] + 40:
             continue
         if following["y0"] - current["y1"] > 20:
             break
         if following["x0"] < current["x0"] - 8:
             break
-        if any(
-            re.match(rf"^{re.escape(other)}(?:\s|$)", following["text"])
-            for other in _OCR_FIELD_LABELS
-        ) or _ocr_ability_tokens(following["text"]) is not None:
+        if (
+            any(
+                re.match(rf"^{re.escape(other)}(?:\s|$)", following["text"])
+                for other in _OCR_FIELD_LABELS
+            )
+            or _ocr_ability_tokens(following["text"]) is not None
+        ):
             break
         if following["text"].upper() in {
             "ACTIONS",
@@ -4517,8 +4136,7 @@ def discover_2014_statblock_names_from_layout(
                 or name.endswith((".", ":"))
                 or _ocr_key(name) in {_ocr_key(label) for label in _OCR_FIELD_LABELS}
                 or not _ocr_heading_has_identity(heading, identity)
-                or min(heading["confidence"], identity["confidence"])
-                < minimum_confidence
+                or min(heading["confidence"], identity["confidence"]) < minimum_confidence
             ):
                 continue
             discovered.append(
@@ -4582,8 +4200,7 @@ def discover_2014_statblock_slots_from_layout(
         identity_indexes = [
             index
             for index, block in enumerate(ordered)
-            if _ocr_identity_match(block["text"])
-            and block["confidence"] >= minimum_confidence
+            if _ocr_identity_match(block["text"]) and block["confidence"] >= minimum_confidence
         ]
         for identity_ordinal, identity_index in enumerate(identity_indexes):
             end = (
@@ -4603,8 +4220,7 @@ def discover_2014_statblock_slots_from_layout(
             heading = ordered[identity_index - 1] if identity_index else None
             discovered_name = (
                 " ".join(str(heading["text"]).split())
-                if heading is not None
-                and _ocr_decorative_heading_has_identity(heading, identity)
+                if heading is not None and _ocr_decorative_heading_has_identity(heading, identity)
                 else None
             )
             slots.append(
@@ -4619,9 +4235,7 @@ def discover_2014_statblock_slots_from_layout(
                         identity["y1"],
                     ],
                     "discovered_name": discovered_name,
-                    "core": {
-                        label: field["text"] for label, field in core.items()
-                    },
+                    "core": {label: field["text"] for label, field in core.items()},
                     "minimum_core_confidence": min(
                         identity["confidence"],
                         *(field["confidence"] for field in core.values()),
@@ -4730,9 +4344,7 @@ def recover_2014_statblock_from_ocr(
                 f"statblock_slot {statblock_slot} is absent; page exposes {len(slots)} slots"
             )
         selected_slot = slots[statblock_slot - 1]
-        same_column_slots = [
-            item for item in slots if item["column"] == selected_slot["column"]
-        ]
+        same_column_slots = [item for item in slots if item["column"] == selected_slot["column"]]
         same_column_position = next(
             index
             for index, item in enumerate(same_column_slots)
@@ -4743,22 +4355,18 @@ def recover_2014_statblock_from_ocr(
                 same_column_slots[same_column_position + 1]["_identity_index"]
             )
             boundary_identity = next(
-                block
-                for block in blocks
-                if block["index"] == selected_slot_boundary_identity_index
+                block for block in blocks if block["index"] == selected_slot_boundary_identity_index
             )
             boundary_heading_height = max(
                 12.0,
                 float(boundary_identity["y1"] - boundary_identity["y0"]),
             )
-            boundary_heading_index = same_column_slots[
-                same_column_position + 1
-            ].get("_heading_index")
+            boundary_heading_index = same_column_slots[same_column_position + 1].get(
+                "_heading_index"
+            )
             if boundary_heading_index is not None:
                 boundary_heading = next(
-                    block
-                    for block in blocks
-                    if block["index"] == boundary_heading_index
+                    block for block in blocks if block["index"] == boundary_heading_index
                 )
                 selected_slot_boundary_y0 = float(boundary_heading["y0"]) - 10.0
             else:
@@ -4766,9 +4374,7 @@ def recover_2014_statblock_from_ocr(
                     float(boundary_identity["y0"]) - boundary_heading_height - 2.0
                 )
         identity_block = next(
-            block
-            for block in blocks
-            if block["index"] == selected_slot["_identity_index"]
+            block for block in blocks if block["index"] == selected_slot["_identity_index"]
         )
         heading_height = max(12.0, float(identity_block["y1"] - identity_block["y0"]))
         heading = {
@@ -4788,9 +4394,7 @@ def recover_2014_statblock_from_ocr(
         heading = fuzzy_headings[0]
         heading_match_mode = "bounded_structural_fuzzy"
     elif len(headings) == 1:
-        identity_candidates = [
-            block for block in blocks if _ocr_identity_match(block["text"])
-        ]
+        identity_candidates = [block for block in blocks if _ocr_identity_match(block["text"])]
         if len(identity_candidates) != 1:
             raise StatblockImportError(
                 f"OCR recovery requires one structurally unambiguous heading matching {name!r}"
@@ -4807,9 +4411,7 @@ def recover_2014_statblock_from_ocr(
             "y0": unique_identity["y0"] - heading_height - 2.0,
             "y1": unique_identity["y0"] - 2.0,
             "cx": unique_identity["cx"],
-            "confidence": min(
-                source_heading["confidence"], unique_identity["confidence"]
-            ),
+            "confidence": min(source_heading["confidence"], unique_identity["confidence"]),
         }
         blocks.append(heading)
         heading_match_mode = "source_name_unique_identity"
@@ -4869,8 +4471,7 @@ def recover_2014_statblock_from_ocr(
         )
         if section_index is not None:
             peer_before_section = any(
-                _ocr_probable_peer_heading(right_ordered, index)
-                for index in range(section_index)
+                _ocr_probable_peer_heading(right_ordered, index) for index in range(section_index)
             )
             if selected_slot is not None:
                 section_y0 = float(right_ordered[section_index]["y0"])
@@ -4890,21 +4491,16 @@ def recover_2014_statblock_from_ocr(
                     ),
                     section_index,
                 )
-                if (
-                    earliest_after_heading <= section_index
-                    and right_ordered[earliest_after_heading]["y0"]
-                    - heading["y0"]
-                    <= max(80.0, float(height) * 0.04)
-                ):
+                if earliest_after_heading <= section_index and right_ordered[
+                    earliest_after_heading
+                ]["y0"] - heading["y0"] <= max(80.0, float(height) * 0.04):
                     continuation_start = earliest_after_heading
                 continuation_end = len(right_ordered)
                 for index in range(section_index + 1, len(right_ordered)):
                     if _ocr_probable_peer_heading(right_ordered, index):
                         continuation_end = index
                         break
-                continuation_blocks = right_ordered[
-                    continuation_start:continuation_end
-                ]
+                continuation_blocks = right_ordered[continuation_start:continuation_end]
         else:
             left_ordinals = [
                 int(match.group(1))
@@ -4922,9 +4518,7 @@ def recover_2014_statblock_from_ocr(
                 and right_ordinal_indexes
                 and max(left_ordinals) + 1 == right_ordinal_indexes[0][1]
             ):
-                continuation_blocks = right_ordered[
-                    right_ordinal_indexes[0][0] :
-                ]
+                continuation_blocks = right_ordered[right_ordinal_indexes[0][0] :]
         if selected_slot_boundary_y0 is not None:
             continuation_blocks = [
                 block
@@ -4944,9 +4538,7 @@ def recover_2014_statblock_from_ocr(
         # with the decorative bottom border. Accepting that text would produce
         # a structurally valid but corrupted card, so require the caller to
         # retry the exact page through its independent OCR layout provider.
-        raise StatblockImportError(
-            "OCR statblock layout contains decorative glyph interleaving"
-        )
+        raise StatblockImportError("OCR statblock layout contains decorative glyph interleaving")
     page_furniture = [
         block
         for block in unfiltered_scoped
@@ -4969,9 +4561,7 @@ def recover_2014_statblock_from_ocr(
     ]
     page_furniture_ids = {block["index"] for block in page_furniture}
     non_furniture = [
-        block
-        for block in unfiltered_scoped
-        if block["index"] not in page_furniture_ids
+        block for block in unfiltered_scoped if block["index"] not in page_furniture_ids
     ]
     trailing_subject_headings = (
         [non_furniture[-1]]
@@ -4986,11 +4576,7 @@ def recover_2014_statblock_from_ocr(
         *page_furniture_ids,
         *(block["index"] for block in trailing_subject_headings),
     }
-    scoped = [
-        block
-        for block in unfiltered_scoped
-        if block["index"] not in excluded_ids
-    ]
+    scoped = [block for block in unfiltered_scoped if block["index"] not in excluded_ids]
     scoped = _ocr_repair_section_heading_fragments(scoped)
     normalized_text_replacements: list[dict[str, str]] = []
     for index, raw_replacement in enumerate(reviewed_text_replacements or ()):
@@ -5007,11 +4593,7 @@ def recover_2014_statblock_from_ocr(
             raise StatblockImportError(
                 f"reviewed OCR text replacement {index} is empty, unchanged, or too long"
             )
-        matches = [
-            block
-            for block in scoped
-            if " ".join(str(block["text"]).split()) == old
-        ]
+        matches = [block for block in scoped if " ".join(str(block["text"]).split()) == old]
         if len(matches) != 1:
             raise StatblockImportError(
                 f"reviewed OCR text replacement {index} must match exactly one scoped block"
@@ -5028,13 +4610,8 @@ def recover_2014_statblock_from_ocr(
     identity_source_text = str(identity["text"])
     identity_match = _ocr_identity_match(identity_source_text)
     assert identity_match is not None
-    normalized_identity = (
-        f"{identity_match.group(1)} {identity_match.group(2).strip()}"
-        + (
-            f", {identity_match.group(3).strip()}"
-            if identity_match.group(3) is not None
-            else ""
-        )
+    normalized_identity = f"{identity_match.group(1)} {identity_match.group(2).strip()}" + (
+        f", {identity_match.group(3).strip()}" if identity_match.group(3) is not None else ""
     )
     identity = {**identity, "text": normalized_identity}
 
@@ -5049,11 +4626,7 @@ def recover_2014_statblock_from_ocr(
         reviewed_ability_scores=reviewed_ability_scores,
     )
     challenge = next(
-        (
-            block
-            for block in scoped
-            if re.match(r"(?i)^Challenge\s+\S", block["text"])
-        ),
+        (block for block in scoped if re.match(r"(?i)^Challenge\s+\S", block["text"])),
         None,
     )
     detail_fields: dict[str, dict[str, Any]] = {}
@@ -5168,8 +4741,7 @@ def recover_2014_statblock_from_ocr(
             joined = f"{details[-1]} {text}"
             joined_entry = _ocr_structural_entry_match(joined)
             details[-1] = (
-                f"***{joined_entry.group(1)}.*** "
-                f"{joined_entry.group(2)}".rstrip()
+                f"***{joined_entry.group(1)}.*** {joined_entry.group(2)}".rstrip()
                 if joined_entry is not None
                 else joined
             )
@@ -5247,30 +4819,21 @@ def recover_2014_statblock_from_ocr(
             name=name,
         )
     except ValueError as error:
-        raise StatblockImportError(
-            f"OCR statblock failed D&D sheet validation: {error}"
-        ) from error
+        raise StatblockImportError(f"OCR statblock failed D&D sheet validation: {error}") from error
     critical_facts = {
         "identity": identity["text"],
-        "armor_class": _strip_ocr_label(
-            core_fields["Armor Class"]["text"], "Armor Class"
-        ),
-        "hit_points": _strip_ocr_label(
-            core_fields["Hit Points"]["text"], "Hit Points"
-        ),
+        "armor_class": _strip_ocr_label(core_fields["Armor Class"]["text"], "Armor Class"),
+        "hit_points": _strip_ocr_label(core_fields["Hit Points"]["text"], "Hit Points"),
         "speed": _strip_ocr_label(core_fields["Speed"]["text"], "Speed"),
         "abilities": {
             ability.casefold(): ability_values[ability]["text"]
             for ability in ("STR", "DEX", "CON", "INT", "WIS", "CHA")
         },
         "fields": {
-            label: _strip_ocr_label(block["text"], label)
-            for label, block in detail_fields.items()
+            label: _strip_ocr_label(block["text"], label) for label, block in detail_fields.items()
         },
         "challenge": (
-            _strip_ocr_label(challenge["text"], "Challenge")
-            if challenge is not None
-            else None
+            _strip_ocr_label(challenge["text"], "Challenge") if challenge is not None else None
         ),
     }
     return {
@@ -5303,9 +4866,7 @@ def recover_2014_statblock_from_ocr(
                         {
                             "abilities": {
                                 ability.lower(): value
-                                for ability, value in dict(
-                                    reviewed_ability_scores or {}
-                                ).items()
+                                for ability, value in dict(reviewed_ability_scores or {}).items()
                             }
                         }
                         if reviewed_ability_scores
@@ -5325,11 +4886,7 @@ def recover_2014_statblock_from_ocr(
             "fuzzy_heading_count": len(fuzzy_headings),
             "statblock_slot": statblock_slot,
             "statblock_slot_summary": (
-                {
-                    key: value
-                    for key, value in selected_slot.items()
-                    if not key.startswith("_")
-                }
+                {key: value for key, value in selected_slot.items() if not key.startswith("_")}
                 if selected_slot is not None
                 else None
             ),
@@ -5343,8 +4900,7 @@ def recover_2014_statblock_from_ocr(
                     "normalized_text": ability_values[ability]["text"],
                 }
                 for ability in _OCR_ABILITY_ORDER
-                if ability_values[ability]["source_text"]
-                != ability_values[ability]["text"]
+                if ability_values[ability]["source_text"] != ability_values[ability]["text"]
             ],
             "ability_label_repairs": [
                 {
@@ -5355,9 +4911,7 @@ def recover_2014_statblock_from_ocr(
                 if ability_labels[ability].get("inferred_from")
             ],
             "excluded_page_furniture_count": len(page_furniture),
-            "excluded_trailing_subject_heading_count": len(
-                trailing_subject_headings
-            ),
+            "excluded_trailing_subject_heading_count": len(trailing_subject_headings),
             "surrounding_prose_boundary": (
                 {
                     "text": surrounding_prose_boundary["text"],
@@ -5401,27 +4955,18 @@ def finalize_imported_actor_rulings(
         entries = list(content.get(section) or [])
         for entry in entries:
             effect = str(
-                entry.get("description")
-                or dict(entry.get("definition") or {}).get("effect")
-                or ""
+                entry.get("description") or dict(entry.get("definition") or {}).get("effect") or ""
             ).strip()
             if not effect:
                 continue
             if str(entry.get("id") or "") in settled_cards:
                 continue
-            mechanic_refs = {
-                str(item) for item in entry.get("mechanic_refs", []) if str(item)
-            }
+            mechanic_refs = {str(item) for item in entry.get("mechanic_refs", []) if str(item)}
             if mechanic_refs & settled_mechanics:
                 continue
-            if (
-                entry.get("resolution") is not None
-                or entry.get("resolution_plan") is not None
-            ):
+            if entry.get("resolution") is not None or entry.get("resolution_plan") is not None:
                 continue
-            manual_ruling = dict(
-                dict(entry.get("choices") or {}).get("manual_ruling") or {}
-            )
+            manual_ruling = dict(dict(entry.get("choices") or {}).get("manual_ruling") or {})
             if (
                 manual_ruling.get("default_resolver") == "agent"
                 and str(manual_ruling.get("source_excerpt") or "").strip()
@@ -5457,9 +5002,7 @@ def finalize_imported_actor_rulings(
                     "source_excerpt": " ".join(effect.split())[:4000],
                     "default_resolver": "agent",
                     "ruling_kind": (
-                        "generic_spell_effect"
-                        if section == "spells"
-                        else "agent_dm_adjudication"
+                        "generic_spell_effect" if section == "spells" else "agent_dm_adjudication"
                     ),
                     "policy_ref": "actor_card.import.v1",
                     "requires_external_input_only_for": [],
@@ -5477,9 +5020,7 @@ def finalize_imported_actor_rulings(
             continue
         if str(item.get("id") or "") in settled_cards:
             continue
-        mechanic_refs = {
-            str(entry) for entry in item.get("mechanic_refs", []) if str(entry)
-        }
+        mechanic_refs = {str(entry) for entry in item.get("mechanic_refs", []) if str(entry)}
         if mechanic_refs & settled_mechanics:
             continue
         if item.get("resolution_plan") is not None:
@@ -5562,9 +5103,7 @@ def parameterized_statblock_requirements(source_text: str) -> dict[str, Any] | N
     """
 
     text = str(source_text or "")
-    folded = _normalize_dependent_template_ocr_tokens(
-        " ".join(text.split()).casefold()
-    )
+    folded = _normalize_dependent_template_ocr_tokens(" ".join(text.split()).casefold())
     parameter_markers = (
         (r"\byour\s+[a-z]+\s+level\b|\byour level\b", "owner_class_level"),
         (
@@ -5603,9 +5142,7 @@ def parameterized_statblock_requirements(source_text: str) -> dict[str, Any] | N
         ),
     )
     parameters = [
-        parameter
-        for pattern, parameter in parameter_markers
-        if re.search(pattern, folded)
+        parameter for pattern, parameter in parameter_markers if re.search(pattern, folded)
     ]
     if not parameters:
         return None
@@ -5650,10 +5187,7 @@ def parameterized_statblock_requirements(source_text: str) -> dict[str, Any] | N
             ):
                 expression = " ".join(flat_core.group(group).split())
                 excerpt = f"{label} {expression}"
-                if any(
-                    re.search(pattern, excerpt.casefold())
-                    for pattern, _ in parameter_markers
-                ):
+                if any(re.search(pattern, excerpt.casefold()) for pattern, _ in parameter_markers):
                     source_expressions.append(
                         {
                             "target_path": target_path,
@@ -5680,6 +5214,8 @@ def parameterized_statblock_requirements(source_text: str) -> dict[str, Any] | N
         parameters=parameters,
         variant_options=source_variant_options,
     )
+    numeric_parameters = set(dict(solution or {}).get("numeric_parameters") or [])
+    source_owner_classes = list(dict(solution or {}).get("owner_class_names") or [])
     return {
         "schema_version": 1,
         "kind": "dependent_actor_template",
@@ -5690,6 +5226,15 @@ def parameterized_statblock_requirements(source_text: str) -> dict[str, Any] | N
         "parameters": list(dict.fromkeys(parameters)),
         "variant_options": source_variant_options,
         "instantiation_phase": "lobby_play_or_combat",
+        **(
+            {
+                "owner_class_binding": (
+                    "source_formula" if source_owner_classes else "owner_selection"
+                )
+            }
+            if "owner_class_level" in numeric_parameters
+            else {}
+        ),
         "solution": solution,
         "runtime_ready": solution is not None,
     }
@@ -5717,9 +5262,7 @@ _DEPENDENT_TEMPLATE_NUMERIC_PARAMETERS = frozenset(
 def _normalized_template_expression(value: str) -> str:
     """Normalize bounded PDF/OCR noise without changing formula meaning."""
 
-    text = _normalize_dependent_template_ocr_tokens(
-        " ".join(str(value or "").split()).casefold()
-    )
+    text = _normalize_dependent_template_ocr_tokens(" ".join(str(value or "").split()).casefold())
     replacements = {
         "intell igence": "intelligence",
         "i ntell igence": "intelligence",
@@ -5833,7 +5376,7 @@ def _compile_template_expression(source_expression: str) -> dict[str, Any] | Non
     expression = re.sub(r"\s*\(the .+? hit dice.+?\)\s*$", "", expression)
     expression = re.sub(r"\s*\(natural armor\)\s*", " ", expression).strip()
 
-    # Form-specific bases such as the summon spells in Tasha's are finite,
+    # Form-specific dependent bases are finite,
     # source-authored choices.  They become an enum, never a free-form input.
     variant_prefix = re.match(
         r"^(?P<variants>\d+ \([^)]+ only\)(?: or \d+ \([^)]+ only\))+)(?P<rest>.*)$",
@@ -5915,9 +5458,7 @@ def compile_parameterized_statblock_solution(
             "combat.proficiency_bonus",
         }:
             return None
-        formula = _compile_template_expression(
-            str(expression.get("source_expression") or "")
-        )
+        formula = _compile_template_expression(str(expression.get("source_expression") or ""))
         if formula is None:
             return None
         compiled_fields.append(
@@ -5931,9 +5472,7 @@ def compile_parameterized_statblock_solution(
         )
     if not compiled_fields:
         return None
-    numeric_parameters: set[str] = {
-        str(value) for value in parameters if str(value)
-    }
+    numeric_parameters: set[str] = {str(value) for value in parameters if str(value)}
     variants: set[str] = {str(value) for value in variant_options if str(value)}
 
     def collect(node: Mapping[str, Any]) -> None:
@@ -5960,9 +5499,7 @@ def compile_parameterized_statblock_solution(
             for expression in expressions
             for match in re.finditer(
                 r"\byour ([a-z]+) level\b",
-                _normalized_template_expression(
-                    str(expression.get("source_expression") or "")
-                ),
+                _normalized_template_expression(str(expression.get("source_expression") or "")),
             )
         }
     )
@@ -6019,6 +5556,36 @@ def dependent_actor_template_solution_errors(
         or len(owner_class_name) > 200
     ):
         errors.append("dependent actor template owner_class_name is invalid")
+    numeric_parameters = set(expected.get("numeric_parameters") or [])
+    source_owner_classes = [
+        str(value).strip()
+        for value in expected.get("owner_class_names") or []
+        if str(value).strip()
+    ]
+    owner_class_binding = requirement.get("owner_class_binding")
+    if "owner_class_level" in numeric_parameters:
+        expected_binding = (
+            "source_formula"
+            if source_owner_classes
+            else "reviewed_context"
+            if isinstance(owner_class_name, str) and owner_class_name.strip()
+            else "owner_selection"
+        )
+        if owner_class_binding != expected_binding:
+            errors.append(
+                "dependent actor template owner_class_binding does not match its source evidence"
+            )
+        if source_owner_classes and isinstance(owner_class_name, str):
+            if owner_class_name.strip().casefold() not in {
+                value.casefold() for value in source_owner_classes
+            }:
+                errors.append(
+                    "dependent actor template reviewed owner class conflicts with its formula"
+                )
+    elif owner_class_binding is not None:
+        errors.append(
+            "dependent actor template owner_class_binding requires owner_class_level"
+        )
     if requirement.get("runtime_ready") is not True:
         errors.append("dependent actor template is not runtime-ready")
     return errors
@@ -6049,12 +5616,15 @@ def _evaluate_dependent_template_formula(
         divisor = int(formula["divisor"])
         if divisor < 1:
             raise ValueError("dependent actor divisor must be positive")
-        return _evaluate_dependent_template_formula(
-            dict(formula["term"]),
-            numeric_parameters=numeric_parameters,
-            self_ability_modifiers=self_ability_modifiers,
-            template_variant=template_variant,
-        ) // divisor
+        return (
+            _evaluate_dependent_template_formula(
+                dict(formula["term"]),
+                numeric_parameters=numeric_parameters,
+                self_ability_modifiers=self_ability_modifiers,
+                template_variant=template_variant,
+            )
+            // divisor
+        )
     if operation == "scale_above":
         value = int(numeric_parameters[str(formula["parameter"])])
         return max(0, value - int(formula["baseline"])) * int(formula["per_step"])
@@ -6145,9 +5715,7 @@ def materialize_parameterized_statblock_source(
             )
         except KeyError as error:
             if not allow_self_modifier_placeholders:
-                raise ValueError(
-                    f"template needs self ability modifier {error.args[0]}"
-                ) from error
+                raise ValueError(f"template needs self ability modifier {error.args[0]}") from error
             result = 1
         if result < 0 or result > 100_000:
             raise ValueError("template formula result is outside its bounded range")
@@ -6287,9 +5855,7 @@ def apply_dependent_actor_template_variant(
 
     value = deepcopy(dict(sheet))
     solution = dict(requirement.get("solution") or {})
-    options = {
-        str(option) for option in solution.get("variant_options") or []
-    }
+    options = {str(option) for option in solution.get("variant_options") or []}
     if not options:
         if template_variant is not None:
             raise ValueError("template_variant is not accepted by this template")
@@ -6301,9 +5867,7 @@ def apply_dependent_actor_template_variant(
     restriction = re.compile(r"\((?P<labels>[^()]+?)\s+only\)", re.IGNORECASE)
 
     def available(entry: Mapping[str, Any]) -> bool:
-        text = " ".join(
-            str(entry.get(field) or "") for field in ("name", "description")
-        )
+        text = " ".join(str(entry.get(field) or "") for field in ("name", "description"))
         match = restriction.search(text)
         if match is None:
             return True

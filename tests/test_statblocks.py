@@ -14,6 +14,7 @@ from sagasmith_dnd.statblocks import (
     apply_dependent_actor_template_variant,
     apply_reviewed_statblock_fill,
     apply_statblock_variant,
+    dependent_actor_template_solution_errors,
     discover_2014_statblock_names_from_layout,
     discover_2014_statblock_slots_from_layout,
     effective_statblock_rating,
@@ -75,17 +76,14 @@ def test_parameterized_statblock_requirements_keep_companion_hp_source_bound() -
         "parameters": ["owner_class_level", "owner_intelligence_modifier"],
     }
     assert requirement["instantiation_phase"] == "lobby_play_or_combat"
+    assert requirement["owner_class_binding"] == "owner_selection"
     assert requirement["runtime_ready"] is True
     assert requirement["solution"]["numeric_parameters"] == [
         "owner_class_level",
         "owner_intelligence_modifier",
     ]
-    assert parameterized_statblock_requirements(
-        "**Hit Points** 45 (6d10 + 12)"
-    ) is None
-    assert parameterized_statblock_requirements(
-        "**Hit Points** unreadable OCR"
-    ) is None
+    assert parameterized_statblock_requirements("**Hit Points** 45 (6d10 + 12)") is None
+    assert parameterized_statblock_requirements("**Hit Points** unreadable OCR") is None
 
 
 def test_parameterized_statblock_compiles_split_ocr_formula_tokens() -> None:
@@ -120,9 +118,7 @@ def test_parameterized_statblock_compiles_half_summoner_hit_point_maximum() -> N
 
     assert requirement is not None
     assert requirement["runtime_ready"] is True
-    assert requirement["solution"]["numeric_parameters"] == [
-        "owner_hit_point_maximum"
-    ]
+    assert requirement["solution"]["numeric_parameters"] == ["owner_hit_point_maximum"]
     rendered, resolved = materialize_parameterized_statblock_source(
         source,
         requirement,
@@ -157,6 +153,7 @@ def test_parameterized_statblock_requirements_cover_numeric_owner_and_spell_form
     assert owner["source_expressions"][0]["source_expression"] == (
         "5 + your Wisdom modifier + five times your druid level"
     )
+    assert owner["owner_class_binding"] == "source_formula"
     assert summoned is not None
     assert summoned["parameters"] == [
         "owner_proficiency_bonus",
@@ -233,6 +230,22 @@ def test_parameterized_statblock_accepts_wrapped_markdown_core_field() -> None:
     assert requirement is not None
     assert requirement["runtime_ready"] is True
     assert requirement["source_expression"].endswith("your artificer level")
+    assert requirement["owner_class_binding"] == "source_formula"
+
+
+def test_dependent_actor_template_requires_explicit_owner_class_binding_policy() -> None:
+    requirement = parameterized_statblock_requirements(
+        "# Companion\n\n"
+        "**Armor Class** 13\n"
+        "**Hit Points** 5 + five times your level in this class\n"
+    )
+
+    assert requirement is not None
+    assert dependent_actor_template_solution_errors(requirement) == []
+    requirement.pop("owner_class_binding")
+    assert dependent_actor_template_solution_errors(requirement) == [
+        "dependent actor template owner_class_binding does not match its source evidence"
+    ]
 
 
 def test_parameterized_statblock_ignores_narrative_hit_point_phrases() -> None:
@@ -252,22 +265,24 @@ def test_parameterized_statblock_ignores_narrative_hit_point_phrases() -> None:
                 "equal to five times your artificer level + your Intelligence modifier"
             ),
             "source_excerpt": (
-                "Hit Points equal to five times your artificer level + your "
-                "Intelligence modifier"
+                "Hit Points equal to five times your artificer level + your Intelligence modifier"
             ),
         }
     ]
 
 
 def test_runtime_spell_level_effect_is_not_a_dependent_actor_template() -> None:
-    assert parameterized_statblock_requirements(
-        "# Abjurer\n\n"
-        "**Armor Class** 12\n"
-        "**Hit Points** 84 (13d8 + 26)\n"
-        "***Arcane Ward.*** When the abjurer casts an abjuration spell of "
-        "1st level or higher, the ward regains hit points equal to twice the "
-        "level of the spell."
-    ) is None
+    assert (
+        parameterized_statblock_requirements(
+            "# Abjurer\n\n"
+            "**Armor Class** 12\n"
+            "**Hit Points** 84 (13d8 + 26)\n"
+            "***Arcane Ward.*** When the abjurer casts an abjuration spell of "
+            "1st level or higher, the ward regains hit points equal to twice the "
+            "level of the spell."
+        )
+        is None
+    )
 
 
 def test_parameterized_statblock_solution_materializes_owner_and_self_values() -> None:
@@ -386,9 +401,7 @@ def test_finalize_imported_actor_rulings_eliminates_lazy_semantic_fill() -> None
                         "activation": {"type": "passive", "cost": 0},
                         # Accounting or other partial mechanics do not settle
                         # the source-authored outcome by themselves.
-                        "mechanic_refs": [
-                            "dnd5e.core.activity.resource_accounting"
-                        ],
+                        "mechanic_refs": ["dnd5e.core.activity.resource_accounting"],
                     }
                 ],
             },
@@ -420,9 +433,7 @@ def test_finalize_imported_actor_rulings_eliminates_lazy_semantic_fill() -> None
     assert requirement["default_resolver"] == "agent"
     assert requirement["source_excerpt"].startswith("Creatures in the source-defined")
     item = next(
-        entry
-        for entry in finalized["inventory"]["items"]
-        if entry["id"] == "strange-blade"
+        entry for entry in finalized["inventory"]["items"] if entry["id"] == "strange-blade"
     )
     assert item["ruling_requirements"][0]["ruling_kind"] == "agent_dm_adjudication"
 
@@ -433,11 +444,10 @@ def test_finalize_imported_actor_rulings_eliminates_lazy_semantic_fill() -> None
     )
     assert not engine_settled["content"]["features"][0]["ruling_requirements"]
     settled_item = next(
-        entry
-        for entry in engine_settled["inventory"]["items"]
-        if entry["id"] == "strange-blade"
+        entry for entry in engine_settled["inventory"]["items"] if entry["id"] == "strange-blade"
     )
     assert not settled_item["ruling_requirements"]
+
 
 COMMONER = """### Commoner
 
@@ -501,10 +511,10 @@ def test_layout_discovery_finds_each_column_without_prose_guesses() -> None:
     ]
 
     slots = discover_2014_statblock_slots_from_layout(layout)
-    assert [
-        (item["slot"], item["column"], item["discovered_name"])
-        for item in slots
-    ] == [(1, 0, "Tortle Druid"), (2, 1, "Tortle")]
+    assert [(item["slot"], item["column"], item["discovered_name"]) for item in slots] == [
+        (1, 0, "Tortle Druid"),
+        (2, 1, "Tortle"),
+    ]
     assert slots[1]["core"] == {
         "Armor Class": "Armor Class 17 (natural)",
         "Hit Points": "Hit Points 22 (4d8 + 4)",
@@ -555,9 +565,7 @@ def test_agent_can_name_a_structural_slot_when_the_decorative_title_is_missing()
     assert recovered["validation"]["name"] == "Nalfeshnee"
     assert recovered["validation"]["challenge_rating"] == "13"
     assert recovered["evidence"]["heading_match_mode"] == "agent_named_structural_slot"
-    assert recovered["evidence"]["statblock_slot_summary"]["identity"].startswith(
-        "Large fiend"
-    )
+    assert recovered["evidence"]["statblock_slot_summary"]["identity"].startswith("Large fiend")
 
 
 @pytest.mark.parametrize(
@@ -682,8 +690,7 @@ def test_agent_can_supply_one_source_reviewed_missing_ability_score() -> None:
             block("Challenge 3 (700 XP)", 540, 250),
             block("ACTIONS", 540, 280),
             block(
-                "Morningstar. Melee Weapon Attack: +5 to hit. "
-                "Hit: 12 (2d8 + 3) piercing damage.",
+                "Morningstar. Melee Weapon Attack: +5 to hit. Hit: 12 (2d8 + 3) piercing damage.",
                 540,
                 310,
             ),
@@ -706,9 +713,7 @@ def test_agent_can_supply_one_source_reviewed_missing_ability_score() -> None:
 
     assert recovered["critical_facts"]["abilities"]["str"] == "17 (+3)"
     assert recovered["critical_facts"]["abilities"]["dex"] == "14 (+2)"
-    assert recovered["evidence"]["reviewed_ocr_corrections"] == {
-        "abilities": {"str": "17 (+3)"}
-    }
+    assert recovered["evidence"]["reviewed_ocr_corrections"] == {"abilities": {"str": "17 (+3)"}}
 
 
 def test_agent_can_replace_named_cells_in_a_complete_ocr_ability_row() -> None:
@@ -756,9 +761,7 @@ def test_agent_can_replace_named_cells_in_a_complete_ocr_ability_row() -> None:
         "wis": "15 (+2)",
         "cha": "16 (+3)",
     }
-    assert recovered["evidence"]["reviewed_ocr_corrections"] == {
-        "abilities": {"con": "21 (+5)"}
-    }
+    assert recovered["evidence"]["reviewed_ocr_corrections"] == {"abilities": {"con": "21 (+5)"}}
 
 
 def test_agent_can_replace_one_exact_source_reviewed_ocr_line() -> None:
@@ -844,8 +847,7 @@ def test_agent_slot_uses_next_same_column_identity_as_a_hard_boundary() -> None:
             block("Challenge 1/4 (50 XP)", 250),
             block("ACTIONS", 280),
             block(
-                "Claws. Melee Weapon Attack: +3 to hit. "
-                "Hit: 6 (2d4 + 1) piercing damage.",
+                "Claws. Melee Weapon Attack: +3 to hit. Hit: 6 (2d4 + 1) piercing damage.",
                 310,
             ),
             # The decorative title is absent. Only the next structural identity
@@ -859,8 +861,7 @@ def test_agent_slot_uses_next_same_column_identity_as_a_hard_boundary() -> None:
             block("Challenge 2 (450 XP)", 478),
             block("ACTIONS", 506),
             block(
-                "Second Attack. Melee Weapon Attack: +6 to hit. "
-                "Hit: 8 (1d8 + 4) slashing damage.",
+                "Second Attack. Melee Weapon Attack: +6 to hit. Hit: 8 (1d8 + 4) slashing damage.",
                 534,
             ),
             block("Magic Sense. The creature notices nearby magic.", 118, 700),
@@ -906,8 +907,7 @@ def test_agent_slot_bounds_right_column_at_the_next_decorative_title() -> None:
             block("Challenge 13 (10,000 XP)", 250),
             block("ACTIONS", 280),
             block(
-                "Bite. Melee Weapon Attack: +11 to hit. "
-                "Hit: 17 (2d10 + 6) piercing damage.",
+                "Bite. Melee Weapon Attack: +11 to hit. Hit: 17 (2d10 + 6) piercing damage.",
                 310,
             ),
             block("LEGENDARY ACTIONS", 104, 700),
@@ -920,8 +920,7 @@ def test_agent_slot_bounds_right_column_at_the_next_decorative_title() -> None:
             # OCR can place the right-column action one pixel above its visual
             # title. It must still belong to the second card.
             block(
-                "Young Bite. Melee Weapon Attack: +7 to hit. "
-                "Hit: 15 (2d10 + 4) piercing damage.",
+                "Young Bite. Melee Weapon Attack: +7 to hit. Hit: 15 (2d10 + 4) piercing damage.",
                 349,
                 700,
             ),
@@ -957,8 +956,7 @@ def test_agent_slot_does_not_treat_an_independent_right_card_as_continuation() -
         block("Challenge 1/2 (100 XP)", 40, 250),
         block("ACTIONS", 40, 280),
         block(
-            "Bite. Melee Weapon Attack: +4 to hit. "
-            "Hit: 6 (1d8 + 2) piercing damage.",
+            "Bite. Melee Weapon Attack: +4 to hit. Hit: 6 (1d8 + 2) piercing damage.",
             40,
             310,
         ),
@@ -974,8 +972,7 @@ def test_agent_slot_does_not_treat_an_independent_right_card_as_continuation() -
         block("Challenge 1/4 (50 XP)", 700, 250),
         block("ACTIONS", 700, 280),
         block(
-            "Hooves. Melee Weapon Attack: +2 to hit. "
-            "Hit: 8 (2d4 + 3) bludgeoning damage.",
+            "Hooves. Melee Weapon Attack: +2 to hit. Hit: 8 (2d4 + 3) bludgeoning damage.",
             700,
             310,
         ),
@@ -1025,10 +1022,6 @@ def test_layout_discovery_rejects_size_word_lore_and_repairs_identity_separator(
 
     assert [item["name"] for item in discovered] == ["MORDAKHESH"]
     assert discovered[0]["identity"] == "Medium.fiend, lawful evil"
-
-
-
-
 
 
 TROLL = """## Troll
@@ -1374,9 +1367,7 @@ one target. *Hit:* 22 (5d8) damage of the type selected for this creature.
     )
 
     derived = derive_character_sheet(parsed.sheet)
-    assert [item["item_id"] for item in derived["inventory"]["weapon_attacks"]] == [
-        "shortsword"
-    ]
+    assert [item["item_id"] for item in derived["inventory"]["weapon_attacks"]] == ["shortsword"]
     orb = next(
         item
         for item in parsed.sheet["content"]["activities"]
@@ -1391,8 +1382,7 @@ one target. *Hit:* 22 (5d8) damage of the type selected for this creature.
         ),
     }
     assert (
-        "Elemental Orb (2/Day): descriptive action is not automatically settled"
-        in parsed.warnings
+        "Elemental Orb (2/Day): descriptive action is not automatically settled" in parsed.warnings
     )
 
 
@@ -1516,9 +1506,7 @@ def test_commoner_statblock_becomes_an_exact_executable_actor_sheet() -> None:
     assert derived["armor_class"] == 10
     assert derived["hit_points"]["max"] == 4
     assert derived["speed"]["walk"] == 30
-    assert derived["inventory"]["weapon_attacks"] == [
-        derived["inventory"]["weapon_attacks"][0]
-    ]
+    assert derived["inventory"]["weapon_attacks"] == [derived["inventory"]["weapon_attacks"][0]]
     club = derived["inventory"]["weapon_attacks"][0]
     assert club["item_id"] == "club"
     assert club["attack_bonus"] == 2
@@ -1629,9 +1617,7 @@ twenty sling stones.
     derived = derive_character_sheet(parsed.sheet)
     sling = derived["inventory"]["weapon_attacks"][0]
     stones = next(
-        item
-        for item in parsed.sheet["inventory"]["items"]
-        if item["kind"] == "ammunition"
+        item for item in parsed.sheet["inventory"]["items"] if item["kind"] == "ammunition"
     )
 
     assert sling["on_hit_effect"] == ""
@@ -1641,8 +1627,7 @@ twenty sling stones.
     assert stones["quantity"] == 20
     assert parsed.warnings == ()
     assert parsed.normalization_notes == (
-        "Sling: trailing ammunition inventory structured separately "
-        "from action settlement",
+        "Sling: trailing ammunition inventory structured separately from action settlement",
     )
 
 
@@ -1695,13 +1680,9 @@ one target. *Hit:* {damage} damage. {inventory}
 """,
         source_key=f"storm-kings-thunder:{name.casefold()}",
     )
-    weapon_attack = derive_character_sheet(parsed.sheet)["inventory"][
-        "weapon_attacks"
-    ][0]
+    weapon_attack = derive_character_sheet(parsed.sheet)["inventory"]["weapon_attacks"][0]
     ammunition = next(
-        item
-        for item in parsed.sheet["inventory"]["items"]
-        if item["kind"] == "ammunition"
+        item for item in parsed.sheet["inventory"]["items"] if item["kind"] == "ammunition"
     )
 
     assert weapon_attack["on_hit_effect"] == ""
@@ -1860,9 +1841,7 @@ one target. *Hit:* 11 (2d 10) force damage plus 9 (2d 8) poison damage.
     )
 
     weapon = next(
-        item
-        for item in parsed.sheet["inventory"]["items"]
-        if item["id"] == "eldritch-arrow"
+        item for item in parsed.sheet["inventory"]["items"] if item["id"] == "eldritch-arrow"
     )
     assert weapon["mechanics"]["damage_formula"] == "2d10"
     assert weapon["mechanics"]["damage_type"] == "force"
@@ -1951,16 +1930,6 @@ def test_weapon_damage_structures_short_two_handed_alternative() -> None:
     assert parsed.warnings == ()
 
 
-
-
-
-
-
-
-
-
-
-
 def test_mixed_weapon_and_special_action_multiattack_stays_a_dm_boundary() -> None:
     parsed = parse_2014_statblock(
         COMMONER.replace(
@@ -2041,13 +2010,10 @@ def test_choice_container_with_nested_attack_is_not_misparsed_as_a_weapon() -> N
     )
 
     assert not any(
-        item["name"] == "Weapon Invention"
-        for item in parsed.sheet["inventory"]["items"]
+        item["name"] == "Weapon Invention" for item in parsed.sheet["inventory"]["items"]
     )
     activity = next(
-        item
-        for item in parsed.sheet["content"]["activities"]
-        if item["name"] == "Weapon Invention"
+        item for item in parsed.sheet["content"]["activities"] if item["name"] == "Weapon Invention"
     )
     assert activity["choices"]["manual_ruling"] == {
         "kind": "descriptive_activity",
@@ -2090,7 +2056,7 @@ def test_agent_can_compile_a_custom_statblock_action_without_a_python_branch() -
                         "from the reviewed source action."
                     ),
                     "resolution_plan": {
-                            "schema_version": 2,
+                        "schema_version": 2,
                         "id": plan_id,
                         "source_card_id": activity["id"],
                         "source_card_kind": "monster_action",
@@ -2125,18 +2091,14 @@ def test_agent_can_compile_a_custom_statblock_action_without_a_python_branch() -
                                     "expression": "3d8",
                                     "damage_type": "radiant",
                                     "source": "Prismatic Pulse",
-                                    "reduction": {
-                                        "$result": "save.damage_reduction_by_actor_id"
-                                    },
+                                    "reduction": {"$result": "save.damage_reduction_by_actor_id"},
                                 },
                             },
                         ],
                         "citations": [
                             {
                                 "source": "module-review:custom-prismatic-pulse",
-                                "source_ref": {
-                                    "chunk_id": "module-chunk:prismatic-pulse"
-                                },
+                                "source_ref": {"chunk_id": "module-chunk:prismatic-pulse"},
                                 "source_excerpt": source_excerpt,
                             }
                         ],
@@ -2146,9 +2108,7 @@ def test_agent_can_compile_a_custom_statblock_action_without_a_python_branch() -
         },
     )
     compiled_activity = next(
-        item
-        for item in filled["sheet"]["content"]["activities"]
-        if item["id"] == activity["id"]
+        item for item in filled["sheet"]["content"]["activities"] if item["id"] == activity["id"]
     )
 
     assert compiled_activity["resolution_plan"]["id"] == plan_id
@@ -2166,9 +2126,7 @@ def test_agent_can_compile_a_weapon_on_hit_plan_from_the_exact_statblock_text() 
         source_key="module-review:giant-spider-web-plan",
     )
     web = next(
-        item
-        for item in parsed.sheet["inventory"]["items"]
-        if item["id"] == "web-recharge-5-6"
+        item for item in parsed.sheet["inventory"]["items"] if item["id"] == "web-recharge-5-6"
     )
     source_excerpt = web["description"]
     filled = apply_reviewed_statblock_fill(
@@ -2198,9 +2156,7 @@ def test_agent_can_compile_a_weapon_on_hit_plan_from_the_exact_statblock_text() 
                             "target": {
                                 "kind": "actor_id",
                                 "owner": "agent",
-                                "description": (
-                                    "The creature hit by the triggering web attack."
-                                ),
+                                "description": ("The creature hit by the triggering web attack."),
                             },
                         },
                         "steps": [
@@ -2238,9 +2194,7 @@ def test_agent_can_compile_a_weapon_on_hit_plan_from_the_exact_statblock_text() 
         },
     )
     compiled_web = next(
-        item
-        for item in filled["sheet"]["inventory"]["items"]
-        if item["id"] == web["id"]
+        item for item in filled["sheet"]["inventory"]["items"] if item["id"] == web["id"]
     )
 
     assert compiled_web["resolution_plan"]["source_card_kind"] == "item"
@@ -2269,9 +2223,7 @@ def test_descriptive_statblock_sections_preserve_nonstandard_action_economies() 
 """,
         source_key="module-review:descriptive-action-economies",
     )
-    activities = {
-        item["name"]: item for item in parsed.sheet["content"]["activities"]
-    }
+    activities = {item["name"]: item for item in parsed.sheet["content"]["activities"]}
 
     assert activities["Shadow Step"]["activation"] == {
         "type": "bonus_action",
@@ -2293,48 +2245,18 @@ def test_descriptive_statblock_sections_preserve_nonstandard_action_economies() 
         for item in activities.values()
         if item["name"] in {"Shadow Step", "Detect", "Falling Stones"}
     )
-    assert (
-        "Shadow Step: descriptive bonus action is not automatically settled"
-        in parsed.warnings
-    )
+    assert "Shadow Step: descriptive bonus action is not automatically settled" in parsed.warnings
     assert "Detect: descriptive special is not automatically settled" in parsed.warnings
-    assert (
-        "Falling Stones: descriptive special is not automatically settled"
-        in parsed.warnings
-    )
+    assert "Falling Stones: descriptive special is not automatically settled" in parsed.warnings
 
 
-
-
-
-
-
-
-
-
-
-
-def test_magmin_illumination_heading_repairs_only_the_bounded_ocr_comma() -> None:
+def test_entry_specific_ocr_punctuation_is_left_for_source_review() -> None:
     assert _repair_layout_ocr_text(
         "Ignited Illumination, As a bonus action, the magmin can set itself ablaze."
-    ) == (
-        "Ignited Illumination. As a bonus action, the magmin can set itself ablaze."
-    )
+    ) == ("Ignited Illumination, As a bonus action, the magmin can set itself ablaze.")
     assert _repair_layout_ocr_text("Unknown Feature, As a bonus action") == (
         "Unknown Feature, As a bonus action"
     )
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_archmage_precombat_footnote_is_not_parsed_as_a_spell_name() -> None:
@@ -2379,13 +2301,9 @@ Cantrips (at will): fire bolt, light, mage hand, prestidigitation, shocking gras
     assert "mage armor" in names
     assert all("before combat" not in name for name in names)
     spellcasting = next(
-        item
-        for item in parsed.sheet["content"]["features"]
-        if item["name"] == "Spellcasting"
+        item for item in parsed.sheet["content"]["features"] if item["name"] == "Spellcasting"
     )
     assert "casts these spells on itself before combat" in spellcasting["description"]
-
-
 
 
 def test_false_appearance_stays_descriptive_for_agent_adjudication() -> None:
@@ -2401,9 +2319,7 @@ def test_false_appearance_stays_descriptive_for_agent_adjudication() -> None:
         source_key="monster-manual-2014:gargoyle",
     )
     feature = next(
-        item
-        for item in parsed.sheet["content"]["features"]
-        if item["name"] == "False Appearance"
+        item for item in parsed.sheet["content"]["features"] if item["name"] == "False Appearance"
     )
 
     assert feature["choices"]["manual_ruling"] == {
@@ -2419,14 +2335,6 @@ def test_false_appearance_stays_descriptive_for_agent_adjudication() -> None:
     )
 
 
-
-
-
-
-
-
-
-
 def test_source_trait_with_unparsed_clause_stays_an_agent_ruling() -> None:
     parsed = parse_2014_statblock(
         KOBOLD.replace(
@@ -2436,17 +2344,11 @@ def test_source_trait_with_unparsed_clause_stays_an_agent_ruling() -> None:
         source_key="module-review:extended-pack-tactics",
     )
     feature = next(
-        item
-        for item in parsed.sheet["content"]["features"]
-        if item["name"] == "Pack Tactics"
+        item for item in parsed.sheet["content"]["features"] if item["name"] == "Pack Tactics"
     )
 
     assert feature["choices"]["manual_ruling"]["default_resolver"] == "agent"
-    assert "Pack Tactics: descriptive passive is not automatically settled" in (
-        parsed.warnings
-    )
-
-
+    assert "Pack Tactics: descriptive passive is not automatically settled" in (parsed.warnings)
 
 
 def test_effect_only_weapon_attack_preserves_web_ruling_without_fake_damage() -> None:
@@ -2516,9 +2418,7 @@ Goblins are black-hearted and gather in overwhelming numbers.
 def test_weapon_range_recovers_ocr_f_separator_inside_attack_grammar() -> None:
     source = BANDIT_CAPTAIN.replace("range 20/60 ft.", "range 20f60 ft.")
     parsed = parse_2014_statblock(source, source_key="module-review:ocr-bandit-captain")
-    dagger = next(
-        item for item in parsed.sheet["inventory"]["items"] if item["name"] == "Dagger"
-    )
+    dagger = next(item for item in parsed.sheet["inventory"]["items"] if item["name"] == "Dagger")
     attacks = {
         item["item_id"]: item
         for item in derive_character_sheet(parsed.sheet)["inventory"]["weapon_attacks"]
@@ -2534,9 +2434,7 @@ def test_weapon_range_does_not_recover_ambiguous_prose_as_separator() -> None:
         source,
         source_key="module-review:ambiguous-bandit-captain",
     )
-    dagger = next(
-        item for item in parsed.sheet["inventory"]["items"] if item["name"] == "Dagger"
-    )
+    dagger = next(item for item in parsed.sheet["inventory"]["items"] if item["name"] == "Dagger")
     attacks = {
         item["item_id"]: item
         for item in derive_character_sheet(parsed.sheet)["inventory"]["weapon_attacks"]
@@ -2544,8 +2442,6 @@ def test_weapon_range_does_not_recover_ambiguous_prose_as_separator() -> None:
 
     assert "range 20fuzzy60 ft." in dagger["description"]
     assert attacks["dagger"]["thrown_range_ft"] == {"normal": 0, "long": 0}
-
-
 
 
 def test_multiattack_parses_once_with_each_weapon_composition() -> None:
@@ -2585,10 +2481,7 @@ def test_multiattack_quantity_does_not_match_inside_creature_name() -> None:
         COMMONER.replace("### Commoner", "### Pentadrone")
         .replace(
             "###### Actions",
-            (
-                "###### Actions\n\n"
-                "***Multiattack.*** The pentadrone makes five arm attacks."
-            ),
+            ("###### Actions\n\n***Multiattack.*** The pentadrone makes five arm attacks."),
         )
         .replace("***Club***", "***Arm***"),
         source_key="monster-manual-2014:pentadrone",
@@ -2633,9 +2526,7 @@ def test_multiattack_parses_complete_melee_or_ranged_compositions() -> None:
         },
         {
             "id": "ranged",
-            "attacks": [
-                {"weapon_id": "longbow", "attack_mode": "ranged", "count": 2}
-            ],
+            "attacks": [{"weapon_id": "longbow", "attack_mode": "ranged", "count": 2}],
         },
     ]
     assert parsed.warnings == ()
@@ -2691,10 +2582,7 @@ def test_generic_multiattack_uses_only_unambiguous_compatible_weapon() -> None:
     parsed = parse_2014_statblock(
         COMMONER.replace(
             "###### Actions",
-            (
-                "###### Actions\n\n"
-                "***Multiattack***. The commoner makes two melee attacks."
-            ),
+            ("###### Actions\n\n***Multiattack***. The commoner makes two melee attacks."),
         ),
         source_key="module-review:generic-multiattack",
     )
@@ -2707,8 +2595,6 @@ def test_generic_multiattack_uses_only_unambiguous_compatible_weapon() -> None:
         }
     ]
     assert parsed.warnings == ()
-
-
 
 
 def test_agent_review_can_fill_unresolved_multiattack_without_new_text_heuristics() -> None:
@@ -2774,15 +2660,12 @@ def test_agent_review_can_fill_unresolved_multiattack_without_new_text_heuristic
         "Multiattack: Multiattack composition requires a DM ruling"
     ]
     assert filled["fill"]["multiattack_options"][0]["default_resolver"] == "agent"
-    assert filled["fill"]["multiattack_options"][0]["ruling_kind"] == (
-        "module_specific_procedure"
-    )
+    assert filled["fill"]["multiattack_options"][0]["ruling_kind"] == ("module_specific_procedure")
 
 
 def test_qualified_multiattack_keeps_source_name_and_accepts_reviewed_fill() -> None:
     source_excerpt = (
-        "The yuan-ti makes two ranged attacks or two melee attacks, "
-        "but can use its bite only once."
+        "The yuan-ti makes two ranged attacks or two melee attacks, but can use its bite only once."
     )
     qualified = COMMONER.replace("### Commoner", "### Yuan-ti Malison")
     qualified = qualified.replace(
@@ -2859,18 +2742,15 @@ def test_qualified_multiattack_keeps_source_name_and_accepts_reviewed_fill() -> 
         },
     )
 
-    assert [item["id"] for item in derive_character_sheet(filled["sheet"])[
-        "multiattack_options"
-    ]] == ["two-longbows", "bite-and-scimitar"]
+    assert [
+        item["id"] for item in derive_character_sheet(filled["sheet"])["multiattack_options"]
+    ] == ["two-longbows", "bite-and-scimitar"]
     filled_activity = next(
-        item
-        for item in filled["sheet"]["content"]["activities"]
-        if item["id"] == activity["id"]
+        item for item in filled["sheet"]["content"]["activities"] if item["id"] == activity["id"]
     )
     assert filled_activity["mechanic_refs"] == [MULTIATTACK_MECHANIC_ID]
     assert filled["resolved_warnings"] == [
-        "Multiattack (Yuan-ti Form Only): "
-        "Multiattack composition requires a DM ruling"
+        "Multiattack (Yuan-ti Form Only): Multiattack composition requires a DM ruling"
     ]
 
 
@@ -2935,9 +2815,7 @@ def test_agent_review_can_confirm_parser_recognized_multiattack() -> None:
         source_key="module-review:agent-confirmed-captain",
     )
     multiattack = next(
-        item
-        for item in parsed.sheet["content"]["activities"]
-        if item["name"] == "Multiattack"
+        item for item in parsed.sheet["content"]["activities"] if item["name"] == "Multiattack"
     )
 
     filled = apply_reviewed_statblock_fill(
@@ -2957,13 +2835,12 @@ def test_agent_review_can_confirm_parser_recognized_multiattack() -> None:
         },
     )
 
-    assert derive_character_sheet(filled["sheet"])["multiattack_options"] == (
-        derive_character_sheet(parsed.sheet)["multiattack_options"]
+    assert (
+        derive_character_sheet(filled["sheet"])["multiattack_options"]
+        == (derive_character_sheet(parsed.sheet)["multiattack_options"])
     )
     assert filled["resolved_warnings"] == []
     assert filled["fill"]["multiattack_options"][0]["default_resolver"] == "agent"
-
-
 
 
 def test_agent_reviewed_additional_action_rejects_unmanaged_or_duplicate_actions() -> None:
@@ -3001,9 +2878,7 @@ def test_agent_review_can_keep_custom_multiattack_as_agent_ruling() -> None:
         source_key="module-review:agent-ruled-captain",
     )
     multiattack = next(
-        item
-        for item in parsed.sheet["content"]["activities"]
-        if item["name"] == "Multiattack"
+        item for item in parsed.sheet["content"]["activities"] if item["name"] == "Multiattack"
     )
 
     filled = apply_reviewed_statblock_fill(
@@ -3025,9 +2900,7 @@ def test_agent_review_can_keep_custom_multiattack_as_agent_ruling() -> None:
 
     assert derive_character_sheet(filled["sheet"])["multiattack_options"] == []
     retained = next(
-        item
-        for item in filled["sheet"]["content"]["activities"]
-        if item["id"] == multiattack["id"]
+        item for item in filled["sheet"]["content"]["activities"] if item["id"] == multiattack["id"]
     )
     assert retained["choices"]["manual_ruling"] == {
         "kind": "multiattack_composition",
@@ -3036,9 +2909,7 @@ def test_agent_review_can_keep_custom_multiattack_as_agent_ruling() -> None:
     }
     assert retained["mechanic_refs"] == []
     assert filled["resolved_warnings"] == []
-    assert filled["added_warnings"] == [
-        "Multiattack: Multiattack composition requires a DM ruling"
-    ]
+    assert filled["added_warnings"] == ["Multiattack: Multiattack composition requires a DM ruling"]
     assert filled["fill"]["multiattack_options"][0]["resolution"] == "agent_ruling"
 
 
@@ -3048,9 +2919,7 @@ def test_agent_ruling_multiattack_rejects_structured_options() -> None:
         source_key="module-review:invalid-agent-ruling-captain",
     )
     multiattack = next(
-        item
-        for item in parsed.sheet["content"]["activities"]
-        if item["name"] == "Multiattack"
+        item for item in parsed.sheet["content"]["activities"] if item["name"] == "Multiattack"
     )
 
     with pytest.raises(StatblockImportError, match="must not contain options"):
@@ -3070,15 +2939,6 @@ def test_agent_ruling_multiattack_rejects_structured_options() -> None:
         )
 
 
-
-
-
-
-
-
-
-
-
 def test_source_parry_rejects_mismatched_requirement_subject() -> None:
     parsed = parse_2014_statblock(
         BANDIT_CAPTAIN.replace(
@@ -3090,16 +2950,10 @@ def test_source_parry_rejects_mismatched_requirement_subject() -> None:
         ),
         source_key="module-review:mismatched-parry-subject",
     )
-    parry = next(
-        item
-        for item in parsed.sheet["content"]["activities"]
-        if item["name"] == "Parry"
-    )
+    parry = next(item for item in parsed.sheet["content"]["activities"] if item["name"] == "Parry")
 
     assert parry["choices"]["manual_ruling"]["default_resolver"] == "agent"
     assert "Parry: descriptive reaction is not automatically settled" in parsed.warnings
-
-
 
 
 def test_source_parry_keeps_unparsed_wielded_shield_extension_for_agent() -> None:
@@ -3110,16 +2964,10 @@ def test_source_parry_keeps_unparsed_wielded_shield_extension_for_agent() -> Non
         ),
         source_key="module-review:extended-parry-shield",
     )
-    parry = next(
-        item
-        for item in parsed.sheet["content"]["activities"]
-        if item["name"] == "Parry"
-    )
+    parry = next(item for item in parsed.sheet["content"]["activities"] if item["name"] == "Parry")
 
     assert parry["choices"]["manual_ruling"]["default_resolver"] == "agent"
     assert "Parry: descriptive reaction is not automatically settled" in parsed.warnings
-
-
 
 
 def test_reaction_defense_with_unparsed_clause_stays_an_agent_ruling() -> None:
@@ -3131,9 +2979,7 @@ def test_reaction_defense_with_unparsed_clause_stays_an_agent_ruling() -> None:
         source_key="module-review:extended-parry",
     )
     reaction = next(
-        item
-        for item in parsed.sheet["content"]["activities"]
-        if item["name"] == "Parry"
+        item for item in parsed.sheet["content"]["activities"] if item["name"] == "Parry"
     )
 
     assert reaction["choices"]["manual_ruling"]["default_resolver"] == "agent"
@@ -3273,9 +3119,7 @@ Cantrips (at will): chill touch, mage hand
     assert derived["multiattack_options"] == [
         {
             "id": "melee",
-            "attacks": [
-                {"weapon_id": "silvered-skull-flail", "attack_mode": "melee", "count": 2}
-            ],
+            "attacks": [{"weapon_id": "silvered-skull-flail", "attack_mode": "melee", "count": 2}],
         }
     ]
     assert parsed.warnings == ()
@@ -3314,9 +3158,7 @@ one target. *Hit:* 3 (1d6) bludgeoning damage.
     )
 
     assert parsed.spellcasting is not None
-    assert [item["name"] for item in parsed.spellcasting["spells"]] == [
-        "globe of invulnerability"
-    ]
+    assert [item["name"] for item in parsed.spellcasting["spells"]] == ["globe of invulnerability"]
 
 
 def test_spellcasting_preserves_source_qualifier_without_changing_spell_identity() -> None:
@@ -3415,10 +3257,7 @@ At will: animal friendship (snakes only)
         if item["name"] == "Innate Spellcasting (Yuan-ti Form Only)"
     )
     assert "manual_ruling" not in feature["choices"]
-    assert not any(
-        warning.startswith("Innate Spellcasting")
-        for warning in parsed.warnings
-    )
+    assert not any(warning.startswith("Innate Spellcasting") for warning in parsed.warnings)
 
 
 def test_statblock_weapon_preserves_additional_damage_and_on_hit_ruling() -> None:
@@ -3460,9 +3299,7 @@ turn undead.
         }
     ]
     assert attack["on_hit_effect"].startswith("Until the end of the target's next turn")
-    assert parsed.warnings == (
-        "Silvered Skull Flail: on-hit effect requires DM settlement",
-    )
+    assert parsed.warnings == ("Silvered Skull Flail: on-hit effect requires DM settlement",)
 
 
 def test_unstructured_statblock_passive_is_an_agent_ruling() -> None:
@@ -3496,9 +3333,7 @@ extra 9 (2d8) damage to the target.
     )
 
     feature = next(
-        item
-        for item in parsed.sheet["content"]["features"]
-        if item["id"] == "dive-attack-passive"
+        item for item in parsed.sheet["content"]["features"] if item["id"] == "dive-attack-passive"
     )
     assert feature["choices"]["manual_ruling"] == {
         "kind": "descriptive_passive",
@@ -3509,9 +3344,7 @@ extra 9 (2d8) damage to the target.
             "an extra 9 (2d8) damage to the target."
         ),
     }
-    assert parsed.warnings == (
-        "Dive Attack: descriptive passive is not automatically settled",
-    )
+    assert parsed.warnings == ("Dive Attack: descriptive passive is not automatically settled",)
 
 
 def test_source_bound_variant_can_apply_common_module_instance_changes() -> None:
@@ -3564,11 +3397,7 @@ def test_source_bound_variant_can_apply_common_module_instance_changes() -> None
     assert sheet["traits"]["senses"]["darkvision"] == 60
     assert sheet["traits"]["languages"] == ["Common", "Elvish"]
     assert sheet["traits"]["condition_immunities"] == ["poisoned", "exhaustion"]
-    feature = next(
-        item
-        for item in sheet["content"]["features"]
-        if item["id"] == "last-defiance"
-    )
+    feature = next(item for item in sheet["content"]["features"] if item["id"] == "last-defiance")
     assert feature["description"].startswith("When reduced to 0 hit points")
     assert feature["choices"] == {}
     assert feature["mechanic_refs"] == []
@@ -3642,10 +3471,7 @@ def test_source_bound_variant_can_replace_ranged_attack_damage_and_range() -> No
     assert attack["range_ft"] == {"normal": 30, "long": 120}
     assert attack["damage_expression"] == "3d6 + 7"
     assert [
-        {
-            key: part[key]
-            for key in ("damage_formula", "damage_bonus", "damage_type")
-        }
+        {key: part[key] for key in ("damage_formula", "damage_bonus", "damage_type")}
         for part in attack["additional_damage"]
     ] == [
         {
@@ -3654,11 +3480,7 @@ def test_source_bound_variant_can_replace_ranged_attack_damage_and_range() -> No
             "damage_type": "fire",
         }
     ]
-    item = next(
-        item
-        for item in sheet["inventory"]["items"]
-        if item["id"] == "molten-iron"
-    )
+    item = next(item for item in sheet["inventory"]["items"] if item["id"] == "molten-iron")
     assert "range 30/120 ft." in item["description"]
     assert "3d6 + 7 bludgeoning damage plus 4d10 fire damage" in item["description"]
 
@@ -3740,16 +3562,14 @@ def test_source_bound_variant_can_apply_a_complete_spellcaster_instance() -> Non
                     "id": "halfling-nimbleness",
                     "name": "Halfling Nimbleness",
                     "description": (
-                        "The actor can move through the space of a Medium or "
-                        "larger creature."
+                        "The actor can move through the space of a Medium or larger creature."
                     ),
                 },
                 {
                     "id": "brave",
                     "name": "Brave",
                     "description": (
-                        "The actor has advantage on saving throws against being "
-                        "frightened."
+                        "The actor has advantage on saving throws against being frightened."
                     ),
                 },
             ],
@@ -3766,16 +3586,12 @@ def test_source_bound_variant_can_apply_a_complete_spellcaster_instance() -> Non
         "animate-dead",
         "blight",
     }
-    assert all(
-        slot["value"] == 0
-        for slot in result["spellcasting"]["spell_slots"].values()
-    )
-    assert {
-        item["id"] for item in result["content"]["features"]
-    } >= {"halfling-nimbleness", "brave"}
-    assert {
-        item["id"] for item in result["content"]["spells"]
-    } == {"animate-dead", "blight"}
+    assert all(slot["value"] == 0 for slot in result["spellcasting"]["spell_slots"].values())
+    assert {item["id"] for item in result["content"]["features"]} >= {
+        "halfling-nimbleness",
+        "brave",
+    }
+    assert {item["id"] for item in result["content"]["spells"]} == {"animate-dead", "blight"}
 
 
 def test_source_bound_variant_can_remove_confiscated_gear_and_dependent_activities() -> None:
@@ -3850,10 +3666,7 @@ damage on a successful one.
 
     sheet = apply_statblock_variant(parsed.sheet, variant)
     derived = derive_character_sheet(sheet)
-    attacks = {
-        attack["item_id"]: attack
-        for attack in derived["inventory"]["weapon_attacks"]
-    }
+    attacks = {attack["item_id"]: attack for attack in derived["inventory"]["weapon_attacks"]}
 
     assert sheet["combat"]["hp"] == {"value": 50, "max": 50, "temp": 0}
     assert effective_statblock_rating(
@@ -4049,9 +3862,7 @@ def test_unresolved_multiattack_produces_one_specific_warning() -> None:
         source_key="module-review:commanding-commoner",
     )
 
-    assert parsed.warnings == (
-        "Multiattack: Multiattack composition requires a DM ruling",
-    )
+    assert parsed.warnings == ("Multiattack: Multiattack composition requires a DM ruling",)
 
 
 def test_layout_ocr_recovers_one_statblock_without_image_reasoning() -> None:
@@ -4196,9 +4007,7 @@ def test_layout_ocr_recovers_one_statblock_without_image_reasoning() -> None:
             "Saving Throws": "Dex +5, Con +11, Wis +7, Cha +9",
             "Skills": "Perception +12, Stealth +5",
             "Damage Immunities": "lightning",
-            "Senses": (
-                "blindsight 60 ft., darkvision 120 ft., passive Perception 22"
-            ),
+            "Senses": ("blindsight 60 ft., darkvision 120 ft., passive Perception 22"),
             "Languages": "Common, Draconic",
         },
         "challenge": "16 (15,000 XP)",
@@ -4210,9 +4019,7 @@ def test_layout_ocr_recovers_one_statblock_without_image_reasoning() -> None:
     assert "ADULT BLUE DRAGONS" not in recovered["normalized_content"]
     assert "\n\n291" not in recovered["normalized_content"]
 
-    constitution = next(
-        item for item in layout["blocks"] if item["text"] == "23 (+6)"
-    )
+    constitution = next(item for item in layout["blocks"] if item["text"] == "23 (+6)")
     constitution["text"] = "233 (+6)"
     with pytest.raises(
         StatblockImportError,
@@ -4221,9 +4028,9 @@ def test_layout_ocr_recovers_one_statblock_without_image_reasoning() -> None:
         recover_2014_statblock_from_ocr(layout, name="Adult Blue Dragon")
     constitution["text"] = "23 (+6)"
 
-    next(
-        item for item in layout["blocks"] if item["text"].startswith("Challenge ")
-    )["confidence"] = 0.5
+    next(item for item in layout["blocks"] if item["text"].startswith("Challenge "))[
+        "confidence"
+    ] = 0.5
     with pytest.raises(
         StatblockImportError,
         match="low-confidence identity or core combat fields",
@@ -4305,6 +4112,7 @@ def test_layout_ocr_separates_asymmetric_same_name_lore_column() -> None:
     assert "Wisdom and Charisma saves" in recovered["normalized_content"]
     assert "This is lore" not in recovered["normalized_content"]
 
+
 def test_layout_recovery_accepts_unaligned_cards_and_grouped_ability_cells() -> None:
     def block(text: str, x0: int, y0: int, x1: int, y1: int) -> dict[str, object]:
         return {
@@ -4347,9 +4155,9 @@ def test_layout_recovery_accepts_unaligned_cards_and_grouped_ability_cells() -> 
         ],
     }
 
-    assert [
-        item["name"] for item in discover_2014_statblock_names_from_layout(layout)
-    ] == ["TINY SERVANT"]
+    assert [item["name"] for item in discover_2014_statblock_names_from_layout(layout)] == [
+        "TINY SERVANT"
+    ]
 
     recovered = recover_2014_statblock_from_ocr(layout, name="Tiny Servant")
 
@@ -4365,9 +4173,7 @@ def test_layout_recovery_accepts_unaligned_cards_and_grouped_ability_cells() -> 
         "cha": "1 (-5)",
     }
     assert "Talons" not in recovered["normalized_content"]
-    assert recovered["evidence"]["surrounding_prose_boundary"]["text"].startswith(
-        "Talons."
-    )
+    assert recovered["evidence"]["surrounding_prose_boundary"]["text"].startswith("Talons.")
 
 
 def test_layout_recovery_preserves_and_validates_dependent_hit_point_formula() -> None:
@@ -4429,12 +4235,11 @@ def test_layout_recovery_preserves_and_validates_dependent_hit_point_formula() -
 
 
 def test_layout_ocr_repairs_only_bounded_weapon_entry_underscore() -> None:
-    assert _repair_layout_ocr_text(
-        "Slam_ Melee Weapon Attack: +5 to hit, reach 5 ft., one target."
-    ) == "Slam. Melee Weapon Attack: +5 to hit, reach 5 ft., one target."
-    assert _repair_layout_ocr_text("A line_with an underscore") == (
-        "A line_with an underscore"
+    assert (
+        _repair_layout_ocr_text("Slam_ Melee Weapon Attack: +5 to hit, reach 5 ft., one target.")
+        == "Slam. Melee Weapon Attack: +5 to hit, reach 5 ft., one target."
     )
+    assert _repair_layout_ocr_text("A line_with an underscore") == ("A line_with an underscore")
     assert _repair_layout_ocr_text("Smallf ey") == "Small fey"
     assert _repair_layout_ocr_text("Smallest objects") == "Smallest objects"
     assert _repair_layout_ocr_text("Languagesбк") == "Languages -"
@@ -4448,12 +4253,11 @@ def test_layout_ocr_repairs_only_bounded_weapon_entry_underscore() -> None:
     assert _repair_layout_ocr_text("\u2013 creature can move") == "\u2013 creature can move"
     assert _repair_layout_ocr_text("8 (-1") == "8 (-1)"
     assert _repair_layout_ocr_text("8 (-1 point") == "8 (-1 point"
-    assert _repair_layout_ocr_text("Hit Points 1 9 (3d8 + 6)") == (
-        "Hit Points 19 (3d8 + 6)"
+    assert _repair_layout_ocr_text("Hit Points 1 9 (3d8 + 6)") == ("Hit Points 19 (3d8 + 6)")
+    assert (
+        _repair_layout_ocr_text("Senses truesight 1 20 ft., passive Perception 1 5")
+        == "Senses truesight 120 ft., passive Perception 15"
     )
-    assert _repair_layout_ocr_text(
-        "Senses truesight 1 20 ft., passive Perception 1 5"
-    ) == "Senses truesight 120 ft., passive Perception 15"
     assert _repair_layout_ocr_text("Hit: 19 (3d 1 2) radiant damage") == (
         "Hit: 19 (3d12) radiant damage"
     )
@@ -4531,9 +4335,7 @@ def test_layout_recovery_repairs_only_redundant_ability_modifier_ocr(
         "normalized_text": expected,
     }
     if source_value == "5(3)":
-        layout["blocks"] = [
-            item for item in layout["blocks"] if item["text"] != "INT"
-        ]
+        layout["blocks"] = [item for item in layout["blocks"] if item["text"] != "INT"]
         repaired_label = recover_2014_statblock_from_ocr(layout, name="Deer")
         assert repaired_label["critical_facts"]["abilities"]["int"] == "2 (-4)"
         assert repaired_label["evidence"]["ability_label_repairs"] == [
@@ -4562,9 +4364,7 @@ def test_layout_recovery_ignores_one_edge_glyph_around_an_ability_score(
 
 
 def test_layout_recovery_joins_spaced_digits_inside_explicit_ability_cells() -> None:
-    parsed = _ocr_ability_score_matches(
-        "1 7 (+3) 1 5 (+2) 14 (+2) 1 0 (+O) 1 5 (+2) 11 (+O)"
-    )
+    parsed = _ocr_ability_score_matches("1 7 (+3) 1 5 (+2) 14 (+2) 1 0 (+O) 1 5 (+2) 11 (+O)")
 
     assert parsed is not None
     assert [value for value, _source in parsed[0]] == [
@@ -4631,9 +4431,7 @@ def test_layout_recovery_joins_split_weapon_attack_marker() -> None:
     recovered = recover_2014_statblock_from_ocr(layout, name="Drow Scout")
 
     assert "***Shortsword.*** Melee Weapon Attack:" in recovered["normalized_content"]
-    assert "***Web (Scout Form Only; Recharge 5-6).***" in recovered[
-        "normalized_content"
-    ]
+    assert "***Web (Scout Form Only; Recharge 5-6).***" in recovered["normalized_content"]
     assert recovered["critical_facts"]["abilities"]["cha"] == "14 (+2)"
     assert recovered["evidence"]["ability_modifier_repairs"] == [
         {
@@ -4688,10 +4486,7 @@ def test_layout_column_split_does_not_cut_one_six_ability_row() -> None:
                 (label, 30.0 + index * 70, 70.0 + index * 70, 145.0)
                 for index, label in enumerate(("STR", "DEX", "CON", "INT", "WIS", "CHA"))
             ],
-            *[
-                ("10 (+0)", 25.0 + index * 70, 80.0 + index * 70, 165.0)
-                for index in range(6)
-            ],
+            *[("10 (+0)", 25.0 + index * 70, 80.0 + index * 70, 165.0) for index in range(6)],
             ("Senses passive Perception 10", 30.0, 250.0, 200.0),
             ("Languages Common", 30.0, 180.0, 220.0),
             ("Challenge 0 (10 XP)", 30.0, 200.0, 240.0),
@@ -4915,15 +4710,14 @@ def test_layout_recovery_uses_one_structural_near_heading_and_numeric_s() -> Non
         "necrotic; bludgeoning, piercing, and slashing from nonmagical attacks"
     )
     assert "## Actions" in recovered["normalized_content"]
-    assert "Spellcasting.*** Jarad is a 10th-level spellcaster" in recovered[
-        "normalized_content"
-    ]
+    assert "Spellcasting.*** Jarad is a 10th-level spellcaster" in recovered["normalized_content"]
     assert "Multiattack" in recovered["normalized_content"]
     assert "one Medium or smaller creature. Hit:" in recovered["normalized_content"]
     assert "## Legendary Actions" in recovered["normalized_content"]
-    assert "***Instinctive Charm (Recharges after the Enchanter Casts an " in recovered[
-        "normalized_content"
-    ]
+    assert (
+        "***Instinctive Charm (Recharges after the Enchanter Casts an "
+        in recovered["normalized_content"]
+    )
     assert "***The attacker must make" not in recovered["normalized_content"]
     assert recovered["evidence"]["heading"] == "JARAD VOD SAVO"
     assert recovered["evidence"]["heading_match_mode"] == "bounded_structural_fuzzy"
@@ -5036,7 +4830,5 @@ def test_layout_recovery_binds_source_name_to_one_unique_unheaded_card() -> None
     recovered = recover_2014_statblock_from_ocr(layout, name="Radiant Idol")
 
     assert recovered["critical_facts"]["identity"] == "Large celestial, lawful evil"
-    assert recovered["evidence"]["heading_match_mode"] == (
-        "source_name_unique_identity"
-    )
+    assert recovered["evidence"]["heading_match_mode"] == ("source_name_unique_identity")
     assert "***Flail.***" in recovered["normalized_content"]

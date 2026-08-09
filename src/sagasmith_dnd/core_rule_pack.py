@@ -115,15 +115,9 @@ _2024_CATEGORY_CITATIONS = {
 }
 
 _2024_BOUNDARY_CITATIONS = {
-    "dnd5e.core.weapon.mastery": (
-        "bundled:srd2024/DND5eSRD_087-103.md#mastery-properties"
-    ),
-    "dnd5e.core.heroic_inspiration": (
-        "bundled:srd2024/DND5eSRD_176-191.md#heroic-inspiration"
-    ),
-    "dnd5e.core.activity.recharge": (
-        "bundled:srd2024/DND5eSRD_253-272.md#limited-usage"
-    ),
+    "dnd5e.core.weapon.mastery": ("bundled:srd2024/DND5eSRD_087-103.md#mastery-properties"),
+    "dnd5e.core.heroic_inspiration": ("bundled:srd2024/DND5eSRD_176-191.md#heroic-inspiration"),
+    "dnd5e.core.activity.recharge": ("bundled:srd2024/DND5eSRD_253-272.md#limited-usage"),
     "dnd5e.core.rest.arcane_recovery": (
         "bundled:srd2024/DND5eSRD_077-086.md#level-1-arcane-recovery"
     ),
@@ -139,9 +133,7 @@ _2024_BOUNDARY_CITATIONS = {
     "dnd5e.core.activity.divine_spark": (
         "bundled:srd2024/DND5eSRD_036-046.md#level-2-channel-divinity"
     ),
-    "dnd5e.core.activity.sear_undead": (
-        "bundled:srd2024/DND5eSRD_036-046.md#level-5-sear-undead"
-    ),
+    "dnd5e.core.activity.sear_undead": ("bundled:srd2024/DND5eSRD_036-046.md#level-5-sear-undead"),
     "dnd5e.core.activity.preserve_life": (
         "bundled:srd2024/DND5eSRD_036-046.md#level-3-preserve-life"
     ),
@@ -151,30 +143,16 @@ _2024_BOUNDARY_CITATIONS = {
     "dnd5e.core.check.jack_of_all_trades": (
         "bundled:srd2024/DND5eSRD_019-035.md#level-2-jack-of-all-trades"
     ),
-    "dnd5e.core.attack.sneak_attack": (
-        "bundled:srd2024/DND5eSRD_047-063.md#level-1-sneak-attack"
-    ),
-    "dnd5e.core.save.evasion": (
-        "bundled:srd2024/DND5eSRD_047-063.md#level-7-evasion"
-    ),
-    "dnd5e.core.spell.pact_magic": (
-        "bundled:srd2024/DND5eSRD_064-076.md#level-1-pact-magic"
-    ),
+    "dnd5e.core.attack.sneak_attack": ("bundled:srd2024/DND5eSRD_047-063.md#level-1-sneak-attack"),
+    "dnd5e.core.save.evasion": ("bundled:srd2024/DND5eSRD_047-063.md#level-7-evasion"),
+    "dnd5e.core.spell.pact_magic": ("bundled:srd2024/DND5eSRD_064-076.md#level-1-pact-magic"),
     "dnd5e.core.spell.spellbook_copy": (
         "bundled:srd2024/DND5eSRD_077-086.md#expanding-and-replacing-a-spellbook"
     ),
-    "dnd5e.core.spell.fly": (
-        "bundled:srd2024/DND5eSRD_121-137.md#fly"
-    ),
-    "dnd5e.core.spell.invisibility": (
-        "bundled:srd2024/DND5eSRD_138-154.md#invisibility"
-    ),
-    "dnd5e.core.spell.hypnotic_pattern": (
-        "bundled:srd2024/DND5eSRD_138-154.md#hypnotic-pattern"
-    ),
-    "dnd5e.core.action.multiattack_choice": (
-        "bundled:srd2024/DND5eSRD_253-272.md#monster-actions"
-    ),
+    "dnd5e.core.spell.fly": ("bundled:srd2024/DND5eSRD_121-137.md#fly"),
+    "dnd5e.core.spell.invisibility": ("bundled:srd2024/DND5eSRD_138-154.md#invisibility"),
+    "dnd5e.core.spell.hypnotic_pattern": ("bundled:srd2024/DND5eSRD_138-154.md#hypnotic-pattern"),
+    "dnd5e.core.action.multiattack_choice": ("bundled:srd2024/DND5eSRD_253-272.md#monster-actions"),
     "dnd5e.core.spell.structured_resolution": (
         "bundled:srd2024/DND5eSRD_104-120.md#casting-spells"
     ),
@@ -184,9 +162,7 @@ _2024_BOUNDARY_CITATIONS = {
     "dnd5e.core.mcp.shield_attack_reaction_atomicity": (
         "bundled:srd2024/DND5eSRD_155-175.md#shield"
     ),
-    "dnd5e.core.mcp.magic_missile_atomicity": (
-        "bundled:srd2024/DND5eSRD_138-154.md#magic-missile"
-    ),
+    "dnd5e.core.mcp.magic_missile_atomicity": ("bundled:srd2024/DND5eSRD_138-154.md#magic-missile"),
 }
 
 
@@ -286,10 +262,7 @@ BOUNDARIES = (
         "dnd5e.core.activity.recharge",
         ("2014", "2024"),
         "activities.recharge_activities_at_turn_start",
-        (
-            "tests/test_activities.py::"
-            "test_recharge_activities_roll_only_while_unavailable",
-        ),
+        ("tests/test_activities.py::test_recharge_activities_roll_only_while_unavailable",),
         "rulebook:mm2014/introduction/limited-usage#recharge-x-y",
     ),
     CoreBoundary(
@@ -400,10 +373,7 @@ BOUNDARIES = (
         "dnd5e.core.check.group",
         ("2014",),
         "combat_engine.resolve_actor_group_check",
-        (
-            "tests/test_combat_engine.py::"
-            "test_2014_group_check_succeeds_when_at_least_half_succeed",
-        ),
+        ("tests/test_combat_engine.py::test_2014_group_check_succeeds_when_at_least_half_succeed",),
         "bundled:srd2014/06_Gameplay/Using_Ability_Scores.md#group-checks",
     ),
     CoreBoundary(
@@ -614,10 +584,7 @@ BOUNDARIES = (
     CoreBoundary(
         "dnd5e.core.spell.shield",
         ("2014", "2024"),
-        (
-            "spells.is_core_shield_spell|available_shield_cast_options|"
-            "consume_shield_reaction"
-        ),
+        ("spells.is_core_shield_spell|available_shield_cast_options|consume_shield_reaction"),
         (
             "tests/test_spells.py::test_shield_reaction_pays_slot_and_expires_at_turn_start",
             "tests/test_spells.py::"
@@ -664,8 +631,7 @@ BOUNDARIES = (
             "character_schema.derive_character_sheet"
         ),
         (
-            "tests/test_spells.py::"
-            "test_fly_applies_willing_target_speed_and_tracks_concentration",
+            "tests/test_spells.py::test_fly_applies_willing_target_speed_and_tracks_concentration",
             "tests/test_spells.py::"
             "test_fly_upcast_target_limit_and_source_dependency_are_hard_settled",
         ),
@@ -820,8 +786,7 @@ BOUNDARIES = (
         ("2014", "2024"),
         "combat_engine.standard_save_damage_reduction",
         (
-            "tests/test_combat_engine.py::"
-            "test_evasion_rewrites_dexterity_save_for_half_damage",
+            "tests/test_combat_engine.py::test_evasion_rewrites_dexterity_save_for_half_damage",
             "tests/test_core_content.py::"
             "test_srd2014_content_uses_leaf_records_and_structured_eligibility",
         ),
@@ -858,10 +823,7 @@ BOUNDARIES = (
     CoreBoundary(
         "dnd5e.core.rest.sorcerous_restoration",
         ("2014", "2024"),
-        (
-            "lifecycle.validate_sorcerous_restoration_choice|"
-            "apply_sorcerous_restoration"
-        ),
+        ("lifecycle.validate_sorcerous_restoration_choice|apply_sorcerous_restoration"),
         (
             "tests/test_lifecycle.py::test_sorcerous_restoration_recovers_four_points",
             "tests/test_lifecycle.py::"
@@ -969,10 +931,7 @@ BOUNDARIES = (
     CoreBoundary(
         "dnd5e.core.mcp.save_damage_atomicity",
         ("2014", "2024"),
-        (
-            "sagasmith_dnd_mcp.server.combat_save_damage|"
-            "combat_engine.resolve_save_damage_to_sheets"
-        ),
+        ("sagasmith_dnd_mcp.server.combat_save_damage|combat_engine.resolve_save_damage_to_sheets"),
         ("SagaSmith-dnd-mcp/tests/test_agent_save_damage_mcp.py",),
         "runtime:mcp/source-bound-save-and-damage",
     ),

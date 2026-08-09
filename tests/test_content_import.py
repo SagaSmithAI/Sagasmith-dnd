@@ -1,24 +1,31 @@
+import hashlib
 from copy import deepcopy
 
 import pytest
 
+import sagasmith_dnd.content_import as content_import_module
 from sagasmith_dnd.content_import import (
     _candidate_artifact_disambiguator,
+    _merge_extracted_candidates,
     _merge_species_grants,
     _species_replaced_base_traits,
+    _spell_card_from_section,
     _trim_trailing_statblock_lore,
     artifact_with_direct_resolution,
-    audit_release_resolution_readiness,
+    audit_release_semantic_validation,
     author_selection_card_from_candidate,
+    candidate_draft_issues,
     compiled_artifacts_from_candidates,
     extract_content_candidates,
     extract_content_inventory,
     module_statblock_review_candidates,
     normalize_2014_statblock_candidate,
+    repair_reviewed_structured_transcription,
     validate_selection_ready_artifacts,
 )
 from sagasmith_dnd.statblocks import (
     StatblockImportError,
+    dependent_actor_template_solution_errors,
     parse_2014_statblock,
     split_2014_statblock_action_variants,
 )
@@ -44,6 +51,133 @@ def test_extracts_review_required_catalog_candidates() -> None:
     assert [item["kind"] for item in candidates] == ["spell", "background"]
     assert all(item["review_status"] == "pending" for item in candidates)
     assert all(item["application_state"] == "catalog_only" for item in candidates)
+
+
+def test_candidate_draft_issues_drive_the_agent_editing_loop() -> None:
+    pending = {
+        "id": "candidate:uncertain",
+        "kind": "feature",
+        "source_chunk_ids": ["chunk-1"],
+        "review_status": "pending",
+    }
+    assert [issue["code"] for issue in candidate_draft_issues(pending)] == [
+        "unresolved_disposition"
+    ]
+
+    included_without_card = {**pending, "review_status": "accepted"}
+    assert [issue["code"] for issue in candidate_draft_issues(included_without_card)] == [
+        "missing_artifact"
+    ]
+
+    excluded = {**pending, "review_status": "rejected"}
+    assert candidate_draft_issues(excluded) == []
+
+
+def test_generic_class_features_container_does_not_become_a_background() -> None:
+    candidates = extract_content_candidates(
+        [
+            {
+                "id": "class-features",
+                "heading_path": ["Chapter 3 - Classes", "CLASS FEATURES"],
+                "content": (
+                    "Skill Proficiencies: choose two skills. Equipment: choose a pack. "
+                    "Background features are described in chapter 4."
+                ),
+                "page_start": 96,
+            }
+        ]
+    )
+
+    assert not [item for item in candidates if item["kind"] == "background"]
+
+
+def test_generic_background_title_is_kept_for_review_when_structure_matches() -> None:
+    candidates = extract_content_candidates(
+        [
+            {
+                "id": "background-card",
+                "heading_path": ["Chapter 4", "BACKGROUND"],
+                "content": (
+                    "Skill Proficiencies: Insight, Persuasion. "
+                    "Equipment: a set of fine clothes and a pouch containing 15 gp."
+                ),
+                "page_start": 130,
+            }
+        ]
+    )
+
+    backgrounds = [item for item in candidates if item["kind"] == "background"]
+    assert [item["name"] for item in backgrounds] == ["BACKGROUND"]
+    assert backgrounds[0]["review_status"] == "pending"
+    assert backgrounds[0]["application_state"] == "catalog_only"
+
+
+def test_final_reviewed_transcription_repairs_late_hydrated_prose_only() -> None:
+    value, repairs = repair_reviewed_structured_transcription(
+        {
+            "name": "Formal Na�me",
+            "description": "crea�ture and trans￾ formed\x02",
+            "choices": {"manual_ruling": {"source_excerpt": "exact� prose"}},
+        },
+        path="card",
+    )
+
+    assert value["name"] == "Formal Na�me"
+    assert value["description"] == "creature and transformed"
+    assert value["choices"]["manual_ruling"]["source_excerpt"] == "exact prose"
+    assert {item["path"] for item in repairs} == {
+        "card.description",
+        "card.choices.manual_ruling.source_excerpt",
+    }
+
+    fragment, _repairs = repair_reviewed_structured_transcription(
+        {"name": "TA\ufffdHA", "rule_clauses": [{"title": "TA\ufffdHA"}]},
+        path="artifact",
+        repair_identity=True,
+    )
+    assert fragment["name"] == "TAHA"
+    assert fragment["rule_clauses"][0]["title"] == "TAHA"
+
+
+def test_adjacent_item_suffix_does_not_merge_without_source_review() -> None:
+    candidates = _merge_extracted_candidates(
+        [
+            {
+                "id": "item-start",
+                "kind": "item",
+                "name": "DEMONOMICON OF IGGWILV",
+                "source_chunk_ids": ["item-start"],
+                "page_start": 126,
+                "page_end": 126,
+                "artifact": {"card": {"description": "First half of the item rules."}},
+            },
+            {
+                "id": "item-tail",
+                "kind": "feature",
+                "name": "OF IGGWILV",
+                "source_chunk_ids": ["item-tail"],
+                "page_start": 126,
+                "page_end": 126,
+                "artifact": {"card": {"description": "Second half of the item rules."}},
+            },
+            {
+                "id": "next-item",
+                "kind": "item",
+                "name": "DEVOTEE'S CENSER",
+                "source_chunk_ids": ["next-item"],
+                "page_start": 127,
+                "page_end": 127,
+                "artifact": {"card": {"description": "A separate item."}},
+            },
+        ]
+    )
+
+    demonomicon = next(item for item in candidates if item["kind"] == "item")
+    assert demonomicon["name"] == "DEMONOMICON OF IGGWILV"
+    assert demonomicon["source_chunk_ids"] == ["item-start"]
+    assert "First half" in demonomicon["artifact"]["card"]["description"]
+    assert "Second half" not in demonomicon["artifact"]["card"]["description"]
+    assert any(item["name"] == "OF IGGWILV" for item in candidates)
 
 
 @pytest.mark.parametrize(
@@ -197,6 +331,92 @@ def test_same_named_features_under_different_subclasses_do_not_merge() -> None:
         ("Artificer Specialists", "Alchemist"),
         ("Artificer Specialists", "Artillerist"),
     }
+
+
+def test_same_named_features_require_review_when_flat_outline_loses_ownership() -> None:
+    def feature(chunk_id: str, description: str) -> dict:
+        return {
+            "id": f"candidate:{chunk_id}",
+            "kind": "feature",
+            "name": "Potent Spellcasting",
+            "source_chunk_ids": [chunk_id],
+            "source_heading_path": [
+                "Chapter 3 - Classes",
+                "DIVINE DOMAINS",
+                "POTENT SPELLCASTING",
+            ],
+            "page_start": 61,
+            "artifact": {
+                "kind": "feature",
+                "card": {"name": "Potent Spellcasting", "description": description},
+            },
+        }
+
+    candidates = _merge_extracted_candidates(
+        [
+            feature("knowledge-potent", "Knowledge Domain feature text."),
+            feature("light-potent", "Light Domain feature text."),
+        ]
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0]["source_chunk_ids"] == ["knowledge-potent", "light-potent"]
+
+    extracted = extract_content_candidates(
+        [
+            {
+                "id": "knowledge-domain",
+                "heading_path": [
+                    "Chapter 3 - Classes",
+                    "DIVINE DOMAINS",
+                    "KNOWLEDGE DOMAIN",
+                ],
+                "content": "The Knowledge Domain grants cleric features at 1st level.",
+                "page_start": 60,
+            },
+            {
+                "id": "knowledge-potent",
+                "heading_path": [
+                    "Chapter 3 - Classes",
+                    "DIVINE DOMAINS",
+                    "POTENT SPELLCASTING",
+                ],
+                "content": (
+                    "Starting at 8th level, add your Wisdom modifier to damage "
+                    "from a cleric cantrip."
+                ),
+                "page_start": 61,
+            },
+            {
+                "id": "light-domain",
+                "heading_path": [
+                    "Chapter 3 - Classes",
+                    "DIVINE DOMAINS",
+                    "LIGHT DOMAIN",
+                ],
+                "content": "The Light Domain grants cleric features at 1st level.",
+                "page_start": 61,
+            },
+            {
+                "id": "light-potent",
+                "heading_path": [
+                    "Chapter 3 - Classes",
+                    "DIVINE DOMAINS",
+                    "POTENT SPELLCASTING",
+                ],
+                "content": (
+                    "Starting at 8th level, add your Wisdom modifier to damage "
+                    "from a cleric cantrip."
+                ),
+                "page_start": 62,
+            },
+        ]
+    )
+    potent = [item for item in extracted if item["name"] == "POTENT SPELLCASTING"]
+    assert len(potent) == 1
+    assert potent[0]["source_chunk_ids"] == ["knowledge-potent", "light-potent"]
+    assert potent[0]["review_status"] == "pending"
+    assert potent[0]["mechanical_scope"] == "review_required"
 
 
 def test_ocr_spacing_and_nested_headers_keep_entity_identity() -> None:
@@ -1115,6 +1335,91 @@ def test_primary_review_preserves_valid_agent_authored_base_class_card() -> None
     assert artifact["card"]["class_definition"]["tool_choice_count"] == 1
 
 
+def test_source_heading_display_names_are_canonicalized_without_changing_identity() -> None:
+    artifact = author_selection_card_from_candidate(
+        {
+            "id": "candidate:archfey-warlock",
+            "kind": "statblock",
+            "name": "WARLOCK OF THE ARCHFEY",
+            "artifact": {
+                "kind": "statblock",
+                "card": {"name": "WARLOCK OF THE ARCHFEY", "normalized_content": ""},
+            },
+        }
+    )
+
+    assert artifact["card"]["name"] == "Warlock of the Archfey"
+
+
+def test_reviewed_species_grants_do_not_inherit_false_ocr_weapon_proficiencies() -> None:
+    artifact = author_selection_card_from_candidate(
+        {
+            "id": "candidate:lizardfolk",
+            "kind": "species",
+            "name": "Lizardfolk",
+            "agent_review_complete": True,
+            "artifact": {
+                "kind": "species",
+                "card": {
+                    "name": "Lizardfolk",
+                    "description": (
+                        "Ability Score Increase. Your Constitution score increases by 2. "
+                        "Size. Your size is Medium. Speed. Your base walking speed is 30 feet. "
+                        "You gain proficiency with two of the following skills of your choice: "
+                        "Animal Handling, Nature, Perception, Stealth, and Survival."
+                    ),
+                    "grants": {
+                        "ability_score_increases": {"constitution": 2},
+                        "size": "medium",
+                        "walk_speed": 30,
+                        "skill_choice_count": 2,
+                        "skill_options": [
+                            "animal_handling",
+                            "nature",
+                            "perception",
+                            "stealth",
+                            "survival",
+                        ],
+                        "allow_any_skill": False,
+                        "weapon_proficiencies": [],
+                        "features": [],
+                        "unresolved": [],
+                    },
+                },
+            },
+        }
+    )
+
+    grants = artifact["card"]["grants"]
+    assert artifact["application_state"] == "selection_ready"
+    assert grants["skill_choice_count"] == 2
+    assert grants["weapon_proficiencies"] == []
+
+
+def test_unreviewed_species_skill_choice_is_not_inferred_as_weapon_training() -> None:
+    artifact = author_selection_card_from_candidate(
+        {
+            "id": "candidate:skillful-species",
+            "kind": "species",
+            "name": "Skillful Species",
+            "artifact": {
+                "kind": "species",
+                "card": {
+                    "name": "Skillful Species",
+                    "description": (
+                        "Ability Score Increase. Your Wisdom score increases by 1. "
+                        "Size. Your size is Medium. Speed. Your base walking speed is 30 feet. "
+                        "You gain proficiency with two of the following skills: Nature and "
+                        "Perception."
+                    ),
+                },
+            },
+        }
+    )
+
+    assert artifact["card"]["grants"]["weapon_proficiencies"] == []
+
+
 def test_trusted_reference_hydrates_typed_species_without_replacing_source_prose() -> None:
     candidate = {
         "id": "candidate:hill-dwarf",
@@ -1298,17 +1603,37 @@ def test_species_grant_merge_deduplicates_text_by_materializer_identity() -> Non
             "skill_proficiencies": ["perception"],
             "weapon_proficiencies": ["battleaxe"],
             "tool_options": ["smith's tools"],
+            "natural_armor_includes_dexterity": True,
+            "natural_weapons": [
+                {
+                    "name": "Claws",
+                    "attack_ability": "strength",
+                    "damage_formula": "1d4",
+                    "damage_type": "slashing",
+                }
+            ],
         },
         {
             "skill_proficiencies": [" Perception "],
             "weapon_proficiencies": ["Battleaxe"],
             "tool_options": ["Smith's Tools"],
+            "natural_armor_includes_dexterity": False,
+            "natural_weapons": [
+                {
+                    "name": "Claws",
+                    "attack_ability": "strength",
+                    "damage_formula": "1d4",
+                    "damage_type": "slashing",
+                }
+            ],
         },
     )
 
     assert merged["skill_proficiencies"] == ["perception"]
     assert merged["weapon_proficiencies"] == ["battleaxe"]
     assert merged["tool_options"] == ["smith's tools"]
+    assert merged["natural_armor_includes_dexterity"] is False
+    assert [item["name"] for item in merged["natural_weapons"]] == ["Claws"]
 
 
 def test_species_grant_merge_honors_explicit_base_trait_replacements() -> None:
@@ -1673,14 +1998,35 @@ def test_parameterized_statblock_persists_its_lobby_template_contract() -> None:
             "id": "candidate:homunculus",
             "kind": "statblock",
             "name": "Alchemical Homunculus",
-            "source_chunk_ids": ["core"],
+            "source_chunk_ids": ["context", "core"],
+            "source_heading_path": ["HOMUNCULUS SERVANT"],
             "artifact": {
                 "kind": "statblock",
                 "application_state": "catalog_only",
-                "card": {"name": "Alchemical Homunculus"},
+                "card": {
+                    "name": "Alchemical Homunculus",
+                    "normalized_content": (
+                        "# Alchemical Homunculus\n\n"
+                        "*Tiny construct, neutral*\n\n"
+                        "**Armor Class** 13 (natural armor)\n"
+                        "**Hit Points** equal to five times your level in this class + "
+                        "your Intelligence modifier\n"
+                        "**Speed** 20 ft., fly 30 ft.\n\n"
+                        "| STR | DEX | CON | INT | WIS | CHA |\n"
+                        "|---:|---:|---:|---:|---:|---:|\n"
+                        "| 4 (-3) | 15 (+2) | 12 (+1) | 10 (+0) | 10 (+0) | 7 (-2) |\n\n"
+                        "**Senses** darkvision 60 ft., passive Perception 10\n"
+                        "**Languages** understands the languages you speak\n"
+                        "**Challenge** —\n\n"
+                        "## Actions\n\n"
+                        "***Force Strike.*** *Ranged Weapon Attack:* your spell attack "
+                        "modifier to hit, range 30 ft., one target. *Hit:* 1d4 + PB force damage."
+                    ),
+                },
             },
         },
         source_chunks_by_id={
+            "context": "Prerequisite: 6th-level artificer",
             "core": (
                 "*Tiny construct, neutral*\n\n"
                 "**Armor Class** 13 (natural armor)\n"
@@ -1696,7 +2042,7 @@ def test_parameterized_statblock_persists_its_lobby_template_contract() -> None:
                 "## Actions\n\n"
                 "***Force Strike.*** *Ranged Weapon Attack:* your spell attack "
                 "modifier to hit, range 30 ft., one target. *Hit:* 1d4 + PB force damage."
-            )
+            ),
         },
     )
 
@@ -1709,9 +2055,231 @@ def test_parameterized_statblock_persists_its_lobby_template_contract() -> None:
         "owner_spell_attack_modifier",
     ]
     assert requirement["runtime_ready"] is True
+    assert requirement["owner_class_name"] == "Artificer"
+    assert requirement["owner_class_binding"] == "reviewed_context"
     assert artifact["card"]["normalized_content"].startswith("# Alchemical Homunculus")
     assert artifact["selection_applicability"] == "not_applicable"
     assert artifact["application_state"] == "catalog_only"
+
+
+def test_parameterized_statblock_does_not_inherit_owner_from_sibling_catalog_context() -> None:
+    source_text = (
+        "# Alchemical Homunculus\n\n"
+        "*Tiny construct, neutral*\n\n"
+        "**Armor Class** 13 (natural armor)\n"
+        "**Hit Points** equal to five times your level in this class + "
+        "your Intelligence modifier\n"
+        "**Speed** 20 ft., fly 30 ft.\n\n"
+        "| STR | DEX | CON | INT | WIS | CHA |\n"
+        "|---:|---:|---:|---:|---:|---:|\n"
+        "| 4 (-3) | 15 (+2) | 11 (+0) | 10 (+0) | 10 (+0) | 7 (-2) |\n\n"
+        "**Senses** darkvision 60 ft., passive Perception 10\n"
+        "**Languages** understands the languages you speak\n\n"
+        "## Actions\n\n"
+        "***Acidic Spittle.*** *Ranged Weapon Attack:* +4 to hit, range 30 ft., "
+        "one target. *Hit:* 1d6 + 2 acid damage."
+    )
+    candidate = {
+        "id": "candidate:homunculus-statblock",
+        "kind": "statblock",
+        "name": "Alchemical Homunculus",
+        "source_chunk_ids": ["statblock"],
+        "source_heading_path": ["Alchemical Homunculus"],
+        "artifact": {
+            "kind": "statblock",
+            "application_state": "catalog_only",
+            "card": {"name": "Alchemical Homunculus", "normalized_content": source_text},
+        },
+    }
+    artificer_feature = {
+        "id": "candidate:homunculus-feature",
+        "kind": "feature",
+        "name": "Alchemical Homunculus",
+        "source_class_name": "Artificer",
+        "source_chunk_ids": ["introduction", "statblock"],
+    }
+
+    authored = author_selection_card_from_candidate(
+        candidate,
+        source_chunks_by_id={"statblock": source_text},
+        context_candidates=[candidate, artificer_feature],
+    )
+    requirement = authored["card"]["dependent_actor_template"]
+    assert "owner_class_name" not in requirement
+    assert requirement["owner_class_binding"] == "owner_selection"
+
+
+def test_feature_uses_reviewed_subclass_owner_instead_of_leaked_outline_class() -> None:
+    feature = {
+        "id": "candidate:bestial-soul",
+        "kind": "feature",
+        "name": "Bestial Soul",
+        "source_heading_path": ["Artificer Infusions", "Path of the Beast", "Bestial Soul"],
+        "artifact": {
+            "kind": "feature",
+            "application_state": "catalog_only",
+            "card": {
+                "name": "Bestial Soul",
+                "description": "6th-level Path of the Beast feature. Reviewed feature text.",
+                "class_name": "Artificer",
+            },
+        },
+    }
+    subclass = {
+        "id": "candidate:path-of-the-beast",
+        "kind": "subclass",
+        "name": "PATH OF THE BEAST",
+        "artifact": {
+            "kind": "subclass",
+            "card": {"name": "Path of the Beast", "class_name": "Barbarian"},
+        },
+    }
+
+    artifact = author_selection_card_from_candidate(
+        feature,
+        context_candidates=[feature, subclass],
+    )
+
+    assert artifact["card"]["subclass_name"] == "Path of the Beast"
+    assert artifact["card"]["class_name"] == "Barbarian"
+
+
+def test_feature_does_not_bind_nearest_subclass_in_flat_source_container() -> None:
+    knowledge = {
+        "id": "candidate:knowledge-domain",
+        "kind": "subclass",
+        "name": "Knowledge Domain",
+        "page_start": 60,
+        "source_heading_path": [
+            "Chapter 3 - Classes",
+            "DIVINE DOMAINS",
+            "KNOWLEDGE DOMAIN",
+        ],
+        "artifact": {
+            "kind": "subclass",
+            "card": {"name": "Knowledge Domain", "class_name": "Cleric"},
+        },
+    }
+    feature = {
+        "id": "candidate:blessings-of-knowledge",
+        "kind": "feature",
+        "name": "Blessings of Knowledge",
+        "page_start": 60,
+        "source_heading_path": [
+            "Chapter 3 - Classes",
+            "DIVINE DOMAINS",
+            "BLESSINGS OF KNOWLEDGE",
+        ],
+        "artifact": {
+            "kind": "feature",
+            "card": {
+                "name": "Blessings of Knowledge",
+                "description": "At 1st level, this cleric feature grants proficiency.",
+            },
+        },
+    }
+
+    artifact = author_selection_card_from_candidate(
+        feature,
+        context_candidates=[knowledge, feature],
+    )
+
+    assert "subclass_name" not in artifact["card"]
+    assert artifact["card"]["class_name"] == "Cleric"
+
+
+def test_reviewed_feature_binding_wins_over_mixed_source_chunk_context() -> None:
+    feature = {
+        "id": "candidate:flames-of-life",
+        "kind": "feature",
+        "name": "Flames of Life",
+        "agent_review_complete": True,
+        "source_heading_path": ["Circle of Wildfire", "Enhanced Bond"],
+        "artifact": {
+            "kind": "feature",
+            "card": {
+                "name": "Flames of Life",
+                "description": (
+                    "10th-level Circle of Wildfire feature. The following column "
+                    "continues with Onomancy features."
+                ),
+                "class_name": "Druid",
+                "subclass_name": "Circle of Wildfire",
+                "minimum_level": 10,
+                "mechanical_grants": {},
+            },
+        },
+    }
+    subclasses = [
+        {
+            "kind": "subclass",
+            "name": "Circle of Wildfire",
+            "artifact": {
+                "kind": "subclass",
+                "card": {"name": "Circle of Wildfire", "class_name": "Druid"},
+            },
+        },
+        {
+            "kind": "subclass",
+            "name": "Onomancy",
+            "artifact": {
+                "kind": "subclass",
+                "card": {"name": "Onomancy", "class_name": "Wizard"},
+            },
+        },
+    ]
+
+    artifact = author_selection_card_from_candidate(
+        feature,
+        context_candidates=[feature, *subclasses],
+    )
+
+    assert artifact["card"]["class_name"] == "Druid"
+    assert artifact["card"]["subclass_name"] == "Circle of Wildfire"
+    assert artifact["card"]["minimum_level"] == 10
+
+
+def test_reviewed_owner_keeps_source_formula_binding_when_formula_names_class() -> None:
+    source_text = (
+        "# Homunculus Servant\n\n"
+        "*Tiny construct*\n\n"
+        "**Armor Class** 13 (natural armor)\n"
+        "**Hit Points** 1 + your Intelligence modifier + your artificer level\n"
+        "**Speed** 20 ft., fly 30 ft.\n\n"
+        "| STR | DEX | CON | INT | WIS | CHA |\n"
+        "|---:|---:|---:|---:|---:|---:|\n"
+        "| 4 (-3) | 15 (+2) | 12 (+1) | 10 (+0) | 10 (+0) | 7 (-2) |\n\n"
+        "**Senses** darkvision 60 ft., passive Perception 10\n"
+        "**Languages** understands the languages you speak\n\n"
+        "## Actions\n\n"
+        "***Force Strike.*** *Ranged Weapon Attack:* your spell attack modifier to hit, "
+        "range 30 ft., one target. *Hit:* 1d4 + PB force damage."
+    )
+
+    artifact = author_selection_card_from_candidate(
+        {
+            "id": "candidate:homunculus-servant",
+            "kind": "statblock",
+            "name": "Homunculus Servant",
+            "source_chunk_ids": ["statblock"],
+            "artifact": {
+                "kind": "statblock",
+                "application_state": "catalog_only",
+                "card": {
+                    "name": "Homunculus Servant",
+                    "owner_class_name": "Artificer",
+                    "normalized_content": source_text,
+                },
+            },
+        },
+        source_chunks_by_id={"statblock": source_text},
+    )
+
+    requirement = artifact["card"]["dependent_actor_template"]
+    assert requirement["solution"]["owner_class_names"] == ["artificer"]
+    assert requirement["owner_class_name"] == "Artificer"
+    assert requirement["owner_class_binding"] == "source_formula"
+    assert dependent_actor_template_solution_errors(requirement) == []
 
 
 def test_parameterized_formula_does_not_hide_an_incomplete_statblock() -> None:
@@ -1835,7 +2403,7 @@ def test_inventory_reattaches_spell_section_heading_to_leading_definition() -> N
     assert card["definition"]["range"]["normal_ft"] == 60
 
 
-def test_inventory_tracks_fused_spell_list_columns_across_ocr_level_resets() -> None:
+def test_inventory_does_not_assign_fused_spell_columns_by_level_reset_order() -> None:
     list_chunks = [
         {
             "id": "bard-start",
@@ -1893,16 +2461,38 @@ def test_inventory_tracks_fused_spell_list_columns_across_ocr_level_resets() -> 
 
     inventory = extract_content_inventory([*list_chunks, *descriptions])
     spells = {
-        item["name"]: item["artifact"]["card"]
+        item["name"].casefold(): item["artifact"]["card"]
         for item in inventory["candidates"]
         if item["kind"] == "spell"
     }
 
-    assert spells["Thunderclap"]["classes"] == ["bard", "druid"]
-    assert spells["Toll the dead"]["classes"] == ["cleric"]
-    assert spells["Temple of the gods"]["classes"] == ["cleric"]
-    assert spells["Ceremony"]["classes"] == ["paladin"]
-    assert spells["Holy weapon"]["classes"] == ["paladin"]
+    assert spells["thunderclap"]["classes"] == []
+    assert spells["toll the dead"]["classes"] == []
+    assert spells["temple of the gods"]["classes"] == []
+    assert spells["ceremony"]["classes"] == ["paladin"]
+    assert spells["holy weapon"]["classes"] == []
+
+
+def test_empty_precomputed_spell_class_index_is_not_recomputed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unexpected_recompute(_chunks: list[dict[str, object]]) -> dict[str, object]:
+        raise AssertionError("empty precomputed index must be reused")
+
+    monkeypatch.setattr(content_import_module, "_spell_class_index", unexpected_recompute)
+    card = _spell_card_from_section(
+        "Example Spell",
+        ["Spells", "Example Spell"],
+        (
+            "1st-level evocation Casting Time: 1 action Range: 60 feet "
+            "Components: V Duration: Instantaneous The spell takes effect."
+        ),
+        [],
+        class_index={},
+    )
+
+    assert card is not None
+    assert card["classes"] == []
 
 
 def test_inventory_repairs_spell_header_ocr_and_bounded_field_continuation() -> None:
@@ -2462,7 +3052,7 @@ def test_rulebook_statblock_ignores_ocr_chapter_footer_inside_heading_path() -> 
     assert "**Challenge** 3 (700 XP)" in statblock["normalized_content"]
 
 
-def test_rulebook_statblock_recovers_name_and_sibling_abilities_from_spell_evidence() -> None:
+def test_rulebook_statblock_does_not_infer_identity_from_preceding_spell_prose() -> None:
     parent = ["Spells", "Summon Celestial"]
     chunks = [
         {
@@ -2521,9 +3111,10 @@ def test_rulebook_statblock_recovers_name_and_sibling_abilities_from_spell_evide
     inventory = extract_content_inventory(chunks, source_title="Summoning Rules")
     statblock = next(item for item in inventory["candidates"] if item["kind"] == "statblock")
 
-    assert statblock["name"] == "Celestial Spirit"
+    assert statblock["name"] == "Creature on page 111"
     assert statblock["source_heading_path"] == parent
-    assert statblock["execution_state"] == "review_ready"
+    assert statblock["extraction_confidence"] == "low"
+    assert statblock["execution_state"] == "agent_resolution_required"
     assert "| 16 (+3) | 14 (+2) | 16 (+3)" in statblock["normalized_content"]
 
 
@@ -3147,8 +3738,6 @@ def test_text_layout_recovery_scopes_split_guard_without_images() -> None:
         normalize_2014_statblock_candidate("CULT FANATIC", chunks)
 
 
-
-
 def test_text_layout_preserves_and_splits_explicit_action_set_variants() -> None:
     base = ["Bestiary", "YUAN-TI MALISON"]
     chunks = [
@@ -3237,8 +3826,6 @@ def test_text_layout_preserves_and_splits_explicit_action_set_variants() -> None
         ["Bite"],
         ["Constrict"],
     ]
-
-
 
 
 def test_text_layout_recovery_ignores_ocr_noise_inside_creature_heading() -> None:
@@ -3453,8 +4040,6 @@ def test_module_statblock_recovers_flattened_actions_and_ranged_distance() -> No
     feature_names = {item["name"] for item in parsed.sheet["content"]["features"]}
     assert "Lightning Breath (Recharge 5-6)" in action_names
     assert "Improved Critical" in feature_names
-
-
 
 
 def test_module_statblock_marks_named_actor_spellcasting_trait() -> None:
@@ -3891,7 +4476,7 @@ def test_class_features_are_not_misclassified_as_feats() -> None:
     assert candidates[0]["source_chunk_ids"] == ["class", "class-features", "rage"]
 
 
-def test_flat_phb_class_feature_siblings_recover_distinct_base_classes() -> None:
+def test_flat_class_feature_siblings_require_source_review_for_boundaries() -> None:
     candidates = extract_content_candidates(
         [
             {
@@ -3937,23 +4522,11 @@ def test_flat_phb_class_feature_siblings_recover_distinct_base_classes() -> None
         source_title="D&D 5E - Player's Handbook",
     )
 
-    classes = [item for item in candidates if item["kind"] == "class"]
-    assert [item["name"] for item in classes] == ["Barbarian", "Cleric"]
-    assert [
-        author_selection_card_from_candidate(item)["application_state"] for item in classes
-    ] == ["selection_ready", "selection_ready"]
-    assert classes[0]["source_chunk_ids"] == [
-        "barbarian",
-        "barbarian-proficiencies",
-    ]
-    assert classes[1]["source_chunk_ids"] == [
-        "cleric",
-        "cleric-proficiencies",
-    ]
+    assert not any(item["kind"] == "class" for item in candidates)
 
 
-def test_flat_last_phb_class_stops_at_the_next_chapter() -> None:
-    candidates = extract_content_candidates(
+def test_flat_class_does_not_use_next_chapter_as_inferred_boundary() -> None:
+    inventory = extract_content_inventory(
         [
             {
                 "id": "wizard",
@@ -3982,10 +4555,12 @@ def test_flat_last_phb_class_stops_at_the_next_chapter() -> None:
         source_title="D&D 5E - Player's Handbook",
     )
 
-    wizard = next(item for item in candidates if item["kind"] == "class")
-    assert wizard["source_chunk_ids"] == ["wizard", "wizard-proficiencies"]
-    chapter_rule = next(item for item in candidates if item.get("coverage_fallback"))
-    assert chapter_rule["source_chunk_ids"] == ["chapter-four"]
+    assert not any(item["kind"] == "class" for item in inventory["candidates"])
+    assert {item["chunk_id"] for item in inventory["ledger"]} == {
+        "wizard",
+        "wizard-proficiencies",
+        "chapter-four",
+    }
 
 
 def test_class_selection_parses_choose_any_skill_count() -> None:
@@ -4121,13 +4696,14 @@ def test_flat_plural_subclass_container_does_not_promote_features() -> None:
         "The Archfey",
         "WAR DOMAIN",
         "LIGHT DOMAIN",
+        "LICHT DOMAIN",
     }
     light = next(item for item in candidates if item["name"] == "LIGHT DOMAIN")
-    assert light["source_chunk_ids"] == ["light-domain", "light-domain-spells"]
+    assert light["source_chunk_ids"] == ["light-domain"]
     assert not any(item["name"] == "FAST HANDS" for item in candidates)
 
 
-def test_ordered_species_traits_recover_subraces_and_drifted_parent() -> None:
+def test_drifted_species_parent_and_subrace_order_require_source_review() -> None:
     candidates = extract_content_candidates(
         [
             {
@@ -4171,20 +4747,10 @@ def test_ordered_species_traits_recover_subraces_and_drifted_parent() -> None:
     )
 
     species = [item for item in candidates if item["kind"] == "species"]
-    assert {item["name"] for item in species} == {
-        "DWARF",
-        "HILL DWARF",
-        "HALF-ORC",
-    }
-    dwarf = next(item for item in species if item["name"] == "DWARF")
-    assert dwarf["artifact"]["selection_applicability"] == "not_applicable"
-    assert (
-        next(item for item in species if item["name"] == "HILL DWARF")["artifact"]["card"][
-            "base_species"
-        ]
-        == "DWARF"
-    )
-    assert not any(item["name"] == "ACCEPTANCE" for item in species)
+    assert "HALF-ORC" not in {item["name"] for item in species}
+    acceptance = next(item for item in species if item["name"] == "ACCEPTANCE")
+    assert acceptance["review_status"] == "pending"
+    assert acceptance["application_state"] == "catalog_only"
 
 
 def test_background_ocr_and_inline_variant_keep_base_grants() -> None:
@@ -4222,7 +4788,7 @@ def test_background_ocr_and_inline_variant_keep_base_grants() -> None:
     }
 
 
-def test_split_feat_heading_and_continuation_form_one_card() -> None:
+def test_split_feat_heading_and_options_continuation_require_source_review() -> None:
     candidates = extract_content_candidates(
         [
             {
@@ -4260,12 +4826,11 @@ def test_split_feat_heading_and_continuation_form_one_card() -> None:
     )
 
     feats = {item["name"]: item for item in candidates if item["kind"] == "feat"}
-    assert set(feats) == {"DEFENSIVE DUELIST", "DURABLE"}
-    assert feats["DEFENSIVE DUELIST"]["source_chunk_ids"] == [
-        "defensive",
-        "duelist",
-    ]
-    assert "minimum regained" in feats["DURABLE"]["artifact"]["card"]["description"]
+    assert "DEFENSIVE DUELIST" not in feats
+    assert not any(
+        "minimum regained" in item["artifact"]["card"]["description"]
+        for item in feats.values()
+    )
 
 
 def test_character_sheet_placeholder_is_not_a_statblock_candidate() -> None:
@@ -4399,6 +4964,46 @@ def test_compiler_requires_review_and_selection_ready_structure() -> None:
         },
     }
     assert validate_selection_ready_artifacts(artifacts) == []
+
+
+def test_compiler_reconciles_feature_ownership_from_reviewed_subclass_cards() -> None:
+    candidates = [
+        {
+            "id": "subclass",
+            "kind": "subclass",
+            "name": "The Fathomless",
+            "source_chunk_ids": ["subclass"],
+            "review_status": "accepted",
+            "artifact": {
+                "kind": "subclass",
+                "card": {
+                    "name": "The Fathomless",
+                    "class_name": "Warlock",
+                },
+            },
+        },
+        {
+            "id": "feature",
+            "kind": "feature",
+            "name": "Tentacle of the Deeps",
+            "source_chunk_ids": ["feature"],
+            "review_status": "accepted",
+            "artifact": {
+                "kind": "feature",
+                "card": {
+                    "name": "Tentacle of the Deeps",
+                    "class_name": "Rogue",
+                    "subclass_name": "Fathomless",
+                },
+            },
+        },
+    ]
+
+    artifacts = compiled_artifacts_from_candidates(candidates, pack_id="dnd5e.tasha")
+    feature = next(item for item in artifacts if item["kind"] == "feature")
+
+    assert feature["card"]["class_name"] == "Warlock"
+    assert feature["card"]["subclass_name"] == "The Fathomless"
 
 
 def test_selection_ready_spell_uses_character_definition_validation() -> None:
@@ -4801,6 +5406,46 @@ def test_direct_import_resolution_persists_source_bound_agent_clause() -> None:
     assert validate_selection_ready_artifacts(artifacts) == []
 
 
+def test_direct_import_resolution_repairs_reviewed_exact_source_excerpt() -> None:
+    candidate = {
+        "id": "candidate:reviewed-transcription",
+        "kind": "feature",
+        "name": "Reviewed Transcription",
+        "source_chunk_ids": ["chunk:reviewed-transcription"],
+        "agent_review_complete": True,
+        "mechanical_scope": "review_required",
+        "artifact": {
+            "kind": "feature",
+            "application_state": "catalog_only",
+            "card": {
+                "name": "Reviewed Transcription",
+                "description": "The creature follows the reviewed procedure.",
+            },
+        },
+    }
+
+    resolved = artifact_with_direct_resolution(
+        candidate,
+        source_chunks_by_id={
+            "chunk:reviewed-transcription": (
+                "The crea�ture isn't trans￾ formed by the reviewed procedure."
+            )
+        },
+    )
+
+    excerpt = resolved["rule_clauses"][0]["source_citations"][0]["source_excerpt"]
+    assert excerpt == "isn't transformed by the reviewed procedure."
+    assert resolved["card"]["ruling_requirements"][0]["source_excerpt"] == excerpt
+    assert resolved["card"]["transcription_repairs"] == [
+        {
+            "path": "generated.source_excerpt",
+            "method": "agent_reviewed_clean_source_span",
+            "u_fffe_removed": 1,
+            "u_fffd_excluded": 1,
+        }
+    ]
+
+
 def test_direct_import_resolution_keeps_descriptive_content_nonmechanical() -> None:
     candidate = {
         "id": "candidate:lore",
@@ -4889,7 +5534,7 @@ def test_release_resolution_audit_rejects_first_use_placeholders() -> None:
         pack_id="dnd5e.extension",
     )[0]
 
-    report = audit_release_resolution_readiness([resolved, unresolved])
+    report = audit_release_semantic_validation([resolved, unresolved])
 
     assert report["complete"] is False
     assert report["resolved_count"] == 1
@@ -4922,7 +5567,7 @@ def test_release_resolution_audit_rejects_stale_lazy_state_even_with_clause() ->
     resolved = artifact_with_direct_resolution(candidate)
     resolved["execution_state"] = "agent_resolution_required"
 
-    report = audit_release_resolution_readiness([resolved])
+    report = audit_release_semantic_validation([resolved])
 
     assert report["complete"] is False
     assert report["modes"] == {}
@@ -4946,8 +5591,8 @@ def test_release_resolution_audit_requires_a_proven_mechanic_provider() -> None:
         "mechanical_scope": "mechanical",
     }
 
-    unresolved = audit_release_resolution_readiness([artifact])
-    resolved = audit_release_resolution_readiness(
+    unresolved = audit_release_semantic_validation([artifact])
+    resolved = audit_release_semantic_validation(
         [artifact],
         settled_mechanic_ids={"dnd5e.extension.mechanic.proven"},
     )
@@ -5119,3 +5764,61 @@ def test_module_statblock_repairs_only_bounded_identity_and_challenge_ocr() -> N
         name="Hybrid Poisoner",
     )
     assert parsed.challenge_rating == "1"
+
+
+def test_reviewed_structured_card_repairs_pdf_sentinels_with_audit() -> None:
+    corrupt_paragraph = "�olve theM-lolA�ly A�� oft e� with collAterAI �AMA�e."
+    artifact = author_selection_card_from_candidate(
+        {
+            "kind": "feature",
+            "agent_review_complete": True,
+            "artifact": {
+                "kind": "feature",
+                "selection_applicability": "not_applicable",
+                "card": {
+                    "name": "Reviewed Feature",
+                    "description": (
+                        "The creature is transformed by the feature.\n\n"
+                        f"{corrupt_paragraph}\n\n"
+                        "The crea�ture isn't trans￾ formed by equipment."
+                    ),
+                },
+            },
+        }
+    )
+
+    description = artifact["card"]["description"]
+    assert "collAterAI" not in description
+    assert "The creature isn't transformed by equipment." in description
+    assert "�" not in description
+    assert "\ufffe" not in description
+    assert artifact["card"]["transcription_repairs"] == [
+        {
+            "path": "card.description",
+            "method": "agent_reviewed_pdf_transcription",
+            "u_fffe_removed": 1,
+            "u_fffd_repaired": 8,
+            "dropped_corrupt_paragraph_sha256": [
+                hashlib.sha256(corrupt_paragraph.encode("utf-8")).hexdigest()
+            ],
+        }
+    ]
+
+
+def test_unreviewed_replacement_character_is_not_silently_guessed() -> None:
+    artifact = author_selection_card_from_candidate(
+        {
+            "kind": "feature",
+            "artifact": {
+                "kind": "feature",
+                "selection_applicability": "not_applicable",
+                "card": {
+                    "name": "Unreviewed Feature",
+                    "description": "The crea�ture changes.",
+                },
+            },
+        }
+    )
+
+    assert "�" in artifact["card"]["description"]
+    assert artifact["card"]["transcription_repairs"][0]["u_fffd_repaired"] == 0

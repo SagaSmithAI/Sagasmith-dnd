@@ -102,9 +102,7 @@ def test_raise_dead_restores_one_hp_and_reduces_its_ordeal_each_long_rest() -> N
         effect for effect in revived["sheet"]["effects"] if effect["id"] == "magical-curse"
     )["active"]
     ordeal = next(
-        effect
-        for effect in revived["sheet"]["effects"]
-        if effect["kind"] == "revival_ordeal"
+        effect for effect in revived["sheet"]["effects"] if effect["kind"] == "revival_ordeal"
     )
     assert {change["value"] for change in ordeal["changes"]} == {-4}
 
@@ -393,9 +391,7 @@ def test_expiring_timed_conditions_preserves_condition_from_an_active_effect() -
             "kind": "timed_conditions",
             "active": True,
             "duration": {"period": "hour", "remaining": 1},
-            "changes": [
-                {"path": "conditions", "mode": "add", "value": "poisoned"}
-            ],
+            "changes": [{"path": "conditions", "mode": "add", "value": "poisoned"}],
         },
         {
             "id": "ongoing-poison",
@@ -403,9 +399,7 @@ def test_expiring_timed_conditions_preserves_condition_from_an_active_effect() -
             "kind": "timed_conditions",
             "active": True,
             "duration": {"period": "hour", "remaining": 2},
-            "changes": [
-                {"path": "conditions", "mode": "add", "value": "poisoned"}
-            ],
+            "changes": [{"path": "conditions", "mode": "add", "value": "poisoned"}],
         },
     ]
 
@@ -426,9 +420,7 @@ def test_source_turn_start_expires_only_effects_owned_by_that_source() -> None:
             "source": "gazer-a",
             "active": True,
             "duration": {"period": "source_turn_start", "remaining": 1},
-            "changes": [
-                {"path": "conditions", "mode": "add", "value": "charmed"}
-            ],
+            "changes": [{"path": "conditions", "mode": "add", "value": "charmed"}],
         },
         {
             "id": "fear-gazer-b",
@@ -437,15 +429,11 @@ def test_source_turn_start_expires_only_effects_owned_by_that_source() -> None:
             "source": "gazer-b",
             "active": True,
             "duration": {"period": "source_turn_start", "remaining": 1},
-            "changes": [
-                {"path": "conditions", "mode": "add", "value": "frightened"}
-            ],
+            "changes": [{"path": "conditions", "mode": "add", "value": "frightened"}],
         },
     ]
 
-    result = advance_source_turn_effect_durations(
-        sheet, source_actor_id="gazer-a"
-    )
+    result = advance_source_turn_effect_durations(sheet, source_actor_id="gazer-a")
 
     assert result["expired"] == ["dazing-gazer-a"]
     assert result["sheet"]["conditions"] == ["frightened", "prone"]
@@ -463,9 +451,7 @@ def test_combat_end_expires_every_combat_clock_but_preserves_elapsed_effects() -
             "source": "gazer",
             "active": True,
             "duration": {"period": "source_turn_start", "remaining": 1},
-            "changes": [
-                {"path": "conditions", "mode": "add", "value": "frightened"}
-            ],
+            "changes": [{"path": "conditions", "mode": "add", "value": "frightened"}],
         },
         {
             "id": "shield",
@@ -489,9 +475,7 @@ def test_combat_end_expires_every_combat_clock_but_preserves_elapsed_effects() -
             "kind": "timed_conditions",
             "active": True,
             "duration": {"period": "hour", "remaining": 1},
-            "changes": [
-                {"path": "conditions", "mode": "add", "value": "poisoned"}
-            ],
+            "changes": [{"path": "conditions", "mode": "add", "value": "poisoned"}],
         },
     ]
 
@@ -501,8 +485,7 @@ def test_combat_end_expires_every_combat_clock_but_preserves_elapsed_effects() -
     assert result["sheet"]["conditions"] == ["poisoned"]
     by_id = {effect["id"]: effect for effect in result["sheet"]["effects"]}
     assert all(
-        by_id[effect_id]["ended_reason"] == "combat_ended"
-        for effect_id in result["expired"]
+        by_id[effect_id]["ended_reason"] == "combat_ended" for effect_id in result["expired"]
     )
     assert by_id["long-poison"]["active"] is True
 
@@ -923,9 +906,10 @@ def test_song_of_rest_applies_once_per_eligible_creature() -> None:
     assert rested["song_of_rest"]["rolled_healing"] == 6
     assert rested["song_of_rest"]["applied_healing"] == 5
     assert rested["sheet"]["combat"]["hp"]["value"] == 20
-    assert {
-        receipt["mechanic_id"] for receipt in rested["rule_receipts"]
-    } >= {"dnd5e.core.rest.hit_dice", "dnd5e.core.rest.song_of_rest"}
+    assert {receipt["mechanic_id"] for receipt in rested["rule_receipts"]} >= {
+        "dnd5e.core.rest.hit_dice",
+        "dnd5e.core.rest.song_of_rest",
+    }
 
     no_hit_die = apply_rest(
         target,
@@ -1161,9 +1145,7 @@ def test_2024_arcane_recovery_resets_only_on_a_long_rest() -> None:
             rules=rules,
         )
 
-    long_rested = apply_rest(
-        recovered["sheet"], rest_type="long_rest", rules=rules
-    )
+    long_rested = apply_rest(recovered["sheet"], rest_type="long_rest", rules=rules)
     long_rested["sheet"]["spellcasting"]["spell_slots"]["1"]["value"] = 0
     used_again = apply_rest(
         long_rested["sheet"],
@@ -1172,9 +1154,9 @@ def test_2024_arcane_recovery_resets_only_on_a_long_rest() -> None:
         rules=rules,
     )
     assert used_again["sheet"]["content"]["features"][0]["uses"]["value"] == 0
-    assert {
-        receipt["mechanic_id"] for receipt in recovered["rule_receipts"]
-    } >= {"dnd5e.core.rest.arcane_recovery"}
+    assert {receipt["mechanic_id"] for receipt in recovered["rule_receipts"]} >= {
+        "dnd5e.core.rest.arcane_recovery"
+    }
 
 
 def test_natural_recovery_is_once_per_long_rest() -> None:
@@ -1212,10 +1194,7 @@ def test_natural_recovery_is_once_per_long_rest() -> None:
     }
     sheet["content"]["features"] = [
         {
-            "id": (
-                "dnd5e.content.srd2014.feature."
-                "circle-of-the-land-natural-recovery"
-            ),
+            "id": ("dnd5e.content.srd2014.feature.circle-of-the-land-natural-recovery"),
             "name": "Natural Recovery",
             "source_key": "Circle of the Land",
             "rule_refs": ["bundled:srd2014/02_Classes/Druid.md"],
@@ -1341,9 +1320,7 @@ def test_2024_sorcerous_restoration_uses_declared_points_once_per_long_rest() ->
                 "recovers_on": "long_rest",
                 "source_key": "Sorcerer",
             },
-            "rule_refs": [
-                "bundled:srd2024/DND5eSRD_064-076.md#level-5-sorcerous-restoration"
-            ],
+            "rule_refs": ["bundled:srd2024/DND5eSRD_064-076.md#level-5-sorcerous-restoration"],
             "mechanic_refs": ["dnd5e.core.rest.sorcerous_restoration"],
         }
     ]
@@ -1554,9 +1531,7 @@ def test_2024_human_resourceful_grants_heroic_inspiration_on_long_rest() -> None
             "name": "Resourceful",
             "source_key": "Human",
             "choices": {"grant_heroic_inspiration_on": "long_rest"},
-            "rule_refs": [
-                "bundled:srd2024/DND5eSRD_077-086.md#human-resourceful"
-            ],
+            "rule_refs": ["bundled:srd2024/DND5eSRD_077-086.md#human-resourceful"],
         }
     )
     rules = resolution_context({"edition": "2024", "fingerprint": "", "lock": []})

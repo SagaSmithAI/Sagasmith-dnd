@@ -15,7 +15,7 @@ from sagasmith_dnd.combat_engine import (
     start_encounter,
     start_witch_bolt_tether,
 )
-from sagasmith_dnd.content_import import audit_release_resolution_readiness
+from sagasmith_dnd.content_import import audit_release_semantic_validation
 from sagasmith_dnd.core_rule_pack import get_core_rule_pack
 from sagasmith_dnd.lifecycle import advance_effect_durations
 from sagasmith_dnd.spell_resolution import scaled_roll_expression, spell_resolution_path
@@ -93,28 +93,25 @@ def test_standard_2014_mechanics_pack_is_separate_from_srd_and_native() -> None:
         "dnd5e.content.standard2014.species.tiefling",
     }
     assert all(
-        str(item["rule_refs"][0]).startswith("book:players-handbook-2014:")
-        for item in artifacts
+        str(item["rule_refs"][0]).startswith("book:players-handbook-2014:") for item in artifacts
     )
     assert spell_resolution_path(artifacts[0]["card"]) == "engine_mechanic"
-    witch_bolt = next(
-        item for item in artifacts if item["id"] == CORE_WITCH_BOLT_SPELL_ID
-    )
+    witch_bolt = next(item for item in artifacts if item["id"] == CORE_WITCH_BOLT_SPELL_ID)
     assert spell_resolution_path(witch_bolt["card"]) == "structured_resolution"
     registered = {item.id for item in get_core_rule_pack("2014").boundaries}
     assert set(manifest["native_mechanic_refs"]) <= registered
-    readiness = audit_release_resolution_readiness(artifacts)
+    validation = audit_release_semantic_validation(artifacts)
     assert manifest["resolution_policy"] == "build_time_complete"
-    assert manifest["resolution_readiness"] == readiness
-    assert readiness == {
+    assert manifest["semantic_validation"] == validation
+    assert validation == {
         "schema_version": 1,
         "complete": True,
         "artifact_count": 7,
         "resolved_count": 7,
-            "modes": {
-                "agent_ruling": 4,
-                "kernel_mechanic": 3,
-                "static_grant": 7,
+        "modes": {
+            "agent_ruling": 4,
+            "kernel_mechanic": 3,
+            "static_grant": 7,
         },
         "unresolved": [],
         "first_use_compilation_required": False,
@@ -153,11 +150,7 @@ def test_blade_ward_resists_only_weapon_attack_bps_until_next_turn_end() -> None
     assert cast["automatic_effect"] == "blade_ward"
     assert cast["concentration_started"] is False
     assert cast["ruling_required"] == ["verbal_component", "somatic_component"]
-    active = next(
-        item
-        for item in cast["sheet"]["effects"]
-        if item["id"] == cast["effect_id"]
-    )
+    active = next(item for item in cast["sheet"]["effects"] if item["id"] == cast["effect_id"])
     assert active["source"] == CORE_BLADE_WARD_MECHANIC_ID
     weapon = apply_damage_to_sheet(
         cast["sheet"],
@@ -262,19 +255,13 @@ def test_witch_bolt_uses_scaled_initial_damage_and_fixed_repeat_action() -> None
         action="dodge",
     )
     ended = next(
-        item
-        for item in dodged["ongoing_effects"]
-        if item["id"] == another_tether["effect"]["id"]
+        item for item in dodged["ongoing_effects"] if item["id"] == another_tether["effect"]["id"]
     )
     assert ended["active"] is False
     assert ended["ended_reason"] == "caster_used_action_for_another_purpose"
 
     ranged_encounter = deepcopy(another_tether["encounter"])
-    target = next(
-        item
-        for item in ranged_encounter["combatants"]
-        if item["actor_id"] == "target"
-    )
+    target = next(item for item in ranged_encounter["combatants"] if item["actor_id"] == "target")
     target["position"] = {"x": 7, "y": 0}
     reconciled = reconcile_witch_bolt_range(ranged_encounter)
     assert reconciled["ended"][0]["ended_reason"] == "target_outside_spell_range"

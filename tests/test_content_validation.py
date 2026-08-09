@@ -4,7 +4,7 @@ import copy
 
 import pytest
 
-from sagasmith_dnd.content_readiness import (
+from sagasmith_dnd.content_validation import (
     DND_SELECTION_MATERIALIZERS,
     background_materializer_errors,
     build_catalog_review,
@@ -85,13 +85,19 @@ def test_catalog_review_is_check_and_content_bound() -> None:
     )
 
     assert catalog_review_errors(artifact) == []
-    assert artifact["catalog_review"]["reviewed_content_hash"] == content_fingerprint(
-        artifact
-    )
+    assert artifact["catalog_review"]["reviewed_content_hash"] == content_fingerprint(artifact)
 
     stale = copy.deepcopy(artifact)
     stale["card"]["level"] = 2
     assert any("stale" in error for error in catalog_review_errors(stale))
+
+    illustrated = copy.deepcopy(artifact)
+    illustrated["card"]["image"] = {
+        "asset_key": "statblock.example.image",
+        "alt": "Example source illustration",
+    }
+    assert content_fingerprint(illustrated) == content_fingerprint(artifact)
+    assert catalog_review_errors(illustrated) == []
 
     same_reviewer = _decisions()
     same_reviewer[1]["reviewer"] = same_reviewer[0]["reviewer"]
@@ -106,7 +112,7 @@ def test_catalog_review_cannot_approve_a_failed_boundary_check() -> None:
         build_catalog_review(_artifact(), decisions=decisions)
 
 
-def test_selection_readiness_is_independent_from_runtime_settlement() -> None:
+def test_selection_validation_is_independent_from_runtime_settlement() -> None:
     artifact = _artifact()
     artifact["semantic_resolution"] = {
         "status": "resolved",
@@ -119,15 +125,9 @@ def test_selection_readiness_is_independent_from_runtime_settlement() -> None:
     )
 
     assert selection_contract_errors(artifact) == []
-    assert artifact["selection_contract"]["materializer"] == (
-        DND_SELECTION_MATERIALIZERS["spell"]
-    )
-    assert artifact["selection_contract"]["schema"] == selection_schema_for_artifact(
-        artifact
-    )
-    assert selection_input_errors(
-        artifact, {"method": "spellbook", "source_class": "wizard"}
-    ) == []
+    assert artifact["selection_contract"]["materializer"] == (DND_SELECTION_MATERIALIZERS["spell"])
+    assert artifact["selection_contract"]["schema"] == selection_schema_for_artifact(artifact)
+    assert selection_input_errors(artifact, {"method": "spellbook", "source_class": "wizard"}) == []
     assert selection_input_errors(artifact, {"raw_payload": {}}) == [
         "dnd5e.example.spell.star-flare.selection has unsupported fields: raw_payload"
     ]
@@ -203,9 +203,7 @@ def test_background_materializer_requires_bounded_choice_semantics() -> None:
         "background tool_option_groups options must not overlap",
         "background tool_option_groups must cover tool_options exactly",
     ]
-    card["background_grants"]["choices"]["tool_option_groups"][1]["options"] = [
-        "Tinker's Tools"
-    ]
+    card["background_grants"]["choices"]["tool_option_groups"][1]["options"] = ["Tinker's Tools"]
 
     card["background_grants"]["spell_list_expansion"] = ["Aid", "aid"]
     assert background_materializer_errors(card) == [
@@ -282,9 +280,7 @@ def test_background_materializer_accepts_only_reviewed_embedded_equipment() -> N
     ]
     card["background_grants"]["equipment"]["wallet"]["gp"] = 2
 
-    item = card["background_grants"]["choices"]["equipment_packages"]["A"][
-        "items"
-    ][0]
+    item = card["background_grants"]["choices"]["equipment_packages"]["A"]["items"][0]
     item["artifact_id"] = "dnd5e.content.srd2014.item.guild-signet"
     assert background_materializer_errors(card) == [
         "background equipment package A items[0] needs exactly one of artifact_id, "
@@ -329,20 +325,14 @@ def test_species_materializer_rejects_ocr_counts_and_unbounded_choices() -> None
     )
     assert species_materializer_errors(card) == []
     card["grants"]["fly_speed"] = "30"
-    assert species_materializer_errors(card) == [
-        "species fly_speed must be a nonnegative integer"
-    ]
+    assert species_materializer_errors(card) == ["species fly_speed must be a nonnegative integer"]
     card["grants"]["fly_speed"] = 30
     card["grants"]["armor_proficiencies"] = ["Light Armor", "light armor"]
-    assert species_materializer_errors(card) == [
-        "species armor_proficiencies must be distinct"
-    ]
+    assert species_materializer_errors(card) == ["species armor_proficiencies must be distinct"]
 
     card["grants"]["armor_proficiencies"] = ["Light Armor"]
     card["grants"]["spell_list_expansion"] = ["Aid", "aid"]
-    assert species_materializer_errors(card) == [
-        "species spell_list_expansion must be distinct"
-    ]
+    assert species_materializer_errors(card) == ["species spell_list_expansion must be distinct"]
 
 
 def test_species_materializer_bounds_ability_choices_to_reviewed_options() -> None:
@@ -478,9 +468,7 @@ def test_species_materializer_accepts_one_bounded_feat_choice() -> None:
 
     assert species_materializer_errors(card) == []
     card["grants"]["feat_choice"]["count"] = 2
-    assert species_materializer_errors(card) == [
-        "species feat_choice.count must be 1"
-    ]
+    assert species_materializer_errors(card) == ["species feat_choice.count must be 1"]
 
 
 def test_species_materializer_validates_resources_and_fixed_spell_levels() -> None:
@@ -516,10 +504,7 @@ def test_species_materializer_validates_resources_and_fixed_spell_levels() -> No
 
     assert species_materializer_errors(card) == []
     card["grants"]["resources"]["species:eladrin:fey_step"]["value"] = 2
-    assert any(
-        "value cannot exceed max" in error
-        for error in species_materializer_errors(card)
-    )
+    assert any("value cannot exceed max" in error for error in species_materializer_errors(card))
     card["grants"]["resources"]["species:eladrin:fey_step"]["value"] = 1
     card["grants"]["spell_grants"][0]["casting_overrides"]["fixed_cast_level"] = 0
     assert any(
@@ -538,6 +523,17 @@ def test_species_materializer_accepts_decreases_defenses_and_shared_spell_resour
             "immunities": ["poison"],
             "condition_immunities": ["poisoned"],
             "natural_armor_base": 13,
+            "natural_armor_includes_dexterity": True,
+            "natural_weapons": [
+                {
+                    "name": "Bite",
+                    "attack_ability": "strength",
+                    "damage_formula": "1d6",
+                    "damage_type": "piercing",
+                    "reach_ft": 5,
+                    "description": "A natural weapon.",
+                }
+            ],
             "spell_grants": [
                 {
                     "name": spell_name,
@@ -561,6 +557,12 @@ def test_species_materializer_accepts_decreases_defenses_and_shared_spell_resour
     card["grants"]["spell_grants"][1]["free_casts"] = 2
     assert any(
         "sharing resource_group must use the same" in error
+        for error in species_materializer_errors(card)
+    )
+    card["grants"]["spell_grants"][1]["free_casts"] = 1
+    card["grants"]["natural_weapons"][0]["damage_formula"] = "source dice"
+    assert any(
+        "damage_formula must be one bounded dice formula" in error
         for error in species_materializer_errors(card)
     )
 
@@ -617,8 +619,7 @@ def test_feat_materializer_accepts_fixed_and_selected_spell_grants() -> None:
     invalid = copy.deepcopy(card)
     invalid["selection_requirements"]["groups"][1]["eligible_classes"] = []
     assert any(
-        "eligible_classes must not be empty" in error
-        for error in feat_materializer_errors(invalid)
+        "eligible_classes must not be empty" in error for error in feat_materializer_errors(invalid)
     )
 
 
@@ -738,6 +739,22 @@ def test_subclass_spell_grants_keep_known_and_prepared_semantics_distinct() -> N
     ]
 
 
+def test_subclass_rejects_duplicate_always_prepared_spell_shape() -> None:
+    card = {
+        "name": "Forge Domain",
+        "class_name": "Cleric",
+        "minimum_level": 1,
+        "always_prepared_spells": [{"name": "Identify", "minimum_level": 1}],
+        "spell_grants": [],
+        "spell_list_expansion": [],
+    }
+
+    assert subclass_spell_grant_errors(card) == [
+        "subclass always_prepared_spells is unsupported; use spell_grants with "
+        "method=always_prepared"
+    ]
+
+
 @pytest.mark.parametrize(
     ("kind", "card", "selection_fields"),
     [
@@ -789,9 +806,7 @@ def test_subclass_spell_grants_keep_known_and_prepared_semantics_distinct() -> N
                 "class_name": "Fighter",
                 "minimum_level": 2,
                 "selection_requirements": {"field": "style"},
-                "selection_requirements_by_level": {
-                    "4": {"field": "ability_score_increases"}
-                },
+                "selection_requirements_by_level": {"4": {"field": "ability_score_increases"}},
                 "mechanical_grants": {},
             },
             [
@@ -817,8 +832,11 @@ def test_subclass_spell_grants_keep_known_and_prepared_semantics_distinct() -> N
             },
             [],
         ),
-        ("species", {"name": "Elf", "grants": {}}, [
-            "abilities",
+        (
+            "species",
+            {"name": "Elf", "grants": {}},
+            [
+                "abilities",
                 "ability_scores_include_species_grants",
                 "cantrip_artifact_id",
                 "feat_selection",
@@ -830,8 +848,9 @@ def test_subclass_spell_grants_keep_known_and_prepared_semantics_distinct() -> N
                 "skills",
                 "tool_expertise",
                 "tools",
-            "values_include_species_grants",
-        ]),
+                "values_include_species_grants",
+            ],
+        ),
         (
             "subclass",
             {"name": "Champion", "class_name": "Fighter", "minimum_level": 3},
@@ -843,20 +862,15 @@ def test_selection_schema_is_typed_and_card_bound(
     kind: str, card: dict, selection_fields: list[str]
 ) -> None:
     artifact = {"id": f"example.{kind}", "kind": kind, "card": card}
-    artifact["selection_contract"] = build_selection_contract(
-        artifact, status="ready"
-    )
+    artifact["selection_contract"] = build_selection_contract(artifact, status="ready")
 
     assert selection_contract_errors(artifact) == []
-    assert artifact["selection_contract"]["schema"]["selection_fields"] == (
-        selection_fields
-    )
+    assert artifact["selection_contract"]["schema"]["selection_fields"] == (selection_fields)
 
     stale_schema = copy.deepcopy(artifact)
     stale_schema["selection_contract"]["schema"]["selection_fields"].append("payload")
     assert any(
-        "schema does not match" in error
-        for error in selection_contract_errors(stale_schema)
+        "schema does not match" in error for error in selection_contract_errors(stale_schema)
     )
 
 
@@ -869,7 +883,5 @@ def test_unsupported_kind_cannot_claim_a_safe_materializer() -> None:
     with pytest.raises(ValueError, match="no safe character materializer"):
         build_selection_contract(artifact, status="ready")
 
-    artifact["selection_contract"] = build_selection_contract(
-        artifact, status="not_applicable"
-    )
+    artifact["selection_contract"] = build_selection_contract(artifact, status="not_applicable")
     assert selection_contract_errors(artifact) == []

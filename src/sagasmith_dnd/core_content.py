@@ -10,7 +10,7 @@ from typing import Any, Iterable
 
 from sagasmith_core.text import ascii_slug
 
-from sagasmith_dnd.content_import import audit_release_resolution_readiness
+from sagasmith_dnd.content_import import audit_release_semantic_validation
 from sagasmith_dnd.content_resolution import finalize_bundled_artifact_resolutions
 from sagasmith_dnd.spell_resolution import (
     SPELL_RESOLUTION_MECHANIC_ID,
@@ -26,7 +26,7 @@ from sagasmith_dnd.standard_spell_ids import (
 )
 
 PACK_ID = "dnd5e.content.srd2014"
-PACK_VERSION = "1.21.0"
+PACK_VERSION = "1.22.0"
 
 _SUBCLASS_LEVELS = {
     "barbarian": 3,
@@ -85,7 +85,7 @@ def _cached_srd2014_content(skill_root: str) -> tuple[dict[str, Any], list[dict[
             if str(mechanic_ref)
         }
     )
-    resolution_readiness = audit_release_resolution_readiness(artifacts)
+    semantic_validation = audit_release_semantic_validation(artifacts)
     return (
         {
             "id": PACK_ID,
@@ -107,7 +107,7 @@ def _cached_srd2014_content(skill_root: str) -> tuple[dict[str, Any], list[dict[
                 "item",
             ],
             "resolution_policy": "build_time_complete",
-            "resolution_readiness": resolution_readiness,
+            "semantic_validation": semantic_validation,
         },
         artifacts,
     )
@@ -801,6 +801,7 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
                     "base": 10,
                     "ability": "constitution",
                     "allows_shield": True,
+                    "includes_dexterity": True,
                 }
             }
         }
@@ -811,6 +812,7 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
                     "base": 10,
                     "ability": "wisdom",
                     "allows_shield": False,
+                    "includes_dexterity": True,
                 }
             }
         }
@@ -1721,9 +1723,7 @@ def _background_fields(body: str) -> dict[str, Any]:
             "choices": {
                 "language_count": language_count,
                 "language_options": [],
-                "allow_any_language": bool(
-                    language_count and "choice" in language_text.casefold()
-                ),
+                "allow_any_language": bool(language_count and "choice" in language_text.casefold()),
                 "tool_choice_count": 0,
                 "tool_options": [],
                 "equipment_description": equipment,

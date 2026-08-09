@@ -417,9 +417,7 @@ def test_character_content_preserves_full_addon_artifact_identifiers() -> None:
     spell_id = "s" * 300
     sheet = default_character_sheet()
     sheet["content"]["features"] = [{"id": feature_id, "name": "Addon Feature"}]
-    sheet["content"]["spells"] = [
-        {"id": spell_id, "name": "Addon Spell", "level": 1}
-    ]
+    sheet["content"]["spells"] = [{"id": spell_id, "name": "Addon Spell", "level": 1}]
     sheet["effects"] = [
         {
             "name": "Addon Spell Effect",
@@ -501,7 +499,6 @@ def test_inventory_wallet_and_effect_contracts() -> None:
     remaining, moved = remove_inventory_item(sheet, item_id, 1)
     assert moved["quantity"] == 1
     assert remaining["inventory"]["items"][0]["quantity"] == 1
-
 
 
 def test_wallet_valuation_uses_the_shared_denomination_contract() -> None:
@@ -986,9 +983,7 @@ def test_weapon_cards_preserve_reviewed_source_bound_resolution_plans() -> None:
     assert weapon_id == "binding-blade"
     sheet = equip_inventory_item(sheet, weapon_id, "main_hand")
 
-    normalized_item = next(
-        item for item in sheet["inventory"]["items"] if item["id"] == weapon_id
-    )
+    normalized_item = next(item for item in sheet["inventory"]["items"] if item["id"] == weapon_id)
     attack = derive_character_sheet(sheet)["inventory"]["weapon_attacks"][0]
 
     assert normalized_item["resolution_plan"]["fingerprint"]
@@ -1001,23 +996,15 @@ def test_weapon_cards_preserve_reviewed_source_bound_resolution_plans() -> None:
         agent_ruling={
             "default_resolver": "agent",
             "ruling_kind": "module_specific_procedure",
-            "decision": (
-                "Store the quoted on-hit condition as this item's solution."
-            ),
-            "reason": (
-                "The exact source clause deterministically restrains the target."
-            ),
+            "decision": ("Store the quoted on-hit condition as this item's solution."),
+            "reason": ("The exact source clause deterministically restrains the target."),
         },
     )
     persisted = validate_character_sheet(sheet)
     persisted_item = next(
-        item
-        for item in persisted["inventory"]["items"]
-        if item["id"] == weapon_id
+        item for item in persisted["inventory"]["items"] if item["id"] == weapon_id
     )
-    assert persisted_item["resolution_solution"]["plan_fingerprint"] == (
-        compiled.fingerprint
-    )
+    assert persisted_item["resolution_solution"]["plan_fingerprint"] == (compiled.fingerprint)
 
 
 def test_attunement_enforces_capacity_copies_transfer_and_death() -> None:
@@ -1176,6 +1163,7 @@ def test_class_unarmored_formulas_honor_ability_and_shield_conditions() -> None:
                         "base": 10,
                         "ability": "constitution",
                         "allows_shield": True,
+                        "includes_dexterity": True,
                     },
                 }
             ],
@@ -1194,6 +1182,7 @@ def test_class_unarmored_formulas_honor_ability_and_shield_conditions() -> None:
                         "base": 10,
                         "ability": "wisdom",
                         "allows_shield": False,
+                        "includes_dexterity": True,
                     },
                 }
             ],
@@ -1218,6 +1207,44 @@ def test_class_unarmored_formulas_honor_ability_and_shield_conditions() -> None:
         "ability": "wisdom",
         "bonus": 4,
     }
+
+
+def test_fixed_natural_armor_formula_omits_dexterity_and_allows_shield() -> None:
+    sheet = default_character_sheet()
+    sheet["abilities"]["dexterity"]["score"] = 18
+    sheet, shield_id = add_inventory_item(
+        sheet,
+        {
+            "id": "shell-shield",
+            "name": "Shield",
+            "kind": "shield",
+            "mechanics": {"ac_bonus": 2, "magic_bonus": 0},
+        },
+    )
+    sheet = equip_inventory_item(sheet, shield_id, "shield")
+    sheet, _ = add_effect(
+        sheet,
+        {
+            "name": "Shell Natural Armor",
+            "kind": "feature",
+            "changes": [
+                {
+                    "path": "combat.ac.unarmored_formula",
+                    "mode": "override",
+                    "value": {
+                        "base": 17,
+                        "ability": None,
+                        "allows_shield": True,
+                        "includes_dexterity": False,
+                    },
+                }
+            ],
+        },
+    )
+
+    derived = derive_character_sheet(sheet)
+    assert derived["armor_class"] == 19
+    assert derived["armor_class_breakdown"]["dexterity_bonus"] == 0
 
 
 def test_equipment_schema_rejects_incompatible_slots_and_inconsistent_state() -> None:

@@ -20,9 +20,7 @@ def test_reviewed_spell_resolutions_scale_without_free_form_formulas() -> None:
     assert spell_attack_count(scorching_ray, cast_level=2) == 3
     assert spell_attack_count(scorching_ray, cast_level=5) == 6
     assert (
-        scaled_roll_expression(
-            scorching_ray["attack"]["damage"], cast_level=5, actor_level=5
-        )
+        scaled_roll_expression(scorching_ray["attack"]["damage"], cast_level=5, actor_level=5)
         == "2d6"
     )
 
@@ -91,9 +89,7 @@ def test_spell_resolution_audit_includes_known_cantrips_and_all_paths() -> None:
     sacred_flame = known_spell_resolution("Sacred Flame")
     assert sacred_flame is not None
     assert (
-        scaled_roll_expression(
-            sacred_flame["save"]["damage"], cast_level=0, actor_level=11
-        )
+        scaled_roll_expression(sacred_flame["save"]["damage"], cast_level=0, actor_level=11)
         == "3d8"
     )
     assert (
@@ -212,8 +208,7 @@ def test_spell_resolution_rejects_mixed_area_dimensions() -> None:
 
 def test_statblock_spell_attack_overlay_keeps_reviewed_ray_count() -> None:
     description = (
-        "*Ranged Spell Attack:* +6 to hit, range 60 ft., one target. "
-        "*Hit:* 7 (2d6) fire damage."
+        "*Ranged Spell Attack:* +6 to hit, range 60 ft., one target. *Hit:* 7 (2d6) fire damage."
     )
     parsed = spell_attack_action_resolution(description)
     assert parsed is not None
@@ -230,8 +225,7 @@ def test_statblock_spell_attack_overlay_keeps_reviewed_ray_count() -> None:
 
 def test_statblock_spell_attack_card_keeps_display_and_settlement_consistent() -> None:
     description = (
-        "*Ranged Spell Attack:* +6 to hit, range 60 ft., one target. "
-        "*Hit:* 7 (2d6) fire damage."
+        "*Ranged Spell Attack:* +6 to hit, range 60 ft., one target. *Hit:* 7 (2d6) fire damage."
     )
     core = {
         "id": "dnd5e.content.srd2014.spell.scorching-ray",

@@ -272,9 +272,7 @@ def _normalize_spell_list_expansion(value: Any, field: str) -> list[dict[str, st
     return result
 
 
-def _normalize_subclass_spell_list_expansion(
-    value: Any, field: str
-) -> list[dict[str, str]]:
+def _normalize_subclass_spell_list_expansion(value: Any, field: str) -> list[dict[str, str]]:
     result: list[dict[str, str]] = []
     for index, raw_grant in enumerate(_array(value or [], field)):
         grant_field = f"{field}[{index}]"
@@ -298,9 +296,7 @@ def _normalize_subclass_spell_list_expansion(
         )
     if any(not grant[field_name] for grant in result for field_name in grant):
         raise ValueError(f"{field} needs exact artifact provenance and source class")
-    identities = [
-        (item["source_class"].casefold(), item["artifact_id"]) for item in result
-    ]
+    identities = [(item["source_class"].casefold(), item["artifact_id"]) for item in result]
     if len(identities) != len(set(identities)):
         raise ValueError(f"{field} contains duplicate class artifacts")
     return result
@@ -354,9 +350,7 @@ def _normalize_recharge_contract(value: Any, field: str) -> dict[str, Any]:
         maximum=100,
     )
     if kind != "d6_turn_start" or minimum > maximum or not source_marker:
-        raise ValueError(
-            f"{field} requires a d6_turn_start range and exact source marker"
-        )
+        raise ValueError(f"{field} requires a d6_turn_start range and exact source marker")
     return {
         "kind": kind,
         "minimum": minimum,
@@ -813,8 +807,6 @@ def _normalize_resource_scaling(value: Any, field: str) -> dict[str, Any]:
         "recovery_amounts": recovery_amounts,
         "unlimited_at_level": unlimited_at_level,
     }
-
-
 
 
 def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, Any]:
@@ -1367,10 +1359,7 @@ def validate_inventory(value: Any) -> dict[str, Any]:
     # source_key records provenance and can legitimately differ between two
     # copies acquired from different adventure chunks.  The 2014 attunement
     # restriction is about copies of the same named item.
-    attuned_identities = [
-        str(item["name"]).strip().casefold()
-        for item in attuned_items
-    ]
+    attuned_identities = [str(item["name"]).strip().casefold() for item in attuned_items]
     if len(attuned_identities) != len(set(attuned_identities)):
         raise ValueError("a character cannot attune to more than one copy of an item")
     by_id = {item["id"]: item for item in items}
@@ -1838,9 +1827,7 @@ def _normalize_spell(value: Any, field: str) -> dict[str, Any]:
         )
         method = _text(source.get("method"), f"{source_field}.method", maximum=100)
         if method not in {"at_will", "known", "limited_use"}:
-            raise ValueError(
-                f"{source_field}.method must be at_will, known, or limited_use"
-            )
+            raise ValueError(f"{source_field}.method must be at_will, known, or limited_use")
         ability = _text(
             source.get("spellcasting_ability"),
             f"{source_field}.spellcasting_ability",
@@ -2085,9 +2072,7 @@ def _normalize_effect(value: Any, field: str) -> dict[str, Any]:
             or not isinstance(change_value, (int, float))
             or not 0 <= float(change_value) <= 10
         ):
-            raise ValueError(
-                f"{field} combat.speed.multiplier requires a multiplier from 0 to 10"
-            )
+            raise ValueError(f"{field} combat.speed.multiplier requires a multiplier from 0 to 10")
         if path in {"rolls.attack.advantage", "rolls.attack.disadvantage"} and (
             mode != "set" or not isinstance(change_value, bool)
         ):
@@ -2336,9 +2321,7 @@ def validate_character_sheet(
         "sheet.progression.species_grants",
         {"spell_list_expansion"},
     )
-    subclass_grants = _object(
-        progression["subclass_grants"], "sheet.progression.subclass_grants"
-    )
+    subclass_grants = _object(progression["subclass_grants"], "sheet.progression.subclass_grants")
     _reject_unknown(
         subclass_grants,
         "sheet.progression.subclass_grants",
@@ -2554,9 +2537,7 @@ def validate_character_sheet(
         "last_rest_completed_elapsed_ticks": optional_elapsed_ticks(
             "last_rest_completed_elapsed_ticks"
         ),
-        "last_long_rest_elapsed_ticks": optional_elapsed_ticks(
-            "last_long_rest_elapsed_ticks"
-        ),
+        "last_long_rest_elapsed_ticks": optional_elapsed_ticks("last_long_rest_elapsed_ticks"),
     }
     started = normalized_rest_history["last_rest_started_elapsed_ticks"]
     completed = normalized_rest_history["last_rest_completed_elapsed_ticks"]
@@ -3374,9 +3355,7 @@ def validate_character_notes(
     notes: dict[str, Any], *, character_type: str | None = None
 ) -> dict[str, Any]:
     value = _merge_defaults(default_character_notes(), _object(notes, "notes"))
-    _reject_unknown(
-        value, "notes", {"schema_version", "profile", "relationships", "goals"}
-    )
+    _reject_unknown(value, "notes", {"schema_version", "profile", "relationships", "goals"})
     if _integer(value["schema_version"], "notes.schema_version") != 3:
         raise ValueError("notes.schema_version must be 3")
     profile = _object(value["profile"], "notes.profile")
@@ -3440,9 +3419,7 @@ def validate_party_state(state: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("campaign.state.game_phase must be lobby or play")
     value["game_phase"] = game_phase
     game_time = (
-        validate_game_time(value["game_time"])
-        if "game_time" in value
-        else game_time_from_ticks()
+        validate_game_time(value["game_time"]) if "game_time" in value else game_time_from_ticks()
     )
     value["game_time"] = game_time
     party = _object(value.get("party") or {}, "campaign.state.party")
@@ -3595,9 +3572,10 @@ def _derive_armor_class(
             ):
                 unarmored_formulas.append(
                     {
-                        "base": int(change["value"]),
-                        "ability": None,
-                        "allows_shield": True,
+                            "base": int(change["value"]),
+                            "ability": None,
+                            "allows_shield": True,
+                            "includes_dexterity": True,
                         "effect_id": effect["id"],
                         "effect_name": effect["name"],
                         "path": change["path"],
@@ -3610,22 +3588,31 @@ def _derive_armor_class(
                 and isinstance(change["value"], dict)
             ):
                 formula = dict(change["value"])
-                ability = str(formula.get("ability") or "").casefold()
+                raw_ability = formula.get("ability")
+                ability = (
+                    str(raw_ability).casefold()
+                    if isinstance(raw_ability, str) and raw_ability
+                    else None
+                )
                 base = formula.get("base")
                 allows_shield = formula.get("allows_shield")
+                includes_dexterity = formula.get("includes_dexterity")
                 if (
-                    set(formula) == {"base", "ability", "allows_shield"}
+                    set(formula)
+                    == {"base", "ability", "allows_shield", "includes_dexterity"}
                     and not isinstance(base, bool)
                     and isinstance(base, int)
                     and base >= 0
-                    and ability in ability_modifiers
+                    and (ability is None or ability in ability_modifiers)
                     and isinstance(allows_shield, bool)
+                    and isinstance(includes_dexterity, bool)
                 ):
                     unarmored_formulas.append(
                         {
                             "base": base,
                             "ability": ability,
                             "allows_shield": allows_shield,
+                            "includes_dexterity": includes_dexterity,
                             "effect_id": effect["id"],
                             "effect_name": effect["name"],
                             "path": change["path"],
@@ -3693,7 +3680,9 @@ def _derive_armor_class(
         for formula in unarmored_formulas:
             if shield_id and not formula["allows_shield"]:
                 continue
-            dexterity_bonus = ability_modifiers["dexterity"]
+            dexterity_bonus = (
+                ability_modifiers["dexterity"] if formula["includes_dexterity"] else 0
+            )
             ability = formula["ability"]
             ability_bonus = ability_modifiers[ability] if ability else 0
             candidate_total = (
@@ -4432,11 +4421,7 @@ def consume_weapon_limited_use(
 
     value = validate_character_sheet(sheet)
     weapon = next(
-        (
-            item
-            for item in value["inventory"]["items"]
-            if item["id"] == weapon_id
-        ),
+        (item for item in value["inventory"]["items"] if item["id"] == weapon_id),
         None,
     )
     if weapon is None or weapon["kind"] != "weapon":

@@ -10,7 +10,7 @@ from sagasmith_dnd.character_schema import (
     default_character_sheet,
     derive_character_sheet,
 )
-from sagasmith_dnd.content_readiness import catalog_review_errors
+from sagasmith_dnd.content_validation import catalog_review_errors
 from sagasmith_dnd.portable_cards import (
     SRD2014_PRESET_PACK_ID,
     SRD2024_PRESET_PACK_ID,
@@ -101,9 +101,7 @@ def test_2024_modifier_only_source_preserves_exact_modifier_and_save() -> None:
 
 
 def test_dnd_card_rejects_a_resigned_noncanonical_sheet() -> None:
-    card = copy.deepcopy(
-        build_srd2014_preset_pack(_skill_root())["payload"]["cards"][0]
-    )
+    card = copy.deepcopy(build_srd2014_preset_pack(_skill_root())["payload"]["cards"][0])
     del card["payload"]["sheet"]["inventory"]
     card["checksum"] = portable_checksum(card)
 
@@ -171,7 +169,4 @@ def test_actor_catalog_review_is_bound_inside_the_portable_card() -> None:
     stale = copy.deepcopy(reviewed)
     stale["payload"]["name"] = "Different Guard"
     stale["checksum"] = portable_checksum(stale)
-    assert any(
-        "stale" in error
-        for error in catalog_review_errors(actor_catalog_artifact(stale))
-    )
+    assert any("stale" in error for error in catalog_review_errors(actor_catalog_artifact(stale)))

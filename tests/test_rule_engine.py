@@ -107,8 +107,7 @@ def test_rule_extension_settles_whitelisted_operation_with_receipt() -> None:
     )
     assert result["sheet"]["resources"]["test"]["value"] == 1
     assert any(
-        receipt["mechanic_id"] == "dnd5e.xgte.test.recover"
-        for receipt in result["rule_receipts"]
+        receipt["mechanic_id"] == "dnd5e.xgte.test.recover" for receipt in result["rule_receipts"]
     )
     assert result["ruleset_fingerprint"] == rules.fingerprint
 
@@ -277,9 +276,9 @@ def test_rule_extension_condition_changes_share_immunity_and_effect_ownership() 
             ]
         )
     )
-    assert apply_rule_event(sourced, "rest.after", remove_rules).sheet[
-        "conditions"
-    ] == ["frightened"]
+    assert apply_rule_event(sourced, "rest.after", remove_rules).sheet["conditions"] == [
+        "frightened"
+    ]
 
 
 def test_rule_extension_effects_share_condition_projection_and_cleanup() -> None:
@@ -316,13 +315,9 @@ def test_rule_extension_effects_share_condition_projection_and_cleanup() -> None
     immune["traits"]["condition_immunities"] = ["frightened"]
     assert apply_rule_event(immune, "rest.after", add_rules).sheet["conditions"] == []
 
-    affected = apply_rule_event(
-        default_character_sheet(), "rest.after", add_rules
-    ).sheet
+    affected = apply_rule_event(default_character_sheet(), "rest.after", add_rules).sheet
     assert affected["conditions"] == ["frightened"]
-    assert apply_rule_event(affected, "rest.after", remove_rules).sheet[
-        "conditions"
-    ] == []
+    assert apply_rule_event(affected, "rest.after", remove_rules).sheet["conditions"] == []
 
     with pytest.raises(RuleCompilationError, match="effect does not exist"):
         apply_rule_event(default_character_sheet(), "rest.after", remove_rules)
@@ -570,9 +565,7 @@ def test_compiler_rejects_invalid_predicates_values_and_empty_citations() -> Non
         "citations": [{"source": "local:xgte"}],
     }
     with pytest.raises(RuleCompilationError, match="unsupported predicate"):
-        resolution_context(
-            _effective([{**base, "predicates": [{"kind": "python.eval"}]}])
-        )
+        resolution_context(_effective([{**base, "predicates": [{"kind": "python.eval"}]}]))
     with pytest.raises(RuleCompilationError, match="modifier.add value"):
         resolution_context(
             _effective(
@@ -589,9 +582,7 @@ def test_compiler_rejects_invalid_predicates_values_and_empty_citations() -> Non
     with pytest.raises(RuleCompilationError, match="source citation"):
         resolution_context(_effective([{**base, "citations": [{}]}]))
     with pytest.raises(RuleCompilationError, match="operations must be a list"):
-        resolution_context(
-            _effective([{**base, "operations": {"op": "advantage.add"}}])
-        )
+        resolution_context(_effective([{**base, "operations": {"op": "advantage.add"}}]))
     with pytest.raises(RuleCompilationError, match="priority must be an integer"):
         resolution_context(_effective([{**base, "priority": "first"}]))
     with pytest.raises(RuleCompilationError, match="cannot consume modifier target"):

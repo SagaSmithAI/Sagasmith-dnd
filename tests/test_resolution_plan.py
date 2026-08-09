@@ -97,9 +97,7 @@ def _plan() -> dict:
                     "expression": {"$slot": "damage"},
                     "damage_type": "radiant",
                     "source": "Prismatic Pulse",
-                    "reduction": {
-                        "$result": "save.damage_reduction_by_actor_id"
-                    },
+                    "reduction": {"$result": "save.damage_reduction_by_actor_id"},
                 },
             },
         ],
@@ -171,9 +169,7 @@ def test_rule_card_locks_steps_while_agent_only_fills_typed_slots() -> None:
 
 def test_plan_rejects_extra_operations_unknown_slots_and_unsafe_values() -> None:
     plan = _plan()
-    plan["steps"].append(
-        {"id": "python", "op": "python.eval", "args": {"code": "pass"}}
-    )
+    plan["steps"].append({"id": "python", "op": "python.eval", "args": {"code": "pass"}})
     with pytest.raises(ResolutionPlanCompilationError, match="supported op"):
         compile_resolution_plan(plan)
 
@@ -301,10 +297,13 @@ def test_v2_trigger_filter_binds_a_plan_to_the_paid_attack_event() -> None:
     assert bound.trigger_filter["target_actor_id"] == "hero-1"
     assert resolution_plan_trigger_matches(bound, event) is True
     require_resolution_plan_trigger(bound, event)
-    assert resolution_plan_trigger_matches(
-        bound,
-        {**event, "target_actor_id": "hero-2"},
-    ) is False
+    assert (
+        resolution_plan_trigger_matches(
+            bound,
+            {**event, "target_actor_id": "hero-2"},
+        )
+        is False
+    )
     with pytest.raises(ResolutionPlanExecutionError, match="paid engine event"):
         require_resolution_plan_trigger(
             bound,
@@ -380,9 +379,7 @@ def test_attack_ac_bonus_plan_rejects_nonstatic_or_invalid_semantics(
 
 
 def test_attack_ac_bonus_plan_rejects_agent_bound_bonus_slots() -> None:
-    plan = _attack_ac_bonus_plan(
-        {"bonus": {"$slot": "bonus"}, "attack_modes": ["melee"]}
-    )
+    plan = _attack_ac_bonus_plan({"bonus": {"$slot": "bonus"}, "attack_modes": ["melee"]})
     plan["slots"] = {
         "bonus": {
             "kind": "integer",
@@ -436,14 +433,10 @@ def test_duration_and_random_exclusions_are_source_bounded() -> None:
         agent_ruling=_agent_ruling(),
     )
     assert bound.steps[-2]["args"]["exclude"] == ["fear"]
-    assert bound.steps[-1]["args"]["duration"] == {
-        "kind": "source_turn_start"
-    }
+    assert bound.steps[-1]["args"]["duration"] == {"kind": "source_turn_start"}
 
     invalid_duration = deepcopy(plan)
-    invalid_duration["steps"][-1]["args"]["duration"] = {
-        "kind": "source_turn_end"
-    }
+    invalid_duration["steps"][-1]["args"]["duration"] = {"kind": "source_turn_end"}
     with pytest.raises(
         ResolutionPlanBindingError,
         match="duration kind is unsupported",

@@ -262,9 +262,7 @@ def _rolls(value: list[Any] | None, rule: dict[str, int]) -> list[dict[str, Any]
         if not isinstance(dice, list) or len(dice) != rule["dice"]:
             raise ValueError(f"each roll must contain {rule['dice']} dice")
         invalid_die = any(
-            isinstance(item, bool)
-            or not isinstance(item, int)
-            or not 1 <= item <= rule["sides"]
+            isinstance(item, bool) or not isinstance(item, int) or not 1 <= item <= rule["sides"]
             for item in dice
         )
         if invalid_die:

@@ -106,9 +106,7 @@ def build_content_solution(
             "source_card_id": plan.source_card_id,
             "source_card_kind": plan.source_card_kind,
             "source_fingerprint": content_solution_source_fingerprint(plan),
-            "source_card_fingerprint": content_solution_card_fingerprint(
-                source_card
-            ),
+            "source_card_fingerprint": content_solution_card_fingerprint(source_card),
             "plan_fingerprint": plan.fingerprint,
             "application_id": application_id,
             "compiled_by": agent_ruling,
@@ -144,23 +142,17 @@ def normalize_content_solution(
     }
     unknown = set(value) - allowed
     if unknown:
-        raise ContentSolutionError(
-            f"resolution_solution has unsupported fields: {sorted(unknown)}"
-        )
+        raise ContentSolutionError(f"resolution_solution has unsupported fields: {sorted(unknown)}")
     schema_version = value.get("schema_version")
     status = str(value.get("status") or "")
     solution_version = value.get("solution_version")
     application_id = str(value.get("application_id") or "").strip()
     source_fingerprint = str(value.get("source_fingerprint") or "")
-    source_card_fingerprint = str(
-        value.get("source_card_fingerprint") or ""
-    )
+    source_card_fingerprint = str(value.get("source_card_fingerprint") or "")
     plan_fingerprint = str(value.get("plan_fingerprint") or "")
     replaces = str(value.get("replaces_plan_fingerprint") or "")
     if schema_version != CONTENT_SOLUTION_SCHEMA_VERSION:
-        raise ContentSolutionError(
-            "resolution_solution schema_version is unsupported"
-        )
+        raise ContentSolutionError("resolution_solution schema_version is unsupported")
     if status != "compiled":
         raise ContentSolutionError("resolution_solution status must be compiled")
     if (
@@ -168,28 +160,21 @@ def normalize_content_solution(
         or not isinstance(solution_version, int)
         or solution_version < 1
     ):
-        raise ContentSolutionError(
-            "resolution_solution solution_version must be positive"
-        )
+        raise ContentSolutionError("resolution_solution solution_version must be positive")
     if _SAFE_ID_RE.fullmatch(application_id) is None:
-        raise ContentSolutionError(
-            "resolution_solution application_id must be stable"
-        )
+        raise ContentSolutionError("resolution_solution application_id must be stable")
     if (
         str(value.get("source_card_id") or "") != plan.source_card_id
         or str(value.get("source_card_kind") or "") != plan.source_card_kind
         or plan_fingerprint != plan.fingerprint
         or source_fingerprint != content_solution_source_fingerprint(plan)
-        or source_card_fingerprint
-        != content_solution_card_fingerprint(source_card)
+        or source_card_fingerprint != content_solution_card_fingerprint(source_card)
     ):
         raise ContentSolutionError(
             "resolution_solution does not match its compiled plan and evidence"
         )
     if replaces and _FINGERPRINT_RE.fullmatch(replaces) is None:
-        raise ContentSolutionError(
-            "resolution_solution replaces_plan_fingerprint is invalid"
-        )
+        raise ContentSolutionError("resolution_solution replaces_plan_fingerprint is invalid")
     compiled_by = _normalize_compiler_ruling(value.get("compiled_by"))
     return {
         "schema_version": CONTENT_SOLUTION_SCHEMA_VERSION,
@@ -208,9 +193,7 @@ def normalize_content_solution(
 
 def _normalize_compiler_ruling(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
-        raise ContentSolutionError(
-            "resolution_solution compiled_by must be an object"
-        )
+        raise ContentSolutionError("resolution_solution compiled_by must be an object")
     allowed = {
         "default_resolver",
         "ruling_kind",
@@ -230,9 +213,7 @@ def _normalize_compiler_ruling(value: Any) -> dict[str, Any]:
         or not 10 <= len(decision) <= 1000
         or not 10 <= len(reason) <= 500
     ):
-        raise ContentSolutionError(
-            "resolution_solution compiled_by must be a bounded Agent ruling"
-        )
+        raise ContentSolutionError("resolution_solution compiled_by must be a bounded Agent ruling")
     return {
         "default_resolver": "agent",
         "ruling_kind": ruling_kind,

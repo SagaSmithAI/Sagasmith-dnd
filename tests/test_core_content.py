@@ -1,7 +1,7 @@
 from collections import Counter
 from pathlib import Path
 
-from sagasmith_dnd.content_import import audit_release_resolution_readiness
+from sagasmith_dnd.content_import import audit_release_semantic_validation
 from sagasmith_dnd.core_content import (
     PACK_VERSION,
     _feat_prerequisites,
@@ -15,9 +15,7 @@ from sagasmith_dnd.standard_feature_ids import (
 
 
 def test_non_numeric_feat_prerequisite_defaults_to_agent_review() -> None:
-    assert _feat_prerequisites(
-        "*Prerequisite: Spellcasting or Pact Magic feature*"
-    ) == [
+    assert _feat_prerequisites("*Prerequisite: Spellcasting or Pact Magic feature*") == [
         {
             "kind": "dm_review",
             "text": "Spellcasting or Pact Magic feature",
@@ -48,13 +46,9 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     manifest, artifacts = build_srd2014_content(workspace / "SagaSmith-dnd-skills")
     counts = Counter(item["kind"] for item in artifacts)
 
-    assert manifest["version"] == PACK_VERSION == "1.21.0"
-    assert "dnd5e.core.spell.structured_resolution" in manifest[
-        "native_mechanic_refs"
-    ]
-    registered = {
-        boundary.id for boundary in get_core_rule_pack("2014").boundaries
-    }
+    assert manifest["version"] == PACK_VERSION == "1.22.0"
+    assert "dnd5e.core.spell.structured_resolution" in manifest["native_mechanic_refs"]
+    registered = {boundary.id for boundary in get_core_rule_pack("2014").boundaries}
     assert set(manifest["native_mechanic_refs"]) <= registered
     assert len(artifacts) == 1014
     assert counts == {
@@ -69,12 +63,12 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     }
     assert len({item["id"] for item in artifacts}) == len(artifacts)
     assert all(item["source_citations"] for item in artifacts)
-    readiness = audit_release_resolution_readiness(artifacts)
+    validation = audit_release_semantic_validation(artifacts)
     assert manifest["resolution_policy"] == "build_time_complete"
-    assert manifest["resolution_readiness"] == readiness
-    assert readiness["complete"] is True
-    assert readiness["first_use_compilation_required"] is False
-    assert readiness["resolved_count"] == len(artifacts)
+    assert manifest["semantic_validation"] == validation
+    assert validation["complete"] is True
+    assert validation["first_use_compilation_required"] is False
+    assert validation["resolved_count"] == len(artifacts)
     assert all(
         artifact["semantic_resolution"]["first_use_compilation_required"] is False
         for artifact in artifacts
@@ -98,9 +92,7 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
         "radius_ft": 20,
     }
     lightning_bolt = next(
-        item
-        for item in artifacts
-        if item["id"] == "dnd5e.content.srd2014.spell.lightning-bolt"
+        item for item in artifacts if item["id"] == "dnd5e.content.srd2014.spell.lightning-bolt"
     )
     assert lightning_bolt["card"]["resolution"]["targeting"]["area"] == {
         "shape": "line",
@@ -129,40 +121,22 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     assert magic_missile["mechanic_refs"] == ["dnd5e.core.spell.magic_missile"]
     assert magic_missile["card"]["mechanic_refs"] == ["dnd5e.core.spell.magic_missile"]
     hypnotic_pattern = next(
-        item
-        for item in artifacts
-        if item["id"] == "dnd5e.content.srd2014.spell.hypnotic-pattern"
+        item for item in artifacts if item["id"] == "dnd5e.content.srd2014.spell.hypnotic-pattern"
     )
-    assert hypnotic_pattern["mechanic_refs"] == [
-        "dnd5e.core.spell.hypnotic_pattern"
-    ]
-    assert hypnotic_pattern["card"]["mechanic_refs"] == [
-        "dnd5e.core.spell.hypnotic_pattern"
-    ]
+    assert hypnotic_pattern["mechanic_refs"] == ["dnd5e.core.spell.hypnotic_pattern"]
+    assert hypnotic_pattern["card"]["mechanic_refs"] == ["dnd5e.core.spell.hypnotic_pattern"]
     assert "ruling_requirements" not in hypnotic_pattern["card"]
-    fly = next(
-        item
-        for item in artifacts
-        if item["id"] == "dnd5e.content.srd2014.spell.fly"
-    )
+    fly = next(item for item in artifacts if item["id"] == "dnd5e.content.srd2014.spell.fly")
     assert fly["mechanic_refs"] == ["dnd5e.core.spell.fly"]
     assert fly["card"]["mechanic_refs"] == ["dnd5e.core.spell.fly"]
     assert "ruling_requirements" not in fly["card"]
     invisibility = next(
-        item
-        for item in artifacts
-        if item["id"] == "dnd5e.content.srd2014.spell.invisibility"
+        item for item in artifacts if item["id"] == "dnd5e.content.srd2014.spell.invisibility"
     )
-    assert invisibility["mechanic_refs"] == [
-        "dnd5e.core.spell.invisibility"
-    ]
-    assert invisibility["card"]["mechanic_refs"] == [
-        "dnd5e.core.spell.invisibility"
-    ]
+    assert invisibility["mechanic_refs"] == ["dnd5e.core.spell.invisibility"]
+    assert invisibility["card"]["mechanic_refs"] == ["dnd5e.core.spell.invisibility"]
     assert "ruling_requirements" not in invisibility["card"]
-    light = next(
-        item for item in artifacts if item["id"] == "dnd5e.content.srd2014.spell.light"
-    )
+    light = next(item for item in artifacts if item["id"] == "dnd5e.content.srd2014.spell.light")
     assert light["card"]["ruling_requirements"][0]["default_resolver"] == "agent"
     assert light["card"]["ruling_requirements"][0]["source_excerpt"]
     assert light["card"]["ruling_requirements"][0]["policy_ref"] == "rule_clause.v1"
@@ -361,11 +335,13 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
             "base": 10,
             "ability": "constitution",
             "allows_shield": True,
+            "includes_dexterity": True,
         },
         "Monk": {
             "base": 10,
             "ability": "wisdom",
             "allows_shield": False,
+            "includes_dexterity": True,
         },
     }
     dragon_ancestor = next(
@@ -648,8 +624,7 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
         "source_excerpt": relentless["description"],
     }
     assert all(
-        CORE_RELENTLESS_ENDURANCE_MECHANIC_ID
-        not in feature.get("mechanic_refs", [])
+        CORE_RELENTLESS_ENDURANCE_MECHANIC_ID not in feature.get("mechanic_refs", [])
         for feature in half_orc["card"]["grants"]["features"]
         if feature["name"] != "Relentless Endurance"
     )

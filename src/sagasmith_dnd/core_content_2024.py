@@ -10,8 +10,9 @@ from typing import Any, Iterable
 
 from sagasmith_core.text import ascii_slug
 
-from sagasmith_dnd.content_import import audit_release_resolution_readiness
+from sagasmith_dnd.content_import import audit_release_semantic_validation
 from sagasmith_dnd.content_resolution import finalize_bundled_artifact_resolutions
+from sagasmith_dnd.parsing_vocabulary import DND5E_2024_CLASS_NAMES as _CLASS_NAMES
 from sagasmith_dnd.spell_resolution import (
     SPELL_RESOLUTION_MECHANIC_ID,
     known_2024_spell_resolution,
@@ -20,20 +21,6 @@ from sagasmith_dnd.spell_resolution import (
 PACK_ID = "dnd5e.content.srd2024"
 PACK_VERSION = "1.2.0"
 
-_CLASS_NAMES = {
-    "Barbarian",
-    "Bard",
-    "Cleric",
-    "Druid",
-    "Fighter",
-    "Monk",
-    "Paladin",
-    "Ranger",
-    "Rogue",
-    "Sorcerer",
-    "Warlock",
-    "Wizard",
-}
 _CLASS_FEATURE_TABLE_HEADINGS = {
     *(f"{class_name} Features" for class_name in _CLASS_NAMES),
     *(f"{class_name} Class Features" for class_name in _CLASS_NAMES),
@@ -121,7 +108,7 @@ def _cached_srd2024_content(skill_root: str) -> tuple[dict[str, Any], list[dict[
             if str(ref)
         }
     )
-    resolution_readiness = audit_release_resolution_readiness(artifacts)
+    semantic_validation = audit_release_semantic_validation(artifacts)
     return (
         {
             "id": PACK_ID,
@@ -144,7 +131,7 @@ def _cached_srd2024_content(skill_root: str) -> tuple[dict[str, Any], list[dict[
                 "monster",
             ],
             "resolution_policy": "build_time_complete",
-            "resolution_readiness": resolution_readiness,
+            "semantic_validation": semantic_validation,
         },
         artifacts,
     )
@@ -241,9 +228,7 @@ def _class_content(root: Path) -> list[dict[str, Any]]:
                     heading.start(),
                     card,
                     application_state=(
-                        "catalog_only"
-                        if feature_name.casefold().endswith(" subclass")
-                        else "ready"
+                        "catalog_only" if feature_name.casefold().endswith(" subclass") else "ready"
                     ),
                 )
             else:
@@ -283,19 +268,13 @@ def _eldritch_invocations(path: Path) -> list[dict[str, Any]]:
             r"(?m)^\*Prerequisite:\s*(.+?)\*\s*$",
             body,
         )
-        prerequisite = (
-            prerequisite_match.group(1).strip()
-            if prerequisite_match
-            else ""
-        )
+        prerequisite = prerequisite_match.group(1).strip() if prerequisite_match else ""
         level_match = re.search(
             r"\bLevel\s+(\d+)\+\s+Warlock\b",
             prerequisite,
             re.IGNORECASE,
         )
-        repeatable = bool(
-            re.search(r"(?m)^\*\*Repeatable\.\*\*", body)
-        )
+        repeatable = bool(re.search(r"(?m)^\*\*Repeatable\.\*\*", body))
         card: dict[str, Any] = {
             "name": name,
             "source_key": "Warlock",
@@ -335,15 +314,11 @@ def _invocation_selection_structure(
 ) -> dict[str, Any]:
     increments = {1: 1, 2: 2, 5: 2, 7: 1, 9: 1, 12: 1, 15: 1, 18: 1}
     options = [str(item["card"]["name"]) for item in invocations]
-    artifact_ids = {
-        str(item["card"]["name"]): str(item["id"]) for item in invocations
-    }
+    artifact_ids = {str(item["card"]["name"]): str(item["id"]) for item in invocations}
     prerequisites: dict[str, dict[str, Any]] = {}
     for item in invocations:
         card = dict(item["card"])
-        prerequisite: dict[str, Any] = {
-            "minimum_level": int(card.get("minimum_level", 1) or 1)
-        }
+        prerequisite: dict[str, Any] = {"minimum_level": int(card.get("minimum_level", 1) or 1)}
         required_invocation = re.search(
             r",\s*([^,]+?)\s+Invocation\b",
             str(card.get("prerequisite_text") or ""),
@@ -362,9 +337,7 @@ def _invocation_selection_structure(
             "option_artifact_ids": artifact_ids,
             "option_prerequisites": prerequisites,
             "repeatable_options": [
-                str(item["card"]["name"])
-                for item in invocations
-                if item["card"].get("repeatable")
+                str(item["card"]["name"]) for item in invocations if item["card"].get("repeatable")
             ],
         }
 
@@ -518,9 +491,7 @@ def _known_feature_structure(class_name: str, name: str, body: str) -> dict[str,
             activation={"type": "bonus_action", "cost": 1},
         )
         structure.pop("ruling_requirements")
-        structure["choices"] = {
-            "outcome": "roll 1d10 + fighter level, then apply healing"
-        }
+        structure["choices"] = {"outcome": "roll 1d10 + fighter level, then apply healing"}
         structure["mechanic_refs"] = ["dnd5e.core.activity.second_wind"]
         return structure
     if key == ("fighter", "action surge"):
@@ -587,9 +558,7 @@ def _known_feature_structure(class_name: str, name: str, body: str) -> dict[str,
         }
         return {
             "selection_requirements": requirements,
-            "selection_requirements_by_level": {
-                str(level): dict(requirements) for level in levels
-            },
+            "selection_requirements_by_level": {str(level): dict(requirements) for level in levels},
             "unlock_levels": levels,
             "repeatable_selection_levels": levels,
         }
@@ -1038,9 +1007,7 @@ def _known_feature_structure(class_name: str, name: str, body: str) -> dict[str,
             activation={"type": "special", "cost": 0},
         )
         structure.pop("ruling_requirements")
-        structure["mechanic_refs"] = [
-            "dnd5e.core.rest.sorcerous_restoration"
-        ]
+        structure["mechanic_refs"] = ["dnd5e.core.rest.sorcerous_restoration"]
         return structure
     if key == ("sorcerer", "metamagic"):
         options = [
@@ -1158,9 +1125,7 @@ def _known_feature_structure(class_name: str, name: str, body: str) -> dict[str,
             },
             "mechanic_refs": ["dnd5e.core.progression.extra_attack"],
         }
-    return {
-        "ruling_requirements": _feature_ruling_requirements(body)
-    }
+    return {"ruling_requirements": _feature_ruling_requirements(body)}
 
 
 def _feature_ruling_requirements(body: str) -> list[dict[str, Any]]:
@@ -1219,13 +1184,11 @@ def _resource_scaling_structure(
         "label": label,
         "class_name": class_name,
         "maximum_by_level": {
-            str(level): maximum
-            for level, maximum in (maximum_by_level or {}).items()
+            str(level): maximum for level, maximum in (maximum_by_level or {}).items()
         },
         "recovers_on": recovers_on,
         "recovery_by_level": {
-            str(level): recovery
-            for level, recovery in (recovery_by_level or {}).items()
+            str(level): recovery for level, recovery in (recovery_by_level or {}).items()
         },
     }
     if maximum_formula is not None:
@@ -1279,9 +1242,7 @@ def _shared_resource_structure(
     )
     result: dict[str, Any] = {
         "resource_key": resource_key,
-        "mechanical_grants": {
-            "resources": {resource_key: _initial_resource(scaling)}
-        },
+        "mechanical_grants": {"resources": {resource_key: _initial_resource(scaling)}},
         "resource_scaling": scaling,
         "ruling_requirements": _feature_ruling_requirements(body),
     }
@@ -1332,11 +1293,7 @@ def _backgrounds(path: Path) -> list[dict[str, Any]]:
         feat_label = re.sub(r"\s*\(see .+", "", _label(body, "Feat"), flags=re.I)
         feat_match = re.fullmatch(r"(.+?)\s*\(([^)]+)\)", feat_label)
         feat_name = feat_match.group(1).strip() if feat_match else feat_label
-        feat_preset = (
-            {"source_class": feat_match.group(2).strip()}
-            if feat_match
-            else {}
-        )
+        feat_preset = {"source_class": feat_match.group(2).strip()} if feat_match else {}
         tool_text = _label(body, "Tool Proficiency")
         tool_choices = (
             ["Dice", "Dragonchess", "Playing Cards", "Three-Dragon Ante"]
@@ -1389,6 +1346,7 @@ def _background_equipment_packages(name: str) -> dict[str, dict[str, Any]]:
             "quantity": quantity,
             **({"display_name": display_name} if display_name else {}),
         }
+
     package_a: dict[str, list[dict[str, Any]]] = {
         "Acolyte": [
             item("Calligrapher's Supplies"),
@@ -1450,9 +1408,7 @@ def _species(path: Path) -> list[dict[str, Any]]:
             continue
         size_text = _label(body, "Size")
         sizes = [
-            size.casefold()
-            for size in ("Tiny", "Small", "Medium", "Large")
-            if size in size_text
+            size.casefold() for size in ("Tiny", "Small", "Medium", "Large") if size in size_text
         ]
         speed = re.search(r"(\d+)\s+feet", _label(body, "Speed"), re.IGNORECASE)
         traits = _bold_traits(body)
@@ -1511,11 +1467,7 @@ def _species(path: Path) -> list[dict[str, Any]]:
                     "description": trait_body[:3000],
                     "activation": {"type": _activation(trait_body), "cost": 0},
                     **(
-                        {
-                            "choices": {
-                                "grant_heroic_inspiration_on": "long_rest"
-                            }
-                        }
+                        {"choices": {"grant_heroic_inspiration_on": "long_rest"}}
                         if name == "Human" and trait_name == "Resourceful"
                         else {}
                     ),
@@ -1654,9 +1606,7 @@ def _tools(path: Path) -> list[dict[str, Any]]:
     if start < 0 or end < 0:
         return []
     region = text[start:end]
-    headings = list(
-        re.finditer(r"^####\s+(.+?)\s+\(([^)]+)\)\s*$", region, re.MULTILINE)
-    )
+    headings = list(re.finditer(r"^####\s+(.+?)\s+\(([^)]+)\)\s*$", region, re.MULTILINE))
     result: list[dict[str, Any]] = []
     for index, heading in enumerate(headings):
         block_end = headings[index + 1].start() if index + 1 < len(headings) else len(region)
@@ -1681,9 +1631,7 @@ def _tools(path: Path) -> list[dict[str, Any]]:
                 properties=properties,
             ),
         }
-        result.append(
-            _artifact("item", name, path, start + heading.start(), card)
-        )
+        result.append(_artifact("item", name, path, start + heading.start(), card))
         variants = _inline_label(body, "Variants")
         for variant in re.finditer(r"(?:^|,\s*)([^,()]+?)\s*\(([^)]+)\)", variants):
             variant_name = _equipment_name(variant.group(1)).title()
@@ -1703,9 +1651,7 @@ def _tools(path: Path) -> list[dict[str, Any]]:
                         "name": variant_name,
                         "category": "Tool Variant",
                         "properties": {
-                            key: value
-                            for key, value in variant_properties.items()
-                            if value
+                            key: value for key, value in variant_properties.items() if value
                         },
                         "description": body[:1200],
                         "inventory_template": _inventory_template(
@@ -1720,13 +1666,7 @@ def _tools(path: Path) -> list[dict[str, Any]]:
 
 
 def _equipment_name(value: str) -> str:
-    return (
-        value.strip()
-        .strip("*")
-        .replace("’", "'")
-        .replace("–", "-")
-        .replace("—", "-")
-    )
+    return value.strip().strip("*").replace("’", "'").replace("–", "-").replace("—", "-")
 
 
 def _inventory_template(
@@ -2035,9 +1975,7 @@ def _monsters(root: Path) -> list[dict[str, Any]]:
                 continue
             local_offset = max(0, match.start() - continuation_start)
             line = continuation_text.count("\n", 0, local_offset) + 1
-            continuation_refs.append(
-                f"bundled:srd2024/{continuation_path.name}#L{line}"
-            )
+            continuation_refs.append(f"bundled:srd2024/{continuation_path.name}#L{line}")
         artifact["rule_refs"] = continuation_refs
         artifact["source_citations"] = [
             {"source": source, "locator": source.rsplit("#L", 1)[-1]}
@@ -2138,9 +2076,7 @@ def _bold_traits(text: str) -> list[tuple[str, str]]:
             _clean_source(
                 text[
                     match.end() : (
-                        matches[index + 1].start()
-                        if index + 1 < len(matches)
-                        else len(text)
+                        matches[index + 1].start() if index + 1 < len(matches) else len(text)
                     )
                 ]
             ),

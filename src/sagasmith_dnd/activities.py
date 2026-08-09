@@ -181,9 +181,7 @@ def consume_activity(
     ruling_requirement = (
         {
             "default_resolver": "agent",
-            "ruling_kind": str(
-                manual_ruling.get("kind") or "agent_dm_adjudication"
-            ),
+            "ruling_kind": str(manual_ruling.get("kind") or "agent_dm_adjudication"),
             "source_excerpt": str(manual_ruling.get("source_excerpt") or ""),
         }
         if requires_ruling

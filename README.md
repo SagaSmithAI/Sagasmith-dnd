@@ -32,9 +32,10 @@ flowchart LR
 
 ## 统一角色卡与默认怪物包
 
-`build_dnd_actor_card` / `validate_dnd_actor_card` 在 Core portable envelope
-之上执行 D&D sheet v2 与 edition 校验。PC、NPC 和怪物没有三套分享格式；
-它们都是完整角色卡，只由 `actor_type`、来源和卡内 mechanics 区分。
+统一 content package 中的 `sagasmith.actor-card.v3` 在 Core schema 之上执行
+D&D sheet v2 与 edition 校验。PC、NPC 和怪物没有三套分享格式；它们都是完整
+角色卡，只由 `actor_type`、来源和卡内 mechanics 区分。旧 builder 仅作为导入编译器
+内部适配器，不是另一种公开分享格式。
 
 `build_srd2014_preset_pack` 从随附 SRD 5.1 Markdown 生成 317 张卡，
 `build_srd2024_preset_pack` 从 SRD 5.2.1 生成 330 张卡。每张卡保留规范化
@@ -55,8 +56,9 @@ modifier 损坏也只在分数本身清晰时由分数重算。Monster Manual �
 法术、474 物品和 182 特性），2024 SRD 为 1,463 个条目（含 339 法术、
 471 物品、269 特性和 330 怪物）。随附中英文来源索引共覆盖 2,032 个
 Markdown 文件、42 个 source partition；任何文件遗漏、重复、条目数量漂移、
-重复 ID 或缺失来源引用都会使测试失败。三本商业核心书的非 SRD 原文不会随
-Apache-2.0 仓库发布；合法持有者可把本地 PHB/DMG/MM 编译为 private core addon。
+重复 ID 或缺失来源引用都会使测试失败。三本商业核心书的非 SRD 原文不会捆绑进
+Apache-2.0 软件包；获授权的持有者可在本地私有编译 PHB/DMG/MM，独立公共内容库
+也可按每个包内记录的内容许可、归属与分发授权发布 archive。
 两版内置目录的每个条目还必须在构建时写入完整 clause set：结构化选择与授予、
 已注册内核机制、纯描述和带精确来源摘录的 Agent-DM 裁定分别标注；发布审计要求
 `first_use_compilation_required=false`，运行时不得再补写 resolution。
@@ -119,26 +121,28 @@ sagasmith-dnd database upgrade --json
 
 扩展书不会通过散落的条件判断直接覆盖核心逻辑。导入流程将内容转成带 provenance 的 draft rule pack，验证 schema、依赖、edition 与 mechanic IR，随后绑定到 campaign rule profile。战役锁定核心包与扩展版本，Snapshot 恢复时必须能解析同一套精确依赖。
 
-这允许 Xanathar 等用户合法持有的扩展内容添加子职、背景、法术和可结算 mechanics，同时保留 2014/2024 核心边界与既有修复。商业书内容不随仓库分发。
+这允许 Xanathar 等用户合法持有的扩展内容添加子职、背景、法术和可结算 mechanics，同时保留 2014/2024 核心边界与既有修复。商业书内容不捆绑进软件仓库；获授权的公开 archive 位于独立内容库，并携带自己的分发元数据。
 
-扩展书也适合发布为组合包：规则内容继续使用带 edition/dependency/source
-lock 的 rule pack；其中预设 PC、NPC、怪物或召唤物使用 portable
-`preset_pack`；若附带冒险、地图或场景则另用 `module_pack`。不要把三者压成
-一个可绕过规则安装审批的巨型包；用显式 dependency 将它们组合即可。
+所有可分享内容统一使用 `sagasmith.content-package` v2 与
+`.sagasmith-pack` 归档。`core_rules`、`addon`、`module`、`preset` 共享同一套
+来源、证据、资产和角色卡物理结构，但保留不同的安装与激活权限。来源只保存一份
+规范化文档 blob，section/chunk 通过 offset 与 hash 引用；原始文档和图片都是
+content-addressed asset。不再接受松散 portable JSON、release manifest 或
+`.sagasmith-module`。
 
-模组只使用 v2 `.sagasmith-module` 归档：描述文件声明 edition compatibility、
-推荐队伍/等级/升级方式、连续战役、内容与叙事目录及 readiness，资产作为
-content-addressed blobs 随归档分发。D&D 插件校验精确规则依赖和角色卡；只有
-`playable`/`complete` 可进入激活事务。addon 不内嵌模组，旧 module-pack v1 不读取。
+未参与索引的随附地图、玩家手册和角色参考表会作为 `map` / `player_reference`
+辅助资产保留逻辑路径；它们不会被伪装成规则证据。公开库可按内容哈希直接展示这些
+经授权的浏览资产，完整归档仍是唯一安装边界。
 
-跨安装迁移时，rule pack 会同时携带完整的已索引来源，并把本地
-`source_id`/`chunk_id` 改写为稳定 locator。接收端验证 checksum、system、edition
-与精确依赖后，以新本地 id 重建来源和引用；规则依赖使用不受本地 UUID 影响的
-definition checksum。独立 rule pack 也必须携带与接收端复算结果完全相同的
-`build_time_complete` resolution audit；缺失、过期或仍有 deferred 内容时拒绝导出、
-导入和安装。结果只是 validated inactive draft，仍需分别 install 和由战役
-Owner/DM activation。薄 `release_manifest` 则锁定各完整组件 envelope 的精确版本与
-checksum，不赋予任何安装或启用权限。
+PC、NPC、怪物统一使用 `sagasmith.actor-card.v3`；依赖主人属性的 statblock 模板在
+实例化前也使用同一套可选卡级图片引用。角色图只引用包内 `actor_image`，不会写入
+运行时角色或 Snapshot。来源图提取会区分“原文确实无插图”与页码、标题或裁剪不确定；
+后者必须复核并阻止发布。
+
+跨安装导入会验证全部 hash 和依赖，以新本地 id 重建来源与引用，安装规则定义并为
+角色创建全新运行时身份。Addon 与模组的战役激活仍是独立、revision-safe 的
+Owner/DM 操作。包内规则定义使用稳定 definition checksum，包依赖使用完整 descriptor
+checksum。
 
 ## 开发
 
@@ -152,9 +156,9 @@ ruff check .
 
 ## 内容与许可
 
-原创代码使用 Apache-2.0。D&D 5e SRD 派生内容遵循对应 CC-BY-4.0 条款；中文便利翻译保留原项目许可和署名。非 SRD 商业内容必须由用户自行合法导入。
-统一 actor card v2 允许 PC、NPC、怪物各自携带一张自包含角色图。图片必须声明
-许可、署名和来源，且只随 portable card/preset/addon 迁移；创建运行时角色时不会
+原创代码使用 Apache-2.0。D&D 5e SRD 派生内容遵循对应 CC-BY-4.0 条款；中文便利翻译保留原项目许可和署名。用户可在其合法使用范围内建立私有包；非 SRD 商业内容若要公开再分发，必须另有可验证授权。
+统一 actor card v3 允许 PC、NPC、怪物各自引用一张 content-addressed 角色图。图片
+必须声明许可、署名和来源，且只随统一 content package 迁移；创建运行时角色时不会
 写入角色实例或 Snapshot。`python -m sagasmith_dnd.public_library` 可将 SRD 预设
-和显式标记为 `public`/`shareable` 的 addon 编译为 GitHub Pages 可读取的静态库；
+和同时带有受支持开放许可证及精确 `license_evidence` 的 addon 编译为 GitHub Pages 可读取的静态库；
 私有或 `user-supplied` 内容会被拒绝发布。

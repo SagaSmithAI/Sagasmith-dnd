@@ -39,28 +39,24 @@ Dexterity saving throw or be blinded until the end of its next turn.
 def test_nonstandard_monster_semantics_stay_source_bound_for_agent_review() -> None:
     parsed = parse_2014_statblock(SOURCE, source_key="addon:test/emberling")
     features = {item["name"]: item for item in parsed.sheet["content"]["features"]}
-    activities = {
-        item["name"]: item for item in parsed.sheet["content"]["activities"]
-    }
+    activities = {item["name"]: item for item in parsed.sheet["content"]["activities"]}
     weapons = {item["name"]: item for item in parsed.sheet["inventory"]["items"]}
 
     assert features["Cinder Skin"]["choices"] == {
         "manual_ruling": {
             "kind": "descriptive_passive",
             "default_resolver": "agent",
-            "source_excerpt": (
-                "A creature that touches the emberling takes 3 (1d6) fire damage."
-            ),
+            "source_excerpt": ("A creature that touches the emberling takes 3 (1d6) fire damage."),
         }
     }
     ash_step = activities["Ash Step (Recharge 5-6)"]
     assert ash_step["choices"]["manual_ruling"] == {
-            "kind": "descriptive_activity",
-            "default_resolver": "agent",
-            "source_excerpt": (
-                "Each creature within 10 feet must make a DC 13 Dexterity saving "
-                "throw or be blinded until the end of its next turn."
-            ),
+        "kind": "descriptive_activity",
+        "default_resolver": "agent",
+        "source_excerpt": (
+            "Each creature within 10 feet must make a DC 13 Dexterity saving "
+            "throw or be blinded until the end of its next turn."
+        ),
     }
     assert ash_step["choices"]["recharge"] == {
         "kind": "d6_turn_start",
@@ -75,9 +71,7 @@ def test_nonstandard_monster_semantics_stay_source_bound_for_agent_review() -> N
             "attacks": [{"weapon_id": "claw", "attack_mode": "melee", "count": 2}],
         }
     ]
-    assert weapons["Claw"]["mechanics"]["on_hit_effect"].startswith(
-        "and the target catches fire"
-    )
+    assert weapons["Claw"]["mechanics"]["on_hit_effect"].startswith("and the target catches fire")
     assert "on_hit_resolution" not in weapons["Claw"]["mechanics"]
     assert "source_trait" not in features["Cinder Skin"]["choices"]
     assert all(
@@ -113,7 +107,9 @@ def test_core_rule_pack_contains_rules_not_creature_content_contracts() -> None:
 
 
 def test_generic_legendary_weapon_action_is_structured() -> None:
-    source = SOURCE + """
+    source = (
+        SOURCE
+        + """
 
 ## Legendary Actions
 
@@ -124,14 +120,13 @@ start of its turn.
 
 ***Cinder Swipe.*** The emberling makes a Claw attack.
 """
+    )
     parsed = parse_2014_statblock(
         source,
         source_key="addon:test/legendary-emberling",
     )
     activity = next(
-        item
-        for item in parsed.sheet["content"]["activities"]
-        if item["name"] == "Cinder Swipe"
+        item for item in parsed.sheet["content"]["activities"] if item["name"] == "Cinder Swipe"
     )
 
     assert activity["mechanic_refs"] == ["dnd5e.core.activity.legendary_action"]
@@ -163,8 +158,7 @@ start of its turn.
 def test_engine_source_has_no_legacy_monster_specific_runtime_contracts() -> None:
     source_root = Path(__file__).parents[1] / "src" / "sagasmith_dnd"
     source = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in sorted(source_root.glob("*.py"))
+        path.read_text(encoding="utf-8") for path in sorted(source_root.glob("*.py"))
     ).casefold()
     forbidden = {
         "dnd5e.core.monster",
@@ -186,15 +180,11 @@ def test_engine_source_has_no_legacy_monster_specific_runtime_contracts() -> Non
     }
     assert not (forbidden & {token for token in forbidden if token in source})
 
-    creature_runtime = (source_root / "statblocks.py").read_text(
-        encoding="utf-8"
-    ).casefold()
+    creature_runtime = (source_root / "statblocks.py").read_text(encoding="utf-8").casefold()
     assert '"reaction_defense"' not in creature_runtime
     assert '"relentless_endurance"' not in creature_runtime
 
-    combat_runtime = (source_root / "combat_engine.py").read_text(
-        encoding="utf-8"
-    ).casefold()
+    combat_runtime = (source_root / "combat_engine.py").read_text(encoding="utf-8").casefold()
     standard_feature_guard = combat_runtime.split(
         "def _validated_standard_relentless_endurance_feature", 1
     )[1].split("\ndef ", 1)[0]

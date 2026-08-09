@@ -224,9 +224,7 @@ def test_2024_recharge_uses_the_same_source_defined_d6_contract() -> None:
     )
 
     assert result["results"][0]["recharged"] is True
-    assert result["rule_receipts"][0]["mechanic_id"] == (
-        "dnd5e.core.activity.recharge"
-    )
+    assert result["rule_receipts"][0]["mechanic_id"] == ("dnd5e.core.activity.recharge")
     assert result["rule_receipts"][0]["citations"] == [
         {
             "source": "bundled:srd2024/DND5eSRD_253-272.md#limited-usage",
@@ -269,9 +267,7 @@ def test_recharge_weapon_spends_and_recovers_the_same_bounded_use() -> None:
 
     spent, audit = consume_weapon_limited_use(validated, "web-recharge-5-6")
     assert audit["remaining"] == 0
-    assert derive_character_sheet(spent)["inventory"]["weapon_attacks"][0][
-        "uses"
-    ]["value"] == 0
+    assert derive_character_sheet(spent)["inventory"]["weapon_attacks"][0]["uses"]["value"] == 0
 
     recovered = recharge_activities_at_turn_start(
         spent,

@@ -13,13 +13,28 @@ from sagasmith_core.text import ascii_slug
 
 from sagasmith_dnd.abilities import ABILITY_LABELS, ABILITY_NAMES, SKILL_ABILITIES
 from sagasmith_dnd.character_schema import normalize_spell_definition
-from sagasmith_dnd.content_readiness import (
+from sagasmith_dnd.content_validation import (
     background_materializer_errors,
     build_catalog_review,
     build_selection_contract,
+    catalog_review_errors,
     selection_contract_errors,
     selection_schema_for_artifact,
     species_materializer_errors,
+)
+from sagasmith_dnd.parsing_rule_registry import registered_parsing_rule
+from sagasmith_dnd.parsing_vocabulary import DND5E_2014_CLASS_NAMES as _CLASS_NAMES
+from sagasmith_dnd.parsing_vocabulary import (
+    DND5E_2014_STANDARD_SUBCLASS_TITLES as _STANDARD_FLAT_SUBCLASS_TITLES,
+)
+from sagasmith_dnd.parsing_vocabulary import (
+    DND5E_2014_SUBCLASS_PARENT_CLASS_NAMES as _SUBCLASS_PARENT_CLASS_NAMES,
+)
+from sagasmith_dnd.parsing_vocabulary import (
+    DND5E_ITEM_CATEGORY_LABELS as _ITEM_CATEGORY_LABELS,
+)
+from sagasmith_dnd.parsing_vocabulary import (
+    DND5E_STATBLOCK_FIELD_LABELS as _STATBLOCK_LABELS,
 )
 from sagasmith_dnd.resolution_plan import (
     ResolutionPlanCompilationError,
@@ -48,35 +63,7 @@ _ITEM_HEADER_RE = re.compile(
     r"(?im)^(?:wondrous item|weapon|armor|potion|ring|rod|scroll|staff|wand)"
     r"(?:\s*\([^\n)]{1,120}\))?\s*(?:,|—|–|-)"
 )
-_ITEM_CATEGORY_LABELS = {
-    "armor": "Armor",
-    "potion": "Potion",
-    "ring": "Ring",
-    "rod": "Rod",
-    "scroll": "Scroll",
-    "staff": "Staff",
-    "wand": "Wand",
-    "weapon": "Weapon",
-    "wondrousitem": "Wondrous item",
-}
 _SPELL_LEVEL_RE = re.compile(r"(?im)^(?:\d+(?:st|nd|rd|th)[ -]level\s+[a-z]+|[a-z]+\s+cantrip)\b")
-_STATBLOCK_LABELS = ("armor class", "hit points", "speed", "challenge")
-_CLASS_NAMES = {
-    "artificer",
-    "barbarian",
-    "bard",
-    "blood hunter",
-    "cleric",
-    "druid",
-    "fighter",
-    "monk",
-    "paladin",
-    "ranger",
-    "rogue",
-    "sorcerer",
-    "warlock",
-    "wizard",
-}
 _SUBCLASS_MINIMUM_LEVELS_2014 = {
     "cleric": 1,
     "sorcerer": 1,
@@ -114,29 +101,6 @@ _GENERIC_SUBCLASS_PARENT_TITLES = {
 _GENERIC_SUBCLASS_PARENT_TITLES.update(
     {f"{title}s" for title in tuple(_GENERIC_SUBCLASS_PARENT_TITLES) if not title.endswith("s")}
 )
-_SUBCLASS_PARENT_CLASS_NAMES = {
-    "arcane tradition": "Wizard",
-    "artificer specialists": "Artificer",
-    "bard college": "Bard",
-    "divine domain": "Cleric",
-    "druid circle": "Druid",
-    "martial archetype": "Fighter",
-    "monastic tradition": "Monk",
-    "otherworldly patron": "Warlock",
-    "primal path": "Barbarian",
-    "ranger archetype": "Ranger",
-    "ranger conclave": "Ranger",
-    "roguish archetype": "Rogue",
-    "sacred oath": "Paladin",
-    "sorcerous origin": "Sorcerer",
-}
-_SUBCLASS_PARENT_CLASS_NAMES.update(
-    {
-        f"{title}s": class_name
-        for title, class_name in tuple(_SUBCLASS_PARENT_CLASS_NAMES.items())
-        if not title.endswith("s")
-    }
-)
 _GENERIC_TITLES.update(_GENERIC_SUBCLASS_PARENT_TITLES)
 _GENERIC_FEATURE_TITLES = {
     "class features",
@@ -146,21 +110,6 @@ _GENERIC_FEATURE_TITLES = {
     "quick build",
 }
 _GENERIC_FEATURE_TITLES.update(_GENERIC_SUBCLASS_PARENT_TITLES)
-_STANDARD_FLAT_SUBCLASS_TITLES = {
-    "arcane trickster",
-    "assassin",
-    "battle master",
-    "beast master",
-    "champion",
-    "draconic bloodline",
-    "eldritch knight",
-    "hunter",
-    "the archfey",
-    "the fiend",
-    "the great old one",
-    "thief",
-    "wild magic",
-}
 _STATBLOCK_PLACEHOLDER_TITLES = {
     "character name",
     "creature name",
@@ -410,6 +359,20 @@ def _normalize_candidate_display_name(value: str) -> str:
     if fused_standard_name:
         return fused_standard_name
     return re.sub(r"([’'][sS])(?=[A-Z])", r"\1 ", normalized)
+
+
+def _canonical_card_display_name(value: str) -> str:
+    """Normalize card presentation after preserving the exact source identity."""
+
+    normalized = _normalize_candidate_display_name(value)
+    if not normalized.isupper():
+        return normalized
+    rendered = re.sub(r"'S\b", "'s", normalized.title())
+    words = rendered.split()
+    return " ".join(
+        word.casefold() if index and word.casefold() in {"a", "and", "of", "or", "the"} else word
+        for index, word in enumerate(words)
+    )
 
 
 def _canonical_spell_header(value: str) -> str | None:
@@ -739,359 +702,12 @@ def _looks_like_spell_schema_text(value: str) -> bool:
     )
 
 
-def _repair_split_option_headings(
-    chunks: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Join adjacent option-name fragments without changing source evidence."""
-
-    repaired = [deepcopy(dict(chunk)) for chunk in chunks]
-    for index, chunk in enumerate(repaired[:-1]):
-        content = str(chunk.get("content") or "").strip()
-        path = [str(value).strip() for value in chunk.get("heading_path") or []]
-        following = repaired[index + 1]
-        following_path = [str(value).strip() for value in following.get("heading_path") or []]
-        if (
-            content
-            or len(path) < 2
-            or len(following_path) != len(path)
-            or path[:-1] != following_path[:-1]
-            or not any("feat" in value.casefold() for value in path[:-1])
-            or path[-1].casefold() in _GENERIC_TITLES
-            or _PAGE_HEADER_RE.match(path[-1])
-        ):
-            continue
-        following_content = str(following.get("content") or "").strip()
-        if len(following_content) < 80 and "prerequisite" not in following_content.casefold():
-            continue
-        combined = _normalize_candidate_display_name(f"{path[-1]} {following_path[-1]}")
-        repaired[index]["heading_path"] = [*path[:-1], combined]
-        repaired[index + 1]["heading_path"] = [*path[:-1], combined]
-    last_feat_path: list[str] = []
-    for chunk in repaired:
-        path = [str(value).strip() for value in chunk.get("heading_path") or []]
-        if len(path) < 2 or not any("feat" in value.casefold() for value in path[:-1]):
-            continue
-        title = path[-1].casefold()
-        content = str(chunk.get("content") or "").strip()
-        if title == "options" and content and last_feat_path:
-            chunk["heading_path"] = list(last_feat_path)
-            continue
-        if (
-            content
-            and title not in _GENERIC_TITLES
-            and not _PAGE_HEADER_RE.match(title)
-            and not title.startswith("part ")
-        ):
-            last_feat_path = path
-    return repaired
-
-
-def _ordered_class_candidates(
-    chunks: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Recover base classes when PDF headings flatten every feature tree."""
-
-    anchors: list[tuple[int, str]] = []
-    for index, chunk in enumerate(chunks):
-        path = [str(value).strip() for value in chunk.get("heading_path") or []]
-        if not path or path[-1].casefold() != "class features":
-            continue
-        if not any(
-            "class" in value.casefold() and "chapter" in value.casefold() for value in path[:-1]
-        ):
-            continue
-        match = re.search(
-            r"(?i)\bas\s+an?\s+(?P<name>[A-Za-z]{3,20})\b",
-            str(chunk.get("content") or "")[:300],
-        )
-        if match is not None:
-            observed = match.group("name").casefold()
-            matches = sorted(
-                (
-                    _bounded_ocr_edit_distance(observed, class_name, 2),
-                    class_name.title(),
-                )
-                for class_name in _CLASS_NAMES
-                if _bounded_ocr_edit_distance(observed, class_name, 2) <= 2
-            )
-            if matches and not (len(matches) > 1 and matches[0][0] == matches[1][0]):
-                anchors.append((index, matches[0][1]))
-
-    candidates: list[dict[str, Any]] = []
-    for anchor_index, (start, name) in enumerate(anchors):
-        hard_end = anchors[anchor_index + 1][0] if anchor_index + 1 < len(anchors) else len(chunks)
-        end = hard_end
-        if anchor_index + 1 < len(anchors):
-            next_name = anchors[anchor_index + 1][1]
-            canonical_next_name = _canonical_source_heading(next_name)
-            for index in range(start + 1, hard_end):
-                path = [
-                    str(value).strip()
-                    for value in chunks[index].get("heading_path") or []
-                    if str(value).strip()
-                ]
-                if len(path) < 2:
-                    continue
-                observed = _canonical_source_heading(path[-1])
-                if (
-                    _bounded_ocr_edit_distance(
-                        observed,
-                        canonical_next_name,
-                        2,
-                    )
-                    <= 2
-                ):
-                    end = index
-                    break
-            if end == hard_end:
-                next_class_pattern = re.compile(rf"(?i)\b{re.escape(next_name)}s?\b")
-                for index in range(max(start + 1, hard_end - 12), hard_end):
-                    path = " ".join(
-                        str(value).strip() for value in chunks[index].get("heading_path") or []
-                    )
-                    content = str(chunks[index].get("content") or "")[:1600]
-                    if next_class_pattern.search(f"{path}\n{content}"):
-                        end = index
-                        break
-        else:
-            start_path = [
-                str(value).strip()
-                for value in chunks[start].get("heading_path") or []
-                if str(value).strip()
-            ]
-            start_root = start_path[0].casefold() if start_path else ""
-            if start_root:
-                for index in range(start + 1, hard_end):
-                    path = [
-                        str(value).strip()
-                        for value in chunks[index].get("heading_path") or []
-                        if str(value).strip()
-                    ]
-                    if path and path[0].casefold() != start_root:
-                        end = index
-                        break
-        evidence = [chunk for chunk in chunks[start:end] if str(chunk.get("id") or "").strip()]
-        content_parts = [
-            str(chunk.get("content") or "").strip()
-            for chunk in evidence
-            if str(chunk.get("content") or "").strip()
-        ]
-        source_chunk_ids = [str(chunk["id"]) for chunk in evidence]
-        if not source_chunk_ids or not content_parts:
-            continue
-        description = "\n\n".join(content_parts)
-        page_start = None
-        page_end = None
-        for chunk in evidence:
-            page_start = _minimum_page(page_start, chunk.get("page_start"))
-            page_end = _maximum_page(page_end, chunk.get("page_end"))
-        identity = "\x1f".join(("class", name.casefold(), *source_chunk_ids))
-        candidates.append(
-            {
-                "id": "candidate:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20],
-                "kind": "class",
-                "name": name,
-                "source_class_name": name,
-                "source_chunk_ids": source_chunk_ids,
-                "source_heading_path": ["Chapter 3 - Classes", name],
-                "page_start": page_start,
-                "page_end": page_end,
-                "extraction_confidence": "high",
-                "extraction_signals": ["ordered class boundary", "class features"],
-                "review_status": "pending",
-                "mechanical_scope": "review_required",
-                "application_state": "catalog_only",
-                "execution_state": "agent_resolution_required",
-                "artifact": {
-                    "kind": "class",
-                    "application_state": "catalog_only",
-                    "card": {"name": name, "description": description[:24000]},
-                },
-            }
-        )
-    return candidates
-
-
-def _species_name_from_traits_path(heading_path: list[str]) -> tuple[str, str] | None:
-    if not heading_path:
-        return None
-    title = re.sub(r"(?<=-)\s+", "", heading_path[-1]).strip()
-    folded = title.casefold()
-    if folded == "traits":
-        ancestors = [
-            value
-            for value in reversed(heading_path[:-1])
-            if value.casefold() not in {"races", "chapter 2 - races"}
-        ]
-        if not ancestors:
-            return None
-        name = ancestors[0]
-    elif folded.endswith(" traits"):
-        name = title[: -len(" Traits")]
-    else:
-        return None
-    name = _normalize_candidate_display_name(name)
-    if name.casefold() in {"racial", "personality", "species"}:
-        return None
-    base_species = name
-    if name.casefold().startswith("variant "):
-        base_species = name[len("Variant ") :]
-    return name, base_species
-
-
-def _ordered_species_candidates(
-    chunks: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Recover species and subraces from source order when outline parents drift."""
-
-    anchors: list[tuple[int, str, str]] = []
-    for index, chunk in enumerate(chunks):
-        path = [str(value).strip() for value in chunk.get("heading_path") or []]
-        if not any("race" in value.casefold() for value in path[:-1]):
-            continue
-        identity = _species_name_from_traits_path(path)
-        if identity is not None:
-            anchors.append((index, *identity))
-
-    base_records: list[dict[str, Any]] = []
-    for anchor_index, (start, name, base_species) in enumerate(anchors):
-        hard_end = anchors[anchor_index + 1][0] if anchor_index + 1 < len(anchors) else len(chunks)
-        evidence: list[dict[str, Any]] = []
-        for chunk in chunks[start:hard_end]:
-            evidence.append(chunk)
-            if re.search(r"(?i)\bLanguages?\s*[.:]", str(chunk.get("content") or "")):
-                break
-        base_records.append(
-            {
-                "start": start,
-                "hard_end": hard_end,
-                "name": name,
-                "base_species": base_species,
-                "evidence": evidence,
-            }
-        )
-
-    result: list[dict[str, Any]] = []
-    base_evidence_by_name = {
-        str(record["name"]).casefold(): list(record["evidence"])
-        for record in base_records
-        if str(record["name"]).casefold() == str(record["base_species"]).casefold()
-    }
-    for record in base_records:
-        record_name = str(record["name"])
-        base_species = str(record["base_species"])
-        evidence = list(record["evidence"])
-        if record_name.casefold() != base_species.casefold():
-            evidence = [
-                *base_evidence_by_name.get(base_species.casefold(), []),
-                *evidence,
-            ]
-        base_candidate = _species_candidate_from_evidence(
-            name=record_name,
-            base_species=base_species,
-            evidence=evidence,
-            signal="ordered species traits",
-        )
-        if base_candidate is None:
-            continue
-        subraces: list[tuple[int, str]] = []
-        base_name = str(record["base_species"])
-        for index in range(int(record["start"]) + 1, int(record["hard_end"])):
-            chunk = chunks[index]
-            path = [str(value).strip() for value in chunk.get("heading_path") or []]
-            if len(path) < 2 or base_name.casefold() not in {
-                value.casefold() for value in path[:-1]
-            }:
-                continue
-            body = str(chunk.get("content") or "").strip()
-            title = _normalize_candidate_display_name(path[-1])
-            if re.search(r"(?i)^As\s+an?\s+", body) or re.search(
-                r"(?i)\b(?:earlier|other)\s+subrace\b", body[:500]
-            ):
-                subraces.append((index, title))
-        if subraces:
-            base_candidate["artifact"]["selection_applicability"] = "not_applicable"
-        result.append(base_candidate)
-        for subrace_index, (subrace_start, subrace_name) in enumerate(subraces):
-            subrace_end = (
-                subraces[subrace_index + 1][0]
-                if subrace_index + 1 < len(subraces)
-                else int(record["hard_end"])
-            )
-            evidence = list(record["evidence"])
-            for chunk in chunks[subrace_start:subrace_end]:
-                path = [str(value).strip() for value in chunk.get("heading_path") or []]
-                if len(path) >= 2 and base_name.casefold() not in {
-                    value.casefold() for value in path[:-1]
-                }:
-                    break
-                evidence.append(chunk)
-            candidate = _species_candidate_from_evidence(
-                name=subrace_name,
-                base_species=base_name,
-                evidence=evidence,
-                signal="ordered subrace boundary",
-            )
-            if candidate is not None:
-                result.append(candidate)
-    return result
-
-
-def _species_candidate_from_evidence(
-    *,
-    name: str,
-    base_species: str,
-    evidence: list[dict[str, Any]],
-    signal: str,
-) -> dict[str, Any] | None:
-    evidence = [chunk for chunk in evidence if str(chunk.get("id") or "").strip()]
-    source_chunk_ids = list(dict.fromkeys(str(chunk["id"]) for chunk in evidence))
-    description = "\n\n".join(
-        str(chunk.get("content") or "").strip()
-        for chunk in evidence
-        if str(chunk.get("content") or "").strip()
-    )
-    if not source_chunk_ids or not description:
-        return None
-    page_start = None
-    page_end = None
-    for chunk in evidence:
-        page_start = _minimum_page(page_start, chunk.get("page_start"))
-        page_end = _maximum_page(page_end, chunk.get("page_end"))
-    identity = "\x1f".join(("species", name.casefold(), *source_chunk_ids))
-    return {
-        "id": "candidate:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20],
-        "kind": "species",
-        "name": name,
-        "source_chunk_ids": source_chunk_ids,
-        "source_heading_path": ["Chapter 2 - Races", base_species, name],
-        "page_start": page_start,
-        "page_end": page_end,
-        "extraction_confidence": "high",
-        "extraction_signals": [signal],
-        "review_status": "pending",
-        "mechanical_scope": "review_required",
-        "application_state": "catalog_only",
-        "execution_state": "agent_resolution_required",
-        "artifact": {
-            "kind": "species",
-            "application_state": "catalog_only",
-            "card": {
-                "name": name,
-                "base_species": base_species,
-                "description": description[:12000],
-            },
-        },
-    }
-
-
 def extract_content_candidates(
     chunks: list[dict[str, Any]],
     *,
     source_title: str = "",
 ) -> list[dict[str, Any]]:
     """Extract review-required cards; never claim unsupported mechanics are executable."""
-    chunks = _repair_split_option_headings(chunks)
     spell_class_index = _spell_class_index(chunks)
     sections: dict[tuple[str, ...], dict[str, Any]] = {}
     for chunk in chunks:
@@ -1316,8 +932,6 @@ def extract_content_candidates(
         )
     )
     candidates.extend(_embedded_item_candidates(chunks))
-    candidates.extend(_ordered_class_candidates(chunks))
-    candidates.extend(_ordered_species_candidates(chunks))
     candidates.extend(_embedded_species_candidates(chunks))
     candidates.extend(_background_variant_candidates(chunks, candidates=candidates))
     candidates.extend(_rulebook_statblock_candidates(chunks))
@@ -1480,6 +1094,7 @@ def _mechanical_source_fragment_candidates(
     return candidates
 
 
+@registered_parsing_rule("dnd.spell.adjacent_explicit_field_continuation")
 def _spell_text_and_field_continuations(
     content: str,
     *,
@@ -1562,7 +1177,8 @@ def _spell_card_from_section(
     source_chunk_ids: list[str] | None = None,
     class_index: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
-    indexed = _spell_class_record(class_index or _spell_class_index(chunks), name)
+    index = class_index if class_index is not None else _spell_class_index(chunks)
+    indexed = _spell_class_record(index, name)
     content = _spell_text_with_field_continuations(
         content,
         source_chunk_ids=list(source_chunk_ids or []),
@@ -1601,12 +1217,7 @@ def _spell_card_from_section(
     )
     if not school or fields is None:
         return None
-    mentioned = (
-        {"classes": set(), "source_chunk_ids": set()}
-        if indexed.get("classes")
-        else _spell_class_mentions(chunks, name)
-    )
-    classes = sorted(set(indexed.get("classes", [])) | set(mentioned["classes"]))
+    classes = sorted(set(indexed.get("classes", [])))
     return {
         "level": level,
         "classes": classes,
@@ -1627,7 +1238,7 @@ def _embedded_spell_candidates(
     source_title: str,
     class_index: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    class_index = class_index or _spell_class_index(chunks)
+    class_index = class_index if class_index is not None else _spell_class_index(chunks)
     candidates = []
     chunks_by_id = {
         str(chunk.get("id") or ""): chunk for chunk in chunks if str(chunk.get("id") or "")
@@ -1689,16 +1300,8 @@ def _embedded_spell_candidates(
             indexed = _spell_class_record(class_index, name)
             if indexed.get("name"):
                 name = str(indexed["name"])
-            mentioned = (
-                {"classes": set(), "source_chunk_ids": set()}
-                if indexed.get("classes")
-                else _spell_class_mentions(chunks, name)
-            )
-            classes = sorted(set(indexed.get("classes", [])) | set(mentioned.get("classes", [])))
-            list_chunks = sorted(
-                set(indexed.get("source_chunk_ids", []))
-                | set(mentioned.get("source_chunk_ids", []))
-            )
+            classes = sorted(set(indexed.get("classes", [])))
+            list_chunks = sorted(set(indexed.get("source_chunk_ids", [])))
             duration = _spell_duration(fields.group("duration"))
             components = _spell_components(fields.group("components"))
             spell_range = _spell_range(fields.group("range"))
@@ -2108,6 +1711,7 @@ def _background_variant_candidates(
     return result
 
 
+@registered_parsing_rule("dnd.spell.explicit_list_ownership")
 def _spell_class_index(chunks: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """Index spell-list membership across ordinary and fused multi-column layouts."""
 
@@ -2115,13 +1719,35 @@ def _spell_class_index(chunks: list[dict[str, Any]]) -> dict[str, dict[str, Any]
     known_spell_name_set: set[str] = set()
     for chunk in chunks:
         raw_content = str(chunk.get("content") or "")
+        heading_keys = {
+            _canonical_source_heading(item) for item in chunk.get("heading_path") or []
+        }
+        has_spell_heading = any("spell" in key for key in heading_keys)
+        has_spell_schema = re.search(r"(?i)\bCasting\s+Time\s*:", raw_content) is not None
+        if not has_spell_heading and not has_spell_schema:
+            continue
         if not _looks_like_spell_schema_text(raw_content):
             continue
         normalized_content = _normalize_spell_ocr_text(raw_content)
-        if chunk.get("heading_path") and any(
-            _canonical_source_heading(item) == "spelldescriptions"
-            for item in chunk.get("heading_path") or []
-        ):
+        if has_spell_schema:
+            heading_parts = [
+                _normalize_candidate_display_name(str(item))
+                for item in chunk.get("heading_path") or []
+                if str(item).strip()
+            ]
+            source_name = next(
+                (
+                    item
+                    for item in reversed(heading_parts)
+                    if _canonical_spell_header(item) is None
+                    and _canonical_source_heading(item)
+                    not in {"spell", "spells", "newspell", "spelldescriptions"}
+                ),
+                "",
+            )
+            if source_name:
+                known_spell_name_set.add(source_name.rstrip(". "))
+        if "spelldescriptions" in heading_keys:
             folded = normalized_content.casefold()[:1200]
             if (
                 sum(
@@ -2261,16 +1887,10 @@ def _spell_class_index(chunks: list[dict[str, Any]]) -> dict[str, dict[str, Any]
                     ritual=bool(entry.group("ritual")),
                 )
 
-    # Multi-column pages can collapse all column headers into one outline
-    # heading while their bodies remain sequential chunks. Track the printed
-    # class order and advance only when the spell level resets.
-    active_classes: list[str] = []
-    active_index = 0
-    previous_level: int | None = None
-    level_marker = re.compile(
-        r"(?i)(?:cantrips?\s*[({][^)}]*[0o]\s+level[^)}]*[)}]|"
-        r"[1-9lIsS\]](?:st|nd|rd|th)\s+level)"
-    )
+    # A flattened list is assigned to a class only when the current heading
+    # names exactly one class.  Printed column order and level resets are layout
+    # artifacts, not ownership evidence; ambiguous multi-class pages stay in
+    # the review ledger.
     for chunk in chunks:
         heading_parts = [
             " ".join(str(item).split())
@@ -2278,84 +1898,40 @@ def _spell_class_index(chunks: list[dict[str, Any]]) -> dict[str, dict[str, Any]
             if str(item).strip()
         ]
         heading_text = normalized_list_text(" ".join(heading_parts))
-        heading_identities = {_canonical_source_heading(item) for item in heading_parts}
-        phb_spell_list = bool(
-            "chapter11spells" in heading_identities
-            and "spelldescriptions" not in heading_identities
-        )
-        if not re.search(r"(?i)\bspell\s+lists?\b", heading_text) and not phb_spell_list:
-            active_classes = []
-            active_index = 0
-            previous_level = None
+        if not re.search(r"(?i)\bspell\s+lists?\b", heading_text):
             continue
-        header_classes = [
+        header_classes = list(
+            dict.fromkeys(
             match.group("class").casefold()
             for match in _SPELL_LIST_SECTION_RE.finditer(heading_text)
-        ]
-        if header_classes:
-            active_classes = list(dict.fromkeys(header_classes))
-            active_index = 0
-            previous_level = None
-        if not active_classes:
+            )
+        )
+        if len(header_classes) != 1:
             continue
         content = normalized_list_text(" ".join(str(chunk.get("content") or "").split()))
         chunk_id = str(chunk.get("id") or "").strip()
         leaf = heading_parts[-1] if heading_parts else ""
         scan = f"{leaf} {content}".strip()
-        markers = list(level_marker.finditer(scan))
-        if not markers:
-            segments = [(None, scan)]
-        else:
-            segments = (
-                [(None, scan[: markers[0].start()])] if scan[: markers[0].start()].strip() else []
-            ) + [
-                (
-                    marker.group(0),
-                    scan[
-                        marker.end() : (
-                            markers[index + 1].start() if index + 1 < len(markers) else len(scan)
-                        )
-                    ],
-                )
-                for index, marker in enumerate(markers)
-            ]
-        for raw_level, segment in segments:
-            level = previous_level
-            if raw_level is not None:
-                level = (
-                    0
-                    if raw_level.casefold().startswith("cantrip")
-                    else int(
-                        {
-                            "i": "1",
-                            "l": "1",
-                            "s": "5",
-                            "]": "7",
-                        }.get(raw_level[0].casefold(), raw_level[0])
-                    )
-                )
-                if (
-                    previous_level is not None
-                    and level <= previous_level
-                    and active_index + 1 < len(active_classes)
-                ):
-                    active_index += 1
-            for entry in _SPELL_LIST_ENTRY_RE.finditer(segment):
-                record(
-                    entry.group("name"),
-                    active_classes[active_index],
-                    chunk_id,
-                    ritual=bool(entry.group("ritual")),
-                )
-            for _source_name, printed_name in printed_names(segment):
-                record(
-                    printed_name,
-                    active_classes[active_index],
-                    chunk_id,
-                    ritual=False,
-                )
-            if level is not None:
-                previous_level = level
+        class_name = header_classes[0]
+        for entry in _SPELL_LIST_ENTRY_RE.finditer(scan):
+            record(
+                entry.group("name"),
+                class_name,
+                chunk_id,
+                ritual=bool(entry.group("ritual")),
+            )
+        for _source_name, printed_name in printed_names(scan):
+            record(printed_name, class_name, chunk_id, ritual=False)
+    # Explicit prose declarations and exact ancestor declarations are indexed
+    # once here.  Spell-card construction must never rescan the whole document
+    # for every individual spell.
+    for spell_name in known_spell_names:
+        mentioned = _spell_class_mentions(chunks, spell_name)
+        for class_name in mentioned["classes"]:
+            source_ids = sorted(mentioned["source_chunk_ids"])
+            if source_ids:
+                for source_id in source_ids:
+                    record(spell_name, class_name, source_id, ritual=False)
     return result
 
 
@@ -2384,6 +1960,7 @@ def _spell_class_record(
     return matches[0][2]
 
 
+@registered_parsing_rule("dnd.spell.explicit_declaration_ownership")
 def _spell_class_mentions(chunks: list[dict[str, Any]], spell_name: str) -> dict[str, set[str]]:
     """Recover list eligibility from list headings and bounded prose declarations."""
 
@@ -2567,6 +2144,7 @@ def _spell_components(value: str) -> dict[str, Any]:
     }
 
 
+@registered_parsing_rule("dnd.statblock.scope_complete_field_group")
 def _rulebook_statblock_candidates(
     chunks: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -2607,33 +2185,6 @@ def _rulebook_statblock_candidates(
             or bool(re.search(r"(?:chapter|appendix)\d+", canonical))
         )
 
-    def preceding_statblock_name(start: int, *, page_number: int | None) -> str | None:
-        lower_bound = max(0, start - 20)
-        matches: list[str] = []
-        for chunk in reversed(ordered[lower_bound:start]):
-            chunk_start = chunk.get("page_start")
-            chunk_end = chunk.get("page_end")
-            if (
-                page_number is not None
-                and isinstance(chunk_start, int)
-                and isinstance(chunk_end, int)
-                and not chunk_start <= page_number <= chunk_end
-            ):
-                continue
-            content = " ".join(str(chunk.get("content") or "").split())
-            for match in re.finditer(
-                r"(?i)\buses\s+the\s+"
-                r"(?P<name>[A-Z][A-Za-z0-9 '/()\-]{1,100}?)\s+stat\s+block\b",
-                content,
-            ):
-                matches.append(" ".join(match.group("name").split()))
-            if matches:
-                break
-        unique = list(dict.fromkeys(item.casefold() for item in matches))
-        if len(unique) != 1:
-            return None
-        return next(item for item in matches if item.casefold() == unique[0])
-
     for root_number, start in enumerate(roots):
         end = roots[root_number + 1] if root_number + 1 < len(roots) else len(ordered)
         root = ordered[start]
@@ -2641,6 +2192,12 @@ def _rulebook_statblock_candidates(
         name_index = next(
             (index for index in range(len(path) - 1, -1, -1) if not ignored_heading(path[index])),
             None,
+        )
+        repeated_identity_heading = (
+            name_index is not None
+            and name_index > 0
+            and _canonical_source_heading(path[name_index - 1])
+            == _canonical_source_heading(path[name_index])
         )
         while (
             name_index is not None
@@ -2658,27 +2215,21 @@ def _rulebook_statblock_candidates(
         if name.casefold() in _STATBLOCK_PLACEHOLDER_TITLES:
             continue
         ignored_suffix = name_index is not None and name_index < len(path) - 1
-        if (
+        semantic_identity_evidenced = not (
             name_index is None
-            or ignored_suffix
+            or (ignored_suffix and not repeated_identity_heading)
             or ignored_heading(name)
             or name.casefold() in _GENERIC_TITLES
-        ):
-            inferred_name = preceding_statblock_name(
-                start,
-                page_number=(
-                    root.get("page_start") if isinstance(root.get("page_start"), int) else None
-                ),
+        )
+        if not semantic_identity_evidenced:
+            name = f"Creature on page {root.get('page_start') or '?'}"
+            scoped_path = (
+                path[: name_index + 1]
+                if ignored_suffix and name_index is not None
+                else path[:name_index]
+                if name_index is not None
+                else path[:-1]
             )
-            if inferred_name is not None:
-                name = inferred_name
-                scoped_path = (
-                    path[: name_index + 1]
-                    if ignored_suffix and name_index is not None
-                    else path[:name_index]
-                    if name_index is not None
-                    else path[:-1]
-                )
 
         # Some two-column PDFs attach the creature name only to the core row,
         # while the six ability cells remain siblings under the surrounding
@@ -2762,8 +2313,12 @@ def _rulebook_statblock_candidates(
             "source_heading_path": scoped_path,
             "page_start": _minimum_page_values(item.get("page_start") for item in scoped),
             "page_end": _maximum_page_values(item.get("page_end") for item in scoped),
-            "extraction_confidence": "high",
-            "extraction_signals": ["creature core", "ordered statblock fields"],
+            "extraction_confidence": "high" if semantic_identity_evidenced else "low",
+            "extraction_signals": [
+                "creature core",
+                "ordered statblock fields",
+                *([] if semantic_identity_evidenced else ["identity review required"]),
+            ],
             "review_status": "pending",
             "mechanical_scope": "review_required",
             "application_state": "catalog_only",
@@ -2779,7 +2334,8 @@ def _rulebook_statblock_candidates(
             normalized_content = _normalize_module_statblock(name, scoped)
             candidate["normalized_content"] = normalized_content
             candidate["artifact"]["card"]["normalized_content"] = normalized_content
-            candidate["execution_state"] = "review_ready"
+            if semantic_identity_evidenced:
+                candidate["execution_state"] = "review_ready"
         except (StatblockImportError, ValueError) as error:
             candidate["review_error"] = str(error)
             candidate["extraction_confidence"] = "medium"
@@ -2787,10 +2343,10 @@ def _rulebook_statblock_candidates(
     return candidates
 
 
+@registered_parsing_rule("dnd.content.merge_same_structural_identity")
 def _merge_extracted_candidates(
     candidates: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    _repair_subclass_table_ocr_identities(candidates)
     merged: dict[tuple[str, ...], dict[str, Any]] = {}
     generic_spell_titles = {"spell", "spells", "spell descriptions", "optional spells"}
     embedded_spell_chunks = {
@@ -2811,16 +2367,6 @@ def _merge_extracted_candidates(
         for item in candidates
         if item.get("kind") == "statblock" and "creature core" in item.get("extraction_signals", [])
     ]
-    ordered_species_chunks = {
-        chunk_id
-        for item in candidates
-        if item.get("kind") == "species"
-        and any(
-            signal in {"ordered species traits", "ordered subrace boundary"}
-            for signal in item.get("extraction_signals", [])
-        )
-        for chunk_id in item.get("source_chunk_ids") or []
-    }
     for candidate in candidates:
         if candidate.get("kind") == "species" and str(
             candidate.get("name") or ""
@@ -2833,15 +2379,6 @@ def _merge_extracted_candidates(
             candidate.get("kind") == "spell"
             and str(candidate.get("name") or "").casefold() in generic_spell_titles
             and embedded_spell_chunks.intersection(candidate.get("source_chunk_ids") or [])
-        ):
-            continue
-        if (
-            candidate.get("kind") == "species"
-            and not any(
-                signal in {"ordered species traits", "ordered subrace boundary"}
-                for signal in candidate.get("extraction_signals", [])
-            )
-            and ordered_species_chunks.intersection(candidate.get("source_chunk_ids") or [])
         ):
             continue
         if (
@@ -2881,7 +2418,8 @@ def _merge_extracted_candidates(
                 _canonical_source_heading(value)
                 for value in candidate.get("source_heading_path") or []
             )[:-1]
-        key = (kind, _canonical_source_heading(candidate_name), *identity_context)
+        base_key = (kind, _canonical_source_heading(candidate_name), *identity_context)
+        key = base_key
         existing = merged.get(key)
         if existing is None:
             merged[key] = candidate
@@ -2950,58 +2488,6 @@ def _merge_extracted_candidates(
             preferred["artifact"] = preferred_artifact
         merged[key] = preferred
     return list(merged.values())
-
-
-def _repair_subclass_table_ocr_identities(
-    candidates: list[dict[str, Any]],
-) -> None:
-    """Join a uniquely near-identical spell table to its subclass heading.
-
-    Display-font OCR can corrupt one glyph in a repeated subclass name even
-    when the prose heading was recovered correctly (for example ``LICHT
-    DOMAIN SPELLS`` beside ``LIGHT DOMAIN``).  The correction is intentionally
-    relational: it needs a non-table subclass in the same source container and
-    a unique one-edit match.  A standalone custom name is therefore never
-    rewritten from a built-in vocabulary guess.
-    """
-
-    bases: dict[tuple[str, ...], list[dict[str, Any]]] = {}
-    tables: list[tuple[tuple[str, ...], dict[str, Any]]] = []
-    for candidate in candidates:
-        if str(candidate.get("kind") or "").casefold() != "subclass":
-            continue
-        path = [str(value).strip() for value in candidate.get("source_heading_path") or []]
-        if not path:
-            continue
-        context = tuple(_canonical_source_heading(value) for value in path[:-1])
-        if path[-1].casefold().endswith(" spells"):
-            tables.append((context, candidate))
-        else:
-            bases.setdefault(context, []).append(candidate)
-
-    for context, table in tables:
-        table_key = _canonical_source_heading(str(table.get("name") or ""))
-        matches = [
-            candidate
-            for candidate in bases.get(context, [])
-            if _bounded_ocr_edit_distance(
-                table_key,
-                _canonical_source_heading(str(candidate.get("name") or "")),
-                1,
-            )
-            <= 1
-        ]
-        if len(matches) != 1:
-            continue
-        repaired_name = str(matches[0].get("name") or "").strip()
-        if not repaired_name:
-            continue
-        table["name"] = repaired_name
-        artifact = dict(table.get("artifact") or {})
-        card = dict(artifact.get("card") or {})
-        card["name"] = repaired_name
-        artifact["card"] = card
-        table["artifact"] = artifact
 
 
 def _unclaimed_mechanical_signals(content: str) -> list[str]:
@@ -3812,6 +3298,26 @@ def compiled_artifacts_from_candidates(
     accepted = [
         candidate for candidate in candidates if candidate.get("review_status") == "accepted"
     ]
+    subclass_bindings: dict[str, set[tuple[str, str]]] = {}
+    for candidate in accepted:
+        artifact = dict(candidate.get("artifact") or {})
+        if str(artifact.get("kind") or candidate.get("kind") or "") != "subclass":
+            continue
+        card = dict(artifact.get("card") or {})
+        subclass_name = " ".join(
+            str(card.get("name") or candidate.get("name") or "").split()
+        )
+        class_name = " ".join(str(card.get("class_name") or "").split())
+        canonical = _canonical_source_heading(subclass_name)
+        if not canonical or not class_name:
+            continue
+        keys = {canonical}
+        if canonical.startswith("the") and len(canonical) > 3:
+            keys.add(canonical[3:])
+        else:
+            keys.add(f"the{canonical}")
+        for key in keys:
+            subclass_bindings.setdefault(key, set()).add((subclass_name, class_name))
     generated_bases: dict[str, int] = {}
     for candidate in accepted:
         value = dict(candidate.get("artifact") or {})
@@ -3845,6 +3351,15 @@ def compiled_artifacts_from_candidates(
             )
         kind = str(value.get("kind") or candidate.get("kind") or "").strip()
         card = dict(value.get("card") or {})
+        if kind == "feature":
+            subclass_key = _canonical_source_heading(
+                str(card.get("subclass_name") or "")
+            )
+            bindings = subclass_bindings.get(subclass_key, set())
+            if len(bindings) == 1:
+                subclass_name, class_name = next(iter(bindings))
+                card["subclass_name"] = subclass_name
+                card["class_name"] = class_name
         name = str(card.get("name") or candidate.get("name") or "").strip()
         if not kind or not name:
             raise ValueError(f"accepted candidate {candidate.get('id')} needs kind and card.name")
@@ -4408,6 +3923,7 @@ def _merge_species_grants(
         "language_options",
         "languages",
         "narrative_choice_groups",
+        "natural_weapons",
         "proficiency_choice_groups",
         "resistances",
         "skill_options",
@@ -4475,6 +3991,10 @@ def _merge_species_grants(
             merged[field] = specific_text
     for field in ("allow_any_language", "allow_any_skill", "allow_any_proficient_tool_expertise"):
         merged[field] = bool(base_value.get(field)) or bool(specific_value.get(field))
+    if "natural_armor_includes_dexterity" in specific_value:
+        merged["natural_armor_includes_dexterity"] = specific_value[
+            "natural_armor_includes_dexterity"
+        ]
     for field in ("cantrip_choice", "feat_choice"):
         specific_mapping = specific_value.get(field)
         if isinstance(specific_mapping, Mapping) and specific_mapping:
@@ -4489,11 +4009,174 @@ def _merge_species_grants(
     return merged
 
 
+_STRUCTURED_TRANSCRIPTION_TEXT_KEYS = frozenset(
+    {
+        "description",
+        "effect",
+        "note",
+        "notes",
+        "normalized_content",
+        "reason",
+        "source_excerpt",
+        "text",
+    }
+)
+
+
+def _repair_structured_transcription_text(
+    value: str,
+    *,
+    agent_review_complete: bool,
+    allow_corrupt_paragraph_drop: bool,
+) -> tuple[str, dict[str, Any] | None]:
+    """Remove PDF extraction sentinels from reviewed structured card prose.
+
+    U+FFFE is emitted by pypdfium2 at discretionary word breaks, so removing it
+    together with following layout whitespace is deterministic.  U+FFFD is
+    ambiguous and is repaired only after the candidate has completed Agent
+    review.  Dense replacement-character paragraphs are decorative marginalia
+    rather than rules text and may be omitted from a non-statblock card; the
+    source bundle and source refs remain unchanged as the verbatim evidence.
+    """
+
+    original = str(value)
+    control_artifact_count = original.count("\x02")
+    noncharacter_count = original.count("\ufffe")
+    replacement_count = original.count("\ufffd")
+    if not control_artifact_count and not noncharacter_count and not replacement_count:
+        return original, None
+
+    repaired = re.sub(r"\ufffe[ \t\r\n]*", "", original.replace("\x02", ""))
+    dropped_hashes: list[str] = []
+    if replacement_count and agent_review_complete:
+        paragraphs = re.split(r"(\n\s*\n)", repaired)
+        kept: list[str] = []
+        for index in range(0, len(paragraphs), 2):
+            paragraph = paragraphs[index]
+            separator = paragraphs[index + 1] if index + 1 < len(paragraphs) else ""
+            corrupt_count = paragraph.count("\ufffd")
+            alphanumeric_count = sum(character.isalnum() for character in paragraph)
+            dense_corruption = corrupt_count >= 4 or (
+                corrupt_count >= 2
+                and corrupt_count / max(alphanumeric_count, 1) >= 0.025
+            )
+            if allow_corrupt_paragraph_drop and dense_corruption:
+                dropped_hashes.append(hashlib.sha256(paragraph.encode("utf-8")).hexdigest())
+                continue
+            paragraph = re.sub(r"(?<=\w)\ufffd+(?=\w)", "", paragraph)
+            paragraph = re.sub(r"\ufffd+", " ", paragraph)
+            paragraph = re.sub(r"[ \t]+", " ", paragraph)
+            kept.extend((paragraph, separator))
+        repaired = "".join(kept).strip()
+
+    audit = {
+        "method": (
+            "agent_reviewed_pdf_transcription"
+            if replacement_count
+            else "deterministic_pdf_word_break"
+        ),
+        "u_fffe_removed": noncharacter_count,
+        "u_fffd_repaired": replacement_count if agent_review_complete else 0,
+        "dropped_corrupt_paragraph_sha256": dropped_hashes,
+    }
+    if control_artifact_count:
+        audit["u_0002_removed"] = control_artifact_count
+    return repaired, audit
+
+
+def _repair_structured_card_transcription(
+    card: Mapping[str, Any],
+    *,
+    agent_review_complete: bool,
+    allow_corrupt_paragraph_drop: bool,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Repair only prose-bearing card fields and return a path-level audit."""
+
+    repairs: list[dict[str, Any]] = []
+
+    def visit(raw: Any, path: str, field_name: str | None = None) -> Any:
+        if isinstance(raw, Mapping):
+            return {
+                str(key): visit(item, f"{path}.{key}" if path else str(key), str(key))
+                for key, item in raw.items()
+            }
+        if isinstance(raw, list):
+            return [visit(item, f"{path}[{index}]", field_name) for index, item in enumerate(raw)]
+        if isinstance(raw, str) and field_name in _STRUCTURED_TRANSCRIPTION_TEXT_KEYS:
+            repaired, audit = _repair_structured_transcription_text(
+                raw,
+                agent_review_complete=agent_review_complete,
+                allow_corrupt_paragraph_drop=allow_corrupt_paragraph_drop,
+            )
+            if audit is not None:
+                repairs.append({"path": path, **audit})
+            return repaired
+        return deepcopy(raw)
+
+    return visit(dict(card), "card"), repairs
+
+
+def repair_reviewed_structured_transcription(
+    value: Mapping[str, Any],
+    *,
+    path: str,
+    repair_identity: bool = False,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Run the final reviewed transcription pass over portable D&D structure.
+
+    The early card authoring pass cannot see fields later hydrated from a base
+    card or generated by the source-bound ruling compiler. U+FFFE word-break
+    markers and U+0002 extraction sentinels are deterministic in every string;
+    ambiguous U+FFFD replacement characters are repaired only in prose-bearing
+    fields after review. A source-fragment identity may also be repaired because
+    it is evidence context, never a selectable rules identity.
+    """
+
+    repairs: list[dict[str, Any]] = []
+    replacement_keys = set(_STRUCTURED_TRANSCRIPTION_TEXT_KEYS)
+    replacement_keys.update({"on_hit_effect", "trigger", "outcome"})
+    if repair_identity:
+        replacement_keys.update({"name", "title"})
+
+    def visit(raw: Any, current_path: str, field_name: str | None = None) -> Any:
+        if isinstance(raw, Mapping):
+            return {
+                str(key): visit(
+                    item,
+                    f"{current_path}.{key}" if current_path else str(key),
+                    str(key),
+                )
+                for key, item in raw.items()
+            }
+        if isinstance(raw, list):
+            return [
+                visit(item, f"{current_path}[{index}]", field_name)
+                for index, item in enumerate(raw)
+            ]
+        if not isinstance(raw, str):
+            return deepcopy(raw)
+        has_deterministic_sentinel = "\ufffe" in raw or "\x02" in raw
+        has_reviewable_replacement = "\ufffd" in raw and field_name in replacement_keys
+        if not has_deterministic_sentinel and not has_reviewable_replacement:
+            return raw
+        repaired, audit = _repair_structured_transcription_text(
+            raw,
+            agent_review_complete=has_reviewable_replacement,
+            allow_corrupt_paragraph_drop=False,
+        )
+        if audit is not None:
+            repairs.append({"path": current_path, **audit})
+        return repaired
+
+    return visit(dict(value), path), repairs
+
+
 def author_selection_card_from_candidate(
     candidate: dict[str, Any],
     *,
     source_chunks_by_id: dict[str, str] | None = None,
     reference_artifacts: Iterable[Mapping[str, Any]] = (),
+    context_candidates: Iterable[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """Prepare a conservative typed card for the primary build-time reviewer.
 
@@ -4507,7 +4190,16 @@ def author_selection_card_from_candidate(
     value = deepcopy(dict(candidate.get("artifact") or {}))
     kind = str(value.get("kind") or candidate.get("kind") or "").strip()
     card = deepcopy(dict(value.get("card") or {}))
-    name = " ".join(str(card.get("name") or candidate.get("name") or "").split())
+    agent_review_complete = candidate.get("agent_review_complete") is True
+    card, transcription_repairs = _repair_structured_card_transcription(
+        card,
+        agent_review_complete=agent_review_complete,
+        allow_corrupt_paragraph_drop=str(value.get("kind") or candidate.get("kind") or "")
+        != "statblock",
+    )
+    if transcription_repairs:
+        card["transcription_repairs"] = transcription_repairs
+    name = _canonical_card_display_name(str(card.get("name") or candidate.get("name") or ""))
     description = " ".join(str(card.get("description") or "").split())
     if not kind or not name:
         return value
@@ -4585,12 +4277,15 @@ def author_selection_card_from_candidate(
             ).split()
         )
         source_text = str(card.get("normalized_content") or "").strip()
-        if not source_text and source_chunks_by_id:
-            source_text = "\n\n".join(
+        source_context = ""
+        if source_chunks_by_id:
+            source_context = "\n\n".join(
                 str(source_chunks_by_id.get(str(chunk_id)) or "").strip()
                 for chunk_id in candidate.get("source_chunk_ids") or []
                 if str(source_chunks_by_id.get(str(chunk_id)) or "").strip()
             )
+        if not source_text and source_context:
+            source_text = source_context
             if source_text:
                 source_text = f"# {name}\n\n{source_text}"
         requirement = parameterized_statblock_requirements(source_text)
@@ -4610,15 +4305,24 @@ def author_selection_card_from_candidate(
                 return value
             if dependent_actor_template_solution_errors(requirement):
                 return value
+            solution = dict(requirement.get("solution") or {})
             if reviewed_owner_class_name:
                 requirement["owner_class_name"] = reviewed_owner_class_name
-            solution = dict(requirement.get("solution") or {})
+                requirement["owner_class_binding"] = (
+                    "source_formula"
+                    if solution.get("owner_class_names")
+                    else "reviewed_context"
+                )
             if "owner_class_level" in set(
                 solution.get("numeric_parameters") or []
             ) and not solution.get("owner_class_names"):
-                owner_class_name = _candidate_class_name(candidate, source_text)
+                owner_class_name = _candidate_class_name(
+                    candidate,
+                    "\n\n".join(value for value in (source_context, source_text) if value),
+                )
                 if owner_class_name:
                     requirement["owner_class_name"] = owner_class_name
+                    requirement["owner_class_binding"] = "reviewed_context"
             card["normalized_content"] = source_text
             card["dependent_actor_template"] = requirement
             value["selection_applicability"] = "not_applicable"
@@ -4673,9 +4377,41 @@ def author_selection_card_from_candidate(
             card.setdefault("selection_requirements", None)
             card.setdefault("mechanical_grants", {})
         elif kind == "feature":
-            class_name = _candidate_class_name(candidate, description)
-            subclass_name = _candidate_subclass_name(candidate, description)
-            minimum_level = _candidate_minimum_level(description)
+            class_name = " ".join(str(card.get("class_name") or "").split())
+            if not class_name:
+                class_name = _candidate_class_name(candidate, description)
+            subclass_name = " ".join(str(card.get("subclass_name") or "").split())
+            if not subclass_name:
+                subclass_name = _candidate_subclass_name(candidate, description)
+            if _canonical_source_heading(subclass_name) == _canonical_source_heading(name):
+                # A flattened outline often places the feature directly under a
+                # generic subclass container.  In that shape the next heading is
+                # the feature itself, not evidence of subclass ownership.
+                subclass_name = ""
+            reviewed_subclass_class = _reviewed_subclass_owner_class(
+                subclass_name,
+                context_candidates,
+            )
+            if reviewed_subclass_class:
+                current_class = " ".join(str(card.get("class_name") or "").split())
+                if (
+                    agent_review_complete
+                    and current_class
+                    and current_class.casefold() != reviewed_subclass_class.casefold()
+                ):
+                    raise ValueError(
+                        f"reviewed feature class {current_class!r} conflicts with "
+                        f"subclass {subclass_name!r} owned by {reviewed_subclass_class!r}"
+                    )
+                class_name = reviewed_subclass_class
+                card["class_name"] = class_name
+            explicit_minimum_level = card.get("minimum_level")
+            minimum_level = (
+                explicit_minimum_level
+                if isinstance(explicit_minimum_level, int)
+                and not isinstance(explicit_minimum_level, bool)
+                else _candidate_minimum_level(description)
+            )
             if class_name:
                 card.setdefault("class_name", class_name)
             if subclass_name:
@@ -4729,11 +4465,12 @@ def author_selection_card_from_candidate(
         inferred = _background_selection_card(description)
         for field, inferred_value in inferred.items():
             reviewed_value = card.get(field)
+            if agent_review_complete and isinstance(reviewed_value, dict):
+                # A completed Agent review makes the whole mechanical object
+                # authoritative; omitted mechanics are deliberately absent.
+                continue
             if isinstance(inferred_value, dict) and isinstance(reviewed_value, dict):
-                card[field] = _merge_inferred_defaults(
-                    inferred_value,
-                    reviewed_value,
-                )
+                card[field] = _merge_inferred_defaults(inferred_value, reviewed_value)
             else:
                 card.setdefault(field, inferred_value)
         value["application_state"] = (
@@ -4747,10 +4484,17 @@ def author_selection_card_from_candidate(
         reviewed_grants = card.get("grants")
         if grants is not None or isinstance(reviewed_grants, dict):
             if isinstance(reviewed_grants, dict):
-                card["grants"] = {
-                    **deepcopy(grants or {}),
-                    **deepcopy(reviewed_grants),
-                }
+                if agent_review_complete:
+                    # `grants` is one reviewed mechanical contract.  It must
+                    # not be contaminated by best-effort prose inference.
+                    card["grants"] = deepcopy(reviewed_grants)
+                else:
+                    # Authoring helpers outside the primary review workflow may
+                    # intentionally provide a partial card and request defaults.
+                    card["grants"] = {
+                        **deepcopy(grants or {}),
+                        **deepcopy(reviewed_grants),
+                    }
             else:
                 assert grants is not None
                 card["grants"] = grants
@@ -4809,7 +4553,7 @@ def _merge_inferred_defaults(
     inferred: dict[str, Any],
     reviewed: dict[str, Any],
 ) -> dict[str, Any]:
-    """Fill absent nested fields while preserving explicit reviewer semantics."""
+    """Fill absent nested fields for an explicitly partial authoring card."""
 
     merged = deepcopy(inferred)
     for field, reviewed_value in reviewed.items():
@@ -4821,6 +4565,7 @@ def _merge_inferred_defaults(
     return merged
 
 
+@registered_parsing_rule("dnd.content.explicit_heading_entity_candidates")
 def _candidate_class_name(candidate: dict[str, Any], description: str) -> str:
     explicit_owner = re.search(
         r"(?i)\b\d{1,2}(?:st|nd|rd|th)\s*[- ]?\s*level\s+"
@@ -4833,25 +4578,67 @@ def _candidate_class_name(candidate: dict[str, Any], description: str) -> str:
             return owner.title()
         if owner.casefold() == "revised ranger":
             return "Revised Ranger"
+    explicit_labels = [
+        match.group("owner")
+        for pattern in (
+            r"(?i)\b(?P<owner>[a-z][a-z' -]{1,40}?)\s+level\s+features\b",
+            r"(?i)\b\d{1,2}(?:st|nd|rd|th)\s*[- ]\s*level\s+"
+            r"(?P<owner>[a-z][a-z' -]{1,40}?)(?=\s*[,.;:)\n]|$)",
+        )
+        for match in re.finditer(pattern, description[:2400])
+    ]
+    explicit_classes = {
+        _normalize_candidate_display_name(owner).title()
+        for owner in explicit_labels
+        if _normalize_candidate_display_name(owner).casefold() in _CLASS_NAMES
+    }
+    if len(explicit_classes) == 1:
+        return next(iter(explicit_classes))
     source_class_name = " ".join(str(candidate.get("source_class_name") or "").split())
     if source_class_name:
         return source_class_name
-    for heading in reversed(candidate.get("source_heading_path") or []):
+    headings = [str(value) for value in candidate.get("source_heading_path") or []]
+    for heading in reversed(headings):
         parent_class = _SUBCLASS_PARENT_CLASS_NAMES.get(str(heading).casefold().strip())
         if parent_class:
             return parent_class
-    values = [
-        *[str(item) for item in candidate.get("source_heading_path") or []],
-        str(candidate.get("name") or ""),
-        description[:1000],
-    ]
-    combined = " ".join(values).casefold()
-    for class_name in sorted(_CLASS_NAMES, key=len, reverse=True):
-        if re.search(rf"\b{re.escape(class_name)}(?:s|\s+level|\s+class|\b)", combined):
-            return class_name.title()
-    if "revised ranger" in combined:
-        return "Revised Ranger"
+    canonical_headings = [_canonical_source_heading(heading) for heading in headings]
+    canonical_parents = {
+        _canonical_source_heading(title): parent
+        for title, parent in _SUBCLASS_PARENT_CLASS_NAMES.items()
+    }
+    for heading in reversed(canonical_headings):
+        for title, parent in canonical_parents.items():
+            if title and heading.startswith(title):
+                return parent
+    for heading in reversed(canonical_headings):
+        for class_name in sorted(_CLASS_NAMES, key=len, reverse=True):
+            if heading.startswith(_canonical_source_heading(class_name)):
+                return class_name.title()
     return ""
+
+
+def _reviewed_subclass_owner_class(
+    subclass_name: str,
+    context_candidates: Iterable[Mapping[str, Any]],
+) -> str:
+    """Resolve a feature owner from a unique source-reviewed subclass card."""
+
+    target = _canonical_source_heading(subclass_name)
+    if not target:
+        return ""
+    owner_classes = {
+        " ".join(str(card.get("class_name") or "").split())
+        for context in context_candidates
+        if str(context.get("kind") or "").casefold() == "subclass"
+        and (
+            card := dict(dict(context.get("artifact") or {}).get("card") or {})
+        )
+        and _canonical_source_heading(str(card.get("name") or context.get("name") or ""))
+        == target
+        and str(card.get("class_name") or "").strip()
+    }
+    return next(iter(owner_classes)) if len(owner_classes) == 1 else ""
 
 
 def _candidate_subclass_name(
@@ -5315,6 +5102,17 @@ def _species_grants(description: str) -> dict[str, Any] | None:
     weapon_proficiencies: list[str] = []
     for segment in proficiency_segments:
         folded_segment = segment.casefold()
+        # "Proficiency with two of the following skills" and tool clauses use
+        # the same English preposition as weapon training.  Ambiguous prose is
+        # not evidence of a weapon grant; source-specific/custom choices are
+        # supplied by the Agent review contract instead.
+        if "skill" in folded_segment or any(
+            re.search(rf"(?i)\b{re.escape(skill.replace('_', ' '))}\b", segment)
+            for skill in SKILL_ABILITIES
+        ):
+            continue
+        if "tool" in folded_segment or "instrument" in folded_segment:
+            continue
         if "armor" in folded_segment or "shield" in folded_segment:
             armor_proficiencies.extend(
                 armor
@@ -5505,6 +5303,47 @@ def _word_number(value: str) -> int:
     return 0
 
 
+def _reviewed_exact_source_excerpt(
+    value: str,
+    *,
+    agent_review_complete: bool,
+) -> tuple[str, dict[str, Any] | None]:
+    """Choose a clean excerpt that remains exact under source evidence normalization."""
+
+    raw = str(value)
+    u_fffe_count = raw.count("\ufffe")
+    u_fffd_count = raw.count("\ufffd")
+    control_artifact_count = raw.count("\x02")
+    normalized_breaks = re.sub(
+        r"\ufffe[ \t\r\n]*",
+        "",
+        raw.replace("\x02", ""),
+    )
+    if u_fffd_count and not agent_review_complete:
+        return " ".join(normalized_breaks.split())[:4000], None
+    segments = re.split(r"\ufffd+", normalized_breaks)
+    clean_segments = []
+    for index, segment in enumerate(segments):
+        cleaned = " ".join(segment.split())
+        if index > 0:
+            cleaned = re.sub(r"^\S+\s*", "", cleaned)
+        if index + 1 < len(segments):
+            cleaned = re.sub(r"\s*\S+$", "", cleaned)
+        clean_segments.append(cleaned)
+    excerpt = max(clean_segments, key=len, default="")[:4000]
+    audit = None
+    if u_fffe_count or u_fffd_count:
+        audit = {
+            "method": "agent_reviewed_clean_source_span",
+            "u_fffe_removed": u_fffe_count,
+            "u_fffd_excluded": u_fffd_count,
+        }
+    if control_artifact_count:
+        audit = dict(audit or {"method": "agent_reviewed_clean_source_span"})
+        audit["u_0002_removed"] = control_artifact_count
+    return excerpt, audit
+
+
 def artifact_with_direct_resolution(
     candidate: dict[str, Any],
     *,
@@ -5553,9 +5392,13 @@ def artifact_with_direct_resolution(
         )
     citation_chunk_id = chunk_ids[0]
     excerpt = ""
+    excerpt_transcription_repair: dict[str, Any] | None = None
     if source_chunks_by_id is not None:
         for chunk_id in chunk_ids:
-            exact_content = " ".join(str(source_chunks_by_id.get(chunk_id) or "").split())
+            exact_content, excerpt_transcription_repair = _reviewed_exact_source_excerpt(
+                str(source_chunks_by_id.get(chunk_id) or ""),
+                agent_review_complete=candidate.get("agent_review_complete") is True,
+            )
             if len(exact_content) >= 10:
                 citation_chunk_id = chunk_id
                 excerpt = exact_content[:4000]
@@ -5603,6 +5446,13 @@ def artifact_with_direct_resolution(
             }
         )
         card["ruling_requirements"] = existing_requirements
+    if excerpt_transcription_repair is not None:
+        card.setdefault("transcription_repairs", []).append(
+            {
+                "path": "generated.source_excerpt",
+                **excerpt_transcription_repair,
+            }
+        )
 
     # Candidate IDs and chunk IDs are database-local extraction identities.
     # A direct-resolution clause is part of the shareable rule definition, so
@@ -5809,7 +5659,98 @@ def validate_selection_ready_artifacts(artifacts: list[dict[str, Any]]) -> list[
     return errors
 
 
-def audit_release_resolution_readiness(
+def candidate_draft_issues(candidate: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Return deterministic D&D issues after one Agent editing pass.
+
+    This deliberately reports semantic ambiguity instead of repairing it. Safe
+    D&D normalization still happens in the ordinary candidate authoring path;
+    these issues are the fail-closed feedback surface for the next Agent pass.
+    """
+
+    value = dict(candidate)
+    candidate_id = str(value.get("id") or "candidate")
+    issues: list[dict[str, Any]] = []
+
+    def add(code: str, message: str, *, path: str, severity: str = "blocker") -> None:
+        issues.append(
+            {
+                "code": code,
+                "severity": severity,
+                "path": path,
+                "message": message,
+                "autofix": False,
+            }
+        )
+
+    status = str(value.get("review_status") or "pending")
+    if status not in {"accepted", "rejected"}:
+        add(
+            "unresolved_disposition",
+            f"{candidate_id} still needs an include or exclude decision",
+            path="review_status",
+        )
+    chunk_ids = [str(item) for item in value.get("source_chunk_ids") or [] if str(item)]
+    if not chunk_ids:
+        add(
+            "missing_source_evidence",
+            f"{candidate_id} has no indexed source chunks",
+            path="source_chunk_ids",
+        )
+    if status != "accepted":
+        return issues
+
+    artifact = value.get("artifact")
+    if not isinstance(artifact, Mapping):
+        add(
+            "missing_artifact",
+            f"{candidate_id} is included without a structured artifact",
+            path="artifact",
+        )
+        return issues
+    artifact_value = dict(artifact)
+    candidate_kind = str(value.get("kind") or "")
+    artifact_kind = str(artifact_value.get("kind") or "")
+    if not artifact_kind:
+        add(
+            "missing_kind",
+            f"{candidate_id} artifact has no D&D content kind",
+            path="artifact.kind",
+        )
+    elif candidate_kind and artifact_kind != candidate_kind:
+        add(
+            "kind_mismatch",
+            f"{candidate_id} candidate and artifact kinds differ",
+            path="artifact.kind",
+        )
+    card = artifact_value.get("card")
+    if not isinstance(card, Mapping) or not str(card.get("name") or "").strip():
+        add(
+            "missing_identity",
+            f"{candidate_id} included card has no reviewed name",
+            path="artifact.card.name",
+        )
+    for error in catalog_review_errors(artifact_value):
+        # needs_review is the normal editable state; explicit finalization will
+        # freeze the same source-bound decision as approved.
+        if "status is invalid" not in error and "approved status" not in error:
+            add("catalog_contract", error, path="artifact.catalog_review")
+    for error in validate_selection_ready_artifacts([artifact_value]):
+        add("dnd_schema", error, path="artifact")
+    execution_state = str(artifact_value.get("execution_state") or "")
+    if execution_state in {
+        "agent_resolution_required",
+        "content_authoring_required",
+        "first_use_compilation_required",
+    }:
+        add(
+            "deferred_semantics",
+            f"{candidate_id} still requires semantic authoring",
+            path="artifact.execution_state",
+        )
+    return issues
+
+
+def audit_release_semantic_validation(
     artifacts: list[dict[str, Any]],
     *,
     settled_mechanic_ids: set[str] | None = None,
@@ -5996,6 +5937,7 @@ def _has_level_feature_marker(content: str) -> bool:
     )
 
 
+@registered_parsing_rule("dnd.content.explicit_heading_entity_candidates")
 def _classify(
     title: str,
     heading_path: list[str],
@@ -6049,8 +5991,13 @@ def _classify(
         )
         if label in normalized_background
     )
-    if "skill proficiencies" in background_signals and (
-        "background" in ancestors or len(background_signals) >= 2
+    background_title_is_eligible = (
+        title_folded not in _GENERIC_TITLES or title_folded in {"background", "backgrounds"}
+    )
+    if background_title_is_eligible and "skill proficiencies" in background_signals and (
+        "background" in ancestors
+        or title_folded in {"background", "backgrounds"}
+        or len(background_signals) >= 2
     ):
         return "background", background_signals
 

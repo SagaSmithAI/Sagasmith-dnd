@@ -107,18 +107,12 @@ def test_source_reviewed_chase_speed_adjustment_is_contextual() -> None:
         quarry_ids=["quarry"],
         initial_distance_ft=100,
     )
-    quarry_state = next(
-        item
-        for item in chase["participants"]
-        if item["actor_id"] == "quarry"
-    )
+    quarry_state = next(item for item in chase["participants"] if item["actor_id"] == "quarry")
 
     assert quarry_state["base_speed_ft"] == 30
     assert quarry_state["speed_adjustment_ft"] == -10
     assert quarry_state["speed_ft"] == 20
-    assert quarry_state["speed_source_excerpt"] == (
-        quarry["chase_speed_source_excerpt"]
-    )
+    assert quarry_state["speed_source_excerpt"] == (quarry["chase_speed_source_excerpt"])
     assert quarry["derived"]["speed"]["walk"] == 30
 
 

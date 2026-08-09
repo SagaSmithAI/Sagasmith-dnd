@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "sagasmith-dnd"
 version = "0.2.0"
-description = "D&D 5e 2014/2024 runtime and portable JSON CLI for SagaSmith Core"
+description = "D&D 5e 2014/2024 runtime and unified content-package CLI for SagaSmith Core"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
@@ -19,8 +19,14 @@ dense = [
     "chromadb>=0.6.0,<1.0.0",
 ]
 documents = ["sagasmith-core[documents]>=0.2.0,<0.3.0"]
+images = [
+    "pymupdf>=1.26.0,<2.0.0",
+    "Pillow>=10.0.0,<13.0.0",
+]
 all = [
     "sagasmith-core[documents,embedding,vector]>=0.2.0,<0.3.0",
+    "pymupdf>=1.26.0,<2.0.0",
+    "Pillow>=10.0.0,<13.0.0",
 ]
 dev = [
     "pytest>=9.0.0,<10.0.0",

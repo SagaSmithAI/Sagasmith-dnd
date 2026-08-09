@@ -357,9 +357,7 @@ def test_manifest_completion_has_one_verified_ending_state() -> None:
     completed["ending"]["achieved_condition_id"] = "victory"
     completed["ending"]["verification"] = [{"passed": True}]
     assert (
-        validate_party_state({"playthrough_manifest": completed})[
-            "playthrough_manifest"
-        ]["status"]
+        validate_party_state({"playthrough_manifest": completed})["playthrough_manifest"]["status"]
         == "completed"
     )
 

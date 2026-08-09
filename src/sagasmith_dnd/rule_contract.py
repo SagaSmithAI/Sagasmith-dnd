@@ -3,7 +3,7 @@
 An artifact may mix data that is copied to a sheet, mechanics owned by the
 trusted kernel, semantic plans executed through primitives, Agent-as-DM
 judgment, and prose that is only descriptive.  Each source clause declares
-exactly one of those settlement modes so selection readiness is based on
+exactly one of those settlement modes so selection validation is based on
 coverage rather than on an artifact-wide guess.
 """
 
@@ -37,9 +37,7 @@ AGENT_RULING_KINDS = frozenset(
 )
 
 _SAFE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._:-]{0,199}$")
-_GRANT_REF_RE = re.compile(
-    r"^card\.[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$"
-)
+_GRANT_REF_RE = re.compile(r"^card\.[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$")
 
 
 class RuleContractError(ValueError):
@@ -71,17 +69,13 @@ def compile_rule_clause(value: Any) -> CompiledRuleClause:
     }
     unknown = set(value) - allowed
     if unknown:
-        raise RuleContractError(
-            f"rule clause has unsupported fields: {sorted(unknown)}"
-        )
+        raise RuleContractError(f"rule clause has unsupported fields: {sorted(unknown)}")
     schema_version = value.get("schema_version")
     clause_id = str(value.get("id") or "").strip()
     title = " ".join(str(value.get("title") or "").split())
     scope = str(value.get("scope") or "").strip()
     if schema_version != RULE_CLAUSE_SCHEMA_VERSION:
-        raise RuleContractError(
-            f"rule clause schema_version must be {RULE_CLAUSE_SCHEMA_VERSION}"
-        )
+        raise RuleContractError(f"rule clause schema_version must be {RULE_CLAUSE_SCHEMA_VERSION}")
     if _SAFE_ID_RE.fullmatch(clause_id) is None:
         raise RuleContractError("rule clause id must be a stable safe identifier")
     if not 3 <= len(title) <= 200:
@@ -120,9 +114,7 @@ def rule_clause_template(clause: CompiledRuleClause) -> dict[str, Any]:
         "id": clause.id,
         "title": clause.title,
         "scope": clause.scope,
-        "source_citations": [
-            deepcopy(citation) for citation in clause.source_citations
-        ],
+        "source_citations": [deepcopy(citation) for citation in clause.source_citations],
         "settlement": deepcopy(clause.settlement),
     }
 
@@ -158,38 +150,30 @@ def validate_rule_clause_coverage(
         if mode == "static_grant":
             for grant_ref in settlement["grant_refs"]:
                 if _resolve_grant_ref(artifact, grant_ref) is None:
-                    errors.append(
-                        f"{prefix} static grant is unavailable: {grant_ref}"
-                    )
+                    errors.append(f"{prefix} static grant is unavailable: {grant_ref}")
         elif mode == "primitive_plan":
             refs = set(settlement["plan_ids"])
             claimed_plans.update(refs)
             missing = sorted(refs - available_plans)
             if missing:
-                errors.append(
-                    f"{prefix} references unavailable plans: {', '.join(missing)}"
-                )
+                errors.append(f"{prefix} references unavailable plans: {', '.join(missing)}")
         elif mode == "kernel_mechanic":
             refs = set(settlement["mechanic_refs"])
             claimed_mechanics.update(refs)
             missing = sorted(refs - available_mechanics)
             if missing:
-                errors.append(
-                    f"{prefix} references unavailable mechanics: {', '.join(missing)}"
-                )
+                errors.append(f"{prefix} references unavailable mechanics: {', '.join(missing)}")
     if require_mechanical_clause and mechanical_count == 0:
         errors.append("mechanical content needs at least one mechanical rule clause")
     unclaimed_plans = sorted(available_plans - claimed_plans)
     if unclaimed_plans:
         errors.append(
-            "resolution plans are not assigned to a source clause: "
-            + ", ".join(unclaimed_plans)
+            "resolution plans are not assigned to a source clause: " + ", ".join(unclaimed_plans)
         )
     unclaimed_mechanics = sorted(available_mechanics - claimed_mechanics)
     if unclaimed_mechanics:
         errors.append(
-            "mechanic refs are not assigned to a source clause: "
-            + ", ".join(unclaimed_mechanics)
+            "mechanic refs are not assigned to a source clause: " + ", ".join(unclaimed_mechanics)
         )
     return errors
 
@@ -200,9 +184,7 @@ def _compile_citations(value: Any) -> tuple[dict[str, Any], ...]:
         or not value
         or any(not isinstance(item, dict) for item in value)
     ):
-        raise RuleContractError(
-            "each rule clause needs at least one source citation"
-        )
+        raise RuleContractError("each rule clause needs at least one source citation")
     citations: list[dict[str, Any]] = []
     for citation in value:
         allowed = {"source", "source_ref", "source_excerpt"}
@@ -210,9 +192,7 @@ def _compile_citations(value: Any) -> tuple[dict[str, Any], ...]:
             raise RuleContractError("rule clause citation has unsupported fields")
         source = str(citation.get("source") or "").strip()
         source_ref = citation.get("source_ref")
-        source_excerpt = " ".join(
-            str(citation.get("source_excerpt") or "").split()
-        )
+        source_excerpt = " ".join(str(citation.get("source_excerpt") or "").split())
         if (
             not source
             or not isinstance(source_ref, dict)
@@ -245,24 +225,21 @@ def _compile_settlement(value: Any, *, scope: str) -> dict[str, Any]:
             )
         return {"mode": mode}
     if scope != "mechanical":
-        raise RuleContractError(
-            f"{mode} settlement requires a mechanical rule clause"
-        )
+        raise RuleContractError(f"{mode} settlement requires a mechanical rule clause")
     if mode == "static_grant":
         if set(value) != {"mode", "grant_refs"}:
-            raise RuleContractError(
-                "static_grant settlement requires only grant_refs"
-            )
-        return {"mode": mode, "grant_refs": _safe_ref_list(
-            value.get("grant_refs"),
-            field="grant_refs",
-            pattern=_GRANT_REF_RE,
-        )}
+            raise RuleContractError("static_grant settlement requires only grant_refs")
+        return {
+            "mode": mode,
+            "grant_refs": _safe_ref_list(
+                value.get("grant_refs"),
+                field="grant_refs",
+                pattern=_GRANT_REF_RE,
+            ),
+        }
     if mode == "primitive_plan":
         if set(value) != {"mode", "plan_ids"}:
-            raise RuleContractError(
-                "primitive_plan settlement requires only plan_ids"
-            )
+            raise RuleContractError("primitive_plan settlement requires only plan_ids")
         return {
             "mode": mode,
             "plan_ids": _safe_ref_list(
@@ -273,9 +250,7 @@ def _compile_settlement(value: Any, *, scope: str) -> dict[str, Any]:
         }
     if mode == "kernel_mechanic":
         if set(value) != {"mode", "mechanic_refs"}:
-            raise RuleContractError(
-                "kernel_mechanic settlement requires only mechanic_refs"
-            )
+            raise RuleContractError("kernel_mechanic settlement requires only mechanic_refs")
         return {
             "mode": mode,
             "mechanic_refs": _safe_ref_list(
@@ -297,9 +272,7 @@ def _compile_settlement(value: Any, *, scope: str) -> dict[str, Any]:
         or ruling_kind not in AGENT_RULING_KINDS
         or not 10 <= len(reason) <= 500
     ):
-        raise RuleContractError(
-            "agent_ruling settlement must be a bounded Agent-as-DM contract"
-        )
+        raise RuleContractError("agent_ruling settlement must be a bounded Agent-as-DM contract")
     return {
         "mode": mode,
         "default_resolver": default_resolver,
@@ -314,20 +287,11 @@ def _safe_ref_list(
     field: str,
     pattern: re.Pattern[str],
 ) -> list[str]:
-    if (
-        not isinstance(value, list)
-        or not value
-        or any(not isinstance(item, str) for item in value)
-    ):
+    if not isinstance(value, list) or not value or any(not isinstance(item, str) for item in value):
         raise RuleContractError(f"{field} must be a non-empty text list")
     refs = [item.strip() for item in value]
-    if (
-        any(pattern.fullmatch(item) is None for item in refs)
-        or len(refs) != len(set(refs))
-    ):
-        raise RuleContractError(
-            f"{field} must contain unique stable references"
-        )
+    if any(pattern.fullmatch(item) is None for item in refs) or len(refs) != len(set(refs)):
+        raise RuleContractError(f"{field} must contain unique stable references")
     return refs
 
 

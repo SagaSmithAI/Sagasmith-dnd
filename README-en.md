@@ -16,7 +16,7 @@ flowchart LR
     D --> C[sagasmith-core]
 ```
 
-Agents should normally connect through [SagaSmith-dnd-mcp](https://github.com/SagaSmithAI/SagaSmith-dnd-mcp), not construct CLI commands or write databases directly. The CLI remains useful for development, diagnostics, and portable integrations; the Python package is the rules/content implementation layer.
+Agents should normally connect through [SagaSmith-dnd-mcp](https://github.com/SagaSmithAI/SagaSmith-dnd-mcp), not construct CLI commands or write databases directly. The CLI remains useful for development, diagnostics, and content compilation; the Python package is the rules/content implementation layer.
 
 ## Implemented capabilities
 
@@ -32,10 +32,11 @@ Agents should normally connect through [SagaSmith-dnd-mcp](https://github.com/Sa
 
 ## Unified actor cards and bundled creature packs
 
-`build_dnd_actor_card` / `validate_dnd_actor_card` apply D&D sheet-v2 and
-edition validation on top of the Core portable envelope. PCs, NPCs, and monsters
-do not have separate sharing formats: each is a complete actor card, separated
-only by `actor_type`, provenance, and card mechanics.
+The unified package's `sagasmith.actor-card.v3` applies D&D sheet-v2 and edition
+validation on top of the Core schema. PCs, NPCs, and monsters do not have
+separate sharing formats: each is a complete actor card, separated only by
+`actor_type`, provenance, and card mechanics. Older builders are internal import
+compiler adapters, not another public sharing format.
 
 `build_srd2014_preset_pack` produces 317 cards from the bundled SRD 5.1
 Markdown; `build_srd2024_preset_pack` produces 330 from SRD 5.2.1. Every card
@@ -63,8 +64,10 @@ artifacts (including 319 spells, 474 items, and 182 features) and 1,463 SRD
 monsters). The multilingual source index covers exactly 2,032 Markdown files
 in 42 source partitions. Missing or duplicate files, count drift, duplicate
 artifact IDs, and missing citations fail tests. Non-SRD text from the three
-commercial core books is not distributed in this Apache-2.0 repository; an
-owner may compile legally held PHB/DMG/MM files as private core addons.
+commercial core books is not bundled with this Apache-2.0 software package.
+An authorized owner may compile legally held PHB/DMG/MM files privately, while
+the separate public content library may publish authorized archives under the
+content-specific license and attribution recorded inside each package.
 Every bundled artifact also receives a complete build-time clause set that
 separates structured grants, registered kernel mechanics, descriptive text,
 and exact-source Agent-DM rulings. Release audit requires
@@ -120,32 +123,33 @@ sagasmith-dnd --help
 
 Extensions do not override the core through scattered conditionals. Ingestion produces a provenance-bearing draft pack, validates schema, dependencies, edition, and mechanic IR, then binds the pack to a campaign profile. Campaigns lock exact core/extension versions, and snapshot restoration requires the same dependency set.
 
-This allows legally owned supplements to add subclasses, backgrounds, spells, and executable mechanics without losing the 2014/2024 core boundaries and regression fixes. Commercial book content is not distributed with this repository.
+This allows legally owned supplements to add subclasses, backgrounds, spells, and executable mechanics without losing the 2014/2024 core boundaries and regression fixes. Commercial book content is not bundled with this software repository; authorized public archives live in the separate content library with their own distribution metadata.
 
-Supplements can also ship as a composed package family: keep rules in an
-edition/dependency/source-locked rule pack; distribute pregenerated PCs, NPCs,
-monsters, and summons in a portable `preset_pack`; place adventures, maps, and
-scenes in a separate `module_pack`. Link them with explicit dependencies instead
-of one giant package that bypasses rule-install approval.
+All shareable content uses `sagasmith.content-package` v2 in a
+`.sagasmith-pack` archive. `core_rules`, `addon`, `module`, and `preset` share
+one physical source/evidence/asset/actor layout while keeping different
+activation authority. Sources store one normalized-document blob with hashed
+section/chunk offsets; original documents and images are content-addressed
+assets. No loose portable JSON, release manifest, or `.sagasmith-module` format
+is accepted.
 
-Modules use only the v2 `.sagasmith-module` archive. Its descriptor declares
-edition compatibility, party/level/advancement guidance, continuity, content and
-narrative catalogs, and readiness; content-addressed blobs travel in the archive.
-The D&D plugin validates exact rule dependencies and actor cards, and only
-`playable`/`complete` packages may enter the activation transaction. Addons do
-not embed modules, and the removed module-pack v1 shape is not read.
+Distributed maps, player handouts, and character-reference sheets that were
+not indexed remain typed `map` / `player_reference` auxiliary assets with their
+logical paths. They are never mislabeled as rules evidence; authorized public
+libraries may expose them by content hash while the archive remains the only
+installation boundary.
 
-For cross-installation migration, a rule pack carries its complete indexed
-sources and replaces local `source_id`/`chunk_id` values with stable locators.
-The receiver validates checksums, system, edition, and exact dependencies, then
-rebuilds sources and citations with fresh local ids. A standalone rule pack must
-also carry a `build_time_complete` resolution audit exactly equal to the
-receiver's recomputation; missing, stale, or deferred semantics block export,
-import, and installation. The result is only a
-validated inactive draft: installation and campaign Owner/DM activation remain
-separate. Rule dependencies use the UUID-independent definition checksum; a
-thin `release_manifest` pins each complete component-envelope checksum. It
-grants no installation or activation authority.
+PCs, NPCs, and monsters use `sagasmith.actor-card.v3`; owner-dependent statblock
+templates use the same optional card-level image reference until instantiated.
+Art points to a package asset and is never copied into runtime state or
+snapshots. Source-backed extraction distinguishes a proven illustration absence
+from an invalid reference or uncertain crop; uncertainty blocks release.
+
+On import, the receiver verifies all hashes and dependencies, rebuilds source
+and citation ids locally, installs rule definitions globally, and creates fresh
+runtime actor identities. Addon and module campaign activation remain explicit,
+revision-safe Owner/DM operations. Embedded rule definitions use a stable
+definition checksum; whole-package dependencies use the descriptor checksum.
 
 ## Development
 
@@ -159,4 +163,4 @@ Tests cover rule packs, core content, preserved rule boundaries, character schem
 
 ## Content and license
 
-Original code is licensed under Apache-2.0. D&D 5e SRD-derived content follows the applicable CC-BY-4.0 terms; convenience translations retain upstream attribution. Non-SRD commercial content must be imported by an authorized user.
+Original code is licensed under Apache-2.0. D&D 5e SRD-derived content follows the applicable CC-BY-4.0 terms; convenience translations retain upstream attribution. Users may build private packages within their lawful-use rights. Public redistribution of non-SRD commercial content requires separate, verifiable authorization.

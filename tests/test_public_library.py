@@ -1,208 +1,142 @@
+from __future__ import annotations
+
+import copy
 import hashlib
 
 import pytest
-from sagasmith_core.portable import (
-    build_module_pack,
-    build_preset_pack,
-    dumps_module_archive,
-    portable_checksum,
+from sagasmith_core.content_pack import (
+    content_package_checksum,
+    dumps_content_archive,
 )
 
 from sagasmith_dnd.character_schema import default_character_notes, default_character_sheet
+from sagasmith_dnd.content_packages import (
+    attach_auxiliary_assets,
+    build_preset_content_package,
+)
 from sagasmith_dnd.portable_cards import build_dnd_actor_card
-from sagasmith_dnd.public_library import build_public_library, validate_public_package
+from sagasmith_dnd.public_library import (
+    build_content_library,
+    build_public_library,
+    validate_public_package,
+)
 
 
-def _monster_card():
+def _package():
     notes = default_character_notes()
     notes["profile"]["summary"] = "A test monster."
-    return build_dnd_actor_card(
+    card = build_dnd_actor_card(
         portable_id="example.monster",
-        version="1.0.0",
+        version="2.0.0",
         actor_type="monster",
         name="Example Monster",
         sheet=default_character_sheet(),
         notes=notes,
     )
-
-
-def test_public_library_writes_index_and_package(tmp_path) -> None:
-    package = build_preset_pack(
-        portable_id="example.public-presets",
-        version="1.0.0",
+    return build_preset_content_package(
+        package_id="example.public-presets",
+        version="2.0.0",
         system_id="dnd5e",
-        cards=[_monster_card()],
+        title="Public examples",
+        cards=[card],
         metadata={
-            "title": "Public examples",
             "distribution": "shareable",
             "license": "CC0-1.0",
+            "attribution": "Example publisher",
+            "license_evidence": {
+                "type": "open_license",
+                "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+                "source_url": "https://example.test/source",
+            },
         },
     )
-    index = build_public_library(tmp_path, [package])
-
-    assert index["schema"] == "sagasmith.public-content-library.v2"
-    assert index["packages"][0]["component_counts"] == {
-        "actor_card": 1,
-        "monster": 1,
-    }
-    assert (tmp_path / index["packages"][0]["path"]).is_file()
 
 
-def test_public_library_rejects_private_package() -> None:
-    private = build_preset_pack(
-        portable_id="example.private-presets",
-        version="1.0.0",
-        system_id="dnd5e",
-        cards=[_monster_card()],
-        metadata={"distribution": "private", "license": "user-supplied"},
+def test_public_library_writes_unified_index_archive_and_source_blob(tmp_path) -> None:
+    package, blobs = _package()
+    map_path = tmp_path / "encounter-map.png"
+    map_path.write_bytes(b"a source-distributed map")
+    package, blobs = attach_auxiliary_assets(
+        package,
+        blobs,
+        [{"path": map_path, "kind": "map"}],
     )
-    with pytest.raises(ValueError, match="not marked public"):
-        validate_public_package(private)
-
-    import copy
-
-    mislabeled = copy.deepcopy(private)
-    mislabeled["metadata"]["distribution"] = "public"
-    mislabeled["checksum"] = portable_checksum(mislabeled)
-    with pytest.raises(ValueError, match="no redistributable license"):
-        validate_public_package(mislabeled)
-
-
-def test_public_library_rejects_private_nested_card() -> None:
-    card = _monster_card()
-    card["metadata"]["distribution"] = "private"
-    card["checksum"] = portable_checksum(card)
-    package = build_preset_pack(
-        portable_id="example.mislabeled-presets",
-        version="1.0.0",
-        system_id="dnd5e",
-        cards=[card],
-        metadata={"distribution": "shareable", "license": "CC0-1.0"},
-    )
-    with pytest.raises(ValueError, match="not marked public"):
-        validate_public_package(package)
-
-
-def test_public_library_indexes_module_scenes_assets_and_actors(tmp_path) -> None:
-    content = "# Arrival\nA public test scene."
-    chunk_content = "A public test scene."
-    package = build_module_pack(
-        portable_id="example.public-module",
-        version="1.0.0",
-        system_id="dnd5e",
-        manifest={
-            "title": "Public Module",
-            "classification": "adventure",
-            "compatibility": {
-                "editions": ["2014"],
-                "required_capabilities": ["module_pack_v2"],
-            },
-            "play_profile": {
-                "party_size": {"minimum": None, "maximum": None, "source_refs": []},
-                "starting_level": {"value": None, "source_refs": []},
-                "expected_end_level": {"value": None, "source_refs": []},
-                "advancement": {
-                    "modes": ["unknown"],
-                    "recommended": "unknown",
-                    "source_refs": [],
-                },
-                "pregenerated_characters": {
-                    "available": False,
-                    "applicability": "Not reviewed",
-                    "source_refs": [],
-                },
-            },
-            "continuity": {
-                "series_id": None,
-                "order": None,
-                "continues_from": None,
-                "state_policy": {},
-            },
-            "activation": {"mode": "campaign_attach", "default_active": False},
-            "content_summary": {},
-        },
-        source={
-            "source_key": "example.public-module",
-            "title": "Public Module",
-            "parser_profile": "test",
-            "parser_version": "1",
-            "metadata": {},
-        },
-        document={
-            "media_type": "text/markdown",
-            "content": content,
-            "checksum": hashlib.sha256(content.encode()).hexdigest(),
-        },
-        scene_atlas=[
-            {
-                "stable_key": "arrival",
-                "title": "Arrival",
-                "chapter_ordinal": 0,
-                "scene_ordinal": 0,
-                "chapter": "Arrival",
-                "scene_type": "scene",
-                "page_start": None,
-                "page_end": None,
-                "headings": ["Arrival"],
-                "keywords": [],
-                "metadata": {},
-                "content": chunk_content,
-                "content_checksum": hashlib.sha256(chunk_content.encode()).hexdigest(),
-                "chunks": [
-                    {
-                        "ordinal": 0,
-                        "heading_path": ["Arrival"],
-                        "content": chunk_content,
-                        "start_offset": 0,
-                        "end_offset": len(chunk_content),
-                        "metadata": {},
-                        "content_hash": hashlib.sha256(chunk_content.encode()).hexdigest(),
-                    }
-                ],
-            }
-        ],
-        actors=[_monster_card()],
-        readiness={
-            "schema_version": 1,
-            "level": "indexed",
-            "dimensions": {
-                name: {
-                    "complete": name in {"source", "structure", "portability"},
-                    "item_count": 1 if name in {"source", "structure"} else 0,
-                    "blockers": []
-                    if name in {"source", "structure", "portability"}
-                    else [
-                        {
-                            "code": f"{name}_unreviewed",
-                            "message": f"{name} requires review",
-                            "source_refs": [],
-                        }
-                    ],
-                }
-                for name in (
-                    "source",
-                    "structure",
-                    "play_profile",
-                    "catalog",
-                    "narrative",
-                    "runtime",
-                    "portability",
-                )
-            },
-            "complete": False,
-        },
-        metadata={"distribution": "public", "license": "CC0-1.0"},
-    )
-    archive = dumps_module_archive(package, {})
+    archive = dumps_content_archive(package, blobs)
     index = build_public_library(
         tmp_path,
         [package],
-        module_archives={package["checksum"]: archive},
+        archives={package["checksum"]: archive},
     )
-    assert index["packages"][0]["component_counts"] == {
-        "scene": 1,
-        "asset": 0,
-        "actor_card": 1,
-    }
-    assert index["packages"][0]["readiness"]["level"] == "indexed"
-    assert (tmp_path / index["packages"][0]["download_path"]).is_file()
+
+    entry = index["packages"][0]
+    assert index["schema"] == "sagasmith.content-library.v1"
+    assert index["visibility"] == "public"
+    assert index["package_format"] == "sagasmith.content-package"
+    assert "map" in index["browser_asset_kinds"]
+    assert entry["kind"] == "preset"
+    assert entry["component_counts"]["actor_card"] == 1
+    assert (tmp_path / entry["path"]).is_file()
+    assert (tmp_path / entry["download_path"]).suffix == ".sagasmith-pack"
+    archive_path = tmp_path / entry["download_path"]
+    assert archive_path.is_file()
+    assert entry["archive_size"] == len(archive)
+    assert entry["archive_checksum"] == hashlib.sha256(archive).hexdigest()
+    assert hashlib.sha256(archive_path.read_bytes()).hexdigest() == entry["archive_checksum"]
+    normalized_asset = next(
+        item for item in package["assets"] if item["kind"] == "normalized_document"
+    )
+    assert (tmp_path / "blobs" / "sha256" / normalized_asset["checksum"]).is_file()
+    map_asset = next(item for item in package["assets"] if item["kind"] == "map")
+    assert (tmp_path / "blobs" / "sha256" / map_asset["checksum"]).is_file()
+
+
+def test_public_library_rejects_private_package() -> None:
+    package, _blobs = _package()
+    private = copy.deepcopy(package)
+    private["metadata"]["distribution"] = "private"
+    private["checksum"] = content_package_checksum(private)
+    with pytest.raises(ValueError, match="not marked public"):
+        validate_public_package(private)
+
+
+def test_public_library_rejects_self_asserted_redistribution_authorization() -> None:
+    package, _blobs = _package()
+    invalid = copy.deepcopy(package)
+    invalid["metadata"].pop("license_evidence")
+    invalid["metadata"]["redistribution_authorization"] = {"confirmed": True}
+    invalid["checksum"] = content_package_checksum(invalid)
+    with pytest.raises(ValueError, match="no exact license evidence"):
+        validate_public_package(invalid)
+
+
+def test_public_library_rejects_asset_without_redistribution_rights() -> None:
+    package, _blobs = _package()
+    invalid = copy.deepcopy(package)
+    invalid["assets"][0]["license"] = "private"
+    invalid["checksum"] = content_package_checksum(invalid)
+    with pytest.raises(ValueError, match="asset .* different license"):
+        validate_public_package(invalid)
+
+
+def test_private_library_keeps_user_supplied_content_without_claiming_public_rights(
+    tmp_path,
+) -> None:
+    package, blobs = _package()
+    package = copy.deepcopy(package)
+    package["metadata"].update(
+        {"distribution": "private", "license": "user-supplied"}
+    )
+    for asset in package["assets"]:
+        asset["license"] = "user-supplied"
+    package["checksum"] = content_package_checksum(package)
+    archive = dumps_content_archive(package, blobs)
+
+    index = build_content_library(
+        tmp_path,
+        [package],
+        archives={package["checksum"]: archive},
+    )
+
+    assert index["schema"] == "sagasmith.content-library.v1"
+    assert index["visibility"] == "private"
+    assert index["packages"][0]["distribution"] == "private"

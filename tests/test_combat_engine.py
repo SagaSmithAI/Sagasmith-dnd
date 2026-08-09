@@ -173,8 +173,6 @@ def test_generic_save_damage_applies_audited_per_target_save_bonuses() -> None:
     ]
 
 
-
-
 def test_concentration_save_does_not_apply_magic_resistance() -> None:
     actor = _actor("archmage")
     actor["sheet"]["content"]["features"].append(
@@ -221,8 +219,6 @@ def test_concentration_save_does_not_apply_magic_resistance() -> None:
     assert result["rule_receipts"] == []
 
 
-
-
 def test_evasion_rewrites_dexterity_save_for_half_damage() -> None:
     trait = {
         "kind": "evasion",
@@ -254,9 +250,7 @@ def test_evasion_rewrites_dexterity_save_for_half_damage() -> None:
     clumsy["id"] = "clumsy-assassin"
     clumsy["sheet"]["abilities"]["dexterity"]["score"] = 1
     clumsy["derived"] = derive_character_sheet(clumsy["sheet"])
-    rules = resolution_context(
-        {"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []}
-    )
+    rules = resolution_context({"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []})
 
     settled = resolve_save_damage_to_sheets(
         [agile, clumsy],
@@ -270,17 +264,12 @@ def test_evasion_rewrites_dexterity_save_for_half_damage() -> None:
         rng=_SequenceRng(3, 4, 10, 1),
     )
 
-    assert [
-        item["damage_reduction"] for item in settled["result"]["targets"]
-    ] == ["none", "half"]
-    assert [
-        item["damage_amount"] for item in settled["result"]["targets"]
-    ] == [0, 3]
+    assert [item["damage_reduction"] for item in settled["result"]["targets"]] == ["none", "half"]
+    assert [item["damage_amount"] for item in settled["result"]["targets"]] == [0, 3]
     assert settled["sheets"]["agile-assassin"]["combat"]["hp"]["value"] == 20
     assert settled["sheets"]["clumsy-assassin"]["combat"]["hp"]["value"] == 17
     assert all(
-        [receipt["mechanic_id"] for receipt in item["rule_receipts"]]
-        == ["dnd5e.core.save.evasion"]
+        [receipt["mechanic_id"] for receipt in item["rule_receipts"]] == ["dnd5e.core.save.evasion"]
         for item in settled["result"]["targets"]
     )
 
@@ -721,9 +710,9 @@ def test_2024_cleave_grants_one_restricted_attack_only_after_a_hit() -> None:
     )
     assert followup_payment["mastery"] == "cleave"
     consumed = consume_weapon_mastery_attack_effects(paid, followup)["encounter"]
-    flags = next(
-        item for item in consumed["combatants"] if item["actor_id"] == "cleaver"
-    )["turn_flags"]
+    flags = next(item for item in consumed["combatants"] if item["actor_id"] == "cleaver")[
+        "turn_flags"
+    ]
     assert "pending_weapon_attack_modifier" not in flags
     with pytest.raises(CombatEngineError, match="only once per turn"):
         preflight_attack(
@@ -849,8 +838,6 @@ def _give_magic_resistance(actor: dict) -> None:
     actor["derived"] = derive_character_sheet(actor["sheet"])
 
 
-
-
 def test_2024_hypnotic_pattern_preserves_its_exact_source_spell_id() -> None:
     target = _actor("target")
     target["sheet"]["edition"] = "2024"
@@ -918,9 +905,7 @@ def test_hypnotic_pattern_effect_lifecycle_preserves_other_condition_sources() -
     )
 
     assert resolved["result"]["outcome"] == "affected"
-    assert resolved["result"]["ended_concentration_effect_ids"] == [
-        "target-concentration"
-    ]
+    assert resolved["result"]["ended_concentration_effect_ids"] == ["target-concentration"]
     assert active_hypnotic_pattern_effect_ids(resolved["sheet"]) == [
         resolved["result"]["effect_id"]
     ]
@@ -1008,9 +993,7 @@ def test_hypnotic_pattern_immunity_and_effect_dependency_are_hard_settled() -> N
 
     assert reconciled["changed_actor_ids"] == ["target"]
     assert reconciled["ended_links"][0]["ended_reason"] == "source_effect_ended"
-    assert active_hypnotic_pattern_effect_ids(
-        reconciled["sheets"]["target"]
-    ) == []
+    assert active_hypnotic_pattern_effect_ids(reconciled["sheets"]["target"]) == []
     assert "charmed" not in reconciled["sheets"]["target"]["conditions"]
     assert "incapacitated" not in reconciled["sheets"]["target"]["conditions"]
 
@@ -1060,29 +1043,8 @@ def test_source_actor_capability_dependency_uses_all_incapacitating_states() -> 
     )
 
     assert reconciled["changed_actor_ids"] == ["undead"]
-    assert reconciled["ended_links"][0]["ended_reason"] == (
-        "source_incapacitated_or_dead"
-    )
+    assert reconciled["ended_links"][0]["ended_reason"] == ("source_incapacitated_or_dead")
     assert reconciled["sheets"]["undead"]["conditions"] == []
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_actor_check_rejects_attack_rolls_owned_by_the_attack_engine() -> None:
@@ -1120,8 +1082,6 @@ def _rogue(identifier: str = "rogue") -> dict:
         }
     ]
     return actor
-
-
 
 
 def test_generic_effect_changes_speed_attacks_and_preserves_charm_source() -> None:
@@ -1275,9 +1235,7 @@ def test_frightened_creature_cannot_willingly_move_closer_to_visible_source() ->
             "source": "gazer",
             "active": True,
             "duration": {"period": "source_turn_start", "remaining": 1},
-            "changes": [
-                {"path": "conditions", "mode": "add", "value": "frightened"}
-            ],
+            "changes": [{"path": "conditions", "mode": "add", "value": "frightened"}],
         }
     ]
     target["derived"] = derive_character_sheet(target["sheet"])
@@ -1345,9 +1303,7 @@ def test_2014_jack_of_all_trades_applies_only_to_unproficient_ability_checks() -
         }
     ]
     bard["derived"] = derive_character_sheet(bard["sheet"])
-    rules = resolution_context(
-        {"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []}
-    )
+    rules = resolution_context({"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []})
 
     untrained = resolve_actor_check(
         bard,
@@ -1361,9 +1317,9 @@ def test_2014_jack_of_all_trades_applies_only_to_unproficient_ability_checks() -
     assert untrained["proficiency_bonus"] == 0
     assert untrained["bonus"] == 1
     assert untrained["total"] == 14
-    assert [
-        receipt["mechanic_id"] for receipt in untrained["rule_receipts"]
-    ] == ["dnd5e.core.check.jack_of_all_trades"]
+    assert [receipt["mechanic_id"] for receipt in untrained["rule_receipts"]] == [
+        "dnd5e.core.check.jack_of_all_trades"
+    ]
 
     trained = resolve_actor_check(
         bard,
@@ -1422,9 +1378,7 @@ def test_2024_jack_of_all_trades_uses_skill_proficiency_but_not_initiative() -> 
         }
     ]
     bard["derived"] = derive_character_sheet(bard["sheet"])
-    rules = resolution_context(
-        {"edition": "2024", "fingerprint": "", "lock": [], "mechanics": []}
-    )
+    rules = resolution_context({"edition": "2024", "fingerprint": "", "lock": [], "mechanics": []})
 
     skill = resolve_actor_check(
         bard,
@@ -1485,9 +1439,7 @@ def test_2014_group_check_succeeds_when_at_least_half_succeed() -> None:
         True,
         False,
     ]
-    assert [item["mechanic_id"] for item in result["rule_receipts"]] == [
-        "dnd5e.core.check.group"
-    ]
+    assert [item["mechanic_id"] for item in result["rule_receipts"]] == ["dnd5e.core.check.group"]
 
 
 def test_2014_group_check_rejects_duplicate_or_single_actor_groups() -> None:
@@ -1517,8 +1469,6 @@ def test_2024_group_check_fails_at_the_public_rules_boundary() -> None:
             dc=10,
             rules_by_actor_id={actor["id"]: rules for actor in actors},
         )
-
-
 
 
 def test_2014_ability_contest_compares_totals_and_uses_no_synthetic_dc() -> None:
@@ -1866,8 +1816,6 @@ def test_ranged_attack_has_close_combat_disadvantage() -> None:
     assert safe["close_combat_threat_ids"] == []
 
 
-
-
 def test_spell_attack_preflight_uses_source_card_and_spellcasting_override() -> None:
     attacker = _actor("caster")
     target = _actor("target")
@@ -1932,10 +1880,7 @@ def test_preserve_life_enforces_pool_half_hp_and_creature_type() -> None:
     }
     cleric["sheet"]["content"]["features"] = [
         {
-            "id": (
-                "dnd5e.content.srd2014.feature."
-                "life-domain-channel-divinity-preserve-life"
-            ),
+            "id": ("dnd5e.content.srd2014.feature.life-domain-channel-divinity-preserve-life"),
             "name": "Channel Divinity: Preserve Life",
             "source_key": "Life Domain",
         }
@@ -2015,8 +1960,6 @@ def test_2024_preserve_life_starts_at_level_three_and_can_target_undead() -> Non
             {"undead": undead},
             allocations=[{"target_id": "undead", "amount": 1}],
         )
-
-
 
 
 def test_2024_turn_undead_applies_frightened_and_incapacitated_until_damaged() -> None:
@@ -2111,11 +2054,12 @@ def test_2024_sear_undead_shares_one_roll_without_ending_the_turn_effect() -> No
     target = resolved["sheets"]["undead"]
     assert target["combat"]["hp"]["value"] == 91
     assert {"frightened", "incapacitated"} <= set(target["conditions"])
-    assert next(
-        effect
-        for effect in target["effects"]
-        if effect["id"] == target_result["effect_id"]
-    )["active"] is True
+    assert (
+        next(effect for effect in target["effects"] if effect["id"] == target_result["effect_id"])[
+            "active"
+        ]
+        is True
+    )
 
 
 def test_2024_divine_spark_heals_or_deals_save_for_half_damage() -> None:
@@ -2284,9 +2228,7 @@ def test_halfling_lucky_rerolls_only_one_natural_one_and_keeps_replacement() -> 
     )
     assert result["rolls"] == [18, 7]
     assert result["natural"] == 18
-    assert result["rerolls"] == [
-        {"index": 0, "from": 1, "to": 18, "source": "halfling_lucky"}
-    ]
+    assert result["rerolls"] == [{"index": 0, "from": 1, "to": 18, "source": "halfling_lucky"}]
     assert result["roll_mode"] == "advantage"
     assert result["advantage_applied"] is True
     assert result["disadvantage_applied"] is False
@@ -2564,8 +2506,7 @@ def test_agent_compiled_reaction_defense_opens_after_hit_and_before_damage() -> 
                 "kind": "descriptive_activity",
                 "default_resolver": "agent",
                 "source_excerpt": (
-                    "The defender adds 2 to its AC against one melee attack that "
-                    "would hit it."
+                    "The defender adds 2 to its AC against one melee attack that would hit it."
                 ),
             }
         },
@@ -2758,9 +2699,7 @@ def test_dueling_style_adds_damage_only_for_one_equipped_melee_weapon() -> None:
     target = _actor("target", hp=20, ac=1)
     plan = preflight_attack(attacker, target, action={"weapon_id": "longsword"})
     assert plan["damage_expression"] == "1d8 + 3 + 2"
-    assert plan["damage_modifiers"] == [
-        {"source": "Fighting Style: Dueling", "value": 2}
-    ]
+    assert plan["damage_modifiers"] == [{"source": "Fighting Style: Dueling", "value": 2}]
 
 
 def test_qualified_multiattack_preserves_recorded_weapon_composition() -> None:
@@ -2818,9 +2757,7 @@ def test_qualified_multiattack_preserves_recorded_weapon_composition() -> None:
                     },
                     {
                         "id": "ranged",
-                        "attacks": [
-                            {"weapon_id": "dagger", "attack_mode": "ranged", "count": 2}
-                        ],
+                        "attacks": [{"weapon_id": "dagger", "attack_mode": "ranged", "count": 2}],
                     },
                 ]
             },
@@ -2855,16 +2792,10 @@ def test_qualified_multiattack_preserves_recorded_weapon_composition() -> None:
         multiattack_option_id="melee",
     )
     assert first["attack_count"] == 3
-    encounter, _ = pay_attack_action(
-        encounter, captain, weapon_id="scimitar", attack_mode="melee"
-    )
+    encounter, _ = pay_attack_action(encounter, captain, weapon_id="scimitar", attack_mode="melee")
     with pytest.raises(ValueError, match="remaining Multiattack"):
-        pay_attack_action(
-            encounter, captain, weapon_id="scimitar", attack_mode="melee"
-        )
-    encounter, _ = pay_attack_action(
-        encounter, captain, weapon_id="dagger", attack_mode="melee"
-    )
+        pay_attack_action(encounter, captain, weapon_id="scimitar", attack_mode="melee")
+    encounter, _ = pay_attack_action(encounter, captain, weapon_id="dagger", attack_mode="melee")
     current = encounter["combatants"][encounter["turn_index"]]
     assert current["turn_budget"]["attack_budget"] == 0
     assert "multiattack" not in current.get("turn_flags", {})
@@ -2959,14 +2890,6 @@ def test_mixed_multiattack_pays_one_weapon_and_one_source_activity() -> None:
     assert current["turn_budget"]["main_action"] == 0
     assert current["turn_budget"]["attack_budget"] == 0
     assert "multiattack" not in current.get("turn_flags", {})
-
-
-
-
-
-
-
-
 
 
 def test_unstructured_multiattack_does_not_block_an_ordinary_weapon_attack() -> None:
@@ -3092,9 +3015,7 @@ def test_encounter_validates_every_participant_before_rolling_initiative() -> No
 
 def test_initiative_ties_require_explicit_tie_breakers() -> None:
     with pytest.raises(NeedsRulingError, match="tie_breaker") as npc_tie:
-        start_encounter(
-            [{**_actor("a"), "initiative": 10}, {**_actor("b"), "initiative": 10}]
-        )
+        start_encounter([{**_actor("a"), "initiative": 10}, {**_actor("b"), "initiative": 10}])
     assert npc_tie.value.ruling_kind == "agent_dm_adjudication"
 
     with pytest.raises(NeedsRulingError, match="tie_breaker") as pc_tie:
@@ -3586,17 +3507,13 @@ def _standard_relentless_endurance_feature(*, mechanic_ref: bool = True) -> dict
                 "source_excerpt": "Drop to 1 hit point instead.",
             }
         },
-        "mechanic_refs": (
-            [CORE_RELENTLESS_ENDURANCE_MECHANIC_ID] if mechanic_ref else []
-        ),
+        "mechanic_refs": ([CORE_RELENTLESS_ENDURANCE_MECHANIC_ID] if mechanic_ref else []),
     }
 
 
 def test_standard_relentless_endurance_is_core_card_bound_and_once_per_rest() -> None:
     actor = _actor("half-orc", hp=10)
-    actor["sheet"]["content"]["features"] = [
-        _standard_relentless_endurance_feature()
-    ]
+    actor["sheet"]["content"]["features"] = [_standard_relentless_endurance_feature()]
     sheet = validate_character_sheet(actor["sheet"])
 
     recovered = apply_damage_to_sheet(sheet, amount=10, damage_type="force")
@@ -3611,9 +3528,7 @@ def test_standard_relentless_endurance_is_core_card_bound_and_once_per_rest() ->
         "remaining": 0,
     }
 
-    exhausted = apply_damage_to_sheet(
-        recovered["sheet"], amount=1, damage_type="force"
-    )
+    exhausted = apply_damage_to_sheet(recovered["sheet"], amount=1, damage_type="force")
     assert exhausted["after_hp"] == 0
     assert exhausted["zero_hp_recovery"] is None
     assert {"prone", "unconscious"} <= set(exhausted["sheet"]["conditions"])
@@ -3623,9 +3538,7 @@ def test_standard_relentless_endurance_is_core_card_bound_and_once_per_rest() ->
     assert refreshed_feature["uses"]["value"] == 1
     assert rested["recovered"]["features:0:uses"] == 1
 
-    killed_outright = apply_damage_to_sheet(
-        rested["sheet"], amount=20, damage_type="force"
-    )
+    killed_outright = apply_damage_to_sheet(rested["sheet"], amount=20, damage_type="force")
     assert killed_outright["after_hp"] == 0
     assert killed_outright["zero_hp_recovery"] is None
     assert "dead" in killed_outright["sheet"]["conditions"]
@@ -3653,9 +3566,7 @@ def test_counterfeit_relentless_endurance_prose_cannot_inject_core_behavior() ->
 
 def test_standard_relentless_endurance_applies_to_direct_hit_point_loss() -> None:
     actor = _actor("half-orc-hp-loss", hp=6)
-    actor["sheet"]["content"]["features"] = [
-        _standard_relentless_endurance_feature()
-    ]
+    actor["sheet"]["content"]["features"] = [_standard_relentless_endurance_feature()]
 
     result = apply_hit_point_loss_to_sheet(
         validate_character_sheet(actor["sheet"]),
@@ -3664,9 +3575,7 @@ def test_standard_relentless_endurance_applies_to_direct_hit_point_loss() -> Non
     )
 
     assert result["after_hp"] == 1
-    assert result["zero_hp_recovery"]["mechanic_id"] == (
-        CORE_RELENTLESS_ENDURANCE_MECHANIC_ID
-    )
+    assert result["zero_hp_recovery"]["mechanic_id"] == (CORE_RELENTLESS_ENDURANCE_MECHANIC_ID)
     assert not ({"prone", "unconscious", "dead"} & set(result["sheet"]["conditions"]))
 
 
@@ -3856,8 +3765,6 @@ def test_paralyzed_target_is_automatic_critical_within_five_feet() -> None:
     assert result["critical"] is True
 
 
-
-
 def test_unseen_attacker_and_target_apply_opposed_attack_modifiers() -> None:
     attacker = _actor("attacker")
     attacker.update(initiative=20, position={"x": 0, "y": 0}, hidden=True)
@@ -3906,10 +3813,6 @@ def _kobold_attack_trait_actor(identifier: str) -> dict:
     ]
     actor["derived"] = derive_character_sheet(actor["sheet"])
     return actor
-
-
-
-
 
 
 @pytest.mark.parametrize(
@@ -4408,16 +4311,6 @@ def test_cunning_action_settles_dash_and_disengage_but_not_hide_outcome() -> Non
     assert dashed_2024["combatants"][0]["turn_budget"]["movement"] == 60
 
 
-
-
-
-
-
-
-
-
-
-
 def test_versatile_weapon_grip_uses_exact_alternate_damage_once() -> None:
     orc = _actor("orc")
     target = _actor("target")
@@ -4472,9 +4365,7 @@ def test_versatile_weapon_grip_uses_exact_alternate_damage_once() -> None:
     )
 
     assert one_handed["damage_expression"] == "1d6 + 4"
-    assert [part["damage_expression"] for part in one_handed["additional_damage"]] == [
-        "1d8"
-    ]
+    assert [part["damage_expression"] for part in one_handed["additional_damage"]] == ["1d8"]
     assert two_handed["damage_expression"] == "2d8 + 4"
     assert two_handed["additional_damage"] == []
     assert two_handed["weapon_grip"] == "two_handed"
@@ -4545,9 +4436,7 @@ def test_versatile_weapon_retains_damage_printed_after_alternate_formula() -> No
     )
 
     assert plan["damage_expression"] == "2d8 + 4"
-    assert [part["damage_expression"] for part in plan["additional_damage"]] == [
-        "1d6"
-    ]
+    assert [part["damage_expression"] for part in plan["additional_damage"]] == ["1d6"]
 
 
 def test_second_wind_rolls_fighter_level_healing_and_clamps_at_maximum() -> None:
@@ -5002,10 +4891,6 @@ def test_hit_point_loss_bypasses_temporary_hp_and_damage_traits() -> None:
     assert result["after_hp"] == 3
     assert result["bypassed_temp_hp"] == 7
     assert result["sheet"]["combat"]["hp"]["temp"] == 7
-
-
-
-
 
 
 def test_common_use_object_action_preserves_the_reviewed_source_payload() -> None:

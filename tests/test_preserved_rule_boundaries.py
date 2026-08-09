@@ -87,9 +87,7 @@ def test_core_pack_preserves_edition_actions_and_condition_rulings() -> None:
     rules_2024 = start_encounter([first, second], ruleset="2024")
     assert "use_object" in available_actions(rules_2014, "first")
     assert "influence" not in available_actions(rules_2014, "first")
-    assert {"influence", "study", "utilize"} <= set(
-        available_actions(rules_2024, "first")
-    )
+    assert {"influence", "study", "utilize"} <= set(available_actions(rules_2024, "first"))
 
     first["conditions"] = ["frightened"]
     with pytest.raises(NeedsRulingError, match="condition source"):
@@ -109,9 +107,7 @@ def test_core_pack_preserves_hidden_reveal_and_2024_knockout() -> None:
             "damage_type": "bludgeoning",
         }
     ]
-    plan = preflight_attack(
-        attacker, target, action={"weapon_id": "club", "knock_out": True}
-    )
+    plan = preflight_attack(attacker, target, action={"weapon_id": "club", "knock_out": True})
     updated_attacker, updated_target, result = resolve_attack_action(
         attacker, target, plan=plan, rng=random.Random(1)
     )
@@ -177,9 +173,7 @@ def test_core_pack_preserves_restrained_save_and_2014_rest_allocation() -> None:
         rng=random.Random(3),
     )
     assert len(result["rolls"]) == 2
-    assert result["rule_receipts"][0]["mechanic_id"] == (
-        "dnd5e.core.save.restrained_dexterity"
-    )
+    assert result["rule_receipts"][0]["mechanic_id"] == ("dnd5e.core.save.restrained_dexterity")
 
     unrestricted = _actor("unrestricted")
     ordinary_save = resolve_actor_check(

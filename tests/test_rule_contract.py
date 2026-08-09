@@ -56,11 +56,14 @@ def test_static_grant_clause_covers_existing_structured_card_data() -> None:
         ]
     )
 
-    assert validate_rule_clause_coverage(
-        clauses,
-        artifact=artifact,
-        require_mechanical_clause=True,
-    ) == []
+    assert (
+        validate_rule_clause_coverage(
+            clauses,
+            artifact=artifact,
+            require_mechanical_clause=True,
+        )
+        == []
+    )
     assert compile_rule_clauses(rule_clause_templates(clauses)) == clauses
 
 
@@ -74,9 +77,7 @@ def test_mixed_rule_card_assigns_plans_kernel_rules_and_agent_judgment() -> None
                     "mode": "primitive_plan",
                     "plan_ids": ["dnd5e.extension.plan.prismatic-pulse"],
                 },
-                excerpt=(
-                    "Each creature in the pulse must make a Wisdom saving throw."
-                ),
+                excerpt=("Each creature in the pulse must make a Wisdom saving throw."),
             ),
             _clause(
                 "concentration",
@@ -94,13 +95,9 @@ def test_mixed_rule_card_assigns_plans_kernel_rules_and_agent_judgment() -> None
                     "mode": "agent_ruling",
                     "default_resolver": "agent",
                     "ruling_kind": "environmental_consequence",
-                    "reason": (
-                        "The source delegates unusual obstructions to the DM."
-                    ),
+                    "reason": ("The source delegates unusual obstructions to the DM."),
                 },
-                excerpt=(
-                    "The DM decides whether an unusual obstruction blocks the pulse."
-                ),
+                excerpt=("The DM decides whether an unusual obstruction blocks the pulse."),
             ),
             _clause(
                 "appearance",
@@ -111,13 +108,16 @@ def test_mixed_rule_card_assigns_plans_kernel_rules_and_agent_judgment() -> None
         ]
     )
 
-    assert validate_rule_clause_coverage(
-        clauses,
-        artifact={"card": {"name": "Prismatic Pulse"}},
-        plan_ids={"dnd5e.extension.plan.prismatic-pulse"},
-        mechanic_refs={"dnd5e.core.spell.concentration"},
-        require_mechanical_clause=True,
-    ) == []
+    assert (
+        validate_rule_clause_coverage(
+            clauses,
+            artifact={"card": {"name": "Prismatic Pulse"}},
+            plan_ids={"dnd5e.extension.plan.prismatic-pulse"},
+            mechanic_refs={"dnd5e.core.spell.concentration"},
+            require_mechanical_clause=True,
+        )
+        == []
+    )
 
 
 def test_clause_coverage_rejects_unassigned_or_missing_execution_paths() -> None:

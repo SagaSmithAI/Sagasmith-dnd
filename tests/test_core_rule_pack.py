@@ -82,8 +82,7 @@ def test_builtin_core_pack_wraps_every_preserved_boundary() -> None:
         assert REQUIRED_BOUNDARIES | EDITION_BOUNDARIES[edition] <= ids
         assert len(ids) == len(pack.boundaries)
         assert all(
-            item.implementation and item.test_refs and item.citation
-            for item in pack.boundaries
+            item.implementation and item.test_refs and item.citation for item in pack.boundaries
         )
         assert all(item.editions == (edition,) for item in pack.boundaries)
         assert all(
@@ -100,8 +99,7 @@ def test_2024_core_pack_never_borrows_a_2014_rulebook_citation() -> None:
 
     assert all("2014" not in item.citation for item in pack.boundaries)
     assert all(
-        item.citation.startswith(("bundled:srd2024/", "runtime:"))
-        for item in pack.boundaries
+        item.citation.startswith(("bundled:srd2024/", "runtime:")) for item in pack.boundaries
     )
     assert {
         "dnd5e.core.activity.recharge",
@@ -111,11 +109,7 @@ def test_2024_core_pack_never_borrows_a_2014_rulebook_citation() -> None:
 
 
 def test_dnd_runtime_never_emits_an_unregistered_core_boundary() -> None:
-    source_root = (
-        Path(__file__).parents[1]
-        / "src"
-        / "sagasmith_dnd"
-    )
+    source_root = Path(__file__).parents[1] / "src" / "sagasmith_dnd"
     emitted = {
         mechanic_id
         for path in source_root.rglob("*.py")
@@ -126,9 +120,7 @@ def test_dnd_runtime_never_emits_an_unregistered_core_boundary() -> None:
         )
     }
     registered = {
-        item.id
-        for edition in ("2014", "2024")
-        for item in get_core_rule_pack(edition).boundaries
+        item.id for edition in ("2014", "2024") for item in get_core_rule_pack(edition).boundaries
     }
 
     assert emitted <= registered
@@ -145,9 +137,9 @@ def test_effective_fingerprint_includes_core_pack() -> None:
     assert second.core_pack.id == "dnd5e.core.2024"
     assert first.fingerprint != second.fingerprint
 
-    receipt = core_receipts(
-        first, ["dnd5e.core.activity.resource_accounting"], "activity.consume"
-    )[0]
+    receipt = core_receipts(first, ["dnd5e.core.activity.resource_accounting"], "activity.consume")[
+        0
+    ]
     assert receipt["core_pack_fingerprint"] == first.core_pack.fingerprint
     assert receipt["ruleset_fingerprint"] == first.fingerprint
 

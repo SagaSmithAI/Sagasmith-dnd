@@ -1,4 +1,4 @@
-"""Evidence-bound catalog and character-selection readiness for D&D content.
+"""Evidence-bound catalog and character-selection validation for D&D content.
 
 Portable checksums prove that bytes did not change. These contracts record
 which checks were performed against the same semantic content that is about to
@@ -13,6 +13,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
 from typing import Any, Mapping, Sequence
 
 from sagasmith_dnd.character_schema import (
@@ -127,8 +128,15 @@ def content_fingerprint(artifact: Mapping[str, Any]) -> str:
     """Hash review-relevant content while excluding the attestations themselves."""
 
     value = copy.deepcopy(dict(artifact))
+    # This is a content-package join key, not part of the reviewed rule card.
+    value.pop("rule_definition_id", None)
     for field in ("catalog_review", "selection_contract", "runtime_contract"):
         value.pop(field, None)
+    card = value.get("card")
+    if isinstance(card, Mapping):
+        semantic_card = copy.deepcopy(dict(card))
+        semantic_card.pop("image", None)
+        value["card"] = semantic_card
     encoded = json.dumps(
         value,
         ensure_ascii=False,
@@ -474,11 +482,7 @@ def background_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
             errors.append(f"{prefix}.id must not be empty")
         tool_group_ids.append(group_id.casefold())
         maximum = raw_group.get("maximum")
-        if (
-            isinstance(maximum, bool)
-            or not isinstance(maximum, int)
-            or not 1 <= maximum <= 5
-        ):
+        if isinstance(maximum, bool) or not isinstance(maximum, int) or not 1 <= maximum <= 5:
             errors.append(f"{prefix}.maximum must be an integer from 1 to 5")
         group_options = string_list(
             raw_group.get("options", []), f"tool_option_groups[{index}].options"
@@ -661,6 +665,67 @@ def species_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
         or not 0 <= natural_armor_base <= 30
     ):
         errors.append("species natural_armor_base must be an integer from 0 to 30")
+    if "natural_armor_includes_dexterity" in grants and not isinstance(
+        grants.get("natural_armor_includes_dexterity"), bool
+    ):
+        errors.append("species natural_armor_includes_dexterity must be a boolean")
+    natural_weapons = grants.get("natural_weapons", [])
+    if not isinstance(natural_weapons, list):
+        errors.append("species natural_weapons must be an array")
+    else:
+        natural_weapon_names: list[str] = []
+        for index, raw_weapon in enumerate(natural_weapons):
+            prefix = f"species natural_weapons[{index}]"
+            if not isinstance(raw_weapon, Mapping):
+                errors.append(f"{prefix} must be an object")
+                continue
+            supported = {
+                "name",
+                "attack_ability",
+                "damage_formula",
+                "damage_type",
+                "reach_ft",
+                "description",
+            }
+            unsupported = set(raw_weapon) - supported
+            if unsupported:
+                errors.append(f"{prefix} has unsupported fields: {sorted(unsupported)}")
+            weapon_name = str(raw_weapon.get("name") or "").strip()
+            if not weapon_name:
+                errors.append(f"{prefix}.name must not be empty")
+            natural_weapon_names.append(weapon_name.casefold())
+            if str(raw_weapon.get("attack_ability") or "").casefold() not in ability_names:
+                errors.append(f"{prefix}.attack_ability is invalid")
+            damage_formula = str(raw_weapon.get("damage_formula") or "").strip().casefold()
+            if not re.fullmatch(r"\d+d\d+(?:\s*[+-]\s*\d+)?", damage_formula):
+                errors.append(f"{prefix}.damage_formula must be one bounded dice formula")
+            if str(raw_weapon.get("damage_type") or "").casefold() not in {
+                "acid",
+                "bludgeoning",
+                "cold",
+                "fire",
+                "force",
+                "lightning",
+                "necrotic",
+                "piercing",
+                "poison",
+                "psychic",
+                "radiant",
+                "slashing",
+                "thunder",
+            }:
+                errors.append(f"{prefix}.damage_type is invalid")
+            reach_ft = raw_weapon.get("reach_ft", 5)
+            if (
+                isinstance(reach_ft, bool)
+                or not isinstance(reach_ft, int)
+                or not 0 < reach_ft <= 30
+            ):
+                errors.append(f"{prefix}.reach_ft must be an integer from 1 to 30")
+            if not isinstance(raw_weapon.get("description", ""), str):
+                errors.append(f"{prefix}.description must be text")
+        if len(natural_weapon_names) != len(set(natural_weapon_names)):
+            errors.append("species natural_weapons names must be distinct")
     for field in ("walk_speed", "fly_speed", "swim_speed", "darkvision_ft"):
         value = grants.get(field, 0)
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -971,9 +1036,7 @@ def species_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
         else:
             unsupported = set(raw_feat_choice) - {"count", "allowed_categories"}
             if unsupported:
-                errors.append(
-                    f"species feat_choice has unsupported fields: {sorted(unsupported)}"
-                )
+                errors.append(f"species feat_choice has unsupported fields: {sorted(unsupported)}")
             feat_count = raw_feat_choice.get("count")
             if feat_count != 1:
                 errors.append("species feat_choice.count must be 1")
@@ -981,9 +1044,7 @@ def species_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
             if not isinstance(categories, list) or any(
                 not isinstance(item, str) or not item.strip() for item in categories
             ):
-                errors.append(
-                    "species feat_choice.allowed_categories must be an array of names"
-                )
+                errors.append("species feat_choice.allowed_categories must be an array of names")
             elif len({item.strip().casefold() for item in categories}) != len(categories):
                 errors.append("species feat_choice.allowed_categories must be distinct")
     raw_affinity_choice = grants.get("damage_affinity_choice")
@@ -1038,13 +1099,9 @@ def species_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
                 if not option_id or not str(raw_option.get("name") or "").strip():
                     errors.append(f"{option_prefix} id and name must not be empty")
                 option_ids.append(option_id)
-                if str(raw_option.get("damage_type") or "").casefold() not in (
-                    valid_damage_types
-                ):
+                if str(raw_option.get("damage_type") or "").casefold() not in (valid_damage_types):
                     errors.append(f"{option_prefix}.damage_type is invalid")
-                if str(raw_option.get("save_ability") or "").casefold() not in (
-                    ability_names
-                ):
+                if str(raw_option.get("save_ability") or "").casefold() not in (ability_names):
                     errors.append(f"{option_prefix}.save_ability is invalid")
                 area = raw_option.get("area")
                 if not isinstance(area, Mapping):
@@ -1062,11 +1119,7 @@ def species_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
                     errors.append(f"{option_prefix}.area must be a bounded line or cone")
                 for field in expected - {"shape"}:
                     distance = area.get(field)
-                    if (
-                        isinstance(distance, bool)
-                        or not isinstance(distance, int)
-                        or distance <= 0
-                    ):
+                    if isinstance(distance, bool) or not isinstance(distance, int) or distance <= 0:
                         errors.append(f"{option_prefix}.area.{field} must be positive")
             if len(option_ids) != len(set(option_ids)):
                 errors.append(f"{prefix}.options ids must be distinct")
@@ -1082,9 +1135,10 @@ def species_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
                     "damage_by_level",
                 }:
                     errors.append(f"{prefix}.activity fields are invalid")
-                if not str(activity.get("id") or "").strip() or not str(
-                    activity.get("name") or ""
-                ).strip():
+                if (
+                    not str(activity.get("id") or "").strip()
+                    or not str(activity.get("name") or "").strip()
+                ):
                     errors.append(f"{prefix}.activity id and name must not be empty")
                 uses = activity.get("uses")
                 if not isinstance(uses, Mapping) or set(uses) != {"max", "recovers_on"}:
@@ -1105,8 +1159,7 @@ def species_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
                     isinstance(save_dc.get("base"), bool)
                     or not isinstance(save_dc.get("base"), int)
                     or save_dc.get("base") < 1
-                    or str(save_dc.get("ability") or "").casefold()
-                    not in ability_names
+                    or str(save_dc.get("ability") or "").casefold() not in ability_names
                     or not isinstance(save_dc.get("include_proficiency"), bool)
                 ):
                     errors.append(f"{prefix}.activity.save_dc values are invalid")
@@ -1122,9 +1175,7 @@ def species_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
                             level = 0
                         levels.append(level)
                         if not 1 <= level <= 20 or not str(formula).strip():
-                            errors.append(
-                                f"{prefix}.activity.damage_by_level entries are invalid"
-                            )
+                            errors.append(f"{prefix}.activity.damage_by_level entries are invalid")
                     if len(levels) != len(set(levels)) or 1 not in levels:
                         errors.append(
                             f"{prefix}.activity.damage_by_level needs distinct levels starting at 1"
@@ -1399,9 +1450,7 @@ def feat_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
                 group_ids.append(str(raw_group.get("id") or "").casefold())
         if len(group_ids) != len(set(group_ids)):
             errors.append("feat spell selection group ids must be distinct")
-    elif isinstance(requirements, Mapping) and requirements.get("kind") == (
-        "proficiency_groups"
-    ):
+    elif isinstance(requirements, Mapping) and requirements.get("kind") == ("proficiency_groups"):
         if set(requirements) - {"field", "kind", "groups"}:
             errors.append("feat proficiency groups contain unsupported fields")
         if not str(requirements.get("field") or "").strip():
@@ -1442,6 +1491,11 @@ def subclass_spell_grant_errors(binding: Mapping[str, Any]) -> list[str]:
     """Validate source-reviewed subclass grants without conflating access modes."""
 
     errors: list[str] = []
+    if "always_prepared_spells" in binding:
+        errors.append(
+            "subclass always_prepared_spells is unsupported; use "
+            "spell_grants with method=always_prepared"
+        )
     normalized_names: list[str] = []
     grants = binding.get("spell_grants")
     if grants is None:
