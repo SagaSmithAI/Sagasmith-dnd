@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { MOCK_COMBAT, combatStatus, submitCombatMove, subscribeCampaign } from '../../lib/api';
+import { MOCK_COMBAT, combatRender, combatStatus, submitCombatMove, subscribeCampaign } from '../../lib/api';
 import type { CombatStatus, GridPosition } from '../../types';
 import CombatMapCanvas from './CombatMapCanvas';
 
@@ -10,6 +10,7 @@ export default function CombatWorkspace() {
   const [demo, setDemo] = useState(false);
   const [message, setMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [rendering, setRendering] = useState(false);
 
   const load = useCallback(async (id: string) => {
     try {
@@ -34,6 +35,24 @@ export default function CombatWorkspace() {
   const ordered = useMemo(() => [...(combat?.combatants || [])].sort((left, right) => right.initiative - left.initiative), [combat]);
   const selected = combat?.combatants.find((item) => item.actor_id === selectedActorId);
   const current = combat?.combatants[combat.turn_index || 0];
+
+  const downloadPlayerView = async () => {
+    setRendering(true);
+    try {
+      const blob = await combatRender(campaignId, 'party_public');
+      const href = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = href;
+      link.download = `sagasmith-combat-${campaignId}.png`;
+      link.click();
+      URL.revokeObjectURL(href);
+      setMessage('PLAYER-SAFE PNG · Downloaded from the MCP audience projection.');
+    } catch (error) {
+      setMessage(`RENDER REJECTED · ${error instanceof Error ? error.message : 'unknown error'}`);
+    } finally {
+      setRendering(false);
+    }
+  };
 
   const move = async (actorId: string, destination: GridPosition, distance: number) => {
     if (!combat) return;
@@ -67,7 +86,7 @@ export default function CombatWorkspace() {
     <div className="page combat-page">
       <div className="page-heading">
         <div><div className="eyebrow">LIVE COMBAT / {combat.active ? `ROUND ${combat.round || 1}` : 'FINAL STATE'}</div><h1>临时战斗地图</h1><p>拖动 Token 只会生成移动请求；MCP 负责验证五尺格、阻挡、距离、权限与借机攻击窗口。</p></div>
-        <div className="heading-actions"><a className="btn btn-ghost" href={`/campaigns/detail?id=${encodeURIComponent(campaignId)}&tab=scenes`}>查看来源场景</a><span className={`badge ${combat.active ? 'badge-orange' : 'badge-gray'}`}>{combat.active ? 'ACTIVE' : 'READ ONLY'}</span></div>
+        <div className="heading-actions"><button className="btn btn-ghost" type="button" onClick={downloadPlayerView} disabled={rendering || demo}>{rendering ? 'RENDERING…' : '下载玩家安全 PNG'}</button><a className="btn btn-ghost" href={`/campaigns/detail?id=${encodeURIComponent(campaignId)}&tab=scenes`}>查看来源场景</a><span className={`badge ${combat.active ? 'badge-orange' : 'badge-gray'}`}>{combat.active ? 'ACTIVE' : 'READ ONLY'}</span></div>
       </div>
       {demo && <div className="demo-notice"><strong>DEMO MAP</strong><span>这里可以试拖动，但只改本地演示状态。真实写入必须由 gateway 调用 MCP 工具。</span></div>}
       <div className="combat-shell">

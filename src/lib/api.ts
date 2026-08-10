@@ -55,6 +55,22 @@ export function listSaves(campaignId: string): Promise<SaveSlot[]> { return fetc
 export function saveLineage(campaignId: string): Promise<SaveSlot[]> { return fetchJson(`/api/campaigns/${encodeURIComponent(campaignId)}/lineage`); }
 export function combatStatus(campaignId: string): Promise<CombatStatus> { return fetchJson(`/api/campaigns/${encodeURIComponent(campaignId)}/combat`); }
 
+export async function combatRender(
+  campaignId: string,
+  audienceProjection: 'caller' | 'party_public' = 'party_public',
+): Promise<Blob> {
+  const query = new URLSearchParams({ audience_projection: audienceProjection });
+  const response = await fetch(
+    `${API_BASE}/api/campaigns/${encodeURIComponent(campaignId)}/combat/render?${query}`,
+    { headers: requestHeaders() },
+  );
+  if (!response.ok) {
+    const problem = await response.json().catch(() => ({})) as { error?: string };
+    throw new Error(problem.error || `Render rejected (${response.status})`);
+  }
+  return response.blob();
+}
+
 export async function submitCombatMove(
   campaignId: string,
   actorId: string,
