@@ -1263,9 +1263,14 @@ def _translate_module_refs(
     if not isinstance(value, dict):
         return copy.deepcopy(value)
     if set(value) == {"source_key", "page", "chunk_hash", "note"}:
-        chunk_key = chunk_hash_keys.get(str(value.get("chunk_hash") or ""))
+        chunk_hash = str(value.get("chunk_hash") or "")
+        chunk_key = chunk_hash_keys.get(chunk_hash)
         if chunk_key is None:
-            return None
+            raise ValueError(
+                "module source_ref.chunk_hash does not match imported draft evidence: "
+                f"{chunk_hash or '<empty>'}; copy source_ref verbatim from "
+                "module_draft(evidence)"
+            )
         return source_ref(
             source_key=source_key,
             chunk_key=chunk_key,
