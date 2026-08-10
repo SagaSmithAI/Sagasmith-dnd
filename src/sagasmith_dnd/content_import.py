@@ -4358,7 +4358,7 @@ def author_selection_card_from_candidate(
             else:
                 value["application_state"] = "selection_ready"
                 return value
-        definition = _class_selection_definition(description)
+        definition = class_selection_definition_from_source(description)
         if definition is not None:
             card.setdefault("class_definition", definition)
             value["application_state"] = "selection_ready"
@@ -4671,8 +4671,15 @@ def _candidate_minimum_level(description: str) -> int | None:
     return min(matches) if matches else None
 
 
-def _class_selection_definition(description: str) -> dict[str, Any] | None:
-    description = _normalize_class_ocr_text(description)
+def class_selection_definition_from_source(description: str) -> dict[str, Any] | None:
+    """Compile the common level-one class contract from reviewed source text.
+
+    Imported PDF text is normally plain text, while bundled SRD sources retain
+    Markdown emphasis around field labels.  Both transports describe the same
+    mechanical contract and must compile to the same selection schema.
+    """
+
+    description = _normalize_class_ocr_text(description.replace("**", ""))
     hit_die_match = re.search(
         r"(?i)\bHit\s+Dice?\s*:\s*1?d\s*(6|8|10|12)(?=\s|per\b)",
         description,

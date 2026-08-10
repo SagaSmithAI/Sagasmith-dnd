@@ -10,7 +10,10 @@ from typing import Any, Iterable
 
 from sagasmith_core.text import ascii_slug
 
-from sagasmith_dnd.content_import import audit_release_semantic_validation
+from sagasmith_dnd.content_import import (
+    audit_release_semantic_validation,
+    class_selection_definition_from_source,
+)
 from sagasmith_dnd.content_resolution import finalize_bundled_artifact_resolutions
 from sagasmith_dnd.spell_resolution import (
     SPELL_RESOLUTION_MECHANIC_ID,
@@ -26,7 +29,7 @@ from sagasmith_dnd.standard_spell_ids import (
 )
 
 PACK_ID = "dnd5e.content.srd2014"
-PACK_VERSION = "1.22.0"
+PACK_VERSION = "1.23.0"
 
 _SUBCLASS_LEVELS = {
     "barbarian": 3,
@@ -211,10 +214,27 @@ def _simple_files(folder: Path, kind: str) -> list[dict[str, Any]]:
 
 
 def _classes(folder: Path) -> list[dict[str, Any]]:
-    """Catalog base classes without pretending a prose card can build a character."""
-    result = _simple_files(folder, "class")
-    for artifact in result:
-        artifact["application_state"] = "catalog_only"
+    """Compile the shared level-one class contract from bundled SRD sources."""
+
+    result: list[dict[str, Any]] = []
+    for path in _markdown_files(folder):
+        text = path.read_text(encoding="utf-8")
+        name = _heading_or_stem(text, path)
+        definition = class_selection_definition_from_source(text)
+        if definition is None:
+            raise ValueError(f"bundled SRD class {name!r} lacks a complete class definition")
+        result.append(
+            _artifact(
+                "class",
+                name,
+                path,
+                {
+                    "name": name,
+                    "description": _description(text),
+                    "class_definition": definition,
+                },
+            )
+        )
     return result
 
 

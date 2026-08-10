@@ -46,7 +46,7 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     manifest, artifacts = build_srd2014_content(workspace / "SagaSmith-dnd-skills")
     counts = Counter(item["kind"] for item in artifacts)
 
-    assert manifest["version"] == PACK_VERSION == "1.22.0"
+    assert manifest["version"] == PACK_VERSION == "1.23.0"
     assert "dnd5e.core.spell.structured_resolution" in manifest["native_mechanic_refs"]
     registered = {boundary.id for boundary in get_core_rule_pack("2014").boundaries}
     assert set(manifest["native_mechanic_refs"]) <= registered
@@ -79,6 +79,33 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     assert ("species", "Racial Traits") not in names
     assert ("background", "Acolyte") in names
     assert ("item", "Longsword") in names
+
+    fighter = next(
+        item for item in artifacts if item["kind"] == "class" and item["card"]["name"] == "Fighter"
+    )
+    assert fighter.get("application_state", "selection_ready") == "selection_ready"
+    assert fighter["card"]["class_definition"] == {
+        "hit_die": 10,
+        "saving_throw_proficiencies": ["strength", "constitution"],
+        "armor_proficiencies": ["All armor", "shields"],
+        "weapon_proficiencies": ["Simple weapons", "martial weapons"],
+        "tool_proficiencies": [],
+        "skill_choice_count": 2,
+        "skill_options": [
+            "acrobatics",
+            "athletics",
+            "history",
+            "insight",
+            "intimidation",
+            "perception",
+        ],
+    }
+    assert all(
+        item.get("application_state", "selection_ready") == "selection_ready"
+        and isinstance(item["card"].get("class_definition"), dict)
+        for item in artifacts
+        if item["kind"] == "class"
+    )
 
     fireball = next(
         item for item in artifacts if item["kind"] == "spell" and item["card"]["name"] == "Fireball"
