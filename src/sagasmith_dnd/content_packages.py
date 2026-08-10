@@ -521,7 +521,7 @@ def _artifact_with_refs(value: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _replace_chunk_keys(value: Any, key_map: Mapping[str, str]) -> Any:
-    """Rewrite legacy indexed keys to hashes of the exact archived text slices."""
+    """Rebind draft chunk keys to hashes of the exact archived text slices."""
 
     if isinstance(value, list):
         return [_replace_chunk_keys(item, key_map) for item in value]
