@@ -874,27 +874,6 @@ def build_rule_content_package(
         "rule_definitions": rule_definitions,
         "artifacts": artifacts,
         "mechanics": mechanics,
-        "selection_rules": [
-            {
-                "artifact_id": item["id"],
-                "rule_definition_id": item["rule_definition_id"],
-                "state": item.get("application_state"),
-                "applicability": item.get("selection_applicability"),
-            }
-            for item in artifacts
-            if item.get("selection_contract") is not None
-        ],
-        "resolutions": [
-            {
-                "artifact_id": item["id"],
-                "rule_definition_id": item["rule_definition_id"],
-                "mode": dict(item.get("semantic_resolution") or {}).get("mode"),
-                "fingerprint": dict(item.get("semantic_resolution") or {}).get("fingerprint"),
-                "state": item.get("execution_state"),
-            }
-            for item in artifacts
-            if item.get("semantic_resolution") is not None
-        ],
     }
     normalized_manifest["content_summary"] = dict(
         sorted(Counter(str(item.get("kind") or "unknown") for item in artifacts).items())
@@ -968,9 +947,6 @@ def compose_addon_content_package(
     rule_definitions_by_id: dict[str, dict[str, Any]] = {}
     artifacts_by_id: dict[str, dict[str, Any]] = {}
     mechanics_by_id: dict[str, dict[str, Any]] = {}
-    selection_rules_by_id: dict[str, dict[str, Any]] = {}
-    resolutions_by_id: dict[str, dict[str, Any]] = {}
-
     for raw_package, raw_blobs in components:
         component = validate_dnd_content_package(raw_package)
         if component["system_id"] != system_id or component["kind"] not in {
@@ -1004,20 +980,6 @@ def compose_addon_content_package(
                 merge_content_record(artifacts_by_id, item, label="artifact")
             for item in content.get("mechanics") or []:
                 merge_content_record(mechanics_by_id, item, label="mechanic")
-            for item in content.get("selection_rules") or []:
-                merge_content_record(
-                    selection_rules_by_id,
-                    item,
-                    label="selection rule",
-                    identity_fields=("id", "artifact_id"),
-                )
-            for item in content.get("resolutions") or []:
-                merge_content_record(
-                    resolutions_by_id,
-                    item,
-                    label="resolution",
-                    identity_fields=("id", "artifact_id"),
-                )
         for dependency in component["dependencies"]:
             identity = (
                 str(dependency["kind"]),
@@ -1042,8 +1004,6 @@ def compose_addon_content_package(
     rule_definitions = list(rule_definitions_by_id.values())
     artifacts = list(artifacts_by_id.values())
     mechanics = list(mechanics_by_id.values())
-    selection_rules = list(selection_rules_by_id.values())
-    resolutions = list(resolutions_by_id.values())
     normalized_manifest["content_summary"] = dict(
         sorted(Counter(str(item.get("kind") or "unknown") for item in artifacts).items())
     )
@@ -1070,8 +1030,6 @@ def compose_addon_content_package(
             "rule_definitions": rule_definitions,
             "artifacts": artifacts,
             "mechanics": mechanics,
-            "selection_rules": selection_rules,
-            "resolutions": resolutions,
         },
         metadata=metadata,
     )

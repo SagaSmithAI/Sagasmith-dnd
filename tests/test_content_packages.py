@@ -750,23 +750,6 @@ def test_addon_composition_uses_artifact_identity_for_selection_and_resolution()
                 }
             ],
             "mechanics": [],
-            "selection_rules": [
-                {
-                    "artifact_id": "dnd5e.example.selection-definition.feature.choice",
-                    "rule_definition_id": "dnd5e.example.selection-definition",
-                    "state": "selection_ready",
-                    "applicability": "available",
-                }
-            ],
-            "resolutions": [
-                {
-                    "artifact_id": "dnd5e.example.selection-definition.feature.choice",
-                    "rule_definition_id": "dnd5e.example.selection-definition",
-                    "mode": "agent_ruling",
-                    "fingerprint": None,
-                    "state": "clause_ready",
-                }
-            ],
         },
         metadata={"distribution": "private"},
     )
@@ -790,6 +773,6 @@ def test_addon_composition_uses_artifact_identity_for_selection_and_resolution()
             (source_package, source_blobs),
         ],
     )
-    assert len(addon["content"]["selection_rules"]) == 1
-    assert len(addon["content"]["resolutions"]) == 1
+    assert "selection_rules" not in addon["content"]
+    assert "resolutions" not in addon["content"]
     assert addon["actors"][0]["provenance"]["source_refs"][0]["page"] == 1

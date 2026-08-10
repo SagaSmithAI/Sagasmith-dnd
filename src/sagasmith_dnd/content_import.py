@@ -5653,12 +5653,7 @@ def validate_selection_ready_artifacts(artifacts: list[dict[str, Any]]) -> list[
 
 
 def candidate_draft_issues(candidate: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """Return deterministic D&D issues after one Agent editing pass.
-
-    This deliberately reports semantic ambiguity instead of repairing it. Safe
-    D&D normalization still happens in the ordinary candidate authoring path;
-    these issues are the fail-closed feedback surface for the next Agent pass.
-    """
+    """Return hard integrity errors and non-blocking Agent editing advisories."""
 
     value = dict(candidate)
     candidate_id = str(value.get("id") or "candidate")
@@ -5679,9 +5674,12 @@ def candidate_draft_issues(candidate: Mapping[str, Any]) -> list[dict[str, Any]]
     if status not in {"accepted", "rejected"}:
         add(
             "unresolved_disposition",
-            f"{candidate_id} still needs an include or exclude decision",
+            f"{candidate_id} is not selected; finalization will exclude it",
             path="review_status",
+            severity="warning",
         )
+    if status != "accepted":
+        return issues
     chunk_ids = [str(item) for item in value.get("source_chunk_ids") or [] if str(item)]
     if not chunk_ids:
         add(
@@ -5689,8 +5687,6 @@ def candidate_draft_issues(candidate: Mapping[str, Any]) -> list[dict[str, Any]]
             f"{candidate_id} has no indexed source chunks",
             path="source_chunk_ids",
         )
-    if status != "accepted":
-        return issues
 
     artifact = value.get("artifact")
     if not isinstance(artifact, Mapping):
@@ -5723,10 +5719,23 @@ def candidate_draft_issues(candidate: Mapping[str, Any]) -> list[dict[str, Any]]
             path="artifact.card.name",
         )
     for error in catalog_review_errors(artifact_value):
-        # needs_review is the normal editable state; explicit finalization will
-        # freeze the same source-bound decision as approved.
-        if "status is invalid" not in error and "approved status" not in error:
-            add("catalog_contract", error, path="artifact.catalog_review")
+        add(
+            "catalog_advisory",
+            error,
+            path="artifact.catalog_review",
+            severity="warning",
+        )
+    selection_contract = artifact_value.pop("selection_contract", None)
+    if selection_contract is not None:
+        for error in selection_contract_errors(
+            {**artifact_value, "selection_contract": selection_contract}
+        ):
+            add(
+                "selection_advisory",
+                error,
+                path="artifact.selection_contract",
+                severity="warning",
+            )
     for error in validate_selection_ready_artifacts([artifact_value]):
         add("dnd_schema", error, path="artifact")
     execution_state = str(artifact_value.get("execution_state") or "")
@@ -5737,8 +5746,9 @@ def candidate_draft_issues(candidate: Mapping[str, Any]) -> list[dict[str, Any]]
     }:
         add(
             "deferred_semantics",
-            f"{candidate_id} still requires semantic authoring",
+            f"{candidate_id} delegates semantic resolution to the Agent",
             path="artifact.execution_state",
+            severity="warning",
         )
     return issues
 

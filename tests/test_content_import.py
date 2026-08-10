@@ -63,6 +63,7 @@ def test_candidate_draft_issues_drive_the_agent_editing_loop() -> None:
     assert [issue["code"] for issue in candidate_draft_issues(pending)] == [
         "unresolved_disposition"
     ]
+    assert candidate_draft_issues(pending)[0]["severity"] == "warning"
 
     included_without_card = {**pending, "review_status": "accepted"}
     assert [issue["code"] for issue in candidate_draft_issues(included_without_card)] == [
