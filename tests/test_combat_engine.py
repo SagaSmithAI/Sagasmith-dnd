@@ -4181,8 +4181,10 @@ def test_movement_and_choice_window_are_explicit() -> None:
     second["position"] = {"x": 3, "y": 2}
     encounter = _grid_encounter([first, second])
     current = encounter["combatants"][encounter["turn_index"]]["actor_id"]
-    moved = spend_movement(encounter, current, 10, destination={"x": 1, "y": 2})
-    assert moved["combatants"][encounter["turn_index"]]["turn_budget"]["movement"] == 20
+    origin = encounter["combatants"][encounter["turn_index"]]["position"]
+    distance = max(abs(origin["x"] - 1), abs(origin["y"] - 2)) * 5
+    moved = spend_movement(encounter, current, distance, destination={"x": 1, "y": 2})
+    assert moved["combatants"][encounter["turn_index"]]["turn_budget"]["movement"] == 30 - distance
     pending = add_choice_window(
         moved,
         kind="opportunity_attack",
