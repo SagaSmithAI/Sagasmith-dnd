@@ -511,6 +511,7 @@ def default_character_notes() -> dict[str, Any]:
         "profile": {
             "summary": "",
             "appearance": "",
+            "portrait_ref": None,
             "personality_traits": [],
             "ideals": [],
             "bonds": [],
@@ -3365,6 +3366,7 @@ def validate_character_notes(
         {
             "summary",
             "appearance",
+            "portrait_ref",
             "personality_traits",
             "ideals",
             "bonds",
@@ -3374,11 +3376,95 @@ def validate_character_notes(
             "dm_notes",
         },
     )
+    raw_portrait = profile["portrait_ref"]
+    portrait_ref = None
+    if raw_portrait is not None:
+        portrait = _object(raw_portrait, "notes.profile.portrait_ref")
+        _reject_unknown(
+            portrait,
+            "notes.profile.portrait_ref",
+            {"asset_key", "checksum", "media_type", "alt", "source"},
+        )
+        required_portrait_fields = {"asset_key", "checksum", "media_type", "alt", "source"}
+        missing_portrait_fields = required_portrait_fields - set(portrait)
+        if missing_portrait_fields:
+            raise ValueError(
+                "notes.profile.portrait_ref has missing fields: "
+                + ", ".join(sorted(missing_portrait_fields))
+            )
+        checksum = _text(
+            portrait["checksum"], "notes.profile.portrait_ref.checksum", maximum=64
+        ).casefold()
+        if not re.fullmatch(r"[0-9a-f]{64}", checksum):
+            raise ValueError("notes.profile.portrait_ref.checksum must be a SHA-256 digest")
+        media_type = _text(
+            portrait["media_type"], "notes.profile.portrait_ref.media_type", maximum=100
+        ).casefold()
+        if not media_type.startswith("image/"):
+            raise ValueError("notes.profile.portrait_ref.media_type must be an image type")
+        source = _object(portrait["source"], "notes.profile.portrait_ref.source")
+        _reject_unknown(
+            source,
+            "notes.profile.portrait_ref.source",
+            {"kind", "package_id", "package_version", "package_checksum"},
+        )
+        required_source_fields = {"kind", "package_id", "package_version", "package_checksum"}
+        missing_source_fields = required_source_fields - set(source)
+        if missing_source_fields:
+            raise ValueError(
+                "notes.profile.portrait_ref.source has missing fields: "
+                + ", ".join(sorted(missing_source_fields))
+            )
+        if _text(source["kind"], "notes.profile.portrait_ref.source.kind", maximum=50) != (
+            "content_pack"
+        ):
+            raise ValueError("notes.profile.portrait_ref.source.kind must be content_pack")
+        package_checksum = _text(
+            source["package_checksum"],
+            "notes.profile.portrait_ref.source.package_checksum",
+            maximum=64,
+        ).casefold()
+        if not re.fullmatch(r"[0-9a-f]{64}", package_checksum):
+            raise ValueError(
+                "notes.profile.portrait_ref.source.package_checksum must be a SHA-256 digest"
+            )
+        portrait_ref = {
+            "asset_key": _text(
+                portrait["asset_key"], "notes.profile.portrait_ref.asset_key", maximum=500
+            ),
+            "checksum": checksum,
+            "media_type": media_type,
+            "alt": _text(portrait["alt"], "notes.profile.portrait_ref.alt", maximum=1000),
+            "source": {
+                "kind": "content_pack",
+                "package_id": _text(
+                    source["package_id"],
+                    "notes.profile.portrait_ref.source.package_id",
+                    maximum=500,
+                ),
+                "package_version": _text(
+                    source["package_version"],
+                    "notes.profile.portrait_ref.source.package_version",
+                    maximum=100,
+                ),
+                "package_checksum": package_checksum,
+            },
+        }
+        if not portrait_ref["asset_key"] or not portrait_ref["alt"]:
+            raise ValueError("notes.profile.portrait_ref asset_key and alt must not be empty")
+        if not portrait_ref["source"]["package_id"] or not portrait_ref["source"][
+            "package_version"
+        ]:
+            raise ValueError(
+                "notes.profile.portrait_ref source package_id and package_version must not be empty"
+            )
+
     normalized = {
         "schema_version": 3,
         "profile": {
             "summary": _text(profile["summary"], "notes.profile.summary", maximum=1200),
             "appearance": _text(profile["appearance"], "notes.profile.appearance", maximum=1200),
+            "portrait_ref": portrait_ref,
             "personality_traits": _string_list(
                 profile["personality_traits"], "notes.profile.personality_traits"
             ),

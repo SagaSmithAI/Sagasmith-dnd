@@ -37,6 +37,30 @@ def test_runtime_sheet_rejects_portable_portrait_fields() -> None:
         validate_character_sheet(sheet)
 
 
+def test_runtime_notes_accept_source_bound_portrait_reference() -> None:
+    portrait_ref = {
+        "asset_key": "actor.goblin.image",
+        "checksum": "a" * 64,
+        "media_type": "image/webp",
+        "alt": "Goblin portrait",
+        "source": {
+            "kind": "content_pack",
+            "package_id": "example.module",
+            "package_version": "1.0.0",
+            "package_checksum": "b" * 64,
+        },
+    }
+
+    notes = validate_character_notes({"profile": {"portrait_ref": portrait_ref}})
+
+    assert notes["profile"]["portrait_ref"] == portrait_ref
+
+
+def test_runtime_notes_reject_unbound_portrait_uri() -> None:
+    with pytest.raises(ValueError, match="portrait_uri"):
+        validate_character_notes({"profile": {"portrait_uri": "https://example.com/goblin.png"}})
+
+
 def test_effective_ability_modifier_uses_the_shared_override_projection() -> None:
     sheet = default_character_sheet()
     sheet["abilities"]["constitution"]["score"] = 10
