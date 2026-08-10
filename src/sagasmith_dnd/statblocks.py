@@ -24,7 +24,6 @@ from sagasmith_dnd.character_schema import (
     validate_character_sheet,
 )
 from sagasmith_dnd.engine import ability_modifier
-from sagasmith_dnd.parsing_rule_registry import registered_parsing_rule
 from sagasmith_dnd.resolution_plan import (
     ResolutionPlanCompilationError,
     compile_resolution_plan,
@@ -3480,7 +3479,6 @@ def _strip_ocr_label(text: str, label: str) -> str:
     return re.sub(rf"(?i)^{re.escape(label)}\s+", "", text)
 
 
-@registered_parsing_rule("dnd.ocr.bounded_schema_field_repairs")
 def _repair_layout_ocr_text(text: str) -> str:
     """Repair only mechanically bounded OCR substitutions before statblock parsing."""
 

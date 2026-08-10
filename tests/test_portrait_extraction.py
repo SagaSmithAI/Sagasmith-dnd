@@ -129,8 +129,8 @@ def test_extractor_reuses_words_and_one_full_page_render(tmp_path: Path) -> None
     document.close()
 
     with PortraitExtractor() as extractor:
-        first = extractor.extract(path, name="Guard", page_number=1)
-        second = extractor.extract(path, name="Guard", page_number=1)
+        first = extractor.inspect(path, name="Guard", page_number=1).portrait
+        second = extractor.inspect(path, name="Guard", page_number=1).portrait
         assert first is not None and second is not None
         assert first.content == second.content
         assert len(extractor._word_cache) == 1

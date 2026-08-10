@@ -38,8 +38,8 @@ separate sharing formats: each is a complete actor card, separated only by
 `actor_type`, provenance, and card mechanics. Older builders are internal import
 compiler adapters, not another public sharing format.
 
-`build_srd2014_preset_pack` produces 317 cards from the bundled SRD 5.1
-Markdown; `build_srd2024_preset_pack` produces 330 from SRD 5.2.1. Every card
+`build_srd2014_preset_actors` produces 317 actor-card.v3 values from the bundled
+SRD 5.1 Markdown; `build_srd2024_preset_actors` produces 330 from SRD 5.2.1. Every actor
 retains the normalized statblock, source text/checksum/reference, parser
 warnings, license, and attribution. Actionless 2014 creatures and speed 0 are
 valid. A 2024 MOD/SAVE-only table uses a canonical representative score that

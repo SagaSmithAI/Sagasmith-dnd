@@ -22,7 +22,6 @@ from sagasmith_dnd.content_validation import (
     selection_schema_for_artifact,
     species_materializer_errors,
 )
-from sagasmith_dnd.parsing_rule_registry import registered_parsing_rule
 from sagasmith_dnd.parsing_vocabulary import DND5E_2014_CLASS_NAMES as _CLASS_NAMES
 from sagasmith_dnd.parsing_vocabulary import (
     DND5E_2014_STANDARD_SUBCLASS_TITLES as _STANDARD_FLAT_SUBCLASS_TITLES,
@@ -1094,7 +1093,6 @@ def _mechanical_source_fragment_candidates(
     return candidates
 
 
-@registered_parsing_rule("dnd.spell.adjacent_explicit_field_continuation")
 def _spell_text_and_field_continuations(
     content: str,
     *,
@@ -1711,7 +1709,6 @@ def _background_variant_candidates(
     return result
 
 
-@registered_parsing_rule("dnd.spell.explicit_list_ownership")
 def _spell_class_index(chunks: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """Index spell-list membership across ordinary and fused multi-column layouts."""
 
@@ -1960,7 +1957,6 @@ def _spell_class_record(
     return matches[0][2]
 
 
-@registered_parsing_rule("dnd.spell.explicit_declaration_ownership")
 def _spell_class_mentions(chunks: list[dict[str, Any]], spell_name: str) -> dict[str, set[str]]:
     """Recover list eligibility from list headings and bounded prose declarations."""
 
@@ -2144,7 +2140,6 @@ def _spell_components(value: str) -> dict[str, Any]:
     }
 
 
-@registered_parsing_rule("dnd.statblock.scope_complete_field_group")
 def _rulebook_statblock_candidates(
     chunks: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -2343,7 +2338,6 @@ def _rulebook_statblock_candidates(
     return candidates
 
 
-@registered_parsing_rule("dnd.content.merge_same_structural_identity")
 def _merge_extracted_candidates(
     candidates: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -4565,7 +4559,6 @@ def _merge_inferred_defaults(
     return merged
 
 
-@registered_parsing_rule("dnd.content.explicit_heading_entity_candidates")
 def _candidate_class_name(candidate: dict[str, Any], description: str) -> str:
     explicit_owner = re.search(
         r"(?i)\b\d{1,2}(?:st|nd|rd|th)\s*[- ]?\s*level\s+"
@@ -5937,7 +5930,6 @@ def _has_level_feature_marker(content: str) -> bool:
     )
 
 
-@registered_parsing_rule("dnd.content.explicit_heading_entity_candidates")
 def _classify(
     title: str,
     heading_path: list[str],

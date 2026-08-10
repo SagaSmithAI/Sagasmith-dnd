@@ -10,11 +10,11 @@ from sagasmith_core.content_pack import (
 )
 
 from sagasmith_dnd.character_schema import default_character_notes, default_character_sheet
+from sagasmith_dnd.content_actors import build_dnd_content_actor
 from sagasmith_dnd.content_packages import (
     attach_auxiliary_assets,
     build_preset_content_package,
 )
-from sagasmith_dnd.portable_cards import build_dnd_actor_card
 from sagasmith_dnd.public_library import (
     build_content_library,
     build_public_library,
@@ -25,8 +25,8 @@ from sagasmith_dnd.public_library import (
 def _package():
     notes = default_character_notes()
     notes["profile"]["summary"] = "A test monster."
-    card = build_dnd_actor_card(
-        portable_id="example.monster",
+    card = build_dnd_content_actor(
+        actor_id="example.monster",
         version="2.0.0",
         actor_type="monster",
         name="Example Monster",

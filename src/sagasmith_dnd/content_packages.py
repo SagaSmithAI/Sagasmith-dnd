@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import copy
 import hashlib
 import json
@@ -25,6 +24,7 @@ from sagasmith_core.content_pack import (
 )
 
 from sagasmith_dnd.character_schema import default_character_notes
+from sagasmith_dnd.content_actors import validate_dnd_content_actor
 from sagasmith_dnd.content_import import repair_reviewed_structured_transcription
 from sagasmith_dnd.content_validation import (
     build_catalog_review,
@@ -33,7 +33,6 @@ from sagasmith_dnd.content_validation import (
     content_fingerprint,
     selection_contract_errors,
 )
-from sagasmith_dnd.portable_cards import validate_dnd_content_actor
 from sagasmith_dnd.portrait_extraction import ExtractedPortrait, PortraitExtractor
 from sagasmith_dnd.statblocks import ParsedStatblock, finalize_imported_actor_rulings
 
@@ -567,19 +566,19 @@ def content_definition_checksum(
 
 
 def _actor_page_hints(card: Mapping[str, Any]) -> list[int]:
-    refs = dict(card.get("payload") or {}).get("provenance", {}).get("source_refs", [])
-    pages = []
-    for value in refs:
-        match = re.search(r"#page:(\d+)", str(value))
-        if match:
-            pages.append(int(match.group(1)))
+    refs = dict(card.get("provenance") or {}).get("source_refs", [])
+    pages = [
+        int(value["page"])
+        for value in refs
+        if isinstance(value, Mapping) and isinstance(value.get("page"), int)
+    ]
     return list(dict.fromkeys(pages))
 
 
 def _actor_source_refs(
     card: Mapping[str, Any], sources: Sequence[Mapping[str, Any]]
 ) -> list[dict[str, Any]]:
-    name = str(dict(card["payload"])["name"])
+    name = str(card["name"])
     normalized_name = _slug(name)
     pages = set(_actor_page_hints(card))
     candidates = []
@@ -617,66 +616,44 @@ def _actor_source_refs(
     return result
 
 
-def actor_from_portable_card(
+def actor_for_package(
     card: Mapping[str, Any],
     *,
     sources: Sequence[Mapping[str, Any]],
-    assets: list[dict[str, Any]],
-    blobs: dict[str, bytes],
-    default_license: str,
-    default_attribution: str,
     fallback_source_refs: Sequence[Mapping[str, Any]] = (),
     direct_source_refs: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Create a v3 actor and externalize its optional image into package assets."""
+    """Bind a validated actor-card.v3 to evidence owned by its package."""
 
-    payload = dict(card["payload"])
-    provenance = copy.deepcopy(dict(payload.get("provenance") or {}))
+    value = validate_dnd_content_actor(card)
+    provenance = copy.deepcopy(dict(value.get("provenance") or {}))
     source_text = str(provenance.pop("source_text", ""))
     provenance.pop("source_refs", None)
     provenance["source_refs"] = (
         copy.deepcopy([dict(ref) for ref in direct_source_refs])
         if direct_source_refs is not None
-        else _actor_source_refs(card, sources)
+        else _actor_source_refs(value, sources)
         or copy.deepcopy([dict(ref) for ref in fallback_source_refs])
     )
     if source_text:
         provenance["source_text_hash"] = hashlib.sha256(source_text.encode("utf-8")).hexdigest()
-    image_asset_key = None
-    image_alt = ""
-    image = payload.get("image")
-    if isinstance(image, Mapping):
-        raw = base64.b64decode(str(image["data_base64"]), validate=True)
-        image_asset_key = f"actor.{_slug(str(card['id']))}.image"
-        image_alt = str(image.get("alt") or payload["name"])
-        asset = blob_descriptor(
-            asset_key=image_asset_key,
-            kind="actor_image",
-            name=f"{_slug(str(payload['name']))}.{str(image['media_type']).split('/')[-1]}",
-            media_type=str(image["media_type"]),
-            content=raw,
-            license=str(image.get("license") or default_license),
-            attribution=str(image.get("attribution") or default_attribution),
-            source_refs=provenance["source_refs"],
-            metadata={"actor_id": card["id"]},
-        )
-        assets.append(asset)
-        blobs.setdefault(asset["checksum"], raw)
     return build_actor_card(
-        actor_id=str(card["id"]),
-        version=str(card["version"]),
-        system_id=str(card["system_id"]),
-        actor_type=str(payload["actor_type"]),
-        name=str(payload["name"]),
-        player_name=payload.get("player_name"),
-        summary=str(payload.get("summary") or ""),
-        sheet=dict(payload["sheet"]),
-        notes=dict(payload["notes"]),
+        actor_id=str(value["id"]),
+        version=str(value["version"]),
+        system_id=str(value["system_id"]),
+        actor_type=str(value["actor_type"]),
+        name=str(value["name"]),
+        player_name=value.get("player_name"),
+        summary=str(value.get("summary") or ""),
+        sheet=dict(value["sheet"]),
+        notes=dict(value["notes"]),
         provenance=provenance,
-        bindings=list(payload.get("bindings") or []),
-        image_asset_key=image_asset_key,
-        image_alt=image_alt,
-        metadata=dict(card.get("metadata") or {}),
+        bindings=list(value.get("bindings") or []),
+        image_asset_key=(
+            str(dict(value["image"])["asset_key"]) if value.get("image") else None
+        ),
+        image_alt=(str(dict(value["image"])["alt"]) if value.get("image") else ""),
+        metadata=dict(value.get("metadata") or {}),
     )
 
 
@@ -684,14 +661,13 @@ def _actor_artifact_source_refs(
     card: Mapping[str, Any],
     artifacts: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
-    payload = dict(card["payload"])
-    provenance = dict(payload.get("provenance") or {})
+    provenance = dict(card.get("provenance") or {})
     requested_ids = {
         match.group(1)
         for value in provenance.get("source_refs") or []
         if (match := re.search(r"#artifact:([^#]+)$", str(value)))
     }
-    actor_name = _slug(str(payload["name"]))
+    actor_name = _slug(str(card["name"]))
     exact = [item for item in artifacts if str(item.get("id") or "") in requested_ids]
     named = [
         item
@@ -801,7 +777,7 @@ def build_rule_content_package(
     system_id: str,
     manifest: Mapping[str, Any],
     rule_descriptors: Sequence[Mapping[str, Any]],
-    preset_cards: Sequence[Mapping[str, Any]] = (),
+    preset_actors: Sequence[Mapping[str, Any]] = (),
     metadata: Mapping[str, Any] | None = None,
     dependencies: Sequence[Mapping[str, Any]] = (),
     kind: str = "addon",
@@ -882,16 +858,12 @@ def build_rule_content_package(
             }
         )
     actors = [
-        actor_from_portable_card(
+        actor_for_package(
             card,
             sources=sources,
-            assets=assets,
-            blobs=blobs,
-            default_license=license,
-            default_attribution=attribution,
             fallback_source_refs=_actor_artifact_source_refs(card, artifacts),
         )
-        for card in preset_cards
+        for card in preset_actors
     ]
     actors = [_repair_reviewed_actor_transcription(actor) for actor in actors]
     content = {
@@ -1127,11 +1099,11 @@ def build_preset_content_package(
     sections = []
     cursor = 0
     for ordinal, card in enumerate(cards):
-        payload = dict(card["payload"])
-        provenance = dict(payload.get("provenance") or {})
+        value = validate_dnd_content_actor(card)
+        provenance = dict(value.get("provenance") or {})
         source_text = str(provenance.get("source_text") or "").strip()
         if not source_text:
-            source_text = f"# {payload['name']}\n\n{payload.get('summary') or ''}".strip()
+            source_text = f"# {value['name']}\n\n{value.get('summary') or ''}".strip()
         source_text = repair_reviewed_structured_transcription(
             {"text": source_text},
             path="preset_source",
@@ -1147,14 +1119,14 @@ def build_preset_content_package(
                 "ordinal": ordinal,
                 "parent_ordinal": None,
                 "level": 1,
-                "title": str(payload["name"]),
-                "path": [str(payload["name"])],
+                "title": str(value["name"]),
+                "path": [str(value["name"])],
                 "start_offset": start,
                 "end_offset": cursor,
                 "chunks": [
                     {
                         "ordinal": ordinal,
-                        "heading_path": [str(payload["name"])],
+                        "heading_path": [str(value["name"])],
                         "start_offset": start,
                         "end_offset": cursor,
                         "token_count": len(source_text.split()),
@@ -1182,18 +1154,14 @@ def build_preset_content_package(
     for card, section in zip(cards, source["sections"], strict=True):
         chunk = section["chunks"][0]
         actors.append(
-            actor_from_portable_card(
+            actor_for_package(
                 card,
                 sources=[source],
-                assets=assets,
-                blobs=blobs,
-                default_license=license,
-                default_attribution=attribution,
                 direct_source_refs=[
                     source_ref(
                         source_key=source["source_key"],
                         chunk_key=chunk["key"],
-                        note=f"Source evidence for {dict(card['payload'])['name']}",
+                        note=f"Source evidence for {card['name']}",
                     )
                 ],
             )
@@ -1429,13 +1397,9 @@ def build_module_content_package(
         ]
         scenes.append(scene)
     actors = [
-        actor_from_portable_card(
+        actor_for_package(
             card,
             sources=[source],
-            assets=assets,
-            blobs=blobs,
-            default_license=license,
-            default_attribution=attribution,
         )
         for card in descriptor.get("actors") or []
     ]

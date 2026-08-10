@@ -10,9 +10,10 @@ from sagasmith_core.content_pack import (
     dumps_content_archive,
     loads_content_archive,
 )
-from sagasmith_core.portable import build_rule_pack, portable_rule_chunk_key
+from sagasmith_core.indexed_source import rule_chunk_key
 
 from sagasmith_dnd.character_schema import default_character_notes, default_character_sheet
+from sagasmith_dnd.content_actors import build_dnd_content_actor
 from sagasmith_dnd.content_packages import (
     _portrait_cache_key,
     _portrait_sources,
@@ -26,11 +27,34 @@ from sagasmith_dnd.content_packages import (
     validate_dnd_content_package,
 )
 from sagasmith_dnd.content_validation import content_fingerprint
-from sagasmith_dnd.portable_cards import build_dnd_actor_card
 from sagasmith_dnd.portrait_extraction import ExtractedPortrait, PortraitInspection
 
 
-def test_final_portable_artifact_refreshes_attestation_hashes_idempotently() -> None:
+def _rule_descriptor(
+    *,
+    descriptor_id: str,
+    version: str,
+    system_id: str,
+    manifest: dict,
+    artifacts: list,
+    mechanics: list,
+    sources: list,
+    metadata: dict,
+) -> dict:
+    return {
+        "id": descriptor_id,
+        "version": version,
+        "system_id": system_id,
+        "manifest": manifest,
+        "artifacts": artifacts,
+        "mechanics": mechanics,
+        "sources": sources,
+        "metadata": metadata,
+        "dependencies": [],
+    }
+
+
+def test_final_content_artifact_refreshes_attestation_hashes_idempotently() -> None:
     artifact = {
         "id": "example.feature",
         "kind": "feature",
@@ -59,8 +83,8 @@ def test_preset_duplicate_actor_names_keep_their_own_source_chunks() -> None:
         notes = default_character_notes()
         notes["profile"]["summary"] = summary
         cards.append(
-            build_dnd_actor_card(
-                portable_id=f"dnd5e.example.guard.{index}",
+            build_dnd_content_actor(
+                actor_id=f"dnd5e.example.guard.{index}",
                 version="2.0.0",
                 actor_type="npc",
                 name="Guard",
@@ -97,8 +121,8 @@ def test_package_rejects_unrepaired_transcription_character_in_actor_sheet() -> 
         system_id="dnd5e",
         title="Bad Transcription",
         cards=[
-            build_dnd_actor_card(
-                portable_id="dnd5e.example.bad-transcription.actor",
+            build_dnd_content_actor(
+                actor_id="dnd5e.example.bad-transcription.actor",
                 version="2.0.0",
                 actor_type="npc",
                 name="Example Actor",
@@ -124,8 +148,8 @@ def test_preset_builder_repairs_reviewed_pdf_word_breaks_in_actor_cards() -> Non
         system_id="dnd5e",
         title="Repaired Transcription",
         cards=[
-            build_dnd_actor_card(
-                portable_id="dnd5e.example.repaired-transcription.actor",
+            build_dnd_content_actor(
+                actor_id="dnd5e.example.repaired-transcription.actor",
                 version="2.0.0",
                 actor_type="npc",
                 name="Example Actor",
@@ -148,8 +172,8 @@ def test_auxiliary_assets_are_distinct_from_indexed_originals(tmp_path: Path) ->
         system_id="dnd5e",
         title="Auxiliary Example",
         cards=[
-            build_dnd_actor_card(
-                portable_id="dnd5e.example.auxiliary.actor",
+            build_dnd_content_actor(
+                actor_id="dnd5e.example.auxiliary.actor",
                 version="2.0.0",
                 actor_type="pc",
                 name="Example Actor",
@@ -197,9 +221,9 @@ def test_auxiliary_assets_are_distinct_from_indexed_originals(tmp_path: Path) ->
 
 def test_addon_content_package_flattens_rules_and_stores_source_once() -> None:
     text = "# Options\nA hero can choose the luminous ward."
-    chunk_key = portable_rule_chunk_key("example.source", 0, 0, text)
-    component = build_rule_pack(
-        portable_id="dnd5e.example.rules",
+    chunk_key = rule_chunk_key("example.source", 0, 0, text)
+    component = _rule_descriptor(
+        descriptor_id="dnd5e.example.rules",
         version="1.0.0",
         system_id="dnd5e",
         manifest={
@@ -275,21 +299,13 @@ def test_addon_content_package_flattens_rules_and_stores_source_once() -> None:
         ],
         metadata={"distribution": "private"},
     )
-    component = {
-        "id": component["id"],
-        "version": component["version"],
-        "system_id": component["system_id"],
-        **component["payload"],
-        "metadata": component["metadata"],
-        "dependencies": component["dependencies"],
-    }
     stale_chunk_key = "example.source/section-0/chunk-0-deadbeefdeadbeef"
     component["sources"][0]["sections"][0]["chunks"][0]["key"] = stale_chunk_key
     component["artifacts"][0]["source_citations"][0]["chunk_key"] = stale_chunk_key
     notes = default_character_notes()
     notes["profile"]["summary"] = "A source-backed test actor."
-    card = build_dnd_actor_card(
-        portable_id="dnd5e.example.actor.luminous-ward",
+    card = build_dnd_content_actor(
+        actor_id="dnd5e.example.actor.luminous-ward",
         version="1.0.0",
         actor_type="npc",
         name="Luminous Ward",
@@ -319,7 +335,7 @@ def test_addon_content_package_flattens_rules_and_stores_source_once() -> None:
             },
         },
         rule_descriptors=[component],
-        preset_cards=[card],
+        preset_actors=[card],
         metadata={
             "license": "CC-BY-4.0",
             "attribution": "Example author",
@@ -327,7 +343,7 @@ def test_addon_content_package_flattens_rules_and_stores_source_once() -> None:
     )
     assert package["kind"] == "addon"
     canonical_chunk_key = package["sources"][0]["sections"][0]["chunks"][0]["key"]
-    assert canonical_chunk_key == portable_rule_chunk_key("example.source", 0, 0, text)
+    assert canonical_chunk_key == rule_chunk_key("example.source", 0, 0, text)
     assert package["content"]["artifacts"][0]["source_refs"][0]["chunk_key"] == (
         canonical_chunk_key
     )
@@ -391,8 +407,8 @@ def test_portraits_attach_to_source_statblock_cards_without_runtime_instances(
         system_id="dnd5e",
         title="Dynamic Template",
         cards=[
-            build_dnd_actor_card(
-                portable_id="dnd5e.example.dynamic-template.guide",
+            build_dnd_content_actor(
+                actor_id="dnd5e.example.dynamic-template.guide",
                 version="2.0.0",
                 actor_type="npc",
                 name="Template Guide",
@@ -511,10 +527,10 @@ def test_portraits_attach_to_source_statblock_cards_without_runtime_instances(
 
 def test_addon_content_package_preserves_existing_unified_source_refs() -> None:
     text = "# Option\nA stable imported rule."
-    portable_chunk_key = portable_rule_chunk_key("example.imported", 0, 0, text)
+    portable_chunk_key = rule_chunk_key("example.imported", 0, 0, text)
     canonical_chunk_key = portable_chunk_key
-    component = build_rule_pack(
-        portable_id="dnd5e.example.imported",
+    component = _rule_descriptor(
+        descriptor_id="dnd5e.example.imported",
         version="1.0.0",
         system_id="dnd5e",
         manifest={
@@ -590,14 +606,6 @@ def test_addon_content_package_preserves_existing_unified_source_refs() -> None:
         metadata={"distribution": "private"},
     )
 
-    component = {
-        "id": component["id"],
-        "version": component["version"],
-        "system_id": component["system_id"],
-        **component["payload"],
-        "metadata": component["metadata"],
-        "dependencies": component["dependencies"],
-    }
     package, _blobs = build_rule_content_package(
         package_id="dnd5e.example.imported.addon",
         version="1.0.0",
@@ -628,8 +636,8 @@ def test_addon_content_package_preserves_existing_unified_source_refs() -> None:
 def test_addon_composition_deduplicates_unified_component_records() -> None:
     notes = default_character_notes()
     notes["profile"]["summary"] = "A source-backed archive guard."
-    card = build_dnd_actor_card(
-        portable_id="dnd5e.example.actor.guard",
+    card = build_dnd_content_actor(
+        actor_id="dnd5e.example.actor.guard",
         version="2.0.0",
         actor_type="npc",
         name="Archive Guard",
@@ -676,8 +684,8 @@ def test_addon_composition_uses_artifact_identity_for_selection_and_resolution()
         system_id="dnd5e",
         title="Selection Source",
         cards=[
-            build_dnd_actor_card(
-                portable_id="dnd5e.example.selection-actor",
+            build_dnd_content_actor(
+                actor_id="dnd5e.example.selection-actor",
                 version="2.0.0",
                 actor_type="pc",
                 name="Selection Actor",

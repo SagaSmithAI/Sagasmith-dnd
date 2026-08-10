@@ -308,23 +308,6 @@ class PortraitExtractor:
     def __exit__(self, *_args: Any) -> None:
         self.close()
 
-    def extract(
-        self,
-        source_path: str | Path,
-        *,
-        name: str,
-        page_number: int,
-        minimum_confidence: float = 0.18,
-    ) -> ExtractedPortrait | None:
-        """Return the extracted portrait, retaining the compact legacy API."""
-
-        return self.inspect(
-            source_path,
-            name=name,
-            page_number=page_number,
-            minimum_confidence=minimum_confidence,
-        ).portrait
-
     def inspect(
         self,
         source_path: str | Path,
@@ -467,12 +450,12 @@ def extract_actor_portrait(
     """Extract one portrait, opening and closing its source document."""
 
     with PortraitExtractor() as extractor:
-        return extractor.extract(
+        return extractor.inspect(
             source_path,
             name=name,
             page_number=page_number,
             minimum_confidence=minimum_confidence,
-        )
+        ).portrait
 
 
 __all__ = [

@@ -245,7 +245,7 @@ def test_cli_error_is_a_single_json_document(tmp_path: Path, monkeypatch, capsys
     assert result["error"]["code"] == "not_found"
 
 
-def test_cli_cannot_create_a_second_simplified_combat_state(
+def test_cli_cannot_write_system_owned_combat_state(
     tmp_path: Path,
     monkeypatch,
     capsys,
@@ -264,21 +264,6 @@ def test_cli_cannot_create_a_second_simplified_combat_state(
         "2014",
     )[1]
     campaign_id = created["data"]["campaign"]["id"]
-
-    code, result = _call(
-        capsys,
-        "combat",
-        "start",
-        "--campaign",
-        campaign_id,
-        "--payload",
-        '{"round":99}',
-    )
-
-    assert code == 4
-    assert result["error"]["code"] == "retired_command"
-    assert "D&D MCP structured combat tools" in result["error"]["message"]
-    assert _call(capsys, "combat", "status", "--campaign", campaign_id)[1]["data"] is None
 
     bypass_code, bypass = _call(
         capsys,

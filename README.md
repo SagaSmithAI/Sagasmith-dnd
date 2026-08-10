@@ -37,8 +37,8 @@ D&D sheet v2 与 edition 校验。PC、NPC 和怪物没有三套分享格式；�
 角色卡，只由 `actor_type`、来源和卡内 mechanics 区分。旧 builder 仅作为导入编译器
 内部适配器，不是另一种公开分享格式。
 
-`build_srd2014_preset_pack` 从随附 SRD 5.1 Markdown 生成 317 张卡，
-`build_srd2024_preset_pack` 从 SRD 5.2.1 生成 330 张卡。每张卡保留规范化
+`build_srd2014_preset_actors` 从随附 SRD 5.1 Markdown 生成 317 个 actor-card.v3，
+`build_srd2024_preset_actors` 从 SRD 5.2.1 生成 330 个 actor-card.v3。每张卡保留规范化
 statblock、原始来源文本/checksum、source ref、parser warning、license 与
 attribution。2014 无 Action 生物与速度 0 的 statblock 仍是合法卡；2024
 MOD/SAVE-only 表只保存能够严格保留印刷 modifier/save 的规范代表值，并把

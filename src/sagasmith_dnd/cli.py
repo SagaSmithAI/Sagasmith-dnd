@@ -321,7 +321,6 @@ def _dispatch(args) -> Any:
                 "continuity",
                 "state",
                 "roll",
-                "combat",
             ],
             "agent_interface": "skill+json-cli",
         }
@@ -1401,20 +1400,6 @@ def _dispatch(args) -> Any:
                     bonus=args.bonus,
                     advantage=args.advantage,
                     disadvantage=args.disadvantage,
-                )
-
-        if args.group == "combat":
-            campaign_id = _require(args.campaign, "campaign")
-            campaign = campaigns.get(campaign_id)
-            state = dict(campaign.state)
-            if args.action == "status":
-                return state.get("combat")
-            if args.action in {"start", "act", "end"}:
-                raise CliError(
-                    "retired_command",
-                    "legacy CLI combat mutations are retired; use the D&D MCP "
-                    "structured combat tools",
-                    exit_code=4,
                 )
 
         raise CliError(
