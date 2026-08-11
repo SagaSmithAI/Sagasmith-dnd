@@ -29,7 +29,7 @@ from sagasmith_dnd.standard_spell_ids import (
 )
 
 PACK_ID = "dnd5e.content.srd2014"
-PACK_VERSION = "1.23.0"
+PACK_VERSION = "1.24.0"
 
 _SUBCLASS_LEVELS = {
     "barbarian": 3,
@@ -202,14 +202,18 @@ def _simple_files(folder: Path, kind: str) -> list[dict[str, Any]]:
     for path in _markdown_files(folder):
         text = path.read_text(encoding="utf-8")
         name = _heading_or_stem(text, path)
-        result.append(
-            _artifact(
-                kind,
-                name,
-                path,
-                {"name": name, "description": _description(text)},
-            )
+        artifact = _artifact(
+            kind,
+            name,
+            path,
+            {"name": name, "description": _description(text)},
         )
+        if kind == "item":
+            # A title and prose description do not constitute an executable
+            # actor inventory card. Keep uncompiled magic items searchable,
+            # but do not advertise them as selection-ready.
+            artifact["application_state"] = "catalog_only"
+        result.append(artifact)
     return result
 
 
@@ -1666,12 +1670,32 @@ def _equipment_items(folder: Path) -> list[dict[str, Any]]:
         if not path.is_file():
             continue
         text = path.read_text(encoding="utf-8")
+        group = ""
         for table_name, fields in _markdown_table_rows(text):
             if table_name not in allowed_tables:
                 continue
-            item_name = next(iter(fields.values()), "").strip()
-            if not item_name or item_name.startswith("**"):
+            name_field = "Goods" if table_name == "Cost of Trade Goods" else next(iter(fields), "")
+            raw_name = str(fields.get(name_field) or "").strip()
+            other_values = [
+                str(value).strip() for key, value in fields.items() if key != name_field
+            ]
+            if not raw_name:
                 continue
+            if not any(other_values):
+                if raw_name.lstrip("~ ").startswith("*"):
+                    group = raw_name.strip("*~ ")
+                continue
+            item_name, amount = _equipment_item_name(raw_name)
+            properties = {_name_key(key).replace("-", "_"): value for key, value in fields.items()}
+            if table_name == "Cost of Trade Goods":
+                properties["cost"] = fields.get("Cost", "")
+            effective_table = (
+                group
+                if group and (table_name == "Weapons" or raw_name.lstrip().startswith("~"))
+                else table_name
+            )
+            if amount is not None:
+                properties["amount"] = amount
             result.append(
                 _artifact(
                     "item",
@@ -1680,14 +1704,177 @@ def _equipment_items(folder: Path) -> list[dict[str, Any]]:
                     {
                         "name": item_name,
                         "category": path.stem.replace("_", " "),
-                        "table": table_name,
-                        "properties": {
-                            _name_key(key).replace("-", "_"): value for key, value in fields.items()
-                        },
+                        "table": effective_table,
+                        "properties": properties,
+                        "inventory_template": _inventory_template(
+                            item_name,
+                            table_name=effective_table,
+                            properties=properties,
+                        ),
                     },
                 )
             )
+        if name == "Adventuring_Gear.md":
+            result.extend(_equipment_packs(path, text))
     return result
+
+
+def _equipment_item_name(value: str) -> tuple[str, int | None]:
+    cleaned = value.strip().lstrip("~ ").strip("*").strip()
+    amount_match = re.search(r"\((\d[\d,]*)\)\s*$", cleaned)
+    amount = int(amount_match.group(1).replace(",", "")) if amount_match else None
+    if amount_match and any(
+        token in cleaned.casefold() for token in ("arrow", "bolt", "bullet", "needle")
+    ):
+        cleaned = cleaned[: amount_match.start()].strip()
+    return cleaned, amount
+
+
+def _equipment_packs(path: Path, text: str) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for match in re.finditer(
+        r"^\*\*\*(.+? Pack) \(([^)]+)\)\*\*\*\.\s*(.+?)$",
+        text,
+        re.MULTILINE | re.IGNORECASE,
+    ):
+        name, cost, description = (part.strip() for part in match.groups())
+        properties = {"cost": cost}
+        result.append(
+            _artifact(
+                "item",
+                name,
+                path,
+                {
+                    "name": name,
+                    "category": "Equipment Pack",
+                    "table": "Equipment Pack",
+                    "properties": properties,
+                    "description": description,
+                    "inventory_template": _inventory_template(
+                        name,
+                        table_name="Equipment Pack",
+                        properties=properties,
+                        description=description,
+                    ),
+                },
+            )
+        )
+    return result
+
+
+def _inventory_template(
+    name: str,
+    *,
+    table_name: str,
+    properties: dict[str, Any],
+    description: str = "",
+) -> dict[str, Any]:
+    """Translate one exact SRD table record to the actor inventory schema."""
+
+    table = table_name.casefold()
+    weight_oz = _weight_ounces(str(properties.get("weight") or ""))
+    template: dict[str, Any] = {
+        "name": name,
+        "kind": "equipment",
+        "quantity": 1,
+        "weight_oz": weight_oz,
+        "price_cp": _price_copper(str(properties.get("cost") or "")),
+        "description": description,
+        "source_key": f"{PACK_ID}.item.{ascii_slug(name)}",
+        "equipped": False,
+        "identified": True,
+        "attunement": "none",
+        "condition": "normal",
+        "uses": {},
+        "charges": {},
+        "mechanics": {},
+    }
+    if "weapon" in table:
+        damage = re.match(r"\s*(\d+d\d+)\s+([A-Za-z]+)", str(properties.get("damage") or ""))
+        property_text = str(properties.get("properties") or "")
+        property_names = [
+            re.sub(r"\s*\(.+\)$", "", item).strip()
+            for item in property_text.split(",")
+            if item.strip() and item.strip() != "-"
+        ]
+        ranged = "ranged weapons" in table
+        range_match = re.search(r"(?:Range\s+)?(\d+)\s*/\s*(\d+)", property_text, re.I)
+        versatile = re.search(r"Versatile\s*\((\d+d\d+)\)", property_text, re.I)
+        template["kind"] = "weapon"
+        template["mechanics"] = {
+            "category": "martial" if "martial" in table else "simple",
+            "attack_type": "ranged" if ranged else "melee",
+            "attack_ability": "dexterity" if ranged else "strength",
+            "damage_formula": damage.group(1) if damage else "",
+            "damage_type": damage.group(2).casefold() if damage else "",
+            "versatile_damage_formula": versatile.group(1) if versatile else "",
+            "properties": property_names,
+            "normal_range_ft": int(range_match.group(1)) if ranged and range_match else 0,
+            "long_range_ft": int(range_match.group(2)) if ranged and range_match else 0,
+            "thrown_normal_range_ft": (
+                int(range_match.group(1))
+                if not ranged and "thrown" in property_text.casefold() and range_match
+                else 0
+            ),
+            "thrown_long_range_ft": (
+                int(range_match.group(2))
+                if not ranged and "thrown" in property_text.casefold() and range_match
+                else 0
+            ),
+            "proficient": True,
+            "mastery": "",
+        }
+    elif table == "armor":
+        ac_text = str(properties.get("armor_class_ac") or "")
+        if name.casefold() == "shield":
+            bonus = re.search(r"\+(\d+)", ac_text)
+            template["kind"] = "shield"
+            template["mechanics"] = {"ac_bonus": int(bonus.group(1)) if bonus else 0}
+        else:
+            base = re.match(r"(\d+)", ac_text)
+            maximum = re.search(r"max\s+(\d+)", ac_text, re.I)
+            dexterity_mode = (
+                "max" if maximum else "full" if "dex modifier" in ac_text.casefold() else "none"
+            )
+            mechanics: dict[str, Any] = {
+                "base_ac": int(base.group(1)) if base else 10,
+                "dexterity_mode": dexterity_mode,
+                "stealth_disadvantage": (
+                    str(properties.get("stealth") or "").casefold() == "disadvantage"
+                ),
+            }
+            if maximum:
+                mechanics["dexterity_max"] = int(maximum.group(1))
+            template["kind"] = "armor"
+            template["mechanics"] = mechanics
+    elif table == "ammunition":
+        amount = int(properties.get("amount") or 1)
+        template["kind"] = "ammunition"
+        template["quantity"] = amount
+        template["weight_oz"] = weight_oz / amount if amount else 0
+    return template
+
+
+def _weight_ounces(value: str) -> int:
+    fraction = re.search(r"(\d+)\s*/\s*(\d+)\s*lb", value.casefold())
+    if fraction:
+        denominator = int(fraction.group(2))
+        return int(int(fraction.group(1)) / denominator * 16) if denominator else 0
+    match = re.search(r"(\d+)?\s*([^\d\s])?\s*lb", value.casefold())
+    if not match:
+        return 0
+    whole = int(match.group(1) or 0)
+    # Some bundled OCR text represents one-half with the CJK glyph 陆.
+    fraction_value = {"¼": 0.25, "½": 0.5, "¾": 0.75, "陆": 0.5}.get(match.group(2) or "", 0)
+    return int((whole + fraction_value) * 16)
+
+
+def _price_copper(value: str) -> int:
+    match = re.search(r"([\d,]+)\s*(CP|SP|EP|GP|PP)\b", value, re.I)
+    if not match:
+        return 0
+    multiplier = {"CP": 1, "SP": 10, "EP": 50, "GP": 100, "PP": 1000}
+    return int(match.group(1).replace(",", "")) * multiplier[match.group(2).upper()]
 
 
 def _markdown_table_rows(text: str) -> Iterable[tuple[str, dict[str, str]]]:

@@ -46,17 +46,17 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     manifest, artifacts = build_srd2014_content(workspace / "SagaSmith-dnd-skills")
     counts = Counter(item["kind"] for item in artifacts)
 
-    assert manifest["version"] == PACK_VERSION == "1.23.0"
+    assert manifest["version"] == PACK_VERSION == "1.24.0"
     assert "dnd5e.core.spell.structured_resolution" in manifest["native_mechanic_refs"]
     registered = {boundary.id for boundary in get_core_rule_pack("2014").boundaries}
     assert set(manifest["native_mechanic_refs"]) <= registered
-    assert len(artifacts) == 1014
+    assert len(artifacts) == 1012
     assert counts == {
         "background": 1,
         "class": 12,
         "feat": 1,
         "feature": 182,
-        "item": 474,
+        "item": 472,
         "species": 13,
         "spell": 319,
         "subclass": 12,
@@ -106,6 +106,54 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
         for item in artifacts
         if item["kind"] == "class"
     )
+
+    ordinary_items = [
+        item
+        for item in artifacts
+        if item["kind"] == "item"
+        and item.get("application_state", "selection_ready") == "selection_ready"
+    ]
+    assert ordinary_items
+    assert all(isinstance(item["card"].get("inventory_template"), dict) for item in ordinary_items)
+    assert all(
+        item.get("application_state") == "catalog_only"
+        for item in artifacts
+        if item["kind"] == "item" and "09_Magic_Items" in item["rule_refs"][0]
+    )
+    chain_mail = next(
+        item for item in artifacts if item["id"] == "dnd5e.content.srd2014.item.chain-mail"
+    )
+    assert chain_mail["card"]["inventory_template"] == {
+        "name": "Chain mail",
+        "kind": "armor",
+        "quantity": 1,
+        "weight_oz": 880,
+        "price_cp": 7500,
+        "description": "",
+        "source_key": "dnd5e.content.srd2014.item.chain-mail",
+        "equipped": False,
+        "identified": True,
+        "attunement": "none",
+        "condition": "normal",
+        "uses": {},
+        "charges": {},
+        "mechanics": {
+            "base_ac": 16,
+            "dexterity_mode": "none",
+            "stealth_disadvantage": True,
+        },
+    }
+    shields = [
+        item
+        for item in artifacts
+        if item["kind"] == "item" and item["card"].get("name", "").casefold() == "shield"
+    ]
+    assert len(shields) == 1
+    assert shields[0]["card"]["inventory_template"]["mechanics"] == {"ac_bonus": 2}
+    arrows = next(item for item in artifacts if item["id"] == "dnd5e.content.srd2014.item.arrows")
+    assert arrows["card"]["inventory_template"]["kind"] == "ammunition"
+    assert arrows["card"]["inventory_template"]["quantity"] == 20
+    assert any(item["card"].get("name") == "Dungeoneer's Pack" for item in ordinary_items)
 
     fireball = next(
         item for item in artifacts if item["kind"] == "spell" and item["card"]["name"] == "Fireball"
