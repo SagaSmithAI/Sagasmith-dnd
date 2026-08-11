@@ -18,6 +18,7 @@ from sagasmith_dnd.content_packages import (
     _portrait_cache_key,
     _portrait_sources,
     _refresh_reviewed_content_hashes,
+    _translate_module_refs,
     attach_actor_portraits,
     attach_auxiliary_assets,
     build_preset_content_package,
@@ -28,6 +29,25 @@ from sagasmith_dnd.content_packages import (
 )
 from sagasmith_dnd.content_validation import content_fingerprint
 from sagasmith_dnd.portrait_extraction import ExtractedPortrait, PortraitInspection
+
+
+def test_module_source_ref_error_reports_unique_one_character_candidate() -> None:
+    valid_hash = "a" * 64
+    submitted_hash = "b" + "a" * 63
+
+    with pytest.raises(ValueError) as error:
+        _translate_module_refs(
+            {
+                "source_key": "book",
+                "page": 1,
+                "chunk_hash": submitted_hash,
+                "note": "reviewed",
+            },
+            source_key="book",
+            chunk_hash_keys={valid_hash: "chunk-1"},
+        )
+
+    assert f"unique one-character candidate: {valid_hash}" in str(error.value)
 
 
 def _rule_descriptor(

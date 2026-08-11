@@ -1266,9 +1266,20 @@ def _translate_module_refs(
         chunk_hash = str(value.get("chunk_hash") or "")
         chunk_key = chunk_hash_keys.get(chunk_hash)
         if chunk_key is None:
+            one_character_candidates = [
+                candidate
+                for candidate in chunk_hash_keys
+                if len(candidate) == len(chunk_hash)
+                and sum(left != right for left, right in zip(candidate, chunk_hash)) == 1
+            ]
+            candidate_hint = (
+                f"; unique one-character candidate: {one_character_candidates[0]}"
+                if len(one_character_candidates) == 1
+                else ""
+            )
             raise ValueError(
                 "module source_ref.chunk_hash does not match imported draft evidence: "
-                f"{chunk_hash or '<empty>'}; copy source_ref verbatim from "
+                f"{chunk_hash or '<empty>'}{candidate_hint}; copy source_ref verbatim from "
                 "module_draft(evidence)"
             )
         return source_ref(
