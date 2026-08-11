@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   GatewayRequestError,
   createActorFromPreset,
+  downloadContentPackArtifact,
   getContentPackDetail,
   listCampaigns,
   listContentPacks,
@@ -242,6 +243,19 @@ export default function ContentWorkbench() {
       });
       await refreshInventory();
       const artifact = (result.data as any)?.artifact?.artifact;
+      if (action === 'export' && artifact) {
+        const blob = await downloadContentPackArtifact(
+          campaignId,
+          installedSelection.kind,
+          artifact,
+        );
+        const href = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = href;
+        anchor.download = artifact;
+        anchor.click();
+        URL.revokeObjectURL(href);
+      }
       setOperation(artifact ? `导出完成：${artifact}` : `${action} 完成。`);
     } catch (error) {
       setOperation(''); setGatewayError(errorMessage(error));
@@ -430,4 +444,3 @@ function Pager({ page, total, pageSize, onPage }: { page: number; total: number;
   if (pages <= 1) return null;
   return <div className="content-pager"><button disabled={page === 0} onClick={() => onPage(page - 1)}>← 上一页</button><span>{page + 1} / {pages}</span><button disabled={page >= pages - 1} onClick={() => onPage(page + 1)}>下一页 →</button></div>;
 }
-

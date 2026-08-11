@@ -155,6 +155,31 @@ export function mutateContentPack(
   }, 120000);
 }
 
+export async function downloadContentPackArtifact(
+  campaignId: string,
+  kind: PackKind,
+  artifact: string,
+): Promise<Blob> {
+  const query = new URLSearchParams({ kind });
+  try {
+    const response = await fetch(
+      `${API_BASE}/api/campaigns/${encodeURIComponent(campaignId)}/content-packs/artifacts/${encodeURIComponent(artifact)}?${query}`,
+      { headers: requestHeaders() },
+    );
+    if (!response.ok) {
+      const problem = await response.json().catch(() => ({})) as { error?: string };
+      throw new GatewayRequestError(
+        response.status,
+        problem.error || `API ${response.status}: ${response.statusText}`,
+      );
+    }
+    return response.blob();
+  } catch (error) {
+    if (error instanceof GatewayRequestError) throw error;
+    throw new GatewayRequestError(0, error instanceof Error ? error.message : String(error));
+  }
+}
+
 export function createActorFromPreset(
   campaignId: string,
   artifactId: string,

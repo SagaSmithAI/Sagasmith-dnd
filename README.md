@@ -1,10 +1,11 @@
 # SagaSmith D&D UI
 
-`/library` 是统一的 core rules/addon/module/preset 浏览器：它显示包 checksum、许可、组件、来源、
-规则记录、场景/资产、统一 PC/NPC/怪物卡及包内角色图，并保留完整统一包描述符 JSON
-供审计。默认读取 `https://sagasmithai.github.io/SagaSmith-dnd-content-library/content-library/index.json`；可用
-`PUBLIC_SAGASMITH_LIBRARY_URL` 或 `?source=` 指向另一份兼容索引。浏览器只读，
-不会安装或启用规则内容。
+`/library` 是 schema-v2 Content Pack 控制台，统一管理 core rules/addon/module/preset。
+Catalog 模式展示 checksum、许可、组件、来源、规则/场景记录、资产和 `actor-card.v3`；
+Installed 模式读取 MCP 权威库存并在 Lobby 中执行导入、激活、停用、导出和移除；Drafts
+模式只观察 `rulebook_draft` 与 `module_draft` 的 Agent 创作状态。默认 Catalog 是
+`https://sagasmithai.github.io/SagaSmith-dnd-content-library/content-library/index.json`，也可用
+`PUBLIC_SAGASMITH_LIBRARY_URL` 或 `?source=` 指向兼容索引。
 
 Every structured rule, scene, narrative entry, content review, and actor card has
 an independent expandable view; the full package descriptor remains available
@@ -27,7 +28,8 @@ D&D runtime + SagaSmith Core
 - The MCP remains authoritative for campaign, branch, actor, rule, and combat state.
 - Player/GM visibility must be filtered by the server before it reaches the browser.
 - Combat movement writes call the MCP-backed gateway with principal, revision, branch, and idempotency contracts; the browser never writes coordinates directly to storage.
-- Other mutation workflows remain Agent/MCP operations. The UI keeps a visibly labeled demo fallback for disconnected design and product testing.
+- Content Pack writes are Lobby-only and go through the MCP `content_pack` facade with revision and idempotency contracts. Import never implies activation.
+- Catalog and Gateway failures are reported separately. The content and rule control planes do not replace failed live reads with demo data.
 
 ## Implemented views
 
@@ -38,6 +40,8 @@ D&D runtime + SagaSmith Core
 - **Combat map** — encounter-local five-foot grid, audience-filtered tokens, initiative, blocked/difficult cell rendering, drag-to-propose movement, and MCP rejection feedback.
 - **Actor dossier** — abilities, combat values, skills, spell resources, equipment, and an explicit actor-knowledge boundary.
 - **Rule evidence** — indexed sources, edition filters, hybrid-search candidates, provenance, and the reminder that retrieval is not authoritative state.
+- **Content control plane** — public Catalog discovery, exact archive SHA-256 checks, MCP import, campaign-aware inventory, kind-specific activation/removal, export download, schema-v2 audit views, and preset Actor creation.
+- **Campaign content** — a dedicated dossier tab that groups the four Pack kinds and refreshes with campaign revisions.
 - **Demo mode** — coherent local data when no compatible gateway answers, visibly labeled throughout the interface.
 
 ## Run
@@ -46,6 +50,8 @@ Requires Node.js 22.12+.
 
 ```bash
 npm install
+npm run typecheck
+npm test
 npm run dev
 npm run build
 npm run preview
@@ -61,7 +67,7 @@ $env:PUBLIC_SAGASMITH_API_TOKEN = "local-development-token"
 npm run dev
 ```
 
-The adapter returns `{ data, meta }` envelopes and pushes campaign revision events over SSE. Failed health or data requests switch to demo data after a short timeout. Server projection is the security boundary: the UI does not use CSS to conceal GM-only scenes, hidden combatants, blocked cells, or world patches.
+The adapter returns `{ data, meta }` envelopes and pushes campaign revision events over SSE. Server projection is the security boundary: the UI does not use CSS to conceal GM-only scenes, hidden combatants, blocked cells, world patches, or private Pack archives. Content reads remain available during Play/Combat; writes are rejected outside Lobby.
 
 ## Static routing
 
