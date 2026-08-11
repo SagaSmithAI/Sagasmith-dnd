@@ -132,6 +132,13 @@ _CREATURE_CORE_RE = re.compile(
     r"\s+Hit Points\s+(?P<hit_points>.+?)"
     r"\s+Speed\s+(?P<speed>.+?)\s*$"
 )
+
+
+def _creature_core_match(value: str) -> re.Match[str] | None:
+    """Match a creature core after removing Markdown emphasis markers."""
+
+    normalized = str(value or "").replace("*", "").replace("_", "").replace("`", "")
+    return _CREATURE_CORE_RE.match(normalized.strip())
 _ENTRY_START_RE = re.compile(
     r"(?P<prefix>^|(?<=\.)[ \t]+|\n+)"
     r"(?P<name>[A-Z][A-Za-z0-9'’/-]*(?:\s+(?:[A-Z][A-Za-z0-9'’/-]*|"
@@ -2159,7 +2166,7 @@ def _rulebook_statblock_candidates(
     roots = [
         index
         for index, chunk in enumerate(ordered)
-        if _CREATURE_CORE_RE.match(str(chunk.get("content") or "").strip())
+        if _creature_core_match(str(chunk.get("content") or ""))
     ]
     candidates = []
     ignored_titles = {
@@ -2571,7 +2578,7 @@ def module_statblock_review_candidates(
             path = [
                 str(item).strip() for item in chunk.get("heading_path") or [] if str(item).strip()
             ]
-            if not path or _CREATURE_CORE_RE.match(content) is None:
+            if not path or _creature_core_match(content) is None:
                 continue
             roots.append(index)
         for root_index, start in enumerate(roots):
@@ -2666,7 +2673,7 @@ def normalize_2014_statblock_candidate(
     matches: list[tuple[list[dict[str, Any]], int]] = []
     for ordered in _ordered_chunks_by_scene(chunks):
         for index, chunk in enumerate(ordered):
-            if _CREATURE_CORE_RE.match(str(chunk.get("content") or "").strip()) is None:
+            if _creature_core_match(str(chunk.get("content") or "")) is None:
                 continue
             heading = next(
                 (
@@ -2691,7 +2698,7 @@ def normalize_2014_statblock_candidate(
         (
             index
             for index in range(root_index + 1, len(ordered))
-            if _CREATURE_CORE_RE.match(str(ordered[index].get("content") or "").strip()) is not None
+            if _creature_core_match(str(ordered[index].get("content") or "")) is not None
         ),
         len(ordered),
     )
@@ -2716,7 +2723,17 @@ def normalize_2014_statblock_candidate(
                     break
                 end_index -= 1
     scoped = ordered[root_index:end_index]
-    normalized = _normalize_module_statblock(target, scoped)
+    try:
+        normalized = _normalize_module_statblock(target, scoped)
+    except StatblockImportError:
+        root_content = str(scoped[0].get("content") or "")
+        if "**Armor Class**" not in root_content:
+            raise
+        normalized = _render_markdown_statblock_candidate(target, scoped)
+        parse_2014_statblock(
+            normalized,
+            source_key=f"rule-source-markdown:{canonical_target}",
+        )
     source_chunk_ids = list(
         dict.fromkeys(
             str(chunk.get("id") or "").strip()
@@ -2729,6 +2746,38 @@ def normalize_2014_statblock_candidate(
         "normalized_content": normalized,
         "source_chunk_ids": source_chunk_ids,
     }
+
+
+def _render_markdown_statblock_candidate(
+    name: str,
+    chunks: list[dict[str, Any]],
+) -> str:
+    """Render Markdown chunks relative to one exact creature heading."""
+
+    canonical_name = _canonical_source_heading(name)
+    rendered = [f"# {name}"]
+    for chunk in chunks:
+        path = [
+            str(value).strip()
+            for value in chunk.get("heading_path") or []
+            if str(value).strip()
+        ]
+        target_indexes = [
+            index
+            for index, heading in enumerate(path)
+            if _canonical_source_heading(heading) == canonical_name
+        ]
+        if not target_indexes:
+            continue
+        suffix = path[target_indexes[-1] + 1 :]
+        rendered.extend(
+            f"{'#' * min(6, 2 + index)} {heading}"
+            for index, heading in enumerate(suffix)
+        )
+        content = str(chunk.get("content") or "").strip()
+        if content:
+            rendered.append(content)
+    return "\n\n".join(rendered).strip()
 
 
 def _ordered_chunks_by_scene(
@@ -2801,7 +2850,7 @@ def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
         (
             chunk
             for chunk in chunks
-            if _CREATURE_CORE_RE.match(str(chunk.get("content") or "").strip())
+            if _creature_core_match(str(chunk.get("content") or ""))
         ),
         None,
     )
@@ -2810,7 +2859,7 @@ def _normalize_module_statblock(name: str, chunks: list[dict[str, Any]]) -> str:
     root_path = list(root.get("heading_path") or [])
     root_text = str(root.get("content") or "").strip()
     core_text = re.split(r"(?m)^#{2,6}\s+", root_text, maxsplit=1)[0].strip()
-    core = _CREATURE_CORE_RE.match(" ".join(core_text.splitlines()))
+    core = _creature_core_match(" ".join(core_text.splitlines()))
     if core is None:
         raise StatblockImportError(
             "statblock candidate needs an unambiguous size/type, Armor Class, Hit Points, and Speed"

@@ -3958,6 +3958,60 @@ def test_text_layout_recovery_repairs_generic_action_bracket_and_range_ocr() -> 
     assert any(warning.startswith("Web (Recharge 5-6):") for warning in parsed.warnings)
 
 
+def test_rule_statblock_recovery_accepts_canonical_markdown_chunks() -> None:
+    source_root = "Bundled source file: references-2014-en/monsters/Giant_Spider.md"
+    chunks = [
+        {
+            "id": "markdown-spider-core",
+            "ordinal": 1,
+            "heading_path": [source_root, "Giant Spider"],
+            "content": """*Large beast, unaligned*
+
+**Armor Class** 14 (natural armor)
+**Hit Points** 26 (4d10+4)
+**Speed** 30 ft., climb 30 ft.
+
+| STR | DEX | CON | INT | WIS | CHA |
+|---:|---:|---:|---:|---:|---:|
+| 14 (+2) | 16 (+3) | 12 (+1) | 2 (-4) | 11 (+0) | 4 (-3) |
+
+**Skills** Stealth +7
+**Senses** blindsight 10 ft., darkvision 60 ft., passive Perception 10
+**Languages** -
+**Challenge** 1 (200 XP)
+
+***Spider Climb***. The spider can climb difficult surfaces.
+""",
+        },
+        {
+            "id": "markdown-spider-actions",
+            "ordinal": 2,
+            "heading_path": [source_root, "Giant Spider", "Actions"],
+            "content": (
+                "***Bite***. *Melee Weapon Attack:* +5 to hit, reach 5 ft., "
+                "one creature. *Hit:* 7 (1d8+3) piercing damage."
+            ),
+        },
+    ]
+
+    candidate = normalize_2014_statblock_candidate("Giant Spider", chunks)
+    parsed = parse_2014_statblock(
+        candidate["normalized_content"],
+        source_key="rule-source:srd2014",
+    )
+
+    assert candidate["source_chunk_ids"] == [
+        "markdown-spider-core",
+        "markdown-spider-actions",
+    ]
+    assert parsed.name == "Giant Spider"
+    assert any(
+        item["name"] == "Bite"
+        for item in parsed.sheet["inventory"]["items"]
+        if item["kind"] == "weapon"
+    )
+
+
 def test_module_statblock_recovers_flattened_actions_and_ranged_distance() -> None:
     base = ["Appendix D", "LANGDEDROSA CYANWRATH"]
     chunks = [
