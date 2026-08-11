@@ -10,6 +10,13 @@ import type {
   SaveSlot,
   SceneProgress,
 } from '../types';
+import type {
+  ContentInventory,
+  DraftInventory,
+  GatewayResult,
+  InstalledPackSummary,
+  PackKind,
+} from '../features/content/contracts';
 
 export const API_BASE = (import.meta.env.PUBLIC_SAGASMITH_API_BASE || 'http://127.0.0.1:8766').replace(/\/$/, '');
 export const PRINCIPAL_ID = import.meta.env.PUBLIC_SAGASMITH_PRINCIPAL_ID || 'system:local';
@@ -22,20 +29,57 @@ function requestHeaders(extra?: HeadersInit): Headers {
   return headers;
 }
 
-function unwrap<T>(value: T | { data: T }): T {
-  return value && typeof value === 'object' && 'data' in value ? (value as { data: T }).data : value as T;
+export class GatewayRequestError extends Error {
+  status: number;
+  category: 'offline' | 'unauthorized' | 'forbidden' | 'conflict' | 'not_found' | 'contract' | 'server';
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'GatewayRequestError';
+    this.status = status;
+    this.category = status === 0 ? 'offline'
+      : status === 401 ? 'unauthorized'
+        : status === 403 ? 'forbidden'
+          : status === 404 ? 'not_found'
+            : status === 409 ? 'conflict'
+              : status >= 500 ? 'server' : 'contract';
+  }
 }
 
-async function fetchJson<T>(path: string): Promise<T> {
+function unwrap<T>(value: T | { data: T }): T {
+  return value && typeof value === 'object' && 'data' in value
+    ? (value as { data: T }).data
+    : value as T;
+}
+
+async function gatewayRequest<T>(path: string, init?: RequestInit, timeoutMs = 8000): Promise<GatewayResult<T>> {
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 3500);
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(`${API_BASE}${path}`, { signal: controller.signal, headers: requestHeaders() });
-    if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
-    return unwrap(await res.json() as T | { data: T });
+    const res = await fetch(`${API_BASE}${path}`, {
+      ...init,
+      signal: controller.signal,
+      headers: requestHeaders(init?.headers),
+    });
+    if (!res.ok) {
+      const problem = await res.json().catch(() => ({})) as { error?: string };
+      throw new GatewayRequestError(res.status, problem.error || `API ${res.status}: ${res.statusText}`);
+    }
+    const value = await res.json() as GatewayResult<T> | T;
+    if (value && typeof value === 'object' && 'data' in value && 'meta' in value) {
+      return value as GatewayResult<T>;
+    }
+    return { data: value as T, meta: { schema_version: 1, audience: PRINCIPAL_ID } };
+  } catch (error) {
+    if (error instanceof GatewayRequestError) throw error;
+    throw new GatewayRequestError(0, error instanceof Error ? error.message : String(error));
   } finally {
     window.clearTimeout(timeout);
   }
+}
+
+async function fetchJson<T>(path: string): Promise<T> {
+  return (await gatewayRequest<T>(path)).data;
 }
 
 export function health(): Promise<HealthStatus> { return fetchJson('/api/health'); }
@@ -48,12 +92,92 @@ export function sceneIndex(campaignId: string): Promise<ModuleScene[]> { return 
 export function sceneProgress(campaignId: string, scope = 'party'): Promise<SceneProgress[]> { return fetchJson(`/api/campaigns/${encodeURIComponent(campaignId)}/scene-progress?scope=${encodeURIComponent(scope)}`); }
 export function currentScene(campaignId: string, scope = 'party'): Promise<CurrentScene> { return fetchJson(`/api/campaigns/${encodeURIComponent(campaignId)}/current-scene?scope=${encodeURIComponent(scope)}`); }
 export function searchModules(campaignId: string, query: string, limit = 8) { return fetchJson(`/api/campaigns/${encodeURIComponent(campaignId)}/search?query=${encodeURIComponent(query)}&limit=${limit}`); }
-export function listRules(systemId = 'dnd5e'): Promise<RuleSource[]> { return fetchJson(`/api/rules?system_id=${encodeURIComponent(systemId)}`); }
-export function searchRules(query: string, systemId = 'dnd5e', limit = 8) { return fetchJson<any>(`/api/rules/search?system_id=${encodeURIComponent(systemId)}&query=${encodeURIComponent(query)}&limit=${limit}`); }
+export function listRules(campaignId: string, packId?: string): Promise<RuleSource[]> {
+  const query = new URLSearchParams({ campaign_id: campaignId });
+  if (packId) query.set('pack_id', packId);
+  return fetchJson(`/api/rules?${query}`);
+}
+export function searchRules(queryText: string, campaignId: string, limit = 8, filters?: { edition?: string; locale?: string }) {
+  const query = new URLSearchParams({ campaign_id: campaignId, query: queryText, limit: String(limit) });
+  if (filters?.edition) query.set('edition', filters.edition);
+  if (filters?.locale) query.set('locale', filters.locale);
+  return fetchJson<any>(`/api/rules/search?${query}`);
+}
 export function listEvents(campaignId: string, limit = 50) { return fetchJson<any[]>(`/api/campaigns/${encodeURIComponent(campaignId)}/events?limit=${limit}`); }
 export function listSaves(campaignId: string): Promise<SaveSlot[]> { return fetchJson(`/api/campaigns/${encodeURIComponent(campaignId)}/saves`); }
 export function saveLineage(campaignId: string): Promise<SaveSlot[]> { return fetchJson(`/api/campaigns/${encodeURIComponent(campaignId)}/lineage`); }
 export function combatStatus(campaignId: string): Promise<CombatStatus> { return fetchJson(`/api/campaigns/${encodeURIComponent(campaignId)}/combat`); }
+
+export function listContentPacks(campaignId: string, kind?: PackKind): Promise<GatewayResult<ContentInventory>> {
+  const query = kind ? `?kind=${encodeURIComponent(kind)}` : '';
+  return gatewayRequest(`/api/campaigns/${encodeURIComponent(campaignId)}/content-packs${query}`);
+}
+
+export function getContentPackDetail(campaignId: string, pack: InstalledPackSummary): Promise<GatewayResult<unknown>> {
+  const query = new URLSearchParams({ kind: pack.kind, pack_id: pack.id });
+  if (pack.version) query.set('version', pack.version);
+  if (pack.local_ref) query.set('local_ref', pack.local_ref);
+  const edition = pack.editions[0];
+  if (edition) query.set('edition', edition);
+  return gatewayRequest(`/api/campaigns/${encodeURIComponent(campaignId)}/content-packs/detail?${query}`);
+}
+
+export async function uploadContentPack(
+  campaignId: string,
+  kind: PackKind,
+  archive: Blob,
+  filename: string,
+  progressRemaps?: unknown[],
+): Promise<GatewayResult<unknown>> {
+  const body = new FormData();
+  body.set('kind', kind);
+  body.set('idempotency_key', globalThis.crypto?.randomUUID?.() || `ui-import-${Date.now()}`);
+  if (progressRemaps?.length) body.set('progress_remaps', JSON.stringify(progressRemaps));
+  body.set('archive', archive, filename);
+  return gatewayRequest(
+    `/api/campaigns/${encodeURIComponent(campaignId)}/content-packs/import`,
+    { method: 'POST', body },
+    120000,
+  );
+}
+
+export function mutateContentPack(
+  campaignId: string,
+  input: Record<string, unknown> & { kind: PackKind; action: 'activate' | 'deactivate' | 'remove' | 'export' },
+): Promise<GatewayResult<unknown>> {
+  return gatewayRequest(`/api/campaigns/${encodeURIComponent(campaignId)}/content-packs/action`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      ...input,
+      idempotency_key: input.idempotency_key || globalThis.crypto?.randomUUID?.() || `ui-pack-${Date.now()}`,
+    }),
+  }, 120000);
+}
+
+export function createActorFromPreset(
+  campaignId: string,
+  artifactId: string,
+  name?: string,
+): Promise<GatewayResult<{ character: Character }>> {
+  return gatewayRequest(`/api/campaigns/${encodeURIComponent(campaignId)}/actors/from-preset`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      artifact_id: artifactId,
+      name: name || undefined,
+      idempotency_key: globalThis.crypto?.randomUUID?.() || `ui-actor-${Date.now()}`,
+    }),
+  });
+}
+
+export function getRuleContext(campaignId: string): Promise<GatewayResult<Record<string, unknown>>> {
+  return gatewayRequest(`/api/campaigns/${encodeURIComponent(campaignId)}/rule-context`);
+}
+
+export function listDrafts(campaignId: string): Promise<GatewayResult<DraftInventory>> {
+  return gatewayRequest(`/api/campaigns/${encodeURIComponent(campaignId)}/drafts`);
+}
 
 export async function combatRender(
   campaignId: string,

@@ -172,6 +172,8 @@ export interface RuleSource {
   locale: string;
   version: string;
   authority: string;
+  status?: string;
+  checksum?: string;
 }
 
 export interface RuleSection {

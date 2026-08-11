@@ -14,9 +14,10 @@ import {
   mockCharactersFor,
 } from '../lib/api';
 import type { Campaign, Character, CurrentScene, ModuleSource, SaveSlot } from '../types';
+import CampaignContentPanel from '../features/content/CampaignContentPanel';
 import SceneIndex from './SceneIndex';
 
-type Tab = 'overview' | 'scenes' | 'knowledge' | 'timeline';
+type Tab = 'overview' | 'content' | 'scenes' | 'knowledge' | 'timeline';
 
 export default function CampaignDetail() {
   const [campaign, setCampaign] = useState<Campaign | null>(null);
@@ -31,7 +32,7 @@ export default function CampaignDetail() {
     const query = new URLSearchParams(window.location.search);
     const id = query.get('id') || 'campaign-1';
     const requestedTab = query.get('tab');
-    if (requestedTab && ['overview', 'scenes', 'knowledge', 'timeline'].includes(requestedTab)) setTab(requestedTab as Tab);
+    if (requestedTab && ['overview', 'content', 'scenes', 'knowledge', 'timeline'].includes(requestedTab)) setTab(requestedTab as Tab);
     Promise.all([getCampaign(id), listCharacters(id), listModules(id), listSaves(id), currentScene(id)])
       .then(([nextCampaign, nextCharacters, nextModules, nextSaves, nextScene]) => {
         setCampaign(nextCampaign); setCharacters(nextCharacters); setModules(nextModules); setSaves(nextSaves); setScene(nextScene); emitRuntimeStatus(true);
@@ -73,11 +74,12 @@ export default function CampaignDetail() {
       </section>
 
       <div className="tabs campaign-tabs">
-        {(['overview', 'scenes', 'knowledge', 'timeline'] as Tab[]).map((item) => <button key={item} className={`tab ${tab === item ? 'active' : ''}`} onClick={() => chooseTab(item)}>{item === 'overview' ? '桌面概览' : item === 'scenes' ? '场景索引' : item === 'knowledge' ? '角色认知' : '分支存档'}</button>)}
+        {(['overview', 'content', 'scenes', 'knowledge', 'timeline'] as Tab[]).map((item) => <button key={item} className={`tab ${tab === item ? 'active' : ''}`} onClick={() => chooseTab(item)}>{item === 'overview' ? '桌面概览' : item === 'content' ? '内容配置' : item === 'scenes' ? '场景索引' : item === 'knowledge' ? '角色认知' : '分支存档'}</button>)}
       </div>
 
       <div className="tab-content">
         {tab === 'overview' && <Overview campaign={campaign} characters={characters} modules={modules} scene={scene} saves={saves} />}
+        {tab === 'content' && <CampaignContentPanel campaign={campaign} />}
         {tab === 'scenes' && <div id="scene"><SceneIndex campaignId={campaign.id} /></div>}
         {tab === 'knowledge' && <KnowledgeView characters={characters} />}
         {tab === 'timeline' && <TimelineView saves={saves} />}
