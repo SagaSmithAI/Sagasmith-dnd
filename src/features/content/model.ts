@@ -102,9 +102,11 @@ export function actorChallengeRating(actor: ContentPackageV2['actors'][number]):
 
 export function packOperationIdentity(pack: InstalledPackSummary): Record<string, string> {
   if (pack.kind === 'addon') return { addon_id: pack.id, version: pack.version };
-  if (pack.kind === 'module') return { module_id: pack.local_ref };
+  if (pack.kind === 'module') {
+    return { module_id: pack.local_ref, pack_id: pack.id, version: pack.version };
+  }
   if (pack.kind === 'preset') return { pack_id: pack.local_ref, version: pack.version };
-  return { pack_id: pack.id, version: pack.version };
+  return { pack_id: pack.local_ref, version: pack.version };
 }
 
 export function extractDescriptor(value: unknown): ContentPackageV2 | null {

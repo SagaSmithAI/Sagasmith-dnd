@@ -353,13 +353,23 @@ function DescriptorDetail({
   const finalization = pack.metadata.agent_finalization as Record<string, unknown> | undefined;
   const activate = installed && ['core_rules', 'addon', 'module'].includes(installed.kind) && !installed.active;
   const deactivate = installed?.active && ['core_rules', 'addon'].includes(installed.kind);
+  const catalogBacked = Boolean(
+    catalogEntry
+    || index?.packages.some((entry) => (
+      entry.kind === pack.kind
+      && entry.id === pack.id
+      && entry.version === pack.version
+      && entry.checksum === pack.checksum
+    )),
+  );
+  const browserIndex = catalogBacked ? index : null;
 
   return <>
     <header className="pack-detail-head"><div><small>{PACK_KIND_LABELS[pack.kind]} / SCHEMA {pack.schema_version}</small><h2>{packageTitle(pack)}</h2><p>{pack.id}@{pack.version}</p></div><div className="pack-head-actions">
       {catalogEntry && <button className="btn btn-primary" disabled={!lobby || installedExact || !campaignId} onClick={onInstall}>{installedExact ? '已导入此精确版本' : '导入到战役'}</button>}
       {activate && <button className="btn btn-primary" disabled={!lobby} onClick={() => onAction('activate')}>激活</button>}
       {deactivate && <button className="btn btn-ghost" disabled={!lobby} onClick={() => onAction('deactivate')}>停用</button>}
-      {installed && installed.kind !== 'module' && <button className="btn btn-ghost" disabled={!lobby} onClick={() => onAction('export')}>导出</button>}
+      {installed && <button className="btn btn-ghost" disabled={!lobby} onClick={() => onAction('export')}>导出</button>}
       {installed && !installed.active && <button className="btn btn-danger" disabled={!lobby} onClick={() => onAction('remove')}>移除</button>}
     </div></header>
     <div className="pack-state-strip"><span>FORMAT<b>{pack.format}</b></span><span>STATUS<b>{installed?.active ? 'ACTIVE' : installed ? 'STORED' : 'CATALOG'}</b></span><span>LICENSE<b>{String(pack.metadata.license || '—')}</b></span><span>DISTRIBUTION<b>{String(pack.metadata.distribution || '—')}</b></span></div>
@@ -375,11 +385,11 @@ function DescriptorDetail({
 
     {tab === 'content' && <div className="pack-pane"><PaneHeading label="STRUCTURED CONTENT" title="规则、场景、叙事与审查记录" count={records.length}/><div className="record-grid">{records.slice(recordPage * 30, recordPage * 30 + 30).map((record, index) => <article key={`${recordTitle(record, index)}-${index}`}><small>{String(record.kind || record._collection || 'record')}</small><strong>{recordTitle(record, index)}</strong><p>{String(record.summary || record.description || record.content || '')}</p><details><summary>Inspect record</summary><pre>{JSON.stringify(record, null, 2)}</pre></details></article>)}</div><Pager page={recordPage} total={records.length} pageSize={30} onPage={setRecordPage}/></div>}
 
-    {tab === 'actors' && <div className="pack-pane"><PaneHeading label="ACTOR-CARD.V3" title="PC / NPC / Monster" count={pack.actors.length}/><div className="actor-filters"><input value={actorQuery} onChange={(event) => { setActorQuery(event.target.value); setActorPage(0); }} placeholder="搜索名称、摘要或 CR…"/><select value={actorType} onChange={(event) => { setActorType(event.target.value); setActorPage(0); }}><option value="all">All actor types</option>{actorTypes.map((item) => <option key={item}>{item}</option>)}</select></div><div className="actor-card-grid">{actors.slice(actorPage * 24, actorPage * 24 + 24).map((actor) => <ActorCard key={actor.id} actor={actor} asset={actor.image ? assets.get(actor.image.asset_key) : undefined} index={index} indexUrl={indexUrl} campaignId={campaignId} canCreate={lobby && pack.kind === 'preset' && Boolean(installed)} onCreated={onActorCreated} onError={onError}/>)}</div><Pager page={actorPage} total={actors.length} pageSize={24} onPage={setActorPage}/></div>}
+    {tab === 'actors' && <div className="pack-pane"><PaneHeading label="ACTOR-CARD.V3" title="PC / NPC / Monster" count={pack.actors.length}/><div className="actor-filters"><input value={actorQuery} onChange={(event) => { setActorQuery(event.target.value); setActorPage(0); }} placeholder="搜索名称、摘要或 CR…"/><select value={actorType} onChange={(event) => { setActorType(event.target.value); setActorPage(0); }}><option value="all">All actor types</option>{actorTypes.map((item) => <option key={item}>{item}</option>)}</select></div><div className="actor-card-grid">{actors.slice(actorPage * 24, actorPage * 24 + 24).map((actor) => <ActorCard key={actor.id} actor={actor} asset={actor.image ? assets.get(actor.image.asset_key) : undefined} index={browserIndex} indexUrl={indexUrl} campaignId={campaignId} installed={pack.kind === 'preset' ? installed : null} canCreate={lobby && pack.kind === 'preset' && Boolean(installed)} onCreated={onActorCreated} onError={onError}/>)}</div><Pager page={actorPage} total={actors.length} pageSize={24} onPage={setActorPage}/></div>}
 
-    {tab === 'sources' && <div className="pack-pane"><PaneHeading label="SOURCE EVIDENCE" title="规范化来源与精确 chunks" count={pack.sources.length}/><div className="source-list">{pack.sources.map((sourceItem) => <SourceDocument key={sourceItem.source_key} sourceItem={sourceItem} pack={pack} index={index} indexUrl={indexUrl}/>)}</div></div>}
+    {tab === 'sources' && <div className="pack-pane"><PaneHeading label="SOURCE EVIDENCE" title="规范化来源与精确 chunks" count={pack.sources.length}/><div className="source-list">{pack.sources.map((sourceItem) => <SourceDocument key={sourceItem.source_key} sourceItem={sourceItem} pack={pack} index={browserIndex} indexUrl={indexUrl}/>)}</div></div>}
 
-    {tab === 'assets' && <div className="pack-pane"><PaneHeading label="CONTENT-ADDRESSED BLOBS" title="图片、地图、Handout 与原始文档" count={pack.assets.length}/><div className="asset-card-grid">{pack.assets.map((asset) => <AssetCard key={asset.asset_key} asset={asset} index={index} indexUrl={indexUrl}/>)}</div></div>}
+    {tab === 'assets' && <div className="pack-pane"><PaneHeading label="CONTENT-ADDRESSED BLOBS" title="图片、地图、Handout 与原始文档" count={pack.assets.length}/><div className="asset-card-grid">{pack.assets.map((asset) => <AssetCard key={asset.asset_key} asset={asset} index={browserIndex} indexUrl={indexUrl}/>)}</div></div>}
 
     {tab === 'integrity' && <div className="pack-pane integrity-pane"><section><small>DESCRIPTOR SHA-256</small><code>{pack.checksum}</code></section>{catalogEntry && <section><small>ARCHIVE SHA-256</small><code>{catalogEntry.archive_checksum}</code><p>{Math.ceil(catalogEntry.archive_size / 1024)} KiB · import 时由 MCP 重新校验全部 blobs。</p></section>}<section><small>AGENT FINALIZATION</small><pre>{JSON.stringify(finalization || null, null, 2)}</pre></section><section><small>AUTHORING REVIEW</small><pre>{JSON.stringify(pack.metadata.authoring_review || null, null, 2)}</pre></section><details className="raw-descriptor"><summary>完整 schema v2 descriptor</summary><pre>{JSON.stringify(pack, null, 2)}</pre></details></div>}
   </>;
@@ -390,14 +400,15 @@ function RawInstalledDetail({ pack, raw, lobby, onAction }: { pack: InstalledPac
   return <><header className="pack-detail-head"><div><small>{PACK_KIND_LABELS[pack.kind]} / LOCAL INVENTORY</small><h2>{pack.title}</h2><p>{pack.id}@{pack.version || 'local'}</p></div><div className="pack-head-actions">{!pack.active && pack.kind !== 'preset' && <button className="btn btn-primary" disabled={!lobby} onClick={() => onAction('activate')}>激活</button>}{pack.active && ['core_rules', 'addon'].includes(pack.kind) && <button className="btn btn-ghost" disabled={!lobby} onClick={() => onAction('deactivate')}>停用</button>}<button className="btn btn-ghost" disabled={!lobby} onClick={() => onAction('export')}>导出</button>{!pack.active && <button className="btn btn-danger" disabled={!lobby} onClick={() => onAction('remove')}>移除</button>}</div></header><div className="pack-pane"><PaneHeading label="AUTHORITATIVE LOCAL RECORD" title="Gateway 投影"/><pre className="raw-record">{JSON.stringify(raw, null, 2)}</pre></div></>;
 }
 
-function ActorCard({ actor, asset, index, indexUrl, campaignId, canCreate, onCreated, onError }: { actor: ContentActor; asset?: ContentAsset; index: ContentLibraryIndex | null; indexUrl: string; campaignId: string; canCreate: boolean; onCreated: (message: string) => void; onError: (message: string) => void }) {
+function ActorCard({ actor, asset, index, indexUrl, campaignId, installed, canCreate, onCreated, onError }: { actor: ContentActor; asset?: ContentAsset; index: ContentLibraryIndex | null; indexUrl: string; campaignId: string; installed: InstalledPackSummary | null; canCreate: boolean; onCreated: (message: string) => void; onError: (message: string) => void }) {
   const [creating, setCreating] = useState(false);
   const imageUrl = asset && index?.browser_asset_kinds.includes(asset.kind)
     ? new URL(`${index.blob_base_path}/${asset.checksum}`, indexUrl).href : null;
   const create = async () => {
     setCreating(true);
     try {
-      const result = await createActorFromPreset(campaignId, actor.id);
+      if (!installed) throw new Error('Actor 创建要求精确的已安装 preset 版本');
+      const result = await createActorFromPreset(campaignId, installed, actor.id);
       onCreated(`已从 ${actor.name} 创建 Character：${result.data.character.name}`);
     } catch (error) { onError(errorMessage(error)); }
     finally { setCreating(false); }
@@ -418,7 +429,7 @@ function SourceDocument({ sourceItem, pack, index, indexUrl }: { sourceItem: Con
     } catch (reason) { setError(errorMessage(reason)); }
   };
   const chunks = sourceItem.sections.reduce((total, section) => total + section.chunks.length, 0);
-  return <details onToggle={(event) => { if (event.currentTarget.open) void load(); }}><summary><span><b>{sourceItem.title}</b><small>{sourceItem.source_key}</small></span><em>{sourceItem.sections.length} sections · {chunks} chunks</em></summary><div className="source-meta"><span>{sourceItem.language || '—'}</span><span>{sourceItem.license || '—'}</span><span>{sourceItem.original_asset_keys.length} original files</span></div>{error && <p className="inline-error">{error}</p>}{text ? <pre>{text}</pre> : <p>展开后按内容哈希加载可在浏览器公开的规范化来源；私有原文不会通过 Catalog 泄露。</p>}</details>;
+  return <details onToggle={(event) => { if (event.currentTarget.open) void load(); }}><summary><span><b>{sourceItem.title}</b><small>{sourceItem.source_key}</small></span><em>{sourceItem.sections.length} sections · {chunks} chunks</em></summary><div className="source-meta"><span>{sourceItem.edition || 'ALL'} · {sourceItem.locale || '—'}</span><span>{sourceItem.authority || '—'}</span><span>{sourceItem.original_asset_keys.length} original files</span></div>{error && <p className="inline-error">{error}</p>}{text ? <pre>{text}</pre> : <p>展开后按内容哈希加载可在浏览器公开的规范化来源；私有原文不会通过 Catalog 泄露。</p>}</details>;
 }
 
 function AssetCard({ asset, index, indexUrl }: { asset: ContentAsset; index: ContentLibraryIndex | null; indexUrl: string }) {

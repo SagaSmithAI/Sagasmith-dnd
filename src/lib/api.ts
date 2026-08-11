@@ -182,6 +182,7 @@ export async function downloadContentPackArtifact(
 
 export function createActorFromPreset(
   campaignId: string,
+  pack: InstalledPackSummary,
   artifactId: string,
   name?: string,
 ): Promise<GatewayResult<{ character: Character }>> {
@@ -190,6 +191,8 @@ export function createActorFromPreset(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       artifact_id: artifactId,
+      pack_id: pack.id,
+      version: pack.version,
       name: name || undefined,
       idempotency_key: globalThis.crypto?.randomUUID?.() || `ui-actor-${Date.now()}`,
     }),

@@ -72,6 +72,28 @@ describe('Content Pack view model', () => {
     });
   });
 
+  it('uses the local rule definition ref while retaining package identity in the catalog', () => {
+    expect(packOperationIdentity({
+      ...installed,
+      kind: 'core_rules',
+      id: 'example.core-package',
+      local_ref: 'example.core-definition',
+    })).toEqual({ pack_id: 'example.core-definition', version: '1.0.0' });
+  });
+
+  it('keeps both portable and local module identities for exact re-export', () => {
+    expect(packOperationIdentity({
+      ...installed,
+      kind: 'module',
+      id: 'example.module',
+      local_ref: 'module-row-id',
+    })).toEqual({
+      module_id: 'module-row-id',
+      pack_id: 'example.module',
+      version: '1.0.0',
+    });
+  });
+
   it('projects module-specific schema-v2 collections without guessing fields', () => {
     expect(packageRecords(descriptor).map((item) => item._collection)).toEqual([
       'scene_atlas',

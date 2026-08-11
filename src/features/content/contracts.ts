@@ -23,6 +23,7 @@ export interface ContentAsset {
   media_type: string;
   checksum: string;
   size: number;
+  blob_key: string;
   alt?: string;
   license: string;
   attribution: string;
@@ -44,7 +45,6 @@ export interface ContentChunk {
 }
 
 export interface ContentSourceSection {
-  section_key?: string;
   ordinal: number;
   parent_ordinal: number | null;
   level: number;
@@ -59,10 +59,11 @@ export interface ContentSourceSection {
 export interface ContentSource {
   source_key: string;
   title: string;
+  edition: string;
+  locale: string;
   version: string;
-  language: string;
-  license: string;
-  attribution: string;
+  publication_id: string;
+  authority: string;
   normalized_document_asset_key: string;
   original_asset_keys: string[];
   metadata: Record<string, unknown>;
@@ -213,5 +214,18 @@ export function assertContentPackage(value: unknown): asserts value is ContentPa
   if (!Array.isArray(item.sources) || !Array.isArray(item.assets) || !Array.isArray(item.actors)) {
     throw new Error('content Pack collections are malformed');
   }
+  if (
+    typeof item.id !== 'string'
+    || typeof item.version !== 'string'
+    || typeof item.system_id !== 'string'
+    || !/^[a-f0-9]{64}$/.test(String(item.checksum))
+    || !item.manifest
+    || typeof item.manifest !== 'object'
+    || !item.content
+    || typeof item.content !== 'object'
+    || !Array.isArray(item.dependencies)
+    || !Array.isArray(item.content_reviews)
+  ) {
+    throw new Error('content Pack descriptor is incomplete');
+  }
 }
-
