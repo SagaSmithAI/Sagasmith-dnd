@@ -8,6 +8,7 @@ from sagasmith_dnd.playthrough import (
     PLAYTHROUGH_SOURCE_FIELDS,
     new_playthrough_manifest,
     playthrough_source_bindings,
+    validate_source_defined_ending_condition,
 )
 
 SOURCE_REF = {
@@ -228,6 +229,46 @@ def test_ending_conditions_require_exact_source_and_machine_checks() -> None:
     manifest["ending"]["conditions"][0]["all_of"] = []
     with pytest.raises(ValueError, match="at least one machine check"):
         validate_party_state({"playthrough_manifest": manifest})
+
+
+def test_ending_conditions_reject_runtime_readiness_without_source_state() -> None:
+    manifest = _manifest()
+    condition = {
+            "id": "victory",
+            "label": "The threat is ended",
+            "source_ref": deepcopy(SOURCE_REF),
+            "all_of": [
+                {
+                    "kind": "campaign_state_value",
+                    "path": "game_phase",
+                    "actor_id": "",
+                    "fact_key": "",
+                    "operator": "equals",
+                    "value": "play",
+                },
+                {
+                    "kind": "campaign_state_value",
+                    "path": "combat_active",
+                    "actor_id": "",
+                    "fact_key": "",
+                    "operator": "equals",
+                    "value": False,
+                },
+                {
+                    "kind": "manifest_value",
+                    "path": "status",
+                    "actor_id": "",
+                    "fact_key": "",
+                    "operator": "equals",
+                    "value": "ready",
+                },
+            ],
+        }
+    manifest["ending"]["conditions"] = [condition]
+
+    with pytest.raises(ValueError, match="source-defined state check"):
+        validate_source_defined_ending_condition(condition)
+    assert validate_party_state({"playthrough_manifest": manifest})
 
 
 def test_source_binding_catalogue_covers_every_manifest_evidence_location() -> None:

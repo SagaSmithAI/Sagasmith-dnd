@@ -670,6 +670,32 @@ def _validate_ending_check(value: Any, index: int, parent: str) -> dict[str, Any
     }
 
 
+def validate_source_defined_ending_condition(value: Any) -> dict[str, Any]:
+    condition = _validate_ending_condition(value, 0)
+    if not any(_is_source_defined_ending_check(check) for check in condition["all_of"]):
+        raise ValueError(
+            "ending condition must contain at least one source-defined state check "
+            "beyond phase, combat, current position, and manifest status"
+        )
+    return condition
+
+
+def _is_source_defined_ending_check(check: dict[str, Any]) -> bool:
+    kind = str(check["kind"])
+    path = str(check.get("path") or "")
+    if kind in {"actor_value", "memory_fact"}:
+        return True
+    if kind == "campaign_state_value":
+        return path not in {"game_phase", "combat_active", "combat.active"}
+    return not (
+        path == "status"
+        or path.startswith("current.")
+        or path.startswith("ending.")
+        or path.startswith("snapshot_dag.")
+        or path.startswith("random_stream.")
+    )
+
+
 def _object(value: Any, field: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"{field} must be an object")
