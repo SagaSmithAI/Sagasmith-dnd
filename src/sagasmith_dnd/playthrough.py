@@ -400,8 +400,10 @@ def _validate_party(value: Any) -> dict[str, Any]:
         review["ruling_kind"] = "source_or_scene_fact"
     if minimum is not None and maximum is not None and maximum < minimum:
         raise ValueError("party recommended maximum must not be below its minimum")
-    if selected is not None and maximum is not None and selected != maximum:
-        raise ValueError("party.selected_size must use the source-recommended maximum")
+    if selected is not None and minimum is not None and selected < minimum:
+        raise ValueError("party.selected_size must not be below the source-recommended minimum")
+    if selected is not None and maximum is not None and selected > maximum:
+        raise ValueError("party.selected_size must not exceed the source-recommended maximum")
     if status == "source_confirmed":
         if maximum is None or selected is None:
             raise ValueError("source-confirmed party size requires a maximum and selected size")

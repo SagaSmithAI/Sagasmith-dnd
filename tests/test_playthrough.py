@@ -177,11 +177,29 @@ def test_party_size_dm_review_cannot_be_relabelled_as_external_input() -> None:
     }
 
 
-def test_manifest_rejects_default_four_and_cross_actor_replacement_knowledge() -> None:
+def test_manifest_accepts_selected_size_within_source_range() -> None:
     manifest = _manifest()
     manifest["party"]["selected_size"] = 4
+    manifest["party"]["members"] = manifest["party"]["members"][:4]
+
+    normalized = validate_party_state({"playthrough_manifest": manifest})
+
+    assert normalized["playthrough_manifest"]["party"]["selected_size"] == 4
+
+
+def test_manifest_rejects_party_size_outside_source_range() -> None:
+    manifest = _manifest()
+    manifest["party"]["selected_size"] = 3
+    with pytest.raises(ValueError, match="recommended minimum"):
+        validate_party_state({"playthrough_manifest": manifest})
+
+    manifest = _manifest()
+    manifest["party"]["selected_size"] = 7
     with pytest.raises(ValueError, match="recommended maximum"):
         validate_party_state({"playthrough_manifest": manifest})
+
+
+def test_manifest_rejects_cross_actor_replacement_knowledge() -> None:
 
     manifest = _manifest()
     manifest["party"]["members"] = [
