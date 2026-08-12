@@ -1241,6 +1241,52 @@ def _module_source_bundle(
     return source, asset, blob, chunk_hash_keys
 
 
+def _module_scene_metadata(raw: Mapping[str, Any]) -> dict[str, Any]:
+    """Separate Core scene fields from D&D profile data in the portable Pack."""
+
+    metadata = copy.deepcopy(dict(raw))
+    canonical_fields = {
+        "visibility",
+        "scene_level",
+        "line_count",
+        "subsections",
+        "tags",
+        "spatial",
+    }
+    ignored_fields = {
+        "absolute_end",
+        "absolute_start",
+        "content_checksum",
+        "end_line",
+        "headings",
+        "keywords",
+        "page_end",
+        "page_start",
+        "stable_key",
+        "start_line",
+    }
+    existing_profile_data = metadata.pop("profile_data", {})
+    if not isinstance(existing_profile_data, Mapping):
+        raise ValueError("module scene metadata.profile_data must be an object")
+    profile_data = copy.deepcopy(dict(existing_profile_data))
+    profile_data.update(
+        {
+            key: value
+            for key, value in metadata.items()
+            if key not in canonical_fields | ignored_fields
+        }
+    )
+    return {
+        "visibility": metadata.get("visibility", "restricted"),
+        "scene_level": metadata.get("scene_level"),
+        "line_count": metadata.get("line_count"),
+        "subsections": list(metadata.get("subsections") or []),
+        "tags": list(metadata.get("tags") or []),
+        "spatial": copy.deepcopy(dict(metadata.get("spatial") or {})),
+        "profile_data": profile_data,
+    }
+
+
 def _translate_module_refs(
     value: Any,
     *,
@@ -1351,6 +1397,7 @@ def build_module_content_package(
             for key, value in raw_scene.items()
             if key not in {"content", "content_checksum", "chunks"}
         }
+        scene["metadata"] = _module_scene_metadata(scene.get("metadata") or {})
         scene["source_span"] = {
             "source_key": source["source_key"],
             "start_offset": source_section["start_offset"],

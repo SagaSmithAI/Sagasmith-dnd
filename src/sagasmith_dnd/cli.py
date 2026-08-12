@@ -65,6 +65,7 @@ from sagasmith_dnd.editions import (
 )
 from sagasmith_dnd.engine import resolve_check, roll
 from sagasmith_dnd.module_profile import DndModuleProfile
+from sagasmith_dnd.retrieval import DND5E_QUERY_HINTS
 from sagasmith_dnd.runtime import database, dense_components
 from sagasmith_dnd.system import DND5E
 
@@ -1026,6 +1027,7 @@ def _dispatch(args) -> Any:
                         for item in rules.search(
                             system_id=DND5E.id,
                             query=_require(args.query, "query"),
+                            query_hints=DND5E_QUERY_HINTS,
                             edition=edition,
                             locale=locale,
                             publications=publications,
@@ -1088,6 +1090,7 @@ def _dispatch(args) -> Any:
                         for item in modules.search(
                             campaign_id=_require(args.campaign, "campaign"),
                             query=_require(args.query, "query"),
+                            query_hints=DND5E_QUERY_HINTS,
                             top_k=args.limit,
                             embedder=embedder,
                             vector_store=vectors,
@@ -1157,14 +1160,20 @@ def _dispatch(args) -> Any:
             if args.action == "list":
                 return {"branches": [asdict(item) for item in branches.list(campaign_id)]}
             if args.action == "create":
-                return asdict(
-                    branches.create(
-                        campaign_id,
-                        name=_require(args.name, "name"),
-                        from_snapshot_id=args.from_snapshot,
-                        checkout=args.status == "checkout",
-                    )
+                campaign = campaigns.get(campaign_id)
+                current_branch = branches.current(campaign_id)
+                created = branches.create(
+                    campaign_id,
+                    name=_require(args.name, "name"),
+                    from_snapshot_id=args.from_snapshot,
+                    checkout=args.status == "checkout",
+                    expected_revision=campaign.revision,
+                    expected_branch_id=current_branch.id,
                 )
+                return {
+                    "branch": asdict(created),
+                    "campaign_revision": campaigns.get(campaign_id).revision,
+                }
             if args.action == "checkout":
                 snapshot = saves.checkout_branch(
                     campaign_id, _require(args.branch or args.id, "branch")

@@ -217,6 +217,31 @@ def test_json_cli_campaign_rules_module_and_save(
         "After arrival",
     )[1]
     slot = str(created_save["data"]["slot"])
+    before_branch = _call(
+        capsys,
+        "campaign",
+        "show",
+        "--campaign",
+        campaign_id,
+    )[1]["data"]["campaign"]
+    created_branch = _call(
+        capsys,
+        "branch",
+        "create",
+        "--campaign",
+        campaign_id,
+        "--name",
+        "alternate",
+    )[1]["data"]
+    assert created_branch["campaign_revision"] == before_branch["revision"] + 1
+    after_branch = _call(
+        capsys,
+        "campaign",
+        "show",
+        "--campaign",
+        campaign_id,
+    )[1]["data"]["campaign"]
+    assert after_branch["revision"] == created_branch["campaign_revision"]
     recap = _call(
         capsys,
         "save",

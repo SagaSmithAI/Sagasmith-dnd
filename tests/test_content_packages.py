@@ -15,6 +15,7 @@ from sagasmith_core.indexed_source import rule_chunk_key
 from sagasmith_dnd.character_schema import default_character_notes, default_character_sheet
 from sagasmith_dnd.content_actors import build_dnd_content_actor
 from sagasmith_dnd.content_packages import (
+    _module_scene_metadata,
     _portrait_cache_key,
     _portrait_sources,
     _refresh_reviewed_content_hashes,
@@ -29,6 +30,35 @@ from sagasmith_dnd.content_packages import (
 )
 from sagasmith_dnd.content_validation import content_fingerprint
 from sagasmith_dnd.portrait_extraction import ExtractedPortrait, PortraitInspection
+
+
+def test_module_scene_metadata_isolates_dnd_profile_fields() -> None:
+    metadata = _module_scene_metadata(
+        {
+            "visibility": "group",
+            "scene_level": 2,
+            "line_count": 4,
+            "subsections": [{"title": "Ambush"}],
+            "tags": ["combat"],
+            "spatial": {"mode": "agent"},
+            "profile_data": {"encounter_id": "goblin-ambush"},
+            "checks": [{"ability": "wisdom"}],
+            "start_line": 10,
+        }
+    )
+
+    assert metadata == {
+        "visibility": "group",
+        "scene_level": 2,
+        "line_count": 4,
+        "subsections": [{"title": "Ambush"}],
+        "tags": ["combat"],
+        "spatial": {"mode": "agent"},
+        "profile_data": {
+            "encounter_id": "goblin-ambush",
+            "checks": [{"ability": "wisdom"}],
+        },
+    }
 
 
 def test_module_source_ref_error_reports_unique_one_character_candidate() -> None:
