@@ -20,6 +20,7 @@ import type {
 
 export const API_BASE = (import.meta.env.PUBLIC_SAGASMITH_API_BASE || 'http://127.0.0.1:8766').replace(/\/$/, '');
 export const PRINCIPAL_ID = import.meta.env.PUBLIC_SAGASMITH_PRINCIPAL_ID || 'system:local';
+export const DEMO_MODE = import.meta.env.PUBLIC_SAGASMITH_DEMO === '1';
 const API_TOKEN = import.meta.env.PUBLIC_SAGASMITH_API_TOKEN || '';
 
 function requestHeaders(extra?: HeadersInit): Headers {

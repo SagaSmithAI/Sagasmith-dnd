@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { MOCK_COMBAT, combatRender, combatStatus, submitCombatMove, subscribeCampaign } from '../../lib/api';
+import { DEMO_MODE, MOCK_COMBAT, combatRender, combatStatus, submitCombatMove, subscribeCampaign } from '../../lib/api';
 import type { CombatStatus, GridPosition } from '../../types';
 import CombatMapCanvas from './CombatMapCanvas';
 
@@ -11,6 +11,7 @@ export default function CombatWorkspace() {
   const [message, setMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [rendering, setRendering] = useState(false);
+  const [error, setError] = useState('');
 
   const load = useCallback(async (id: string) => {
     try {
@@ -18,7 +19,12 @@ export default function CombatWorkspace() {
       setCombat(next);
       setDemo(false);
       setSelectedActorId((current) => current || next?.combatants?.[next.turn_index || 0]?.actor_id || '');
-    } catch {
+    } catch (reason) {
+      if (!DEMO_MODE) {
+        setCombat(null);
+        setError(reason instanceof Error ? reason.message : String(reason));
+        return;
+      }
       setCombat(MOCK_COMBAT);
       setDemo(true);
       setSelectedActorId((current) => current || MOCK_COMBAT.combatants[MOCK_COMBAT.turn_index || 0]?.actor_id || '');
@@ -79,7 +85,7 @@ export default function CombatWorkspace() {
     }
   };
 
-  if (!combat) return <div className="page"><div className="empty">正在读取战斗状态…</div></div>;
+  if (!combat) return <div className="page"><div className="empty">{error ? `RUNTIME OFFLINE · ${error}` : '正在读取战斗状态…'}</div></div>;
   if (combat.positioning_mode === 'agent') return <div className="page"><div className="page-heading"><div><div className="eyebrow">COMBAT WORKSPACE / AGENT POSITIONING</div><h1>Agent spatial adjudication</h1><p>This encounter deliberately has no coordinates or battle map. The Agent decides range, line of sight, obstruction, and friendly-fire inclusion from the current fiction, then sends structured spatial facts with each action.</p></div></div><div className="combat-boundary card">The browser is read-only in Agent mode. It never invents token positions or converts narrative text into hidden geometry.</div></div>;
   if (!combat.battle_map) return <div className="page"><div className="page-heading"><div><div className="eyebrow">COMBAT WORKSPACE / GRID POSITIONING</div><h1>Grid contract violation</h1><p>A grid encounter must include a compiled temporary map and coordinates for every participant.</p></div></div><div className="combat-boundary card">Return to the Agent and restart or repair the encounter; the browser cannot synthesize missing geometry.</div></div>;
   return (

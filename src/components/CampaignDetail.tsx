@@ -4,6 +4,7 @@ import {
   MOCK_MODULES,
   MOCK_SAVES,
   MOCK_SCENE,
+  DEMO_MODE,
   currentScene,
   emitRuntimeStatus,
   getCampaign,
@@ -27,6 +28,7 @@ export default function CampaignDetail() {
   const [scene, setScene] = useState<CurrentScene | null>(null);
   const [tab, setTab] = useState<Tab>('overview');
   const [demo, setDemo] = useState(false);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
@@ -37,18 +39,23 @@ export default function CampaignDetail() {
       .then(([nextCampaign, nextCharacters, nextModules, nextSaves, nextScene]) => {
         setCampaign(nextCampaign); setCharacters(nextCharacters); setModules(nextModules); setSaves(nextSaves); setScene(nextScene); emitRuntimeStatus(true);
       })
-      .catch(() => {
+      .catch((reason) => {
+        emitRuntimeStatus(false);
+        if (!DEMO_MODE) {
+          setError(reason instanceof Error ? reason.message : String(reason));
+          return;
+        }
         const fallback = mockCampaign(id);
         setCampaign(fallback);
         setCharacters(mockCharactersFor(fallback.id).length ? mockCharactersFor(fallback.id) : MOCK_CHARACTERS.slice(0, 2));
         setModules(fallback.id === 'campaign-1' ? MOCK_MODULES : []);
         setSaves(fallback.id === 'campaign-1' ? MOCK_SAVES : MOCK_SAVES.slice(-1));
         setScene(fallback.id === 'campaign-1' ? MOCK_SCENE : null);
-        setDemo(true); emitRuntimeStatus(false);
+        setDemo(true);
       });
   }, []);
 
-  if (!campaign) return <div className="page"><div className="empty">正在读取战役档案…</div></div>;
+  if (!campaign) return <div className="page"><div className="empty">{error ? `RUNTIME OFFLINE · ${error}` : '正在读取战役档案…'}</div></div>;
   const phase = String(campaign.state?.game_phase || 'lobby');
   const chooseTab = (next: Tab) => {
     setTab(next);

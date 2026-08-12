@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  DEMO_MODE,
   MOCK_CAMPAIGNS,
   MOCK_CHARACTERS,
   MOCK_MODULES,
@@ -15,7 +16,7 @@ import {
 } from '../lib/api';
 import type { Campaign, Character, CurrentScene, HealthStatus } from '../types';
 
-type Connection = 'loading' | 'connected' | 'demo';
+type Connection = 'loading' | 'connected' | 'demo' | 'offline';
 
 export default function Dashboard() {
   const [connection, setConnection] = useState<Connection>('loading');
@@ -24,6 +25,7 @@ export default function Dashboard() {
   const [characters, setCharacters] = useState<Character[]>([]);
   const [scene, setScene] = useState<CurrentScene | null>(null);
   const [stats, setStats] = useState({ modules: 0, saves: 0 });
+  const [error, setError] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -48,14 +50,19 @@ export default function Dashboard() {
         setScene(liveScene);
         setStats({ modules: modules.length, saves: saves.length });
         emitRuntimeStatus(true, runtime.version);
-      } catch {
+      } catch (reason) {
         if (cancelled) return;
+        emitRuntimeStatus(false);
+        if (!DEMO_MODE) {
+          setConnection('offline');
+          setError(reason instanceof Error ? reason.message : String(reason));
+          return;
+        }
         setConnection('demo');
         setCampaigns(MOCK_CAMPAIGNS);
         setCharacters(MOCK_CHARACTERS);
         setScene(MOCK_SCENE);
         setStats({ modules: MOCK_MODULES.length, saves: MOCK_SAVES.length });
-        emitRuntimeStatus(false);
       }
     };
     load();
@@ -69,7 +76,7 @@ export default function Dashboard() {
     <div className="page">
       <div className="page-heading">
         <div>
-          <div className="eyebrow">LIVE TABLE / {connection === 'connected' ? 'RUNTIME CONNECTED' : connection === 'demo' ? 'DEMO FALLBACK' : 'CONNECTING'}</div>
+          <div className="eyebrow">LIVE TABLE / {connection === 'connected' ? 'RUNTIME CONNECTED' : connection === 'demo' ? 'DEMO ENABLED' : connection === 'offline' ? 'RUNTIME OFFLINE' : 'CONNECTING'}</div>
           <h1>今晚的桌面</h1>
           <p>把战役连续性、当前场景、角色认知与 MCP 工具阶段放在同一个开团视图中。</p>
         </div>
@@ -84,6 +91,9 @@ export default function Dashboard() {
           <strong>DEMO DATA</strong>
           <span>未发现兼容的只读 gateway，界面正在使用本地演示数据。权威写入始终属于 D&D MCP。</span>
         </div>
+      )}
+      {connection === 'offline' && (
+        <div className="demo-notice"><strong>RUNTIME OFFLINE</strong><span>{error}</span></div>
       )}
 
       <section className="table-hero">

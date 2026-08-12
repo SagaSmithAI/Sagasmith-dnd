@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { MOCK_SCENE, sceneIndex, sceneProgress } from '../../lib/api';
+import { DEMO_MODE, MOCK_SCENE, sceneIndex, sceneProgress } from '../../lib/api';
 import type { ModuleScene, SceneProgress } from '../../types';
 import SpatialEvidenceDiagram from './SpatialEvidenceDiagram';
 
@@ -28,6 +28,7 @@ export default function SceneAtlas({ campaignId }: { campaignId: string }) {
   const [search, setSearch] = useState('');
   const [selectedId, setSelectedId] = useState('');
   const [demo, setDemo] = useState(false);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
@@ -39,7 +40,11 @@ export default function SceneAtlas({ campaignId }: { campaignId: string }) {
         setProgress(nextProgress);
         setSelectedId(query.get('scene') || nextScenes[0]?.scene_id || '');
       })
-      .catch(() => {
+      .catch((reason) => {
+        if (!DEMO_MODE) {
+          setError(reason instanceof Error ? reason.message : String(reason));
+          return;
+        }
         setDemo(true);
         setScenes(DEMO_SCENES);
         setProgress(DEMO_PROGRESS);
@@ -79,6 +84,7 @@ export default function SceneAtlas({ campaignId }: { campaignId: string }) {
         </div>
       </header>
       {demo && <div className="atlas-demo">DEMO PROJECTION · 真实连接后由服务端按 principal 过滤，不在 CSS 中隐藏内容。</div>}
+      {error && <div className="atlas-demo">RUNTIME OFFLINE · {error}</div>}
       <div className="atlas-filters">
         <button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>ALL / {scenes.length}</button>
         {types.map((type) => <button key={type} className={filter === type ? 'active' : ''} onClick={() => setFilter(type)}>{type.toUpperCase()}</button>)}

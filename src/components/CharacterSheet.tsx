@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { emitRuntimeStatus, getCharacter, mockCharacter } from '../lib/api';
+import { DEMO_MODE, emitRuntimeStatus, getCharacter, mockCharacter } from '../lib/api';
 import type { Character } from '../types';
 import { ABILITY_LABELS, ABILITY_NAMES_EN, SKILL_NAMES } from '../types';
 
@@ -7,15 +7,20 @@ export default function CharacterSheet() {
   const [character, setCharacter] = useState<Character | null>(null);
   const [showRaw, setShowRaw] = useState(false);
   const [demo, setDemo] = useState(false);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     const id = new URLSearchParams(window.location.search).get('id') || 'char-varis';
     getCharacter(id)
       .then((item) => { setCharacter(item); emitRuntimeStatus(true); })
-      .catch(() => { setCharacter(mockCharacter(id)); setDemo(true); emitRuntimeStatus(false); });
+      .catch((reason) => {
+        emitRuntimeStatus(false);
+        if (DEMO_MODE) { setCharacter(mockCharacter(id)); setDemo(true); return; }
+        setError(reason instanceof Error ? reason.message : String(reason));
+      });
   }, []);
 
-  if (!character) return <div className="page"><div className="empty">正在读取角色卡…</div></div>;
+  if (!character) return <div className="page"><div className="empty">{error ? `RUNTIME OFFLINE · ${error}` : '正在读取角色卡…'}</div></div>;
   const sheet = (character.sheet || {}) as Record<string, any>;
   const abilities = sheet.ability_scores || {};
   const hp = sheet.hp || {};

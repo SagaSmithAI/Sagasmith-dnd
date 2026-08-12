@@ -1,15 +1,20 @@
 import { useEffect, useState } from 'react';
-import { MOCK_CAMPAIGNS, emitRuntimeStatus, listCampaigns } from '../lib/api';
+import { DEMO_MODE, MOCK_CAMPAIGNS, emitRuntimeStatus, listCampaigns } from '../lib/api';
 import type { Campaign } from '../types';
 
 export default function CampaignList() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [demo, setDemo] = useState(false);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     listCampaigns()
       .then((items) => { setCampaigns(items); emitRuntimeStatus(true); })
-      .catch(() => { setCampaigns(MOCK_CAMPAIGNS); setDemo(true); emitRuntimeStatus(false); });
+      .catch((reason) => {
+        emitRuntimeStatus(false);
+        if (DEMO_MODE) { setCampaigns(MOCK_CAMPAIGNS); setDemo(true); return; }
+        setError(reason instanceof Error ? reason.message : String(reason));
+      });
   }, []);
 
   return (
@@ -19,6 +24,7 @@ export default function CampaignList() {
         <div className="heading-actions"><a href="/" className="btn btn-ghost">返回桌面</a><a href="https://github.com/SagaSmithAI/SagaSmith-dnd-mcp" className="btn btn-primary" target="_blank" rel="noreferrer">通过 MCP 建团 ↗</a></div>
       </div>
       {demo && <div className="demo-notice"><strong>DEMO DATA</strong><span>未连接 compatible gateway；以下战役用于展示信息结构。</span></div>}
+      {error && <div className="demo-notice"><strong>RUNTIME OFFLINE</strong><span>{error}</span></div>}
       <div className="campaign-grid">
         {campaigns.map((campaign, index) => {
           const phase = String(campaign.state?.game_phase || 'lobby');
