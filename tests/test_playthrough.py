@@ -177,26 +177,35 @@ def test_party_size_dm_review_cannot_be_relabelled_as_external_input() -> None:
     }
 
 
-def test_manifest_accepts_selected_size_within_source_range() -> None:
+@pytest.mark.parametrize("selected_size", [1, 3, 4, 6, 7])
+def test_manifest_party_recommendation_never_blocks_positive_selection(
+    selected_size: int,
+) -> None:
     manifest = _manifest()
-    manifest["party"]["selected_size"] = 4
-    manifest["party"]["members"] = manifest["party"]["members"][:4]
+    manifest["party"]["selected_size"] = selected_size
+    member = {
+        "actor_id": "",
+        "name": "Party member",
+        "status": "active",
+        "source": "generated",
+        "source_asset_path": "",
+        "level": 1,
+        "xp": 0,
+        "hit_points": {"current": 8, "maximum": 8},
+        "resources": {},
+        "wallet": {},
+        "equipment": [],
+        "knowledge_scope_actor_id": "",
+    }
+    for index in range(selected_size):
+        current = deepcopy(member)
+        current["actor_id"] = f"actor-{index}"
+        current["knowledge_scope_actor_id"] = current["actor_id"]
+        manifest["party"]["members"].append(current)
 
     normalized = validate_party_state({"playthrough_manifest": manifest})
 
-    assert normalized["playthrough_manifest"]["party"]["selected_size"] == 4
-
-
-def test_manifest_rejects_party_size_outside_source_range() -> None:
-    manifest = _manifest()
-    manifest["party"]["selected_size"] = 3
-    with pytest.raises(ValueError, match="recommended minimum"):
-        validate_party_state({"playthrough_manifest": manifest})
-
-    manifest = _manifest()
-    manifest["party"]["selected_size"] = 7
-    with pytest.raises(ValueError, match="recommended maximum"):
-        validate_party_state({"playthrough_manifest": manifest})
+    assert normalized["playthrough_manifest"]["party"]["selected_size"] == selected_size
 
 
 def test_manifest_rejects_cross_actor_replacement_knowledge() -> None:
