@@ -4,9 +4,9 @@ import type { ModuleScene, SceneProgress } from '../../types';
 import SpatialEvidenceDiagram from './SpatialEvidenceDiagram';
 
 const DEMO_SCENES: ModuleScene[] = [
-  { ...MOCK_SCENE, scene_id: 'scene-gate', stable_key: 'chapter-three-lockdown-gate', title: '封锁区入口', scene_ordinal: 0, scene_type: 'social', page_start: 38, page_end: 41, tags: ['social', 'gate'], visibility: 'party', keywords: ['守卫', '通行证'], headings: ['第三章', '封锁区入口'], content: '灰袍守卫封锁了通往钟楼的石桥。', spatial: { schema_version: 1, locations: [{ key: 'gate', title: '封锁门', kind: 'threshold', confidence: 'explicit' }], connections: [] } },
+  { ...MOCK_SCENE, scene_id: 'scene-gate', stable_key: 'chapter-three-lockdown-gate', title: '封锁区入口', scene_ordinal: 0, scene_type: 'social', page_start: 38, page_end: 41, tags: ['social', 'gate'], visibility: 'group', keywords: ['守卫', '通行证'], headings: ['第三章', '封锁区入口'], content: '灰袍守卫封锁了通往钟楼的石桥。', spatial: { schema_version: 1, locations: [{ key: 'gate', title: '封锁门', kind: 'threshold', confidence: 'explicit' }], connections: [] } },
   MOCK_SCENE,
-  { ...MOCK_SCENE, scene_id: 'scene-vault', stable_key: 'chapter-three-ember-vault', title: '余烬保险库', scene_ordinal: 2, scene_type: 'combat', page_start: 46, page_end: 50, tags: ['combat', 'dungeon'], visibility: 'keeper', keywords: ['保险库', '守卫构装体'], headings: ['第三章', '余烬保险库'], content: '保险库内的构装体仍处于待机状态。', spatial: { schema_version: 1, grid: { kind: 'square', cell_ft: 5 }, locations: [{ key: 'vault-floor', title: '保险库主层', kind: 'room', dimensions_ft: { width: 60, height: 45 }, confidence: 'explicit' }], connections: [] } },
+  { ...MOCK_SCENE, scene_id: 'scene-vault', stable_key: 'chapter-three-ember-vault', title: '余烬保险库', scene_ordinal: 2, scene_type: 'combat', page_start: 46, page_end: 50, tags: ['combat', 'dungeon'], visibility: 'restricted', keywords: ['保险库', '守卫构装体'], headings: ['第三章', '余烬保险库'], content: '保险库内的构装体仍处于待机状态。', spatial: { schema_version: 1, grid: { kind: 'square', cell_ft: 5 }, locations: [{ key: 'vault-floor', title: '保险库主层', kind: 'room', dimensions_ft: { width: 60, height: 45 }, confidence: 'explicit' }], connections: [] } },
 ];
 
 const DEMO_PROGRESS: SceneProgress[] = [

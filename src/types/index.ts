@@ -84,7 +84,7 @@ export interface ModuleScene {
   spatial?: SceneSpatial;
 }
 
-export type SceneVisibility = 'keeper' | 'party' | 'public';
+export type SceneVisibility = 'restricted' | 'group' | 'public';
 
 export interface SpatialLocation {
   key: string;
