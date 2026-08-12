@@ -166,22 +166,18 @@ def validate_dnd_content_package(package: Mapping[str, Any]) -> dict[str, Any]:
                     "must contain 1 to 2000 characters"
                 )
         profile = dict(value["content"].get("play_profile") or {})
-        party_size = dict(profile.get("party_size") or {})
         starting_level = dict(profile.get("starting_level") or {})
         expected_end_level = dict(profile.get("expected_end_level") or {})
         advancement = dict(profile.get("advancement") or {})
         pregenerated = dict(profile.get("pregenerated_characters") or {})
         sourced_profile_entries = (
-            party_size,
             starting_level,
             expected_end_level,
             advancement,
             pregenerated,
         )
         if (
-            party_size.get("minimum") is None
-            or party_size.get("maximum") is None
-            or starting_level.get("value") is None
+            starting_level.get("value") is None
             or expected_end_level.get("value") is None
             or advancement.get("recommended") in {None, "unknown"}
             or "unknown" in list(advancement.get("modes") or [])
@@ -195,8 +191,8 @@ def validate_dnd_content_package(package: Mapping[str, Any]) -> dict[str, Any]:
             )
         ):
             raise ValueError(
-                "finalized module play_profile requires sourced party, level, "
-                "advancement, and pregenerated-character review"
+                "finalized module play_profile requires sourced level, advancement, "
+                "and pregenerated-character review; party-size advice is optional"
             )
         if (
             value["content"].get("classification") == "campaign"

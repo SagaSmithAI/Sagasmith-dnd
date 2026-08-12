@@ -191,15 +191,19 @@ def validate_playthrough_manifest(value: Any) -> dict[str, Any]:
         ],
     }
     if status in {"ready", "in_progress", "completed"}:
-        if normalized["review_blocks"]:
+        blocking_reviews = [
+            item
+            for item in normalized["review_blocks"]
+            if item.get("kind") != "recommended_party_size"
+        ]
+        if blocking_reviews:
             raise ValueError("playthrough cannot leave lobby while review blocks remain")
-        selected_size = party["selected_size"]
-        if selected_size is None:
-            raise ValueError("playthrough cannot leave lobby without a selected party size")
-        if len(party["members"]) != selected_size:
-            raise ValueError(
-                "playthrough cannot leave lobby until party members match selected_size"
-            )
+        if status == "ready" and not any(
+            member["status"] == "active" for member in party["members"]
+        ):
+            raise ValueError("ready playthrough requires an active party member")
+        if status in {"in_progress", "completed"} and not party["members"]:
+            raise ValueError("playthrough cannot leave lobby without a party member")
     if status in {"in_progress", "completed"} and not current["scene_id"]:
         raise ValueError("active playthrough requires a current scene")
     if (status == "completed") != (ending["status"] == "completed"):
@@ -398,25 +402,14 @@ def _validate_party(value: Any) -> dict[str, Any]:
     if status in {"dm_review_required", "dm_review_completed"}:
         review["default_resolver"] = "agent"
         review["ruling_kind"] = "source_or_scene_fact"
-    if minimum is not None and maximum is not None and maximum < minimum:
-        raise ValueError("party recommended maximum must not be below its minimum")
-    if status == "source_confirmed":
-        if selected is None:
-            raise ValueError("source-confirmed party size requires a positive selected size")
-    elif status == "dm_review_required":
-        if selected is not None:
-            raise ValueError("unresolved party-size Agent-as-DM review cannot select a party size")
-    else:
-        if selected is None or not review:
-            raise ValueError(
-                "completed party-size Agent-as-DM review requires a positive selected size "
-                "and review evidence"
-            )
-        if review.get("represented_as_module_recommendation") is not False:
-            raise ValueError(
-                "completed party-size Agent-as-DM review must not be represented as a "
-                "module recommendation"
-            )
+    if (
+        status == "dm_review_completed"
+        and review.get("represented_as_module_recommendation") is True
+    ):
+        raise ValueError(
+            "completed party-size Agent-as-DM review must not be represented as a "
+            "module recommendation"
+        )
     members = [
         _validate_party_member(item, index)
         for index, item in enumerate(_list(party.get("members")))

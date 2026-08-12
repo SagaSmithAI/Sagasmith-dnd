@@ -155,6 +155,56 @@ def test_package_rejects_unrepaired_transcription_character_in_actor_sheet() -> 
         validate_dnd_content_package(package)
 
 
+def test_finalized_module_does_not_require_party_size_recommendation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_ref = {"source_key": "book", "chunk_key": "chunk-1"}
+    package = {
+        "kind": "module",
+        "system_id": "dnd5e",
+        "metadata": {
+            "agent_finalization": {
+                "confirmed": True,
+                "reviewer": "agent:test",
+                "note": "Reviewed source; no fixed party size is required.",
+            }
+        },
+        "content": {
+            "classification": "campaign",
+            "artifacts": [],
+            "narrative": {"endings": [{"id": "ending-1"}]},
+            "play_profile": {
+                "party_size": {
+                    "minimum": None,
+                    "maximum": None,
+                    "source_refs": [],
+                },
+                "starting_level": {"value": 1, "source_refs": [source_ref]},
+                "expected_end_level": {"value": 5, "source_refs": [source_ref]},
+                "advancement": {
+                    "recommended": "milestone",
+                    "modes": ["milestone"],
+                    "source_refs": [source_ref],
+                },
+                "pregenerated_characters": {
+                    "present": False,
+                    "source_refs": [source_ref],
+                },
+            },
+        },
+        "actors": [],
+        "assets": [],
+    }
+    monkeypatch.setattr(
+        "sagasmith_dnd.content_packages.validate_core_content_package",
+        lambda value: copy.deepcopy(value),
+    )
+
+    validated = validate_dnd_content_package(package)
+
+    assert validated["content"]["play_profile"]["party_size"]["minimum"] is None
+
+
 def test_preset_builder_repairs_reviewed_pdf_word_breaks_in_actor_cards() -> None:
     sheet = default_character_sheet()
     sheet["content"]["features"] = [

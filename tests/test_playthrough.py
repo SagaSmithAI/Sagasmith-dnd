@@ -124,7 +124,7 @@ def test_manifest_preserves_completed_party_size_dm_review_without_faking_source
         validate_party_state({"playthrough_manifest": invalid})
 
 
-def test_manifest_keeps_unresolved_party_size_dm_review_blocked() -> None:
+def test_manifest_allows_positive_selection_while_party_size_review_is_unresolved() -> None:
     manifest = new_playthrough_manifest(
         run_id="review-1",
         campaign_line_id="unknown-size",
@@ -142,8 +142,25 @@ def test_manifest_keeps_unresolved_party_size_dm_review_blocked() -> None:
     }
 
     manifest["party"]["selected_size"] = 4
-    with pytest.raises(ValueError, match="cannot select"):
-        validate_party_state({"playthrough_manifest": manifest})
+    manifest["party"]["members"] = [
+        {
+            "actor_id": "actor-1",
+            "name": "First member",
+            "status": "active",
+            "source": "generated",
+            "source_asset_path": "",
+            "level": 1,
+            "xp": 0,
+            "hit_points": {"current": 8, "maximum": 8},
+            "resources": {},
+            "wallet": {},
+            "equipment": [],
+            "knowledge_scope_actor_id": "actor-1",
+        }
+    ]
+    manifest["status"] = "ready"
+    normalized = validate_party_state({"playthrough_manifest": manifest})
+    assert normalized["playthrough_manifest"]["party"]["selected_size"] == 4
 
 
 def test_party_size_dm_review_cannot_be_relabelled_as_external_input() -> None:
@@ -206,6 +223,20 @@ def test_manifest_party_recommendation_never_blocks_positive_selection(
     normalized = validate_party_state({"playthrough_manifest": manifest})
 
     assert normalized["playthrough_manifest"]["party"]["selected_size"] == selected_size
+
+
+def test_manifest_inconsistent_party_recommendation_is_advisory() -> None:
+    manifest = _manifest()
+    manifest["party"].update(
+        recommended_minimum=6,
+        recommended_maximum=4,
+        selected_size=1,
+    )
+
+    normalized = validate_party_state({"playthrough_manifest": manifest})
+
+    assert normalized["playthrough_manifest"]["party"]["recommended_minimum"] == 6
+    assert normalized["playthrough_manifest"]["party"]["recommended_maximum"] == 4
 
 
 def test_manifest_rejects_cross_actor_replacement_knowledge() -> None:
@@ -438,7 +469,7 @@ def test_manifest_cannot_leave_lobby_before_quality_gate_passes() -> None:
         validate_party_state({"playthrough_manifest": manifest})
 
     manifest["review_blocks"] = []
-    with pytest.raises(ValueError, match="members match selected_size"):
+    with pytest.raises(ValueError, match="active party member"):
         validate_party_state({"playthrough_manifest": manifest})
 
     member = {
@@ -456,7 +487,7 @@ def test_manifest_cannot_leave_lobby_before_quality_gate_passes() -> None:
         "knowledge_scope_actor_id": "",
     }
     manifest["party"]["members"] = []
-    for index in range(6):
+    for index in range(3):
         current = deepcopy(member)
         current["actor_id"] = f"actor-{index}"
         current["knowledge_scope_actor_id"] = current["actor_id"]
