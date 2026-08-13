@@ -102,7 +102,7 @@ function Overview({ campaign, characters, modules, scene, saves }: { campaign: C
         <div className="card-header"><strong>ACTORS</strong><span>{characters.length} VISIBLE</span></div>
         {characters.map((character) => {
           const sheet = character.sheet as Record<string, any>;
-          return <a className="list-row" key={character.id} href={`/characters/detail?id=${encodeURIComponent(character.id)}`}><div><div className="list-row-title">{character.name}</div><div className="list-row-meta">{character.character_type.toUpperCase()} · {sheet.class || '—'} {sheet.level ? `LV.${sheet.level}` : ''} · REV {character.revision}</div></div><span className="badge badge-gray">{(character.notes as any)?.knowledge_count || 0} FACTS</span></a>;
+          return <a className="list-row" key={character.id} href={`/characters/detail?campaign=${encodeURIComponent(campaign.id)}&id=${encodeURIComponent(character.id)}`}><div><div className="list-row-title">{character.name}</div><div className="list-row-meta">{character.character_type.toUpperCase()} · {sheet.class || '—'} {sheet.level ? `LV.${sheet.level}` : ''} · REV {character.revision}</div></div><span className="badge badge-gray">{(character.notes as any)?.knowledge_count || 0} FACTS</span></a>;
         })}
         {characters.length === 0 && <div className="empty">没有可见角色。</div>}
       </section>

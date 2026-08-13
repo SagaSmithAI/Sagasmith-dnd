@@ -134,7 +134,7 @@ export default function Dashboard() {
               const sheet = character.sheet as Record<string, any>;
               const hp = sheet.hp || {};
               return (
-                <a className="actor-row" key={character.id} href={`/characters/detail?id=${encodeURIComponent(character.id)}`}>
+                <a className="actor-row" key={character.id} href={`/characters/detail?campaign=${encodeURIComponent(active?.id || character.campaign_id || '')}&id=${encodeURIComponent(character.id)}`}>
                   <span className={`actor-sigil ${character.character_type}`}>{character.name.slice(0, 1)}</span>
                   <span className="actor-info"><strong>{character.name}</strong><small>{character.character_type.toUpperCase()} · {sheet.class || 'UNCLASSIFIED'} {sheet.level ? `LV.${sheet.level}` : ''}</small></span>
                   <span className="actor-hp"><b>{hp.current ?? '—'}</b><small>/ {hp.max ?? '—'} HP</small></span>

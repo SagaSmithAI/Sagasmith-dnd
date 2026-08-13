@@ -19,13 +19,11 @@ import type {
 } from '../features/content/contracts';
 
 export const API_BASE = (import.meta.env.PUBLIC_SAGASMITH_API_BASE || 'http://127.0.0.1:8766').replace(/\/$/, '');
-export const PRINCIPAL_ID = import.meta.env.PUBLIC_SAGASMITH_PRINCIPAL_ID || 'system:local';
 export const DEMO_MODE = import.meta.env.PUBLIC_SAGASMITH_DEMO === '1';
 const API_TOKEN = import.meta.env.PUBLIC_SAGASMITH_API_TOKEN || '';
 
 function requestHeaders(extra?: HeadersInit): Headers {
   const headers = new Headers(extra);
-  headers.set('X-SagaSmith-Principal', PRINCIPAL_ID);
   if (API_TOKEN) headers.set('Authorization', `Bearer ${API_TOKEN}`);
   return headers;
 }
@@ -59,6 +57,7 @@ async function gatewayRequest<T>(path: string, init?: RequestInit, timeoutMs = 8
   try {
     const res = await fetch(`${API_BASE}${path}`, {
       ...init,
+      credentials: 'include',
       signal: controller.signal,
       headers: requestHeaders(init?.headers),
     });
@@ -70,7 +69,7 @@ async function gatewayRequest<T>(path: string, init?: RequestInit, timeoutMs = 8
     if (value && typeof value === 'object' && 'data' in value && 'meta' in value) {
       return value as GatewayResult<T>;
     }
-    return { data: value as T, meta: { schema_version: 1, audience: PRINCIPAL_ID } };
+    return { data: value as T, meta: { schema_version: 1, audience: 'gateway-bound' } };
   } catch (error) {
     if (error instanceof GatewayRequestError) throw error;
     throw new GatewayRequestError(0, error instanceof Error ? error.message : String(error));
@@ -87,7 +86,7 @@ export function health(): Promise<HealthStatus> { return fetchJson('/api/health'
 export function listCampaigns(): Promise<Campaign[]> { return fetchJson('/api/campaigns'); }
 export function getCampaign(id: string): Promise<Campaign> { return fetchJson(`/api/campaigns/${encodeURIComponent(id)}`); }
 export function listCharacters(campaignId: string): Promise<Character[]> { return fetchJson(`/api/campaigns/${encodeURIComponent(campaignId)}/characters`); }
-export function getCharacter(id: string): Promise<Character> { return fetchJson(`/api/characters/${encodeURIComponent(id)}`); }
+export function getCharacter(campaignId: string, id: string): Promise<Character> { return fetchJson(`/api/campaigns/${encodeURIComponent(campaignId)}/characters/${encodeURIComponent(id)}`); }
 export function listModules(campaignId: string): Promise<ModuleSource[]> { return fetchJson(`/api/campaigns/${encodeURIComponent(campaignId)}/modules`); }
 export function sceneIndex(campaignId: string): Promise<ModuleScene[]> { return fetchJson(`/api/campaigns/${encodeURIComponent(campaignId)}/scenes`); }
 export function sceneProgress(campaignId: string, scope = 'party'): Promise<SceneProgress[]> { return fetchJson(`/api/campaigns/${encodeURIComponent(campaignId)}/scene-progress?scope=${encodeURIComponent(scope)}`); }
@@ -165,7 +164,7 @@ export async function downloadContentPackArtifact(
   try {
     const response = await fetch(
       `${API_BASE}/api/campaigns/${encodeURIComponent(campaignId)}/content-packs/artifacts/${encodeURIComponent(artifact)}?${query}`,
-      { headers: requestHeaders() },
+      { credentials: 'include', headers: requestHeaders() },
     );
     if (!response.ok) {
       const problem = await response.json().catch(() => ({})) as { error?: string };
@@ -215,7 +214,7 @@ export async function combatRender(
   const query = new URLSearchParams({ audience_projection: audienceProjection });
   const response = await fetch(
     `${API_BASE}/api/campaigns/${encodeURIComponent(campaignId)}/combat/render?${query}`,
-    { headers: requestHeaders() },
+    { credentials: 'include', headers: requestHeaders() },
   );
   if (!response.ok) {
     const problem = await response.json().catch(() => ({})) as { error?: string };
@@ -234,6 +233,7 @@ export async function submitCombatMove(
 ): Promise<CombatStatus> {
   const response = await fetch(`${API_BASE}/api/campaigns/${encodeURIComponent(campaignId)}/combat/move`, {
     method: 'POST',
+    credentials: 'include',
     headers: requestHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({
       actor_id: actorId,
@@ -252,7 +252,7 @@ export async function submitCombatMove(
 }
 
 export function subscribeCampaign(campaignId: string, onRevision: () => void): () => void {
-  const query = new URLSearchParams({ principal_id: PRINCIPAL_ID });
+  const query = new URLSearchParams();
   if (API_TOKEN) query.set('token', API_TOKEN);
   const source = new EventSource(`${API_BASE}/api/campaigns/${encodeURIComponent(campaignId)}/stream?${query}`);
   source.addEventListener('revision', onRevision);

@@ -61,7 +61,6 @@ Start the adjacent `SagaSmith-dnd-mcp` gateway (or use `SagaSmith-agent/start.ba
 
 ```powershell
 $env:PUBLIC_SAGASMITH_API_BASE = "http://127.0.0.1:8766"
-$env:PUBLIC_SAGASMITH_PRINCIPAL_ID = "system:local"
 # Only when the gateway is configured with SAGASMITH_DND_GATEWAY_TOKEN:
 $env:PUBLIC_SAGASMITH_API_TOKEN = "local-development-token"
 npm run dev

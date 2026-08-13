@@ -10,8 +10,14 @@ export default function CharacterSheet() {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    const id = new URLSearchParams(window.location.search).get('id') || 'char-varis';
-    getCharacter(id)
+    const query = new URLSearchParams(window.location.search);
+    const id = query.get('id') || 'char-varis';
+    const campaignId = query.get('campaign');
+    if (!campaignId && !DEMO_MODE) {
+      setError('campaign query parameter is required');
+      return;
+    }
+    getCharacter(campaignId || 'campaign-1', id)
       .then((item) => { setCharacter(item); emitRuntimeStatus(true); })
       .catch((reason) => {
         emitRuntimeStatus(false);
