@@ -10,11 +10,9 @@ from __future__ import annotations
 
 import re
 from copy import deepcopy
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from typing import Any, Iterable
 from uuid import uuid4
-
-from sagasmith_core.access import LOCAL_SYSTEM_PRINCIPAL_ID
 
 from sagasmith_dnd.activity_identity import is_multiattack_activity
 from sagasmith_dnd.character_schema import (
@@ -231,67 +229,6 @@ class NeedsRulingError(CombatEngineError):
 
 
 @dataclass(frozen=True)
-class ActionIntent:
-    """A fully identified action declaration before mechanical resolution."""
-
-    campaign_id: str
-    actor_id: str
-    action_type: str
-    target_ids: tuple[str, ...] = ()
-    item_id: str | None = None
-    activity_id: str | None = None
-    payment: str | None = None
-    branch_id: str | None = None
-    principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID
-    expected_revisions: dict[str, int] = field(default_factory=dict)
-    idempotency_key: str | None = None
-    payload: dict[str, Any] = field(default_factory=dict)
-    rulings: tuple[dict[str, Any], ...] = ()
-
-    @classmethod
-    def from_dict(cls, value: dict[str, Any]) -> "ActionIntent":
-        targets = value.get("target_ids", value.get("targets", ()))
-        if isinstance(targets, str):
-            targets = (targets,)
-        if not isinstance(targets, (list, tuple)):
-            raise CombatEngineError("target_ids must be a list")
-        rulings = value.get("rulings", ())
-        if isinstance(rulings, dict):
-            rulings = (rulings,)
-        return cls(
-            campaign_id=str(value.get("campaign_id") or ""),
-            actor_id=str(value.get("actor_id") or ""),
-            action_type=str(value.get("action_type") or value.get("type") or ""),
-            target_ids=tuple(str(item) for item in targets),
-            item_id=value.get("item_id"),
-            activity_id=value.get("activity_id"),
-            payment=value.get("payment"),
-            branch_id=value.get("branch_id"),
-            principal_id=str(value.get("principal_id") or LOCAL_SYSTEM_PRINCIPAL_ID),
-            expected_revisions={
-                str(key): int(item)
-                for key, item in dict(value.get("expected_revisions") or {}).items()
-            },
-            idempotency_key=value.get("idempotency_key"),
-            payload=deepcopy(dict(value.get("payload") or {})),
-            rulings=tuple(deepcopy(item) for item in rulings if isinstance(item, dict)),
-        )
-
-    def validate(self) -> None:
-        if not self.campaign_id:
-            raise CombatEngineError("campaign_id is required")
-        if not self.actor_id:
-            raise CombatEngineError("actor_id is required")
-        if not self.action_type:
-            raise CombatEngineError("action_type is required")
-        for ruling in self.rulings:
-            if not ruling.get("kind") or "value" not in ruling:
-                raise CombatEngineError("every ruling needs kind and value")
-            if ruling.get("source") not in {"rule", "module", "scene", "dm_ruling"}:
-                raise CombatEngineError("ruling source is invalid")
-
-
-@dataclass(frozen=True)
 class ChoiceWindow:
     id: str
     kind: str
@@ -300,24 +237,6 @@ class ChoiceWindow:
     candidates: tuple[dict[str, Any], ...] = ()
     deadline: str = "before_commit"
     status: str = "pending"
-
-
-@dataclass(frozen=True)
-class ResolutionReceipt:
-    id: str
-    operation: str
-    status: str
-    campaign_id: str
-    branch_id: str | None
-    actor_id: str | None
-    result: dict[str, Any]
-    rolls: tuple[dict[str, Any], ...] = ()
-    changes: tuple[dict[str, Any], ...] = ()
-    pending: tuple[dict[str, Any], ...] = ()
-    rulings: tuple[dict[str, Any], ...] = ()
-
-    def as_dict(self) -> dict[str, Any]:
-        return asdict(self)
 
 
 def actor_id(actor: dict[str, Any]) -> str:
