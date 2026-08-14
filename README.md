@@ -117,7 +117,7 @@ sagasmith-dnd doctor --json
 sagasmith-dnd database upgrade --json
 ```
 
-`database upgrade` 当前会执行 Snapshot schema v8 的一次性切换：完整 schema-v7 JSON Snapshot 会转为独立、受大小限制和 checksum 保护的 `zlib-1` 记录，并删除旧 `payload` 列。执行前先停止所有数据库写入并创建一致性备份；v3–v6 Snapshot 必须先由匹配的历史运行时物化到 v7。该切换不提供 downgrade，回滚需恢复升级前数据库以及匹配的 Core/D&D 版本。
+`database upgrade` 要求数据库符合当前 Snapshot schema v8：每个完整状态文档都以独立、受大小限制和 checksum 保护的 `zlib-1` 记录保存。执行前先停止所有数据库写入并创建一致性备份。当前格式不提供 downgrade；回滚需恢复成套的数据库以及匹配的 Core/D&D 版本。
 
 ## 扩展规则包
 
