@@ -14,6 +14,8 @@ from sagasmith_dnd.module_profile import DndModuleProfile
 from sagasmith_dnd.spatial import (
     BattleMapError,
     compile_battle_map,
+    compile_battle_map_template,
+    normalize_combat_grid_template,
     patch_battle_map,
     validate_position,
 )
@@ -143,3 +145,67 @@ def test_dnd_temporary_map_rejects_non_five_foot_cells() -> None:
         assert "five-foot" in str(exc)
     else:
         raise AssertionError("the combat engine only resolves five-foot grid cells")
+
+
+def test_combat_grid_template_is_canonical_and_compiles_to_a_fresh_map() -> None:
+    template = {
+        "schema_version": 1,
+        "id": "gate-ambush",
+        "title": "Gate ambush",
+        "location_key": "a1-gate",
+        "grid": {"kind": "square", "cell_ft": 5},
+        "bounds": {"width_cells": 8, "height_cells": 6},
+        "blocked_cells": [{"x": 4, "y": 2}],
+        "difficult_cells": [{"x": 2, "y": 1}],
+        "deployment_zones": [
+            {"id": "party", "cells": [{"x": 1, "y": 5}, {"x": 0, "y": 5}]}
+        ],
+        "source_refs": [
+            {"source_key": "keep", "chunk_key": "chunk-1", "page": 3, "note": "Map"}
+        ],
+    }
+    normalized = normalize_combat_grid_template(template)
+    assert normalized["deployment_zones"][0]["cells"] == [
+        {"x": 0, "y": 5},
+        {"x": 1, "y": 5},
+    ]
+    scene = {
+        "scene_id": "scene-layout",
+        "encounter_scene_id": "scene-ambush",
+        "module_id": "module-1",
+        "spatial": {"schema_version": 1, "locations": [{"key": "a1-gate"}]},
+    }
+    first = compile_battle_map_template(
+        scene,
+        normalized,
+        authority_receipt={"kind": "content_pack_template"},
+    )
+    second = compile_battle_map_template(scene, normalized)
+    assert first["id"] != second["id"]
+    assert first["source"]["battle_map_template_id"] == "gate-ambush"
+    assert first["blocked_cells"] == ["4,2"]
+    assert first["deployment_zones"] == [{"id": "party", "cells": ["0,5", "1,5"]}]
+    assert first["authority_receipt"] == {"kind": "content_pack_template"}
+
+
+def test_combat_grid_template_rejects_mechanically_undefined_cells() -> None:
+    template = {
+        "schema_version": 1,
+        "id": "bad-grid",
+        "title": "Bad grid",
+        "location_key": "room",
+        "grid": {"kind": "square", "cell_ft": 5},
+        "bounds": {"width_cells": 2, "height_cells": 2},
+        "blocked_cells": [{"x": 1, "y": 1}],
+        "difficult_cells": [{"x": 1, "y": 1}],
+        "deployment_zones": [],
+        "source_refs": [
+            {"source_key": "book", "chunk_key": "chunk", "page": 1, "note": "Map"}
+        ],
+    }
+    try:
+        normalize_combat_grid_template(template)
+    except BattleMapError as exc:
+        assert "must not overlap" in str(exc)
+    else:
+        raise AssertionError("overlapping blocked and difficult terrain must fail")

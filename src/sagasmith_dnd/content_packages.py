@@ -34,6 +34,7 @@ from sagasmith_dnd.content_validation import (
     selection_contract_errors,
 )
 from sagasmith_dnd.portrait_extraction import ExtractedPortrait, PortraitExtractor
+from sagasmith_dnd.spatial import BattleMapError, normalize_combat_grid_templates
 from sagasmith_dnd.statblocks import ParsedStatblock, finalize_imported_actor_rulings
 
 
@@ -145,6 +146,7 @@ def validate_dnd_content_package(package: Mapping[str, Any]) -> dict[str, Any]:
             else ""
         )
         raise ValueError(f"D&D content attestations are stale: {preview}{suffix}")
+    assets = {str(asset["asset_key"]): asset for asset in value["assets"]}
     if value["kind"] == "module":
         finalization = value["metadata"].get("agent_finalization")
         if not isinstance(finalization, Mapping) or set(finalization) != {
@@ -199,7 +201,48 @@ def validate_dnd_content_package(package: Mapping[str, Any]) -> dict[str, Any]:
             and not dict(value["content"].get("narrative") or {}).get("endings")
         ):
             raise ValueError("finalized campaign module requires at least one ending")
-    assets = {str(asset["asset_key"]): asset for asset in value["assets"]}
+        template_ids: set[str] = set()
+        for scene_index, scene in enumerate(value["content"].get("scene_atlas") or []):
+            metadata = dict(scene.get("metadata") or {})
+            profile_data = dict(metadata.get("profile_data") or {})
+            if "combat_grid_templates" not in profile_data:
+                continue
+            try:
+                templates = normalize_combat_grid_templates(
+                    profile_data["combat_grid_templates"]
+                )
+            except BattleMapError as exc:
+                raise ValueError(
+                    f"scene_atlas[{scene_index}] combat_grid_templates is invalid: {exc}"
+                ) from exc
+            if profile_data["combat_grid_templates"] != templates:
+                raise ValueError(
+                    f"scene_atlas[{scene_index}] combat_grid_templates is not canonical"
+                )
+            location_keys = {
+                str(item.get("key"))
+                for item in dict(metadata.get("spatial") or {}).get("locations", [])
+                if isinstance(item, Mapping) and item.get("key")
+            }
+            for template in templates:
+                if template["id"] in template_ids:
+                    raise ValueError(
+                        "module combat-grid template ids must be unique across the Scene Atlas"
+                    )
+                template_ids.add(template["id"])
+                if template["location_key"] not in location_keys:
+                    raise ValueError(
+                        "combat-grid template location_key must belong to its Scene Atlas scene"
+                    )
+                asset_key = template.get("map_asset_key")
+                if asset_key:
+                    asset = assets.get(str(asset_key))
+                    if asset is None or not str(asset.get("media_type") or "").startswith(
+                        "image/"
+                    ):
+                        raise ValueError(
+                            "combat-grid template map_asset_key must reference a packaged image"
+                        )
     for artifact in value["content"].get("artifacts") or []:
         if not isinstance(artifact, Mapping) or artifact.get("kind") != "statblock":
             continue
@@ -247,6 +290,15 @@ def canonicalize_dnd_content_package(package: Mapping[str, Any]) -> dict[str, An
     if value["system_id"] != "dnd5e":
         return value
     content = copy.deepcopy(dict(value["content"]))
+    for scene in content.get("scene_atlas") or []:
+        metadata = dict(scene.get("metadata") or {})
+        profile_data = dict(metadata.get("profile_data") or {})
+        if "combat_grid_templates" in profile_data:
+            profile_data["combat_grid_templates"] = normalize_combat_grid_templates(
+                profile_data["combat_grid_templates"]
+            )
+            metadata["profile_data"] = profile_data
+            scene["metadata"] = metadata
     artifacts = []
     for raw_artifact in content.get("artifacts") or []:
         artifact = copy.deepcopy(dict(raw_artifact))
@@ -1367,16 +1419,22 @@ def build_module_content_package(
     for raw_asset in descriptor.get("assets") or []:
         checksum = str(raw_asset["checksum"])
         raw = archive_blobs[checksum]
-        kind = str(dict(raw_asset.get("metadata") or {}).get("asset_kind") or "source_asset")
+        asset_metadata = dict(raw_asset.get("metadata") or {})
+        kind = str(asset_metadata.get("asset_kind") or "source_asset")
+        portable_asset_key = str(
+            asset_metadata.get("content_asset_key") or raw_asset["asset_key"]
+        ).strip()
+        if not portable_asset_key:
+            raise ValueError("module asset content_asset_key must not be empty")
         asset = blob_descriptor(
-            asset_key=str(raw_asset["asset_key"]),
+            asset_key=portable_asset_key,
             kind=kind,
             name=str(raw_asset["name"]),
             media_type=str(raw_asset["media_type"]),
             content=raw,
             license=license,
             attribution=attribution,
-            metadata=dict(raw_asset.get("metadata") or {}),
+            metadata=asset_metadata,
         )
         assets.append(asset)
         blobs[asset["checksum"]] = raw
@@ -1397,7 +1455,19 @@ def build_module_content_package(
             for key, value in raw_scene.items()
             if key not in {"content", "content_checksum", "chunks"}
         }
-        scene["metadata"] = _module_scene_metadata(scene.get("metadata") or {})
+        scene_metadata = _module_scene_metadata(scene.get("metadata") or {})
+        profile_data = dict(scene_metadata.get("profile_data") or {})
+        if "combat_grid_templates" in profile_data:
+            translated_templates = _translate_module_refs(
+                profile_data["combat_grid_templates"],
+                source_key=source["source_key"],
+                chunk_hash_keys=hash_keys,
+            )
+            profile_data["combat_grid_templates"] = normalize_combat_grid_templates(
+                translated_templates
+            )
+            scene_metadata["profile_data"] = profile_data
+        scene["metadata"] = scene_metadata
         scene["source_span"] = {
             "source_key": source["source_key"],
             "start_offset": source_section["start_offset"],
