@@ -111,7 +111,16 @@ Requires Python 3.11+:
 pip install "sagasmith-dnd[all]"
 sagasmith-dnd doctor --json
 sagasmith-dnd --help
+sagasmith-dnd database upgrade --json
 ```
+
+`database upgrade` now includes the one-time Snapshot schema-v8 cutover. It
+converts complete schema-v7 JSON snapshots to independent, bounded,
+checksummed `zlib-1` records and removes the old `payload` column. Stop all
+writers and take a consistent database backup first. Schema v3-v6 snapshots
+must be materialized by their matching historical runtime before upgrading.
+There is no downgrade; rollback restores the pre-upgrade database together
+with matching Core and D&D versions.
 
 | Extra | Purpose |
 |---|---|
