@@ -17,6 +17,7 @@ from sagasmith_core.content_pack import (
     build_actor_card,
     build_content_package,
     build_source_bundle,
+    content_package_checksum,
     source_ref,
 )
 from sagasmith_core.content_pack import (
@@ -24,7 +25,10 @@ from sagasmith_core.content_pack import (
 )
 
 from sagasmith_dnd.character_schema import default_character_notes
-from sagasmith_dnd.content_actors import validate_dnd_content_actor
+from sagasmith_dnd.content_actors import (
+    canonicalize_dnd_content_actor,
+    validate_dnd_content_actor,
+)
 from sagasmith_dnd.content_import import repair_reviewed_structured_transcription
 from sagasmith_dnd.content_validation import (
     build_catalog_review,
@@ -131,6 +135,7 @@ def validate_dnd_content_package(package: Mapping[str, Any]) -> dict[str, Any]:
                     path=f"actors[{index}]",
                 )
             )
+            validate_dnd_content_actor(actor)
     if invalid_text:
         preview = ", ".join(invalid_text[:8])
         suffix = f" (+{len(invalid_text) - 8} more)" if len(invalid_text) > 8 else ""
@@ -286,7 +291,15 @@ def validate_dnd_content_package(package: Mapping[str, Any]) -> dict[str, Any]:
 def canonicalize_dnd_content_package(package: Mapping[str, Any]) -> dict[str, Any]:
     """Rebuild the exact current D&D package form without changing source evidence."""
 
-    value = validate_core_content_package(package)
+    candidate = copy.deepcopy(dict(package))
+    if candidate.get("system_id") == "dnd5e" and candidate.get("kind") == "module":
+        for scene in dict(candidate.get("content") or {}).get("scene_atlas") or []:
+            metadata = dict(scene.get("metadata") or {})
+            if metadata.get("visibility") == "keeper":
+                metadata["visibility"] = "restricted"
+                scene["metadata"] = metadata
+        candidate["checksum"] = content_package_checksum(candidate)
+    value = validate_core_content_package(candidate)
     if value["system_id"] != "dnd5e":
         return value
     content = copy.deepcopy(dict(value["content"]))
@@ -341,7 +354,7 @@ def canonicalize_dnd_content_package(package: Mapping[str, Any]) -> dict[str, An
     if "rule_definitions" in content:
         content["rule_definitions"] = definitions
     actors = [
-        _repair_reviewed_actor_transcription(actor)
+        canonicalize_dnd_content_actor(_repair_reviewed_actor_transcription(actor))
         for actor in value.get("actors") or []
     ]
     rebuilt = build_content_package(

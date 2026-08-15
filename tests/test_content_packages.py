@@ -185,6 +185,95 @@ def test_package_rejects_unrepaired_transcription_character_in_actor_sheet() -> 
         validate_dnd_content_package(package)
 
 
+def test_package_validation_rejects_noncanonical_actor_but_canonicalizer_repairs_it() -> None:
+    notes = default_character_notes()
+    notes["profile"]["summary"] = "Legacy actor."
+    card = build_dnd_content_actor(
+        actor_id="dnd5e.example.legacy-actor",
+        version="2.0.0",
+        actor_type="npc",
+        name="Legacy Actor",
+        sheet=default_character_sheet(),
+        notes=notes,
+    )
+    package, _blobs = build_preset_content_package(
+        package_id="dnd5e.example.legacy-actors",
+        version="2.0.0",
+        system_id="dnd5e",
+        title="Legacy Actors",
+        cards=[card],
+    )
+    legacy_actor = copy.deepcopy(package["actors"][0])
+    legacy_actor["notes"]["profile"].pop("portrait_ref")
+    legacy = build_content_package(
+        kind=package["kind"],
+        package_id=package["id"],
+        version=package["version"],
+        system_id=package["system_id"],
+        manifest=package["manifest"],
+        dependencies=package["dependencies"],
+        sources=package["sources"],
+        assets=package["assets"],
+        content_reviews=package["content_reviews"],
+        actors=[legacy_actor],
+        content=package["content"],
+        metadata=package["metadata"],
+    )
+
+    with pytest.raises(ValueError, match="canonical sheet and notes"):
+        validate_dnd_content_package(legacy)
+
+    repaired = canonicalize_dnd_content_package(legacy)
+    assert repaired["actors"][0]["notes"]["profile"]["portrait_ref"] is None
+    assert validate_dnd_content_package(repaired) == repaired
+
+
+def test_canonicalizer_maps_obsolete_keeper_visibility_to_restricted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = {
+        "kind": "module",
+        "id": "dnd5e.example.legacy-visibility",
+        "version": "1.0.0",
+        "system_id": "dnd5e",
+        "checksum": "0" * 64,
+        "manifest": {},
+        "dependencies": [],
+        "sources": [],
+        "assets": [],
+        "content_reviews": [],
+        "actors": [],
+        "content": {
+            "scene_atlas": [{"metadata": {"visibility": "keeper"}}],
+            "artifacts": [],
+            "mechanics": [],
+        },
+        "metadata": {},
+    }
+    monkeypatch.setattr(
+        "sagasmith_dnd.content_packages.validate_core_content_package",
+        lambda value: copy.deepcopy(value),
+    )
+    monkeypatch.setattr(
+        "sagasmith_dnd.content_packages.content_package_checksum",
+        lambda _value: "1" * 64,
+    )
+    monkeypatch.setattr(
+        "sagasmith_dnd.content_packages.build_content_package",
+        lambda **kwargs: kwargs,
+    )
+    monkeypatch.setattr(
+        "sagasmith_dnd.content_packages.validate_dnd_content_package",
+        lambda value: value,
+    )
+
+    repaired = canonicalize_dnd_content_package(package)
+
+    assert repaired["content"]["scene_atlas"][0]["metadata"]["visibility"] == (
+        "restricted"
+    )
+
+
 def test_finalized_module_does_not_require_party_size_recommendation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

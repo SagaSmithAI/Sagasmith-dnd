@@ -86,6 +86,15 @@ def build_dnd_content_actor(
 def validate_dnd_content_actor(actor: Mapping[str, Any]) -> dict[str, Any]:
     """Validate a package-owned v3 actor with the full D&D sheet contracts."""
 
+    value, normalized = _normalized_dnd_content_actor(actor)
+    if normalized["sheet"] != value["sheet"] or normalized["notes"] != value["notes"]:
+        raise ContentPackageError("D&D content actor must use canonical sheet and notes")
+    return value
+
+
+def _normalized_dnd_content_actor(
+    actor: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
     image = actor.get("image") if isinstance(actor, Mapping) else None
     image_key = str(image.get("asset_key") or "") if isinstance(image, Mapping) else ""
     value = validate_actor_card(
@@ -103,9 +112,30 @@ def validate_dnd_content_actor(actor: Mapping[str, Any]) -> dict[str, Any]:
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise ContentPackageError(f"invalid D&D content actor: {exc}") from exc
-    if sheet != value["sheet"] or notes != value["notes"]:
-        raise ContentPackageError("D&D content actor must use canonical sheet and notes")
-    return value
+    normalized = build_actor_card(
+        actor_id=str(value["id"]),
+        version=str(value["version"]),
+        system_id=str(value["system_id"]),
+        actor_type=actor_type,
+        name=str(value["name"]),
+        player_name=value.get("player_name"),
+        summary=str(value.get("summary") or ""),
+        sheet=sheet,
+        notes=notes,
+        provenance=value["provenance"],
+        bindings=value["bindings"],
+        image_asset_key=(image_key or None),
+        image_alt=(str(image.get("alt") or "") if isinstance(image, Mapping) else ""),
+        metadata=value["metadata"],
+    )
+    return value, normalized
+
+
+def canonicalize_dnd_content_actor(actor: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the current deterministic D&D form of an actor-card.v3 value."""
+
+    _value, normalized = _normalized_dnd_content_actor(actor)
+    return validate_dnd_content_actor(normalized)
 
 
 def content_actor_from_statblock(
@@ -276,5 +306,6 @@ __all__ = [
     "build_srd2014_preset_actors",
     "build_srd2024_preset_actors",
     "content_actor_from_statblock",
+    "canonicalize_dnd_content_actor",
     "validate_dnd_content_actor",
 ]
