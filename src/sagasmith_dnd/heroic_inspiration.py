@@ -91,8 +91,82 @@ def spend_heroic_inspiration_reroll(
     }
 
 
+def reroll_recorded_d20_result(
+    sheet: dict[str, Any],
+    recorded_result: dict[str, Any],
+    *,
+    roll_index: int,
+    expected_original_roll: int,
+    rng: Any = None,
+) -> dict[str, Any]:
+    """Spend Heroic Inspiration and rebuild one canonical recorded d20 result."""
+
+    if isinstance(roll_index, bool) or not isinstance(roll_index, int) or roll_index < 0:
+        raise HeroicInspirationError("roll_index must be a non-negative integer")
+    original = deepcopy(dict(recorded_result))
+    rolls = list(original.get("rolls") or [])
+    if (
+        roll_index >= len(rolls)
+        or isinstance(rolls[roll_index], bool)
+        or int(rolls[roll_index]) != int(expected_original_roll)
+    ):
+        raise HeroicInspirationError(
+            "roll_index and expected_original_roll must match the recorded die"
+        )
+    if any(
+        isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 20
+        for value in rolls
+    ):
+        raise HeroicInspirationError("recorded d20 rolls must contain integers between 1 and 20")
+    natural_before = original.get("natural")
+    total_before = original.get("total")
+    if (
+        isinstance(natural_before, bool)
+        or not isinstance(natural_before, int)
+        or isinstance(total_before, bool)
+        or not isinstance(total_before, int)
+    ):
+        raise HeroicInspirationError("recorded d20 result requires integer natural and total")
+    spent = spend_heroic_inspiration_reroll(
+        sheet,
+        die_sides=20,
+        original_roll=int(expected_original_roll),
+        rng=rng,
+    )
+    rolls[roll_index] = int(spent["new_roll"])
+    roll_mode = str(original.get("roll_mode") or "normal")
+    if roll_mode not in {"normal", "advantage", "disadvantage"}:
+        raise HeroicInspirationError("recorded d20 result has an unsupported roll_mode")
+    natural = (
+        max(rolls)
+        if roll_mode == "advantage"
+        else min(rolls)
+        if roll_mode == "disadvantage"
+        else rolls[0]
+    )
+    modifier = int(total_before) - int(natural_before)
+    result = {
+        **original,
+        "rolls": rolls,
+        "natural": natural,
+        "critical": natural == 20,
+        "fumble": natural == 1,
+        "total": natural + modifier,
+    }
+    if isinstance(original.get("dc"), int) and not isinstance(original.get("dc"), bool):
+        result["success"] = int(result["total"]) >= int(original["dc"])
+    return {
+        "sheet": spent["sheet"],
+        "result": result,
+        "heroic_inspiration_reroll": {
+            key: value for key, value in spent.items() if key != "sheet"
+        },
+    }
+
+
 __all__ = [
     "HeroicInspirationError",
     "grant_heroic_inspiration",
+    "reroll_recorded_d20_result",
     "spend_heroic_inspiration_reroll",
 ]
