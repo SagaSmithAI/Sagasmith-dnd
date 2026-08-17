@@ -50,7 +50,7 @@ def test_source_evidence_excludes_derived_resolution_fields() -> None:
             "resolution_plan": {"text": "Do not treat this as evidence."},
             "nested": {"effect": "A second original clause."},
         }
-    ) == ("Original source wording.", "A second original clause.")
+    ) == ("original source wording.", "a second original clause.")
 
 
 def test_standard_spell_ruling_is_bound_to_the_recorded_clause() -> None:

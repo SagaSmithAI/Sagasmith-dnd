@@ -5,6 +5,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from sagasmith_core.modules import normalize_source_evidence_text
+
 from sagasmith_dnd.resolution_plan import (
     CompiledResolutionPlan,
     ResolutionPlanCompilationError,
@@ -116,9 +118,6 @@ def source_card_evidence_texts(source_card: dict[str, Any]) -> tuple[str, ...]:
 
     values: list[str] = []
 
-    def normalize(value: Any) -> str:
-        return " ".join(str(value or "").split()).strip()
-
     def collect(value: Any, key: str = "") -> None:
         if isinstance(value, dict):
             for child_key, child in value.items():
@@ -131,7 +130,7 @@ def source_card_evidence_texts(source_card: dict[str, Any]) -> tuple[str, ...]:
                 collect(child, key)
             return
         if key in {"description", "effect", "on_hit_effect", "source_excerpt", "text"}:
-            normalized = normalize(value)
+            normalized = normalize_source_evidence_text(value)
             if len(normalized) >= 10:
                 values.append(normalized)
 
@@ -180,7 +179,7 @@ def validate_persisted_standard_spell_ruling(
     application_id = str(raw_ruling.get("application_id") or "").strip()
     decision = " ".join(str(raw_ruling.get("decision") or "").split())
     reason = " ".join(str(raw_ruling.get("reason") or "").split())
-    source_excerpt = " ".join(str(raw_ruling.get("source_excerpt") or "").split())
+    source_excerpt = normalize_source_evidence_text(raw_ruling.get("source_excerpt"))
     recorded_excerpt = str(requirement.get("source_excerpt") or "")
     if (
         set(raw_ruling) - allowed
@@ -189,7 +188,7 @@ def validate_persisted_standard_spell_ruling(
         or raw_ruling.get("ruling_kind") != "generic_spell_effect"
         or not 10 <= len(decision) <= 1000
         or not 10 <= len(reason) <= 500
-        or source_excerpt != " ".join(recorded_excerpt.split())
+        or source_excerpt != normalize_source_evidence_text(recorded_excerpt)
     ):
         raise CharacterSourceCardError(
             "standard spell agent_ruling requires the exact persisted "
