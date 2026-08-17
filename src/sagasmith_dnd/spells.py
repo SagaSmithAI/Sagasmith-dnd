@@ -786,6 +786,32 @@ def end_concentration_effects(
     return {"sheet": value, "ended_effect_ids": ended}
 
 
+def end_tether_concentrations(
+    sheet: dict[str, Any],
+    tethers: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """End the exact concentration effects referenced by ended spell tethers."""
+
+    effect_ids = [
+        str(item.get("concentration_effect_id") or "")
+        for item in tethers
+        if str(item.get("concentration_effect_id") or "")
+    ]
+    reason = next(
+        (
+            str(item.get("ended_reason") or "")
+            for item in tethers
+            if str(item.get("ended_reason") or "")
+        ),
+        "witch_bolt_ended",
+    )
+    return end_concentration_effects(
+        sheet,
+        effect_ids=effect_ids,
+        ended_reason=reason,
+    )
+
+
 def _apply_concentration_effect(
     sheet: dict[str, Any],
     *,

@@ -175,6 +175,105 @@ class CombatEngineError(ValueError):
     """Base error for a rejected or incomplete combat operation."""
 
 
+def source_spell_resolution(sheet: dict[str, Any], spell_id: str) -> dict[str, Any]:
+    """Return one source-bound reviewed spell resolution from an actor card."""
+
+    spell = next(
+        (
+            item
+            for item in sheet.get("content", {}).get("spells", [])
+            if str(item.get("id") or "") == str(spell_id)
+        ),
+        None,
+    )
+    if spell is None:
+        raise CombatEngineError("spell is not recorded on the caster card")
+    resolution = spell.get("resolution")
+    if not isinstance(resolution, dict):
+        raise CombatEngineError("spell does not have a reviewed structured resolution")
+    if SPELL_RESOLUTION_MECHANIC_ID not in {
+        str(item) for item in spell.get("mechanic_refs", [])
+    }:
+        raise CombatEngineError("spell resolution is not bound to the Core executor")
+    return deepcopy(resolution)
+
+
+def newly_ended_witch_bolt_tethers(
+    before: dict[str, Any],
+    after: dict[str, Any],
+    *,
+    source_actor_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Find exact tether transitions that require concentration cleanup."""
+
+    active_before = {
+        str(item.get("id") or "")
+        for item in before.get("ongoing_effects", [])
+        if (
+            isinstance(item, dict)
+            and item.get("active", True)
+            and item.get("mechanic_id") == CORE_WITCH_BOLT_MECHANIC_ID
+        )
+    }
+    return [
+        deepcopy(item)
+        for item in after.get("ongoing_effects", [])
+        if (
+            isinstance(item, dict)
+            and str(item.get("id") or "") in active_before
+            and not item.get("active", True)
+            and item.get("mechanic_id") == CORE_WITCH_BOLT_MECHANIC_ID
+            and (
+                source_actor_id is None
+                or str(item.get("source_actor_id") or "") == source_actor_id
+            )
+        )
+    ]
+
+
+def reconcile_readied_spells(
+    encounter: dict[str, Any], actor_id: str, sheet: dict[str, Any]
+) -> list[str]:
+    """Dissipate readied spells whose holding concentration is no longer active."""
+
+    active_effect_ids = {
+        str(effect.get("id"))
+        for effect in sheet.get("effects", [])
+        if effect.get("active") and effect.get("concentration")
+    }
+    expired = [
+        item
+        for item in encounter.get("readied", [])
+        if item.get("kind") == "spell"
+        and item.get("actor_id") == actor_id
+        and str(item.get("holding_effect_id")) not in active_effect_ids
+    ]
+    if not expired:
+        return []
+    expired_ids = {str(item.get("id")) for item in expired}
+    encounter["readied"] = [
+        item for item in encounter.get("readied", []) if str(item.get("id")) not in expired_ids
+    ]
+    encounter["pending"] = [
+        item
+        for item in encounter.get("pending", [])
+        if str(item.get("readied_id")) not in expired_ids
+    ]
+    encounter["log"] = [
+        *list(encounter.get("log") or []),
+        *[
+            {
+                "type": "readied_spell_dissipated",
+                "actor_id": actor_id,
+                "readied_id": item.get("id"),
+                "reason": "concentration_ended",
+            }
+            for item in expired
+        ],
+    ][-100:]
+    return sorted(expired_ids)
+
+
 def reconcile_ended_effect_condition_ids(
     sheet: dict[str, Any], *, ended_effect_ids: Iterable[str]
 ) -> bool:
