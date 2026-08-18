@@ -6,8 +6,8 @@
     "name": "SagaSmithAI",
     "url": "https://github.com/SagaSmithAI"
   },
-  "homepage": "https://github.com/SagaSmithAI/SagaSmith-dnd-skills",
-  "repository": "https://github.com/SagaSmithAI/SagaSmith-dnd-skills",
+  "homepage": "https://github.com/SagaSmithAI/sagasmith-dnd/tree/main/skills",
+  "repository": "https://github.com/SagaSmithAI/sagasmith-dnd",
   "license": "Apache-2.0",
   "keywords": ["dnd", "dnd5e", "mcp", "campaign", "game-master"],
   "skills": "./skills/",
@@ -18,7 +18,7 @@
     "developerName": "SagaSmithAI",
     "category": "Developer Tools",
     "capabilities": ["Interactive", "Write"],
-    "websiteURL": "https://github.com/SagaSmithAI/SagaSmith-dnd-skills",
+    "websiteURL": "https://github.com/SagaSmithAI/sagasmith-dnd/tree/main/skills",
     "defaultPrompt": [
       "Resume my SagaSmith D&D campaign.",
       "Set up a source-bound D&D campaign.",

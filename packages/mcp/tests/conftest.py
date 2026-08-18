@@ -30,7 +30,7 @@ class _TestDatabaseTemplates:
         self.root = root
         self.enabled = enabled
         self.building = False
-        self.workspace = Path(__file__).resolve().parents[2]
+        self.workspace = Path(__file__).resolve().parents[3]
         self._templates: dict[bool, Path] = {}
 
     def _config(self, home: Path, *, auto_seed_rules: bool) -> McpConfig:
@@ -39,8 +39,8 @@ class _TestDatabaseTemplates:
             database_url=None,
             chroma_url=None,
             chroma_path_override=None,
-            dnd_skills_dir=self.workspace / "SagaSmith-dnd-skills",
-            modulegen_skills_dir=self.workspace / "SagaSmith-module-gen-skills",
+            dnd_skills_dir=self.workspace / "skills",
+            modulegen_skills_dir=self.workspace / "skills" / "dnd-module-generator",
             auto_seed_rules=auto_seed_rules,
         )
 

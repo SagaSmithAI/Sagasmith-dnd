@@ -147,13 +147,13 @@ def _config(
     presets: bool = False,
     rule_import_roots: tuple[Path, ...] = (),
 ) -> McpConfig:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     return McpConfig(
         home=tmp_path / "home",
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=(workspace / "SagaSmith-dnd-skills" if presets else tmp_path / "dnd"),
+        dnd_skills_dir=(workspace / "skills" if presets else tmp_path / "dnd"),
         modulegen_skills_dir=tmp_path / "modulegen",
         auto_seed_rules=presets,
         rule_import_roots=rule_import_roots,

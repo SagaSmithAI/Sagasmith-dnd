@@ -104,7 +104,9 @@ def validate_runtime(config_path: Path, agent_root: Path) -> list[str]:
             "tools.ssrfWhitelist must include 127.0.0.1/32 for the local HTTP MCP."
         )
 
-    expected_skills = (agent_root.parent / "SagaSmith-dnd-skills" / "full" / "skills").resolve()
+    expected_skills = (
+        agent_root.parent / "sagasmith-dnd" / "skills" / "full" / "skills"
+    ).resolve()
     if dnd_skill_roots and expected_skills not in dnd_skill_roots:
         errors.append(
             "Agent externalSkillsDirs must expose the sibling Full D&D skill pack."
@@ -130,7 +132,7 @@ def main() -> int:
     parser.add_argument("--config", default="config/config.json")
     parser.add_argument(
         "--agent-root",
-        default=str(Path(__file__).resolve().parents[2] / "SagaSmith-agent"),
+        default=str(Path(__file__).resolve().parents[4] / "SagaSmith-agent"),
     )
     args = parser.parse_args()
     agent_root = Path(args.agent_root).expanduser().resolve()

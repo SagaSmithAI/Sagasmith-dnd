@@ -42,8 +42,8 @@ def test_arcane_recovery_reset_is_derived_from_the_source_edition_text() -> None
 
 
 def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
-    workspace = Path(__file__).resolve().parents[2]
-    manifest, artifacts = build_srd2014_content(workspace / "SagaSmith-dnd-skills")
+    workspace = Path(__file__).resolve().parents[3]
+    manifest, artifacts = build_srd2014_content(workspace / "skills")
     counts = Counter(item["kind"] for item in artifacts)
 
     assert manifest["version"] == PACK_VERSION == "1.24.0"

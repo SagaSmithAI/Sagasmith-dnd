@@ -898,7 +898,7 @@ Agent 可以继续：
 |---|---|
 | Agent 与 domain memory 所有权 | `SagaSmith-agent/nanobot/templates/AGENTS.md`、`nanobot/templates/agent/recap_generation.md` |
 | 宿主有界上下文协议 | `full/references/host-integration-bounded-context.md` |
-| Full Runtime 总入口 | `SagaSmith-dnd-skills/full/SKILL.md` |
+| Full Runtime 总入口 | `skills/full/SKILL.md` |
 | 运行流程 | `full/references/workflows.md` |
 | MCP 工具和单一权威表 | `full/references/mcp-contract.md` |
 | Memory 路由 | `full/references/memory-ownership.md` |
@@ -911,5 +911,5 @@ Agent 可以继续：
 | Campaign/Event/Fact/Knowledge/Snapshot | `sagasmith-core/src/sagasmith_core/` 对应 services |
 | D&D manifest schema | `sagasmith-dnd/src/sagasmith_dnd/playthrough.py` |
 | 角色和规则结算 | `sagasmith-dnd/src/sagasmith_dnd/` |
-| 公开事务与 exposure | `SagaSmith-dnd-mcp/src/sagasmith_dnd_mcp/server.py` |
-| 真实跑团驱动器 | `SagaSmith-dnd-mcp/scripts/regression_playthrough.py`、`regression_encounter.py` |
+| 公开事务与 exposure | `packages/mcp/src/sagasmith_dnd_mcp/server.py` |
+| 真实跑团驱动器 | `packages/mcp/scripts/regression_playthrough.py`、`regression_encounter.py` |

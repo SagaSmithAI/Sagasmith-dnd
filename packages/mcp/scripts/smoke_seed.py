@@ -37,9 +37,10 @@ async def seed(home: Path) -> dict[str, Any]:
             database_url=None,
             chroma_url=None,
             chroma_path_override=None,
-            dnd_skills_dir=Path(__file__).resolve().parents[2] / "SagaSmith-dnd-skills",
-            modulegen_skills_dir=Path(__file__).resolve().parents[2]
-            / "SagaSmith-module-gen-skills",
+            dnd_skills_dir=Path(__file__).resolve().parents[3] / "skills",
+            modulegen_skills_dir=Path(__file__).resolve().parents[3]
+            / "skills"
+            / "dnd-module-generator",
             auto_seed_rules=False,
         )
     )

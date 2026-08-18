@@ -1054,7 +1054,7 @@ def test_standard_statblock_keeps_open_multiattack_as_source_bound_agent_ruling(
 
 
 def test_statblock_spellcasting_binds_slots_and_active_content(tmp_path: Path) -> None:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     import_root = tmp_path / "rules"
     import_root.mkdir()
     source_path = import_root / "master-of-souls.md"
@@ -1064,7 +1064,7 @@ def test_statblock_spellcasting_binds_slots_and_active_content(tmp_path: Path) -
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
+        dnd_skills_dir=workspace / "skills",
         modulegen_skills_dir=tmp_path / "modulegen",
         rule_import_roots=(import_root,),
         auto_seed_rules=False,
@@ -1338,7 +1338,7 @@ def test_statblock_spellcasting_binds_slots_and_active_content(tmp_path: Path) -
 def test_innate_statblock_spellcasting_binds_daily_uses_and_qualifiers(
     tmp_path: Path,
 ) -> None:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     import_root = tmp_path / "rules"
     import_root.mkdir()
     source_path = import_root / "yuan-ti-malison.md"
@@ -1348,7 +1348,7 @@ def test_innate_statblock_spellcasting_binds_daily_uses_and_qualifiers(
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
+        dnd_skills_dir=workspace / "skills",
         modulegen_skills_dir=tmp_path / "modulegen",
         rule_import_roots=(import_root,),
         auto_seed_rules=False,

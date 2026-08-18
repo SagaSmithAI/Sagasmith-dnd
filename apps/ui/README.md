@@ -60,7 +60,7 @@ npm run build
 npm run preview
 ```
 
-Start the adjacent `SagaSmith-dnd-mcp` gateway (or use `SagaSmith-agent/start.bat`). The default URL is `http://127.0.0.1:8766`. Override its address and audience at build/dev time:
+Start the repository-local `packages/mcp` gateway (or use `SagaSmith-agent`). The default URL is `http://127.0.0.1:8766`. Override its address and audience at build/dev time:
 
 ```powershell
 $env:PUBLIC_SAGASMITH_API_BASE = "http://127.0.0.1:8766"

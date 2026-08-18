@@ -1,6 +1,6 @@
 # SagaSmith D&D Skills
 
-[官网](https://sagasmithai.github.io) · [平台总览](https://github.com/SagaSmithAI/.github/blob/main/profile/README.md) · [D&D MCP](https://github.com/SagaSmithAI/SagaSmith-dnd-mcp) · [D&D runtime](https://github.com/SagaSmithAI/Sagasmith-dnd) · [托管服务](https://github.com/SagaSmithAI/SagaSmith-service) · [内容目录](https://github.com/SagaSmithAI/SagaSmith-dnd-content-library)
+[官网](https://sagasmithai.github.io) · [平台总览](https://github.com/SagaSmithAI/.github/blob/main/profile/README.md) · [D&D MCP](https://github.com/SagaSmithAI/sagasmith-dnd/tree/main/packages/mcp) · [D&D runtime](https://github.com/SagaSmithAI/Sagasmith-dnd) · [托管服务](https://github.com/SagaSmithAI/SagaSmith-service) · [内容目录](https://github.com/SagaSmithAI/SagaSmith-dnd-content-library)
 
 **让兼容 SKILL.md 的 Agent 学会完整主持 D&D 5e 2014/2024。** 本仓库保存主持策略、工具使用契约、规则参考和 workspace 模板；不拥有数据库，也不自行实现规则结算。
 
@@ -75,10 +75,10 @@ MCP contract、workflow、rule boundary、combat 与内容导入参考，以及
 
 ## 安装
 
-推荐先启动 [SagaSmith-dnd-mcp](https://github.com/SagaSmithAI/SagaSmith-dnd-mcp)，再让 Agent 加载本仓库 `full/SKILL.md`。MCP 也可将同一 Skill 作为 resources/prompts 提供给不直接安装仓库的 Host。
+推荐先启动 [SagaSmith-dnd-mcp](https://github.com/SagaSmithAI/sagasmith-dnd/tree/main/packages/mcp)，再让 Agent 加载本仓库 `full/SKILL.md`。MCP 也可将同一 Skill 作为 resources/prompts 提供给不直接安装仓库的 Host。
 
 ```text
-用户：安装 https://github.com/SagaSmithAI/SagaSmith-dnd-skills
+用户：安装 https://github.com/SagaSmithAI/sagasmith-dnd/tree/main/skills
 Agent：检测 D&D MCP → 可用则加载 full → 不可用时询问是否明确切换 standalone
 ```
 

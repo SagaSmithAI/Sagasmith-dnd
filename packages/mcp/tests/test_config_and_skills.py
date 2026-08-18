@@ -132,13 +132,13 @@ def test_default_rule_import_roots_include_the_dnd_skill_corpus(monkeypatch) -> 
 
 
 def test_bundled_rule_seed_reports_complete_multilingual_corpus(tmp_path: Path) -> None:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
+        dnd_skills_dir=workspace / "skills",
         modulegen_skills_dir=tmp_path / "modulegen",
         auto_seed_rules=True,
     )

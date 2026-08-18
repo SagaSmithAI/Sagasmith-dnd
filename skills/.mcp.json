@@ -5,6 +5,7 @@
       "args": [],
       "env": {
         "SAGASMITH_DND_SKILLS_DIR": "${CLAUDE_PLUGIN_ROOT}",
+        "SAGASMITH_MODULEGEN_SKILLS_DIR": "${CLAUDE_PLUGIN_ROOT}/dnd-module-generator",
         "SAGASMITH_DND_MCP_BOUND_PRINCIPAL_ID": "claude-code:local"
       }
     }

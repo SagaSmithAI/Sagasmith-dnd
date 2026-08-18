@@ -376,14 +376,14 @@ def test_narrative_choices_preserve_bounded_agent_context_without_false_grants()
 
 @pytest.mark.fresh_database
 def test_reviewed_addon_feat_materializes_bounded_spell_sources(tmp_path: Path) -> None:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
-        modulegen_skills_dir=workspace / "SagaSmith-module-gen-skills",
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
     )
 
     async def exercise() -> None:
@@ -565,14 +565,14 @@ def test_reviewed_addon_feat_materializes_bounded_spell_sources(tmp_path: Path) 
 def test_reviewed_addon_actor_template_derives_owner_values_and_receipt(
     tmp_path: Path,
 ) -> None:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
-        modulegen_skills_dir=workspace / "SagaSmith-module-gen-skills",
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
     )
     source_text = """### Steel Defender
 
@@ -929,14 +929,14 @@ to hit, reach 5 ft., one target. *Hit:* 1d8 + PB force damage.
 
 @pytest.mark.fresh_database
 def test_reviewed_addon_item_uses_bound_inventory_materializer(tmp_path: Path) -> None:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
-        modulegen_skills_dir=workspace / "SagaSmith-module-gen-skills",
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
     )
 
     async def exercise() -> None:
@@ -1084,14 +1084,14 @@ def test_reviewed_addon_item_uses_bound_inventory_materializer(tmp_path: Path) -
 
 @pytest.mark.fresh_database
 def test_reviewed_addon_background_materializes_embedded_equipment(tmp_path: Path) -> None:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
-        modulegen_skills_dir=workspace / "SagaSmith-module-gen-skills",
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
     )
 
     async def exercise() -> None:
@@ -1964,14 +1964,14 @@ def test_reviewed_addon_background_materializes_embedded_equipment(tmp_path: Pat
 def test_subclass_spell_prefers_exact_reviewed_dependency_over_bundled_duplicate(
     tmp_path: Path,
 ) -> None:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
-        modulegen_skills_dir=workspace / "SagaSmith-module-gen-skills",
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
     )
 
     async def exercise() -> None:
@@ -2211,14 +2211,14 @@ def test_subclass_spell_prefers_exact_reviewed_dependency_over_bundled_duplicate
 
 @pytest.mark.fresh_database
 def test_reviewed_addon_base_class_uses_bound_level_one_materializer(tmp_path: Path) -> None:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
-        modulegen_skills_dir=workspace / "SagaSmith-module-gen-skills",
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
     )
 
     async def exercise() -> None:

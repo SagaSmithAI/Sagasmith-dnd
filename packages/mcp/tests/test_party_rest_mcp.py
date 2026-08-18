@@ -587,13 +587,13 @@ def test_party_long_rest_honors_source_granted_elf_trance(tmp_path: Path) -> Non
 
 def test_party_long_rest_accounts_for_2014_preparation_time(tmp_path: Path) -> None:
     async def exercise() -> None:
-        workspace = Path(__file__).resolve().parents[2]
+        workspace = Path(__file__).resolve().parents[3]
         config = McpConfig(
             home=tmp_path / "home",
             database_url=None,
             chroma_url=None,
             chroma_path_override=None,
-            dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
+            dnd_skills_dir=workspace / "skills",
             modulegen_skills_dir=tmp_path / "modulegen",
             auto_seed_rules=False,
         )

@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 def _workspace_root() -> Path:
-    return Path(__file__).resolve().parents[3]
+    return Path(__file__).resolve().parents[4]
 
 
 @dataclass(frozen=True)
@@ -42,7 +42,7 @@ class McpConfig:
         root = _workspace_root()
         home = Path(os.environ.get("SAGASMITH_DND_MCP_HOME", root / ".sagasmith-dnd-mcp"))
         dnd_skills_dir = Path(
-            os.environ.get("SAGASMITH_DND_SKILLS_DIR", root / "SagaSmith-dnd-skills")
+            os.environ.get("SAGASMITH_DND_SKILLS_DIR", root / "skills")
         ).expanduser().resolve()
         raw_chroma_path = os.environ.get("CHROMA_DB_PATH")
         raw_rule_roots = os.environ.get("SAGASMITH_DND_MCP_RULE_IMPORT_ROOTS")
@@ -56,7 +56,7 @@ class McpConfig:
             )
             if raw_rule_roots is not None
             else (
-                root / "reference" / "DnD-Books",
+                root.parent / "reference" / "DnD-Books",
                 dnd_skills_dir / "full" / "skills" / "dnd-dm" / "srd",
             )
         )
@@ -67,7 +67,7 @@ class McpConfig:
                 if value.strip()
             )
             if raw_module_roots is not None
-            else (root / "test_pdfs",)
+            else (root.parent / "test_pdfs",)
         )
         return cls(
             home=home.expanduser().resolve(),
@@ -80,7 +80,7 @@ class McpConfig:
             modulegen_skills_dir=Path(
                 os.environ.get(
                     "SAGASMITH_MODULEGEN_SKILLS_DIR",
-                    root / "SagaSmith-module-gen-skills",
+                    root / "skills" / "dnd-module-generator",
                 )
             )
             .expanduser()

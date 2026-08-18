@@ -34,14 +34,14 @@ def test_mcp_runtime_never_emits_an_unregistered_core_boundary() -> None:
 
 @pytest.mark.fresh_database
 def test_core_srd_content_catalog_is_structured_and_selectable(tmp_path: Path) -> None:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
-        modulegen_skills_dir=workspace / "SagaSmith-module-gen-skills",
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
     )
 
     async def call(server, name: str, arguments: dict):

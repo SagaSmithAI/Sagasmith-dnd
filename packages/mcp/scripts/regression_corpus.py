@@ -66,7 +66,7 @@ REQUIRED_RECOVERY_OPERATIONS = {
 
 def _arguments() -> argparse.Namespace:
     repo = Path(__file__).resolve().parents[1]
-    workspace = repo.parent
+    workspace = repo.parents[2]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workspace", type=Path, default=workspace)
     parser.add_argument("--output", type=Path, required=True)
@@ -727,7 +727,7 @@ def _default_roots(workspace: Path) -> tuple[list[Path], list[Path], list[Path],
         workspace / "reference" / "DnD-Books" / "5e" / "Campaign",
         workspace / "reference" / "DnD-Books" / "5e" / "One Shots",
         workspace / "test_pdfs",
-        workspace / "SagaSmith-dnd-mcp" / "fixtures",
+        Path(__file__).resolve().parents[1] / "fixtures",
     ]
     pack_roots = [
         workspace / "tmp" / "unified-content-build-cache",

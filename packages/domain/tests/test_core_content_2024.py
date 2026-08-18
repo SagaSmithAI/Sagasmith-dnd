@@ -13,8 +13,8 @@ from sagasmith_dnd.spell_resolution import effective_spell_resolution
 
 
 def test_srd2024_content_covers_every_core_catalog_kind_with_exact_sources() -> None:
-    workspace = Path(__file__).resolve().parents[2]
-    manifest, artifacts = build_srd2024_content(workspace / "SagaSmith-dnd-skills")
+    workspace = Path(__file__).resolve().parents[3]
+    manifest, artifacts = build_srd2024_content(workspace / "skills")
     counts = Counter(item["kind"] for item in artifacts)
 
     assert manifest["id"] == PACK_ID
@@ -148,8 +148,8 @@ def test_srd2024_content_covers_every_core_catalog_kind_with_exact_sources() -> 
 
 
 def test_srd2024_changed_spells_never_borrow_2014_resolution_values() -> None:
-    workspace = Path(__file__).resolve().parents[2]
-    _, artifacts = build_srd2024_content(workspace / "SagaSmith-dnd-skills")
+    workspace = Path(__file__).resolve().parents[3]
+    _, artifacts = build_srd2024_content(workspace / "skills")
     spells = {item["card"]["name"]: item for item in artifacts if item["kind"] == "spell"}
 
     cure_wounds = spells["Cure Wounds"]
@@ -166,8 +166,8 @@ def test_srd2024_changed_spells_never_borrow_2014_resolution_values() -> None:
 
 
 def test_srd2024_features_and_weapons_carry_executable_resource_evidence() -> None:
-    workspace = Path(__file__).resolve().parents[2]
-    _, artifacts = build_srd2024_content(workspace / "SagaSmith-dnd-skills")
+    workspace = Path(__file__).resolve().parents[3]
+    _, artifacts = build_srd2024_content(workspace / "skills")
 
     second_wind = next(
         item
@@ -242,8 +242,8 @@ def test_srd2024_features_and_weapons_carry_executable_resource_evidence() -> No
 
 
 def test_srd2024_primary_class_resources_are_structured_without_fake_execution() -> None:
-    workspace = Path(__file__).resolve().parents[2]
-    _, artifacts = build_srd2024_content(workspace / "SagaSmith-dnd-skills")
+    workspace = Path(__file__).resolve().parents[3]
+    _, artifacts = build_srd2024_content(workspace / "skills")
     features = {
         (item["card"].get("class_name"), item["card"]["name"]): item
         for item in artifacts
@@ -316,8 +316,8 @@ def test_srd2024_primary_class_resources_are_structured_without_fake_execution()
 
 
 def test_srd2024_advancement_choices_and_feat_prerequisites_are_executable() -> None:
-    workspace = Path(__file__).resolve().parents[2]
-    _, artifacts = build_srd2024_content(workspace / "SagaSmith-dnd-skills")
+    workspace = Path(__file__).resolve().parents[3]
+    _, artifacts = build_srd2024_content(workspace / "skills")
     by_id = {item["id"]: item for item in artifacts}
 
     fighter_asi = by_id["dnd5e.content.srd2024.feature.fighter-ability-score-improvement"]["card"]
@@ -400,8 +400,8 @@ def test_srd2024_advancement_choices_and_feat_prerequisites_are_executable() -> 
 
 
 def test_srd2024_backgrounds_use_character_schema_shaped_grants() -> None:
-    workspace = Path(__file__).resolve().parents[2]
-    _, artifacts = build_srd2024_content(workspace / "SagaSmith-dnd-skills")
+    workspace = Path(__file__).resolve().parents[3]
+    _, artifacts = build_srd2024_content(workspace / "skills")
     backgrounds = {
         item["card"]["name"]: item["card"] for item in artifacts if item["kind"] == "background"
     }
@@ -442,8 +442,8 @@ def test_srd2024_backgrounds_use_character_schema_shaped_grants() -> None:
 
 
 def test_srd2024_unstructured_rules_retain_agent_context_not_fake_mechanics() -> None:
-    workspace = Path(__file__).resolve().parents[2]
-    _, artifacts = build_srd2024_content(workspace / "SagaSmith-dnd-skills")
+    workspace = Path(__file__).resolve().parents[3]
+    _, artifacts = build_srd2024_content(workspace / "skills")
     light = next(item for item in artifacts if item["id"] == "dnd5e.content.srd2024.spell.light")
     aboleth = next(
         item for item in artifacts if item["id"] == "dnd5e.content.srd2024.monster.aboleth"
@@ -457,8 +457,8 @@ def test_srd2024_unstructured_rules_retain_agent_context_not_fake_mechanics() ->
 
 
 def test_srd2024_monsters_cross_file_boundaries_and_preserve_modifier_only_blocks() -> None:
-    workspace = Path(__file__).resolve().parents[2]
-    _, artifacts = build_srd2024_content(workspace / "SagaSmith-dnd-skills")
+    workspace = Path(__file__).resolve().parents[3]
+    _, artifacts = build_srd2024_content(workspace / "skills")
     monsters = {item["card"]["name"]: item for item in artifacts if item["kind"] == "monster"}
 
     aboleth = parse_srd2024_monster_artifact(monsters["Aboleth"])

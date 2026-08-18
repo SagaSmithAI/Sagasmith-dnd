@@ -162,7 +162,7 @@ export default function Dashboard() {
         <div><span>QUICK OPERATIONS</span><p>浏览界面用于观察与导航；状态提交仍通过 Agent + MCP。</p></div>
         <a href="/campaigns">战役档案 <b>→</b></a>
         <a href="/rules">规则来源 <b>→</b></a>
-        <a href="https://github.com/SagaSmithAI/SagaSmith-dnd-mcp" target="_blank" rel="noreferrer">MCP Contract <b>↗</b></a>
+        <a href="https://github.com/SagaSmithAI/sagasmith-dnd/tree/main/packages/mcp" target="_blank" rel="noreferrer">MCP Contract <b>↗</b></a>
       </section>
     </div>
   );

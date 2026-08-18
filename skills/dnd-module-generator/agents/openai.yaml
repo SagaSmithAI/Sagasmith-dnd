@@ -1,7 +1,7 @@
 interface:
-  display_name: "SagaSmith Content Pack Builder"
-  short_description: "Build reviewed Module and rules Packs"
-  default_prompt: "Use $sagasmith-modulegen to build and finalize a reviewed current-schema Content Pack for my active SagaSmith system."
+  display_name: "D&D Module Generator"
+  short_description: "Build reviewed D&D Module and rules Packs"
+  default_prompt: "Use $dnd-module-generator to build a reviewed D&D 5e Pack from my source."
 
 policy:
   allow_implicit_invocation: true

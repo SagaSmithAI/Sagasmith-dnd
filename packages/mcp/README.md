@@ -33,7 +33,7 @@ The gateway listens on `127.0.0.1:8766` by default and serves the built Workbenc
 `SAGASMITH_DND_UI_DIST` is set. Both the gateway and Agent remain real MCP clients; each observes
 server-emitted `tools/list_changed` rather than using a fixed tool superset.
 
-[平台总览](https://github.com/SagaSmithAI/.github/blob/main/profile/README.md) · [D&D runtime](https://github.com/SagaSmithAI/Sagasmith-dnd) · [D&D Skills](https://github.com/SagaSmithAI/SagaSmith-dnd-skills)
+[平台总览](https://github.com/SagaSmithAI/.github/blob/main/profile/README.md) · [D&D runtime](https://github.com/SagaSmithAI/Sagasmith-dnd) · [D&D Skills](https://github.com/SagaSmithAI/sagasmith-dnd/tree/main/skills)
 
 **SagaSmithAI 的 D&D 5e Agent 能力服务。** 它通过标准 MCP transport 将 SagaSmith Core、D&D 规则运行时、D&D Skills 和模组生成 Skill 组合成一个可被不同 Agent Host 复用的服务端边界；本地系统使用唯一的 streamable-HTTP 权威进程。
 
@@ -130,7 +130,7 @@ NanoBot 本地 HTTP 示例：
 
 `injectPrincipal` 与 `sessionScoped` 在多人渠道中都必须开启。Host 注入的 principal 是认证身份，模型不能自行声明；每个逻辑 Agent 会话必须拥有独立 MCP session 与可变原生工具表。grant 工具中的目标 principal 与调用者身份是两个字段。
 
-Nanobot 应把 `SagaSmith-dnd-skills/full/skills` 加入 `externalSkillsDirs`，不要把
+Nanobot 应把 `skills/full/skills` 加入 `externalSkillsDirs`，不要把
 `full/` 包装目录当成两个运行 Skill 的根目录。
 
 不具备可信逐请求身份注入的单用户 stdio Host 应设置

@@ -27,13 +27,13 @@ async def _raw(server, name: str, arguments: dict):
 def test_public_magic_item_update_hydrates_new_spellcasting_mechanics(
     tmp_path: Path,
 ) -> None:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
+        dnd_skills_dir=workspace / "skills",
         modulegen_skills_dir=tmp_path / "modulegen",
         auto_seed_rules=False,
     )
@@ -144,13 +144,13 @@ def test_public_magic_item_update_hydrates_new_spellcasting_mechanics(
 def test_public_magic_item_spell_cast_hydrates_card_and_pays_action_and_charges(
     tmp_path: Path,
 ) -> None:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
+        dnd_skills_dir=workspace / "skills",
         modulegen_skills_dir=tmp_path / "modulegen",
         auto_seed_rules=False,
     )

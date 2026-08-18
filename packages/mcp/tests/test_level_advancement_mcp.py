@@ -36,8 +36,8 @@ async def _call(server, name: str, arguments: dict):
 
 
 def test_all_declared_srd_feature_contracts_are_fail_closed_or_supported() -> None:
-    workspace = Path(__file__).resolve().parents[2]
-    _manifest, artifacts = build_srd2014_content(workspace / "SagaSmith-dnd-skills")
+    workspace = Path(__file__).resolve().parents[3]
+    _manifest, artifacts = build_srd2014_content(workspace / "skills")
     feature_cards = [
         dict(artifact.get("card") or {})
         for artifact in artifacts
@@ -326,14 +326,14 @@ def _land_druid_sheet() -> dict:
 def test_lobby_resource_sync_preserves_independent_top_level_counter_via_public_facade(
     tmp_path: Path,
 ) -> None:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
-        modulegen_skills_dir=workspace / "SagaSmith-module-gen-skills",
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
         auto_seed_rules=True,
     )
 
@@ -397,14 +397,14 @@ def test_lobby_resource_sync_preserves_independent_top_level_counter_via_public_
 def test_source_choice_repeats_and_off_list_oath_spells_are_enforced(
     tmp_path: Path,
 ) -> None:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
-        modulegen_skills_dir=workspace / "SagaSmith-module-gen-skills",
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
         auto_seed_rules=True,
     )
 
@@ -558,14 +558,14 @@ def test_source_choice_repeats_and_off_list_oath_spells_are_enforced(
 def test_feature_granted_spells_and_invocation_prerequisites_are_settled(
     tmp_path: Path,
 ) -> None:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
-        modulegen_skills_dir=workspace / "SagaSmith-module-gen-skills",
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
         auto_seed_rules=True,
     )
 
@@ -784,14 +784,14 @@ def test_feature_granted_spells_and_invocation_prerequisites_are_settled(
 def test_favored_enemy_language_is_conditional_and_materialized(
     tmp_path: Path,
 ) -> None:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
-        modulegen_skills_dir=workspace / "SagaSmith-module-gen-skills",
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
         auto_seed_rules=True,
     )
 
@@ -902,14 +902,14 @@ def test_favored_enemy_language_is_conditional_and_materialized(
 def test_draconic_resilience_applies_retroactive_max_hp_and_unarmored_ac(
     tmp_path: Path,
 ) -> None:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
-        modulegen_skills_dir=workspace / "SagaSmith-module-gen-skills",
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
         auto_seed_rules=True,
     )
 
@@ -996,14 +996,14 @@ def test_draconic_resilience_applies_retroactive_max_hp_and_unarmored_ac(
 def test_multiclass_channel_divinity_uses_the_shared_cleric_capacity(
     tmp_path: Path,
 ) -> None:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
-        modulegen_skills_dir=workspace / "SagaSmith-module-gen-skills",
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
         auto_seed_rules=True,
     )
 
@@ -1088,14 +1088,14 @@ def test_multiclass_channel_divinity_uses_the_shared_cleric_capacity(
 def test_extra_attack_materializes_the_fighter_level_count_through_mcp(
     tmp_path: Path,
 ) -> None:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
-        modulegen_skills_dir=workspace / "SagaSmith-module-gen-skills",
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
         auto_seed_rules=True,
     )
 
@@ -1158,14 +1158,14 @@ def test_extra_attack_materializes_the_fighter_level_count_through_mcp(
 def test_multiclass_character_cannot_gain_unarmored_defense_twice(
     tmp_path: Path,
 ) -> None:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
-        modulegen_skills_dir=workspace / "SagaSmith-module-gen-skills",
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
         auto_seed_rules=True,
     )
 
@@ -1243,14 +1243,14 @@ def test_multiclass_character_cannot_gain_unarmored_defense_twice(
 def test_fighting_style_uniqueness_ignores_unrelated_option_choices(
     tmp_path: Path,
 ) -> None:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
-        modulegen_skills_dir=workspace / "SagaSmith-module-gen-skills",
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
         auto_seed_rules=True,
     )
 
@@ -1342,14 +1342,14 @@ def test_fighting_style_uniqueness_ignores_unrelated_option_choices(
 def test_monk_unarmored_defense_materializes_its_wisdom_formula(
     tmp_path: Path,
 ) -> None:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
-        modulegen_skills_dir=workspace / "SagaSmith-module-gen-skills",
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
         auto_seed_rules=True,
     )
 
@@ -1424,14 +1424,14 @@ def test_monk_unarmored_defense_materializes_its_wisdom_formula(
 def test_paladin_channel_divinity_is_publicly_materialized_and_rest_bound(
     tmp_path: Path,
 ) -> None:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
-        modulegen_skills_dir=workspace / "SagaSmith-module-gen-skills",
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
         auto_seed_rules=True,
     )
 
@@ -1508,14 +1508,14 @@ def test_paladin_channel_divinity_is_publicly_materialized_and_rest_bound(
 def test_signature_spells_are_always_prepared_and_use_explicit_free_resources(
     tmp_path: Path,
 ) -> None:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
-        modulegen_skills_dir=workspace / "SagaSmith-module-gen-skills",
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
         auto_seed_rules=True,
     )
 
@@ -1668,14 +1668,14 @@ def test_signature_spells_are_always_prepared_and_use_explicit_free_resources(
 def test_spell_mastery_preserves_existing_preparation_state(
     tmp_path: Path,
 ) -> None:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
-        modulegen_skills_dir=workspace / "SagaSmith-module-gen-skills",
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
         auto_seed_rules=True,
     )
 
@@ -1938,14 +1938,14 @@ def test_spell_mastery_preserves_existing_preparation_state(
 def test_level_plan_is_read_only_and_orders_feature_resource_dependencies(
     tmp_path: Path,
 ) -> None:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
-        modulegen_skills_dir=workspace / "SagaSmith-module-gen-skills",
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
         auto_seed_rules=True,
     )
 
@@ -2020,14 +2020,14 @@ def test_level_plan_is_read_only_and_orders_feature_resource_dependencies(
 def test_land_druid_bonus_cantrip_and_non_list_circle_spells_are_materialized(
     tmp_path: Path,
 ) -> None:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
-        modulegen_skills_dir=workspace / "SagaSmith-module-gen-skills",
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
         auto_seed_rules=True,
     )
 
@@ -2109,14 +2109,14 @@ def test_land_druid_bonus_cantrip_and_non_list_circle_spells_are_materialized(
 def test_ability_score_improvement_is_applied_and_repeats_at_later_unlocks(
     tmp_path: Path,
 ) -> None:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
-        modulegen_skills_dir=workspace / "SagaSmith-module-gen-skills",
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
         auto_seed_rules=True,
     )
 
@@ -2254,14 +2254,14 @@ def test_ability_score_improvement_is_applied_and_repeats_at_later_unlocks(
 def test_prepared_spell_limit_tracks_spellcasting_ability_score_improvement(
     tmp_path: Path,
 ) -> None:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
-        modulegen_skills_dir=workspace / "SagaSmith-module-gen-skills",
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
         auto_seed_rules=True,
     )
 
@@ -2386,14 +2386,14 @@ def test_prepared_spell_limit_tracks_spellcasting_ability_score_improvement(
 def test_lobby_level_advance_is_source_bound_and_reports_catalog_follow_up(
     tmp_path: Path,
 ) -> None:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
-        modulegen_skills_dir=workspace / "SagaSmith-module-gen-skills",
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
         auto_seed_rules=True,
     )
 
@@ -2641,14 +2641,14 @@ def test_lobby_level_advance_is_source_bound_and_reports_catalog_follow_up(
 def test_level_advance_materializes_new_always_prepared_domain_spells(
     tmp_path: Path,
 ) -> None:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
-        modulegen_skills_dir=workspace / "SagaSmith-module-gen-skills",
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
         auto_seed_rules=True,
     )
 
@@ -2748,14 +2748,14 @@ def test_level_advance_materializes_new_always_prepared_domain_spells(
 def test_rolled_level_hp_is_engine_owned_idempotent_and_revision_safe(
     tmp_path: Path, monkeypatch
 ) -> None:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
-        modulegen_skills_dir=workspace / "SagaSmith-module-gen-skills",
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
         auto_seed_rules=True,
     )
     calls: list[str] = []
@@ -2915,14 +2915,14 @@ def test_level_advance_is_rejected_outside_lobby(tmp_path: Path) -> None:
 
 
 def test_xp_mode_awards_atomically_and_enforces_level_threshold(tmp_path: Path) -> None:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
-        modulegen_skills_dir=workspace / "SagaSmith-module-gen-skills",
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
         auto_seed_rules=True,
     )
 

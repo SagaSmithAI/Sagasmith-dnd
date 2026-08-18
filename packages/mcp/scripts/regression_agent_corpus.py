@@ -22,7 +22,8 @@ from pathlib import Path
 from typing import Any, Iterable
 
 repo = Path(__file__).resolve().parents[1]
-workspace = repo.parent
+monorepo = repo.parents[1]
+workspace = monorepo.parent
 
 CORE_TOOLS = frozenset(
     {
@@ -2039,7 +2040,7 @@ def _configure_agent(
     defaults = config.setdefault("agents", {}).setdefault("defaults", {})
     defaults["workspace"] = str(agent_workspace.resolve())
     defaults["dream"] = {"enabled": False, "interval_h": 2}
-    skills = str((workspace / "SagaSmith-dnd-skills" / "full" / "skills").resolve())
+    skills = str((monorepo / "skills" / "full" / "skills").resolve())
     external = list(defaults.get("external_skills_dirs") or [])
     if skills not in external:
         external.append(skills)
@@ -2054,7 +2055,10 @@ def _configure_agent(
     env = server.setdefault("env", {})
     env["PYTHONUTF8"] = "1"
     env["SAGASMITH_DND_MCP_HOME"] = str(home.resolve())
-    env["SAGASMITH_DND_SKILLS_DIR"] = str((workspace / "SagaSmith-dnd-skills").resolve())
+    env["SAGASMITH_DND_SKILLS_DIR"] = str((monorepo / "skills").resolve())
+    env["SAGASMITH_MODULEGEN_SKILLS_DIR"] = str(
+        (monorepo / "skills" / "dnd-module-generator").resolve()
+    )
     roots = args.module_root or [
         workspace / "reference" / "DnD-Books" / "5e" / "Campaign",
         workspace / "reference" / "DnD-Books" / "5e" / "One Shots",

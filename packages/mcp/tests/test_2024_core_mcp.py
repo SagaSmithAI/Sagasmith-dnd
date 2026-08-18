@@ -22,13 +22,13 @@ async def _call(server, name: str, arguments: dict):
 
 
 def _config(tmp_path: Path, *, bundled_skills: bool = False) -> McpConfig:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     return McpConfig(
         home=tmp_path / "home",
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=(workspace / "SagaSmith-dnd-skills" if bundled_skills else tmp_path / "dnd"),
+        dnd_skills_dir=(workspace / "skills" if bundled_skills else tmp_path / "dnd"),
         modulegen_skills_dir=tmp_path / "modulegen",
         auto_seed_rules=False,
     )

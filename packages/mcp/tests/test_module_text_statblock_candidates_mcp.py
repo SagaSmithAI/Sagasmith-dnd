@@ -500,13 +500,13 @@ def test_agent_can_fill_custom_monster_multiattack_from_exact_module_source(
 def test_text_module_spellcaster_ocr_hydrates_source_bound_spells(
     tmp_path: Path,
 ) -> None:
-    workspace = Path(__file__).resolve().parents[2]
+    workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
         chroma_url=None,
         chroma_path_override=None,
-        dnd_skills_dir=workspace / "SagaSmith-dnd-skills",
+        dnd_skills_dir=workspace / "skills",
         modulegen_skills_dir=tmp_path / "modulegen",
         auto_seed_rules=False,
     )

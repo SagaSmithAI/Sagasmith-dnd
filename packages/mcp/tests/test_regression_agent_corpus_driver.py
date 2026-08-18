@@ -2201,7 +2201,7 @@ def test_dm_prompt_contains_coverage_evidence_but_no_authored_story_outcome() ->
     assert "dnd:full/references/skill-groups/lobby/modules-import.md" in prompt
     assert "A prior activation without a successful Pack import" in prompt
     source_path = str(
-        (Path(__file__).resolve().parents[2] / "reference/module.pdf").resolve()
+        (Path(__file__).resolve().parents[3] / "reference/module.pdf").resolve()
     )
     assert source_path.replace("\\", "\\\\") in prompt
     assert "coverage evidence and route intent, not a story answer" in prompt

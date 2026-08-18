@@ -53,7 +53,8 @@ for one PC/NPC/monster's subjective information, and scoped scene state for priv
 discoveries. Read `references/memory-ownership.md` before routing a "remember this"
 request or persisting a scene. Do not use workspace memory as campaign state.
 
-Module generation is maintained separately in `SagaSmith-module-gen-skills`.
+For Module or rules Pack authoring, load the repository-local
+`skills/dnd-module-generator/SKILL.md` procedure.
 
 ## Invariants
 

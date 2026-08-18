@@ -7,8 +7,8 @@ from sagasmith_dnd.bundled_rules import (
 
 
 def test_bundled_rule_catalog_partitions_every_srd_file_once() -> None:
-    workspace = Path(__file__).resolve().parents[2]
-    root = workspace / "SagaSmith-dnd-skills" / "full" / "skills" / "dnd-dm" / "srd"
+    workspace = Path(__file__).resolve().parents[3]
+    root = workspace / "skills" / "full" / "skills" / "dnd-dm" / "srd"
 
     sources = build_bundled_rule_sources(root)
     inventory = bundled_rule_corpus_inventory(root, sources)

@@ -21,7 +21,7 @@ export default function CampaignList() {
     <div className="page">
       <div className="page-heading">
         <div><div className="eyebrow">CAMPAIGN ARCHIVE / BRANCH-AWARE</div><h1>战役档案</h1><p>查看系统版本、当前阶段、revision 与活动状态。进入战役后继续检查角色、场景、模组和 Snapshot lineage。</p></div>
-        <div className="heading-actions"><a href="/" className="btn btn-ghost">返回桌面</a><a href="https://github.com/SagaSmithAI/SagaSmith-dnd-mcp" className="btn btn-primary" target="_blank" rel="noreferrer">通过 MCP 建团 ↗</a></div>
+        <div className="heading-actions"><a href="/" className="btn btn-ghost">返回桌面</a><a href="https://github.com/SagaSmithAI/sagasmith-dnd/tree/main/packages/mcp" className="btn btn-primary" target="_blank" rel="noreferrer">通过 MCP 建团 ↗</a></div>
       </div>
       {demo && <div className="demo-notice"><strong>DEMO DATA</strong><span>未连接 compatible gateway；以下战役用于展示信息结构。</span></div>}
       {error && <div className="demo-notice"><strong>RUNTIME OFFLINE</strong><span>{error}</span></div>}
