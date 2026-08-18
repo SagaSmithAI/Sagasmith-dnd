@@ -1,0 +1,7 @@
+interface:
+  display_name: "SagaSmith Content Pack Builder"
+  short_description: "Build reviewed Module and rules Packs"
+  default_prompt: "Use $sagasmith-modulegen to build and finalize a reviewed current-schema Content Pack for my active SagaSmith system."
+
+policy:
+  allow_implicit_invocation: true
