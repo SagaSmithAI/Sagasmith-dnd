@@ -1,6 +1,6 @@
 # SagaSmith D&D
 
-[中文](README.md) · [English](README-en.md) · [D&D MCP](https://github.com/SagaSmithAI/SagaSmith-dnd-mcp)
+[中文](README.md) · [English](README-en.md) · [官网](https://sagasmithai.github.io) · [平台总览](https://github.com/SagaSmithAI/.github/blob/main/profile/README.md) · [D&D MCP](https://github.com/SagaSmithAI/SagaSmith-dnd-mcp) · [托管服务](https://github.com/SagaSmithAI/SagaSmith-service) · [内容目录](https://github.com/SagaSmithAI/SagaSmith-dnd-content-library)
 
 **SagaSmithAI 的 D&D 5e 2014/2024 规则运行时。** 本仓库实现可测试的角色、法术、活动、规则包、空间与结构化战斗逻辑，并通过 `sagasmith.systems` 注册 `dnd5e` 系统插件。
 
@@ -163,4 +163,5 @@ ruff check .
 必须声明许可、署名和来源，且只随统一 content package 迁移；创建运行时角色时不会
 写入角色实例或 Snapshot。`python -m sagasmith_dnd.public_library` 可将 SRD 预设
 和同时带有受支持开放许可证及精确 `license_evidence` 的 addon 编译为 GitHub Pages 可读取的静态库；
-私有或 `user-supplied` 内容会被拒绝发布。
+私有或 `user-supplied` 内容会被拒绝发布。当前 Content Pack 仓库公开可见，但其中
+逐包记录的许可与分发限制仍然有效；仓库可见性本身不构成公开再分发授权。

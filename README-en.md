@@ -1,6 +1,6 @@
 # SagaSmith D&D
 
-[中文](README.md) · [English](README-en.md) · [D&D MCP](https://github.com/SagaSmithAI/SagaSmith-dnd-mcp)
+[中文](README.md) · [English](README-en.md) · [Website](https://sagasmithai.github.io) · [Platform overview](https://github.com/SagaSmithAI/.github/blob/main/profile/README.md) · [D&D MCP](https://github.com/SagaSmithAI/SagaSmith-dnd-mcp) · [Hosted service](https://github.com/SagaSmithAI/SagaSmith-service) · [Content catalog](https://github.com/SagaSmithAI/SagaSmith-dnd-content-library)
 
 **The D&D 5e 2014/2024 rules runtime for SagaSmithAI.** This package implements testable character, spell, activity, rule-pack, spatial, and structured-combat logic, and registers the `dnd5e` plugin through `sagasmith.systems`.
 
@@ -130,7 +130,7 @@ D&D versions as one unit.
 
 Extensions do not override the core through scattered conditionals. Ingestion produces a provenance-bearing draft pack, validates schema, dependencies, edition, and mechanic IR, then binds the pack to a campaign profile. Campaigns lock exact core/extension versions, and snapshot restoration requires the same dependency set.
 
-This allows legally owned supplements to add subclasses, backgrounds, spells, and executable mechanics without losing the 2014/2024 core boundaries and regression fixes. Commercial book content is not bundled with this software repository; authorized public archives live in the separate content library with their own distribution metadata.
+This allows legally owned supplements to add subclasses, backgrounds, spells, and executable mechanics without losing the 2014/2024 core boundaries and regression fixes. Commercial book content is not bundled with this software repository; the separate public Content Pack repository retains per-archive license and distribution metadata, and repository visibility is not redistribution permission.
 
 All shareable content uses `sagasmith.content-package` v2 in a
 `.sagasmith-pack` archive. `core_rules`, `addon`, `module`, and `preset` share
