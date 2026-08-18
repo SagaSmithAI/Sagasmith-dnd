@@ -1,11 +1,14 @@
 # SagaSmith D&D UI
 
+[Website](https://sagasmithai.github.io) · [Platform overview](https://github.com/SagaSmithAI/.github/blob/main/profile/README.md) · [Hosted service](https://github.com/SagaSmithAI/SagaSmith-service) · [Public content repository](https://github.com/SagaSmithAI/SagaSmith-dnd-content-library)
+
 `/library` 是 schema-v2 Content Pack 控制台，统一管理 core rules/addon/module/preset。
 Catalog 模式展示 checksum、许可、组件、来源、规则/场景记录、资产和 `actor-card.v3`；
 Installed 模式读取 MCP 权威库存并在 Lobby 中执行导入、激活、停用、导出和移除；Drafts
-模式只观察 `rulebook_draft` 与 `module_draft` 的 Agent 创作状态。Catalog 不再默认指向
-一个不存在的公共 URL。内容仓库可以保持私有或受许可证限制；部署方必须用
-`PUBLIC_SAGASMITH_LIBRARY_URL` 配置一个公开或已授权的兼容索引，也可用 `?source=` 显式指定。
+模式只观察 `rulebook_draft` 与 `module_draft` 的 Agent 创作状态。UI 不隐式选择 Catalog；
+部署方可以把 `PUBLIC_SAGASMITH_LIBRARY_URL` 指向当前公开索引
+`https://sagasmithai.github.io/SagaSmith-dnd-content-library/content-library/index.json`，
+也可用 `?source=` 指定其他已授权索引。仓库公开可见不代表其中每个 Pack 都采用开放许可。
 
 Every structured rule, scene, narrative entry, content review, and actor card has
 an independent expandable view; the full package descriptor remains available
