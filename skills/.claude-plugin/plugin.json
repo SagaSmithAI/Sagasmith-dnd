@@ -1,0 +1,9 @@
+{
+  "name": "sagasmith-dnd-skills",
+  "version": "0.1.0",
+  "description": "Source-bound D&D 5e campaign workflows for the SagaSmith MCP runtime.",
+  "author": {
+    "name": "SagaSmithAI"
+  },
+  "license": "Apache-2.0"
+}

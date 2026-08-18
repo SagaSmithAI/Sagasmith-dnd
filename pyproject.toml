@@ -1,50 +1,18 @@
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
 [project]
-name = "sagasmith-dnd"
+name = "sagasmith-dnd-workspace"
 version = "0.2.0"
-description = "D&D 5e 2014/2024 runtime and unified content-package CLI for SagaSmith Core"
-readme = "README.md"
+description = "Development workspace for the SagaSmith D&D domain, MCP, Skills, and UI"
 requires-python = ">=3.11"
-license = "Apache-2.0"
-license-files = ["LICENSE", "NOTICE"]
-authors = [{ name = "SagaSmithAI" }]
-dependencies = ["sagasmith-core>=0.2.0,<0.3.0"]
+dependencies = []
 
-[project.optional-dependencies]
-dense = [
-    "sentence-transformers>=5.0.0,<6.0.0",
-    "chromadb>=0.6.0,<1.0.0",
-]
-documents = ["sagasmith-core[documents]>=0.2.0,<0.3.0"]
-images = [
-    "pymupdf>=1.26.0,<2.0.0",
-    "Pillow>=10.0.0,<13.0.0",
-]
-all = [
-    "sagasmith-core[documents,embedding,vector]>=0.2.0,<0.3.0",
-    "pymupdf>=1.26.0,<2.0.0",
-    "Pillow>=10.0.0,<13.0.0",
-]
-dev = [
-    "pytest>=9.0.0,<10.0.0",
-    "pytest-cov>=6.0.0,<7.0.0",
-    "ruff>=0.1.0",
-]
+[tool.uv]
+package = false
 
-[project.scripts]
-sagasmith-dnd = "sagasmith_dnd.cli:main"
-
-[project.entry-points."sagasmith.systems"]
-dnd5e = "sagasmith_dnd.system:get_system"
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/sagasmith_dnd"]
+[tool.uv.workspace]
+members = ["packages/domain", "packages/mcp"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["packages/domain/tests", "packages/mcp/tests"]
 addopts = "-q"
 
 [tool.ruff]

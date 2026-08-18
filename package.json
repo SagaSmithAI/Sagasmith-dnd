@@ -1,0 +1,12 @@
+{
+  "name": "sagasmith-dnd-workspace",
+  "private": true,
+  "workspaces": [
+    "apps/ui"
+  ],
+  "scripts": {
+    "build:ui": "npm --workspace sagasmith-dnd-ui run build",
+    "check:ui": "npm --workspace sagasmith-dnd-ui run check",
+    "test:ui": "npm --workspace sagasmith-dnd-ui run test"
+  }
+}
