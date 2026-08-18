@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "license": "MIT",
+  "defaults": {
+    "decorative": true,
+    "mechanical": false,
+    "audience": "public",
+    "may_imply_geometry": false
+  },
+  "collections": {
+    "scenes": ["exploration", "social", "combat", "dungeon", "travel", "unknown"],
+    "maps": ["stone", "parchment", "forest"],
+    "tokens": ["pc", "ally", "hostile", "neutral", "unknown"],
+    "icons": ["room", "door", "hazard", "objective", "unknown"]
+  },
+  "notes": [
+    "Placeholder backgrounds never define walls, blocked cells, cover, line of sight, or elevation.",
+    "Only MCP-projected battle_map fields may carry mechanical meaning."
+  ]
+}
