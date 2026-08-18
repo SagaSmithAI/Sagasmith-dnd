@@ -25,7 +25,7 @@ def _local_config(skills: Path) -> dict:
 
 def _workspace(tmp_path: Path) -> tuple[Path, Path, Path]:
     agent_root = tmp_path / "SagaSmith-agent"
-    skills = tmp_path / "SagaSmith-dnd-skills" / "full" / "skills"
+    skills = tmp_path / "sagasmith-dnd" / "skills" / "full" / "skills"
     for skill in ("dnd-dm", "dnd-campaign-manager"):
         path = skills / skill / "SKILL.md"
         path.parent.mkdir(parents=True, exist_ok=True)
