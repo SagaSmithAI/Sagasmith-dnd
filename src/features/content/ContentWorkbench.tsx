@@ -43,8 +43,7 @@ import {
 type WorkbenchView = 'catalog' | 'installed' | 'drafts';
 type DetailTab = 'overview' | 'content' | 'actors' | 'sources' | 'assets' | 'integrity';
 
-const defaultUrl = import.meta.env.PUBLIC_SAGASMITH_LIBRARY_URL
-  || 'https://sagasmithai.github.io/SagaSmith-dnd-content-library/content-library/index.json';
+const defaultUrl = String(import.meta.env.PUBLIC_SAGASMITH_LIBRARY_URL || '').trim();
 
 function errorMessage(error: unknown): string {
   if (error instanceof GatewayRequestError) {
@@ -118,17 +117,28 @@ export default function ContentWorkbench() {
     }
     const indexUrl = params.get('source') || defaultUrl;
     setSource(indexUrl);
-    Promise.all([
-      fetch(indexUrl).then(async (response) => {
+    const catalog = indexUrl
+      ? fetch(indexUrl).then(async (response) => {
         if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
         const value: unknown = await response.json();
         assertLibraryIndex(value);
         return value;
-      }),
+      })
+      : Promise.resolve<ContentLibraryIndex | null>(null);
+    if (!indexUrl) {
+      setCatalogError(
+        '未配置公开或已授权的 Catalog。请设置 PUBLIC_SAGASMITH_LIBRARY_URL，'
+        + '或用 ?source=<index.json URL> 显式指定。',
+      );
+    }
+    Promise.all([
+      catalog,
       listCampaigns().catch(() => []),
     ]).then(([nextIndex, nextCampaigns]) => {
-      setIndex(nextIndex);
-      setCatalogSelection(nextIndex.packages[0] || null);
+      if (nextIndex) {
+        setIndex(nextIndex);
+        setCatalogSelection(nextIndex.packages[0] || null);
+      }
       setCampaigns(nextCampaigns);
       const requestedCampaign = params.get('campaign');
       const selected = nextCampaigns.find((item) => item.id === requestedCampaign)
@@ -289,7 +299,7 @@ export default function ContentWorkbench() {
     {view !== 'drafts' && <div className="content-controls">
       <input aria-label="搜索内容包" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索标题、ID、版本、状态…"/>
       <select aria-label="内容包类型" value={kind} onChange={(event) => setKind(event.target.value as 'all' | PackKind)}><option value="all">All kinds</option>{PACK_KINDS.map((item) => <option value={item} key={item}>{PACK_KIND_LABELS[item]}</option>)}</select>
-      <code>{view === 'catalog' ? source : campaignId || 'NO CAMPAIGN'}</code>
+      <code>{view === 'catalog' ? source || 'NO CATALOG CONFIGURED' : campaignId || 'NO CAMPAIGN'}</code>
     </div>}
 
     {loading ? <div className="content-empty">正在读取 Content Pack catalog…</div> : view === 'drafts'

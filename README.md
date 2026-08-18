@@ -3,9 +3,9 @@
 `/library` 是 schema-v2 Content Pack 控制台，统一管理 core rules/addon/module/preset。
 Catalog 模式展示 checksum、许可、组件、来源、规则/场景记录、资产和 `actor-card.v3`；
 Installed 模式读取 MCP 权威库存并在 Lobby 中执行导入、激活、停用、导出和移除；Drafts
-模式只观察 `rulebook_draft` 与 `module_draft` 的 Agent 创作状态。默认 Catalog 是
-`https://sagasmithai.github.io/SagaSmith-dnd-content-library/content-library/index.json`，也可用
-`PUBLIC_SAGASMITH_LIBRARY_URL` 或 `?source=` 指向兼容索引。
+模式只观察 `rulebook_draft` 与 `module_draft` 的 Agent 创作状态。Catalog 不再默认指向
+一个不存在的公共 URL。内容仓库可以保持私有或受许可证限制；部署方必须用
+`PUBLIC_SAGASMITH_LIBRARY_URL` 配置一个公开或已授权的兼容索引，也可用 `?source=` 显式指定。
 
 Every structured rule, scene, narrative entry, content review, and actor card has
 an independent expandable view; the full package descriptor remains available
