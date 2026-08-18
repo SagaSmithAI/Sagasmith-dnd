@@ -26,9 +26,9 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - run: uv sync --frozen --all-packages --all-extras
-      - run: uv run ruff check packages/domain packages/mcp
-      - run: uv run --package sagasmith-dnd pytest packages/domain/tests
-      - run: uv run --package sagasmith-dnd-mcp pytest packages/mcp/tests
+      - run: uv run --no-sync ruff check packages/domain packages/mcp
+      - run: uv run --no-sync pytest packages/domain/tests
+      - run: uv run --no-sync pytest packages/mcp/tests
 
   skills:
     runs-on: ubuntu-latest
