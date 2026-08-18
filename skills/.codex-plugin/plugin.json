@@ -1,0 +1,29 @@
+{
+  "name": "sagasmith-dnd-skills",
+  "version": "0.1.0",
+  "description": "Source-bound D&D 5e campaign workflows for the SagaSmith MCP runtime.",
+  "author": {
+    "name": "SagaSmithAI",
+    "url": "https://github.com/SagaSmithAI"
+  },
+  "homepage": "https://github.com/SagaSmithAI/SagaSmith-dnd-skills",
+  "repository": "https://github.com/SagaSmithAI/SagaSmith-dnd-skills",
+  "license": "Apache-2.0",
+  "keywords": ["dnd", "dnd5e", "mcp", "campaign", "game-master"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "SagaSmith D&D",
+    "shortDescription": "Persistent, source-bound D&D 5e campaigns",
+    "longDescription": "Run D&D 5e campaigns through SagaSmith's MCP-owned rules, modules, continuity, combat, branches, and snapshots.",
+    "developerName": "SagaSmithAI",
+    "category": "Developer Tools",
+    "capabilities": ["Interactive", "Write"],
+    "websiteURL": "https://github.com/SagaSmithAI/SagaSmith-dnd-skills",
+    "defaultPrompt": [
+      "Resume my SagaSmith D&D campaign.",
+      "Set up a source-bound D&D campaign.",
+      "Run the current D&D scene."
+    ],
+    "brandColor": "#7C2D12"
+  }
+}

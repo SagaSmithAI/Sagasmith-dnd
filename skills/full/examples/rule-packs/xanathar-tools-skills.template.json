@@ -1,0 +1,47 @@
+{
+  "source_id": "$SOURCE_ID",
+  "manifest": {
+    "id": "dnd5e.xgte.tool_synergy",
+    "version": "1.0.0",
+    "title": "Xanathar Tool and Skill Synergy",
+    "namespace": "dnd5e.xgte.tool_synergy",
+    "system_id": "dnd5e",
+    "editions": ["2014"],
+    "capabilities": ["check.before"],
+    "tests": [
+      {
+        "name": "both proficiencies activate synergy",
+        "event": "check.before",
+        "facts": {
+          "skill_proficiency_applies": true,
+          "tool_proficiency_applies": true
+        },
+        "expect": []
+      }
+    ]
+  },
+  "mechanics": [
+    {
+      "id": "dnd5e.xgte.tool_synergy.advantage",
+      "event": "check.before",
+      "predicates": [
+        {
+          "kind": "fact_equals",
+          "key": "skill_proficiency_applies",
+          "value": true
+        },
+        {
+          "kind": "fact_equals",
+          "key": "tool_proficiency_applies",
+          "value": true
+        }
+      ],
+      "operations": [
+        {"op": "advantage.add"}
+      ],
+      "citations": [
+        {"chunk_id": "$CHUNK_ID", "note": "DM-reviewed tool/skill synergy section"}
+      ]
+    }
+  ]
+}

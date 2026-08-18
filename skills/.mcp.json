@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "sagasmith_dnd": {
+      "command": "sagasmith-dnd-mcp",
+      "args": [],
+      "env": {
+        "SAGASMITH_DND_SKILLS_DIR": "${CLAUDE_PLUGIN_ROOT}",
+        "SAGASMITH_DND_MCP_BOUND_PRINCIPAL_ID": "claude-code:local"
+      }
+    }
+  }
+}

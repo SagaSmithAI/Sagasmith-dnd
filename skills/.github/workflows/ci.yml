@@ -1,0 +1,37 @@
+name: Skill Contract
+on:
+  push:
+  pull_request:
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate portable assets
+        run: |
+          python - <<'PY'
+          import json
+          import py_compile
+          from pathlib import Path
+
+          skills = list(Path('.').rglob('SKILL.md'))
+          if not skills:
+              raise SystemExit('no SKILL.md files found')
+          for path in skills:
+              text = path.read_text(encoding='utf-8-sig')
+              if text.startswith('---\n'):
+                  frontmatter = text.split('---', 2)[1]
+                  for key in ('name:', 'description:'):
+                      if key not in frontmatter:
+                          raise SystemExit(f'{path}: missing {key[:-1]}')
+              elif not text.lstrip().startswith('#'):
+                  raise SystemExit(f'{path}: expected skill frontmatter or reference heading')
+          for path in Path('.').rglob('*.json'):
+              json.loads(path.read_text(encoding='utf-8-sig'))
+          for path in Path('.').rglob('*.py'):
+              py_compile.compile(str(path), doraise=True)
+          print(f'validated {len(skills)} skill documents')
+          PY
