@@ -5,6 +5,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import TextIO
 
 from aiohttp.test_utils import TestClient, TestServer
 
@@ -18,13 +19,14 @@ def _unused_loopback_port() -> int:
         return int(listener.getsockname()[1])
 
 
-def _wait_for_port(port: int, process: subprocess.Popen[str]) -> None:
+def _wait_for_port(port: int, process: subprocess.Popen[str], output: TextIO) -> None:
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         if process.poll() is not None:
-            stdout, stderr = process.communicate()
+            output.flush()
+            log = Path(output.name).read_text(encoding="utf-8", errors="replace")
             raise AssertionError(
-                f"D&D MCP exited before startup ({process.returncode}):\n{stdout}\n{stderr}"
+                f"D&D MCP exited before startup ({process.returncode}):\n{log}"
             )
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=0.25):
@@ -48,15 +50,16 @@ def test_real_streamable_http_client_tracks_dynamic_tools(tmp_path: Path) -> Non
             "SAGASMITH_MODULEGEN_SKILLS_DIR": str(tmp_path / "modulegen-skills"),
         }
     )
+    output = (tmp_path / "dnd-mcp.log").open("w", encoding="utf-8")
     process = subprocess.Popen(
         [sys.executable, "-m", "sagasmith_dnd_mcp.server"],
         env=environment,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=output,
+        stderr=subprocess.STDOUT,
         text=True,
     )
     try:
-        _wait_for_port(port, process)
+        _wait_for_port(port, process, output)
 
         async def exercise() -> None:
             client = DndMcpClient(f"http://127.0.0.1:{port}/mcp")
@@ -131,3 +134,4 @@ def test_real_streamable_http_client_tracks_dynamic_tools(tmp_path: Path) -> Non
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=5)
+        output.close()
