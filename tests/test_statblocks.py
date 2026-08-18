@@ -5,6 +5,7 @@ from sagasmith_dnd.activity_identity import (
     is_multiattack_source_name,
 )
 from sagasmith_dnd.character_schema import derive_character_sheet, validate_character_sheet
+from sagasmith_dnd.statblock_spells import hydrate_statblock_spellcasting
 from sagasmith_dnd.statblocks import (
     StatblockImportError,
     _ocr_ability_score_matches,
@@ -3123,6 +3124,23 @@ Cantrips (at will): chill touch, mage hand
         }
     ]
     assert parsed.warnings == ()
+    hydrated, hydration_warnings = hydrate_statblock_spellcasting(
+        parsed,
+        [],
+        source_key="module-review:master-of-souls",
+        rule_refs=["rule:master-of-souls"],
+    )
+    hydrated_spells = {item["name"]: item for item in hydrated["content"]["spells"]}
+    assert set(hydrated_spells) == {"Chill Touch", "Ray of Sickness", "Scorching Ray"}
+    assert hydrated_spells["Ray of Sickness"]["resolution"]["attack"]["mode"] == "ranged"
+    assert hydrated_spells["Ray of Sickness"]["grant"]["source_type"] == "statblock"
+    assert hydration_warnings == [
+        "Chill Touch: source-bound statblock spell requires component ruling",
+        "mage hand: no active spell artifact or complete statblock action exists",
+        "Ray of Sickness: source-bound statblock spell requires component ruling",
+        "shield: no active spell artifact or complete statblock action exists",
+        "Scorching Ray: source-bound statblock spell requires component ruling",
+    ]
 
 
 def test_spellcasting_repairs_split_of_glyph_in_spell_name() -> None:
