@@ -11,6 +11,15 @@ def _workspace_root() -> Path:
     return Path(__file__).resolve().parents[4]
 
 
+def _auth_context_secret() -> str | None:
+    value = os.environ.get("SAGASMITH_AUTH_CONTEXT_SECRET", "")
+    if not value:
+        return None
+    if len(value.encode("utf-8")) < 32:
+        raise ValueError("SAGASMITH_AUTH_CONTEXT_SECRET must contain at least 32 bytes")
+    return value
+
+
 @dataclass(frozen=True)
 class McpConfig:
     """Resolve all local state beneath one portable MCP home directory."""
@@ -31,6 +40,7 @@ class McpConfig:
     module_ocr_scale: float = 2.0
     module_ocr_model: str = "medium"
     bound_principal_id: str | None = None
+    auth_context_secret: str | None = None
     document_cache_dir: Path | None = None
     npc_host_token: str | None = None
     http_host: str = "127.0.0.1"
@@ -120,6 +130,7 @@ class McpConfig:
                 ).strip()
                 else None
             ),
+            auth_context_secret=_auth_context_secret(),
             document_cache_dir=(
                 Path(raw_document_cache).expanduser().resolve()
                 if raw_document_cache
