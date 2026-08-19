@@ -1,22 +1,21 @@
-## Development
+# D&D Workbench Agent Guide
 
-When starting the dev server, use background mode:
+Follow the repository root `AGENTS.md`. This UI is a projection and control
+surface for the authoritative sibling `packages/mcp` gateway.
 
+- Never read or write the MCP database or artifact directories directly.
+- Never accept a browser-selected authoritative principal.
+- Refresh the real native tool schema after `tools/list_changed`; do not keep a
+  fixed tool catalog or simulate unavailable tools.
+- Render only audience-filtered server DTOs and resolution presentations.
+- Keep demo mode explicit, read-only, and visually distinct. A live failure must
+  never silently fall back to demo data.
+- Keep content rights visible; catalog presence is not a license grant.
+
+Validate UI changes from the repository root:
+
+```powershell
+npm --prefix apps/ui ci
+npm --prefix apps/ui test
+npm --prefix apps/ui run build
 ```
-astro dev --background
-```
-
-Manage the background server with `astro dev stop`, `astro dev status`, and `astro dev logs`.
-
-## Documentation
-
-Full documentation: https://docs.astro.build
-
-Consult these guides before working on related tasks:
-
-- [Adding pages, dynamic routes, or middleware](https://docs.astro.build/en/guides/routing/)
-- [Working with Astro components](https://docs.astro.build/en/basics/astro-components/)
-- [Using React, Vue, Svelte, or other framework components](https://docs.astro.build/en/guides/framework-components/)
-- [Adding or managing content](https://docs.astro.build/en/guides/content-collections/)
-- [Adding styles or using Tailwind](https://docs.astro.build/en/guides/styling/)
-- [Supporting multiple languages](https://docs.astro.build/en/guides/internationalization/)

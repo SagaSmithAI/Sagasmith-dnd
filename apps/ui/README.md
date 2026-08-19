@@ -2,6 +2,8 @@
 
 [Website](https://sagasmithai.github.io) · [Platform overview](https://github.com/SagaSmithAI/.github/blob/main/profile/README.md) · [Hosted service](https://github.com/SagaSmithAI/SagaSmith-service) · [Public content repository](https://github.com/SagaSmithAI/SagaSmith-dnd-content-library)
 
+> Current source: `sagasmith-dnd/apps/ui`. The former standalone D&D UI repository is archived.
+
 `/library` 是 schema-v2 Content Pack 控制台，统一管理 core rules/addon/module/preset。
 Catalog 模式展示 checksum、许可、组件、来源、规则/场景记录、资产和 `actor-card.v3`；
 Installed 模式读取 MCP 权威库存并在 Lobby 中执行导入、激活、停用、导出和移除；Drafts
