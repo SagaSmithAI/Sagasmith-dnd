@@ -1,5 +1,7 @@
 # SagaSmith D&D Skills — Standalone
 
+> 此便携子集位于 `sagasmith-dnd/skills/standalone`；它不是旧独立 Skills 仓库，也不替代 Full Runtime。
+
 **无 MCP、零第三方依赖的便携模式。** 它使用 Python 标准库、随附参考和 `portable.py`，适合快速规则查阅、演示或无法运行 Full MCP 的环境。
 
 ```powershell

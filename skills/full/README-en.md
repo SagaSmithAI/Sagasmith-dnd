@@ -1,5 +1,7 @@
 # SagaSmith D&D Skills — Full MCP Runtime
 
+> This is the repository-local `sagasmith-dnd/skills/full` distribution, not a standalone repository.
+
 Full mode runs D&D 5e 2014/2024 through the `sagasmith_dnd` MCP server. MCP
 owns state, Packs, modules, actors, knowledge, branches, and combat; this
 directory contains Agent workflows only.

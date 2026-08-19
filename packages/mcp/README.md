@@ -2,6 +2,8 @@
 
 [官网](https://sagasmithai.github.io) · [平台总览](https://github.com/SagaSmithAI/.github/blob/main/profile/README.md) · [托管服务](https://github.com/SagaSmithAI/SagaSmith-service) · [内容目录](https://github.com/SagaSmithAI/SagaSmith-dnd-content-library)
 
+> Current source: `sagasmith-dnd/packages/mcp`. It is released from the D&D vertical monorepo together with its Domain, Skills, and Workbench contracts.
+
 ## Content Pack gateway
 
 The HTTP gateway connects to the one authoritative streamable-HTTP MCP process and projects its
@@ -25,7 +27,7 @@ $env:SAGASMITH_DND_MCP_HTTP_PORT = "8767"
 sagasmith-dnd-mcp
 
 $env:SAGASMITH_DND_MCP_URL = "http://127.0.0.1:8767/mcp"
-$env:SAGASMITH_DND_UI_DIST = "C:\path\to\SagaSmith-dnd-ui\dist"
+$env:SAGASMITH_DND_UI_DIST = "C:\path\to\sagasmith-dnd\apps\ui\dist"
 sagasmith-dnd-gateway
 ```
 

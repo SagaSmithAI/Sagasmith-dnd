@@ -1,5 +1,7 @@
 # SagaSmith D&D Skills — Full MCP Runtime
 
+> 这是 `sagasmith-dnd/skills/full` 的同仓分发，不是独立仓库。
+
 Full 模式通过 `sagasmith_dnd` MCP 运行 D&D 5e 2014/2024。状态、规则包、模组、
 角色、知识、分支与战斗均由 MCP 持有；本目录只保存 Agent 工作流。
 
