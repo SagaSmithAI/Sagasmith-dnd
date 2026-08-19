@@ -28,6 +28,16 @@ above. The former standalone MCP, Skills, UI, and generic Module Generator
 repositories are archived read-only; issues, releases, integrations, and docs
 for current D&D development belong here.
 
+## Verified integration baseline
+
+The 2026-08-20 hosted regression uses the current SagaSmith Agent and Service,
+signed `sagasmith.auth-context/v1` principal context, session-scoped dynamic MCP
+tools, and this repository's Domain/MCP/Skills revision. The D&D reference
+campaign ran concurrently with the CoC reference campaign without a reported
+regression gap and recorded a legal D&D ending. The catalog runner also records
+every discovered module and any explicit exclusion in machine-readable output;
+this reference result does not claim every mutually exclusive path was played.
+
 ## Development
 
 Install and test the Python workspace from this repository root:
