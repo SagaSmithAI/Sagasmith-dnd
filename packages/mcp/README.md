@@ -87,9 +87,35 @@ flowchart TB
 Python 3.11+：
 
 ```powershell
-pip install -e ".[dev]"
+pip install sagasmith-dnd-mcp
 sagasmith-dnd-mcp
 ```
+
+这是 D&D-only Local Kit 的文字基线：SQLite、FTS、Markdown/text、权威 MCP
+handlers 和 Skills 均可用，不会强制安装 Core documents/vector/OCR/embedding、
+Pillow、OpenCV、ChromaDB 或 Torch。重型模块只在调用对应能力时加载；未安装时会
+返回明确的 extra 安装指令，不会让服务启动失败或静默降级。
+
+| Extra | 能力 |
+|---|---|
+| `documents` | PDF 文本提取与页面渲染 |
+| `images` | 角色图提取与战斗 PNG 展示 |
+| `ocr` | RapidOCR、OpenCV、ONNX Runtime 及 PDF 支持 |
+| `embedding` | Sentence Transformers 嵌入 |
+| `vector` | ChromaDB 向量存储 |
+| `dense` | `embedding` + `vector` |
+| `gateway` | Workbench HTTP gateway |
+| `all` | 全部文档、图片、OCR、嵌入与向量能力 |
+
+```powershell
+pip install "sagasmith-dnd-mcp[documents]"
+pip install "sagasmith-dnd-mcp[images]"
+pip install "sagasmith-dnd-mcp[ocr]"
+pip install "sagasmith-dnd-mcp[dense]"
+```
+
+跨系统 Local Kit manifest 由 `SagaSmith-agent` 统一维护；本仓只声明 D&D wheel
+及其 extras，不硬编码 Agent、CoC 或 Narrative 的安装 revision。
 
 本地 MCP 的 stdio 与 loopback Streamable HTTP 运行同一个 `create_server()`
 及同一组权威 handlers；tool schema、错误、revision、idempotency 和 authority
@@ -104,7 +130,7 @@ Gateway，不能替代 MCP auth context。
 若要连接 D&D Workbench UI，同时安装并启动 HTTP/SSE adapter：
 
 ```powershell
-pip install -e ".[gateway,dev]"
+pip install "sagasmith-dnd-mcp[gateway]"
 sagasmith-dnd-gateway
 ```
 
@@ -113,7 +139,7 @@ Gateway 默认只监听 `127.0.0.1:8766`，身份由服务端配置或上游认�
 启用向量嵌入：
 
 ```powershell
-pip install -e ".[dense,dev]"
+pip install "sagasmith-dnd-mcp[dense]"
 $env:SAGASMITH_DND_MCP_DENSE_ENABLED = "1"
 sagasmith-dnd-mcp
 ```

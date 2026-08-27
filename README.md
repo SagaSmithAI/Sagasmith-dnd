@@ -28,6 +28,33 @@ above. The former standalone MCP, Skills, UI, and generic Module Generator
 repositories are archived read-only; issues, releases, integrations, and docs
 for current D&D development belong here.
 
+## Local Agent Kit install profiles
+
+The text-only authoritative MCP keeps the Local Kit baseline small:
+
+```bash
+pip install sagasmith-dnd-mcp
+sagasmith-dnd-mcp
+```
+
+That baseline provides SQLite state, Markdown/text content, FTS retrieval, and
+the native MCP contract. Install only the capability profiles a local host
+actually uses:
+
+```bash
+pip install "sagasmith-dnd-mcp[documents]"  # PDF text and page handling
+pip install "sagasmith-dnd-mcp[images]"     # portraits and combat PNGs
+pip install "sagasmith-dnd-mcp[ocr]"        # scanned-PDF OCR
+pip install "sagasmith-dnd-mcp[dense]"      # embeddings plus vector storage
+pip install "sagasmith-dnd-mcp[all]"        # every optional runtime capability
+```
+
+Heavy document, image, OCR, embedding, and vector libraries load only when the
+corresponding capability is called. Missing capabilities return an install
+instruction instead of preventing text MCP startup. Cross-system Local Agent
+Kit manifests remain owned by `SagaSmith-agent`; this vertical repository owns
+only the D&D package/extras contract.
+
 ## Verified integration baseline
 
 The 2026-08-20 hosted regression uses the current SagaSmith Agent and Service,

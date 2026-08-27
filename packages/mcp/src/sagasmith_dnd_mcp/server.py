@@ -482,7 +482,6 @@ from sagasmith_dnd_mcp.bounded_evaluations import (
     normalize_bounded_proposal,
     validate_bounded_proposal_refs,
 )
-from sagasmith_dnd_mcp.combat_render import render_combat_png
 from sagasmith_dnd_mcp.config import McpConfig
 from sagasmith_dnd_mcp.exposure import Exposure, ExposureError, ExposureRegistry
 from sagasmith_dnd_mcp.npc_conversations import (
@@ -524,6 +523,21 @@ from sagasmith_dnd_mcp.tool_profiles import (
     tools_for_phase,
     validate_profile_coverage,
 )
+
+
+def _render_combat_png(*args: Any, **kwargs: Any) -> tuple[dict[str, Any], bytes]:
+    """Load Pillow-backed combat presentation only when that tool is called."""
+
+    try:
+        from sagasmith_dnd_mcp.combat_render import render_combat_png
+    except ModuleNotFoundError as exc:
+        if (exc.name or "").partition(".")[0] != "PIL":
+            raise
+        raise RuntimeError(
+            "Combat image rendering requires "
+            "`pip install \"sagasmith-dnd-mcp[images]\"`"
+        ) from exc
+    return render_combat_png(*args, **kwargs)
 
 
 @lru_cache(maxsize=8)
@@ -7127,7 +7141,7 @@ def create_server(config: McpConfig | None = None) -> FastMCP:
                     "max": hp.get("max"),
                     "temporary": hp.get("temp"),
                 }
-        metadata, content = render_combat_png(
+        metadata, content = _render_combat_png(
             encounter,
             portraits=portraits,
             audience_projection=audience_projection,

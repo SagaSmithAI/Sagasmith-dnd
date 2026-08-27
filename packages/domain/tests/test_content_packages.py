@@ -650,11 +650,11 @@ def test_portraits_attach_to_source_statblock_cards_without_runtime_instances(
         method="test-reviewed-crop",
     )
     monkeypatch.setattr(
-        "sagasmith_dnd.content_packages.PortraitExtractor.inspect",
+        "sagasmith_dnd.portrait_extraction.PortraitExtractor.inspect",
         lambda *args, **kwargs: PortraitInspection(portrait, "extracted", True, 1, 0.95),
     )
     monkeypatch.setattr(
-        "sagasmith_dnd.content_packages.PortraitExtractor.extract_reviewed_crop",
+        "sagasmith_dnd.portrait_extraction.PortraitExtractor.extract_reviewed_crop",
         lambda *args, **kwargs: portrait,
     )
     source_path = tmp_path / "source.pdf"
@@ -694,7 +694,7 @@ def test_portraits_attach_to_source_statblock_cards_without_runtime_instances(
     assert audit["reviewed"][0]["decision"] == "crop"
 
     monkeypatch.setattr(
-        "sagasmith_dnd.content_packages.PortraitExtractor.inspect",
+        "sagasmith_dnd.portrait_extraction.PortraitExtractor.inspect",
         lambda *args, **kwargs: PortraitInspection(
             None, "no_visual_candidate", True, 0, 0.0
         ),

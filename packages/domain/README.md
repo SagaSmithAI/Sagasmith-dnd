@@ -99,17 +99,27 @@ MCP 层会用 preflight、choice window 和 ruling-required 结果把这些问�
 Python 3.11+：
 
 ```bash
-pip install "sagasmith-dnd[all]"
+pip install sagasmith-dnd
 sagasmith-dnd doctor --json
 ```
+
+基础安装只包含 Core 数据库与文本运行时；Markdown/text、SQLite、FTS 和普通文字团
+不需要 PDF、图片、OCR、ChromaDB、Sentence Transformers 或 Torch。
 
 可选 extras：
 
 | Extra | 用途 |
 |---|---|
 | `documents` | PDF 文档解析 |
-| `dense` | sentence-transformers + ChromaDB |
-| `all` | 文档、嵌入与向量依赖 |
+| `images` | PyMuPDF + Pillow 角色图提取 |
+| `embedding` | Sentence Transformers 嵌入模型 |
+| `vector` | ChromaDB 向量存储 |
+| `dense` | `embedding` + `vector` |
+| `all` | Domain 的文档、图片、嵌入与向量能力 |
+
+例如只导入 PDF 时使用 `pip install "sagasmith-dnd[documents]"`；只有确实需要
+语义检索时才安装 `dense`。D&D MCP 的扫描件 OCR 属于 MCP 的 `ocr` extra，
+不由 Domain 基础包暗中安装。
 
 查看 CLI 的当前命令契约：
 
