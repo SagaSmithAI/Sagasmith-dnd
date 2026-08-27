@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import importlib
 import json
 import math
 import os
@@ -538,6 +539,16 @@ def _render_combat_png(*args: Any, **kwargs: Any) -> tuple[dict[str, Any], bytes
             "`pip install \"sagasmith-dnd-mcp[images]\"`"
         ) from exc
     return render_combat_png(*args, **kwargs)
+
+
+def _preload_optional_pdf_runtime() -> None:
+    """Warm an installed PDF runtime without making it a text-host dependency."""
+
+    try:
+        importlib.import_module("pypdfium2")
+    except ModuleNotFoundError as exc:
+        if exc.name != "pypdfium2":
+            raise
 
 
 @lru_cache(maxsize=8)
@@ -47127,8 +47138,9 @@ boundary.
 def main() -> None:
     # pypdfium2 imports NumPy-backed bitmap helpers lazily. On Windows that
     # native import can stall when first attempted from FastMCP's running
-    # asyncio loop, so initialize it on the main thread before the loop starts.
-    import pypdfium2  # noqa: F401
+    # asyncio loop, so warm it on the main thread when the documents extra is
+    # installed. A text-only base wheel must still start without that extra.
+    _preload_optional_pdf_runtime()
 
     config = McpConfig.from_environment()
     transport = os.environ.get("SAGASMITH_DND_MCP_TRANSPORT", "stdio").strip().casefold()
