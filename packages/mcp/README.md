@@ -1,6 +1,6 @@
 # SagaSmith D&D MCP
 
-[官网](https://sagasmithai.github.io) · [平台总览](https://github.com/SagaSmithAI/.github/blob/main/profile/README.md) · [托管服务](https://github.com/SagaSmithAI/SagaSmith-service) · [内容目录](https://github.com/SagaSmithAI/SagaSmith-dnd-content-library)
+[官网](https://sagasmithai.github.io) · [平台总览](https://github.com/SagaSmithAI/.github/blob/main/profile/README.md) · [SagaSmith Web](https://github.com/SagaSmithAI/SagaSmith-service) · [内容目录](https://github.com/SagaSmithAI/SagaSmith-dnd-content-library)
 
 > Current source: `sagasmith-dnd/packages/mcp`. It is released from the D&D vertical monorepo together with its Domain, Skills, and Workbench contracts.
 
@@ -90,6 +90,11 @@ Python 3.11+：
 pip install -e ".[dev]"
 sagasmith-dnd-mcp
 ```
+
+本地 MCP 的 stdio 与 loopback Streamable HTTP 运行同一个 `create_server()`
+及同一组权威 handlers；tool schema、错误、revision、idempotency 和 authority
+语义不得按 transport 分叉。stdio 适合一个 Agent 独占一个进程，多个本机客户端
+共享常驻服务时使用 Streamable HTTP。
 
 若要连接 D&D Workbench UI，同时安装并启动 HTTP/SSE adapter：
 

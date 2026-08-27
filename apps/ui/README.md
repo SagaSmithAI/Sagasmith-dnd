@@ -1,6 +1,6 @@
 # SagaSmith D&D UI
 
-[Website](https://sagasmithai.github.io) · [Platform overview](https://github.com/SagaSmithAI/.github/blob/main/profile/README.md) · [Hosted service](https://github.com/SagaSmithAI/SagaSmith-service) · [Public content repository](https://github.com/SagaSmithAI/SagaSmith-dnd-content-library)
+[Website](https://sagasmithai.github.io) · [Platform overview](https://github.com/SagaSmithAI/.github/blob/main/profile/README.md) · [SagaSmith Web](https://github.com/SagaSmithAI/SagaSmith-service) · [Public content repository](https://github.com/SagaSmithAI/SagaSmith-dnd-content-library)
 
 > Current source: `sagasmith-dnd/apps/ui`. The former standalone D&D UI repository is archived.
 

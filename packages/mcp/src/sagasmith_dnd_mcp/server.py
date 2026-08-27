@@ -10573,7 +10573,16 @@ def create_server(config: McpConfig | None = None) -> FastMCP:
         """Describe the MCP contract and the automatic-vs-ruling combat boundary."""
         return {
             "contract_version": "2026-08-session-exposure-v1",
-            "transport": "stdio",
+            "authoritative_contract": {
+                "schema": "sagasmith.authoritative-mcp/v1",
+                "transports": ["stdio", "streamable-http"],
+                "shared_handlers": True,
+                "dynamic_tool_exposure": "session-scoped",
+                "revision_model": "optimistic",
+                "idempotency_model": "required-for-writes",
+                "authority_model": "server-owned",
+                "error_model": "mcp-tool-error",
+            },
             "state_owner": "sagasmith-dnd-mcp",
             "zero_knowledge_bootstrap": {
                 "resource": "sagasmith://bootstrap",

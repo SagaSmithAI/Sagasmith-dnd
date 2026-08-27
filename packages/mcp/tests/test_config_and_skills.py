@@ -730,6 +730,16 @@ def test_server_capabilities_publish_the_rulebook_import_contract(tmp_path: Path
         assert capabilities["features"]["shared_continuity_budget"] is True
         assert capabilities["features"]["continuity_diagnostics"] is True
         assert capabilities["contract_version"] == "2026-08-session-exposure-v1"
+        assert capabilities["authoritative_contract"] == {
+            "schema": "sagasmith.authoritative-mcp/v1",
+            "transports": ["stdio", "streamable-http"],
+            "shared_handlers": True,
+            "dynamic_tool_exposure": "session-scoped",
+            "revision_model": "optimistic",
+            "idempotency_model": "required-for-writes",
+            "authority_model": "server-owned",
+            "error_model": "mcp-tool-error",
+        }
         assert capabilities["features"]["source_bound_hypnotic_pattern"] is True
         assert capabilities["features"]["compiled_or_agent_content_resolution"] is True
         assert capabilities["ruling_policy"] == {
