@@ -7049,6 +7049,7 @@ def create_server(config: McpConfig | None = None) -> FastMCP:
                     for key in (
                         "id",
                         "schema_version",
+                        "map_revision",
                         "lifecycle",
                         "source",
                         "grid",
@@ -7107,7 +7108,15 @@ def create_server(config: McpConfig | None = None) -> FastMCP:
         if isinstance(battle_map, dict):
             value["battle_map"] = {
                 key: deepcopy(battle_map[key])
-                for key in ("id", "schema_version", "lifecycle", "source", "grid", "bounds")
+                for key in (
+                    "id",
+                    "schema_version",
+                    "map_revision",
+                    "lifecycle",
+                    "source",
+                    "grid",
+                    "bounds",
+                )
                 if key in battle_map
             }
         return value

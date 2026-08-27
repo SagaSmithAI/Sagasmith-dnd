@@ -113,7 +113,7 @@ export default function CombatMapCanvas({ battleMap, combatants, selectedActorId
         const radius = Math.max(8, layout.cell * .31);
         context.beginPath();
         context.arc(cx, cy, radius, 0, Math.PI * 2);
-        context.fillStyle = combatant.disposition === 'hostile' ? '#b64732' : combatant.disposition === 'neutral' ? '#b08c4e' : '#637b64';
+        context.fillStyle = combatant.disposition === 'hostile' ? '#b64732' : combatant.disposition === 'neutral' ? '#b08c4e' : combatant.disposition === 'friendly' ? '#637b64' : '#69716c';
         context.fill();
         context.lineWidth = selectedActorId === combatant.actor_id ? 3 : 1.5;
         context.strokeStyle = selectedActorId === combatant.actor_id ? '#fff2dc' : 'rgba(255,255,255,.58)';

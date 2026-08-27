@@ -13,11 +13,14 @@ _PAPER = "#f5efdf"
 _INK = "#171916"
 _MUTED = "#777367"
 _GRID_BG = "#20241f"
+_GRID_TEXTURE = "#2a2f29"
 _GRID_LINE = "#666b60"
 _FRIENDLY = "#637b64"
 _HOSTILE = "#b64732"
 _NEUTRAL = "#b08c4e"
+_UNKNOWN = "#69716c"
 _ACCENT = "#e2522d"
+_COORDINATE_GUTTER = 28
 
 
 def _font(size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -50,12 +53,14 @@ def _fit_text(draw: ImageDraw.ImageDraw, value: str, font: Any, width: int) -> s
 
 
 def _disposition_color(value: Any) -> str:
-    disposition = str(value or "friendly").casefold()
+    disposition = str(value or "").casefold()
+    if disposition == "friendly":
+        return _FRIENDLY
     if disposition == "hostile":
         return _HOSTILE
     if disposition == "neutral":
         return _NEUTRAL
-    return _FRIENDLY
+    return _UNKNOWN
 
 
 def _condition_labels(value: Any) -> list[str]:
@@ -134,6 +139,105 @@ def _current_actor_id(combatants: list[dict[str, Any]], turn_index: Any) -> str 
     return None
 
 
+def _bounded_text_value(value: str, limit: int) -> str:
+    normalized = " ".join(str(value or "").split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _coordinate_step(cell_count: int) -> int:
+    if cell_count <= 32:
+        return 1
+    if cell_count <= 80:
+        return 5
+    return 10
+
+
+def _share_metadata(
+    encounter: Mapping[str, Any],
+    *,
+    combatants: list[dict[str, Any]],
+    current_actor_id: str | None,
+    grid_mode: bool,
+    width_cells: int,
+    height_cells: int,
+    map_revision: int | None,
+) -> dict[str, Any]:
+    """Build one compact, audience-safe card for chat and accessible clients."""
+
+    title = _bounded_text_value(str(encounter.get("name") or "Combat"), 160)
+    round_number = int(encounter.get("round", 1) or 1)
+    current_actor = next(
+        (
+            actor
+            for actor in combatants
+            if str(actor.get("actor_id") or "") == current_actor_id
+        ),
+        None,
+    )
+    current_name = (
+        _bounded_text_value(str(current_actor.get("name") or "Visible combatant"), 120)
+        if current_actor is not None
+        else None
+    )
+    roster = [
+        {
+            "name": _bounded_text_value(
+                str(actor.get("name") or "Visible combatant"),
+                120,
+            ),
+            "initiative": int(actor.get("initiative", 0) or 0),
+            "position": (
+                {
+                    "x": int(actor["position"]["x"]),
+                    "y": int(actor["position"]["y"]),
+                }
+                if grid_mode
+                and isinstance(actor.get("position"), Mapping)
+                and isinstance(actor["position"].get("x"), int)
+                and isinstance(actor["position"].get("y"), int)
+                else None
+            ),
+        }
+        for actor in sorted(
+            combatants,
+            key=lambda item: -int(item.get("initiative", 0) or 0),
+        )
+    ]
+    map_label = (
+        f"{width_cells}x{height_cells} / 5 ft / rev {map_revision or 1}"
+        if grid_mode
+        else "Agent spatial mode / no coordinates"
+    )
+    lines = [f"⚔️ {title} · Round {round_number}"]
+    if current_name:
+        lines.append(f"▶️ Turn: {current_name}")
+    lines.append(f"🗺️ {map_label}")
+    if roster:
+        roster_text = " · ".join(
+            f"{item['name']} {item['initiative']}"
+            + (
+                f" @ {item['position']['x']},{item['position']['y']}"
+                if item["position"] is not None
+                else ""
+            )
+            for item in roster[:12]
+        )
+        if len(roster) > 12:
+            roster_text += f" · +{len(roster) - 12} more"
+        lines.append(f"👥 {roster_text}")
+    return {
+        "title": title,
+        "round": round_number,
+        "current_actor_name": current_name,
+        "map_label": map_label,
+        "visible_combatant_count": len(roster),
+        "roster": roster,
+        "suggested_caption": _bounded_text_value("\n".join(lines), 1800),
+    }
+
+
 def _draw_grid(
     canvas: Image.Image,
     draw: ImageDraw.ImageDraw,
@@ -151,6 +255,49 @@ def _draw_grid(
     width = width_cells * cell
     height = height_cells * cell
     draw.rectangle((left, top, left + width, top + height), fill=_GRID_BG)
+    texture_step = max(18, min(42, cell))
+    for offset in range(0, height, texture_step):
+        stagger = (offset // texture_step % 2) * (texture_step // 2)
+        draw.line(
+            (
+                left,
+                top + offset,
+                left + width,
+                top + offset,
+            ),
+            fill=_GRID_TEXTURE,
+            width=1,
+        )
+        for cross in range(stagger, width + texture_step, texture_step):
+            draw.line(
+                (
+                    left + cross,
+                    top + offset,
+                    left + cross - texture_step // 3,
+                    top + min(height, offset + texture_step // 3),
+                ),
+                fill=_GRID_TEXTURE,
+                width=1,
+            )
+    coordinate_font = _font(max(10, min(15, cell // 4)), bold=True)
+    x_step = _coordinate_step(width_cells)
+    y_step = _coordinate_step(height_cells)
+    for x in range(0, width_cells, x_step):
+        draw.text(
+            (left + x * cell + cell // 2, top - 9),
+            str(x),
+            fill=_MUTED,
+            font=coordinate_font,
+            anchor="ms",
+        )
+    for y in range(0, height_cells, y_step):
+        draw.text(
+            (left - 9, top + y * cell + cell // 2),
+            str(y),
+            fill=_MUTED,
+            font=coordinate_font,
+            anchor="rm",
+        )
     difficult = set(battle_map.get("difficult_cells") or [])
     blocked = set(battle_map.get("blocked_cells") or [])
     for y in range(height_cells):
@@ -196,6 +343,39 @@ def _draw_grid(
             portrait=portraits.get(actor_id),
             current=actor_id == current_actor_id,
         )
+        initiative = str(int(actor.get("initiative", 0) or 0))
+        badge_radius = max(7, min(13, cell // 5))
+        badge_x = left + (x + 1) * cell - badge_radius
+        badge_y = top + y * cell + badge_radius
+        draw.ellipse(
+            (
+                badge_x - badge_radius,
+                badge_y - badge_radius,
+                badge_x + badge_radius,
+                badge_y + badge_radius,
+            ),
+            fill=_INK,
+            outline=_PAPER,
+            width=1,
+        )
+        draw.text(
+            (badge_x, badge_y),
+            initiative,
+            fill=_PAPER,
+            font=_font(max(8, badge_radius), bold=True),
+            anchor="mm",
+        )
+        hp = actor.get("hp")
+        if isinstance(hp, Mapping) and hp.get("current") is not None and hp.get("max"):
+            ratio = max(0.0, min(1.0, float(hp["current"]) / float(hp["max"])))
+            bar_left = left + x * cell + 4
+            bar_right = left + (x + 1) * cell - 4
+            bar_top = top + (y + 1) * cell - 6
+            draw.rectangle((bar_left, bar_top, bar_right, bar_top + 3), fill="#3a1712")
+            draw.rectangle(
+                (bar_left, bar_top, bar_left + int((bar_right - bar_left) * ratio), bar_top + 3),
+                fill=_ACCENT,
+            )
 
 
 def _draw_agent_panel(
@@ -249,8 +429,10 @@ def render_combat_png(
     grid_mode = positioning_mode == "grid" and width_cells > 0 and height_cells > 0
 
     cell = max(8, min(64, 1120 // width_cells, 800 // height_cells)) if grid_mode else 0
-    map_width = width_cells * cell if grid_mode else 960
-    map_height = height_cells * cell if grid_mode else 720
+    grid_width = width_cells * cell if grid_mode else 960
+    grid_height = height_cells * cell if grid_mode else 720
+    map_width = grid_width + (_COORDINATE_GUTTER if grid_mode else 0)
+    map_height = grid_height + (_COORDINATE_GUTTER if grid_mode else 0)
     roster_width = 430
     header_height = 132
     footer_height = 70
@@ -291,8 +473,8 @@ def render_combat_png(
             combatants=combatants,
             portraits=portrait_values,
             current_actor_id=current_actor_id,
-            left=map_left,
-            top=map_top,
+            left=map_left + _COORDINATE_GUTTER,
+            top=map_top + _COORDINATE_GUTTER,
             width_cells=width_cells,
             height_cells=height_cells,
             cell=cell,
@@ -388,9 +570,23 @@ def render_combat_png(
             else ""
         )
         actor_summaries.append(
-            f"{actor.get('name') or actor.get('actor_id')}, initiative "
+            f"{actor.get('name') or 'Visible combatant'}, initiative "
             f"{int(actor.get('initiative', 0) or 0)}{location}"
         )
+    share_card = _share_metadata(
+        value,
+        combatants=combatants,
+        current_actor_id=current_actor_id,
+        grid_mode=grid_mode,
+        width_cells=width_cells,
+        height_cells=height_cells,
+        map_revision=map_revision if grid_mode else None,
+    )
+    alt_text = _bounded_text_value(
+        f"{value.get('name') or 'Combat'}, round {int(value.get('round', 1) or 1)}. "
+        + "; ".join(actor_summaries),
+        1800,
+    )
     metadata = {
         "encounter_id": value.get("id"),
         "positioning_mode": positioning_mode,
@@ -402,10 +598,9 @@ def render_combat_png(
         "height": canvas_height,
         "mime_type": "image/png",
         "image_checksum": hashlib.sha256(content).hexdigest(),
-        "alt_text": (
-            f"{value.get('name') or 'Combat'}, round {int(value.get('round', 1) or 1)}. "
-            + "; ".join(actor_summaries)
-        ),
+        "alt_text": alt_text,
+        "share_card": share_card,
+        "suggested_caption": share_card["suggested_caption"],
     }
     return metadata, content
 
