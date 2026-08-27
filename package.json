@@ -6,7 +6,7 @@
   ],
   "scripts": {
     "build:ui": "npm --workspace sagasmith-dnd-ui run build",
-    "check:ui": "npm --workspace sagasmith-dnd-ui run check",
+    "check:ui": "npm --workspace sagasmith-dnd-ui run typecheck",
     "test:ui": "npm --workspace sagasmith-dnd-ui run test"
   }
 }
