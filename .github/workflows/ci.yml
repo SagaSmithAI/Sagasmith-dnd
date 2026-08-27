@@ -2,6 +2,7 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:
@@ -9,7 +10,20 @@ permissions:
 
 jobs:
   python:
+    name: python (${{ matrix.profile }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: locked-py311
+            python-version: "3.11"
+            core-ref: 08ac611cfa8e551231028d181c5c3bf2727ee0f7
+            sync-args: --frozen
+          - profile: compatibility-py312
+            python-version: "3.12"
+            core-ref: main
+            sync-args: ""
     defaults:
       run:
         working-directory: sagasmith-dnd
@@ -20,13 +34,14 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: SagaSmithAI/sagasmith-core
+          ref: ${{ matrix.core-ref }}
           path: sagasmith-core
       - uses: astral-sh/setup-uv@v10.0.1
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
           enable-cache: true
           prune-cache: true
-      - run: uv sync --frozen --all-packages --all-extras
+      - run: uv sync ${{ matrix.sync-args }} --all-packages --all-extras
       - run: uv run --no-sync ruff check packages/domain packages/mcp
       - run: uv run --no-sync pytest packages/domain/tests
       - run: uv run --no-sync pytest packages/mcp/tests
@@ -76,4 +91,6 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
+      - run: npm run check:ui
+      - run: npm run test:ui
       - run: npm run build:ui
