@@ -110,11 +110,15 @@ The MCP layer represents uncertainty through preflight results, choice windows, 
 Requires Python 3.11+:
 
 ```bash
-pip install "sagasmith-dnd[all]"
+pip install sagasmith-dnd
 sagasmith-dnd doctor --json
 sagasmith-dnd --help
 sagasmith-dnd database upgrade --json
 ```
+
+The baseline contains only the Core database and text runtime. Markdown/text,
+SQLite, FTS, and ordinary text sessions do not require PDF, image, OCR,
+ChromaDB, Sentence Transformers, or Torch packages.
 
 `database upgrade` requires the current Snapshot schema v8. Every complete
 state document is stored as an independent, bounded, checksummed `zlib-1`
@@ -125,8 +129,15 @@ D&D versions as one unit.
 | Extra | Purpose |
 |---|---|
 | `documents` | PDF parsing |
-| `dense` | sentence-transformers + ChromaDB |
-| `all` | document, embedding, and vector dependencies |
+| `images` | PyMuPDF + Pillow actor portrait extraction |
+| `embedding` | Sentence Transformers embedding models |
+| `vector` | ChromaDB vector storage |
+| `dense` | `embedding` + `vector` |
+| `all` | Domain document, image, embedding, and vector capabilities |
+
+Use `pip install "sagasmith-dnd[documents]"` for PDF imports and add `dense`
+only when semantic retrieval is needed. Scanned-document OCR belongs to the
+D&D MCP `ocr` extra; it is not hidden in the Domain baseline.
 
 ## Extension rule packs
 

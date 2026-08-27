@@ -10,7 +10,7 @@ import re
 import unicodedata
 from collections import Counter
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
 from sagasmith_core.content_pack import (
     blob_descriptor,
@@ -37,9 +37,25 @@ from sagasmith_dnd.content_validation import (
     content_fingerprint,
     selection_contract_errors,
 )
-from sagasmith_dnd.portrait_extraction import ExtractedPortrait, PortraitExtractor
 from sagasmith_dnd.spatial import BattleMapError, normalize_combat_grid_templates
 from sagasmith_dnd.statblocks import ParsedStatblock, finalize_imported_actor_rulings
+
+if TYPE_CHECKING:
+    from sagasmith_dnd.portrait_extraction import ExtractedPortrait, PortraitExtractor
+
+
+def _portrait_extractor_type() -> type[PortraitExtractor]:
+    """Load image support only for an explicit portrait extraction request."""
+
+    try:
+        from sagasmith_dnd.portrait_extraction import PortraitExtractor
+    except ModuleNotFoundError as exc:
+        if (exc.name or "").partition(".")[0] != "PIL":
+            raise
+        raise RuntimeError(
+            "Actor portrait extraction requires `pip install \"sagasmith-dnd[images]\"`"
+        ) from exc
+    return PortraitExtractor
 
 
 def _slug(value: str) -> str:
@@ -1857,7 +1873,7 @@ def attach_actor_portraits(
     reviews = {str(key): dict(item) for key, item in dict(portrait_reviews or {}).items()}
     consumed_review_keys: set[str] = set()
     image_refs_by_cache: dict[str, dict[str, str]] = {}
-    with PortraitExtractor() as extractor:
+    with _portrait_extractor_type()() as extractor:
         for subject in subjects:
             target = subject["target"]
             if target.get("image") is not None:
