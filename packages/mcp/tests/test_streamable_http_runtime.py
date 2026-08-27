@@ -39,6 +39,43 @@ def _wait_for_port(port: int, process: subprocess.Popen[str], output: TextIO) ->
     raise AssertionError("D&D MCP streamable HTTP endpoint did not start")
 
 
+def test_optional_pdf_preload_skips_only_a_missing_root_module(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from sagasmith_dnd_mcp import server
+
+    def missing_pdf_runtime(name: str) -> None:
+        assert name == "pypdfium2"
+        raise ModuleNotFoundError("missing optional PDF runtime", name="pypdfium2")
+
+    monkeypatch.setattr(server.importlib, "import_module", missing_pdf_runtime)
+
+    server._preload_optional_pdf_runtime()
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        ModuleNotFoundError("missing internal dependency", name="unexpected_internal"),
+        ImportError("broken installed PDF runtime"),
+    ],
+)
+def test_optional_pdf_preload_preserves_real_import_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: ImportError,
+) -> None:
+    from sagasmith_dnd_mcp import server
+
+    def fail_import(name: str) -> None:
+        assert name == "pypdfium2"
+        raise failure
+
+    monkeypatch.setattr(server.importlib, "import_module", fail_import)
+
+    with pytest.raises(type(failure), match=str(failure)):
+        server._preload_optional_pdf_runtime()
+
+
 def test_real_streamable_http_client_tracks_dynamic_tools(tmp_path: Path) -> None:
     port = _unused_loopback_port()
     environment = os.environ.copy()
