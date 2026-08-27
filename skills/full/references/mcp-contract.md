@@ -1035,8 +1035,8 @@ operational signal, not permission to rewrite history automatically.
 ## Session exposure and game phase
 
 The MCP, not Agent configuration, owns tool exposure. Every connection starts
-with exactly six core tools: `exposure`, `server_capabilities`, `storage_status`,
-`campaign_query`, `game_phase`, and `skill_query`.
+with exactly 7 core tools: `exposure`, `server_capabilities`, `storage_status`,
+`campaign_query`, `game_phase`, `resolution_presentation`, and `skill_query`.
 
 Call `exposure(action="open", campaign_id?, principal_id?)`, discover exact tool
 ids with `action="search"`, and change the session's loaded ids with

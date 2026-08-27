@@ -96,6 +96,11 @@ sagasmith-dnd-mcp
 语义不得按 transport 分叉。stdio 适合一个 Agent 独占一个进程，多个本机客户端
 共享常驻服务时使用 Streamable HTTP。
 
+原始 MCP 仅在 loopback 上允许无签名启动。将
+`SAGASMITH_DND_MCP_HTTP_HOST` 设为非 loopback 地址时，必须同时配置至少
+32 字节的 `SAGASMITH_AUTH_CONTEXT_SECRET`；Gateway bearer token 只保护
+Gateway，不能替代 MCP auth context。
+
 若要连接 D&D Workbench UI，同时安装并启动 HTTP/SSE adapter：
 
 ```powershell
