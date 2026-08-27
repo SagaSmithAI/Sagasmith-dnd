@@ -11,7 +11,7 @@ from mcp.types import ImageContent, TextContent
 from PIL import Image
 from sagasmith_dnd.character_schema import default_character_sheet
 
-from sagasmith_dnd_mcp.combat_render import render_combat_png
+from sagasmith_dnd_mcp.combat_render import _disposition_color, render_combat_png
 from sagasmith_dnd_mcp.config import McpConfig
 from sagasmith_dnd_mcp.server import create_server
 from sagasmith_dnd_mcp.storage import SagaSmithStorage
@@ -56,29 +56,32 @@ def test_render_combat_png_is_deterministic_and_uses_portrait() -> None:
         },
         "combatants": [
             {
-                "actor_id": "hero",
+                "actor_id": "actor-internal-hero",
                 "name": "Hero",
                 "initiative": 18,
                 "position": {"x": 1, "y": 1},
                 "disposition": "friendly",
+                "hp": {"current": 3, "max": 99},
+                "conditions": ["secret-mark"],
             },
             {
-                "actor_id": "foe",
+                "actor_id": "actor-internal-foe",
                 "name": "Foe",
                 "initiative": 12,
                 "position": {"x": 4, "y": 2},
                 "disposition": "hostile",
             },
         ],
+        "source": {"location_key": "secret-vault"},
     }
     first_metadata, first = render_combat_png(
         encounter,
-        portraits={"hero": _portrait_bytes()},
+        portraits={"actor-internal-hero": _portrait_bytes()},
         audience_projection="party_public",
     )
     second_metadata, second = render_combat_png(
         encounter,
-        portraits={"hero": _portrait_bytes()},
+        portraits={"actor-internal-hero": _portrait_bytes()},
         audience_projection="party_public",
     )
 
@@ -87,8 +90,34 @@ def test_render_combat_png_is_deterministic_and_uses_portrait() -> None:
     assert first_metadata == second_metadata
     assert first_metadata["image_checksum"] == hashlib.sha256(first).hexdigest()
     assert first_metadata["map_revision"] == 3
-    assert first_metadata["current_actor_id"] == "hero"
+    assert first_metadata["current_actor_id"] == "actor-internal-hero"
     assert "Hero" in first_metadata["alt_text"]
+    share_payload = json.dumps(
+        {
+            "alt_text": first_metadata["alt_text"],
+            "share_card": first_metadata["share_card"],
+            "suggested_caption": first_metadata["suggested_caption"],
+        },
+        ensure_ascii=False,
+    )
+    for private_value in (
+        "actor-internal-hero",
+        "actor-internal-foe",
+        "secret-mark",
+        "secret-vault",
+    ):
+        assert private_value not in share_payload
+    assert set(first_metadata["share_card"]["roster"][0]) == {
+        "name",
+        "initiative",
+        "position",
+    }
+
+
+def test_missing_disposition_uses_unknown_instead_of_friendly_color() -> None:
+    assert _disposition_color(None) == "#69716c"
+    assert _disposition_color("undisclosed") == "#69716c"
+    assert _disposition_color("friendly") == "#637b64"
 
 
 def test_managed_actor_image_is_checksum_bound(tmp_path: Path) -> None:
@@ -151,7 +180,7 @@ def test_combat_query_render_returns_image_and_party_projection_hides_actor(
                 "idempotency_key": "play",
             },
         )
-        await _call(
+        started = await _call(
             server,
             "combat_start",
             {
@@ -176,6 +205,16 @@ def test_combat_query_render_returns_image_and_party_projection_hides_actor(
                 "idempotency_key": "start",
             },
         )
+        patched = await _call(
+            server,
+            "combat_map_patch",
+            {
+                "campaign_id": campaign["id"],
+                "patches": [{"key": "secret-door", "value": True}],
+                "expected_revision": started["campaign_revision"],
+                "idempotency_key": "patch-map",
+            },
+        )
 
         rendered = await server.call_tool(
             "combat_query",
@@ -194,8 +233,22 @@ def test_combat_query_render_returns_image_and_party_projection_hides_actor(
         assert rendered.content[1].mimeType == "image/png"
         assert content.startswith(b"\x89PNG\r\n\x1a\n")
         assert metadata["audience_projection"] == "party_public"
+        assert metadata["map_revision"] == 2
         assert "Visible Hero" in metadata["alt_text"]
         assert "Hidden Foe" not in metadata["alt_text"]
-        assert metadata["campaign_revision"] == phase["campaign_revision"] + 1
+        assert metadata["campaign_revision"] == patched["campaign_revision"]
+        share_payload = json.dumps(
+            {
+                "alt_text": metadata["alt_text"],
+                "share_card": metadata["share_card"],
+                "suggested_caption": metadata["suggested_caption"],
+            },
+            ensure_ascii=False,
+        )
+        assert characters[0]["id"] not in share_payload
+        assert characters[1]["id"] not in share_payload
+        assert "Hidden Foe" not in share_payload
+        assert "secret-door" not in share_payload
+        assert metadata["share_card"]["map_label"].endswith("rev 2")
 
     asyncio.run(exercise())
