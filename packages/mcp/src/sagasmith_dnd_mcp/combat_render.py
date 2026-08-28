@@ -93,6 +93,73 @@ def _portrait_image(content: bytes | None, size: int) -> Image.Image | None:
         return None
 
 
+def _party_public_map_image(
+    battle_map: Mapping[str, Any],
+    content: bytes | None,
+    *,
+    audience_projection: str,
+) -> tuple[Image.Image, dict[str, Any]] | None:
+    """Open one checksum-bound reviewed image; invalid decoration is always optional."""
+
+    if audience_projection != "party_public" or not content:
+        return None
+    asset = battle_map.get("party_public_map_asset")
+    if not isinstance(asset, Mapping):
+        return None
+    try:
+        review = dict(asset.get("review") or {})
+        if review.get("status") != "approved" or review.get("audience") != "party_public":
+            return None
+        if any(
+            not str(asset.get(field) or "").strip()
+            for field in ("alt_text", "license", "attribution")
+        ):
+            return None
+        checksum = str(asset.get("checksum") or "").casefold()
+        if hashlib.sha256(content).hexdigest() != checksum:
+            return None
+        expected_media_type = str(asset.get("media_type") or "").casefold()
+        expected_format = {
+            "image/jpeg": "JPEG",
+            "image/png": "PNG",
+            "image/webp": "WEBP",
+        }.get(expected_media_type)
+        if expected_format is None:
+            return None
+        with Image.open(BytesIO(content)) as source:
+            if source.format != expected_format or source.size != (
+                int(asset.get("width", 0) or 0),
+                int(asset.get("height", 0) or 0),
+            ):
+                return None
+            if source.width * source.height > 32 * 1024 * 1024:
+                return None
+            source.load()
+            artwork = source.convert("RGB")
+        alignment = dict(asset.get("grid_alignment") or {})
+        if alignment.get("mode") != "contain":
+            return None
+        bounds = dict(battle_map.get("bounds") or {})
+        width_cells = int(bounds.get("width_cells", 0) or 0)
+        height_cells = int(bounds.get("height_cells", 0) or 0)
+        x = int(alignment.get("x", -1))
+        y = int(alignment.get("y", -1))
+        aligned_width = int(alignment.get("width_cells", 0))
+        aligned_height = int(alignment.get("height_cells", 0))
+        if (
+            x < 0
+            or y < 0
+            or aligned_width < 1
+            or aligned_height < 1
+            or x + aligned_width > width_cells
+            or y + aligned_height > height_cells
+        ):
+            return None
+        return artwork, alignment
+    except (Image.DecompressionBombError, OSError, TypeError, ValueError):
+        return None
+
+
 def _draw_round_portrait(
     canvas: Image.Image,
     draw: ImageDraw.ImageDraw,
@@ -251,34 +318,54 @@ def _draw_grid(
     width_cells: int,
     height_cells: int,
     cell: int,
+    map_artwork: tuple[Image.Image, dict[str, Any]] | None,
 ) -> None:
     width = width_cells * cell
     height = height_cells * cell
     draw.rectangle((left, top, left + width, top + height), fill=_GRID_BG)
-    texture_step = max(18, min(42, cell))
-    for offset in range(0, height, texture_step):
-        stagger = (offset // texture_step % 2) * (texture_step // 2)
-        draw.line(
-            (
-                left,
-                top + offset,
-                left + width,
-                top + offset,
-            ),
-            fill=_GRID_TEXTURE,
-            width=1,
-        )
-        for cross in range(stagger, width + texture_step, texture_step):
+    if map_artwork is None:
+        texture_step = max(18, min(42, cell))
+        for offset in range(0, height, texture_step):
+            stagger = (offset // texture_step % 2) * (texture_step // 2)
             draw.line(
                 (
-                    left + cross,
+                    left,
                     top + offset,
-                    left + cross - texture_step // 3,
-                    top + min(height, offset + texture_step // 3),
+                    left + width,
+                    top + offset,
                 ),
                 fill=_GRID_TEXTURE,
                 width=1,
             )
+            for cross in range(stagger, width + texture_step, texture_step):
+                draw.line(
+                    (
+                        left + cross,
+                        top + offset,
+                        left + cross - texture_step // 3,
+                        top + min(height, offset + texture_step // 3),
+                    ),
+                    fill=_GRID_TEXTURE,
+                    width=1,
+                )
+    else:
+        artwork, alignment = map_artwork
+        target_left = left + int(alignment["x"]) * cell
+        target_top = top + int(alignment["y"]) * cell
+        target_width = int(alignment["width_cells"]) * cell
+        target_height = int(alignment["height_cells"]) * cell
+        fitted = ImageOps.contain(
+            artwork,
+            (target_width, target_height),
+            method=Image.Resampling.LANCZOS,
+        )
+        canvas.paste(
+            fitted,
+            (
+                target_left + (target_width - fitted.width) // 2,
+                target_top + (target_height - fitted.height) // 2,
+            ),
+        )
     coordinate_font = _font(max(10, min(15, cell // 4)), bold=True)
     x_step = _coordinate_step(width_cells)
     y_step = _coordinate_step(height_cells)
@@ -413,6 +500,7 @@ def render_combat_png(
     *,
     portraits: Mapping[str, bytes] | None = None,
     audience_projection: str,
+    party_public_map_asset: bytes | None = None,
 ) -> tuple[dict[str, Any], bytes]:
     """Render one already audience-filtered encounter to a PNG plus metadata."""
 
@@ -427,6 +515,15 @@ def render_combat_png(
     width_cells = int(bounds.get("width_cells", 0) or 0)
     height_cells = int(bounds.get("height_cells", 0) or 0)
     grid_mode = positioning_mode == "grid" and width_cells > 0 and height_cells > 0
+    map_artwork = (
+        _party_public_map_image(
+            battle_map,
+            party_public_map_asset,
+            audience_projection=audience_projection,
+        )
+        if grid_mode
+        else None
+    )
 
     cell = max(8, min(64, 1120 // width_cells, 800 // height_cells)) if grid_mode else 0
     grid_width = width_cells * cell if grid_mode else 960
@@ -478,6 +575,7 @@ def render_combat_png(
             width_cells=width_cells,
             height_cells=height_cells,
             cell=cell,
+            map_artwork=map_artwork,
         )
     else:
         _draw_agent_panel(
@@ -582,11 +680,33 @@ def render_combat_png(
         height_cells=height_cells,
         map_revision=map_revision if grid_mode else None,
     )
+    public_asset = dict(battle_map.get("party_public_map_asset") or {})
+    artwork_alt = (
+        f" Map artwork: {public_asset.get('alt_text')}." if map_artwork is not None else ""
+    )
     alt_text = _bounded_text_value(
-        f"{value.get('name') or 'Combat'}, round {int(value.get('round', 1) or 1)}. "
-        + "; ".join(actor_summaries),
+        f"{value.get('name') or 'Combat'}, round {int(value.get('round', 1) or 1)}."
+        f"{artwork_alt} " + "; ".join(actor_summaries),
         1800,
     )
+    map_asset_metadata: dict[str, Any] = {
+        "used": map_artwork is not None,
+        "fallback": None if map_artwork is not None else "deterministic_texture",
+    }
+    if map_artwork is not None:
+        artwork, alignment = map_artwork
+        target_width = int(alignment["width_cells"]) * cell
+        target_height = int(alignment["height_cells"]) * cell
+        fitted = ImageOps.contain(artwork, (target_width, target_height))
+        map_asset_metadata.update(
+            {
+                "letterboxed": fitted.size != (target_width, target_height),
+                "alt_text": str(public_asset["alt_text"]),
+                "license": str(public_asset["license"]),
+                "attribution": str(public_asset["attribution"]),
+                "grid_alignment": dict(alignment),
+            }
+        )
     metadata = {
         "encounter_id": value.get("id"),
         "positioning_mode": positioning_mode,
@@ -601,6 +721,7 @@ def render_combat_png(
         "alt_text": alt_text,
         "share_card": share_card,
         "suggested_caption": share_card["suggested_caption"],
+        "decorative_map_asset": map_asset_metadata,
     }
     return metadata, content
 

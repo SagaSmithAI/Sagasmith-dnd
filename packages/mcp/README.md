@@ -258,6 +258,48 @@ Agent 根据当前叙事判断范围、命中条件、视线、阻挡和友军�
 `spatial_facts`；引擎仍负责行动经济、资源、掷骰、伤害和事务。两种模式不会互相猜测或
 静默降级。
 
+已定稿 Module Pack 可以在 combat-grid template 中保留两种互不等价的图片引用：
+
+- `map_asset_key` 仍是 DM/来源侧的私有引用，不会因为进入战斗或调用渲染而公开；
+- `party_public_map_asset` 是单独的发布契约，必须绑定 Pack asset 的 SHA-256、MIME、
+  实际像素尺寸、替代文本、许可/署名、`contain` 格网对齐信息，以及认证 DM 的
+  `approved` / `party_public` 审查记录。
+
+```json
+{
+  "party_public_map_asset": {
+    "asset_key": "gate-map",
+    "checksum": "<sha256>",
+    "media_type": "image/png",
+    "width": 1600,
+    "height": 1200,
+    "alt_text": "已审核、不含隐藏标记的门楼地图。",
+    "license": "private party display",
+    "attribution": "User-supplied artwork.",
+    "grid_alignment": {
+      "mode": "contain",
+      "x": 0,
+      "y": 0,
+      "width_cells": 12,
+      "height_cells": 8
+    },
+    "review": {
+      "status": "approved",
+      "audience": "party_public",
+      "reviewer": "<authenticated DM principal>",
+      "reviewed_at": "2026-08-28T00:00:00Z",
+      "note": "No hidden doors, traps, unexplored labels, or DM notes."
+    }
+  }
+}
+```
+
+只有第二种引用会进入 `party_public` 投影。服务在草稿编辑时核对认证 reviewer、
+文件 checksum、MIME 与尺寸，在读取 Pack 时再次核对不可变 blob；任何缺失、损坏、
+未授权或格式不一致都会回退到确定性纹理。背景图始终按格网区域 letterbox，不裁切，
+权威格线、可见地形/迷雾投影、坐标与 token 最后绘制。实时战斗路径不会调用 ComfyUI
+或其他生成器，渲染也不会写 campaign revision；因此图片失败不会阻断文字游戏。
+
 ### 统一 Content Package
 
 PC、NPC 与怪物统一使用 `sagasmith.actor-card.v3`，并只在最终 `preset` 或 `module`

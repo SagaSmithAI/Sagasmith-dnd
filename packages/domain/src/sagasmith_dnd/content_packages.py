@@ -264,6 +264,28 @@ def validate_dnd_content_package(package: Mapping[str, Any]) -> dict[str, Any]:
                         raise ValueError(
                             "combat-grid template map_asset_key must reference a packaged image"
                         )
+                public_asset = template.get("party_public_map_asset")
+                if public_asset:
+                    asset = assets.get(str(public_asset["asset_key"]))
+                    if asset is None or not str(asset.get("media_type") or "").startswith(
+                        "image/"
+                    ):
+                        raise ValueError(
+                            "combat-grid template party_public_map_asset must reference a "
+                            "packaged image"
+                        )
+                    if str(asset.get("checksum") or "") != str(public_asset["checksum"]):
+                        raise ValueError(
+                            "combat-grid template party_public_map_asset checksum does not "
+                            "match its packaged image"
+                        )
+                    if str(asset.get("media_type") or "").casefold() != str(
+                        public_asset["media_type"]
+                    ).casefold():
+                        raise ValueError(
+                            "combat-grid template party_public_map_asset media_type does not "
+                            "match its packaged image"
+                        )
     for artifact in value["content"].get("artifacts") or []:
         if not isinstance(artifact, Mapping) or artifact.get("kind") != "statblock":
             continue

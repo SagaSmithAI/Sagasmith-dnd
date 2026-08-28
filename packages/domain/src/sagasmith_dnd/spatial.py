@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
+from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
@@ -27,8 +28,37 @@ _TEMPLATE_FIELDS = {
     "difficult_cells",
     "deployment_zones",
     "map_asset_key",
+    "party_public_map_asset",
     "source_refs",
 }
+
+_PARTY_PUBLIC_ASSET_FIELDS = {
+    "asset_key",
+    "checksum",
+    "media_type",
+    "width",
+    "height",
+    "alt_text",
+    "license",
+    "attribution",
+    "grid_alignment",
+    "review",
+}
+_PARTY_PUBLIC_ALIGNMENT_FIELDS = {
+    "mode",
+    "x",
+    "y",
+    "width_cells",
+    "height_cells",
+}
+_PARTY_PUBLIC_REVIEW_FIELDS = {
+    "status",
+    "audience",
+    "reviewer",
+    "reviewed_at",
+    "note",
+}
+_PARTY_PUBLIC_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 
 
 def normalize_combat_grid_template(
@@ -41,7 +71,9 @@ def normalize_combat_grid_template(
     if not isinstance(value, Mapping):
         raise BattleMapError("combat-grid template must be an object")
     unknown = sorted(set(value) - _TEMPLATE_FIELDS)
-    missing = sorted((_TEMPLATE_FIELDS - {"map_asset_key"}) - set(value))
+    missing = sorted(
+        (_TEMPLATE_FIELDS - {"map_asset_key", "party_public_map_asset"}) - set(value)
+    )
     if unknown or missing:
         details = []
         if missing:
@@ -110,7 +142,110 @@ def normalize_combat_grid_template(
         result["map_asset_key"] = _bounded_text(
             value.get("map_asset_key"), "map_asset_key", 300
         )
+    if "party_public_map_asset" in value:
+        result["party_public_map_asset"] = normalize_party_public_map_asset(
+            value.get("party_public_map_asset"),
+            width_cells=width,
+            height_cells=height,
+        )
     return result
+
+
+def normalize_party_public_map_asset(
+    value: Any,
+    *,
+    width_cells: int,
+    height_cells: int,
+) -> dict[str, Any]:
+    """Validate one explicitly reviewed, portable party-public map asset reference."""
+
+    if not isinstance(value, Mapping) or set(value) != _PARTY_PUBLIC_ASSET_FIELDS:
+        raise BattleMapError(
+            "party_public_map_asset must contain exactly asset_key, checksum, media_type, "
+            "width, height, alt_text, license, attribution, grid_alignment, and review"
+        )
+    checksum = str(value.get("checksum") or "").casefold()
+    if not re.fullmatch(r"[0-9a-f]{64}", checksum):
+        raise BattleMapError("party_public_map_asset.checksum must be a SHA-256 checksum")
+    media_type = str(value.get("media_type") or "").strip().casefold()
+    if media_type not in _PARTY_PUBLIC_IMAGE_TYPES:
+        raise BattleMapError(
+            "party_public_map_asset.media_type must be image/png, image/jpeg, or image/webp"
+        )
+    width = _bounded_int(value.get("width"), "party_public_map_asset.width", 1, 16384)
+    height = _bounded_int(value.get("height"), "party_public_map_asset.height", 1, 16384)
+    if width * height > 32 * 1024 * 1024:
+        raise BattleMapError("party_public_map_asset exceeds the 32-megapixel safety limit")
+
+    alignment = value.get("grid_alignment")
+    if not isinstance(alignment, Mapping) or set(alignment) != _PARTY_PUBLIC_ALIGNMENT_FIELDS:
+        raise BattleMapError(
+            "party_public_map_asset.grid_alignment must contain exactly mode, x, y, "
+            "width_cells, and height_cells"
+        )
+    if alignment.get("mode") != "contain":
+        raise BattleMapError("party-public map artwork must use contain (letterbox) alignment")
+    x = _bounded_int(alignment.get("x"), "grid_alignment.x", 0, width_cells - 1)
+    y = _bounded_int(alignment.get("y"), "grid_alignment.y", 0, height_cells - 1)
+    aligned_width = _bounded_int(
+        alignment.get("width_cells"),
+        "grid_alignment.width_cells",
+        1,
+        width_cells,
+    )
+    aligned_height = _bounded_int(
+        alignment.get("height_cells"),
+        "grid_alignment.height_cells",
+        1,
+        height_cells,
+    )
+    if x + aligned_width > width_cells or y + aligned_height > height_cells:
+        raise BattleMapError("party_public_map_asset.grid_alignment exceeds map bounds")
+
+    review = value.get("review")
+    if not isinstance(review, Mapping) or set(review) != _PARTY_PUBLIC_REVIEW_FIELDS:
+        raise BattleMapError(
+            "party_public_map_asset.review must contain exactly status, audience, reviewer, "
+            "reviewed_at, and note"
+        )
+    if review.get("status") != "approved" or review.get("audience") != "party_public":
+        raise BattleMapError(
+            "party_public_map_asset requires an approved party_public publication review"
+        )
+    reviewed_at = _bounded_text(review.get("reviewed_at"), "review.reviewed_at", 100)
+    try:
+        reviewed_datetime = datetime.fromisoformat(reviewed_at.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise BattleMapError("review.reviewed_at must be an RFC 3339 timestamp") from exc
+    if reviewed_datetime.tzinfo is None:
+        raise BattleMapError("review.reviewed_at must include a timezone")
+    normalized_review = {
+        "status": "approved",
+        "audience": "party_public",
+        "reviewer": _bounded_text(review.get("reviewer"), "review.reviewer", 300),
+        "reviewed_at": reviewed_at,
+        "note": _bounded_text(review.get("note"), "review.note", 2000),
+    }
+    return {
+        "asset_key": _bounded_text(value.get("asset_key"), "party_public_map_asset.asset_key", 300),
+        "checksum": checksum,
+        "media_type": media_type,
+        "width": width,
+        "height": height,
+        "alt_text": _bounded_text(value.get("alt_text"), "party_public_map_asset.alt_text", 1000),
+        "license": _bounded_text(value.get("license"), "party_public_map_asset.license", 500),
+        "attribution": _bounded_text(
+            value.get("attribution"), "party_public_map_asset.attribution", 2000
+        ),
+        "grid_alignment": {
+            "mode": "contain",
+            "x": x,
+            "y": y,
+            "width_cells": aligned_width,
+            "height_cells": aligned_height,
+        },
+        "review": normalized_review,
+    }
 
 
 def normalize_combat_grid_templates(
@@ -189,6 +324,8 @@ def compile_battle_map_template(
     }
     if normalized.get("map_asset_key"):
         value["map_asset_key"] = normalized["map_asset_key"]
+    if normalized.get("party_public_map_asset"):
+        value["party_public_map_asset"] = deepcopy(normalized["party_public_map_asset"])
     value["checksum"] = _checksum(value)
     return value
 

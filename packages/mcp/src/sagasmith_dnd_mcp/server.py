@@ -19,7 +19,7 @@ from dataclasses import asdict, replace
 from datetime import datetime
 from functools import lru_cache, wraps
 from pathlib import Path
-from typing import Annotated, Any, Callable, Literal, TypeVar
+from typing import Annotated, Any, Callable, Literal, Mapping, TypeVar
 from uuid import NAMESPACE_URL, uuid4, uuid5
 from weakref import WeakValueDictionary
 
@@ -381,6 +381,7 @@ from sagasmith_dnd.spatial import (
     normalize_combat_grid_source_refs,
     normalize_combat_grid_template,
     normalize_combat_grid_templates,
+    normalize_party_public_map_asset,
     patch_battle_map,
     validate_position,
 )
@@ -539,6 +540,34 @@ def _render_combat_png(*args: Any, **kwargs: Any) -> tuple[dict[str, Any], bytes
             "`pip install \"sagasmith-dnd-mcp[images]\"`"
         ) from exc
     return render_combat_png(*args, **kwargs)
+
+
+def _image_properties(path: str | Path) -> tuple[int, int, str]:
+    """Inspect reviewed map dimensions and MIME without a startup dependency."""
+
+    try:
+        from PIL import Image as PillowImage
+    except ModuleNotFoundError as exc:
+        if (exc.name or "").partition(".")[0] != "PIL":
+            raise
+        raise RuntimeError(
+            "Party-public map review requires "
+            "`pip install \"sagasmith-dnd-mcp[images]\"`"
+        ) from exc
+    try:
+        with PillowImage.open(path) as image:
+            width, height = int(image.width), int(image.height)
+            media_type = {
+                "JPEG": "image/jpeg",
+                "PNG": "image/png",
+                "WEBP": "image/webp",
+            }.get(str(image.format or ""))
+            if media_type is None:
+                raise ValueError("unsupported party-public raster image format")
+            image.verify()
+            return width, height, media_type
+    except (PillowImage.DecompressionBombError, OSError, ValueError) as exc:
+        raise ValueError("party_public_map_asset must reference a valid raster image") from exc
 
 
 def _preload_optional_pdf_runtime() -> None:
@@ -7106,20 +7135,91 @@ def create_server(config: McpConfig | None = None) -> FastMCP:
             value.pop(key, None)
         battle_map = value.get("battle_map")
         if isinstance(battle_map, dict):
-            value["battle_map"] = {
+            public_battle_map = {
                 key: deepcopy(battle_map[key])
                 for key in (
-                    "id",
                     "schema_version",
                     "map_revision",
-                    "lifecycle",
-                    "source",
                     "grid",
                     "bounds",
                 )
                 if key in battle_map
             }
+            raw_encounter = dict(
+                dict(campaigns.get(campaign_id).state or {}).get("combat") or {}
+            )
+            raw_battle_map = dict(raw_encounter.get("battle_map") or {})
+            raw_bounds = dict(raw_battle_map.get("bounds") or {})
+            try:
+                public_battle_map["party_public_map_asset"] = (
+                    normalize_party_public_map_asset(
+                        raw_battle_map.get("party_public_map_asset"),
+                        width_cells=int(raw_bounds.get("width_cells", 0) or 0),
+                        height_cells=int(raw_bounds.get("height_cells", 0) or 0),
+                    )
+                )
+            except BattleMapError:
+                public_battle_map.pop("party_public_map_asset", None)
+            value["battle_map"] = public_battle_map
         return value
+
+    def party_public_map_asset_content(
+        campaign_id: str,
+        encounter: Mapping[str, Any],
+    ) -> bytes | None:
+        """Resolve only an explicitly reviewed Pack asset; any defect is decorative fallback."""
+
+        try:
+            battle_map = dict(encounter.get("battle_map") or {})
+            bounds = dict(battle_map.get("bounds") or {})
+            asset_ref = normalize_party_public_map_asset(
+                battle_map.get("party_public_map_asset"),
+                width_cells=int(bounds.get("width_cells", 0) or 0),
+                height_cells=int(bounds.get("height_cells", 0) or 0),
+            )
+            source = dict(battle_map.get("source") or {})
+            module_id = str(source.get("module_id") or "")
+            receipt = dict(battle_map.get("authority_receipt") or {})
+            if not module_id or receipt.get("kind") != "content_pack_template":
+                return None
+            module_assets = modules.list_assets(campaign_id, module_id)
+            archive_matches = [
+                item
+                for item in module_assets
+                if str(dict(item.get("metadata") or {}).get("asset_kind") or "")
+                == "content_package_archive"
+            ]
+            if len(archive_matches) != 1:
+                return None
+            archive_metadata = dict(archive_matches[0].get("metadata") or {})
+            if str(archive_metadata.get("content_package_checksum") or "") != str(
+                receipt.get("package_checksum") or ""
+            ):
+                return None
+            matches = [
+                item
+                for item in module_assets
+                if str(dict(item.get("metadata") or {}).get("content_asset_key") or "")
+                == asset_ref["asset_key"]
+            ]
+            if len(matches) != 1:
+                return None
+            asset = dict(matches[0])
+            if (
+                str(asset.get("checksum") or "") != asset_ref["checksum"]
+                or str(asset.get("media_type") or "").casefold()
+                != asset_ref["media_type"]
+            ):
+                return None
+            source_path = Path(str(asset.get("source_path") or "")).resolve()
+            module_asset_root = config.module_assets_dir.resolve()
+            if not source_path.is_file() or not source_path.is_relative_to(module_asset_root):
+                return None
+            if file_sha256(source_path) != asset_ref["checksum"]:
+                return None
+            return source_path.read_bytes()
+        except (BattleMapError, LookupError, OSError, RuntimeError, TypeError, ValueError):
+            return None
 
     def render_combat_snapshot(
         campaign_id: str,
@@ -7130,8 +7230,16 @@ def create_server(config: McpConfig | None = None) -> FastMCP:
 
         if audience_projection == "party_public":
             encounter = party_public_combat_view(campaign_id, principal_id)
+            campaign = campaigns.get(campaign_id)
+            authoritative_encounter = dict(dict(campaign.state or {}).get("combat") or {})
+            public_map_asset = (
+                party_public_map_asset_content(campaign_id, authoritative_encounter)
+                if authoritative_encounter
+                else None
+            )
         else:
             encounter = combat_view(campaign_id, principal_id)
+            public_map_asset = None
         if encounter is None:
             raise CombatEngineError("campaign has no combat snapshot to render")
         portraits: dict[str, bytes] = {}
@@ -7165,6 +7273,7 @@ def create_server(config: McpConfig | None = None) -> FastMCP:
             encounter,
             portraits=portraits,
             audience_projection=audience_projection,
+            party_public_map_asset=public_map_asset,
         )
         campaign = campaigns.get(campaign_id)
         metadata.update(
@@ -42226,6 +42335,51 @@ boundary.
                             raise ValueError(
                                 "map_asset_key must identify one draft image asset by "
                                 "metadata.content_asset_key"
+                            )
+                    public_asset = template.get("party_public_map_asset")
+                    if public_asset:
+                        if str(dict(public_asset["review"])["reviewer"]) != principal_id:
+                            raise PermissionError(
+                                "party_public_map_asset review.reviewer must be the "
+                                "authenticated DM principal"
+                            )
+                        public_matches = [
+                            item
+                            for item in modules.list_assets(campaign_id, str(job.module_id))
+                            if str(dict(item.get("metadata") or {}).get("content_asset_key") or "")
+                            == str(public_asset["asset_key"])
+                        ]
+                        if len(public_matches) != 1:
+                            raise ValueError(
+                                "party_public_map_asset.asset_key must identify exactly one "
+                                "draft asset"
+                            )
+                        public_match = public_matches[0]
+                        if (
+                            str(public_match.get("checksum") or "")
+                            != str(public_asset["checksum"])
+                            or str(public_match.get("media_type") or "").casefold()
+                            != str(public_asset["media_type"]).casefold()
+                        ):
+                            raise ValueError(
+                                "party_public_map_asset checksum and media_type must match the "
+                                "reviewed draft asset"
+                            )
+                        actual_width, actual_height, actual_media_type = _image_properties(
+                            str(public_match.get("source_path") or "")
+                        )
+                        if (actual_width, actual_height) != (
+                            int(public_asset["width"]),
+                            int(public_asset["height"]),
+                        ):
+                            raise ValueError(
+                                "party_public_map_asset dimensions must match the reviewed "
+                                "draft asset"
+                            )
+                        if actual_media_type != str(public_asset["media_type"]).casefold():
+                            raise ValueError(
+                                "party_public_map_asset media_type must match the reviewed "
+                                "image bytes"
                             )
                     by_id = {item["id"]: item for item in existing}
                     by_id[template["id"]] = template

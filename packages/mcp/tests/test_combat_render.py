@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hashlib
 import json
+from copy import deepcopy
 from io import BytesIO
 from pathlib import Path
 
@@ -38,6 +39,142 @@ def _portrait_bytes() -> bytes:
     output = BytesIO()
     Image.new("RGB", (20, 30), "#315a72").save(output, format="PNG")
     return output.getvalue()
+
+
+def _map_bytes(*, size: tuple[int, int] = (80, 80)) -> bytes:
+    output = BytesIO()
+    Image.new("RGB", size, "#bc693f").save(output, format="PNG")
+    return output.getvalue()
+
+
+def _party_public_asset(content: bytes) -> dict:
+    with Image.open(BytesIO(content)) as image:
+        width, height = image.size
+    return {
+        "asset_key": "reviewed-map",
+        "checksum": hashlib.sha256(content).hexdigest(),
+        "media_type": "image/png",
+        "width": width,
+        "height": height,
+        "alt_text": "A reviewed public gatehouse map.",
+        "license": "private party display",
+        "attribution": "User-supplied artwork.",
+        "grid_alignment": {
+            "mode": "contain",
+            "x": 0,
+            "y": 0,
+            "width_cells": 4,
+            "height_cells": 2,
+        },
+        "review": {
+            "status": "approved",
+            "audience": "party_public",
+            "reviewer": "dm:keeper",
+            "reviewed_at": "2026-08-28T00:00:00Z",
+            "note": "No hidden geometry or DM annotations.",
+        },
+    }
+
+
+def _public_asset_encounter(content: bytes) -> dict:
+    return {
+        "id": "encounter-public",
+        "name": "Public map",
+        "positioning_mode": "grid",
+        "round": 1,
+        "turn_index": 0,
+        "battle_map": {
+            "map_revision": 1,
+            "grid": {"kind": "square", "cell_ft": 5},
+            "bounds": {"width_cells": 4, "height_cells": 2},
+            "difficult_cells": ["1,0"],
+            "party_public_map_asset": _party_public_asset(content),
+        },
+        "combatants": [
+            {
+                "actor_id": "hero-internal",
+                "name": "Hero",
+                "initiative": 18,
+                "position": {"x": 2, "y": 1},
+            }
+        ],
+    }
+
+
+def test_party_public_map_artwork_is_letterboxed_beneath_authoritative_overlays() -> None:
+    artwork = _map_bytes(size=(80, 80))
+    encounter = _public_asset_encounter(artwork)
+
+    metadata, content = render_combat_png(
+        encounter,
+        audience_projection="party_public",
+        party_public_map_asset=artwork,
+    )
+
+    assert content.startswith(b"\x89PNG\r\n\x1a\n")
+    assert metadata["decorative_map_asset"] == {
+        "used": True,
+        "fallback": None,
+        "letterboxed": True,
+        "alt_text": "A reviewed public gatehouse map.",
+        "license": "private party display",
+        "attribution": "User-supplied artwork.",
+        "grid_alignment": {
+            "mode": "contain",
+            "x": 0,
+            "y": 0,
+            "width_cells": 4,
+            "height_cells": 2,
+        },
+    }
+    assert "reviewed-map" not in json.dumps(metadata)
+    assert "dm:keeper" not in json.dumps(metadata)
+    assert "Map artwork: A reviewed public gatehouse map." in metadata["alt_text"]
+    with Image.open(BytesIO(content)) as rendered:
+        # The square art is contained inside a 4x2-cell target: the side band is
+        # letterbox, visible art remains in cell 2, and authoritative terrain
+        # covers the artwork in difficult cell 1.
+        assert rendered.getpixel((90, 192)) == (32, 36, 31)
+        assert rendered.getpixel((230, 192)) == (188, 105, 63)
+        assert rendered.getpixel((166, 192)) == (102, 83, 51)
+
+
+def test_invalid_or_non_public_map_artwork_uses_deterministic_fallback() -> None:
+    artwork = _map_bytes()
+    encounter = _public_asset_encounter(artwork)
+    private_only = deepcopy(encounter)
+    private_only["battle_map"].pop("party_public_map_asset")
+    private_only["battle_map"]["map_asset_key"] = "private-source-map"
+
+    bad_checksum = deepcopy(encounter)
+    bad_checksum["battle_map"]["party_public_map_asset"]["checksum"] = "0" * 64
+    unapproved = deepcopy(encounter)
+    unapproved["battle_map"]["party_public_map_asset"]["review"]["status"] = "pending"
+    cases = (
+        (encounter, "caller"),
+        (private_only, "party_public"),
+        (bad_checksum, "party_public"),
+        (unapproved, "party_public"),
+    )
+    outputs = []
+    for value, projection in cases:
+        metadata, rendered = render_combat_png(
+            value,
+            audience_projection=projection,
+            party_public_map_asset=artwork,
+        )
+        assert metadata["decorative_map_asset"] == {
+            "used": False,
+            "fallback": "deterministic_texture",
+        }
+        outputs.append(rendered)
+
+    repeated = render_combat_png(
+        unapproved,
+        audience_projection="party_public",
+        party_public_map_asset=artwork,
+    )[1]
+    assert outputs[-1] == repeated
 
 
 def test_render_combat_png_is_deterministic_and_uses_portrait() -> None:

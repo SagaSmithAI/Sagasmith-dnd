@@ -9,6 +9,7 @@ from zipfile import ZIP_STORED, ZipFile
 import pytest
 from mcp.server.fastmcp.exceptions import ToolError
 from PIL import Image
+from sagasmith_core.access import LOCAL_SYSTEM_PRINCIPAL_ID
 from sagasmith_core.content_pack import ARCHIVE_DESCRIPTOR, loads_content_archive
 from sagasmith_core.integrity import canonical_json
 
@@ -92,7 +93,7 @@ def test_finalized_combat_grid_template_starts_isolated_encounter_map(tmp_path: 
         )
         image_path = tmp_path / "gate-map.png"
         Image.new("RGB", (8, 8), "#808080").save(image_path)
-        await _call(
+        attached_map = await _call(
             server,
             "module_draft",
             {
@@ -135,6 +136,30 @@ def test_finalized_combat_grid_template_starts_isolated_encounter_map(tmp_path: 
                 {"id": "hostile", "cells": [{"x": 5, "y": 0}]},
             ],
             "map_asset_key": "gate-map",
+            "party_public_map_asset": {
+                "asset_key": "gate-map",
+                "checksum": attached_map["artifact"]["checksum"],
+                "media_type": attached_map["artifact"]["media_type"],
+                "width": 8,
+                "height": 8,
+                "alt_text": "A reviewed public gatehouse map without hidden annotations.",
+                "license": "private party display",
+                "attribution": "User-supplied test artwork.",
+                "grid_alignment": {
+                    "mode": "contain",
+                    "x": 0,
+                    "y": 0,
+                    "width_cells": 6,
+                    "height_cells": 4,
+                },
+                "review": {
+                    "status": "approved",
+                    "audience": "party_public",
+                    "reviewer": LOCAL_SYSTEM_PRINCIPAL_ID,
+                    "reviewed_at": "2026-08-28T00:00:00Z",
+                    "note": "Reviewed for hidden doors, traps, labels, and DM notes.",
+                },
+            },
             "source_refs": [source_ref],
         }
         edit_arguments = {
@@ -151,6 +176,12 @@ def test_finalized_combat_grid_template_starts_isolated_encounter_map(tmp_path: 
             "expected_revision": started["job"]["revision"],
             "idempotency_key": "grid-upsert",
         }
+        wrong_reviewer = deepcopy(edit_arguments)
+        wrong_reviewer["payload"]["template"]["party_public_map_asset"]["review"][
+            "reviewer"
+        ] = "untrusted:caller"
+        with pytest.raises(ToolError, match="authenticated DM principal"):
+            await _call(server, "module_draft", wrong_reviewer)
         edited = await _call(server, "module_draft", edit_arguments)
         assert await _call(server, "module_draft", edit_arguments) == edited
         assert edited["combat_grid_templates"][0]["id"] == "gate-ambush"
@@ -225,6 +256,9 @@ def test_finalized_combat_grid_template_starts_isolated_encounter_map(tmp_path: 
         )
         assert packaged_template["source_refs"][0]["chunk_key"]
         assert packaged_template["map_asset_key"] == "gate-map"
+        assert packaged_template["party_public_map_asset"]["checksum"] == attached_map[
+            "artifact"
+        ]["checksum"]
         with pytest.raises(ToolError, match="immutable"):
             await _call(
                 server,
@@ -323,6 +357,56 @@ def test_finalized_combat_grid_template_starts_isolated_encounter_map(tmp_path: 
         battle_map = combat["combat"]["battle_map"]
         assert battle_map["authority_receipt"]["kind"] == "content_pack_template"
         assert battle_map["source"]["battle_map_template_id"] == "gate-ambush"
+        await _call(
+            server,
+            "access_grant",
+            {
+                "scope": "campaign",
+                "campaign_id": campaign["id"],
+                "principal_id": "player:viewer",
+                "payload": {"role": "player"},
+                "by_principal_id": LOCAL_SYSTEM_PRINCIPAL_ID,
+            },
+        )
+        player_status = await _call(
+            server,
+            "combat_query",
+            {
+                "campaign_id": campaign["id"],
+                "view": "status",
+                "principal_id": "player:viewer",
+            },
+        )
+        assert "party_public_map_asset" not in player_status["battle_map"]
+        assert "map_asset_key" not in player_status["battle_map"]
+        state_before_render = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        revision_before_render = state_before_render["revision"]
+        rendered = await server.call_tool(
+            "combat_query",
+            {
+                "campaign_id": campaign["id"],
+                "view": "render",
+                "payload": {"audience_projection": "party_public"},
+                "principal_id": "player:viewer",
+            },
+        )
+        rendered_metadata = rendered.structuredContent
+        assert rendered_metadata["decorative_map_asset"]["used"] is True
+        assert rendered_metadata["decorative_map_asset"]["letterboxed"] is True
+        safe_render_metadata = canonical_json(rendered_metadata)
+        assert "gate-map" not in safe_render_metadata
+        assert LOCAL_SYSTEM_PRINCIPAL_ID not in safe_render_metadata
+        assert "battle_map_template_id" not in safe_render_metadata
+        state_after_render = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        assert state_after_render["revision"] == revision_before_render
         main_branch = next(
             item
             for item in await _call(
