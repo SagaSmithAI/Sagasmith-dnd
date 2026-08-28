@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import importlib
+import inspect
 import json
 import math
 import os
@@ -23,9 +24,18 @@ from typing import Annotated, Any, Callable, Literal, Mapping, TypeVar
 from uuid import NAMESPACE_URL, uuid4, uuid5
 from weakref import WeakValueDictionary
 
-from mcp.server.fastmcp import FastMCP, Image
+from mcp.server.caching import CacheHint
+from mcp.server.context import ServerRequestContext
 from mcp.server.lowlevel.server import NotificationOptions
-from mcp.types import CallToolResult, TextContent
+from mcp.server.mcpserver import Context, Image, MCPServer
+from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
+from mcp.types import (
+    CallToolResult,
+    ListToolsResult,
+    PaginatedRequestParams,
+    TextContent,
+    ToolAnnotations,
+)
 from pydantic import Field
 from sagasmith_core import (
     DOCUMENT_NORMALIZER_VERSION,
@@ -73,6 +83,7 @@ from sagasmith_core.access import (
     AccessDeniedError,
 )
 from sagasmith_core.auth_context import (
+    AUTH_CONTEXT_DELEGATION_SCHEMA,
     AUTH_CONTEXT_META_KEY,
     AUTH_CONTEXT_RECEIPT_META_KEY,
     AuthContext,
@@ -536,8 +547,7 @@ def _render_combat_png(*args: Any, **kwargs: Any) -> tuple[dict[str, Any], bytes
         if (exc.name or "").partition(".")[0] != "PIL":
             raise
         raise RuntimeError(
-            "Combat image rendering requires "
-            "`pip install \"sagasmith-dnd-mcp[images]\"`"
+            'Combat image rendering requires `pip install "sagasmith-dnd-mcp[images]"`'
         ) from exc
     return render_combat_png(*args, **kwargs)
 
@@ -551,8 +561,7 @@ def _image_properties(path: str | Path) -> tuple[int, int, str]:
         if (exc.name or "").partition(".")[0] != "PIL":
             raise
         raise RuntimeError(
-            "Party-public map review requires "
-            "`pip install \"sagasmith-dnd-mcp[images]\"`"
+            'Party-public map review requires `pip install "sagasmith-dnd-mcp[images]"`'
         ) from exc
     try:
         with PillowImage.open(path) as image:
@@ -2604,9 +2613,14 @@ def _auth_receipt_revision(value: Any) -> int | str | None:
 
 
 def _attach_auth_receipt(result: Any, context: AuthContext | None, tool: str) -> Any:
-    if context is None or not (isinstance(result, tuple) and len(result) == 2):
+    if context is None:
         return result
-    content, structured = result
+    if isinstance(result, CallToolResult):
+        content, structured = result.content, result.structured_content
+    elif isinstance(result, tuple) and len(result) == 2:
+        content, structured = result
+    else:
+        return result
     receipt = context.audit_receipt(tool=tool, revision=_auth_receipt_revision(structured))
     updated = []
     attached = False
@@ -2618,15 +2632,17 @@ def _attach_auth_receipt(result: Any, context: AuthContext | None, tool: str) ->
             attached = True
         else:
             updated.append(item)
+    if isinstance(result, CallToolResult):
+        return result.model_copy(update={"content": updated})
     return updated, structured
 
 
-class SessionExposureFastMCP(FastMCP):
-    """FastMCP with server-owned, session-scoped progressive tool exposure.
+class RequestScopedMCPServer(MCPServer):
+    """Dual-era MCP server with request-scoped identity and a stable catalog.
 
-    Direct in-process calls retain FastMCP's normal behaviour for library users
-    and deterministic unit tests. Actual MCP requests have a Context/session and
-    are always checked against the exposure registry.
+    The SDK owns protocol negotiation: v2 serves legacy initialize/session clients
+    and 2026-07-28 server/discover clients from the same stdio/HTTP handlers.  The
+    application never treats a transport session as an authorization boundary.
     """
 
     def __init__(
@@ -2653,18 +2669,15 @@ class SessionExposureFastMCP(FastMCP):
         self._bound_principal_id = bound_principal_id.strip() if bound_principal_id else None
         self._auth_context_secret = auth_context_secret
         self._auth_context_nonces = AuthContextNonceGuard() if auth_context_secret else None
-        self._sessions: WeakValueDictionary[str, Any] = WeakValueDictionary()
         self._exposure_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
-        self._campaign_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
+        self._sessions: WeakValueDictionary[str, Any] = WeakValueDictionary()
         super().__init__(*args, **kwargs)
-        original_initialization_options = self._mcp_server.create_initialization_options
+        original_initialization_options = self._lowlevel_server.create_initialization_options
 
         def initialization_options(
             notification_options: NotificationOptions | None = None,
             experimental_capabilities: dict[str, dict[str, Any]] | None = None,
         ):
-            """Advertise the dynamic tool notifications this server actually sends."""
-
             return original_initialization_options(
                 notification_options
                 or NotificationOptions(
@@ -2675,32 +2688,36 @@ class SessionExposureFastMCP(FastMCP):
                 experimental_capabilities,
             )
 
-        self._mcp_server.create_initialization_options = initialization_options  # type: ignore[method-assign]
+        self._lowlevel_server.create_initialization_options = initialization_options  # type: ignore[method-assign]
 
-    def _request_session(self) -> tuple[str, Any] | None:
+    def _request_session(self, context: Context | None = None) -> tuple[str, Any] | None:
+        """Return a legacy compatibility key, never an authority identity."""
+
+        if context is None:
+            return None
         try:
-            context = self.get_context()
             session = context.session
         except (LookupError, ValueError):
             return None
-        key = getattr(session, "_sagasmith_exposure_session_key", None)
-        if key is None:
-            key = f"mcp:{uuid4().hex}"
-            setattr(session, "_sagasmith_exposure_session_key", key)
+        connection = getattr(session, "_connection", None)
+        transport_session_id = getattr(connection, "session_id", None)
+        key = transport_session_id or f"legacy:{id(connection)}"
         self._sessions[key] = session
         return key, session
 
     def _exposure_lock(self, exposure_id: str) -> asyncio.Lock:
         return self._exposure_locks.setdefault(exposure_id, asyncio.Lock())
 
-    def _campaign_lock(self, campaign_id: str) -> asyncio.Lock:
-        return self._campaign_locks.setdefault(campaign_id, asyncio.Lock())
-
     @staticmethod
     def _attach_random_receipt(result: Any, receipt: dict[str, Any] | None) -> Any:
-        if receipt is None or not (isinstance(result, tuple) and len(result) == 2):
+        if receipt is None:
             return result
-        content, structured = result
+        if isinstance(result, CallToolResult):
+            content, structured = result.content, result.structured_content
+        elif isinstance(result, tuple) and len(result) == 2:
+            content, structured = result
+        else:
+            return result
 
         def attach(value: Any) -> Any:
             if not isinstance(value, dict):
@@ -2734,7 +2751,72 @@ class SessionExposureFastMCP(FastMCP):
                     }
                 )
             )
-        return updated_content, attach(structured)
+        updated_structured = attach(structured)
+        if isinstance(result, CallToolResult):
+            return result.model_copy(
+                update={
+                    "content": updated_content,
+                    "structured_content": updated_structured,
+                }
+            )
+        return updated_content, updated_structured
+
+    @staticmethod
+    def _ensure_text_fallback(result: Any) -> Any:
+        """Keep legacy clients useful when a structured result is empty/list-shaped."""
+
+        if not isinstance(result, CallToolResult) or result.content:
+            return result
+        if result.structured_content is None:
+            return result
+        return result.model_copy(
+            update={
+                "content": [
+                    TextContent(
+                        type="text",
+                        text=json.dumps(
+                            result.structured_content,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                    )
+                ]
+            }
+        )
+
+    @staticmethod
+    def _structured_tool_error(message: str) -> CallToolResult:
+        text = message.strip() or "The tool request was rejected."
+        lowered = text.casefold()
+        retryable = any(
+            marker in lowered for marker in ("stale", "expired", "timeout", "temporar", "conflict")
+        )
+        code = (
+            "stale_revision"
+            if "stale" in lowered and "revision" in lowered
+            else "expired_handle"
+            if "expired" in lowered and ("handle" in lowered or "exposure" in lowered)
+            else "authorization_denied"
+            if any(marker in lowered for marker in ("auth", "principal", "permission", "access"))
+            else "invalid_request"
+        )
+        error = {
+            "code": code,
+            "message": text,
+            "retryable": retryable,
+            "recovery": (
+                "Refresh the authoritative revision or handle and retry with "
+                "the same idempotency key."
+                if retryable
+                else "Correct the request or obtain a new audience-bound "
+                "delegation before retrying."
+            ),
+        }
+        return CallToolResult(
+            is_error=True,
+            content=[TextContent(type="text", text=text)],
+            structured_content={"error": error},
+        )
 
     @staticmethod
     def _attach_host_context_binding(
@@ -2743,9 +2825,14 @@ class SessionExposureFastMCP(FastMCP):
     ) -> Any:
         """Attach one authoritative binding to both MCP result representations."""
 
-        if binding is None or not (isinstance(result, tuple) and len(result) == 2):
+        if binding is None:
             return result
-        content, structured = result
+        if isinstance(result, CallToolResult):
+            content, structured = result.content, result.structured_content
+        elif isinstance(result, tuple) and len(result) == 2:
+            content, structured = result
+        else:
+            return result
 
         def attach(value: Any) -> Any:
             if not isinstance(value, dict):
@@ -2780,7 +2867,15 @@ class SessionExposureFastMCP(FastMCP):
                     }
                 )
             )
-        return updated_content, attach(structured)
+        updated_structured = attach(structured)
+        if isinstance(result, CallToolResult):
+            return result.model_copy(
+                update={
+                    "content": updated_content,
+                    "structured_content": updated_structured,
+                }
+            )
+        return updated_content, updated_structured
 
     @staticmethod
     def _result_campaign_id(
@@ -2795,9 +2890,12 @@ class SessionExposureFastMCP(FastMCP):
             campaign_id = nested_arguments.get("campaign_id")
         if campaign_id:
             return str(campaign_id).strip() or None
-        if not (isinstance(result, tuple) and len(result) == 2):
+        if isinstance(result, CallToolResult):
+            structured = result.structured_content
+        elif isinstance(result, tuple) and len(result) == 2:
+            structured = result[1]
+        else:
             return None
-        structured = result[1]
         if not isinstance(structured, dict):
             return None
         payload = structured.get("result", structured)
@@ -2894,18 +2992,36 @@ class SessionExposureFastMCP(FastMCP):
         *,
         name: str,
         arguments: dict[str, Any],
-        session: Any,
+        context: Context | None,
         exposure: Exposure | None,
     ) -> AuthContext | None:
         principal_argument = self._principal_argument(name)
-        if self._auth_context_secret is None or principal_argument is None:
+        if self._auth_context_secret is None:
             return None
-        actor = str(arguments.get(principal_argument) or "").strip()
-        if not actor:
-            raise ExposureError("tool caller principal is required")
+        supplied_principal = (
+            str(arguments.get(principal_argument) or "").strip()
+            if principal_argument is not None
+            else ""
+        )
         try:
-            metadata = self.get_context().request_context.meta
-            envelope = getattr(metadata, AUTH_CONTEXT_META_KEY, None)
+            if context is None:
+                raise ValueError("signed auth context requires an MCP request context")
+            metadata = context.request_context.meta
+            envelope = (
+                metadata.get(AUTH_CONTEXT_META_KEY)
+                if isinstance(metadata, Mapping)
+                else getattr(metadata, AUTH_CONTEXT_META_KEY, None)
+            )
+            verified = verify_auth_context(envelope, self._auth_context_secret)
+            is_modern_request = context.protocol_version == "2026-07-28"
+            if is_modern_request and verified.schema != AUTH_CONTEXT_DELEGATION_SCHEMA:
+                raise ValueError("delegated auth context v2 is required on the 2026-07-28 path")
+            if supplied_principal and supplied_principal != verified.actor_principal:
+                raise ValueError(f"{principal_argument} does not match the signed actor_principal")
+            # The signed Host envelope, never model-authored arguments or clientInfo,
+            # selects the authoritative caller.
+            if principal_argument is not None:
+                arguments[principal_argument] = verified.actor_principal
             expected_campaign = self._argument_campaign_id(arguments)
             if (
                 not expected_campaign
@@ -2913,35 +3029,46 @@ class SessionExposureFastMCP(FastMCP):
                 and not (name == "exposure" and arguments.get("action") == "open")
             ):
                 expected_campaign = exposure.campaign_id or ""
+            expected_revision = arguments.get("expected_revision", arguments.get("base_revision"))
+            if isinstance(expected_revision, bool) or not isinstance(expected_revision, int):
+                expected_revision = None
+            expected_resource_owner = (
+                str(arguments.get("resource_owner_principal") or "").strip() or None
+            )
+            expected_acting_character = (
+                str(arguments.get("acting_character_id") or "").strip() or None
+            )
             context = verify_auth_context(
                 envelope,
                 self._auth_context_secret,
-                expected_actor=actor,
-                expected_campaign=expected_campaign,
+                expected_actor=verified.actor_principal,
+                expected_campaign=expected_campaign or None,
+                expected_service="sagasmith-dnd-mcp" if is_modern_request else None,
+                expected_operation=name if is_modern_request else None,
+                expected_audience="sagasmith-dnd-mcp" if is_modern_request else None,
+                expected_room_turn=verified.room_turn_id if is_modern_request else None,
+                expected_base_revision=expected_revision if is_modern_request else None,
+                expected_resource_owner=(expected_resource_owner if is_modern_request else None),
+                expected_acting_character=(
+                    expected_acting_character if is_modern_request else None
+                ),
             )
         except ValueError as exc:
             raise ExposureError(str(exc)) from exc
-        bound_session_id = getattr(session, "_sagasmith_auth_session_id", None)
-        bound_conversation = getattr(session, "_sagasmith_auth_conversation", None)
-        if bound_session_id is not None and bound_session_id != context.session_id:
-            raise ExposureError("auth context session changed within one MCP session")
-        if bound_conversation is not None and bound_conversation != context.conversation_principal:
-            raise ExposureError("auth context conversation changed within one MCP session")
-        expected_epoch = (
-            exposure.revision
-            if exposure is not None
-            and not (name == "exposure" and arguments.get("action") == "open")
-            else 0
-        )
-        if context.authorization_epoch != expected_epoch:
-            raise ExposureError("auth context authorization_epoch is stale")
+        if context.schema != AUTH_CONTEXT_DELEGATION_SCHEMA:
+            expected_epoch = (
+                exposure.revision
+                if exposure is not None
+                and not (name == "exposure" and arguments.get("action") == "open")
+                else 0
+            )
+            if context.authorization_epoch != expected_epoch:
+                raise ExposureError("auth context authorization_epoch is stale")
         assert self._auth_context_nonces is not None
         try:
             self._auth_context_nonces.remember(context)
         except (RuntimeError, ValueError) as exc:
             raise ExposureError(str(exc)) from exc
-        setattr(session, "_sagasmith_auth_session_id", context.session_id)
-        setattr(session, "_sagasmith_auth_conversation", context.conversation_principal)
         return context
 
     async def _refresh(self, session_key: str, campaign_id: str | None = None) -> bool:
@@ -2973,76 +3100,136 @@ class SessionExposureFastMCP(FastMCP):
         return bool(changed_session_keys)
 
     async def list_tools(self):  # type: ignore[override]
-        public_tools = [
-            tool for tool in await super().list_tools() if tool.name not in HOST_PRIVATE_TOOLS
-        ]
-        request = self._request_session()
-        if request is None:
-            return public_tools
-        session_key, request_session = request
-        await self._refresh(session_key)
-        visible = self.exposure_registry.visible_tools(self.exposure_registry.active(session_key))
-        return [tool for tool in public_tools if tool.name in visible]
+        """Return one deterministic catalog; Host-side selection is not MCP state."""
 
-    async def call_tool(self, name: str, arguments: dict[str, Any]):  # type: ignore[override]
-        request = self._request_session()
-        if request is None:
-            return await super().call_tool(name, arguments)
-        session_key, request_session = request
-        await self._refresh(session_key)
+        public_tools = (
+            tool for tool in await super().list_tools() if tool.name not in HOST_PRIVATE_TOOLS
+        )
+        return sorted(public_tools, key=lambda tool: tool.name)
+
+    async def _handle_list_tools(
+        self,
+        ctx: ServerRequestContext,
+        params: PaginatedRequestParams | None,
+    ) -> ListToolsResult:
+        """Keep the legacy adapter while making modern catalogs stateless."""
+
+        tools = await self.list_tools()
+        if ctx.protocol_version != "2026-07-28":
+            context = Context(
+                request_context=ctx, mcp_server=self, subscriptions=self._subscriptions
+            )
+            request = self._request_session(context)
+            if request is not None:
+                session_key, _session = request
+                await self._refresh(session_key)
+                visible = self.exposure_registry.visible_tools(
+                    self.exposure_registry.active(session_key)
+                )
+                tools = [tool for tool in tools if tool.name in visible]
+        return ListToolsResult(tools=tools)
+
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        context: Context | None = None,
+    ):  # type: ignore[override]
+        """Execute one request with fresh identity/role/phase/revision checks."""
+
+        arguments = dict(arguments or {})
         arguments = self._bind_configured_principal(name, arguments)
         if name in HOST_PRIVATE_TOOLS:
-            return await super().call_tool(name, arguments)
-        exposure = self.exposure_registry.active(session_key)
-        if name not in CORE_TOOLS and exposure is None:
-            raise ExposureError(
-                "No active exposure for this MCP session. Call exposure(action='open')."
-            )
-        if exposure is not None:
-            arguments = self._bind_exposure_principal(
-                exposure, name, arguments, inject_missing=True
-            )
-            if name != "exposure" or arguments.get("action") != "open":
-                self._scope_validator(exposure, name, arguments)
-        auth_context = self._verify_request_auth_context(
-            name=name,
-            arguments=arguments,
-            session=request_session,
-            exposure=exposure,
+            try:
+                private_result = await super().call_tool(name, arguments, context)
+            except ToolError as exc:
+                if context is None:
+                    if isinstance(exc, UnexpectedToolError) and exc.__cause__ is not None:
+                        raise ToolError(str(exc.__cause__)) from exc.__cause__
+                    raise
+                return self._structured_tool_error(str(exc))
+            if (
+                context is None
+                and isinstance(private_result, CallToolResult)
+                and all(isinstance(item, TextContent) for item in private_result.content)
+            ):
+                return private_result.content, private_result.structured_content
+            return private_result
+        legacy_request = (
+            self._request_session(context)
+            if context is not None and context.protocol_version != "2026-07-28"
+            else None
         )
-        if name not in CORE_TOOLS:
-            assert exposure is not None
-            async with self._exposure_lock(exposure.id):
-                self.exposure_registry.require_tool(exposure, name)
-                context_manager = (
-                    self._random_context_factory(exposure.campaign_id, name, arguments)
-                    if exposure.campaign_id
-                    else nullcontext(None)
+        legacy_session_key = legacy_request[0] if legacy_request else None
+        if legacy_session_key is not None:
+            await self._refresh(legacy_session_key)
+        exposure = None
+        if name == "exposure" and arguments.get("action") != "open":
+            handle = str(arguments.get("exposure_handle") or "").strip()
+            if handle:
+                exposure = self.exposure_registry.get(handle)
+            elif legacy_session_key is not None:
+                exposure = self.exposure_registry.active(legacy_session_key)
+        elif legacy_session_key is not None:
+            exposure = self.exposure_registry.active(legacy_session_key)
+        if legacy_session_key is not None:
+            if name not in CORE_TOOLS and exposure is None:
+                raise ExposureError(
+                    "No active compatibility exposure. Call exposure(action='open')."
                 )
-                if exposure.campaign_id:
-                    async with self._campaign_lock(exposure.campaign_id):
-                        with context_manager as random_stream:
-                            result = await super().call_tool(name, arguments)
-                            random_receipt = self._finalize_random_stream(random_stream)
-                else:
-                    with context_manager as random_stream:
-                        result = await super().call_tool(name, arguments)
-                        random_receipt = self._finalize_random_stream(random_stream)
-                result = self._attach_random_receipt(result, random_receipt)
-        else:
-            result = await super().call_tool(name, arguments)
-        if name == "exposure" and arguments.get("action") in {"open", "set"}:
-            session = self._sessions.get(session_key)
-            if session is not None:
-                await session.send_tool_list_changed()
-        campaign_id = str(arguments.get("campaign_id") or "") or None
-        campaign_id = campaign_id or (exposure.campaign_id if exposure else None)
+            if exposure is not None:
+                arguments = self._bind_exposure_principal(
+                    exposure, name, arguments, inject_missing=True
+                )
+                if name != "exposure" or arguments.get("action") != "open":
+                    self._scope_validator(exposure, name, arguments)
+            if name not in CORE_TOOLS:
+                assert exposure is not None
+                self.exposure_registry.require_tool(exposure, name)
+        try:
+            auth_context = self._verify_request_auth_context(
+                name=name,
+                arguments=arguments,
+                context=context,
+                exposure=exposure,
+            )
+        except ExposureError as exc:
+            if context is None:
+                raise
+            return self._structured_tool_error(str(exc))
+        campaign_id = self._argument_campaign_id(arguments) or (
+            exposure.campaign_id if exposure is not None else None
+        )
+        context_manager = (
+            self._random_context_factory(campaign_id, name, arguments)
+            if campaign_id and name not in CORE_TOOLS
+            else nullcontext(None)
+        )
+        try:
+            with context_manager as random_stream:
+                result = await super().call_tool(name, arguments, context)
+                random_receipt = self._finalize_random_stream(random_stream)
+        except ToolError as exc:
+            if context is None:
+                if isinstance(exc, UnexpectedToolError) and exc.__cause__ is not None:
+                    raise ToolError(str(exc.__cause__)) from exc.__cause__
+                raise
+            message = str(exc)
+            if message.startswith("Unknown tool") or "validation error" in message.casefold():
+                raise
+            return self._structured_tool_error(message)
+        result = self._ensure_text_fallback(result)
+        result = self._attach_random_receipt(result, random_receipt)
+        if (
+            legacy_request is not None
+            and name == "exposure"
+            and arguments.get("action") in {"open", "set"}
+        ):
+            await legacy_request[1].send_tool_list_changed()
         campaign_id = campaign_id or self._result_campaign_id(name, result, arguments)
         if campaign_id:
-            # Reconcile every successful campaign call. Most calls are a cheap
-            # no-op, while phase restores and role changes no longer depend on
-            # a fragile list of mutation tool names.
-            await self._refresh(session_key, campaign_id)
+            if legacy_session_key is not None:
+                await self._refresh(legacy_session_key, campaign_id)
             principal_argument = self._principal_argument(name)
             principal_id = str(
                 arguments.get(principal_argument) if principal_argument else ""
@@ -3058,17 +3245,36 @@ class SessionExposureFastMCP(FastMCP):
                 principal_id,
                 arguments,
             )
-            current_exposure = self.exposure_registry.active(session_key)
             if binding is not None:
+                current_exposure = (
+                    self.exposure_registry.active(legacy_session_key)
+                    if legacy_session_key is not None
+                    else None
+                )
                 binding["authorization_epoch"] = (
                     current_exposure.revision if current_exposure is not None else 0
                 )
             result = self._attach_host_context_binding(result, binding)
-        return _attach_auth_receipt(result, auth_context, name)
+        result = _attach_auth_receipt(result, auth_context, name)
+        # Preserve the historical direct-Python testing API. Network requests
+        # always supply Context and therefore always receive the SDK v2
+        # CallToolResult expected by both protocol eras.
+        if (
+            context is None
+            and isinstance(result, CallToolResult)
+            and all(isinstance(item, TextContent) for item in result.content)
+        ):
+            return result.content, result.structured_content
+        return result
 
 
-def create_server(config: McpConfig | None = None) -> FastMCP:
-    """Create one session-aware MCP server over either supported local transport."""
+# Transitional import alias for downstream tests and callers.  The behaviour is
+# request scoped despite the historical name.
+SessionExposureFastMCP = RequestScopedMCPServer
+
+
+def create_server(config: McpConfig | None = None) -> MCPServer:
+    """Create one dual-era MCP server over either supported transport."""
     config = config or McpConfig.from_environment()
     storage = SagaSmithStorage(config)
     storage.migrate()
@@ -3112,9 +3318,7 @@ def create_server(config: McpConfig | None = None) -> FastMCP:
             campaign_id=campaign_id,
             branch_id=resolved_branch_id,
         ):
-            raise ValueError(
-                "close or abort the active NPC conversation before " + operation
-            )
+            raise ValueError("close or abort the active NPC conversation before " + operation)
 
     def rule_document_options(
         checksum: str | None = None,
@@ -5017,18 +5221,18 @@ def create_server(config: McpConfig | None = None) -> FastMCP:
         )
         return use_random_stream(stream)
 
-    mcp = SessionExposureFastMCP(
+    mcp = RequestScopedMCPServer(
         "SagaSmith D&D",
+        version="0.1.0",
         instructions=(
             "SagaSmith is a source-bound D&D 5e campaign runtime. Cold start: call "
             "skill_query(kind='skill', action='read', identifier='dnd.full'), then use "
             "outline/section/search for task-specific depth. Call "
             "storage_status and server_capabilities. "
-            "Call campaign_query to find a campaign. Open exactly one exposure with "
-            "exposure(action='open', campaign_id?, principal_id?), then search and set the "
-            "needed tool ids through that same facade. Reopen with campaign_id after creating "
-            "a campaign. The server sends tools/list_changed and loaded tools are called "
-            "directly. Never invent a successful write, "
+            "Call campaign_query to find a campaign. tools/list is stable and cacheable; "
+            "the Host selects a phase/task-appropriate facade subset for its model. The optional "
+            "exposure workflow returns an explicit opaque handle for catalog guidance only and "
+            "never changes tools/list or grants authority. Never invent a successful write, "
             "bypass phase/role/revision/idempotency requirements, or treat module search "
             "summaries as exact evidence. Read sagasmith://bootstrap for the compact "
             "host-independent workflow. Standard mechanics are engine-owned; unstructured "
@@ -5047,16 +5251,73 @@ def create_server(config: McpConfig | None = None) -> FastMCP:
         authorization_fingerprint_lookup=access.authorization_fingerprint,
         bound_principal_id=config.bound_principal_id,
         auth_context_secret=config.auth_context_secret,
-        host=config.http_host,
-        port=config.http_port,
-        streamable_http_path=config.http_path,
+        cache_hints={"tools/list": CacheHint(ttl_ms=300_000, scope="private")},
     )
 
     def public_tool() -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-        """Register one public MCP tool."""
+        """Register one public MCP tool with all four protocol hints."""
 
         def decorate(function: Callable[..., Any]) -> Callable[..., Any]:
-            return mcp.tool()(function)
+            name = function.__name__
+            read_only = any(
+                marker in name
+                for marker in (
+                    "_query",
+                    "_search",
+                    "_status",
+                    "_list",
+                    "_get",
+                    "_expand",
+                    "_explain",
+                    "capabilities",
+                    "continuity_context",
+                    "bounded_evaluation",
+                    "skill_query",
+                    "storage_status",
+                    "state_revision",
+                )
+            )
+            idempotent = read_only or "idempotency_key" in function.__annotations__
+            anticipated = (
+                ValueError,
+                AccessDeniedError,
+                ExposureError,
+                RulesetUnavailableError,
+                RulePackError,
+            )
+
+            if inspect.iscoroutinefunction(function):
+
+                @wraps(function)
+                async def guarded(*args: Any, **kwargs: Any) -> Any:
+                    try:
+                        return await function(*args, **kwargs)
+                    except ToolError:
+                        raise
+                    except anticipated as exc:
+                        raise ToolError(str(exc)) from exc
+
+            else:
+
+                @wraps(function)
+                def guarded(*args: Any, **kwargs: Any) -> Any:
+                    try:
+                        return function(*args, **kwargs)
+                    except ToolError:
+                        raise
+                    except anticipated as exc:
+                        # Anticipated, model-repairable execution failures become
+                        # isError=true. Unknown methods/tools stay protocol errors.
+                        raise ToolError(str(exc)) from exc
+
+            return mcp.tool(
+                annotations=ToolAnnotations(
+                    read_only_hint=read_only,
+                    destructive_hint=False if read_only else True,
+                    idempotent_hint=idempotent,
+                    open_world_hint=False,
+                )
+            )(guarded)
 
         return decorate
 
@@ -7145,18 +7406,14 @@ def create_server(config: McpConfig | None = None) -> FastMCP:
                 )
                 if key in battle_map
             }
-            raw_encounter = dict(
-                dict(campaigns.get(campaign_id).state or {}).get("combat") or {}
-            )
+            raw_encounter = dict(dict(campaigns.get(campaign_id).state or {}).get("combat") or {})
             raw_battle_map = dict(raw_encounter.get("battle_map") or {})
             raw_bounds = dict(raw_battle_map.get("bounds") or {})
             try:
-                public_battle_map["party_public_map_asset"] = (
-                    normalize_party_public_map_asset(
-                        raw_battle_map.get("party_public_map_asset"),
-                        width_cells=int(raw_bounds.get("width_cells", 0) or 0),
-                        height_cells=int(raw_bounds.get("height_cells", 0) or 0),
-                    )
+                public_battle_map["party_public_map_asset"] = normalize_party_public_map_asset(
+                    raw_battle_map.get("party_public_map_asset"),
+                    width_cells=int(raw_bounds.get("width_cells", 0) or 0),
+                    height_cells=int(raw_bounds.get("height_cells", 0) or 0),
                 )
             except BattleMapError:
                 public_battle_map.pop("party_public_map_asset", None)
@@ -7207,8 +7464,7 @@ def create_server(config: McpConfig | None = None) -> FastMCP:
             asset = dict(matches[0])
             if (
                 str(asset.get("checksum") or "") != asset_ref["checksum"]
-                or str(asset.get("media_type") or "").casefold()
-                != asset_ref["media_type"]
+                or str(asset.get("media_type") or "").casefold() != asset_ref["media_type"]
             ):
                 return None
             source_path = Path(str(asset.get("source_path") or "")).resolve()
@@ -7358,8 +7614,12 @@ def create_server(config: McpConfig | None = None) -> FastMCP:
                 return
             if isinstance(value, dict):
                 dice = value.get("rolls")
-                if not isinstance(dice, list) or not dice or not all(
-                    isinstance(item, int) and not isinstance(item, bool) for item in dice
+                if (
+                    not isinstance(dice, list)
+                    or not dice
+                    or not all(
+                        isinstance(item, int) and not isinstance(item, bool) for item in dice
+                    )
                 ):
                     dice = value.get("dice")
                 total = value.get("total")
@@ -7481,9 +7741,7 @@ def create_server(config: McpConfig | None = None) -> FastMCP:
             "rolls": resolution_rolls(resolution_id, result),
             "outcome": resolution_outcome(result),
             "pending_choice": deepcopy(event.get("pending_choice")),
-            "campaign_revision": int(
-                event.get("campaign_revision") or campaign.revision
-            ),
+            "campaign_revision": int(event.get("campaign_revision") or campaign.revision),
             "random_stream_receipt": {
                 key: deepcopy(value)
                 for key, value in dict(event.get("random_stream_receipt") or {}).items()
@@ -7535,9 +7793,7 @@ def create_server(config: McpConfig | None = None) -> FastMCP:
             principal_id=principal_id,
             role=str(membership.role),
             audience=audience,
-            authorization_fingerprint=access.authorization_fingerprint(
-                campaign_id, principal_id
-            ),
+            authorization_fingerprint=access.authorization_fingerprint(campaign_id, principal_id),
         )
 
     def active_encounter(campaign_id: str) -> tuple[Any, dict[str, Any]]:
@@ -10715,12 +10971,24 @@ def create_server(config: McpConfig | None = None) -> FastMCP:
     def server_capabilities() -> dict[str, Any]:
         """Describe the MCP contract and the automatic-vs-ruling combat boundary."""
         return {
-            "contract_version": "2026-08-session-exposure-v1",
+            "contract_version": "2026-07-28-dual-era-v2",
+            "protocol_versions": {
+                "modern": "2026-07-28",
+                "legacy": ["2025-11-25", "2025-06-18", "2025-03-26"],
+            },
             "authoritative_contract": {
-                "schema": "sagasmith.authoritative-mcp/v1",
+                "schema": "sagasmith.authoritative-mcp/v2",
                 "transports": ["stdio", "streamable-http"],
                 "shared_handlers": True,
-                "dynamic_tool_exposure": "session-scoped",
+                "catalog": {
+                    "ordering": "deterministic",
+                    "ttl_ms": 300000,
+                    "cache_scope": "private",
+                    "exposure_side_effects": False,
+                },
+                "cross_call_state": "explicit-opaque-handles-or-campaign-revision",
+                "request_authorization": "delegated-auth-context-v2",
+                "transport_session_authority": False,
                 "revision_model": "optimistic",
                 "idempotency_model": "required-for-writes",
                 "authority_model": "server-owned",
@@ -10737,15 +11005,13 @@ def create_server(config: McpConfig | None = None) -> FastMCP:
                 "mode": (
                     "process_bound"
                     if config.bound_principal_id is not None
-                    else "trusted_local_or_host_adapter"
+                    else "request_scoped_delegated_or_explicit_legacy_adapter"
                 ),
                 "bound_principal_id": config.bound_principal_id,
                 "environment": "SAGASMITH_DND_MCP_BOUND_PRINCIPAL_ID",
-                "multi_user_requirement": (
-                    "Use one process per trusted principal or a host adapter that hides "
-                    "and injects the authenticated principal. Never let the model choose "
-                    "an authorization identity."
-                ),
+                "target_service": "sagasmith-dnd-mcp",
+                "authorized_audience": "sagasmith-dnd-mcp",
+                "model_selects_authority": False,
             },
             "npc_conversations": {
                 "schema_version": NPC_CONVERSATION_SCHEMA_VERSION,
@@ -14032,9 +14298,7 @@ def create_server(config: McpConfig | None = None) -> FastMCP:
                     "template_checksum": json_sha256(template),
                     "scene_stable_key": str(template_scene.get("stable_key") or ""),
                 }
-                map_scene_context = modules.read_scene(
-                    campaign_id, str(template_scene["scene_id"])
-                )
+                map_scene_context = modules.read_scene(campaign_id, str(template_scene["scene_id"]))
                 map_scene_context = {
                     **map_scene_context,
                     "encounter_scene_id": resolved_scene_id,
@@ -14240,8 +14504,7 @@ def create_server(config: McpConfig | None = None) -> FastMCP:
                 if missing_zones:
                     raise CombatEngineError(
                         "template-backed grid combat requires a deployment_zone_id for every "
-                        "participant: "
-                        + ", ".join(missing_zones)
+                        "participant: " + ", ".join(missing_zones)
                     )
                 for actor_id_value in participant_ids:
                     entry = dict(config_by_actor.get(actor_id_value) or {})
@@ -14735,12 +14998,15 @@ def create_server(config: McpConfig | None = None) -> FastMCP:
         replay = replay_idempotent(scope, idempotency_key, payload)
         if replay is not None:
             return combat_response(campaign_id, principal_id, replay)
-        resolution_id = "resolution-" + hashlib.sha256(
-            (
-                f"{campaign_id}:{resolved_branch_id}:combat.attack:"
-                f"{idempotency_key}:{actor_id}:{target_id}"
-            ).encode("utf-8")
-        ).hexdigest()[:32]
+        resolution_id = (
+            "resolution-"
+            + hashlib.sha256(
+                (
+                    f"{campaign_id}:{resolved_branch_id}:combat.attack:"
+                    f"{idempotency_key}:{actor_id}:{target_id}"
+                ).encode("utf-8")
+            ).hexdigest()[:32]
+        )
         if expected_revision is not None and campaign.revision != expected_revision:
             raise ValueError(
                 "campaign revision conflict: "
@@ -28067,12 +28333,14 @@ def create_server(config: McpConfig | None = None) -> FastMCP:
             result = resolver()
             if stream.draw_count == 0:
                 raise ValueError("random resolution must consume at least one random draw")
-            resolution_id = "resolution-" + hashlib.sha256(
-                (
-                    f"{campaign_id}:{resolved_branch_id}:{operation}:"
-                    f"{idempotency_key}"
-                ).encode("utf-8")
-            ).hexdigest()[:32]
+            resolution_id = (
+                "resolution-"
+                + hashlib.sha256(
+                    (f"{campaign_id}:{resolved_branch_id}:{operation}:{idempotency_key}").encode(
+                        "utf-8"
+                    )
+                ).hexdigest()[:32]
+            )
             membership = access.require_campaign(campaign_id, principal_id)
             audience = (
                 {"scope": "dm", "actor_refs": [], "disclosure": "hidden"}
@@ -29298,9 +29566,7 @@ def create_server(config: McpConfig | None = None) -> FastMCP:
                     for transcript_event in list(payload.get("transcript") or []):
                         overall = dict(transcript_event.get("audience_facts") or {})
                         segments = list(transcript_event.get("utterance_segments") or [])
-                        segment_facts = list(
-                            transcript_event.get("segment_audience_facts") or []
-                        )
+                        segment_facts = list(transcript_event.get("segment_audience_facts") or [])
                         visible_parts: list[str] = []
                         if segments and len(segment_facts) == len(segments):
                             for segment, facts in zip(segments, segment_facts, strict=True):
@@ -29344,13 +29610,10 @@ def create_server(config: McpConfig | None = None) -> FastMCP:
                                 "utterance": visible_text,
                                 "language": str(transcript_event.get("language") or ""),
                                 "delivery": str(transcript_event.get("delivery") or ""),
-                                "visible_action": str(
-                                    transcript_event.get("visible_action") or ""
-                                ),
+                                "visible_action": str(transcript_event.get("visible_action") or ""),
                                 "public_speech_acts": [],
                                 "visible_portrayal_cues": [
-                                    str(item)
-                                    for item in transcript_event.get("visible_cues") or []
+                                    str(item) for item in transcript_event.get("visible_cues") or []
                                 ],
                                 "participants": [dict(item) for item in event.participants],
                             }
@@ -29377,9 +29640,7 @@ def create_server(config: McpConfig | None = None) -> FastMCP:
                         "participants": [dict(item) for item in event.participants],
                     }
                 )
-            conversation_events = conversation_events[
-                -max(1, min(int(conversation_limit), 30)) :
-            ]
+            conversation_events = conversation_events[-max(1, min(int(conversation_limit), 30)) :]
             conversation = {
                 "schema_version": 1,
                 "campaign_id": campaign_id,
@@ -29568,9 +29829,7 @@ def create_server(config: McpConfig | None = None) -> FastMCP:
                     "actor": {"id": actor_id},
                 }
             )
-            fact_changed = dict(lock.get("fact_heads") or {}) != dict(
-                current_lock["fact_heads"]
-            )
+            fact_changed = dict(lock.get("fact_heads") or {}) != dict(current_lock["fact_heads"])
             knowledge_changed = dict(lock.get("knowledge_heads") or {}) != dict(
                 current_lock["knowledge_heads"]
             )
@@ -29619,16 +29878,13 @@ def create_server(config: McpConfig | None = None) -> FastMCP:
                 for resolution in session.get("pending_resolutions") or []:
                     if (
                         resolution.get("status") == "pending"
-                        and str(resolution.get("activation_id") or "")
-                        in invalidated_activation_ids
+                        and str(resolution.get("activation_id") or "") in invalidated_activation_ids
                     ):
                         resolution["status"] = "invalidated"
                 for candidate in session.get("memory_candidates") or []:
-                    if (
-                        str(candidate.get("source_activation_id") or "")
-                        in invalidated_activation_ids
-                        and not candidate.get("source_event_id")
-                    ):
+                    if str(
+                        candidate.get("source_activation_id") or ""
+                    ) in invalidated_activation_ids and not candidate.get("source_event_id"):
                         candidate["status"] = "invalidated"
                 authority["actor_revisions"][actor_id] = actor.revision
                 authority.setdefault("actor_context_locks", {})[actor_id] = (
@@ -29708,13 +29964,9 @@ def create_server(config: McpConfig | None = None) -> FastMCP:
             include_inactive=True,
         )
         return {
-            "fact_heads": {
-                str(item["fact_key"]): str(item["revision_id"])
-                for item in actor_facts
-            },
+            "fact_heads": {str(item["fact_key"]): str(item["revision_id"]) for item in actor_facts},
             "knowledge_heads": {
-                str(item.knowledge_key): str(item.revision_id)
-                for item in actor_knowledge
+                str(item.knowledge_key): str(item.revision_id) for item in actor_knowledge
             },
         }
 
@@ -30091,24 +30343,20 @@ def create_server(config: McpConfig | None = None) -> FastMCP:
         ):
             raise ValueError("conversation has unfinished NPC activations")
         if any(
-            item.get("status") == "pending_audience"
-            for item in session.get("publications") or []
+            item.get("status") == "pending_audience" for item in session.get("publications") or []
         ):
             raise ValueError("conversation has unpublished NPC output")
         if any(
-            item.get("status") == "pending"
-            for item in session.get("pending_resolutions") or []
+            item.get("status") == "pending" for item in session.get("pending_resolutions") or []
         ):
             raise ValueError("conversation has unresolved mechanic requests")
         candidate_ids = list(accepted_candidate_ids or [])
-        if (
-            any(not isinstance(item, str) or not item for item in candidate_ids)
-            or len(candidate_ids) != len(set(candidate_ids))
-        ):
+        if any(not isinstance(item, str) or not item for item in candidate_ids) or len(
+            candidate_ids
+        ) != len(set(candidate_ids)):
             raise ValueError("accepted_candidate_ids must be a unique non-empty string list")
         candidates = {
-            str(item["candidate_id"]): item
-            for item in npc_conversations.memory_candidates(session)
+            str(item["candidate_id"]): item for item in npc_conversations.memory_candidates(session)
         }
         if unknown := sorted(set(candidate_ids) - set(candidates)):
             raise ValueError(f"accepted_candidate_ids contains unavailable candidates: {unknown}")
@@ -32750,9 +32998,7 @@ def create_server(config: McpConfig | None = None) -> FastMCP:
             primary_scale=primary_scale,
             preferred_model=preferred_model,
             load_layout=load_layout,
-            extract_page_text=lambda page_number: extract_pdf_page_text(
-                source_path, page_number
-            ),
+            extract_page_text=lambda page_number: extract_pdf_page_text(source_path, page_number),
             statblock_slot=statblock_slot,
             ocr_corrections=ocr_corrections,
         )
@@ -42356,8 +42602,7 @@ boundary.
                             )
                         public_match = public_matches[0]
                         if (
-                            str(public_match.get("checksum") or "")
-                            != str(public_asset["checksum"])
+                            str(public_match.get("checksum") or "") != str(public_asset["checksum"])
                             or str(public_match.get("media_type") or "").casefold()
                             != str(public_asset["media_type"]).casefold()
                         ):
@@ -43130,8 +43375,11 @@ boundary.
         ] = "list",
         payload: dict[str, Any] | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
+        query: Annotated[str, Field(max_length=200)] = "",
+        limit: Annotated[int, Field(ge=1, le=100)] = 50,
+        offset: Annotated[int, Field(ge=0, le=100_000)] = 0,
     ) -> dict[str, Any]:
-        """Read characters or inspect an allowlisted character document without inventing data."""
+        """Read characters with bounded filtering/paging or inspect an allowlisted document."""
         data = facade_payload(payload)
         if view == "catalog":
             campaign_id = str(required(data, "campaign_id"))
@@ -43330,6 +43578,20 @@ boundary.
             }
         else:
             result = character_list(data.get("campaign_id"), principal_id)
+            needle = query.strip().casefold()
+            if needle:
+                result = [
+                    item
+                    for item in result
+                    if needle
+                    in (
+                        f"{item.get('name', '')} {item.get('summary', '')} "
+                        f"{item.get('character_type', '')}"
+                    ).casefold()
+                ]
+            result = sorted(
+                result, key=lambda item: (str(item.get("name", "")), str(item.get("id", "")))
+            )[offset : offset + limit]
         return facade_result(view, result)
 
     def dependent_actor_source_text(
@@ -43704,8 +43966,7 @@ boundary.
                 raise ValueError(f"unsupported participant config fields: {unknown}")
             visible_to = config_value.get("visible_to_actor_ids")
             encounter_actor_ids = {
-                str(item.get("actor_id") or "")
-                for item in encounter.get("combatants", [])
+                str(item.get("actor_id") or "") for item in encounter.get("combatants", [])
             } | {actor_id}
             if visible_to is not None and (
                 not isinstance(visible_to, list)
@@ -43723,9 +43984,7 @@ boundary.
                 or not isinstance(join_round, int)
                 or join_round <= int(encounter.get("round", 1) or 1)
             ):
-                raise ValueError(
-                    "join_round must be an integer after the current combat round"
-                )
+                raise ValueError("join_round must be an integer after the current combat round")
             provisional = CharacterInfo(
                 id=actor_id,
                 system_id=DND5E.id,
@@ -45353,8 +45612,11 @@ boundary.
         view: Literal["list", "get", "party", "resume", "binding"] = "list",
         payload: dict[str, Any] | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
+        query: Annotated[str, Field(max_length=200)] = "",
+        limit: Annotated[int, Field(ge=1, le=100)] = 50,
+        offset: Annotated[int, Field(ge=0, le=100_000)] = 0,
     ) -> dict[str, Any]:
-        """Read campaigns, party state, or one complete resume bundle."""
+        """Read bounded campaign pages, party state, or one complete resume bundle."""
         data = facade_payload(payload)
         if view == "binding":
             data = facade_payload(payload)
@@ -45421,6 +45683,20 @@ boundary.
             result = party_show(required(data, "campaign_id"), principal_id)
         else:
             result = campaign_list(data.get("status"), principal_id)
+            needle = query.strip().casefold()
+            if needle:
+                result = [
+                    item
+                    for item in result
+                    if needle
+                    in (
+                        f"{item.get('name', '')} {item.get('slug', '')} "
+                        f"{item.get('description', '')}"
+                    ).casefold()
+                ]
+            result = sorted(
+                result, key=lambda item: (str(item.get("name", "")), str(item.get("id", "")))
+            )[offset : offset + limit]
         return facade_result(view, result)
 
     @public_tool()
@@ -47153,25 +47429,33 @@ boundary.
     @public_tool()
     async def exposure(
         action: Literal["open", "get", "search", "set"],
+        ctx: Context,
+        exposure_handle: str | None = None,
         campaign_id: str | None = None,
-        query: str = "",
+        query: Annotated[str, Field(max_length=200)] = "",
+        limit: Annotated[int, Field(ge=1, le=50)] = 20,
+        offset: Annotated[int, Field(ge=0, le=10_000)] = 0,
         add_tool_ids: list[str] | None = None,
         remove_tool_ids: list[str] | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
     ) -> dict[str, Any]:
-        """Open, inspect, search, or mutate this session's native tool list.
+        """Open or use an explicit, owner-bound catalog guidance handle.
 
         Search requires every whitespace-delimited term to match one tool. Use
-        one short capability phrase or one exact tool id per search.
+        one short capability phrase or one exact tool id per search. This facade
+        never changes the protocol tools/list result and never grants authority.
         """
 
         campaign_id = str(campaign_id or "").strip() or None
         if config.bound_principal_id is not None:
             principal_id = config.bound_principal_id
-        request = mcp._request_session()
+        request = mcp._request_session(ctx)
+        modern = ctx.protocol_version == "2026-07-28"
         session_key = request[0] if request is not None else f"direct:{principal_id}"
+        if modern:
+            session_key = f"handle:{uuid4().hex}"
         if action == "open":
-            current = exposures.active(session_key)
+            current = exposures.active(session_key) if not modern else None
             if (
                 current is not None
                 and current.principal_id == principal_id
@@ -47199,17 +47483,22 @@ boundary.
             )
             return {
                 **exposures.status(opened),
-                "native_dynamic_tools": request is not None,
-                "next": "Use exposure(action='search'), then exposure(action='set').",
+                "exposure_handle": opened.id,
+                "native_dynamic_tools": False,
+                "catalog_effect": "guidance_only",
+                "next": "Pass exposure_handle to exposure(get|search|set).",
             }
 
-        current = exposures.active(session_key)
+        handle = str(exposure_handle or "").strip()
+        if modern and not handle:
+            raise ExposureError("exposure_handle is required on the 2026-07-28 path")
+        current = exposures.get(handle) if handle else exposures.active(session_key)
         if current is None:
-            raise ExposureError("No active exposure for this MCP session. Use action='open'.")
+            raise ExposureError("Unknown or expired exposure_handle. Use action='open'.")
         if current.principal_id != principal_id:
             raise ExposureError("The active exposure belongs to another principal.")
         if campaign_id is not None and campaign_id != current.campaign_id:
-            raise ExposureError("Reopen the exposure to bind a different campaign.")
+            raise ExposureError("Open a new handle to bind a different campaign.")
         if current.campaign_id:
             current_phase = authoritative_phase(current.campaign_id)
             exposures.refresh_phase(
@@ -47254,10 +47543,18 @@ boundary.
                         "roles": sorted(roles),
                     }
                 )
+            matches = sorted(matches, key=lambda item: str(item["tool_id"]))
+            page = matches[offset : offset + limit]
             result = {
                 **exposures.status(current),
                 "query_semantics": "all_terms_match_one_tool",
-                "matches": matches,
+                "matches": page,
+                "page": {
+                    "offset": offset,
+                    "limit": limit,
+                    "returned": len(page),
+                    "has_more": offset + limit < len(matches),
+                },
             }
             if terms and not matches:
                 result["next"] = (
@@ -47314,10 +47611,17 @@ def main() -> None:
         and config.http_host.strip().casefold() not in {"127.0.0.1", "::1", "localhost"}
         and config.auth_context_secret is None
     ):
-        raise ValueError(
-            "D&D non-loopback Streamable HTTP requires SAGASMITH_AUTH_CONTEXT_SECRET"
+        raise ValueError("D&D non-loopback Streamable HTTP requires SAGASMITH_AUTH_CONTEXT_SECRET")
+    server = create_server(config)
+    if transport == "streamable-http":
+        server.run(
+            transport="streamable-http",
+            host=config.http_host,
+            port=config.http_port,
+            streamable_http_path=config.http_path,
         )
-    create_server(config).run(transport=transport)
+    else:
+        server.run(transport="stdio")
 
 
 if __name__ == "__main__":

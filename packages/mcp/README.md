@@ -4,6 +4,37 @@
 
 > Current source: `sagasmith-dnd/packages/mcp`. It is released from the D&D vertical monorepo together with its Domain, Skills, and Workbench contracts.
 
+## MCP 2026-07-28 / 协议兼容
+
+The primary protocol is MCP `2026-07-28` on both stdio and Streamable HTTP. It uses
+`server/discover`, a deterministic sorted `tools/list`, private cache hints
+(`ttlMs=300000`), and request metadata. HTTP has no authoritative transport session.
+Every hosted tool call verifies a short-lived `sagasmith.auth-context/delegation-v2`
+envelope for `target_service`, operation, audience, room turn, campaign/revision,
+resource owner, and acting character. Browser tokens and tokens for another audience
+must never be forwarded to this service.
+
+Legacy initialize/session clients remain supported during migration. Their exposure
+state and `tools/list_changed` notifications are compatibility behavior only. On the
+modern path, `exposure(open)` returns an explicit owner-bound, expiring
+`exposure_handle`; it is catalog guidance, not a capability, and never changes
+`tools/list`. The Host chooses a phase/task subset for the model while every call is
+re-authorized by the domain server.
+
+现代路径不依赖隐藏 transport session。跨调用状态使用服务端签发的显式 handle，或显式
+campaign/revision 参数；每次调用都重新校验身份、角色、阶段和 revision。Host 可以缩小提供给
+模型的稳定目录，但不能把模型选择或提示词当作授权边界。
+
+### Upgrade and rollback / 升级与回滚
+
+1. Upgrade the Host to send per-request protocol headers/metadata and delegated auth v2.
+2. Verify `server/discover`, deterministic `tools/list`, and one read/write canary over
+   both configured transports before moving hosted traffic.
+3. Roll back Host traffic to the documented legacy adapter if a client cannot yet
+   negotiate 2026-07-28; do not restore session identity as an authority boundary.
+4. Roll back this package and its lockfile together. No database migration is required
+   by the protocol change.
+
 ## Content Pack gateway
 
 The HTTP gateway connects to the one authoritative streamable-HTTP MCP process and projects its
@@ -32,8 +63,9 @@ sagasmith-dnd-gateway
 ```
 
 The gateway listens on `127.0.0.1:8766` by default and serves the built Workbench when
-`SAGASMITH_DND_UI_DIST` is set. Both the gateway and Agent remain real MCP clients; each observes
-server-emitted `tools/list_changed` rather than using a fixed tool superset.
+`SAGASMITH_DND_UI_DIST` is set. Both the gateway and Agent remain real MCP clients. Modern
+clients cache the deterministic catalog privately; the legacy gateway adapter may still observe
+`tools/list_changed` until its compatibility path is retired.
 
 [平台总览](https://github.com/SagaSmithAI/.github/blob/main/profile/README.md) · [D&D runtime](https://github.com/SagaSmithAI/Sagasmith-dnd) · [D&D Skills](https://github.com/SagaSmithAI/sagasmith-dnd/tree/main/skills)
 
@@ -156,8 +188,8 @@ NanoBot 本地 HTTP 示例：
         "type": "streamableHttp",
         "url": "http://127.0.0.1:8767/mcp",
         "toolTimeout": 900,
-        "injectPrincipal": true,
-        "sessionScoped": true,
+        "protocolVersion": "2026-07-28",
+        "requestScopedDelegation": true,
         "enabledTools": ["*"]
       }
     },

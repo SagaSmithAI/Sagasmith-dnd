@@ -58,25 +58,25 @@ def test_stdio_rejects_missing_tampered_and_replayed_auth_context(tmp_path: Path
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 missing = await session.call_tool("exposure", arguments)
-                assert missing.isError
+                assert missing.is_error
 
                 tampered = await session.call_tool(
                     "exposure",
                     arguments,
                     meta=_meta(actor="discord:user:member-2", nonce="tampered"),
                 )
-                assert tampered.isError
+                assert tampered.is_error
 
                 metadata = _meta(actor="discord:user:member-1", nonce="accepted")
                 accepted = await session.call_tool("exposure", arguments, meta=metadata)
-                assert not accepted.isError
+                assert not accepted.is_error
                 receipt = accepted.content[0].meta["sagasmith_auth_context_receipt"]
                 assert receipt["actor_principal"] == "discord:user:member-1"
                 assert receipt["conversation_principal"] == "discord:group:shared-room"
                 assert receipt["tool"] == "exposure"
 
                 replayed = await session.call_tool("exposure", arguments, meta=metadata)
-                assert replayed.isError
+                assert replayed.is_error
                 assert "already used" in replayed.content[0].text
 
                 opened_epoch = int(receipt["revision"])
@@ -93,7 +93,7 @@ def test_stdio_rejects_missing_tampered_and_replayed_auth_context(tmp_path: Path
                         authorization_epoch=opened_epoch,
                     ),
                 )
-                assert not updated.isError
+                assert not updated.is_error
                 stale = await session.call_tool(
                     "exposure",
                     {
@@ -107,7 +107,7 @@ def test_stdio_rejects_missing_tampered_and_replayed_auth_context(tmp_path: Path
                         authorization_epoch=opened_epoch,
                     ),
                 )
-                assert stale.isError
+                assert stale.is_error
                 assert "authorization_epoch is stale" in stale.content[0].text
 
                 rebound = await session.call_tool(
@@ -115,11 +115,9 @@ def test_stdio_rejects_missing_tampered_and_replayed_auth_context(tmp_path: Path
                     {"action": "open", "principal_id": "discord:user:member-2"},
                     meta=_meta(actor="discord:user:member-2", nonce="actor-rebind"),
                 )
-                assert not rebound.isError
+                assert not rebound.is_error
                 rebound_receipt = rebound.content[0].meta["sagasmith_auth_context_receipt"]
                 assert rebound_receipt["actor_principal"] == "discord:user:member-2"
-                assert rebound_receipt["conversation_principal"] == (
-                    "discord:group:shared-room"
-                )
+                assert rebound_receipt["conversation_principal"] == ("discord:group:shared-room")
 
     asyncio.run(exercise())

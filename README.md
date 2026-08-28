@@ -57,9 +57,10 @@ only the D&D package/extras contract.
 
 ## Verified integration baseline
 
-The 2026-08-20 hosted regression uses the current SagaSmith Agent and Service,
-signed `sagasmith.auth-context/v1` principal context, session-scoped dynamic MCP
-tools, and this repository's Domain/MCP/Skills revision. The D&D reference
+The hosted boundary supports MCP 2026-07-28 request-scoped discovery and the
+explicitly documented legacy initialization adapter. Hosted calls use the signed,
+audience-bound `sagasmith.auth-context/delegation-v2` envelope; transport sessions
+and model-authored principal text are never authority. The D&D reference
 campaign ran concurrently with the CoC reference campaign without a reported
 regression gap and recorded a legal D&D ending. The catalog runner also records
 every discovered module and any explicit exclusion in machine-readable output;

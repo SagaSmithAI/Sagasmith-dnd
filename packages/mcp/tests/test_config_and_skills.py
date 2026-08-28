@@ -223,9 +223,7 @@ def test_bundled_rule_seed_reports_complete_multilingual_corpus(tmp_path: Path) 
             },
         )
         assert default_zh["result"]
-        assert {
-            item["metadata"]["locale"] for item in default_zh["result"]
-        } == {"zh"}
+        assert {item["metadata"]["locale"] for item in default_zh["result"]} == {"zh"}
 
         _, explicit_en = await server.call_tool(
             "rule_search",
@@ -237,9 +235,7 @@ def test_bundled_rule_seed_reports_complete_multilingual_corpus(tmp_path: Path) 
             },
         )
         assert explicit_en["result"]
-        assert {
-            item["metadata"]["locale"] for item in explicit_en["result"]
-        } == {"en"}
+        assert {item["metadata"]["locale"] for item in explicit_en["result"]} == {"en"}
         rat_hits = [
             item
             for item in explicit_en["result"]
@@ -250,9 +246,7 @@ def test_bundled_rule_seed_reports_complete_multilingual_corpus(tmp_path: Path) 
             for item in rat_hits
             if item["heading_path"][0].startswith("Bundled source file:")
         )
-        rat_chunks = [
-            item for item in rat_hits if item["heading_path"][0] == single_card_root
-        ]
+        rat_chunks = [item for item in rat_hits if item["heading_path"][0] == single_card_root]
         rat_source_id = rat_chunks[0]["source_id"]
         assert len(rat_chunks) >= 2
         assert {item["source_id"] for item in rat_chunks} == {rat_source_id}
@@ -543,7 +537,7 @@ def test_server_exposes_static_skill_overview_resource(tmp_path: Path) -> None:
     asyncio.run(inspect_resources())
 
 
-def test_server_advertises_native_tools_list_changed(tmp_path: Path) -> None:
+def test_server_advertises_legacy_tools_list_changed(tmp_path: Path) -> None:
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
@@ -554,8 +548,8 @@ def test_server_advertises_native_tools_list_changed(tmp_path: Path) -> None:
     )
     server = create_server(config)
 
-    capabilities = server._mcp_server.create_initialization_options().capabilities.model_dump(
-        exclude_none=True
+    capabilities = server._lowlevel_server.create_initialization_options().capabilities.model_dump(
+        exclude_none=True, by_alias=True
     )
 
     assert capabilities["tools"]["listChanged"] is True
@@ -577,11 +571,10 @@ def test_server_tools_keep_domain_context_metadata_without_host_profiles(tmp_pat
         by_name = {tool.name: tool for tool in tools}
         assert set(by_name) == set().union(*map(set, profile_catalog().values()))
         assert all(
-            tool.meta["sagasmith_domain_context"] == "sagasmith-dnd"
-            for tool in by_name.values()
+            tool.meta["sagasmith_domain_context"] == "sagasmith-dnd" for tool in by_name.values()
         )
         assert by_name["campaign_query"].meta["sagasmith_context_sync"] is True
-        rule_properties = by_name["rule_search"].inputSchema["properties"]
+        rule_properties = by_name["rule_search"].input_schema["properties"]
         assert "Omit for the first lookup" in rule_properties["filters"]["description"]
         assert "edition" not in rule_properties
         assert "page" not in rule_properties
@@ -634,13 +627,13 @@ def test_server_capabilities_publish_the_rulebook_import_contract(tmp_path: Path
             "conversation_revision": True,
             "write_idempotency": True,
             "actor_local_authority_refresh": True,
-                "local_resolution_waits": True,
-                "incremental_actor_context": True,
-                "stable_memory_candidate_ids": True,
-                "symmetric_heard_statement_candidates": True,
-                "actor_safe_transcript_recall": True,
-                "terminal_journal_compaction": True,
-                "durable_semantic_journal": True,
+            "local_resolution_waits": True,
+            "incremental_actor_context": True,
+            "stable_memory_candidate_ids": True,
+            "symmetric_heard_statement_candidates": True,
+            "actor_safe_transcript_recall": True,
+            "terminal_journal_compaction": True,
+            "durable_semantic_journal": True,
             "server_managed_inference": False,
             "server_managed_kv": False,
             "minimum_host_capabilities": [
@@ -729,12 +722,21 @@ def test_server_capabilities_publish_the_rulebook_import_contract(tmp_path: Path
         assert capabilities["features"]["validated_module_runtime_manifest"] is True
         assert capabilities["features"]["shared_continuity_budget"] is True
         assert capabilities["features"]["continuity_diagnostics"] is True
-        assert capabilities["contract_version"] == "2026-08-session-exposure-v1"
-        assert capabilities["authoritative_contract"] == {
-            "schema": "sagasmith.authoritative-mcp/v1",
+        assert capabilities["contract_version"] == "2026-07-28-dual-era-v2"
+        contract = capabilities["authoritative_contract"]
+        assert contract == {
+            "schema": "sagasmith.authoritative-mcp/v2",
             "transports": ["stdio", "streamable-http"],
             "shared_handlers": True,
-            "dynamic_tool_exposure": "session-scoped",
+            "catalog": {
+                "ordering": "deterministic",
+                "ttl_ms": 300000,
+                "cache_scope": "private",
+                "exposure_side_effects": False,
+            },
+            "cross_call_state": "explicit-opaque-handles-or-campaign-revision",
+            "request_authorization": "delegated-auth-context-v2",
+            "transport_session_authority": False,
             "revision_model": "optimistic",
             "idempotency_model": "required-for-writes",
             "authority_model": "server-owned",

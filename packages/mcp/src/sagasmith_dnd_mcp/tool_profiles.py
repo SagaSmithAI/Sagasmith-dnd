@@ -1,8 +1,8 @@
 """One phase policy per public D&D MCP tool.
 
-Exposure is session-scoped and mutable, but authorization is not encoded in an
-Agent-owned load plan.  This module is the single catalogue used by native
-``tools/list`` filtering and call-time phase/role checks.
+The public catalog is deterministic. These profiles let a Host choose a small
+phase/task subset for a model and support the explicit exposure guidance handle.
+They never encode authorization; call-time phase/role checks remain authoritative.
 """
 
 from __future__ import annotations
@@ -32,8 +32,8 @@ def campaign_phase(state: Mapping[str, Any] | None) -> str:
     return phase
 
 
-# These tools are always visible. ``exposure`` owns the mutable native list;
-# authorization remains a call-time concern.
+# Legacy clients always see these tools before opening their compatibility
+# exposure. Modern clients see the full deterministic catalog.
 CORE_TOOLS = frozenset(
     {
         "exposure",

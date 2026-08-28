@@ -9,6 +9,7 @@ from typing import TextIO
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
+from mcp import Client
 
 from sagasmith_dnd_mcp.config import McpConfig
 from sagasmith_dnd_mcp.gateway import DndMcpClient, GatewayConfig, create_app
@@ -28,9 +29,7 @@ def _wait_for_port(port: int, process: subprocess.Popen[str], output: TextIO) ->
         if process.poll() is not None:
             output.flush()
             log = Path(output.name).read_text(encoding="utf-8", errors="replace")
-            raise AssertionError(
-                f"D&D MCP exited before startup ({process.returncode}):\n{log}"
-            )
+            raise AssertionError(f"D&D MCP exited before startup ({process.returncode}):\n{log}")
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=0.25):
                 return
@@ -106,11 +105,11 @@ def test_real_streamable_http_client_tracks_dynamic_tools(tmp_path: Path) -> Non
             await client.start()
             try:
                 capabilities = await client.call_tool("server_capabilities", {})
-                assert capabilities.isError is not True
-                capability_value = dict(capabilities.structuredContent or {})
+                assert capabilities.is_error is not True
+                capability_value = dict(capabilities.structured_content or {})
                 capability_value = dict(capability_value.get("result") or capability_value)
                 contract = capability_value["authoritative_contract"]
-                assert contract["schema"] == "sagasmith.authoritative-mcp/v1"
+                assert contract["schema"] == "sagasmith.authoritative-mcp/v2"
                 assert contract["transports"] == ["stdio", "streamable-http"]
                 assert contract["shared_handlers"] is True
 
@@ -118,15 +117,15 @@ def test_real_streamable_http_client_tracks_dynamic_tools(tmp_path: Path) -> Non
                     "campaign_create",
                     {"name": "HTTP Table", "idempotency_key": "http-campaign"},
                 )
-                assert created.isError is not True
-                campaign = dict(created.structuredContent or {})
+                assert created.is_error is not True
+                campaign = dict(created.structured_content or {})
                 campaign = dict(campaign.get("result") or campaign)
 
                 queried = await client.call_tool(
                     "campaign_query",
                     {"action": "get", "campaign_id": campaign["id"]},
                 )
-                assert queried.isError is not True
+                assert queried.is_error is not True
                 characters_direct = await asyncio.wait_for(
                     client.call_tool(
                         "character_query",
@@ -137,9 +136,17 @@ def test_real_streamable_http_client_tracks_dynamic_tools(tmp_path: Path) -> Non
                     ),
                     15,
                 )
-                assert characters_direct.isError is not True
+                assert characters_direct.is_error is not True
             finally:
                 await client.stop()
+
+            async with Client(f"http://127.0.0.1:{port}/mcp", mode="2026-07-28") as modern:
+                assert modern.protocol_version == "2026-07-28"
+                modern_tools = await modern.list_tools(cache_mode="reload")
+                names = [tool.name for tool in modern_tools.tools]
+                assert names == sorted(names)
+                assert modern_tools.ttl_ms == 300_000
+                assert modern_tools.cache_scope == "private"
 
             ui_dist = tmp_path / "ui-dist"
             ui_dist.mkdir()
@@ -211,7 +218,7 @@ def test_non_loopback_streamable_http_accepts_signed_auth_context(
     auth_context_secrets: list[str | None] = []
 
     class StubServer:
-        def run(self, *, transport: str) -> None:
+        def run(self, *, transport: str, **_: object) -> None:
             transports.append(transport)
 
     def create_stub(config: McpConfig) -> StubServer:

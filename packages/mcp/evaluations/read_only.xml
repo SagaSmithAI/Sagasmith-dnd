@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<evaluation>
+  <qa_pair>
+    <question>Across every active campaign in the deterministic evaluation fixture, inspect each campaign and its actor roster. Which campaign has the largest roster?</question>
+    <answer>Alpha Expedition</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Explore all active campaigns and all of their actors. Considering only player characters, which actor name is alphabetically last?</question>
+    <answer>Zephyr</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Find the sole actor classified as a monster, then resolve its campaign. What is that campaign's name?</question>
+    <answer>Beta Citadel</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Enumerate all active campaigns and their complete actor rosters. How many actors are classified as NPCs in total?</question>
+    <answer>4</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>After traversing every active campaign and its actor roster, how many campaign-bound actors exist altogether?</question>
+    <answer>7</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Compare role composition across the active campaigns. Which campaign has the same number of player characters and NPCs?</question>
+    <answer>Beta Citadel</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Read the detailed records for every actor and locate the summary that mentions a sealed observatory. What is that actor's name?</question>
+    <answer>Nyx</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Resolve the roster belonging to Beta Citadel and count the distinct actor classifications represented there. What is the count?</question>
+    <answer>3</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Resolve each campaign's system identifier through the server's supported-system catalog. What display name is shared by both fixture campaigns?</question>
+    <answer>Dungeons &amp; Dragons 5e</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Sort the active campaigns by their human-readable names, select the first, and report its canonical slug.</question>
+    <answer>alpha-expedition</answer>
+  </qa_pair>
+</evaluation>

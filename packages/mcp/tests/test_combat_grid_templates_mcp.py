@@ -7,7 +7,7 @@ from pathlib import Path
 from zipfile import ZIP_STORED, ZipFile
 
 import pytest
-from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.mcpserver.exceptions import ToolError
 from PIL import Image
 from sagasmith_core.access import LOCAL_SYSTEM_PRINCIPAL_ID
 from sagasmith_core.content_pack import ARCHIVE_DESCRIPTOR, loads_content_archive
@@ -394,7 +394,7 @@ def test_finalized_combat_grid_template_starts_isolated_encounter_map(tmp_path: 
                 "principal_id": "player:viewer",
             },
         )
-        rendered_metadata = rendered.structuredContent
+        rendered_metadata = rendered.structured_content
         assert rendered_metadata["decorative_map_asset"]["used"] is True
         assert rendered_metadata["decorative_map_asset"]["letterboxed"] is True
         safe_render_metadata = canonical_json(rendered_metadata)
