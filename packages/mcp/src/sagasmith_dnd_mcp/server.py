@@ -3138,6 +3138,23 @@ class RequestScopedMCPServer(MCPServer):
         """Execute one request with fresh identity/role/phase/revision checks."""
 
         arguments = dict(arguments or {})
+        # Preserve the historical in-process API used by domain tests and local
+        # application code.  It has no MCP request metadata, so it cannot be a
+        # modern authorization boundary and must not synthesize request-scoped
+        # receipts after an idempotent result has already been persisted.
+        if context is None and self._auth_context_secret is None:
+            try:
+                direct_result = await super().call_tool(name, arguments, context)
+            except ToolError as exc:
+                if isinstance(exc, UnexpectedToolError) and exc.__cause__ is not None:
+                    raise ToolError(str(exc.__cause__)) from exc.__cause__
+                raise
+            if (
+                isinstance(direct_result, CallToolResult)
+                and all(isinstance(item, TextContent) for item in direct_result.content)
+            ):
+                return direct_result.content, direct_result.structured_content
+            return direct_result
         arguments = self._bind_configured_principal(name, arguments)
         if name in HOST_PRIVATE_TOOLS:
             try:
