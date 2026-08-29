@@ -33,6 +33,7 @@ class McpConfig:
     auto_seed_rules: bool = True
     rule_import_roots: tuple[Path, ...] = ()
     module_import_roots: tuple[Path, ...] = ()
+    official_content_library: Path | None = None
     rule_ocr_enabled: bool = True
     rule_ocr_scale: float = 2.0
     rule_ocr_model: str = "medium"
@@ -58,6 +59,10 @@ class McpConfig:
         raw_rule_roots = os.environ.get("SAGASMITH_DND_MCP_RULE_IMPORT_ROOTS")
         raw_module_roots = os.environ.get("SAGASMITH_DND_MCP_MODULE_IMPORT_ROOTS")
         raw_document_cache = os.environ.get("SAGASMITH_DOCUMENT_CACHE_DIR")
+        raw_official_library = os.environ.get(
+            "SAGASMITH_DND_OFFICIAL_CONTENT_LIBRARY",
+            "",
+        ).strip()
         rule_roots = (
             tuple(
                 Path(value).expanduser().resolve()
@@ -98,6 +103,11 @@ class McpConfig:
             auto_seed_rules=os.environ.get("SAGASMITH_DND_MCP_AUTO_SEED", "1") == "1",
             rule_import_roots=tuple(path.resolve() for path in rule_roots),
             module_import_roots=tuple(path.resolve() for path in module_roots),
+            official_content_library=(
+                Path(raw_official_library).expanduser().resolve()
+                if raw_official_library
+                else None
+            ),
             rule_ocr_enabled=os.environ.get("SAGASMITH_DND_MCP_RULE_OCR", "1") == "1",
             rule_ocr_scale=float(
                 os.environ.get("SAGASMITH_DND_MCP_RULE_OCR_SCALE", "2.0")

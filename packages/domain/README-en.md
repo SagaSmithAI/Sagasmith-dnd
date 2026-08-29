@@ -95,6 +95,27 @@ snapshots. Bundled SRD catalogs and preset builders have exact coverage tests.
 Commercial rulebook text is not distributed in the Apache-2.0 software package;
 public redistribution requires separately verifiable authorization.
 
+The runtime ships a metadata-only compatibility lock for the ten current
+`official_supplement` / `official_legacy` D&D addons in the SagaSmith Content
+Library. It covers 2,007 artifacts, including one additional class and 77
+subclasses, without embedding any commercial text. Verify an authorized local
+library checkout before import or release qualification:
+
+```bash
+sagasmith-dnd content verify-official-expansions \
+  --path /path/to/SagaSmith-dnd-content-library --json
+```
+
+Verification checks the immutable archive identities, current D&D package
+semantics, declared artifact totals, and all 1,134 selection-ready materializer
+contracts. The MCP runtime can mount this exact locked set as core-visible,
+inactive-by-default 2014 content by setting
+`SAGASMITH_DND_OFFICIAL_CONTENT_LIBRARY` to the authorized checkout before
+startup. It also mounts the exact Player's Handbook support Pack required by the
+expansions. Explicit `content_pack(action="activate")` calls remain required,
+and 2024 campaigns cannot activate the set. No operation downloads, exports, or
+grants a license to the commercial content.
+
 Objective world facts belong to CampaignMemory and use stable `fact_key`
 identities. PC/NPC knowledge, beliefs, rumors, and misconceptions belong to
 ActorKnowledge. Character notes and Agent workspace memory are not

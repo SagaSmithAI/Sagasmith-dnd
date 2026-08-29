@@ -336,6 +336,13 @@ from sagasmith_dnd.lifecycle import (
     validate_sorcerous_restoration_choice,
 )
 from sagasmith_dnd.module_profile import DndModuleProfile
+from sagasmith_dnd.official_expansions import (
+    official_expansion_catalog,
+    official_expansion_dependency_rebinds,
+    official_expansion_support_catalog,
+    resolve_official_expansion_archives,
+    resolve_official_expansion_support_archives,
+)
 from sagasmith_dnd.playthrough import (
     playthrough_source_bindings,
     validate_playthrough_manifest,
@@ -5093,18 +5100,14 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             result["activated"] = True
         return result
 
-    def import_content_rules_package(
-        campaign_id: str,
+    def store_content_rules_package(
         package: dict[str, Any],
         blobs: dict[str, bytes],
         *,
-        principal_id: str,
-        idempotency_key: str,
+        import_campaign_id: str | None,
     ) -> dict[str, Any]:
-        """Install one unified addon/core-rules/preset archive."""
+        """Store one verified rules archive without activating it for a campaign."""
 
-        access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
-        require_facade_phase(campaign_id, "content_pack(import)", PROFILE_LOBBY)
         value = validate_dnd_content_package(package)
         if value["system_id"] != DND5E.id or value["kind"] not in {
             "addon",
@@ -5112,12 +5115,13 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             "preset",
         }:
             raise ValueError("content package must be a dnd5e addon, core_rules, or preset")
-        request = {"operation": "import_content", "package_checksum": value["checksum"]}
-        scope = f"content-package-import:{campaign_id}:{principal_id}"
-        replay = replay_idempotent(scope, idempotency_key, request)
-        if replay is not None:
-            return replay
         managed_archive = storage.write_content_archive(value, blobs)
+        dependency_rebinds = [
+            item
+            for item in official_expansion_dependency_rebinds()
+            if item["package_id"] in {"*", value["id"]}
+        ]
+        component_equivalence: list[dict[str, str]] = []
 
         assets = {str(item["asset_key"]): item for item in value["assets"]}
         source_map: dict[str, str] = {}
@@ -5174,6 +5178,52 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             progressed = False
             for definition_id, definition in list(pending.items()):
                 manifest = deepcopy(dict(definition["manifest"]))
+                applied_rebinds = []
+                for rebind in dependency_rebinds:
+                    if rebind["definition_id"] not in {"*", definition_id}:
+                        continue
+                    matches = [
+                        item
+                        for item in manifest.get("dependencies") or []
+                        if isinstance(item, dict)
+                        and str(item.get("id") or "") == rebind["dependency_id"]
+                        and str(item.get("version") or "") == rebind["dependency_version"]
+                        and str(item.get("checksum") or "") == rebind["source_checksum"]
+                    ]
+                    if not matches and rebind["package_id"] == "*":
+                        continue
+                    if len(matches) != 1:
+                        raise ValueError(
+                            f"official dependency rebind no longer matches {definition_id}"
+                        )
+                    runtime_checksum = str(rebind["runtime_checksum"])
+                    try:
+                        runtime_dependency = rule_packs.get_version(
+                            str(rebind["dependency_id"]),
+                            str(rebind["dependency_version"]),
+                        )
+                    except LookupError:
+                        runtime_dependency = None
+                    if runtime_dependency is not None:
+                        dependency_provenance = rule_packs.provenance(
+                            runtime_dependency.pack_id,
+                            runtime_dependency.version,
+                        )
+                        definition_provenance = dict(
+                            dependency_provenance.get("content_definition") or {}
+                        )
+                        if (
+                            definition_provenance.get("source_definition_checksum")
+                            == runtime_checksum
+                            and definition_provenance.get("definition_checksum")
+                        ):
+                            runtime_checksum = str(
+                                definition_provenance["definition_checksum"]
+                            )
+                    matches[0]["checksum"] = runtime_checksum
+                    applied_rebinds.append(
+                        {**deepcopy(rebind), "resolved_runtime_checksum": runtime_checksum}
+                    )
                 dependencies_ready = True
                 for dependency in manifest.get("dependencies") or []:
                     try:
@@ -5188,6 +5238,33 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                         break
                 if not dependencies_ready:
                     continue
+                portable_artifacts = [
+                    {
+                        key: deepcopy(child)
+                        for key, child in item.items()
+                        if key != "rule_definition_id"
+                    }
+                    for item in value["content"].get("artifacts") or []
+                    if str(item.get("rule_definition_id") or "") == definition_id
+                ]
+                portable_mechanics = [
+                    {
+                        key: deepcopy(child)
+                        for key, child in item.items()
+                        if key != "rule_definition_id"
+                    }
+                    for item in value["content"].get("mechanics") or []
+                    if str(item.get("rule_definition_id") or "") == definition_id
+                ]
+                runtime_definition_checksum = (
+                    content_definition_checksum(
+                        manifest=manifest,
+                        artifacts=portable_artifacts,
+                        mechanics=portable_mechanics,
+                    )
+                    if applied_rebinds
+                    else str(definition["definition_checksum"])
+                )
                 try:
                     existing = rule_packs.get_version(definition_id, str(definition["version"]))
                 except LookupError:
@@ -5198,33 +5275,26 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                         dict(provenance.get("content_definition") or {}).get("definition_checksum")
                         or ""
                     )
+                    recorded_source = str(
+                        dict(provenance.get("content_definition") or {}).get(
+                            "source_definition_checksum"
+                        )
+                        or ""
+                    )
                     if not recorded:
                         recorded = content_definition_checksum(
                             manifest=existing.manifest,
                             artifacts=existing.artifacts,
                             mechanics=existing.mechanics,
                         )
-                    if recorded != str(definition["definition_checksum"]):
+                    if (
+                        recorded != str(definition["definition_checksum"])
+                        and recorded_source != str(definition["definition_checksum"])
+                    ):
                         raise ValueError(f"content rule definition conflict: {definition_id}")
                 else:
-                    artifacts = [
-                        {
-                            key: child
-                            for key, child in localize(item).items()
-                            if key != "rule_definition_id"
-                        }
-                        for item in value["content"].get("artifacts") or []
-                        if str(item.get("rule_definition_id") or "") == definition_id
-                    ]
-                    mechanics = [
-                        {
-                            key: child
-                            for key, child in localize(item).items()
-                            if key != "rule_definition_id"
-                        }
-                        for item in value["content"].get("mechanics") or []
-                        if str(item.get("rule_definition_id") or "") == definition_id
-                    ]
+                    artifacts = [localize(item) for item in portable_artifacts]
+                    mechanics = [localize(item) for item in portable_mechanics]
                     localized_artifacts = _strip_artifact_authoring_state(
                         refresh_portable_resolution_plans(artifacts)
                     )
@@ -5242,8 +5312,12 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                                 "package_id": value["id"],
                                 "package_version": value["version"],
                                 "package_checksum": value["checksum"],
-                                "definition_checksum": definition["definition_checksum"],
+                                "definition_checksum": runtime_definition_checksum,
+                                "source_definition_checksum": definition[
+                                    "definition_checksum"
+                                ],
                             },
+                            "official_dependency_rebinds": applied_rebinds,
                             "content_package_kind": value["kind"],
                             "content_package_id": value["id"],
                             "content_package_version": value["version"],
@@ -5256,6 +5330,17 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     if draft["status"] != "validated":
                         raise ValueError(f"content rule definition was rejected: {definition_id}")
                     rule_packs.install(definition_id, str(definition["version"]))
+                if applied_rebinds:
+                    component_equivalence.append(
+                        {
+                            "kind": "rule_pack",
+                            "component_id": definition_id,
+                            "component_version": str(definition["version"]),
+                            "checksum": str(definition["definition_checksum"]),
+                            "basis": "built-in official dependency rebind",
+                            "proof_checksum": runtime_definition_checksum,
+                        }
+                    )
                 component_results.append(
                     {
                         "kind": "rule_pack",
@@ -5333,10 +5418,16 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             imported_addon = addons.import_package(
                 value,
                 provenance={
-                    "import_campaign_id": campaign_id,
+                    "import_campaign_id": import_campaign_id,
                     "content_archive_artifact": managed_archive["artifact"],
                 },
             )
+            for verification in component_equivalence:
+                addons.record_component_equivalence(
+                    imported_addon.addon_id,
+                    imported_addon.version,
+                    **verification,
+                )
             installed_addon = asdict(
                 addons.install(imported_addon.addon_id, imported_addon.version)
             )
@@ -5356,9 +5447,120 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             "stored": True,
             "activated": False,
         }
+        return response
+
+    def import_content_rules_package(
+        campaign_id: str,
+        package: dict[str, Any],
+        blobs: dict[str, bytes],
+        *,
+        principal_id: str,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        """Install one unified addon/core-rules/preset archive through campaign authority."""
+
+        access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
+        require_facade_phase(campaign_id, "content_pack(import)", PROFILE_LOBBY)
+        value = validate_dnd_content_package(package)
+        request = {"operation": "import_content", "package_checksum": value["checksum"]}
+        scope = f"content-package-import:{campaign_id}:{principal_id}"
+        replay = replay_idempotent(scope, idempotency_key, request)
+        if replay is not None:
+            return replay
+        response = store_content_rules_package(
+            value,
+            blobs,
+            import_campaign_id=campaign_id,
+        )
         return remember_idempotent(
             scope, idempotency_key, request, response, campaign_id=campaign_id
         )
+
+    def ensure_official_expansion_content_packs() -> dict[str, Any]:
+        """Mount locked official 2014 expansions from an authorized local library."""
+
+        library = config.official_content_library
+        catalog = official_expansion_catalog()
+        support_catalog = official_expansion_support_catalog()
+        if library is None:
+            return {
+                "configured": False,
+                "installed": 0,
+                "available": len(catalog),
+                "support_installed": 0,
+                "support_available": len(support_catalog),
+                "packages": [],
+            }
+        support_archives = resolve_official_expansion_support_archives(library)
+        archives = (*support_archives, *resolve_official_expansion_archives(library))
+        results = []
+        for archive in archives:
+            try:
+                existing = addons.get_version(archive.id, archive.version)
+            except LookupError:
+                existing = None
+            if existing is not None:
+                if existing.checksum != archive.checksum:
+                    raise ValueError(
+                        f"official expansion version conflicts with built-in registry: "
+                        f"{archive.id}@{archive.version}"
+                    )
+                if existing.status != "installed":
+                    raise ValueError(
+                        f"official expansion is only partially installed: "
+                        f"{archive.id}@{archive.version}"
+                    )
+                results.append(
+                    {
+                        "id": archive.id,
+                        "version": archive.version,
+                        "checksum": archive.checksum,
+                        "status": "stored",
+                        "reused": True,
+                        "role": archive.role,
+                    }
+                )
+                continue
+            if file_sha256(archive.path) != archive.archive_sha256:
+                raise ValueError(
+                    f"official expansion archive changed after verification: {archive.id}"
+                )
+            package, blobs = storage.read_content_archive(source_path=archive.path)
+            if (
+                package.get("id") != archive.id
+                or package.get("version") != archive.version
+                or package.get("checksum") != archive.checksum
+            ):
+                raise ValueError(
+                    f"official expansion archive identity changed after verification: "
+                    f"{archive.id}"
+                )
+            with storage.database.transaction():
+                stored = store_content_rules_package(
+                    package,
+                    blobs,
+                    import_campaign_id=None,
+                )
+            results.append(
+                {
+                    **dict(stored["package"]),
+                    "status": "stored",
+                    "reused": False,
+                    "role": archive.role,
+                }
+            )
+        return {
+            "configured": True,
+            "installed": sum(item.get("role") != "official_core_dependency" for item in results),
+            "available": len(catalog),
+            "support_installed": sum(
+                item.get("role") == "official_core_dependency" for item in results
+            ),
+            "support_available": len(support_catalog),
+            "packages": results,
+        }
+
+    official_expansion_mount = ensure_official_expansion_content_packs()
 
     def managed_module_asset_bytes(source_path: str) -> bytes:
         path = Path(source_path).expanduser().resolve()
@@ -35975,6 +36177,14 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             "effective": effective,
             "effective_error": effective_error,
             "available_core_pack": available_core_pack,
+            "available_official_expansions": list(
+                official_expansion_catalog(profile.edition if profile else None)
+            ),
+            "official_expansion_mount": {
+                key: deepcopy(value)
+                for key, value in official_expansion_mount.items()
+                if key != "packages"
+            },
             "campaign_revision": campaign.revision,
         }
 
@@ -42509,11 +42719,34 @@ boundary.
                 branch_id=(str(data["branch_id"]) if data.get("branch_id") else None),
             )
         }
+        official = {item["id"]: item for item in official_expansion_catalog()}
+        support = {item["id"]: item for item in official_expansion_support_catalog()}
         result = [
             {
                 **asdict(item),
                 "status": "stored" if item.status == "installed" else item.status,
                 "activation": active.get(item.addon_id),
+                "built_in_official_expansion": item.addon_id in official,
+                "built_in_official_core_support": item.addon_id in support,
+                "publication_id": str(
+                    dict(official.get(item.addon_id) or {}).get("publication_id") or ""
+                ),
+                "classification": str(
+                    dict(
+                        official.get(item.addon_id)
+                        or support.get(item.addon_id)
+                        or {}
+                    ).get("classification")
+                    or ""
+                ),
+                "editions": list(
+                    dict(
+                        official.get(item.addon_id)
+                        or support.get(item.addon_id)
+                        or {}
+                    ).get("editions")
+                    or []
+                ),
             }
             for item in versions
         ]

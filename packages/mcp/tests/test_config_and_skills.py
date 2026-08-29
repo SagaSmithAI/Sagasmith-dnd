@@ -100,6 +100,7 @@ def test_environment_config_has_separate_rule_and_module_import_roots(monkeypatc
     monkeypatch.setenv("SAGASMITH_DND_MCP_RULE_OCR_MODEL", "medium")
     monkeypatch.setenv("SAGASMITH_DND_MCP_BOUND_PRINCIPAL_ID", "trusted-user")
     monkeypatch.setenv("SAGASMITH_DOCUMENT_CACHE_DIR", "shared-documents")
+    monkeypatch.setenv("SAGASMITH_DND_OFFICIAL_CONTENT_LIBRARY", "official-library")
 
     config = McpConfig.from_environment()
 
@@ -108,6 +109,8 @@ def test_environment_config_has_separate_rule_and_module_import_roots(monkeypatc
     assert config.module_ocr_enabled is False
     assert config.module_ocr_scale == 1.5
     assert config.rule_ocr_model == "medium"
+    assert config.official_content_library is not None
+    assert config.official_content_library.name == "official-library"
     assert config.module_ocr_model == "medium"
     assert config.bound_principal_id == "trusted-user"
     assert config.document_cache_dir is not None

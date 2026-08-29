@@ -65,6 +65,7 @@ from sagasmith_dnd.editions import (
 )
 from sagasmith_dnd.engine import resolve_check, roll
 from sagasmith_dnd.module_profile import DndModuleProfile
+from sagasmith_dnd.official_expansions import verify_official_expansion_library
 from sagasmith_dnd.retrieval import DND5E_QUERY_HINTS
 from sagasmith_dnd.runtime import database, dense_components
 from sagasmith_dnd.system import DND5E
@@ -321,10 +322,15 @@ def _dispatch(args) -> Any:
                 "branch",
                 "continuity",
                 "state",
+                "content",
                 "roll",
             ],
             "agent_interface": "skill+json-cli",
         }
+    if args.group == "content" and args.action == "verify-official-expansions":
+        return verify_official_expansion_library(
+            Path(_require(args.path, "path")),
+        )
 
     db = database()
     try:
