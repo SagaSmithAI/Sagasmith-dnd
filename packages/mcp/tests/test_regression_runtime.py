@@ -18,18 +18,18 @@ from scripts.regression_runtime import (
 def test_decode_mcp_result_owns_text_structured_and_error_contracts() -> None:
     text_result = SimpleNamespace(
         content=[SimpleNamespace(text='{"value": 3}')],
-        isError=False,
-        structuredContent=None,
+        is_error=False,
+        structured_content=None,
     )
     structured_result = SimpleNamespace(
         content=[],
-        isError=False,
-        structuredContent={"value": 4},
+        is_error=False,
+        structured_content={"value": 4},
     )
     error_result = SimpleNamespace(
         content=[SimpleNamespace(text="denied")],
-        isError=True,
-        structuredContent=None,
+        is_error=True,
+        structured_content=None,
     )
 
     assert decode_mcp_result(text_result) == {"value": 3}
@@ -44,14 +44,14 @@ def test_decode_mcp_result_prefers_authoritative_structured_list() -> None:
             SimpleNamespace(text='{"id":"first"}'),
             SimpleNamespace(text='{"id":"second"}'),
         ],
-        isError=False,
-        structuredContent={
+        is_error=False,
+        structured_content={
             "result": [{"id": "first"}, {"id": "second"}],
             "host_context_binding": {"domain": "sagasmith-dnd"},
         },
     )
 
-    assert decode_mcp_result(result) == result.structuredContent
+    assert decode_mcp_result(result) == result.structured_content
 
 
 def test_facade_value_unwraps_structured_result_with_context_binding() -> None:

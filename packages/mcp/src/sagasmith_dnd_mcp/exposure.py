@@ -1,4 +1,4 @@
-"""Ephemeral, session-scoped native MCP tool exposure."""
+"""Expiring catalog-guidance handles plus the explicit legacy session adapter."""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ class Exposure:
 
 
 class ExposureRegistry:
-    """Own mutable tool lists without making them campaign authority."""
+    """Own guidance handles without making their names capabilities."""
 
     def __init__(
         self,
@@ -54,9 +54,7 @@ class ExposureRegistry:
 
     def _prune(self) -> None:
         now = self._now()
-        for exposure_id in [
-            key for key, item in self._by_id.items() if item.expires_at <= now
-        ]:
+        for exposure_id in [key for key, item in self._by_id.items() if item.expires_at <= now]:
             exposure = self._by_id.pop(exposure_id)
             if self._active_by_session.get(exposure.session_key) == exposure_id:
                 self._active_by_session.pop(exposure.session_key, None)
@@ -175,13 +173,9 @@ class ExposureRegistry:
             if policy is None:
                 raise ExposureError(f"Unknown loadable tool: {tool_id}")
             if exposure.phase not in policy.phases:
-                raise ExposureError(
-                    f"Tool {tool_id!r} is unavailable during {exposure.phase!r}."
-                )
+                raise ExposureError(f"Tool {tool_id!r} is unavailable during {exposure.phase!r}.")
             if policy.requires_campaign and exposure.campaign_id is None:
-                raise ExposureError(
-                    f"Tool {tool_id!r} requires a campaign-bound exposure."
-                )
+                raise ExposureError(f"Tool {tool_id!r} requires a campaign-bound exposure.")
             if policy.local_only and exposure.principal_id != LOCAL_SYSTEM_PRINCIPAL_ID:
                 raise ExposureError(
                     f"Tool {tool_id!r} is restricted to {LOCAL_SYSTEM_PRINCIPAL_ID}."

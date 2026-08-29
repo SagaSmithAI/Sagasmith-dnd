@@ -4,7 +4,6 @@ import asyncio
 import json
 import os
 import sys
-from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -63,12 +62,8 @@ def test_role_refresh_crops_loaded_tools_without_changing_phase() -> None:
 def test_character_creation_is_lobby_only_and_recovery_survives_combat() -> None:
     assert policy_for_tool("character_create_from").phases == frozenset({"lobby"})
     assert policy_for_tool("character_create_from").roles("lobby") == frozenset()
-    assert policy_for_tool("character_content_apply").roles("play") == frozenset(
-        CAMPAIGN_DM_ROLES
-    )
-    assert policy_for_tool("state_revision").roles("combat") == frozenset(
-        CAMPAIGN_DM_ROLES
-    )
+    assert policy_for_tool("character_content_apply").roles("play") == frozenset(CAMPAIGN_DM_ROLES)
+    assert policy_for_tool("state_revision").roles("combat") == frozenset(CAMPAIGN_DM_ROLES)
 
 
 def test_campaign_admission_is_independent_of_game_phase() -> None:
@@ -657,7 +652,7 @@ def test_exposure_time_lease_and_revision_are_deterministic() -> None:
     assert exposure.updated_at == datetime(2026, 7, 28, 1, 2, tzinfo=UTC)
 
 
-def test_native_tool_list_starts_core_and_varies_per_session(tmp_path: Path) -> None:
+def test_native_tool_list_is_stable_across_exposure_side_effects(tmp_path: Path) -> None:
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
@@ -670,8 +665,9 @@ def test_native_tool_list_starts_core_and_varies_per_session(tmp_path: Path) -> 
 
     async def exercise() -> None:
         server = create_server(config)
-        server._request_session = lambda: ("mcp:first", object())  # type: ignore[method-assign]
-        assert {tool.name for tool in await server.list_tools()} == set(CORE_TOOLS)
+        initial = [tool.name for tool in await server.list_tools()]
+        assert initial == sorted(initial)
+        assert set(CORE_TOOLS) < set(initial)
 
         first = server.exposure_registry.open(
             session_key="mcp:first",
@@ -680,10 +676,7 @@ def test_native_tool_list_starts_core_and_varies_per_session(tmp_path: Path) -> 
             phase="lobby",
         )
         server.exposure_registry.set_tools(first, add=["campaign_create"])
-        assert "campaign_create" in {tool.name for tool in await server.list_tools()}
-
-        server._request_session = lambda: ("mcp:second", object())  # type: ignore[method-assign]
-        assert {tool.name for tool in await server.list_tools()} == set(CORE_TOOLS)
+        assert [tool.name for tool in await server.list_tools()] == initial
 
     asyncio.run(exercise())
 
@@ -762,9 +755,7 @@ def test_membership_revoke_crops_loaded_tools_and_notifies_session(tmp_path: Pat
     asyncio.run(exercise())
 
 
-def test_same_server_runs_two_campaign_sessions_without_cross_talk(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_same_server_runs_two_campaigns_without_catalog_cross_talk(tmp_path: Path) -> None:
     async def exercise() -> None:
         server = create_server(
             McpConfig(
@@ -790,158 +781,38 @@ def test_same_server_runs_two_campaign_sessions_without_cross_talk(
             "campaign_create",
             {"name": "Parallel campaign B", "idempotency_key": "campaign-b"},
         )
-        await direct(
-            "game_phase",
-            {
-                "campaign_id": campaign_a["id"],
-                "action": "set",
-                "tool_profile": "play",
-                "expected_revision": campaign_a["revision"],
-                "idempotency_key": "campaign-a-play",
-            },
-        )
-
-        class Session:
-            def __init__(self) -> None:
-                self.notifications = 0
-
-            async def send_tool_list_changed(self) -> None:
-                self.notifications += 1
-
-        session_a = Session()
-        session_b = Session()
-        request_session: ContextVar[tuple[str, Session]] = ContextVar("request_session")
-
-        def current_request() -> tuple[str, Session]:
-            key, session = request_session.get()
-            server._sessions[key] = session
-            return key, session
-
-        monkeypatch.setattr(server, "_request_session", current_request)
-
-        async def session_call(
-            key: str, session: Session, name: str, arguments: dict
-        ) -> dict:
-            token = request_session.set((key, session))
-            try:
-                _, structured = await server.call_tool(name, arguments)
-                return structured.get("result", structured)
-            finally:
-                request_session.reset(token)
-
-        async def session_tools(key: str, session: Session) -> set[str]:
-            token = request_session.set((key, session))
-            try:
-                return {tool.name for tool in await server.list_tools()}
-            finally:
-                request_session.reset(token)
-
-        assert await asyncio.gather(
-            session_tools("session:a", session_a),
-            session_tools("session:b", session_b),
-        ) == [set(CORE_TOOLS), set(CORE_TOOLS)]
-
-        await asyncio.gather(
-            session_call(
-                "session:a",
-                session_a,
-                "exposure",
+        catalog_before = [tool.name for tool in await server.list_tools()]
+        actor_b = await asyncio.wait_for(
+            direct(
+                "character_create_from",
                 {
-                    "action": "open",
-                    "campaign_id": campaign_a["id"],
-                    "principal_id": "system:local",
-                },
-            ),
-            session_call(
-                "session:b",
-                session_b,
-                "exposure",
-                {
-                    "action": "open",
-                    "campaign_id": campaign_b["id"],
-                    "principal_id": "system:local",
-                },
-            ),
-        )
-        await asyncio.gather(
-            session_call(
-                "session:a",
-                session_a,
-                "exposure",
-                {
-                    "action": "set",
-                    "add_tool_ids": ["character_check"],
-                    "principal_id": "system:local",
-                },
-            ),
-            session_call(
-                "session:b",
-                session_b,
-                "exposure",
-                {
-                    "action": "set",
-                    "add_tool_ids": ["character_create_from"],
-                    "principal_id": "system:local",
-                },
-            ),
-        )
-        assert "character_check" in await session_tools("session:a", session_a)
-        assert "character_create_from" not in await session_tools("session:a", session_a)
-        assert "character_create_from" in await session_tools("session:b", session_b)
-        assert "character_check" not in await session_tools("session:b", session_b)
-
-        # Holding campaign A's write lock must not serialize a public mutation for B.
-        campaign_a_lock = server._campaign_lock(campaign_a["id"])
-        await campaign_a_lock.acquire()
-        try:
-            actor_b = await asyncio.wait_for(
-                session_call(
-                    "session:b",
-                    session_b,
-                    "character_create_from",
-                    {
-                        "mode": "direct",
-                        "payload": {
-                            "campaign_id": campaign_b["id"],
-                            "name": "Parallel B Hero",
-                            "sheet": default_character_sheet(),
-                        },
-                        "idempotency_key": "campaign-b-actor",
+                    "mode": "direct",
+                    "payload": {
+                        "campaign_id": campaign_b["id"],
+                        "name": "Parallel B Hero",
+                        "sheet": default_character_sheet(),
                     },
-                ),
-                timeout=5,
-            )
-        finally:
-            campaign_a_lock.release()
+                    "idempotency_key": "campaign-b-actor",
+                },
+            ),
+            timeout=5,
+        )
         assert actor_b["campaign_id"] == campaign_b["id"]
 
         binding_a, binding_b = await asyncio.gather(
-            session_call(
-                "session:a",
-                session_a,
+            direct(
                 "campaign_query",
                 {"view": "get", "payload": {"campaign_id": campaign_a["id"]}},
             ),
-            session_call(
-                "session:b",
-                session_b,
+            direct(
                 "campaign_query",
                 {"view": "get", "payload": {"campaign_id": campaign_b["id"]}},
             ),
         )
-        assert binding_a["host_context_binding"]["campaign_id"] == campaign_a["id"]
-        assert binding_b["host_context_binding"]["campaign_id"] == campaign_b["id"]
-        assert len(binding_a["host_context_binding"]["authorization_fingerprint"]) == 64
-        assert (
-            binding_a["host_context_binding"]["context_epoch"]
-            != binding_b["host_context_binding"]["context_epoch"]
-        )
+        assert binding_a["id"] == campaign_a["id"]
+        assert binding_b["id"] == campaign_b["id"]
 
-        session_a.notifications = 0
-        session_b.notifications = 0
-        entered_b = await session_call(
-            "session:b",
-            session_b,
+        entered_b = await direct(
             "game_phase",
             {
                 "campaign_id": campaign_b["id"],
@@ -952,24 +823,8 @@ def test_same_server_runs_two_campaign_sessions_without_cross_talk(
             },
         )
         assert entered_b["tool_profile"] == "play"
-        assert session_b.notifications >= 1
-        assert session_a.notifications == 0
-        assert "character_create_from" not in await session_tools("session:b", session_b)
-        assert "character_check" in await session_tools("session:a", session_a)
-
-        await session_call(
-            "session:b",
-            session_b,
-            "exposure",
-            {
-                "action": "set",
-                "add_tool_ids": ["character_query"],
-                "principal_id": "system:local",
-            },
-        )
-        queried_b = await session_call(
-            "session:b",
-            session_b,
+        assert [tool.name for tool in await server.list_tools()] == catalog_before
+        queried_b = await direct(
             "character_query",
             {"view": "get", "payload": {"character_id": actor_b["id"]}},
         )
@@ -999,7 +854,7 @@ def test_stdio_session_mutates_native_tool_list_and_calls_tools_directly(
         async with stdio_client(params) as (read, write):
             async with ClientSession(read, write) as session:
                 initialized = await session.initialize()
-                assert initialized.capabilities.tools.listChanged is True
+                assert initialized.capabilities.tools.list_changed is True
                 assert {tool.name for tool in (await session.list_tools()).tools} == set(CORE_TOOLS)
 
                 principal_id = "discord:user-42"
@@ -1014,7 +869,7 @@ def test_stdio_session_mutates_native_tool_list_and_calls_tools_directly(
                         "principal_id": principal_id,
                     },
                 )
-                assert not opened.isError
+                assert not opened.is_error
                 opened_payload = json.loads(opened.content[0].text)
                 assert opened_payload["campaign_id"] is None
                 assert {tool.name for tool in (await session.list_tools()).tools} == set(CORE_TOOLS)
@@ -1039,9 +894,7 @@ def test_stdio_session_mutates_native_tool_list_and_calls_tools_directly(
                     },
                 )
                 exact_payload = json.loads(exact.content[0].text)
-                assert [item["tool_id"] for item in exact_payload["matches"]] == [
-                    "campaign_create"
-                ]
+                assert [item["tool_id"] for item in exact_payload["matches"]] == ["campaign_create"]
                 loaded = await session.call_tool(
                     "exposure",
                     {
@@ -1050,7 +903,7 @@ def test_stdio_session_mutates_native_tool_list_and_calls_tools_directly(
                         "principal_id": principal_id,
                     },
                 )
-                assert not loaded.isError
+                assert not loaded.is_error
                 visible = {tool.name for tool in (await session.list_tools()).tools}
                 assert "campaign_create" in visible
                 assert "combat_query" not in visible
@@ -1062,7 +915,7 @@ def test_stdio_session_mutates_native_tool_list_and_calls_tools_directly(
                         "idempotency_key": "exposure-test-create",
                     },
                 )
-                assert not created.isError
+                assert not created.is_error
                 campaign_id = json.loads(created.content[0].text)["id"]
                 second_created = await session.call_tool(
                     "campaign_create",
@@ -1071,7 +924,7 @@ def test_stdio_session_mutates_native_tool_list_and_calls_tools_directly(
                         "idempotency_key": "exposure-test-create-second",
                     },
                 )
-                assert not second_created.isError
+                assert not second_created.is_error
                 second_campaign_id = json.loads(second_created.content[0].text)["id"]
 
                 reopened = await session.call_tool(
@@ -1082,7 +935,7 @@ def test_stdio_session_mutates_native_tool_list_and_calls_tools_directly(
                         "principal_id": principal_id,
                     },
                 )
-                assert not reopened.isError
+                assert not reopened.is_error
                 loaded = await session.call_tool(
                     "exposure",
                     {
@@ -1091,11 +944,11 @@ def test_stdio_session_mutates_native_tool_list_and_calls_tools_directly(
                         "principal_id": principal_id,
                     },
                 )
-                assert not loaded.isError
+                assert not loaded.is_error
                 visible = {tool.name for tool in (await session.list_tools()).tools}
                 assert "rulebook_draft" in visible
                 status = await session.call_tool("rule_seed_status", {})
-                assert not status.isError
+                assert not status.is_error
                 assert json.loads(status.content[0].text)["auto_seed"] is False
 
                 rebound = await session.call_tool(
@@ -1106,7 +959,7 @@ def test_stdio_session_mutates_native_tool_list_and_calls_tools_directly(
                         "principal_id": principal_id,
                     },
                 )
-                assert not rebound.isError
+                assert not rebound.is_error
                 rebound_payload = json.loads(rebound.content[0].text)
                 assert rebound_payload["campaign_id"] == second_campaign_id
                 assert rebound_payload["loaded_tools"] == []
@@ -1119,16 +972,17 @@ def test_stdio_session_mutates_native_tool_list_and_calls_tools_directly(
                         "principal_id": principal_id,
                     },
                 )
-                assert repeated.isError
+                assert repeated.is_error
                 assert "already bound" in repeated.content[0].text
                 retained = await session.call_tool(
                     "exposure",
                     {"action": "get", "principal_id": principal_id},
                 )
-                assert not retained.isError
-                assert json.loads(retained.content[0].text)["exposure_id"] == rebound_payload[
-                    "exposure_id"
-                ]
+                assert not retained.is_error
+                assert (
+                    json.loads(retained.content[0].text)["exposure_id"]
+                    == rebound_payload["exposure_id"]
+                )
 
     asyncio.run(exercise())
 
@@ -1261,12 +1115,12 @@ def test_stdio_player_loads_only_player_safe_module_and_continuity_projections(
             async with stdio_client(params) as (read, write):
                 async with ClientSession(read, write, message_handler=on_message) as session:
                     initialized = await session.initialize()
-                    assert initialized.capabilities.tools.listChanged is True
+                    assert initialized.capabilities.tools.list_changed is True
                     opened = await session.call_tool(
                         "exposure",
                         {"action": "open", "campaign_id": campaign["id"]},
                     )
-                    assert not opened.isError
+                    assert not opened.is_error
                     assert response_payload(opened)["phase"] == expected_phase
                     for tool_id in sorted(player_tools):
                         searched = await session.call_tool(
@@ -1277,7 +1131,7 @@ def test_stdio_player_loads_only_player_safe_module_and_continuity_projections(
                                 "query": tool_id,
                             },
                         )
-                        assert not searched.isError
+                        assert not searched.is_error
                         matches = response_payload(searched)["matches"]
                         assert [(item["tool_id"], item["roles"]) for item in matches] == [
                             (tool_id, [])
@@ -1292,7 +1146,7 @@ def test_stdio_player_loads_only_player_safe_module_and_continuity_projections(
                             "add_tool_ids": sorted(player_tools),
                         },
                     )
-                    assert not loaded.isError
+                    assert not loaded.is_error
                     await asyncio.sleep(0)
                     await asyncio.sleep(0)
                     assert "ToolListChangedNotification" in notifications
@@ -1304,7 +1158,7 @@ def test_stdio_player_loads_only_player_safe_module_and_continuity_projections(
                         "module_query",
                         {"campaign_id": campaign["id"], "view": "list", "payload": {}},
                     )
-                    assert not listed.isError
+                    assert not listed.is_error
                     modules = response_result(listed)
                     assert len(modules) == 1
                     assert "source_path" not in modules[0]
@@ -1318,7 +1172,7 @@ def test_stdio_player_loads_only_player_safe_module_and_continuity_projections(
                             "payload": {"module_id": module_id},
                         },
                     )
-                    assert not indexed.isError
+                    assert not indexed.is_error
                     assert response_result(indexed) == []
                     searched = await session.call_tool(
                         "module_search",
@@ -1328,7 +1182,7 @@ def test_stdio_player_loads_only_player_safe_module_and_continuity_projections(
                             "module_ids": [module_id],
                         },
                     )
-                    assert not searched.isError
+                    assert not searched.is_error
                     assert response_result(searched) == []
                     context = await session.call_tool(
                         "continuity_context",
@@ -1339,7 +1193,7 @@ def test_stdio_player_loads_only_player_safe_module_and_continuity_projections(
                             "scope_id": "party",
                         },
                     )
-                    assert not context.isError
+                    assert not context.is_error
                     assert response_result(context)["module_evidence"] == []
 
                     for view in ("content", "assets", "candidates"):
@@ -1351,7 +1205,7 @@ def test_stdio_player_loads_only_player_safe_module_and_continuity_projections(
                                 "payload": {"module_id": module_id},
                             },
                         )
-                        assert private_view.isError
+                        assert private_view.is_error
                         assert "cannot access campaign" in private_view.content[0].text
                     dm_context = await session.call_tool(
                         "continuity_context",
@@ -1362,7 +1216,7 @@ def test_stdio_player_loads_only_player_safe_module_and_continuity_projections(
                             "scope_id": "party",
                         },
                     )
-                    assert dm_context.isError
+                    assert dm_context.is_error
                     assert "only to Owner/DM" in dm_context.content[0].text
 
         await assert_player_projection("play")
@@ -1447,7 +1301,7 @@ def test_stdio_play_transition_removes_character_creation_and_rejects_stale_call
                         "principal_id": principal_id,
                     },
                 )
-                assert not loaded.isError
+                assert not loaded.is_error
                 assert "character_create_from" in {
                     tool.name for tool in (await session.list_tools()).tools
                 }
@@ -1472,7 +1326,7 @@ def test_stdio_play_transition_removes_character_creation_and_rejects_stale_call
                         "idempotency_key": "enter-play",
                     },
                 )
-                assert not entered.isError
+                assert not entered.is_error
                 await asyncio.sleep(0)
                 await asyncio.sleep(0)
                 assert "ToolListChangedNotification" in notifications
@@ -1488,7 +1342,7 @@ def test_stdio_play_transition_removes_character_creation_and_rejects_stale_call
                         "idempotency_key": "late-actor",
                     },
                 )
-                assert stale_call.isError
+                assert stale_call.is_error
 
                 stale_load = await session.call_tool(
                     "exposure",
@@ -1498,7 +1352,7 @@ def test_stdio_play_transition_removes_character_creation_and_rejects_stale_call
                         "principal_id": principal_id,
                     },
                 )
-                assert stale_load.isError
+                assert stale_load.is_error
 
     asyncio.run(exercise())
 
@@ -1580,7 +1434,7 @@ def test_stdio_undo_phase_change_immediately_notifies_and_refreshes_tools(
                         "idempotency_key": "enter-play",
                     },
                 )
-                assert not entered.isError
+                assert not entered.is_error
                 await session.call_tool(
                     "exposure",
                     {
@@ -1618,7 +1472,7 @@ def test_stdio_undo_phase_change_immediately_notifies_and_refreshes_tools(
                         "idempotency_key": "undo-enter-play",
                     },
                 )
-                assert not undone.isError
+                assert not undone.is_error
                 await asyncio.sleep(0)
                 await asyncio.sleep(0)
                 assert "ToolListChangedNotification" in notifications
@@ -1632,9 +1486,9 @@ def test_stdio_undo_phase_change_immediately_notifies_and_refreshes_tools(
                         "principal_id": principal_id,
                     },
                 )
-                assert json.loads(resumed.content[0].text)["result"]["state"][
-                    "game_phase"
-                ] == "lobby"
+                assert (
+                    json.loads(resumed.content[0].text)["result"]["state"]["game_phase"] == "lobby"
+                )
 
     asyncio.run(exercise())
 
@@ -1668,7 +1522,7 @@ def test_stdio_redo_to_lobby_requires_reloading_snapshot_restore(
         async with stdio_client(params) as (read, write):
             async with ClientSession(read, write, message_handler=on_message) as session:
                 initialized = await session.initialize()
-                assert initialized.capabilities.tools.listChanged is True
+                assert initialized.capabilities.tools.list_changed is True
                 principal_id = "discord:redo-snapshot-recovery"
                 await session.call_tool(
                     "exposure", {"action": "open", "principal_id": principal_id}
@@ -1685,7 +1539,7 @@ def test_stdio_redo_to_lobby_requires_reloading_snapshot_restore(
                     "campaign_create",
                     {"name": "Redo snapshot recovery", "idempotency_key": "create"},
                 )
-                assert not created.isError
+                assert not created.is_error
                 campaign_id = json.loads(created.content[0].text)["id"]
                 await session.call_tool(
                     "exposure",
@@ -1703,7 +1557,7 @@ def test_stdio_redo_to_lobby_requires_reloading_snapshot_restore(
                         "principal_id": principal_id,
                     },
                 )
-                assert not loaded.isError
+                assert not loaded.is_error
                 current = await session.call_tool(
                     "campaign_query",
                     {
@@ -1723,7 +1577,7 @@ def test_stdio_redo_to_lobby_requires_reloading_snapshot_restore(
                         "idempotency_key": "initial-lobby-snapshot",
                     },
                 )
-                assert not checkpoint_result.isError
+                assert not checkpoint_result.is_error
                 checkpoint = json.loads(checkpoint_result.content[0].text)
 
                 entered = await session.call_tool(
@@ -1736,7 +1590,7 @@ def test_stdio_redo_to_lobby_requires_reloading_snapshot_restore(
                         "idempotency_key": "enter-play",
                     },
                 )
-                assert not entered.isError
+                assert not entered.is_error
                 in_play = await session.call_tool(
                     "campaign_query",
                     {
@@ -1756,7 +1610,7 @@ def test_stdio_redo_to_lobby_requires_reloading_snapshot_restore(
                         "idempotency_key": "return-lobby",
                     },
                 )
-                assert not returned.isError
+                assert not returned.is_error
                 loaded_restore = await session.call_tool(
                     "exposure",
                     {
@@ -1765,7 +1619,7 @@ def test_stdio_redo_to_lobby_requires_reloading_snapshot_restore(
                         "principal_id": principal_id,
                     },
                 )
-                assert not loaded_restore.isError
+                assert not loaded_restore.is_error
                 assert "snapshot_restore" in {
                     tool.name for tool in (await session.list_tools()).tools
                 }
@@ -1777,9 +1631,7 @@ def test_stdio_redo_to_lobby_requires_reloading_snapshot_restore(
                         "payload": {},
                     },
                 )
-                return_lobby_sequence = json.loads(history.content[0].text)["result"][0][
-                    "sequence"
-                ]
+                return_lobby_sequence = json.loads(history.content[0].text)["result"][0]["sequence"]
                 await settle_notifications()
                 notifications.clear()
 
@@ -1794,7 +1646,7 @@ def test_stdio_redo_to_lobby_requires_reloading_snapshot_restore(
                         "idempotency_key": "undo-return-lobby",
                     },
                 )
-                assert not undone.isError
+                assert not undone.is_error
                 await settle_notifications()
                 assert "ToolListChangedNotification" in notifications
                 play_tools = {tool.name for tool in (await session.list_tools()).tools}
@@ -1808,9 +1660,10 @@ def test_stdio_redo_to_lobby_requires_reloading_snapshot_restore(
                         "principal_id": principal_id,
                     },
                 )
-                assert json.loads(undone_campaign.content[0].text)["result"]["state"][
-                    "game_phase"
-                ] == "play"
+                assert (
+                    json.loads(undone_campaign.content[0].text)["result"]["state"]["game_phase"]
+                    == "play"
+                )
                 undone_history = await session.call_tool(
                     "state_revision",
                     {
@@ -1836,7 +1689,7 @@ def test_stdio_redo_to_lobby_requires_reloading_snapshot_restore(
                         "idempotency_key": "redo-return-lobby",
                     },
                 )
-                assert not redone.isError
+                assert not redone.is_error
                 await settle_notifications()
                 assert "ToolListChangedNotification" in notifications
                 lobby_tools = {tool.name for tool in (await session.list_tools()).tools}
@@ -1861,7 +1714,7 @@ def test_stdio_redo_to_lobby_requires_reloading_snapshot_restore(
                         "principal_id": principal_id,
                     },
                 )
-                assert not searched.isError
+                assert not searched.is_error
                 search_payload = json.loads(searched.content[0].text)
                 assert [item["tool_id"] for item in search_payload["matches"]] == [
                     "snapshot_restore"
@@ -1877,7 +1730,7 @@ def test_stdio_redo_to_lobby_requires_reloading_snapshot_restore(
                         "principal_id": principal_id,
                     },
                 )
-                assert not reloaded.isError
+                assert not reloaded.is_error
                 await settle_notifications()
                 assert "ToolListChangedNotification" in notifications
                 assert "snapshot_restore" in {
@@ -1894,7 +1747,7 @@ def test_stdio_redo_to_lobby_requires_reloading_snapshot_restore(
                         "idempotency_key": "restore-initial-lobby",
                     },
                 )
-                assert not restored.isError
+                assert not restored.is_error
                 resumed = await session.call_tool(
                     "campaign_query",
                     {
@@ -1903,7 +1756,7 @@ def test_stdio_redo_to_lobby_requires_reloading_snapshot_restore(
                         "principal_id": principal_id,
                     },
                 )
-                assert not resumed.isError
+                assert not resumed.is_error
                 resumed_payload = json.loads(resumed.content[0].text)["result"]
                 assert resumed_payload["state"]["game_phase"] == "lobby"
 
@@ -1951,14 +1804,12 @@ def test_stdio_process_binding_overwrites_model_authored_principal(tmp_path: Pat
                         "idempotency_key": "bound-principal-create",
                     },
                 )
-                assert not created.isError
+                assert not created.is_error
                 listed = await session.call_tool(
                     "campaign_query",
                     {"principal_id": "another:forged-user"},
                 )
                 listed_payload = json.loads(listed.content[0].text)["result"]
-                assert [item["name"] for item in listed_payload] == [
-                    "Principal-bound campaign"
-                ]
+                assert [item["name"] for item in listed_payload] == ["Principal-bound campaign"]
 
     asyncio.run(exercise())

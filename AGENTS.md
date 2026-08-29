@@ -6,7 +6,7 @@ This is the current vertical source repository for the D&D product line:
 
 - `packages/domain` owns deterministic D&D 5e mechanics and canonical schemas.
 - `packages/mcp` owns authoritative state, authorization, revisions, random
-  streams, idempotency, settlement, and session-scoped tool exposure.
+  streams, idempotency, settlement, and request-scoped tool enforcement.
 - `skills` owns reusable Agent procedures and module-authoring review.
 - `apps/ui` is the D&D Workbench and must use the authenticated gateway/MCP
   contract rather than direct state access.
@@ -22,8 +22,10 @@ compatibility paths, or documentation authorities.
 - Put only reusable, deterministic D&D mechanics in `packages/domain`.
 - Put one authoritative write check at the MCP boundary; do not duplicate it in
   UI or Skills.
-- Preserve dynamic native tool lists and `tools/list_changed`; never substitute
-  a fixed superset or text-only tool imitation.
+- Preserve the deterministic, cacheable MCP catalog. Host-side phase/task
+  selection may present a stable subset to a model, but `tools/list` must not
+  change because another call mutated exposure state. Legacy list-changed
+  behavior is a compatibility adapter, never an authority boundary.
 - In agent spatial mode, never synthesize coordinates. Grid mode alone owns
   engine-resolved coordinates and geometry.
 

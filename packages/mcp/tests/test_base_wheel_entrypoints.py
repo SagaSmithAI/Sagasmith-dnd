@@ -132,6 +132,6 @@ def test_final_base_wheel_stdio_entrypoints_initialize(
         async with stdio_client(params) as (read, write):
             async with ClientSession(read, write) as session:
                 result = await session.initialize()
-                assert result.serverInfo.name
+                assert result.server_info.name
 
     asyncio.run(asyncio.wait_for(initialize(), timeout=45))

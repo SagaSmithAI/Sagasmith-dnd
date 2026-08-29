@@ -366,8 +366,8 @@ def test_combat_query_render_returns_image_and_party_projection_hides_actor(
         assert isinstance(rendered.content[1], ImageContent)
         metadata = json.loads(rendered.content[0].text)
         content = base64.b64decode(rendered.content[1].data)
-        assert rendered.structuredContent == metadata
-        assert rendered.content[1].mimeType == "image/png"
+        assert rendered.structured_content == metadata
+        assert rendered.content[1].mime_type == "image/png"
         assert content.startswith(b"\x89PNG\r\n\x1a\n")
         assert metadata["audience_projection"] == "party_public"
         assert metadata["map_revision"] == 2

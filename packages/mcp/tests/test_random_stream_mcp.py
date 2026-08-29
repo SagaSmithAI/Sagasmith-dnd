@@ -308,7 +308,7 @@ def test_stdio_character_roll_persists_and_replays_its_stream_receipt(tmp_path: 
                         "principal_id": principal_id,
                     },
                 )
-                assert not loaded.isError, loaded.content[0].text
+                assert not loaded.is_error, loaded.content[0].text
                 created = await session.call_tool(
                     "campaign_create",
                     {
@@ -319,7 +319,7 @@ def test_stdio_character_roll_persists_and_replays_its_stream_receipt(tmp_path: 
                         "idempotency_key": "campaign",
                     },
                 )
-                assert not created.isError, created.content[0].text
+                assert not created.is_error, created.content[0].text
                 campaign = json.loads(created.content[0].text)
                 campaign_id = campaign["id"]
 

@@ -75,12 +75,8 @@ class GatewayConfig:
             upload_limit_bytes=int(
                 os.environ.get("SAGASMITH_DND_GATEWAY_UPLOAD_LIMIT", str(64 * 1024 * 1024))
             ),
-            mcp_url=os.environ.get(
-                "SAGASMITH_DND_MCP_URL", "http://127.0.0.1:8767/mcp"
-            ),
-            agent_webui_url=os.environ.get(
-                "SAGASMITH_AGENT_WEBUI_URL", "http://127.0.0.1:8765/"
-            ),
+            mcp_url=os.environ.get("SAGASMITH_DND_MCP_URL", "http://127.0.0.1:8767/mcp"),
+            agent_webui_url=os.environ.get("SAGASMITH_AGENT_WEBUI_URL", "http://127.0.0.1:8765/"),
             ui_dist=(
                 Path(value).expanduser().resolve()
                 if (value := os.environ.get("SAGASMITH_DND_UI_DIST", "")).strip()
@@ -157,7 +153,7 @@ class DndMcpClient:
         while True:
             try:
                 async with streamable_http_client(self.url) as streams:
-                    read_stream, write_stream, _ = streams
+                    read_stream, write_stream = streams[:2]
                     refresh_generation = 0
                     synced_generation = 0
                     call_lock = asyncio.Lock()
@@ -272,19 +268,17 @@ class DndMcpClient:
         dynamic_tool = tool_id not in CORE_TOOLS
         if dynamic_tool:
             payload = arguments.get("payload")
-            payload_campaign = (
-                payload.get("campaign_id") if isinstance(payload, dict) else None
+            payload_campaign = payload.get("campaign_id") if isinstance(payload, dict) else None
+            campaign_id = (
+                str(arguments.get("campaign_id") or payload_campaign or "").strip() or None
             )
-            campaign_id = str(
-                arguments.get("campaign_id") or payload_campaign or ""
-            ).strip() or None
             principal_id = self._principal(arguments)
             try:
                 status = await session.call_tool(
                     "exposure",
                     {"action": "get", "principal_id": principal_id},
                 )
-                current = dict(status.structuredContent or {})
+                current = dict(status.structured_content or {})
                 current = dict(current.get("result") or current)
             except Exception:
                 current = {}
@@ -301,7 +295,7 @@ class DndMcpClient:
                     },
                 )
                 self._raise_tool_error(opened)
-                current = dict(opened.structuredContent or {})
+                current = dict(opened.structured_content or {})
                 current = dict(current.get("result") or current)
             if tool_id not in set(current.get("loaded_tools") or []):
                 loaded = await session.call_tool(
@@ -315,19 +309,17 @@ class DndMcpClient:
                 )
                 self._raise_tool_error(loaded)
                 await refresh_changed_tools(session)
-                loaded_value = dict(loaded.structuredContent or {})
+                loaded_value = dict(loaded.structured_content or {})
                 loaded_value = dict(loaded_value.get("result") or loaded_value)
                 if tool_id not in set(loaded_value.get("loaded_tools") or []):
-                    raise RuntimeError(
-                        f"D&D MCP did not load {tool_id!r} into the active exposure"
-                    )
+                    raise RuntimeError(f"D&D MCP did not load {tool_id!r} into the active exposure")
         result = await session.call_tool(tool_id, arguments)
         self._raise_tool_error(result)
         return result
 
     @staticmethod
     def _raise_tool_error(result: CallToolResult) -> None:
-        if not result.isError:
+        if not result.is_error:
             return
         message = next(
             (
@@ -433,11 +425,7 @@ class DndGateway:
 
         manifest = dict(value.get("manifest") or {})
         metadata = dict(value.get("metadata") or {})
-        package_ref = (
-            dict(metadata.get("content_package") or {})
-            if kind == "module"
-            else {}
-        )
+        package_ref = dict(metadata.get("content_package") or {}) if kind == "module" else {}
         activation = value.get("activation")
         if kind == "addon":
             identifier = str(value.get("addon_id") or manifest.get("id") or "")
@@ -452,33 +440,23 @@ class DndGateway:
                 or ""
             )
         title = str(
-            value.get("title")
-            or manifest.get("title")
-            or metadata.get("title")
-            or identifier
+            value.get("title") or manifest.get("title") or metadata.get("title") or identifier
         )
         status = str(value.get("status") or ("active" if value.get("active") else "stored"))
         return {
             "kind": kind,
             "id": identifier,
             "local_ref": str(
-                value.get("local_ref")
-                or value.get("id")
-                or value.get("module_id")
-                or identifier
+                value.get("local_ref") or value.get("id") or value.get("module_id") or identifier
             ),
             "version": str(
-                package_ref.get("version")
-                or value.get("version")
-                or manifest.get("version")
-                or ""
+                package_ref.get("version") or value.get("version") or manifest.get("version") or ""
             ),
             "checksum": str(package_ref.get("checksum") or value.get("checksum") or ""),
             "title": title,
             "status": status,
             "active": bool(
-                value.get("active")
-                or (isinstance(activation, dict) and activation.get("enabled"))
+                value.get("active") or (isinstance(activation, dict) and activation.get("enabled"))
             ),
             "editions": list(manifest.get("editions") or metadata.get("editions") or []),
             "classification": manifest.get("classification") or metadata.get("classification"),
@@ -505,7 +483,7 @@ class DndGateway:
 
     async def call(self, tool_id: str, arguments: dict[str, Any]) -> Any:
         value = await self.client.call_tool(tool_id, arguments)
-        structured = value.structuredContent
+        structured = value.structured_content
         if isinstance(structured, dict) and set(structured) >= {"action", "result"}:
             return structured["result"]
         if isinstance(structured, dict) and set(structured) >= {"result"}:
@@ -702,21 +680,14 @@ class DndGateway:
             },
         )
         projected = []
-        values = [
-            ("core_rules", item)
-            for item in core_result if isinstance(core_result, list)
-        ] + [
-            ("addon", item)
-            for item in addon_result if isinstance(addon_result, list)
+        values = [("core_rules", item) for item in core_result if isinstance(core_result, list)] + [
+            ("addon", item) for item in addon_result if isinstance(addon_result, list)
         ]
         for kind, item in values:
             manifest = dict(item.get("manifest") or {})
             editions = list(manifest.get("editions") or [])
             identifier = str(
-                item.get("pack_id")
-                or item.get("addon_id")
-                or manifest.get("id")
-                or ""
+                item.get("pack_id") or item.get("addon_id") or manifest.get("id") or ""
             )
             projected.append(
                 {
@@ -751,11 +722,7 @@ class DndGateway:
         campaign_id = request.query.get("campaign_id", "")
         if not campaign_id:
             raise web.HTTPBadRequest(text="campaign_id is required")
-        filters = {
-            key: value
-            for key in ("edition", "locale")
-            if (value := request.query.get(key))
-        }
+        filters = {key: value for key in ("edition", "locale") if (value := request.query.get(key))}
         result = await self.call(
             "rule_search",
             {
@@ -920,9 +887,7 @@ class DndGateway:
                         target.write(chunk)
             kind = fields.get("kind", "")
             if kind not in CONTENT_PACK_KINDS:
-                raise web.HTTPBadRequest(
-                    text="kind must be core_rules, addon, module, or preset"
-                )
+                raise web.HTTPBadRequest(text="kind must be core_rules, addon, module, or preset")
             if temporary_path is None or not archive_size:
                 raise web.HTTPBadRequest(text="archive is required")
             idempotency_key = fields.get("idempotency_key", "").strip()
@@ -1139,9 +1104,7 @@ class DndGateway:
         campaign_id = request.match_info["campaign_id"]
         audience_projection = request.query.get("audience_projection", "party_public")
         if audience_projection not in {"caller", "party_public"}:
-            raise web.HTTPBadRequest(
-                text="audience_projection must be caller or party_public"
-            )
+            raise web.HTTPBadRequest(text="audience_projection must be caller or party_public")
         rendered = await self.client.call_tool(
             "combat_query",
             {
@@ -1157,19 +1120,17 @@ class DndGateway:
         )
         if image is None:
             raise RuntimeError("combat render returned no image content")
-        metadata = rendered.structuredContent or {}
+        metadata = rendered.structured_content or {}
         checksum = str(metadata.get("image_checksum") or "")
         headers = {
             "Cache-Control": "no-store",
-            "Content-Disposition": (
-                f'attachment; filename="sagasmith-combat-{campaign_id}.png"'
-            ),
+            "Content-Disposition": (f'attachment; filename="sagasmith-combat-{campaign_id}.png"'),
         }
         if checksum:
             headers["ETag"] = f'"{checksum}"'
         return web.Response(
             body=base64.b64decode(image.data, validate=True),
-            content_type=image.mimeType,
+            content_type=image.mime_type,
             headers=headers,
         )
 
@@ -1339,9 +1300,7 @@ def create_app(
     app.router.add_get("/api/campaigns", gateway.campaigns)
     app.router.add_get("/api/campaigns/{campaign_id}", gateway.campaign)
     app.router.add_get("/api/campaigns/{campaign_id}/characters", gateway.characters)
-    app.router.add_get(
-        "/api/campaigns/{campaign_id}/characters/{character_id}", gateway.character
-    )
+    app.router.add_get("/api/campaigns/{campaign_id}/characters/{character_id}", gateway.character)
     app.router.add_get(
         "/api/campaigns/{campaign_id}/modules",
         modules,
@@ -1422,10 +1381,14 @@ def create_app(
 
         async def ui_file(request: web.Request) -> web.FileResponse:
             relative = request.match_info.get("path", "").strip("/")
-            candidates = [
-                ui_root / relative,
-                ui_root / relative / "index.html",
-            ] if relative else [ui_root / "index.html"]
+            candidates = (
+                [
+                    ui_root / relative,
+                    ui_root / relative / "index.html",
+                ]
+                if relative
+                else [ui_root / "index.html"]
+            )
             target = next(
                 (
                     candidate.resolve()

@@ -170,8 +170,8 @@ def test_pdf_page_review_becomes_snapshot_managed_scene_atlas(
         assert render_metadata["page_number"] == 1
         assert render_metadata["transcription"]["ocr"]["text"] == "D5. Entry"
         assert render_metadata["transcription"]["ocr"]["model"] == "medium"
-        assert rendered.structuredContent == render_metadata
-        assert rendered.content[1].mimeType == "image/png"
+        assert rendered.structured_content == render_metadata
+        assert rendered.content[1].mime_type == "image/png"
 
         index = await _call(
             server,

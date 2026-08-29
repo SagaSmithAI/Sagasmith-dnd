@@ -25,9 +25,13 @@ def decode_mcp_result(result: Any) -> Any:
 
     texts = [item.text for item in result.content if getattr(item, "text", None)]
     message = "\n".join(texts)
-    if result.isError:
+    if bool(getattr(result, "is_error", getattr(result, "isError", False))):
         raise RuntimeError(message or "MCP tool call failed")
-    structured = getattr(result, "structuredContent", None)
+    structured = getattr(
+        result,
+        "structured_content",
+        getattr(result, "structuredContent", None),
+    )
     if structured is not None:
         return structured
     if not message:

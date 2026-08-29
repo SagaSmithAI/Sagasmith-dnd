@@ -7,7 +7,7 @@ from io import BytesIO
 from pathlib import Path
 
 import pytest
-from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.mcpserver.exceptions import ToolError
 from PIL import Image
 from sagasmith_core.content_pack import (
     blob_descriptor,

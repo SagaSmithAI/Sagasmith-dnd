@@ -9,7 +9,7 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 from sagasmith_dnd_mcp.config import McpConfig
 from sagasmith_dnd_mcp.server import create_server
@@ -59,7 +59,7 @@ class _TestDatabaseTemplates:
             config.database_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(self.get(False), config.database_path)
 
-        server: FastMCP | None = None
+        server: MCPServer | None = None
         self.building = True
         try:
             server = create_server(config)

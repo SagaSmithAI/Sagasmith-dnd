@@ -1124,8 +1124,8 @@ def test_rulebook_draft_renders_a_checksum_bound_review_page(
         assert metadata["transcription"]["source_checksum"] == staged["result"]["checksum"]
         assert metadata["transcription"]["normalized"]["text_sha256"]
         assert metadata["transcription"]["native_text"]["text_sha256"]
-        assert rendered.structuredContent == metadata
-        assert rendered.content[1].mimeType == "image/png"
+        assert rendered.structured_content == metadata
+        assert rendered.content[1].mime_type == "image/png"
 
         _, inspected = await server.call_tool(
             "rulebook_draft",

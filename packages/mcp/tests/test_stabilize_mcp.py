@@ -3,7 +3,7 @@ import random
 from pathlib import Path
 
 import pytest
-from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.mcpserver.exceptions import ToolError
 from sagasmith_dnd.character_schema import default_character_sheet
 
 import sagasmith_dnd_mcp.server as server_module

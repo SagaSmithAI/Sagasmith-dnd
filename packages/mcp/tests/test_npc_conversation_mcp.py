@@ -290,7 +290,7 @@ def test_stdio_restart_lists_and_aborts_active_conversation(tmp_path: Path) -> N
                         "idempotency_key": "play",
                     },
                 )
-                assert not entered.isError
+                assert not entered.is_error
                 await session.list_tools()
                 await session.call_tool(
                     "exposure",
@@ -311,7 +311,7 @@ def test_stdio_restart_lists_and_aborts_active_conversation(tmp_path: Path) -> N
                         },
                     },
                 )
-                assert not opened.isError
+                assert not opened.is_error
                 conversation_id = json.loads(opened.content[0].text)["conversation_id"]
 
         async with stdio_client(params) as (read, write):
@@ -337,7 +337,7 @@ def test_stdio_restart_lists_and_aborts_active_conversation(tmp_path: Path) -> N
                     "npc_conversation",
                     {"campaign_id": campaign_id, "action": "list", "payload": {}},
                 )
-                assert not listed.isError
+                assert not listed.is_error
                 recovery = json.loads(listed.content[0].text)
                 assert recovery["count"] == 1
                 assert recovery["conversations"][0]["conversation_id"] == conversation_id
@@ -354,7 +354,7 @@ def test_stdio_restart_lists_and_aborts_active_conversation(tmp_path: Path) -> N
                         },
                     },
                 )
-                assert not aborted.isError
+                assert not aborted.is_error
                 listed = await session.call_tool(
                     "npc_conversation",
                     {"campaign_id": campaign_id, "action": "list", "payload": {}},

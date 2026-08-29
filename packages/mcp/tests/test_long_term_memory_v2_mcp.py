@@ -38,7 +38,7 @@ def test_character_state_facade_has_no_second_actor_memory_authority(
         tool = next(
             item for item in await server.list_tools() if item.name == "character_state_change"
         )
-        actions = tool.inputSchema["properties"]["action"]["enum"]
+        actions = tool.input_schema["properties"]["action"]["enum"]
         assert "memory_add" not in actions
         assert "memory_resolve" not in actions
         assert {"actor_knowledge_query", "actor_knowledge_change"}.issubset(
