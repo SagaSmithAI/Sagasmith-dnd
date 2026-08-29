@@ -3146,12 +3146,23 @@ class RequestScopedMCPServer(MCPServer):
             is_modern_request = context.protocol_version == "2026-07-28"
             if is_modern_request and verified.schema != AUTH_CONTEXT_DELEGATION_SCHEMA:
                 raise ValueError("delegated auth context v2 is required on the 2026-07-28 path")
-            if supplied_principal and supplied_principal != verified.actor_principal:
+            is_delegated = verified.schema == AUTH_CONTEXT_DELEGATION_SCHEMA
+            if (
+                not is_delegated
+                and supplied_principal
+                and supplied_principal != verified.actor_principal
+            ):
                 raise ValueError(f"{principal_argument} does not match the signed actor_principal")
-            # The signed Host envelope, never model-authored arguments or clientInfo,
-            # selects the authoritative caller.
+            authorization_principal = (
+                verified.authorization_principal if is_delegated else verified.actor_principal
+            )
+            authority_principal = (
+                verified.authority_principal if is_delegated else verified.actor_principal
+            )
+            # Authorization follows the requesting player while audit authority
+            # follows the acting Host. Model-authored identity never selects either.
             if principal_argument is not None:
-                arguments[principal_argument] = verified.actor_principal
+                arguments[principal_argument] = authorization_principal
             expected_campaign = self._argument_campaign_id(arguments)
             if (
                 not expected_campaign
@@ -3171,7 +3182,8 @@ class RequestScopedMCPServer(MCPServer):
             context = verify_auth_context(
                 envelope,
                 self._auth_context_secret,
-                expected_actor=verified.actor_principal,
+                expected_actor=authority_principal,
+                expected_requester=authorization_principal if is_delegated else None,
                 expected_campaign=expected_campaign or None,
                 expected_service="sagasmith-dnd-mcp" if is_modern_request else None,
                 expected_operation=name if is_modern_request else None,
