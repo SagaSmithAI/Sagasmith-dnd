@@ -95,6 +95,16 @@ does not rely on projection for security.
 opaque, owner-bound, expiring handle and does not change `tools/list` or confer
 permission. An expired or mismatched handle returns a structured recovery error.
 
+Collection facades (`*_query`, `*_search`, event/history views, draft indexes,
+content packs, NPC conversations, Skills, and exposure search) accept a bounded
+filter plus `limit`/`top_k` of 1–100 and an opaque `cursor`. Successful list
+results preserve the existing `result` and text fallback while adding `page`
+and top-level `next_cursor`. A cursor is bound to its authorized collection and
+filter; it is neither identity nor authority, and every continuation is
+authorized again. Do not parse cursors. Restart at page one after an invalid or
+expired cursor. `content_pack(include_package=true)` is the deliberate exception:
+it requests one complete, finite import artifact rather than a catalog page.
+
 ## Install and run
 
 Python 3.11 or newer is required.
@@ -283,10 +293,14 @@ uv run --package sagasmith-dnd-mcp pytest \
 ```
 
 The repository contains ten independent, deterministic, read-only MCP Builder
-evaluations in `packages/mcp/evaluations/read_only.xml`; the test fixture solves
-and verifies every answer without a paid model or external service. Write tests
-separately cover authorization, idempotency, stale revisions, concurrency,
-cancellation, restart recovery, structured errors, media, and transport parity.
+evaluations in `packages/mcp/evaluations/read_only.xml`. Each question starts a
+fresh traversal of a six-campaign, 30-actor fixture, follows multiple campaign
+and roster continuation pages, inspects actor details, resolves the system
+catalog, and computes its own answer. The test requires at least 35 public-tool
+calls and seven cursor continuations per question and verifies every answer
+without a paid model or external service. Write tests separately cover
+authorization, idempotency, stale revisions, concurrency, cancellation, restart
+recovery, structured errors, media, and transport parity.
 
 ## Upgrade and rollback
 

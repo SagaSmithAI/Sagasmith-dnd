@@ -88,6 +88,34 @@ metadata are evaluated per request. Cross-call state is explicit:
 
 Handles are names, never capabilities. Every use is independently authorized.
 
+### Bounded collection contract
+
+All potentially growing list/search/query surfaces use the same continuation
+contract. Supply a text `query`, `limit` (or `top_k` for ranked search) from 1
+through 100, and the previous opaque `cursor`. The response retains the
+compatible `result` plus concise text and adds:
+
+```json
+{
+  "page": {
+    "limit": 50,
+    "returned": 50,
+    "has_more": true,
+    "next_cursor": "opaque"
+  },
+  "next_cursor": "opaque"
+}
+```
+
+The cursor is scoped to the authorized collection and normalized filter. It
+must not be parsed, stored as a credential, or reused with another campaign,
+principal, view, branch, or query. Continuations rerun authorization. On an
+invalid/expired cursor, restart without a cursor. Older facade clients may place
+the cursor, query, limit, or offset inside `payload`; new clients should use the
+top-level fields. A materialized catalog page also reports `total_count` when it
+is available without reading unbounded history. `content_pack(include_package=true)`
+explicitly retrieves one complete finite import artifact and is not a catalog list.
+
 ### Stable catalog and bounded Host projection
 
 The current contract test locks 77 public tools. `tools/list` returns them in
@@ -324,11 +352,14 @@ uv run --package sagasmith-dnd-mcp pytest \
 ```
 
 `evaluations/read_only.xml` contains ten independent, complex, deterministic,
-read-only MCP Builder questions. `test_read_only_evaluations.py` creates a fixed
-fixture, solves every question through read-only public tools, and verifies the
-answers without a paid model or external service. Write-side tests separately
-cover idempotency, authorization isolation, stale revisions, concurrency,
-cancellation, restart recovery, and structured errors.
+read-only MCP Builder questions. For every question,
+`test_read_only_evaluations.py` independently traverses multiple pages of six
+campaigns and 30 nested actors, reads actor detail records, resolves system
+metadata, and computes the answer. The test rejects a nominal ten-question file
+unless each solver performs at least 35 public-tool calls and seven cursor
+continuations. It uses no paid model or external service. Write-side tests
+separately cover idempotency, authorization isolation, stale revisions,
+concurrency, cancellation, restart recovery, and structured errors.
 
 The opt-in real-provider corpus regression is documented in
 [`docs/FULL_AGENT_REGRESSION.md`](docs/FULL_AGENT_REGRESSION.md). It is not part
