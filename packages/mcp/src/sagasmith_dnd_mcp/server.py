@@ -30,6 +30,7 @@ from mcp.server.lowlevel.server import NotificationOptions
 from mcp.server.mcpserver import Context, Image, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
 from mcp.types import (
+    CallToolRequestParams,
     CallToolResult,
     ListToolsResult,
     PaginatedRequestParams,
@@ -2637,6 +2638,134 @@ def _attach_auth_receipt(result: Any, context: AuthContext | None, tool: str) ->
     return updated, structured
 
 
+_MAX_ARGUMENT_BYTES = 262_144
+_MAX_COLLECTION_ITEMS = 1_000
+_PARAMETER_DESCRIPTIONS: dict[str, str] = {
+    "action": "Exact operation supported by this facade.",
+    "actor_id": "Authoritative campaign actor identifier.",
+    "audience": "Audience scope used to filter private campaign information.",
+    "branch_id": "Authoritative timeline branch identifier.",
+    "budget_chars": "Maximum characters in the returned context bundle.",
+    "by_principal_id": (
+        "Authenticated writer principal; modern requests bind it from Host delegation."
+    ),
+    "campaign_id": "Authoritative campaign identifier.",
+    "character_id": "Authoritative player character or NPC identifier.",
+    "cursor": "Opaque continuation cursor returned by the preceding response.",
+    "dc": "Bounded D&D difficulty class used by the authoritative check.",
+    "expected_branch_id": "Branch guard that must match the current authoritative branch.",
+    "expected_campaign_revision": "Campaign revision guard used to reject stale mutations.",
+    "expected_revision": "Authority revision guard used to reject stale mutations.",
+    "exposure_handle": "Opaque owner-bound, expiring catalog-guidance handle.",
+    "idempotency_key": "Stable business-operation key reused unchanged across retries.",
+    "limit": "Maximum records to return in this bounded page (1 through 100).",
+    "offset": "Non-negative bounded compatibility offset; prefer opaque cursors where available.",
+    "payload": "Operation-specific bounded JSON object described by the selected action.",
+    "principal_id": "Caller hint overwritten by process binding or signed Host delegation.",
+    "query": "Case-insensitive bounded search text.",
+    "top_k": "Maximum ranked matches to return (1 through 100).",
+}
+
+
+def _parameter_description(tool_name: str, parameter_name: str) -> str:
+    return _PARAMETER_DESCRIPTIONS.get(
+        parameter_name,
+        f"Bounded {parameter_name.replace('_', ' ')} value accepted by {tool_name}.",
+    )
+
+
+def _validate_contract_arguments(arguments: Mapping[str, Any]) -> None:
+    try:
+        size = len(json.dumps(arguments, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    except (TypeError, ValueError, RecursionError) as exc:
+        raise ValueError("tool arguments must be a bounded JSON object") from exc
+    if size > _MAX_ARGUMENT_BYTES:
+        raise ValueError(f"tool arguments exceed the {_MAX_ARGUMENT_BYTES}-byte request limit")
+
+    def visit(value: Any, *, depth: int = 0) -> None:
+        if depth > 12:
+            raise ValueError("tool arguments exceed the maximum nesting depth of 12")
+        if isinstance(value, Mapping):
+            if len(value) > _MAX_COLLECTION_ITEMS:
+                raise ValueError("tool argument object has too many fields")
+            for nested in value.values():
+                visit(nested, depth=depth + 1)
+        elif isinstance(value, list | tuple):
+            if len(value) > _MAX_COLLECTION_ITEMS:
+                raise ValueError("tool argument collection exceeds 1000 items")
+            for nested in value:
+                visit(nested, depth=depth + 1)
+        elif isinstance(value, str) and len(value) > 65_536:
+            raise ValueError("tool argument string exceeds 65536 characters")
+
+    visit(arguments)
+    for field_name, value in arguments.items():
+        if not isinstance(value, str):
+            continue
+        if (
+            field_name.endswith("_id")
+            or field_name
+            in {"action", "kind", "idempotency_key", "query", "name", "label", "identifier"}
+        ) and len(value) > 256:
+            raise ValueError(f"{field_name} must not exceed 256 characters")
+    for field_name in ("limit", "top_k", "conversation_limit"):
+        if field_name not in arguments:
+            continue
+        value = arguments[field_name]
+        if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 100:
+            raise ValueError(f"{field_name} must be an integer between 1 and 100")
+    if "offset" in arguments:
+        offset = arguments["offset"]
+        if isinstance(offset, bool) or not isinstance(offset, int) or not 0 <= offset <= 100_000:
+            raise ValueError("offset must be an integer between 0 and 100000")
+
+
+def _tool_output_schema(tool_name: str) -> dict[str, Any]:
+    prefix = tool_name.split("_", 1)[0]
+    field_names = {
+        "result",
+        prefix,
+        "campaign_id",
+        "campaign_revision",
+        "character_revision",
+        "branch_id",
+        "receipt",
+        "host_context_binding",
+    }
+    if any(marker in tool_name for marker in ("query", "search", "list", "status")):
+        field_names.update({"items", "next_cursor", "has_more"})
+    if "combat" in tool_name:
+        field_names.update({"combat", "legal_actions"})
+    if any(marker in tool_name for marker in ("dice", "check", "roll", "resolve")):
+        field_names.update({"roll", "resolution", "random_stream_receipt"})
+    if any(marker in tool_name for marker in ("change", "create", "restore", "apply")):
+        field_names.update({"changed", "idempotent_replay"})
+    properties = {
+        name: {"description": f"Authoritative {name.replace('_', ' ')} returned by {tool_name}."}
+        for name in sorted(field_names)
+    }
+    properties["error"] = {
+        "type": "object",
+        "description": (
+            "Safe model-repairable execution error; protocol errors remain JSON-RPC errors."
+        ),
+        "required": ["code", "message", "retryable", "recovery"],
+        "properties": {
+            "code": {"type": "string"},
+            "message": {"type": "string"},
+            "retryable": {"type": "boolean"},
+            "recovery": {"type": "string"},
+        },
+        "additionalProperties": False,
+    }
+    return {
+        "type": "object",
+        "description": f"Structured authoritative result for the {tool_name} tool.",
+        "properties": properties,
+        "additionalProperties": True,
+    }
+
+
 class RequestScopedMCPServer(MCPServer):
     """Dual-era MCP server with request-scoped identity and a stable catalog.
 
@@ -2671,6 +2800,7 @@ class RequestScopedMCPServer(MCPServer):
         self._auth_context_nonces = AuthContextNonceGuard() if auth_context_secret else None
         self._exposure_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
         self._sessions: WeakValueDictionary[str, Any] = WeakValueDictionary()
+        self._metric_counts: Counter[tuple[str, str, str, str]] = Counter()
         super().__init__(*args, **kwargs)
         original_initialization_options = self._lowlevel_server.create_initialization_options
 
@@ -3115,6 +3245,8 @@ class RequestScopedMCPServer(MCPServer):
         """Keep the legacy adapter while making modern catalogs stateless."""
 
         tools = await self.list_tools()
+        era = "modern" if ctx.protocol_version == "2026-07-28" else "legacy"
+        self._metric_counts[("catalog", era, "tools/list", "success")] += 1
         if ctx.protocol_version != "2026-07-28":
             context = Context(
                 request_context=ctx, mcp_server=self, subscriptions=self._subscriptions
@@ -3129,6 +3261,71 @@ class RequestScopedMCPServer(MCPServer):
                 tools = [tool for tool in tools if tool.name in visible]
         return ListToolsResult(tools=tools)
 
+    async def _handle_call_tool(
+        self,
+        ctx: ServerRequestContext,
+        params: CallToolRequestParams,
+    ):
+        """Attach bounded telemetry and standard trace context at the transport boundary."""
+
+        result = await super()._handle_call_tool(ctx, params)
+        if (
+            isinstance(result, CallToolResult)
+            and result.is_error
+            and result.structured_content is None
+        ):
+            message = next(
+                (
+                    item.text
+                    for item in result.content
+                    if isinstance(item, TextContent) and item.text.strip()
+                ),
+                "The tool request was rejected.",
+            )
+            structured = self._structured_tool_error(message)
+            result = result.model_copy(update={"structured_content": structured.structured_content})
+        era = "modern" if ctx.protocol_version == "2026-07-28" else "legacy"
+        outcome = "error" if isinstance(result, CallToolResult) and result.is_error else "success"
+        self._metric_counts[("tool", era, params.name, outcome)] += 1
+        if not isinstance(result, CallToolResult):
+            return result
+        try:
+            context = Context(
+                request_context=ctx,
+                mcp_server=self,
+                input_params=params,
+                subscriptions=self._subscriptions,
+            )
+            headers = context.headers
+        except (AttributeError, LookupError, TypeError, ValueError):
+            return result
+        if not isinstance(headers, Mapping):
+            return result
+        propagated = {
+            key: value
+            for key in ("traceparent", "tracestate", "baggage")
+            if isinstance((value := headers.get(key)), str) and 0 < len(value) <= 2048
+        }
+        if not propagated:
+            return result
+        metadata = dict(result.meta or {})
+        metadata["sagasmith_trace_context"] = propagated
+        return result.model_copy(update={"meta": metadata})
+
+    def metrics_snapshot(self) -> list[dict[str, Any]]:
+        """Return bounded protocol/tool counters to the embedding Host."""
+
+        return [
+            {
+                "stage": stage,
+                "protocol_era": era,
+                "operation": operation,
+                "outcome": outcome,
+                "count": count,
+            }
+            for (stage, era, operation, outcome), count in sorted(self._metric_counts.items())
+        ]
+
     async def call_tool(
         self,
         name: str,
@@ -3138,6 +3335,12 @@ class RequestScopedMCPServer(MCPServer):
         """Execute one request with fresh identity/role/phase/revision checks."""
 
         arguments = dict(arguments or {})
+        try:
+            _validate_contract_arguments(arguments)
+        except ValueError as exc:
+            if context is None:
+                raise ToolError(str(exc)) from exc
+            return self._structured_tool_error(str(exc))
         # Preserve the historical in-process API used by domain tests and local
         # application code.  It has no MCP request metadata, so it cannot be a
         # modern authorization boundary and must not synthesize request-scoped
@@ -3149,9 +3352,8 @@ class RequestScopedMCPServer(MCPServer):
                 if isinstance(exc, UnexpectedToolError) and exc.__cause__ is not None:
                     raise ToolError(str(exc.__cause__)) from exc.__cause__
                 raise
-            if (
-                isinstance(direct_result, CallToolResult)
-                and all(isinstance(item, TextContent) for item in direct_result.content)
+            if isinstance(direct_result, CallToolResult) and all(
+                isinstance(item, TextContent) for item in direct_result.content
             ):
                 return direct_result.content, direct_result.structured_content
             return direct_result
@@ -47602,6 +47804,44 @@ boundary.
     registered_tools = mcp._tool_manager.list_tools()
     validate_profile_coverage(tool.name for tool in registered_tools)
     for registered_tool in registered_tools:
+        parameters = deepcopy(registered_tool.parameters)
+        properties = parameters.get("properties") or {}
+        for parameter_name, parameter_schema in properties.items():
+            parameter_schema.setdefault(
+                "description",
+                _parameter_description(registered_tool.name, parameter_name),
+            )
+            if parameter_name in {"limit", "top_k", "conversation_limit"}:
+                parameter_schema.update({"minimum": 1, "maximum": 100})
+            elif parameter_name == "offset":
+                parameter_schema.update({"minimum": 0, "maximum": 100_000})
+            elif parameter_name in {"query", "name", "label", "identifier"}:
+                parameter_schema.setdefault("maxLength", 256)
+            elif parameter_name.endswith("_id") or parameter_name in {
+                "action",
+                "kind",
+                "idempotency_key",
+            }:
+                parameter_schema.setdefault("maxLength", 256)
+            if parameter_schema.get("type") == "array":
+                parameter_schema.setdefault("maxItems", _MAX_COLLECTION_ITEMS)
+        registered_tool.parameters = parameters
+        registered_tool.__dict__.pop("output_schema", None)
+        registered_tool.fn_metadata.output_schema = _tool_output_schema(registered_tool.name)
+        if registered_tool.annotations is None:
+            read_only = any(
+                marker in registered_tool.name
+                for marker in ("query", "search", "status", "list", "expand", "capabilities")
+            )
+            registered_tool.annotations = ToolAnnotations(
+                read_only_hint=read_only,
+                destructive_hint=any(
+                    marker in registered_tool.name
+                    for marker in ("remove", "revoke", "restore", "end")
+                ),
+                idempotent_hint=read_only or "idempotency_key" in properties,
+                open_world_hint=False,
+            )
         registered_tool.meta = {
             **dict(registered_tool.meta or {}),
             "sagasmith_domain_context": "sagasmith-dnd",

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import sys
 from pathlib import Path
 
-from mcp import Client
+import pytest
+from mcp import Client, StdioServerParameters
 from sagasmith_core.auth_context import (
     AUTH_CONTEXT_META_KEY,
     AUTH_CONTEXT_RECEIPT_META_KEY,
@@ -120,5 +123,42 @@ def test_legacy_initialize_remains_available(tmp_path: Path) -> None:
             assert client.protocol_version != "2026-07-28"
             listed = await client.list_tools(cache_mode="reload")
             assert {tool.name for tool in listed.tools}
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_count"),
+    [("legacy", 7), ("2026-07-28", 77)],
+)
+def test_real_stdio_legacy_modern_contract_matrix(
+    tmp_path: Path,
+    mode: str,
+    expected_count: int,
+) -> None:
+    async def exercise() -> None:
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "SAGASMITH_DND_MCP_HOME": str(tmp_path / f"home-{mode}"),
+                "SAGASMITH_DND_MCP_AUTO_SEED": "0",
+                "SAGASMITH_DND_SKILLS_DIR": str(tmp_path / "dnd-skills"),
+                "SAGASMITH_MODULEGEN_SKILLS_DIR": str(tmp_path / "modulegen-skills"),
+            }
+        )
+        parameters = StdioServerParameters(
+            command=sys.executable,
+            args=["-m", "sagasmith_dnd_mcp.server"],
+            env=environment,
+        )
+        async with Client(parameters, mode=mode) as client:
+            catalog = await client.list_tools(cache_mode="reload")
+            names = [tool.name for tool in catalog.tools]
+            assert names == sorted(names)
+            assert len(names) == expected_count
+            status = await client.call_tool("storage_status")
+            assert status.is_error is False
+            assert status.content
+            assert status.structured_content is not None
 
     asyncio.run(exercise())
