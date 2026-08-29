@@ -683,7 +683,7 @@ def test_rule_statblock_recovers_split_text_layout_without_images(tmp_path: Path
                 "payload": {
                     "job_id": job_id,
                     "kind": "chunks",
-                    "limit": 200,
+                    "limit": 100,
                 },
             },
         )

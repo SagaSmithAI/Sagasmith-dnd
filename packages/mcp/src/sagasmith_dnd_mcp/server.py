@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import hashlib
 import importlib
 import inspect
@@ -815,15 +817,192 @@ def _pending_result_ruling_kind(
     return nested_ruling_kind(result, fallback=fallback)
 
 
-def _facade_result(action: str, result: Any) -> dict[str, Any]:
+def _facade_result(
+    action: str,
+    result: Any,
+    *,
+    page: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Preserve a nested domain ruling's ownership at the public facade."""
 
     status = result.get("status", "ok") if isinstance(result, dict) else "ok"
     response = {"status": status, "action": action, "result": result}
+    if page is not None:
+        response["page"] = page
+        response["next_cursor"] = page.get("next_cursor")
     if status == "pending_ruling" and isinstance(result, dict):
         ruling_kind = _pending_result_ruling_kind(result)
         response.update(_ruling_resolution_for_kind(ruling_kind))
     return response
+
+
+def _bounded_page(
+    values: list[Any],
+    *,
+    scope: str,
+    query: str = "",
+    limit: int = 50,
+    cursor: str | None = None,
+    offset: int = 0,
+) -> tuple[list[Any], dict[str, Any]]:
+    """Filter and page one already-authorized collection with an opaque cursor.
+
+    The cursor is a continuation name rather than a capability. It is bound to
+    the tool/view/filter scope so a client cannot accidentally reuse it for a
+    different authorized collection. Authorization is still rechecked before
+    this helper receives any values.
+    """
+
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+        raise ValueError("limit must be an integer between 1 and 100")
+    if isinstance(offset, bool) or not isinstance(offset, int) or not 0 <= offset <= 100_000:
+        raise ValueError("offset must be an integer between 0 and 100000")
+    normalized_query = " ".join(str(query or "").split()).casefold()
+    fingerprint = json_sha256({"scope": scope, "query": normalized_query})[:24]
+    if cursor:
+        if offset:
+            raise ValueError("cursor and offset are mutually exclusive")
+        try:
+            padded = str(cursor) + "=" * (-len(str(cursor)) % 4)
+            cursor_payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
+            if (
+                not isinstance(cursor_payload, dict)
+                or cursor_payload.get("v") != 1
+                or cursor_payload.get("f") != fingerprint
+                or isinstance(cursor_payload.get("o"), bool)
+                or not isinstance(cursor_payload.get("o"), int)
+                or not 0 <= int(cursor_payload["o"]) <= 100_000
+            ):
+                raise ValueError
+            offset = int(cursor_payload["o"])
+        except (
+            binascii.Error,
+            UnicodeDecodeError,
+            ValueError,
+            TypeError,
+            json.JSONDecodeError,
+        ) as exc:
+            raise ValueError(
+                "cursor is invalid for this query; restart from the first page"
+            ) from exc
+
+    filtered = list(values)
+    if normalized_query:
+        filtered = [
+            value
+            for value in filtered
+            if normalized_query
+            in json.dumps(value, ensure_ascii=False, sort_keys=True, default=str).casefold()
+        ]
+    page_values = filtered[offset : offset + limit]
+    next_offset = offset + len(page_values)
+    has_more = next_offset < len(filtered)
+    next_cursor = None
+    if has_more:
+        raw = json.dumps(
+            {"v": 1, "f": fingerprint, "o": next_offset},
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        next_cursor = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    return page_values, {
+        "limit": limit,
+        "returned": len(page_values),
+        "has_more": has_more,
+        "next_cursor": next_cursor,
+        "total_count": len(filtered),
+    }
+
+
+def _page_limit(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 100:
+        raise ValueError("limit must be an integer between 1 and 100")
+    return value
+
+
+def _cursor_offset(
+    *,
+    scope: str,
+    query: str = "",
+    cursor: str | None = None,
+    offset: int = 0,
+) -> tuple[str, int]:
+    """Decode one scope-bound continuation cursor before an authority query."""
+
+    if isinstance(offset, bool) or not isinstance(offset, int) or not 0 <= offset <= 100_000:
+        raise ValueError("offset must be an integer between 0 and 100000")
+    normalized_query = " ".join(str(query or "").split()).casefold()
+    fingerprint = json_sha256({"scope": scope, "query": normalized_query})[:24]
+    if not cursor:
+        return fingerprint, offset
+    if offset:
+        raise ValueError("cursor and offset are mutually exclusive")
+    try:
+        padded = str(cursor) + "=" * (-len(str(cursor)) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
+        if (
+            not isinstance(payload, dict)
+            or payload.get("v") != 1
+            or payload.get("f") != fingerprint
+            or isinstance(payload.get("o"), bool)
+            or not isinstance(payload.get("o"), int)
+            or not 0 <= int(payload["o"]) <= 100_000
+        ):
+            raise ValueError
+        return fingerprint, int(payload["o"])
+    except (
+        binascii.Error,
+        UnicodeDecodeError,
+        ValueError,
+        TypeError,
+        json.JSONDecodeError,
+    ) as exc:
+        raise ValueError("cursor is invalid for this query; restart from the first page") from exc
+
+
+def _encode_cursor(fingerprint: str, offset: int) -> str:
+    raw = json.dumps(
+        {"v": 1, "f": fingerprint, "o": offset},
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _authority_page(
+    values: list[Any],
+    *,
+    fingerprint: str,
+    offset: int,
+    limit: int,
+    query: str = "",
+    chronological_tail: bool = False,
+) -> tuple[list[Any], dict[str, Any]]:
+    """Build page metadata for a limit+1 authority query.
+
+    EventService returns each newest window in chronological order, so its
+    look-ahead record is at the front. RevisionService is newest-first, so its
+    look-ahead record is at the end.
+    """
+
+    limit = _page_limit(limit)
+    has_more = len(values) > limit
+    selected = values[-limit:] if chronological_tail else values[:limit]
+    normalized_query = " ".join(str(query or "").split()).casefold()
+    if normalized_query:
+        selected = [
+            value
+            for value in selected
+            if normalized_query
+            in json.dumps(value, ensure_ascii=False, sort_keys=True, default=str).casefold()
+        ]
+    next_cursor = _encode_cursor(fingerprint, offset + limit) if has_more else None
+    return selected, {
+        "limit": limit,
+        "returned": len(selected),
+        "has_more": has_more,
+        "next_cursor": next_cursor,
+    }
 
 
 def _needs_ruling_kind(
@@ -29320,6 +29499,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         branch_id: str | None = None,
         actor_id: str | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         membership = access.require_campaign(campaign_id, principal_id)
         resolved_branch_id = readable_branch(campaign_id, branch_id, principal_id)
@@ -29337,6 +29517,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             audience=audience,
             actor_id=actor_id,
             limit=limit,
+            offset=offset,
             branch_id=resolved_branch_id,
         )
         return [asdict(item) for item in values]
@@ -29548,10 +29729,13 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         campaign_id: str,
         limit: int = 100,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         """List audited reversible campaign and character mutations."""
         access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
-        return [asdict(item) for item in revisions.history(campaign_id, limit=limit)]
+        return [
+            asdict(item) for item in revisions.history(campaign_id, limit=limit, offset=offset)
+        ]
 
     def state_undo(
         campaign_id: str,
@@ -31266,6 +31450,9 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         action: Literal["open", "list", "get", "ingest", "publish", "close", "abort"],
         payload: dict[str, Any],
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
+        query: Annotated[str, Field(max_length=200)] = "",
+        limit: Annotated[int, Field(ge=1, le=100)] = 50,
+        cursor: Annotated[str | None, Field(max_length=1024)] = None,
     ) -> dict[str, Any]:
         """Run the complete public NPC conversation workflow through one facade."""
 
@@ -31289,7 +31476,22 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 principal_id=principal_id,
             )
         if action == "list":
-            return npc_conversation_list_impl(campaign_id, principal_id)
+            listing = npc_conversation_list_impl(campaign_id, principal_id)
+            conversations, page = _bounded_page(
+                list(listing.get("conversations") or []),
+                scope=f"npc_conversation:list:{campaign_id}:{principal_id}",
+                query=query or str(data.get("query") or ""),
+                limit=data.get("limit", limit),
+                cursor=cursor or data.get("cursor"),
+                offset=data.get("offset", 0),
+            )
+            return {
+                **listing,
+                "count": len(conversations),
+                "conversations": conversations,
+                "page": page,
+                "next_cursor": page["next_cursor"],
+            }
         conversation_id = str(data["conversation_id"])
         if action == "get":
             return npc_conversation_status_impl(campaign_id, conversation_id, principal_id)
@@ -32958,7 +33160,8 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         top_k: int = 8,
         module_ids: list[str] | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
-    ) -> list[dict[str, Any]]:
+        cursor: Annotated[str | None, Field(max_length=1024)] = None,
+    ) -> dict[str, Any]:
         """Search adventure content, optionally scoped to exact active module revisions."""
         membership = access.require_campaign(campaign_id, principal_id)
         embedder, vectors = storage.dense_components()
@@ -32966,18 +33169,30 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             campaign_id=campaign_id,
             query=query,
             query_hints=DND5E_QUERY_HINTS,
-            top_k=top_k,
+            top_k=100,
             module_ids=module_ids,
             embedder=embedder,
             vector_store=vectors,
         )
         if membership.role in CAMPAIGN_DM_ROLES:
-            return [asdict(hit) for hit in hits]
-        return [
-            asdict(hit)
-            for hit in hits
-            if hit.metadata.get("visibility", "restricted") in PLAYER_MODULE_VISIBILITY_SCOPES
-        ]
+            values = [asdict(hit) for hit in hits]
+        else:
+            values = [
+                asdict(hit)
+                for hit in hits
+                if hit.metadata.get("visibility", "restricted")
+                in PLAYER_MODULE_VISIBILITY_SCOPES
+            ]
+        values, page = _bounded_page(
+            values,
+            scope=(
+                f"module_search:{campaign_id}:{principal_id}:{query}:"
+                f"{','.join(sorted(module_ids or []))}"
+            ),
+            limit=top_k,
+            cursor=cursor,
+        )
+        return _facade_result("search", values, page=page)
 
     def campaign_rule_source_ids(campaign_id: str) -> set[str]:
         """Resolve the indexed sources visible to this campaign and branch."""
@@ -33045,7 +33260,8 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         ] = None,
         top_k: int = 8,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
-    ) -> list[dict[str, Any]]:
+        cursor: Annotated[str | None, Field(max_length=1024)] = None,
+    ) -> dict[str, Any]:
         """Search rules visible to the campaign; first lookup needs only id and query."""
         access.require_campaign(campaign_id, principal_id)
         if not str(query or "").strip():
@@ -33145,7 +33361,17 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     + "; omit source_keys unless exact source evidence supplies one"
                 )
         if not allowed_source_ids:
-            return []
+            return _facade_result(
+                "search",
+                [],
+                page={
+                    "limit": top_k,
+                    "returned": 0,
+                    "has_more": False,
+                    "next_cursor": None,
+                    "total_count": 0,
+                },
+            )
         embedder, vectors = storage.dense_components()
         hits = rules.search(
             system_id=DND5E.id,
@@ -33156,7 +33382,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             publications=publications,
             source_ids=sorted(allowed_source_ids),
             source_keys=source_keys,
-            top_k=top_k,
+            top_k=100,
             embedder=embedder,
             vector_store=vectors,
         )
@@ -33169,7 +33395,16 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 <= page
                 <= int(dict(item.get("metadata") or {}).get("page_end") or 0)
             ]
-        return values
+        values, pagination = _bounded_page(
+            values,
+            scope=(
+                f"rule_search:{campaign_id}:{principal_id}:{query}:"
+                f"{json_sha256(filter_data)}"
+            ),
+            limit=top_k,
+            cursor=cursor,
+        )
+        return _facade_result("search", values, page=pagination)
 
     @public_tool()
     def rule_expand(
@@ -41696,8 +41931,13 @@ boundary.
         except ValueError as exc:
             raise ValueError(f"payload.{name} must be ISO-8601") from exc
 
-    def facade_result(action: str, result: Any) -> dict[str, Any]:
-        return _facade_result(action, result)
+    def facade_result(
+        action: str,
+        result: Any,
+        *,
+        page: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return _facade_result(action, result, page=page)
 
     def facade_render_result(rendered: Any) -> CallToolResult:
         """Preserve native image content while satisfying a facade's structured output."""
@@ -41988,6 +42228,9 @@ boundary.
         ] = "list",
         payload: dict[str, Any] | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
+        query: Annotated[str, Field(max_length=200)] = "",
+        limit: Annotated[int, Field(ge=1, le=100)] = 50,
+        cursor: Annotated[str | None, Field(max_length=1024)] = None,
     ) -> dict[str, Any]:
         """Read module cards, indexes, one scene, or current scoped progress."""
         data = facade_payload(payload)
@@ -42046,6 +42289,16 @@ boundary.
                 data.get("module_id"),
                 principal_id,
             )
+        if isinstance(result, list):
+            result, page = _bounded_page(
+                result,
+                scope=f"module_query:{campaign_id}:{view}:{principal_id}",
+                query=query or str(data.get("query") or ""),
+                limit=data.get("limit", limit),
+                cursor=cursor or data.get("cursor"),
+                offset=data.get("offset", 0),
+            )
+            return facade_result(view, result, page=page)
         return facade_result(view, result)
 
     def _content_pack_actor_presets(
@@ -42435,6 +42688,9 @@ boundary.
         principal_id: Annotated[str, Field(title="Principal")] = LOCAL_SYSTEM_PRINCIPAL_ID,
         expected_revision: Annotated[int | None, Field(title="Revision")] = None,
         idempotency_key: Annotated[str | None, Field(title="Request Key")] = None,
+        query: Annotated[str, Field(max_length=200)] = "",
+        limit: Annotated[int, Field(ge=1, le=100)] = 50,
+        cursor: Annotated[str | None, Field(max_length=1024)] = None,
     ) -> dict[str, Any]:
         """Create, inspect, edit, and finalize one source-bound rulebook draft."""
 
@@ -42444,16 +42700,36 @@ boundary.
             if data.get("job_id"):
                 job = import_job_get(campaign_id, str(data["job_id"]), principal_id)
                 source = rules.source(str(job["source_id"])) if job.get("source_id") else None
+                candidates, page = _bounded_page(
+                    list(job.get("candidates") or []),
+                    scope=(
+                        f"rulebook_draft:get:{campaign_id}:{principal_id}:"
+                        f"{str(data['job_id'])}:candidates"
+                    ),
+                    query=query or str(data.get("query") or ""),
+                    limit=data.get("limit", limit),
+                    cursor=cursor or data.get("cursor"),
+                    offset=data.get("offset", 0),
+                )
+                job = {**job, "candidates": candidates}
                 result = {
                     "job": job,
-                    "candidates": list(job.get("candidates") or []),
+                    "candidates": candidates,
                     "inspection": deepcopy(job.get("inspection")),
                     "source_id": job.get("source_id"),
                     "source": source,
                 }
             else:
-                result = {"jobs": import_job_list(campaign_id, "rulebook", principal_id)}
-            return facade_result(action, result)
+                jobs, page = _bounded_page(
+                    import_job_list(campaign_id, "rulebook", principal_id),
+                    scope=f"rulebook_draft:get:{campaign_id}:{principal_id}:jobs",
+                    query=query or str(data.get("query") or ""),
+                    limit=data.get("limit", limit),
+                    cursor=cursor or data.get("cursor"),
+                    offset=data.get("offset", 0),
+                )
+                result = {"jobs": jobs}
+            return facade_result(action, result, page=page)
 
         if action == "start":
             data = facade_payload(payload)
@@ -42551,16 +42827,15 @@ boundary.
                     and isinstance(item.get("page_end"), int)
                     and int(item["page_start"]) <= int(page_number) <= int(item["page_end"])
                 ]
-            query = str(data.get("query") or "").strip().casefold()
-            if query:
-                chunks = [
-                    item for item in chunks if query in str(item.get("content") or "").casefold()
-                ]
-            offset = int(data.get("offset", 0))
-            limit = int(data.get("limit", 50))
-            if offset < 0 or not 1 <= limit <= 200:
-                raise ValueError("payload offset/limit is outside the supported range")
-            return facade_result(action, chunks[offset : offset + limit])
+            chunks, page = _bounded_page(
+                chunks,
+                scope=f"rulebook_draft:evidence:{campaign_id}:{principal_id}:{job_id}",
+                query=query or str(data.get("query") or ""),
+                limit=data.get("limit", limit),
+                cursor=cursor or data.get("cursor"),
+                offset=data.get("offset", 0),
+            )
+            return facade_result(action, chunks, page=page)
 
         if action == "edit":
             operation = str(required(data, "operation"))
@@ -42884,6 +43159,9 @@ boundary.
         principal_id: Annotated[str, Field(title="Principal")] = LOCAL_SYSTEM_PRINCIPAL_ID,
         expected_revision: Annotated[int | None, Field(title="Revision")] = None,
         idempotency_key: Annotated[str | None, Field(title="Request Key")] = None,
+        query: Annotated[str, Field(max_length=200)] = "",
+        limit: Annotated[int, Field(ge=1, le=100)] = 50,
+        cursor: Annotated[str | None, Field(max_length=1024)] = None,
     ) -> dict[str, Any]:
         """Create, inspect, edit, and finalize one source-bound module draft."""
 
@@ -42899,15 +43177,24 @@ boundary.
                 jobs = [import_job_get(campaign_id, str(data["job_id"]), principal_id)]
             else:
                 access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
+                jobs, page = _bounded_page(
+                    [
+                        module_draft_handle_view(item)
+                        for item in import_jobs.list(campaign_id, kind="module")
+                    ],
+                    scope=f"module_draft:get:{campaign_id}:{principal_id}:jobs",
+                    query=query or str(data.get("query") or ""),
+                    limit=data.get("limit", limit),
+                    cursor=cursor or data.get("cursor"),
+                    offset=data.get("offset", 0),
+                )
                 return facade_result(
                     action,
                     {
                         "order": "newest_first",
-                        "jobs": [
-                            module_draft_handle_view(item)
-                            for item in import_jobs.list(campaign_id, kind="module")
-                        ],
+                        "jobs": jobs,
                     },
+                    page=page,
                 )
             if view == "package":
                 job = require_import_job(campaign_id, str(data["job_id"]), "module")
@@ -43043,25 +43330,18 @@ boundary.
                     job.module_id,
                     scene_id=(str(data["scene_id"]) if data.get("scene_id") else None),
                 )
-                query = str(data.get("query") or "").strip().casefold()
-                if query:
-                    chunks = [
-                        item
-                        for item in chunks
-                        if query
-                        in "\n".join(
-                            [
-                                *[str(value) for value in item.get("heading_path", [])],
-                                str(item.get("content") or ""),
-                            ]
-                        ).casefold()
-                    ]
-                limit = data.get("limit", 100)
-                if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500:
-                    raise ValueError("payload.limit must be an integer between 1 and 500")
+                chunks, page = _bounded_page(
+                    chunks,
+                    scope=f"module_draft:evidence:{campaign_id}:{principal_id}:{job_id}",
+                    query=query or str(data.get("query") or ""),
+                    limit=data.get("limit", limit),
+                    cursor=cursor or data.get("cursor"),
+                    offset=data.get("offset", 0),
+                )
                 return facade_result(
                     action,
-                    [chunk_evidence_receipt(item) for item in chunks[:limit]],
+                    [chunk_evidence_receipt(item) for item in chunks],
+                    page=page,
                 )
             if evidence_kind != "page":
                 raise ValueError("payload.kind must be page or chunks")
@@ -43667,6 +43947,9 @@ boundary.
         principal_id: Annotated[str, Field(title="Principal")] = LOCAL_SYSTEM_PRINCIPAL_ID,
         expected_revision: Annotated[int | None, Field(title="Revision")] = None,
         idempotency_key: Annotated[str | None, Field(title="Request Key")] = None,
+        query: Annotated[str, Field(max_length=200)] = "",
+        limit: Annotated[int, Field(ge=1, le=100)] = 50,
+        cursor: Annotated[str | None, Field(max_length=1024)] = None,
     ) -> dict[str, Any]:
         """Inspect and manage finalized core-rules, addon, module, and preset Packs."""
 
@@ -43724,6 +44007,18 @@ boundary.
                     if data.get("include_package") is True
                     else _content_pack_actor_preset_list(data, principal_id)
                 )
+            if isinstance(result, list):
+                result, page = _bounded_page(
+                    result,
+                    scope=f"content_pack:list:{campaign_id}:{kind}:{principal_id}",
+                    query=query or str(data.get("query") or ""),
+                    limit=data.get("limit", limit),
+                    cursor=cursor or data.get("cursor"),
+                    offset=data.get("offset", 0),
+                )
+                return facade_result(action, result, page=page)
+            # include_package=True intentionally returns one complete, bounded
+            # preset artifact for import and is not a catalog listing.
             return facade_result(action, result)
 
         if action == "get":
@@ -44106,6 +44401,7 @@ boundary.
         query: Annotated[str, Field(max_length=200)] = "",
         limit: Annotated[int, Field(ge=1, le=100)] = 50,
         offset: Annotated[int, Field(ge=0, le=100_000)] = 0,
+        cursor: Annotated[str | None, Field(max_length=1024)] = None,
     ) -> dict[str, Any]:
         """Read characters with bounded filtering/paging or inspect an allowlisted document."""
         data = facade_payload(payload)
@@ -44306,20 +44602,22 @@ boundary.
             }
         else:
             result = character_list(data.get("campaign_id"), principal_id)
-            needle = query.strip().casefold()
-            if needle:
-                result = [
-                    item
-                    for item in result
-                    if needle
-                    in (
-                        f"{item.get('name', '')} {item.get('summary', '')} "
-                        f"{item.get('character_type', '')}"
-                    ).casefold()
-                ]
             result = sorted(
                 result, key=lambda item: (str(item.get("name", "")), str(item.get("id", "")))
-            )[offset : offset + limit]
+            )
+        if view in {"list", "library", "catalog"} and isinstance(result, list):
+            result, page = _bounded_page(
+                result,
+                scope=(
+                    f"character_query:{view}:{principal_id}:"
+                    f"{str(data.get('campaign_id') or '')}"
+                ),
+                query=query or str(data.get("query") or ""),
+                limit=data.get("limit", limit),
+                cursor=cursor or data.get("cursor"),
+                offset=offset or data.get("offset", 0),
+            )
+            return facade_result(view, result, page=page)
         return facade_result(view, result)
 
     def dependent_actor_source_text(
@@ -46343,6 +46641,7 @@ boundary.
         query: Annotated[str, Field(max_length=200)] = "",
         limit: Annotated[int, Field(ge=1, le=100)] = 50,
         offset: Annotated[int, Field(ge=0, le=100_000)] = 0,
+        cursor: Annotated[str | None, Field(max_length=1024)] = None,
     ) -> dict[str, Any]:
         """Read bounded campaign pages, party state, or one complete resume bundle."""
         data = facade_payload(payload)
@@ -46411,20 +46710,18 @@ boundary.
             result = party_show(required(data, "campaign_id"), principal_id)
         else:
             result = campaign_list(data.get("status"), principal_id)
-            needle = query.strip().casefold()
-            if needle:
-                result = [
-                    item
-                    for item in result
-                    if needle
-                    in (
-                        f"{item.get('name', '')} {item.get('slug', '')} "
-                        f"{item.get('description', '')}"
-                    ).casefold()
-                ]
             result = sorted(
                 result, key=lambda item: (str(item.get("name", "")), str(item.get("id", "")))
-            )[offset : offset + limit]
+            )
+            result, page = _bounded_page(
+                result,
+                scope=f"campaign_query:list:{principal_id}:{str(data.get('status') or '')}",
+                query=query or str(data.get("query") or ""),
+                limit=data.get("limit", limit),
+                cursor=cursor or data.get("cursor"),
+                offset=offset or data.get("offset", 0),
+            )
+            return facade_result(view, result, page=page)
         return facade_result(view, result)
 
     @public_tool()
@@ -47164,6 +47461,9 @@ boundary.
         payload: dict[str, Any] | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
         idempotency_key: str | None = None,
+        query: Annotated[str, Field(max_length=200)] = "",
+        limit: Annotated[int, Field(ge=1, le=100)] = 50,
+        cursor: Annotated[str | None, Field(max_length=1024)] = None,
     ) -> dict[str, Any]:
         """Append an auditable campaign event or retrieve its branch-visible event log."""
         data = facade_payload(payload)
@@ -47183,13 +47483,35 @@ boundary.
                 idempotency_key,
             )
         else:
+            effective_query = query or str(data.get("query") or "")
+            page_limit = _page_limit(data.get("limit", limit))
+            page_scope = (
+                f"campaign_event:list:{campaign_id}:{principal_id}:"
+                f"{str(data.get('branch_id') or '')}:{str(data.get('actor_id') or '')}"
+            )
+            fingerprint, page_offset = _cursor_offset(
+                scope=page_scope,
+                query=effective_query,
+                cursor=cursor or data.get("cursor"),
+                offset=data.get("offset", 0),
+            )
             result = event_list(
                 campaign_id,
-                data.get("limit", 50),
+                page_limit + 1,
                 data.get("branch_id"),
                 data.get("actor_id"),
                 principal_id,
+                page_offset,
             )
+            result, page = _authority_page(
+                result,
+                fingerprint=fingerprint,
+                offset=page_offset,
+                limit=page_limit,
+                query=effective_query,
+                chronological_tail=True,
+            )
+            return facade_result(action, result, page=page)
         return facade_result(action, result)
 
     @public_tool()
@@ -47198,6 +47520,9 @@ boundary.
         view: Literal["list", "search", "diagnostics"] = "list",
         payload: dict[str, Any] | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
+        query: Annotated[str, Field(max_length=200)] = "",
+        limit: Annotated[int, Field(ge=1, le=100)] = 50,
+        cursor: Annotated[str | None, Field(max_length=1024)] = None,
     ) -> dict[str, Any]:
         """Read objective campaign memory; actor knowledge remains a separate subjective store."""
         if view == "diagnostics":
@@ -47217,11 +47542,12 @@ boundary.
                 ),
             )
         data = facade_payload(payload)
+        effective_query = query or str(data.get("query") or "")
         result = (
             memory_search(
                 campaign_id,
-                required(data, "query"),
-                data.get("limit", 8),
+                required(data, "query") if not query else query,
+                100,
                 data.get("branch_id"),
                 principal_id,
                 data.get("include_inactive", False),
@@ -47235,6 +47561,20 @@ boundary.
                 data.get("include_inactive", False),
             )
         )
+        if isinstance(result, list):
+            result, page = _bounded_page(
+                result,
+                scope=(
+                    f"memory_query:{campaign_id}:{view}:{principal_id}:"
+                    f"{str(data.get('branch_id') or '')}:{bool(data.get('include_inactive'))}:"
+                    f"{json_sha256(effective_query)}"
+                ),
+                query="" if view == "search" else effective_query,
+                limit=data.get("limit", limit),
+                cursor=cursor or data.get("cursor"),
+                offset=data.get("offset", 0),
+            )
+            return facade_result(view, result, page=page)
         return facade_result(view, result)
 
     @public_tool()
@@ -47416,22 +47756,37 @@ boundary.
         view: Literal["list", "search"] = "list",
         payload: dict[str, Any] | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
+        query: Annotated[str, Field(max_length=200)] = "",
+        limit: Annotated[int, Field(ge=1, le=100)] = 50,
+        cursor: Annotated[str | None, Field(max_length=1024)] = None,
     ) -> dict[str, Any]:
         """Read only one actor's branch-scoped, subjective knowledge."""
         data = facade_payload(payload)
+        effective_query = query or str(data.get("query") or "")
         result = (
             actor_knowledge_search(
                 campaign_id,
                 actor_id,
-                required(data, "query"),
+                required(data, "query") if not query else query,
                 data.get("branch_id"),
-                data.get("limit", 8),
+                100,
                 principal_id,
             )
             if view == "search"
             else actor_knowledge_list(campaign_id, actor_id, data.get("branch_id"), principal_id)
         )
-        return facade_result(view, result)
+        result, page = _bounded_page(
+            result,
+            scope=(
+                f"actor_knowledge_query:{campaign_id}:{actor_id}:{view}:{principal_id}:"
+                f"{str(data.get('branch_id') or '')}:{json_sha256(effective_query)}"
+            ),
+            query="" if view == "search" else effective_query,
+            limit=data.get("limit", limit),
+            cursor=cursor or data.get("cursor"),
+            offset=data.get("offset", 0),
+        )
+        return facade_result(view, result, page=page)
 
     @public_tool()
     def actor_knowledge_change(
@@ -47480,6 +47835,9 @@ boundary.
         view: Literal["list", "compare"] = "list",
         payload: dict[str, Any] | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
+        query: Annotated[str, Field(max_length=200)] = "",
+        limit: Annotated[int, Field(ge=1, le=100)] = 50,
+        cursor: Annotated[str | None, Field(max_length=1024)] = None,
     ) -> dict[str, Any]:
         """List branches or compare two branch heads without changing checkout state."""
         data = facade_payload(payload)
@@ -47493,6 +47851,16 @@ boundary.
             if view == "compare"
             else branch_list(campaign_id, principal_id)
         )
+        if view == "list":
+            result, page = _bounded_page(
+                result,
+                scope=f"branch_query:{campaign_id}:{principal_id}",
+                query=query or str(data.get("query") or ""),
+                limit=data.get("limit", limit),
+                cursor=cursor or data.get("cursor"),
+                offset=data.get("offset", 0),
+            )
+            return facade_result(view, result, page=page)
         return facade_result(view, result)
 
     @public_tool()
@@ -47548,6 +47916,9 @@ boundary.
         view: Literal["list", "verify", "lineage", "recap", "core"] = "list",
         payload: dict[str, Any] | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
+        query: Annotated[str, Field(max_length=200)] = "",
+        limit: Annotated[int, Field(ge=1, le=100)] = 50,
+        cursor: Annotated[str | None, Field(max_length=1024)] = None,
     ) -> dict[str, Any]:
         """Read snapshot history, integrity, lineage, or a regenerated recap."""
         data = facade_payload(payload)
@@ -47561,6 +47932,16 @@ boundary.
             result = snapshot_regenerate_recap(campaign_id, required(data, "slot"), principal_id)
         else:
             result = snapshot_core_lock(campaign_id, required(data, "slot"), principal_id)
+        if isinstance(result, list):
+            result, page = _bounded_page(
+                result,
+                scope=f"snapshot_query:{campaign_id}:{view}:{principal_id}",
+                query=query or str(data.get("query") or ""),
+                limit=data.get("limit", limit),
+                cursor=cursor or data.get("cursor"),
+                offset=data.get("offset", 0),
+            )
+            return facade_result(view, result, page=page)
         return facade_result(view, result)
 
     @public_tool()
@@ -47570,11 +47951,23 @@ boundary.
         payload: dict[str, Any] | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
         idempotency_key: str | None = None,
+        query: Annotated[str, Field(max_length=200)] = "",
+        limit: Annotated[int, Field(ge=1, le=100)] = 50,
+        cursor: Annotated[str | None, Field(max_length=1024)] = None,
     ) -> dict[str, Any]:
         """Read revision history or perform guarded undo/redo."""
         data = facade_payload(payload)
         if action == "history":
-            result = state_history(campaign_id, data.get("limit", 100), principal_id)
+            effective_query = query or str(data.get("query") or "")
+            page_limit = _page_limit(data.get("limit", limit))
+            page_scope = f"state_revision:history:{campaign_id}:{principal_id}"
+            fingerprint, page_offset = _cursor_offset(
+                scope=page_scope,
+                query=effective_query,
+                cursor=cursor or data.get("cursor"),
+                offset=data.get("offset", 0),
+            )
+            result = state_history(campaign_id, page_limit + 1, principal_id, page_offset)
         elif action == "receipt":
             receipt_key = str(required(data, "idempotency_key")).strip()
             if not receipt_key:
@@ -47593,6 +47986,15 @@ boundary.
             result = state_redo(
                 campaign_id, principal_id, data.get("expected_history_sequence"), idempotency_key
             )
+        if action == "history":
+            result, page = _authority_page(
+                result,
+                fingerprint=fingerprint,
+                offset=page_offset,
+                limit=page_limit,
+                query=effective_query,
+            )
+            return facade_result(action, result, page=page)
         return facade_result(action, result)
 
     @public_tool()
@@ -47609,6 +48011,9 @@ boundary.
         actor_id: str | None = None,
         payload: dict[str, Any] | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
+        query: Annotated[str, Field(max_length=200)] = "",
+        limit: Annotated[int, Field(ge=1, le=100)] = 50,
+        cursor: Annotated[str | None, Field(max_length=1024)] = None,
     ) -> dict[str, Any]:
         """Read combat state, render a safe snapshot, or inspect DM-only transactions."""
         data = facade_payload(payload)
@@ -47634,7 +48039,16 @@ boundary.
                 )
             )
         elif view == "transaction_history":
-            result = state_history(campaign_id, data.get("limit", 100), principal_id)
+            effective_query = query or str(data.get("query") or "")
+            page_limit = _page_limit(data.get("limit", limit))
+            page_scope = f"combat_query:{campaign_id}:{view}:{principal_id}"
+            fingerprint, page_offset = _cursor_offset(
+                scope=page_scope,
+                query=effective_query,
+                cursor=cursor or data.get("cursor"),
+                offset=data.get("offset", 0),
+            )
+            result = state_history(campaign_id, page_limit + 1, principal_id, page_offset)
         else:
             receipt_key = str(required(data, "idempotency_key")).strip()
             if not receipt_key:
@@ -47645,6 +48059,15 @@ boundary.
                 data.get("branch_id"),
                 principal_id,
             )
+        if view == "transaction_history":
+            result, page = _authority_page(
+                result,
+                fingerprint=fingerprint,
+                offset=page_offset,
+                limit=page_limit,
+                query=effective_query,
+            )
+            return facade_result(view, result, page=page)
         return facade_result(view, result)
 
     @public_tool()
@@ -48094,6 +48517,7 @@ boundary.
         query: str | None = None,
         max_chars: int = 12_000,
         limit: int = 8,
+        cursor: Annotated[str | None, Field(max_length=1024)] = None,
     ) -> dict[str, Any]:
         """Discover or read bounded installed workflow guidance."""
         if action == "outline":
@@ -48113,7 +48537,7 @@ boundary.
                 kind=kind,
                 identifier=identifier,
                 query=required({"query": query}, "query"),
-                limit=limit,
+                limit=100,
             )
         elif kind == "skill":
             result = (
@@ -48127,6 +48551,18 @@ boundary.
                 if action == "list"
                 else skill_asset_read(required({"identifier": identifier}, "identifier"))
             )
+        if isinstance(result, list):
+            result, page = _bounded_page(
+                result,
+                scope=(
+                    f"skill_query:{kind}:{action}:{str(identifier or source or '')}:"
+                    f"{json_sha256(str(query or ''))}"
+                ),
+                query="" if action == "search" else str(query or ""),
+                limit=limit,
+                cursor=cursor,
+            )
+            return facade_result(action, result, page=page)
         return facade_result(action, result)
 
     @public_tool()
@@ -48163,6 +48599,7 @@ boundary.
         query: Annotated[str, Field(max_length=200)] = "",
         limit: Annotated[int, Field(ge=1, le=50)] = 20,
         offset: Annotated[int, Field(ge=0, le=10_000)] = 0,
+        cursor: Annotated[str | None, Field(max_length=1024)] = None,
         add_tool_ids: list[str] | None = None,
         remove_tool_ids: list[str] | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
@@ -48272,17 +48709,22 @@ boundary.
                     }
                 )
             matches = sorted(matches, key=lambda item: str(item["tool_id"]))
-            page = matches[offset : offset + limit]
+            page_items, page = _bounded_page(
+                matches,
+                scope=(
+                    f"exposure:search:{current.id}:{current.revision}:"
+                    f"{' '.join(sorted(terms))}"
+                ),
+                limit=limit,
+                cursor=cursor,
+                offset=offset,
+            )
             result = {
                 **exposures.status(current),
                 "query_semantics": "all_terms_match_one_tool",
-                "matches": page,
-                "page": {
-                    "offset": offset,
-                    "limit": limit,
-                    "returned": len(page),
-                    "has_more": offset + limit < len(matches),
-                },
+                "matches": page_items,
+                "page": page,
+                "next_cursor": page["next_cursor"],
             }
             if terms and not matches:
                 result["next"] = (
@@ -48326,6 +48768,8 @@ boundary.
                 parameter_schema.update({"minimum": 0, "maximum": 100_000})
             elif parameter_name in {"query", "name", "label", "identifier"}:
                 parameter_schema.setdefault("maxLength", 256)
+            elif parameter_name == "cursor":
+                parameter_schema.setdefault("maxLength", 1024)
             elif parameter_name.endswith("_id") or parameter_name in {
                 "action",
                 "kind",

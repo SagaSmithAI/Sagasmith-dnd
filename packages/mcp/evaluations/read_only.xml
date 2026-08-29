@@ -1,43 +1,43 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <evaluation>
   <qa_pair>
-    <question>Across every active campaign in the deterministic evaluation fixture, inspect each campaign and its actor roster. Which campaign has the largest roster?</question>
-    <answer>Alpha Expedition</answer>
+    <question>Traverse the complete campaign catalog through pagination, then page through every campaign roster. Compare NPC counts across campaigns; which campaign has the largest NPC roster?</question>
+    <answer>Ivory Archive</answer>
   </qa_pair>
   <qa_pair>
-    <question>Explore all active campaigns and all of their actors. Considering only player characters, which actor name is alphabetically last?</question>
+    <question>Explore every paginated campaign and roster, separate monsters from PCs and NPCs, and compare monster totals by campaign. Which campaign contains the most monsters?</question>
+    <answer>Violet March</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>After paginating across all campaigns and their complete rosters, keep only campaigns with exactly two player characters. Of those, which has the larger total roster?</question>
+    <answer>Cobalt Labyrinth</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Walk all campaign pages and all nested roster pages. Considering only actors classified as player characters, what is the alphabetically last actor name?</question>
     <answer>Zephyr</answer>
   </qa_pair>
   <qa_pair>
-    <question>Find the sole actor classified as a monster, then resolve its campaign. What is that campaign's name?</question>
-    <answer>Beta Citadel</answer>
+    <question>Discover all campaigns, page through their rosters, and inspect the detailed actor records to find the keeper whose summary mentions the sealed lens. What is that actor's campaign slug?</question>
+    <answer>amber-observatory</answer>
   </qa_pair>
   <qa_pair>
-    <question>Enumerate all active campaigns and their complete actor rosters. How many actors are classified as NPCs in total?</question>
-    <answer>4</answer>
+    <question>Locate the campaign whose description says tidal bells guide navigation, then page through its roster and sort only its NPCs. Which NPC name comes first alphabetically?</question>
+    <answer>Quill</answer>
   </qa_pair>
   <qa_pair>
-    <question>After traversing every active campaign and its actor roster, how many campaign-bound actors exist altogether?</question>
-    <answer>7</answer>
+    <question>Paginate every campaign and roster, exclude every campaign that has any monsters, and compare the remaining NPC-to-PC ratios. Which campaign has the highest ratio?</question>
+    <answer>Ivory Archive</answer>
   </qa_pair>
   <qa_pair>
-    <question>Compare role composition across the active campaigns. Which campaign has the same number of player characters and NPCs?</question>
-    <answer>Beta Citadel</answer>
-  </qa_pair>
-  <qa_pair>
-    <question>Read the detailed records for every actor and locate the summary that mentions a sealed observatory. What is that actor's name?</question>
-    <answer>Nyx</answer>
-  </qa_pair>
-  <qa_pair>
-    <question>Resolve the roster belonging to Beta Citadel and count the distinct actor classifications represented there. What is the count?</question>
+    <question>Find the campaign with the largest total roster after traversing all campaign and character pages. How many distinct actor classifications appear in that roster?</question>
     <answer>3</answer>
   </qa_pair>
   <qa_pair>
-    <question>Resolve each campaign's system identifier through the server's supported-system catalog. What display name is shared by both fixture campaigns?</question>
+    <question>Sort the fully paginated campaign catalog by name, compare the alphabetically first and last campaigns, and resolve their shared system identifier through the supported-system catalog. What display name does it have?</question>
     <answer>Dungeons &amp; Dragons 5e</answer>
   </qa_pair>
   <qa_pair>
-    <question>Sort the active campaigns by their human-readable names, select the first, and report its canonical slug.</question>
-    <answer>alpha-expedition</answer>
+    <question>Across every campaign and complete paginated roster, find the campaign where the monster count equals the combined PC and NPC count. What is that campaign's canonical slug?</question>
+    <answer>violet-march</answer>
   </qa_pair>
 </evaluation>
