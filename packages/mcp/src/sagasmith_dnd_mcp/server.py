@@ -498,6 +498,12 @@ from sagasmith_dnd_mcp.bounded_evaluations import (
 )
 from sagasmith_dnd_mcp.config import McpConfig
 from sagasmith_dnd_mcp.exposure import Exposure, ExposureError, ExposureRegistry
+from sagasmith_dnd_mcp.mcp_tasks import (
+    DurableTaskStore,
+    TaskIdentity,
+    TaskRecord,
+    TasksExtension,
+)
 from sagasmith_dnd_mcp.npc_conversations import (
     ACTIVE_CONVERSATION_STATUSES,
     NPC_CONVERSATION_CONTRACT,
@@ -5452,6 +5458,141 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         )
         return use_random_stream(stream)
 
+    task_store = DurableTaskStore(config.home / "mcp-tasks.sqlite3")
+    task_create_nonces = AuthContextNonceGuard() if config.auth_context_secret else None
+    task_followup_nonces = AuthContextNonceGuard() if config.auth_context_secret else None
+
+    def task_request_meta(ctx: ServerRequestContext[Any, Any]) -> dict[str, Any]:
+        metadata = ctx.meta
+        if metadata is None:
+            return {}
+        if isinstance(metadata, Mapping):
+            return deepcopy(dict(metadata))
+        model_dump = getattr(metadata, "model_dump", None)
+        if callable(model_dump):
+            return deepcopy(model_dump(by_alias=True, exclude_none=True))
+        return {}
+
+    def task_envelope(ctx: ServerRequestContext[Any, Any]) -> Any:
+        return task_request_meta(ctx).get(AUTH_CONTEXT_META_KEY)
+
+    def local_task_identity(arguments: dict[str, Any]) -> TaskIdentity:
+        principal = config.bound_principal_id or LOCAL_SYSTEM_PRINCIPAL_ID
+        campaign_id = RequestScopedMCPServer._argument_campaign_id(arguments)
+        revision = arguments.get("expected_revision", arguments.get("base_revision", 0))
+        if isinstance(revision, bool) or not isinstance(revision, int):
+            revision = 0
+        arguments["principal_id"] = principal
+        return TaskIdentity(
+            owner_principal=principal,
+            authority_principal=principal,
+            resource_owner_principal=principal,
+            campaign_id=campaign_id,
+            room_turn_id=f"local:{campaign_id or 'unbound'}",
+            base_revision=revision,
+            auth_meta={},
+        )
+
+    def authorize_task_create(
+        ctx: ServerRequestContext[Any, Any],
+        params: CallToolRequestParams,
+    ) -> TaskIdentity:
+        arguments = dict(params.arguments or {})
+        if config.auth_context_secret is None:
+            identity = local_task_identity(arguments)
+            params.arguments = arguments
+            return identity
+        envelope = task_envelope(ctx)
+        verified = verify_auth_context(envelope, config.auth_context_secret)
+        if verified.schema != AUTH_CONTEXT_DELEGATION_SCHEMA:
+            raise ValueError("delegated auth context v2 is required for MCP task creation")
+        campaign_id = RequestScopedMCPServer._argument_campaign_id(arguments)
+        verified = verify_auth_context(
+            envelope,
+            config.auth_context_secret,
+            expected_actor=verified.authority_principal,
+            expected_requester=verified.authorization_principal,
+            expected_campaign=campaign_id,
+            expected_service="sagasmith-dnd-mcp",
+            expected_operation=params.name,
+            expected_audience="sagasmith-dnd-mcp",
+            expected_room_turn=verified.room_turn_id,
+            expected_base_revision=verified.base_revision,
+            expected_resource_owner=verified.resource_owner_principal,
+        )
+        if verified.allowed_operations != (params.name,):
+            raise ValueError("task creation delegation must allow only the requested tool")
+        assert task_create_nonces is not None
+        task_create_nonces.remember(verified)
+        # The requesting player is authoritative for campaign access. The
+        # model cannot select this identity through tool arguments.
+        arguments["principal_id"] = verified.authorization_principal
+        params.arguments = arguments
+        return TaskIdentity(
+            owner_principal=verified.authorization_principal,
+            authority_principal=verified.authority_principal,
+            resource_owner_principal=verified.resource_owner_principal,
+            campaign_id=verified.campaign_id,
+            room_turn_id=verified.room_turn_id,
+            base_revision=verified.base_revision,
+            # Ephemeral only: the store intentionally never persists signatures.
+            auth_meta={AUTH_CONTEXT_META_KEY: deepcopy(envelope)},
+        )
+
+    def authorize_task_request(
+        ctx: ServerRequestContext[Any, Any],
+        operation: str,
+        record: TaskRecord | None,
+    ) -> TaskIdentity:
+        if record is None:
+            raise ValueError("task record is required")
+        if config.auth_context_secret is None:
+            principal = config.bound_principal_id or LOCAL_SYSTEM_PRINCIPAL_ID
+            if principal != record.owner_principal or principal != record.authority_principal:
+                raise ValueError("local task principal does not own this task")
+            return TaskIdentity(
+                owner_principal=record.owner_principal,
+                authority_principal=record.authority_principal,
+                resource_owner_principal=record.resource_owner_principal,
+                campaign_id=record.campaign_id,
+                room_turn_id=record.room_turn_id,
+                base_revision=record.base_revision,
+                auth_meta={},
+            )
+        envelope = task_envelope(ctx)
+        verified = verify_auth_context(
+            envelope,
+            config.auth_context_secret,
+            expected_actor=record.authority_principal,
+            expected_requester=record.owner_principal,
+            expected_campaign=record.campaign_id,
+            expected_service="sagasmith-dnd-mcp",
+            expected_operation=operation,
+            expected_audience="sagasmith-dnd-mcp",
+            expected_room_turn=record.room_turn_id,
+            expected_base_revision=record.base_revision,
+            expected_resource_owner=record.resource_owner_principal,
+        )
+        if verified.allowed_operations != (operation,):
+            raise ValueError(f"task delegation must allow only {operation}")
+        assert task_followup_nonces is not None
+        task_followup_nonces.remember(verified)
+        return TaskIdentity(
+            owner_principal=verified.authorization_principal,
+            authority_principal=verified.authority_principal,
+            resource_owner_principal=verified.resource_owner_principal,
+            campaign_id=verified.campaign_id,
+            room_turn_id=verified.room_turn_id,
+            base_revision=verified.base_revision,
+            auth_meta={AUTH_CONTEXT_META_KEY: deepcopy(envelope)},
+        )
+
+    tasks_extension = TasksExtension(
+        store=task_store,
+        authorize_create=authorize_task_create,
+        authorize_task=authorize_task_request,
+    )
+
     mcp = RequestScopedMCPServer(
         "SagaSmith D&D",
         version="0.1.0",
@@ -5483,7 +5624,67 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         bound_principal_id=config.bound_principal_id,
         auth_context_secret=config.auth_context_secret,
         cache_hints={"tools/list": CacheHint(ttl_ms=300_000, scope="private")},
+        extensions=[tasks_extension],
     )
+
+    async def execute_durable_task(
+        record: TaskRecord,
+        request_context: ServerRequestContext[Any, Any],
+        identity: TaskIdentity,
+    ) -> CallToolResult:
+        # A fresh task-method delegation was already verified against every
+        # stored identity fact before this executor is scheduled. Invoke the
+        # registered tool directly so an expired creation signature is never
+        # persisted or replayed after restart.
+        arguments = deepcopy(record.arguments)
+        arguments["principal_id"] = identity.owner_principal
+        context = Context(
+            request_context=request_context,
+            mcp_server=mcp,
+            input_params=CallToolRequestParams(
+                name=record.tool_name,
+                arguments=arguments,
+                meta=identity.auth_meta,
+            ),
+            subscriptions=mcp._subscriptions,
+        )
+        try:
+            result = await MCPServer.call_tool(
+                mcp,
+                record.tool_name,
+                arguments,
+                context,
+            )
+        except ToolError as exc:
+            message = (
+                str(exc.__cause__)
+                if isinstance(exc, UnexpectedToolError) and exc.__cause__ is not None
+                else str(exc)
+            )
+            result = mcp._structured_tool_error(message)
+        if not isinstance(result, CallToolResult):
+            raise RuntimeError("durable task tool returned an unsupported result type")
+        result = mcp._ensure_text_fallback(result)
+        binding = authoritative_host_context_binding(
+            record.campaign_id,
+            identity.owner_principal,
+            arguments,
+        )
+        result = mcp._attach_host_context_binding(result, binding)
+        task_audit = {
+            "requester_principal": identity.owner_principal,
+            "resource_owner_principal": identity.resource_owner_principal,
+            "acting_host_principal": identity.authority_principal,
+            "campaign_id": identity.campaign_id,
+            "room_turn_id": identity.room_turn_id,
+            "base_revision": identity.base_revision,
+            "authorized_operation": request_context.method,
+        }
+        return result.model_copy(
+            update={"meta": {**dict(result.meta or {}), "sagasmith_task_authority": task_audit}}
+        )
+
+    tasks_extension.set_executor(execute_durable_task)
 
     def public_tool() -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         """Register one public MCP tool with all four protocol hints."""
@@ -11224,6 +11425,18 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 "idempotency_model": "required-for-writes",
                 "authority_model": "server-owned",
                 "error_model": "mcp-tool-error",
+                "tasks": {
+                    "extension": "io.modelcontextprotocol/tasks",
+                    "protocol": "SEP-2663",
+                    "eligible_tool": "module_draft",
+                    "eligible_action": "start",
+                    "durable_store": "mcp-tasks.sqlite3",
+                    "task_id_is_capability": False,
+                    "fresh_authorization_per_request": True,
+                    "followup_operations": ["tasks/get", "tasks/update", "tasks/cancel"],
+                    "legacy_or_unnegotiated_fallback": "synchronous-call-tool-result",
+                    "unsupported_methods": ["tasks/list", "tasks/result"],
+                },
             },
             "state_owner": "sagasmith-dnd-mcp",
             "zero_knowledge_bootstrap": {
@@ -11327,6 +11540,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 "campaign_effect_timeline": True,
                 "idempotency_crash_recovery": True,
                 "idempotency_receipt_recovery": True,
+                "mcp_tasks_extension": True,
                 "structured_rulebook_import": True,
                 "source_bound_rule_packs": True,
                 "unified_content_package_import_export": True,

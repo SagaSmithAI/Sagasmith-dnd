@@ -741,7 +741,20 @@ def test_server_capabilities_publish_the_rulebook_import_contract(tmp_path: Path
             "idempotency_model": "required-for-writes",
             "authority_model": "server-owned",
             "error_model": "mcp-tool-error",
+            "tasks": {
+                "extension": "io.modelcontextprotocol/tasks",
+                "protocol": "SEP-2663",
+                "eligible_tool": "module_draft",
+                "eligible_action": "start",
+                "durable_store": "mcp-tasks.sqlite3",
+                "task_id_is_capability": False,
+                "fresh_authorization_per_request": True,
+                "followup_operations": ["tasks/get", "tasks/update", "tasks/cancel"],
+                "legacy_or_unnegotiated_fallback": "synchronous-call-tool-result",
+                "unsupported_methods": ["tasks/list", "tasks/result"],
+            },
         }
+        assert capabilities["features"]["mcp_tasks_extension"] is True
         assert capabilities["features"]["source_bound_hypnotic_pattern"] is True
         assert capabilities["features"]["compiled_or_agent_content_resolution"] is True
         assert capabilities["ruling_policy"] == {
