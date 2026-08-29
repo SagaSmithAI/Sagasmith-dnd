@@ -5,8 +5,10 @@ surface for the authoritative sibling `packages/mcp` gateway.
 
 - Never read or write the MCP database or artifact directories directly.
 - Never accept a browser-selected authoritative principal.
-- Refresh the real native tool schema after `tools/list_changed`; do not keep a
-  fixed tool catalog or simulate unavailable tools.
+- For modern MCP, consume the deterministic authorization-scoped catalog and
+  let the Host project a bounded system/phase/task subset; ordinary writes must
+  not trigger catalog refresh. Keep `tools/list_changed` handling only in the
+  explicit legacy adapter, and never simulate unavailable tools.
 - Render only audience-filtered server DTOs and resolution presentations.
 - Keep demo mode explicit, read-only, and visually distinct. A live failure must
   never silently fall back to demo data.

@@ -1,34 +1,24 @@
-# 安装引导 — SagaSmith D&D
+# 安装指南 — SagaSmith D&D
 
-Agent 请按此流程安装。
+推荐的 Agent/Hosted 入口是仓内 [D&D MCP](../mcp/README.md) 与
+[Full Skills](../../skills/full/SKILL.md)。只有规则引擎开发、诊断或便携脚本才直接安装
+Domain CLI。
 
-安装入口：
-`https://github.com/SagaSmithAI/sagasmith-dnd/tree/main/skills`
+## 前置条件
 
-## 前置检查
+- Python 3.11 或更新版本；
+- 对当前环境可写的独立数据目录；
+- 需要升级现有数据库时，先停止写入并创建一致性备份。
 
-```powershell
-sagasmith-dnd doctor --json 2>nul
-```
-
-如果返回 `{"status":"ok"}` → ✅ **已安装**，直接加载 skill。
-
-加载哪个 SKILL.md 由 Agent 根据环境自动选择。
-
-## 基础文字版（推荐起点）
+## Domain CLI
 
 ```bash
 pip install sagasmith-dnd
 sagasmith-dnd doctor --json
+sagasmith-dnd --help
 ```
 
-SKILL.md：`https://github.com/SagaSmithAI/sagasmith-dnd/tree/main/skills/full`
-→ 加载 `full/SKILL.md`
-
-基础版支持 SQLite、FTS、Markdown/text 和普通文字团，不安装 PDF、Pillow、
-OpenCV、ChromaDB、Sentence Transformers 或 Torch。
-
-按需添加能力：
+按需安装可选能力：
 
 ```bash
 pip install "sagasmith-dnd[documents]"  # PDF 解析
@@ -39,12 +29,36 @@ pip install "sagasmith-dnd[all]"        # Domain 全部可选能力
 
 扫描件 OCR 由 `sagasmith-dnd-mcp[ocr]` 提供，不属于 Domain 基础安装。
 
-## Standalone 轻量版
+## Full MCP Runtime
 
-如果当前环境无法安装 Python 包（无 pip、无 Python 3.11+）：
+```bash
+pip install sagasmith-dnd-mcp
+sagasmith-dnd-mcp
+```
 
-SKILL.md：`https://github.com/SagaSmithAI/sagasmith-dnd/tree/main/skills/standalone`
-→ 从 `standalone/` 目录操作，加载 `standalone/SKILL.md`、使用 `standalone/portable.py`
+默认是 stdio。共享或 Hosted 环境使用 Streamable HTTP，并按 MCP README 配置
+per-request delegation-v2；不要用浏览器 token、模型 principal 或连接 session 代替授权。
 
-使用 Python 标准库，数据存 `~/.sagasmith/`。不支持 PDF 导入、FTS5、ChromaDB。
-需要 PDF 时请用户先转为 Markdown。
+## Standalone 便携模式
+
+如果无法安装 Full MCP，可加载
+[`skills/standalone/SKILL.md`](../../skills/standalone/SKILL.md)，在
+`skills/standalone` 中运行：
+
+```powershell
+python portable.py doctor
+python portable.py campaign start --name "Campaign" --edition 2024
+```
+
+Standalone 使用 Python 标准库和本地文件状态；它没有 MCP 授权、revision、
+ActorKnowledge、完整结构化战斗、PDF/OCR 或规则包保证。portable 写入不会进入 Full
+campaign，Agent 必须在切换前明确告知用户这些差异。
+
+## 数据库升级
+
+```bash
+sagasmith-dnd database upgrade --json
+```
+
+先停止所有写入并备份数据库。当前格式没有 downgrade；回滚必须恢复匹配的数据库、
+Core/D&D 版本与 component lock。
