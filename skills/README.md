@@ -1,6 +1,6 @@
 # SagaSmith D&D Skills
 
-[官网](https://sagasmithai.github.io) · [平台总览](https://github.com/SagaSmithAI/.github/blob/main/profile/README.md) · [D&D MCP](https://github.com/SagaSmithAI/sagasmith-dnd/tree/main/packages/mcp) · [D&D runtime](https://github.com/SagaSmithAI/Sagasmith-dnd) · [SagaSmith Web](https://github.com/SagaSmithAI/SagaSmith-service) · [内容目录](https://github.com/SagaSmithAI/SagaSmith-dnd-content-library)
+[官网](https://sagasmithai.github.io) · [平台总览](https://github.com/SagaSmithAI/.github/blob/main/profile/README.md) · [D&D MCP](https://github.com/SagaSmithAI/sagasmith-dnd/tree/main/packages/mcp) · [D&D runtime](https://github.com/SagaSmithAI/Sagasmith-dnd) · [SagaSmith Web](https://github.com/SagaSmithAI/SagaSmith-Web) · [内容目录](https://github.com/SagaSmithAI/SagaSmith-dnd-content-library)
 
 > 当前 Skill 源码位于 `sagasmith-dnd/skills`；原独立 Skills 与通用 Module Generator 仓库已归档。
 
@@ -21,13 +21,37 @@ Standalone 不是 Full 的离线数据库替身。切换到 portable 后必须�
 
 ```mermaid
 flowchart LR
-    A[Agent] --> S[D&D Skills]
-    S --> E[MCP exposure<br/>lobby · play · combat]
-    E --> M[SagaSmith D&D MCP]
+    A[Agent Host] --> S[D&D Skills]
+    S --> P[Host tool projection<br/>system · phase · role · task]
+    P --> M[SagaSmith D&D MCP]
     M --> R[D&D runtime + Core]
 ```
 
-Full 模式首先调用 `exposure(action="open")` 建立会话，再用 `search/set` 按任务改变原生工具列表。MCP 端根据战役阶段、principal、role、campaign 和 TTL 控制工具；Skill 不复制工具白名单，也不允许模型越过 exposure 直接写状态。
+现代 Full 模式先读取 `sagasmith://bootstrap`，通过 `server/discover` 与原生
+`tools/list` 获取同一授权范围内稳定、确定排序、可私有缓存的目录。Host 只连接当前
+campaign system 对应的 MCP，并按权威 phase、role 和任务向模型投影一个小而稳定的
+facade/workflow 子集；SagaSmith Hosted 当前上限为 16 个工具。这个子集只用于提高模型
+命中率：MCP 仍在每次调用时重新校验 requester、acting Host、campaign、role、phase、
+revision 和 allowed operation。
+
+`exposure` 在现代路径只返回 owner-bound、带 TTL 的目录指导 handle；handle 是名称，
+不是 capability，也不会改变 `tools/list`。只有明确配置的 legacy initialize 客户端才使用
+session exposure、`search/set` 和 `tools/list_changed` 兼容适配。Skill 不复制长期工具
+白名单，也不能把模型可见性或提示词当成授权边界。
+
+### Host 必须保留的上下文
+
+- requester/player、resource owner、acting Host/workload 与 acting character 必须是
+  分离的可信字段，不能和玩家文本拼成一段提示词；
+- 写操作沿浏览器、Web job、Agent、MCP 复用同一业务幂等键，并携带权威
+  `base_revision`；stale revision 应刷新后恢复，不能悄悄生成第二次业务操作；
+- 标准 MCP `text`、`image`、`audio`、resource link 与 embedded resource 内容块必须
+  原样进入 Host 媒体转换层；尤其不能把战斗 grid 图片降级成 JSON 路径；
+- `CallToolResult(isError=true)` 中的结构化 `code`、`retryable`、`recovery` 要交回
+  Agent；JSON-RPC protocol error 与工具执行错误不能合并成泛化 502；
+- Web 的 `RoomTurnJob` 不是 MCP Task。只有长耗时的
+  `module_draft(action="start")` 在协商 `io.modelcontextprotocol/tasks` 后使用
+  `tasks/get`、`tasks/update`、`tasks/cancel`；每次 follow-up 都需要新的窄权限授权。
 
 ### 可分享内容
 
