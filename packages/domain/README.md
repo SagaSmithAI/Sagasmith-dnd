@@ -88,6 +88,12 @@ sagasmith-dnd content verify-official-expansions \
   --path /path/to/SagaSmith-dnd-content-library --json
 ```
 
+MCP 运行时可在启动前把 `SAGASMITH_DND_OFFICIAL_CONTENT_LIBRARY` 指向该已授权
+checkout。运行时会校验并挂载锁定的十个 2014 官方扩展 Pack，以及它们所需的精确
+Player's Handbook 支持 Pack；这些内容与核心规则处于同一运行时层级，但默认不激活，
+必须由 DM 对每个战役显式调用 `content_pack(action="activate")`。2024 战役不会显示且
+不能激活这组 2014 内容。仓库和接口都不会复制、导出商业原文，也不会授予内容许可。
+
 验证会检查不可变 archive 身份、当前 D&D Pack 语义、声明的内容总数，以及全部 1,134 个
 `selection_ready` materializer 契约。该命令不下载、不复制内容，也不授予任何许可。
 

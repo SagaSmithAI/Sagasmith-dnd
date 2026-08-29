@@ -12,6 +12,8 @@ from sagasmith_dnd import cli, official_expansions
 from sagasmith_dnd.official_expansions import (
     OFFICIAL_EXPANSION_LOCK_SCHEMA,
     load_official_expansion_lock,
+    official_expansion_catalog,
+    resolve_official_expansion_archives,
     verify_official_expansion_library,
 )
 
@@ -41,6 +43,15 @@ def test_shipped_lock_covers_every_current_official_expansion_artifact() -> None
         "subclass": 77,
     }
     assert ready + catalog_only == content
+
+
+def test_shipped_registry_is_2014_only_and_metadata_only() -> None:
+    catalog = official_expansion_catalog("2014")
+
+    assert len(catalog) == 10
+    assert official_expansion_catalog("2024") == ()
+    assert all(item["editions"] == ["2014"] for item in catalog)
+    assert all("path" not in item and "sources" not in item for item in catalog)
 
 
 def _fixture_library(root: Path) -> tuple[dict, Path]:
@@ -149,6 +160,26 @@ def test_verifier_accounts_for_every_selection_ready_artifact(
     }
     assert report["rights"]["content_copied"] is False
     assert report["rights"]["license_granted"] is False
+
+
+def test_resolver_returns_only_archives_that_completed_full_verification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lock, archive_path = _fixture_library(tmp_path)
+    monkeypatch.setattr(
+        official_expansions,
+        "validate_dnd_content_package",
+        lambda package: package,
+    )
+
+    resolved = resolve_official_expansion_archives(tmp_path, lock=lock)
+
+    assert len(resolved) == 1
+    assert resolved[0].id == "dnd5e.addon.fixture.official"
+    assert resolved[0].editions == ("2014",)
+    assert resolved[0].path == archive_path.resolve()
+    assert resolved[0].archive_sha256 == lock["packages"][0]["archive_sha256"]
 
 
 def test_verifier_rejects_archive_bytes_not_bound_by_the_lock(

@@ -337,5 +337,17 @@ sagasmith-dnd content verify-official-expansions \
 ```
 
 The verifier checks exact Pack/archive identities, D&D semantics, complete
-artifact accounting, and selection-materializer coverage. It neither downloads
-nor redistributes commercial content and does not grant a content license.
+artifact accounting, and selection-materializer coverage. To mount the same
+locked set as first-class, core-visible content in the MCP runtime, point the
+server at that authorized checkout before startup:
+
+```powershell
+$env:SAGASMITH_DND_OFFICIAL_CONTENT_LIBRARY = "C:\path\to\SagaSmith-dnd-content-library"
+sagasmith-dnd-mcp
+```
+
+The runtime verifies and stores the exact 2014 Player's Handbook dependency and
+all ten expansion Packs. They remain inactive until a DM explicitly enables
+them with `content_pack(action="activate")`; 2024 campaigns neither advertise
+nor accept these 2014 Packs. The verifier and mount perform no download, do not
+redistribute commercial content, and grant no content license.

@@ -3,6 +3,52 @@
   "generated_on": "2026-08-29",
   "source_repository": "https://github.com/SagaSmithAI/SagaSmith-dnd-content-library",
   "source_commit": "51bb33c9ba16f1b097c090ce24c8a45334f2a3ff",
+  "builtin_rule_definitions": [
+    {
+      "id": "dnd5e.content.srd2014",
+      "version": "1.24.0",
+      "checksum": "9e42e92859667e7e5f4cbd520004dba62845f7309c70bd1657c6f52c5be051a3"
+    }
+  ],
+  "support_packages": [
+    {
+      "role": "official_core_dependency",
+      "id": "dnd5e.addon.rulebook.d-d-5e-player-s-handbook.7ad6d3e9c93c.addon",
+      "version": "1.0.1",
+      "checksum": "e879447c1dd00139f12a30ee42e3e30b323af771d3abceacbd6e6e6d17c9de00",
+      "archive_sha256": "500a8bf596e58ba1f6fe8b7fbea2fba2c69da1f58e548c0d8c6993d1280a2c76",
+      "title": "D&D 5E - Player's Handbook",
+      "classification": "official_core",
+      "editions": ["2014"],
+      "provided_rule_definitions": [
+        {
+          "id": "dnd5e.addon.rulebook.d-d-5e-player-s-handbook.7ad6d3e9c93c",
+          "version": "1.0.0",
+          "checksum": "842ac5c926a0fa8fc6c43e5abd9dd602ba7bb185568fd20a01f5ecde15110016"
+        }
+      ]
+    }
+  ],
+  "dependency_rebinds": [
+    {
+      "package_id": "*",
+      "definition_id": "*",
+      "dependency_id": "dnd5e.content.srd2014",
+      "dependency_version": "1.24.0",
+      "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
+      "runtime_checksum": "9e42e92859667e7e5f4cbd520004dba62845f7309c70bd1657c6f52c5be051a3",
+      "basis": "The built-in 2014 catalog retained its version while its reviewed definition advanced after the library migration."
+    },
+    {
+      "package_id": "dnd5e.addon.rulebook.d-d-5e-xanathar-s-guide-to-everything.72d56f4f8dae.addon",
+      "definition_id": "dnd5e.addon.rulebook.d-d-5e-xanathar-s-guide-to-everything.72d56f4f8dae",
+      "dependency_id": "dnd5e.addon.rulebook.d-d-5e-player-s-handbook.7ad6d3e9c93c",
+      "dependency_version": "1.0.0",
+      "source_checksum": "de7196ee37f7246f0cff0fb698587eb2cd08ca830c9a14988a88e42cb1af96b6",
+      "runtime_checksum": "842ac5c926a0fa8fc6c43e5abd9dd602ba7bb185568fd20a01f5ecde15110016",
+      "basis": "The current library migrated the PHB definition without rewriting Xanathar's exact runtime dependency."
+    }
+  ],
   "packages": [
     {
       "id": "dnd5e.addon.rulebook.d-d-5e-eberron-rising-from-the-last-war.31293633134f.addon",

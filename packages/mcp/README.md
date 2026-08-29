@@ -259,6 +259,7 @@ Clients must not edit these paths directly.
 | `SAGASMITH_MODULEGEN_SKILLS_DIR` | module-generator Skill directory |
 | `SAGASMITH_DND_MCP_RULE_IMPORT_ROOTS` | `os.pathsep`-separated rulebook allowlist |
 | `SAGASMITH_DND_MCP_MODULE_IMPORT_ROOTS` | `os.pathsep`-separated module allowlist |
+| `SAGASMITH_DND_OFFICIAL_CONTENT_LIBRARY` | authorized local Content Library checkout; verifies and mounts the locked 2014 official expansion set inactive |
 | `SAGASMITH_DND_MCP_AUTO_SEED=0` | disable bundled core-reference seed |
 | `SAGASMITH_DND_MCP_RULE_OCR=0/1` | rulebook OCR toggle |
 | `SAGASMITH_DND_MCP_MODULE_OCR=0/1` | module OCR toggle |
@@ -269,6 +270,30 @@ Clients must not edit these paths directly.
 
 Keep secrets outside files, logs, fixtures, and command examples committed to
 the repository.
+
+### Official 2014 expansion mount
+
+Set `SAGASMITH_DND_OFFICIAL_CONTENT_LIBRARY` before server startup to mount the
+ten locked official supplement/legacy Packs and their exact Player's Handbook
+support dependency. The Packs are registered at the same runtime layer as other
+core-visible content, but are stored inactive and must be enabled per campaign
+through `content_pack(action="activate")`. Their edition metadata is enforced:
+2014 campaigns can opt in, while 2024 campaigns cannot advertise or activate
+them.
+
+The repository contains only the compatibility registry and checksums. The
+commercial archives remain in the authorized local library and are never
+returned by profile or inventory APIs. A rights-gated end-to-end regression can
+be run locally without exporting content:
+
+```powershell
+uv run --package sagasmith-dnd-mcp python packages/mcp/scripts/regression_official_expansions.py `
+  --content-library C:\path\to\SagaSmith-dnd-content-library
+```
+
+It activates all ten Packs, checks all 2,007 catalog entries and 1,134
+selection-ready entries, builds and advances an Artificer/Battle Smith with an
+official species and background, and commits an actual rules settlement.
 
 ## Workbench gateway
 

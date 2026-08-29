@@ -393,6 +393,11 @@ class SagaSmithStorage:
             allowed_roots=[
                 *self.config.module_import_roots,
                 *self.config.rule_import_roots,
+                *(
+                    [self.config.official_content_library]
+                    if self.config.official_content_library is not None
+                    else []
+                ),
             ],
         )
 
