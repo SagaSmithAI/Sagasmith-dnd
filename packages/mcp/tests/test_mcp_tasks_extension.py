@@ -12,7 +12,12 @@ from typing import Any, Literal
 
 import pytest
 from mcp import Client, StdioServerParameters
-from mcp.client.extension import advertise
+from mcp.client.extension import (
+    ClaimContext,
+    ClientExtension,
+    ResultClaim,
+    advertise,
+)
 from mcp.shared.exceptions import MCPError
 from mcp.types import (
     CallToolRequest,
@@ -55,6 +60,60 @@ class TaskResult(Result):
     poll_interval_ms: int | None = Field(alias="pollIntervalMs", default=None)
     result: dict[str, Any] | None = None
     error: dict[str, Any] | None = None
+
+
+class CreateTaskResult(Result):
+    """Exact extension result claimed by the hosted Agent task adapter."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    result_type: Literal["task"] = Field(alias="resultType")
+    task_id: str = Field(alias="taskId")
+    status: str
+    status_message: str | None = Field(alias="statusMessage", default=None)
+    created_at: str = Field(alias="createdAt")
+    last_updated_at: str = Field(alias="lastUpdatedAt")
+    ttl_ms: int = Field(alias="ttlMs")
+    poll_interval_ms: int = Field(alias="pollIntervalMs")
+
+
+async def _resolve_task_result(
+    task: CreateTaskResult,
+    ctx: ClaimContext,
+) -> CallToolResult:
+    """Exercise the same strict discovery gate and claim flow as Agent."""
+
+    extensions = ctx.session.server_capabilities.extensions or {}
+    if TASKS_EXTENSION_ID not in extensions:
+        raise RuntimeError("server did not negotiate the MCP Tasks extension")
+    for _ in range(100):
+        status = await ctx.session.send_request(
+            GetTaskRequest(params=TaskIdParams(taskId=task.task_id)),
+            TaskResult,
+        )
+        if status.status == "completed":
+            assert status.result is not None
+            return CallToolResult.model_validate(status.result)
+        if status.status in {"failed", "cancelled"}:
+            raise RuntimeError(f"task terminated as {status.status}")
+        await asyncio.sleep(0.02)
+    raise TimeoutError("task did not complete within the test polling window")
+
+
+class TasksClientExtension(ClientExtension):
+    """Minimal Agent-compatible task result claim used across real transports."""
+
+    identifier = TASKS_EXTENSION_ID
+
+    def claims(self) -> tuple[ResultClaim[CreateTaskResult], ...]:
+        return (
+            ResultClaim(
+                result_type="task",
+                model=CreateTaskResult,
+                resolve=_resolve_task_result,
+                protocol_versions=frozenset({"2026-07-28"}),
+            ),
+        )
 
 
 class GetTaskRequest(Request[TaskIdParams, Literal["tasks/get"]]):
@@ -347,11 +406,12 @@ def test_modern_task_success_and_cancel_use_standard_methods(tmp_path: Path) -> 
         campaign_id = await _campaign(server)
         async with Client(
             server,
-            mode="2026-07-28",
+            mode="auto",
             extensions=[advertise(TASKS_EXTENSION_ID)],
         ) as client:
-            advertised = await client.session.send_discover("2026-07-28")
-            assert TASKS_EXTENSION_ID in advertised["capabilities"]["extensions"]
+            assert client.session.protocol_version == "2026-07-28"
+            adopted_extensions = client.session.server_capabilities.extensions or {}
+            assert TASKS_EXTENSION_ID in adopted_extensions
             task = await _create_task(
                 client,
                 {
@@ -401,6 +461,37 @@ def test_modern_task_success_and_cancel_use_standard_methods(tmp_path: Path) -> 
                 TaskResult,
             )
             assert ack.result_type == "complete"
+
+    asyncio.run(exercise())
+
+
+def test_inprocess_agent_style_claim_uses_adopted_tasks_capability(
+    tmp_path: Path,
+) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        campaign_id = await _campaign(server)
+        async with Client(
+            server,
+            mode="auto",
+            extensions=[TasksClientExtension()],
+        ) as client:
+            adopted_extensions = client.session.server_capabilities.extensions or {}
+            assert TASKS_EXTENSION_ID in adopted_extensions
+            result = await client.call_tool(
+                "module_draft",
+                {
+                    "campaign_id": campaign_id,
+                    "action": "start",
+                    "payload": {
+                        "name": "In-process claim",
+                        "content": "# In-process\n\nResolve through ResultClaim.",
+                    },
+                    "idempotency_key": "inprocess-claim",
+                },
+            )
+            assert result.is_error is False
+            assert result.structured_content is not None
 
     asyncio.run(exercise())
 
@@ -609,17 +700,20 @@ def test_real_transport_task_parity_and_mcp_name(tmp_path: Path, transport: str)
     async def exercise() -> None:
         async with Client(
             endpoint,
-            mode="2026-07-28",
-            extensions=[advertise(TASKS_EXTENSION_ID)],
+            mode="auto",
+            extensions=[TasksClientExtension()],
         ) as client:
+            assert client.session.protocol_version == "2026-07-28"
+            adopted_extensions = client.session.server_capabilities.extensions or {}
+            assert TASKS_EXTENSION_ID in adopted_extensions
             created = await client.call_tool(
                 "campaign_create",
                 {"name": f"{transport} Task", "idempotency_key": f"campaign-{transport}"},
             )
             campaign = dict(created.structured_content or {})
             campaign = dict(campaign.get("result") or campaign)
-            task = await _create_task(
-                client,
+            result = await client.call_tool(
+                "module_draft",
                 {
                     "campaign_id": campaign["id"],
                     "action": "start",
@@ -630,19 +724,11 @@ def test_real_transport_task_parity_and_mcp_name(tmp_path: Path, transport: str)
                     "idempotency_key": f"module-{transport}",
                 },
             )
-            assert task.task_id is not None
-            for _ in range(50):
-                # GetTaskRequest.name_param makes the SDK send
-                # Mcp-Name=<taskId> over HTTP. Server-side header/params
-                # validation and stdio reach this same handler.
-                status = await client.session.send_request(
-                    GetTaskRequest(params=TaskIdParams(taskId=task.task_id)),
-                    TaskResult,
-                )
-                if status.status == "completed":
-                    break
-                await asyncio.sleep(0.02)
-            assert status.status == "completed"
+            # The ResultClaim performed a strict discovered-capability gate,
+            # sent tasks/get with Mcp-Name=<taskId> over HTTP, and converted
+            # the terminal embedded payload back to the standard result.
+            assert result.is_error is False
+            assert result.structured_content is not None
 
     try:
         asyncio.run(exercise())
