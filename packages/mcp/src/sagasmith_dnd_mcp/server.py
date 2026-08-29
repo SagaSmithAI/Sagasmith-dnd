@@ -6077,6 +6077,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         current_refs: set[str],
         budget_chars: int,
         retrieved_events: list[dict[str, Any]] | None = None,
+        audience: str = "dm",
         knowledge_disclosure_scopes: set[str] | frozenset[str] = (
             ACTOR_KNOWLEDGE_DISCLOSURE_SCOPES
         ),
@@ -6088,20 +6089,19 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             branch_id,
             str(actor.id),
         )
-        actor_knowledge = [
-            item
-            for item in knowledge.list(
-                campaign_id,
-                actor_id=str(actor.id),
-                branch_id=branch_id,
-            )
-            if item.disclosure_scope in knowledge_disclosure_scopes
-        ]
+        actor_knowledge = knowledge.list(
+            campaign_id,
+            actor_id=str(actor.id),
+            branch_id=branch_id,
+            disclosure_scopes=knowledge_disclosure_scopes,
+        )
         actor_events = [
             *events.list_for_actor(
                 campaign_id,
                 actor_id=str(actor.id),
                 branch_id=branch_id,
+                knowledge_disclosure_scopes=knowledge_disclosure_scopes,
+                audience=audience,
                 limit=200,
             ),
             *(
@@ -6110,6 +6110,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     actor_id=str(actor.id),
                     query=query,
                     knowledge_disclosure_scopes=knowledge_disclosure_scopes,
+                    audience=audience,
                     branch_id=branch_id,
                     limit=50,
                 )
@@ -6536,6 +6537,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 },
                 budget_chars=8_000,
                 retrieved_events=events_context,
+                audience=audience,
             )
             facts = [
                 dict(item["record"])
@@ -30099,6 +30101,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 current_refs=resolved_related_refs,
                 budget_chars=budget_chars,
                 retrieved_events=list(result.get("events") or []),
+                audience=audience,
                 knowledge_disclosure_scopes=(
                     ACTOR_KNOWLEDGE_DISCLOSURE_SCOPES
                     if membership.role in CAMPAIGN_DM_ROLES
@@ -30224,6 +30227,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 current_refs=memory_refs,
                 budget_chars=min(int(budget_chars), 8_000),
                 retrieved_events=list(result.get("events") or []),
+                audience=audience,
             )
             actor_knowledge = [dict(item["record"]) for item in actor_memory["semantic"]]
             common_context = [
