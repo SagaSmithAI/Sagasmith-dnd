@@ -25,6 +25,12 @@ re-authorized by the domain server.
 campaign/revision 参数；每次调用都重新校验身份、角色、阶段和 revision。Host 可以缩小提供给
 模型的稳定目录，但不能把模型选择或提示词当作授权边界。
 
+全部公开工具都发布参数说明、实际执行的输入边界、四项行为注解和稳定输出 schema。
+可修复的执行失败保留兼容 text block，并在 `structuredContent.error` 返回 `code`、
+`message`、`retryable` 和 `recovery`。stdio 与 Streamable HTTP 共用同一 handler；真实测试
+覆盖 legacy/2026-07-28 矩阵。服务传播 `traceparent`、`tracestate`、`baggage`，指标仅使用
+协议时代、阶段、工具名和结果等有界维度。
+
 ### Upgrade and rollback / 升级与回滚
 
 1. Upgrade the Host to send per-request protocol headers/metadata and delegated auth v2.
@@ -71,17 +77,18 @@ clients cache the deterministic catalog privately; the legacy gateway adapter ma
 
 **SagaSmithAI 的 D&D 5e Agent 能力服务。** 它通过标准 MCP transport 将 SagaSmith Core、D&D 规则运行时、D&D Skills 和模组生成 Skill 组合成一个可被不同 Agent Host 复用的服务端边界；本地系统使用唯一的 streamable-HTTP 权威进程。
 
-与“把 70+ 个工具一次性塞给模型”不同，本服务在 MCP 侧维护会话级 exposure：先发现能力组，再按当前 `lobby` / `play` / `combat` 阶段加载少量工具，并在阶段、权限或 TTL 改变时收回。
+本服务不会把 70+ 个工具一次性塞给模型。现代 MCP 对同一授权范围返回稳定、确定排序的
+77 工具目录；Host 再按 system、权威 phase、角色和当前任务投影一个小而稳定的模型可见子集。
+`exposure` 在现代路径只提供有 owner/TTL 的目录检索 handle，不改变 `tools/list`，也不授予权限。
 
-## 为什么 exposure 在 MCP 侧
+## 为什么由 Host 投影工具
 
-- **跨 Host 一致** — NanoBot、Codex 或任何兼容 MCP client 使用同一套目录、权限与阶段规则。
-- **会话隔离** — exposure 绑定 MCP session、认证 principal 和 campaign；同一服务上的两个会话可以加载不同工具组。
-- **阶段安全** — 权威阶段来自 campaign state。开战后 lobby/play 写工具不会继续残留，结束战斗后 combat 工具被收回。
-- **最小暴露** — 首次 `tools/list` 只有 7 个核心发现、诊断与展示工具，而不是整个领域 schema；其中 `skill_query` 允许零预设 Host 做有界工作流读取。
-- **预算锁定** — 当前完整公开目录为 77 个工具；Lobby/Play/Combat 暴露上限分别为
-  55/46/46。预算测试以代码中的 profile 为唯一真源，文档不再维护另一套兼容目录。
-- **服务端执行门禁** — 未暴露工具不能直接调用；权限不是提示词约定。
+- **跨 Host 一致** — NanoBot、Codex 或任何兼容 MCP client 读取同一稳定目录和 schema。
+- **请求隔离** — 每次调用重新验证签名 principal、campaign、phase、revision 和 allowed operation；HTTP 连接池不保存隐式身份。
+- **阶段安全** — 权威阶段来自 campaign state。Host 刷新模型可见子集，MCP 在执行时独立拒绝错误阶段的工具。
+- **最小模型暴露** — Host 只提供当前任务所需的 facade；legacy 首次目录仍保留 7 个核心工具作为迁移适配。
+- **预算锁定** — 当前完整公开目录为 77 个工具；Lobby/Play/Combat 的 Host 投影预算由代码 profile 测试锁定。
+- **服务端执行门禁** — 模型可见性只是命中率优化，权限始终由 MCP 每请求执行门禁决定。
 - **规则与自设内容分界** — 已注册的标准规则 mechanic 由版本锁定的引擎实现执行；标准卡缺少结果实现时会在付款前要求补引擎，不能降级成自设解释。未注册的模组或自设角色卡必须在导入、构建或写卡事务内依据精确来源写入直接 Agent ruling 或受校验的通用计划；正式使用只执行已经保存的边界，不再临时补内容方案。
 
 ## 运行结构
