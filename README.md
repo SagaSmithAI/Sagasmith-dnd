@@ -325,3 +325,17 @@ and translations retain their own license and attribution in the relevant
 NOTICE files. Repository visibility is not permission to redistribute
 commercial rulebooks or user content. Public Content Packs must carry explicit,
 verifiable license and distribution metadata.
+
+For authorized local copies of the current SagaSmith Content Library, the
+Domain package includes a metadata-only lock and verifier for all ten D&D
+official expansion addons (2,007 artifacts; one additional class and 77
+subclasses):
+
+```bash
+sagasmith-dnd content verify-official-expansions \
+  --path /path/to/SagaSmith-dnd-content-library --json
+```
+
+The verifier checks exact Pack/archive identities, D&D semantics, complete
+artifact accounting, and selection-materializer coverage. It neither downloads
+nor redistributes commercial content and does not grant a content license.

@@ -78,6 +78,19 @@ PC、NPC、怪物统一使用 `sagasmith.actor-card.v3`。角色图只引用包�
 content-addressed asset，不进入运行时角色或 Snapshot。内置 SRD 目录和 preset 构建有精确
 覆盖测试；商业规则书原文不随 Apache-2.0 软件包分发，公开再分发必须有可验证授权。
 
+运行时内置一份仅含元数据的兼容性锁，覆盖 SagaSmith Content Library 当前十个
+`official_supplement` / `official_legacy` D&D addon，共 2,007 个 artifact，其中包括
+1 个扩展职业和 77 个子职；锁文件不包含任何商业规则原文。导入或发布验收前，可验证已授权的
+本地内容库检出：
+
+```bash
+sagasmith-dnd content verify-official-expansions \
+  --path /path/to/SagaSmith-dnd-content-library --json
+```
+
+验证会检查不可变 archive 身份、当前 D&D Pack 语义、声明的内容总数，以及全部 1,134 个
+`selection_ready` materializer 契约。该命令不下载、不复制内容，也不授予任何许可。
+
 客观世界事实进入 CampaignMemory 并使用稳定 `fact_key`；PC/NPC 的知识、信念、谣言与
 误解进入 ActorKnowledge。角色 notes 和 Agent workspace 不是权威 campaign memory。
 
