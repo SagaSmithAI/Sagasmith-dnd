@@ -35,7 +35,16 @@ def _server(tmp_path: Path):
     )
 
 
-def _meta(*, operation: str, nonce: str, base_revision: int = 0) -> dict[str, object]:
+def _meta(
+    *,
+    operation: str,
+    nonce: str,
+    base_revision: int = 0,
+    campaign_id: str = "campaign:lobby",
+    requester_principal: str = "system:local",
+    resource_owner_principal: str = "system:local",
+    acting_host_principal: str = "system:local",
+) -> dict[str, object]:
     return {
         AUTH_CONTEXT_META_KEY: sign_delegated_auth_context(
             secret=SECRET,
@@ -43,18 +52,25 @@ def _meta(*, operation: str, nonce: str, base_revision: int = 0) -> dict[str, ob
             target_service=SERVICE,
             caller_principal="workload:sagasmith-agent",
             workload_identity="hosted-worker:test",
-            requester_principal="system:local",
-            resource_owner_principal="system:local",
-            acting_host_principal="system:local",
+            requester_principal=requester_principal,
+            resource_owner_principal=resource_owner_principal,
+            acting_host_principal=acting_host_principal,
             authorized_audience=SERVICE,
             allowed_operations=[operation],
             conversation_principal="room:test",
-            campaign_id="campaign:lobby",
+            campaign_id=campaign_id,
             room_turn_id="room-turn:test",
             base_revision=base_revision,
             nonce=nonce,
         )
     }
+
+
+async def _direct(server, name: str, arguments: dict[str, object]) -> dict[str, object]:
+    result = await server.call_tool(name, arguments)
+    structured = result[1] if isinstance(result, tuple) else result.structured_content
+    assert isinstance(structured, dict)
+    return structured
 
 
 def test_modern_discover_catalog_and_request_scoped_delegation(tmp_path: Path) -> None:
@@ -123,6 +139,84 @@ def test_legacy_initialize_remains_available(tmp_path: Path) -> None:
             assert client.protocol_version != "2026-07-28"
             listed = await client.list_tools(cache_mode="reload")
             assert {tool.name for tool in listed.tools}
+
+    asyncio.run(exercise())
+
+
+def test_modern_requester_authorizes_and_acting_host_owns_audit(tmp_path: Path) -> None:
+    async def exercise() -> None:
+        bootstrap = create_server(
+            McpConfig(
+                home=tmp_path / "home",
+                database_url=None,
+                chroma_url=None,
+                chroma_path_override=None,
+                dnd_skills_dir=tmp_path / "dnd",
+                modulegen_skills_dir=tmp_path / "modulegen",
+                auto_seed_rules=False,
+            )
+        )
+        campaign = await _direct(
+            bootstrap,
+            "campaign_create",
+            {"name": "Delegated Table", "idempotency_key": "delegated-campaign"},
+        )
+        await _direct(
+            bootstrap,
+            "access_grant",
+            {
+                "scope": "campaign",
+                "campaign_id": campaign["id"],
+                "principal_id": "player:authorized",
+                "payload": {"role": "player"},
+                "by_principal_id": "system:local",
+            },
+        )
+
+        server = _server(tmp_path)
+        async with Client(server, mode="2026-07-28") as client:
+            allowed = await client.call_tool(
+                "campaign_query",
+                {
+                    "view": "get",
+                    "payload": {"campaign_id": campaign["id"]},
+                    "principal_id": "model:forged-admin",
+                },
+                meta=_meta(
+                    operation="campaign_query",
+                    nonce="identity-allowed",
+                    campaign_id=str(campaign["id"]),
+                    requester_principal="player:authorized",
+                    resource_owner_principal="owner:campaign",
+                    acting_host_principal="workload:sagasmith-agent",
+                ),
+            )
+            assert allowed.is_error is False
+            receipt = allowed.content[0].meta[AUTH_CONTEXT_RECEIPT_META_KEY]
+            assert receipt["requester_principal"] == "player:authorized"
+            assert receipt["resource_owner_principal"] == "owner:campaign"
+            assert receipt["acting_host_principal"] == "workload:sagasmith-agent"
+            # Core derives authority from acting_host_principal and authorization
+            # from requester_principal; the receipt retains the original facts.
+
+            denied = await client.call_tool(
+                "campaign_query",
+                {
+                    "view": "get",
+                    "payload": {"campaign_id": campaign["id"]},
+                    "principal_id": "system:local",
+                },
+                meta=_meta(
+                    operation="campaign_query",
+                    nonce="identity-denied",
+                    campaign_id=str(campaign["id"]),
+                    requester_principal="player:denied",
+                    resource_owner_principal="owner:campaign",
+                    acting_host_principal="workload:sagasmith-agent",
+                ),
+            )
+            assert denied.is_error is True
+            assert denied.structured_content["error"]["code"] == "authorization_denied"
 
     asyncio.run(exercise())
 

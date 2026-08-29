@@ -205,7 +205,11 @@ NanoBot 本地 HTTP 示例：
 }
 ```
 
-`injectPrincipal` 与 `sessionScoped` 在多人渠道中都必须开启。Host 注入的 principal 是认证身份，模型不能自行声明；每个逻辑 Agent 会话必须拥有独立 MCP session 与可变原生工具表。grant 工具中的目标 principal 与调用者身份是两个字段。
+现代多人 Hosted 调用必须为每个请求签发 delegation-v2：`requester_principal`
+接受 campaign role 校验，`acting_host_principal` 执行并承担权威审计归因，
+`resource_owner_principal` 标识资源所有者。模型提供的 principal 会被覆盖，浏览器
+token 不得透传。共享 HTTP 连接池可以复用连接，但不得保存 principal 或 campaign
+session；`sessionScoped` 与 `injectPrincipal` 仅属于 legacy 适配，不能成为现代安全边界。
 
 Nanobot 应把 `skills/full/skills` 加入 `externalSkillsDirs`，不要把
 `full/` 包装目录当成两个运行 Skill 的根目录。
@@ -214,21 +218,21 @@ Nanobot 应把 `skills/full/skills` 加入 `externalSkillsDirs`，不要把
 `SAGASMITH_DND_MCP_BOUND_PRINCIPAL_ID=<stable-user-id>`。服务端会覆盖模型提供的
 principal；`system:local` 只适用于明确受信任的本地进程。
 
-## 渐进式调用流程
+## Host 工具投影流程
 
 ```text
 1. read sagasmith://bootstrap or skill_query(action="read", identifier="dnd.full")
 2. use skill_query outline/section/search for task-specific guidance
 3. campaign_query(view="resume") when resuming
-4. exposure(action="open", campaign_id?, principal_id injected or process-bound)
-5. exposure(action="search", query="create a 2024 character")
-6. exposure(action="set", add_tool_ids=[...])
-7. refresh tools/list and call newly visible tools directly
-8. 重新 tools/list，原生调用新出现的工具
-9. exposure(action="set", remove_tool_ids=[...]) 或等待阶段/TTL 自动收回
+4. server/discover + deterministic tools/list for the signed authorization scope
+5. Host selects a small sorted facade/workflow subset for system, phase, and task
+6. call tools with fresh delegation-v2 metadata and explicit campaign/base_revision
+7. refresh only when authorization/catalog cache scope changes, not after combat writes
 ```
 
-Host 使用原生 `tools/list` + `tools/call`；每次 exposure 变化后刷新列表。
+Host 使用原生 `tools/list` + `tools/call`，但只把任务相关的有界子集提供给模型。
+`exposure` 在现代路径只返回 owner-bound、带 TTL 的提示 handle，不改变底层目录，
+也不授予权限；MCP 每次调用仍独立验证 role、phase、revision 和 operation。
 
 ## 能力组
 
