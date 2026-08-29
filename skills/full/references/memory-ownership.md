@@ -48,6 +48,10 @@ whole unit; never finish only the remaining calls from a partially imagined save
 
 - DM administration may query facts and inactive revision history directly.
 - Player narration uses `continuity_context` with the exact actor and scene scope.
+  For a long-running PC or NPC, use `purpose="actor_memory"` to obtain the
+  branch-local identity, motivational, semantic, and episodic tracks under one
+  deterministic character budget. This is retrieval only and never supplies an
+  intent for the actor.
 - DM narrative adjudication supplies the relevant actor/scene/location/quest/item
   `related_refs`; exact `module_evidence` selected by `context_anchor` facts is
   source context for Agent reasoning, not a trigger, world fact, or player belief.

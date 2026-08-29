@@ -110,6 +110,7 @@ from sagasmith_core.rule_packs import RulePackError, RulesetUnavailableError
 from sagasmith_core.systems import SystemRegistry
 from sagasmith_core.text import ascii_slug, compact_ascii_key
 from sagasmith_core.visibility import (
+    ACTOR_KNOWLEDGE_DISCLOSURE_SCOPES,
     PLAYER_MODULE_VISIBILITY_SCOPES,
     PLAYER_OWNED_ACTOR_DISCLOSURE_SCOPES,
 )
@@ -489,6 +490,7 @@ from sagasmith_dnd.vocabulary import (
 )
 from sqlalchemy.exc import NoResultFound
 
+from sagasmith_dnd_mcp.actor_memory import select_actor_memory_context
 from sagasmith_dnd_mcp.bounded_evaluations import (
     BOUNDED_EVALUATION_PURPOSES,
     BOUNDED_EVALUATION_SCHEMA_VERSION,
@@ -5947,7 +5949,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             for item in memories.list_for_subject_refs(
                 campaign_id,
                 subject_refs={actor_ref},
-                predicates={"relationship_to", "goal"},
+                predicates={"relationship_to", "goal", "commitment"},
                 kinds={"actor_state"},
                 branch_id=branch_id,
             )
@@ -6065,6 +6067,68 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 ),
             },
         }
+
+    def actor_memory_projection(
+        *,
+        campaign_id: str,
+        branch_id: str,
+        actor: Any,
+        query: str,
+        current_refs: set[str],
+        budget_chars: int,
+        retrieved_events: list[dict[str, Any]] | None = None,
+        knowledge_disclosure_scopes: set[str] | frozenset[str] = (
+            ACTOR_KNOWLEDGE_DISCLOSURE_SCOPES
+        ),
+    ) -> dict[str, Any]:
+        """Build one PC/NPC-neutral, branch-local long-term memory view."""
+
+        actor_state, _fact_heads, _knowledge_heads = npc_turn_actor_state(
+            campaign_id,
+            branch_id,
+            str(actor.id),
+        )
+        actor_knowledge = [
+            item
+            for item in knowledge.list(
+                campaign_id,
+                actor_id=str(actor.id),
+                branch_id=branch_id,
+            )
+            if item.disclosure_scope in knowledge_disclosure_scopes
+        ]
+        actor_events = [
+            *events.list_for_actor(
+                campaign_id,
+                actor_id=str(actor.id),
+                branch_id=branch_id,
+                limit=200,
+            ),
+            *(
+                events.search_for_actor(
+                    campaign_id,
+                    actor_id=str(actor.id),
+                    query=query,
+                    knowledge_disclosure_scopes=knowledge_disclosure_scopes,
+                    branch_id=branch_id,
+                    limit=50,
+                )
+                if query.strip()
+                else []
+            ),
+            *list(retrieved_events or []),
+        ]
+        return select_actor_memory_context(
+            actor_state={
+                **npc_turn_actor_projection(actor),
+                "state_facts": actor_state,
+            },
+            actor_knowledge=actor_knowledge,
+            events=actor_events,
+            current_refs=current_refs,
+            query=query,
+            budget_chars=max(0, min(int(budget_chars), 12_000)),
+        ).as_dict()
 
     def issue_npc_turn_receipt(
         *,
@@ -6409,6 +6473,8 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         subject: dict[str, Any]
         normalized_stimulus: dict[str, Any] | None = None
         actor_projection: dict[str, Any] | None = None
+        actor_memory: dict[str, Any] | None = None
+        campaign_design: dict[str, Any] | None = None
         actor_revision: int | None = None
         interlocutors: list[dict[str, Any]] = []
 
@@ -6440,7 +6506,6 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             actor_state, _fact_heads, _knowledge_heads = npc_turn_actor_state(
                 campaign_id, branch_id, actor_id
             )
-            facts = actor_state
             actor_projection["perception"] = npc_turn_perception_projection(
                 campaigns.get(campaign_id),
                 actor_id=actor_id,
@@ -6448,21 +6513,39 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 scene=npc_turn_scene_projection(scene),
             )
             scene = npc_turn_scene_projection(scene)
-            events_context = [
-                {
-                    "id": event.id,
-                    "sequence": event.sequence,
-                    "event_type": event.event_type,
-                    "summary": event.summary,
-                    "participants": [dict(item) for item in event.participants],
-                }
-                for event in events.list_for_actor(
-                    campaign_id,
-                    actor_id=actor_id,
-                    branch_id=branch_id,
-                    limit=20,
-                )
+            actor_memory = actor_memory_projection(
+                campaign_id=campaign_id,
+                branch_id=branch_id,
+                actor=actor,
+                query=" ".join(
+                    item
+                    for item in (
+                        query.strip(),
+                        str(normalized_stimulus.get("content") or "").strip(),
+                    )
+                    if item
+                ),
+                current_refs={
+                    f"actor:{actor_id}",
+                    *(f"actor:{item}" for item in interlocutor_actor_ids),
+                    *(
+                        [f"scene:{scene['scene_id']}"]
+                        if scene is not None and scene.get("scene_id")
+                        else []
+                    ),
+                },
+                budget_chars=8_000,
+                retrieved_events=events_context,
+            )
+            facts = [
+                dict(item["record"])
+                for item in actor_memory["motivational"]
+                if item["source"] == "actor_state_fact"
             ]
+            actor_knowledge = [
+                dict(item["record"]) for item in actor_memory["semantic"]
+            ]
+            events_context = [dict(item["record"]) for item in actor_memory["episodic"]]
             target_refs = sorted(
                 {f"actor:{actor_id}", *(f"actor:{item}" for item in interlocutor_actor_ids)}
             )
@@ -6485,6 +6568,58 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 raise ValueError("faction_turn subject has no faction_state or faction_knowledge")
             events_context = []
             actor_knowledge = []
+        elif purpose == "campaign_expansion":
+            if not query.strip():
+                raise ValueError("query is required for campaign_expansion")
+            campaign = campaigns.get(campaign_id)
+            manifest = validate_playthrough_manifest(
+                dict(dict(campaign.state or {}).get("playthrough_manifest") or {})
+            )
+            if manifest.get("campaign_mode") not in {
+                "authored_module",
+                "authored_with_extensions",
+                "emergent",
+            }:
+                raise ValueError(
+                    "campaign_expansion requires a current authored or emergent "
+                    "playthrough manifest"
+                )
+            campaign_line_id = str(manifest.get("campaign_line_id") or "").strip()
+            if not campaign_line_id:
+                raise ValueError("emergent playthrough manifest requires campaign_line_id")
+            subject_ref = f"campaign_line:{campaign_line_id}"
+            subject = {
+                "kind": "campaign_line",
+                "id": campaign_line_id,
+                "name": str(campaign.name),
+            }
+            campaign_design = {
+                key: deepcopy(manifest.get(key))
+                for key in (
+                    "schema_version",
+                    "campaign_mode",
+                    "campaign_line_id",
+                    "module_ids",
+                    "content_lineage",
+                    "front_progress",
+                    "thread_progress",
+                    "arc_progress",
+                    "current",
+                    "quests",
+                )
+            }
+            campaign_module_ids = {str(item) for item in manifest.get("module_ids") or []}
+            campaign_design["installed_shards"] = [
+                {
+                    "module_id": str(item["id"]),
+                    "title": str(item.get("title") or ""),
+                    "runtime_manifest": deepcopy(item.get("runtime_manifest") or {}),
+                }
+                for item in modules.list(campaign_id)
+                if str(item["id"]) in campaign_module_ids
+            ]
+            actor_knowledge = []
+            target_refs = []
         elif purpose == "audience_render":
             subject_id = actor_id or audience or "party"
             subject_ref = f"audience:{subject_id}"
@@ -6602,6 +6737,20 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             normalized_stimulus = {**normalized_stimulus, "basis_ref": stimulus_ref}
             allowed_basis_refs.add(stimulus_ref)
             claim_basis_refs.add(stimulus_ref)
+        if campaign_design is not None:
+            campaign_design_ref = (
+                "campaign_design:"
+                + hashlib.sha256(canonical_json(campaign_design).encode("utf-8")).hexdigest()
+            )
+            campaign_design = {**campaign_design, "basis_ref": campaign_design_ref}
+            allowed_basis_refs.add(campaign_design_ref)
+            claim_basis_refs.add(campaign_design_ref)
+        if actor_memory is not None:
+            for track in ("identity", "motivational", "semantic", "episodic"):
+                for item in actor_memory[track]:
+                    basis_ref = str(item["basis_ref"])
+                    allowed_basis_refs.add(basis_ref)
+                    claim_basis_refs.add(basis_ref)
         for anchor in memories.list(
             campaign_id,
             kind="context_anchor",
@@ -6636,6 +6785,8 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 "actor": actor_projection,
                 "interlocutors": interlocutors,
                 "stimulus": normalized_stimulus,
+                "actor_memory": actor_memory,
+                "campaign_design": campaign_design,
                 "facts": fact_context,
                 "actor_knowledge": knowledge_context,
                 "events": event_context,
@@ -11462,7 +11613,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 "contract": NPC_CONVERSATION_CONTRACT,
                 "phase": "play",
                 "execution_mode": "client_subagents_required",
-                "proposal_contract": "npc-conversation-proposal.v4",
+                "proposal_contract": "npc-conversation-proposal.v5",
                 "public_tool": "npc_conversation",
                 "public_actions": [
                     "open",
@@ -11497,6 +11648,20 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     "structured_json_output",
                     "private_host_side_mcp_routing",
                 ],
+            },
+            "campaign_expansion": {
+                "purpose": "campaign_expansion",
+                "phase": "lobby",
+                "campaign_modes": [
+                    "authored_module",
+                    "authored_with_extensions",
+                    "emergent",
+                ],
+                "proposal_contract": "campaign-expansion-proposal.v1",
+                "review_only": True,
+                "may_write_state": False,
+                "authored_root_immutable": True,
+                "off_atlas_episode_classification": "emergent_episode",
             },
             "features": {
                 "mutation_groups": True,
@@ -11744,7 +11909,8 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     },
                     "printed_source_typo_policy": ("preserve_source_text_author_structured_card"),
                 },
-                "runtime_manifest_schema": 1,
+                "runtime_manifest_schema": 2,
+                "runtime_manifest_legacy_schemas": [1],
             },
             "write_requirements": "operation-specific",
             "tool_exposure": {
@@ -29786,8 +29952,10 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             "actor_turn",
             "audience_render",
             "faction_turn",
+            "campaign_expansion",
             "source_interpretation",
             "bounded_ruling",
+            "actor_memory",
         ] = "general",
         subject_ref: str | None = None,
         evaluation_target_refs: list[str] | None = None,
@@ -29801,7 +29969,9 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
     ) -> dict[str, Any]:
         """Retrieve current continuity plus pinned, source-exact DM module context."""
-        continuity_purposes = NPC_TURN_PURPOSES | BOUNDED_EVALUATION_PURPOSES
+        continuity_purposes = NPC_TURN_PURPOSES | BOUNDED_EVALUATION_PURPOSES | {
+            "actor_memory"
+        }
         if purpose not in continuity_purposes:
             raise ValueError(f"unsupported continuity context purpose: {purpose}")
         live_turn_purposes = {
@@ -29815,6 +29985,8 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             PROFILE_COMBAT,
         }:
             raise ValueError(f"{purpose} context is available only during Play or Combat")
+        if purpose == "campaign_expansion" and authoritative_phase(campaign_id) != PROFILE_LOBBY:
+            raise ValueError("campaign_expansion context is available only during Lobby")
         membership = access.require_campaign(campaign_id, principal_id)
         branch_id = readable_branch(campaign_id, branch_id, principal_id)
         if audience not in {"dm", "player"}:
@@ -29825,10 +29997,11 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             "faction_turn",
             "source_interpretation",
             "bounded_ruling",
+            "campaign_expansion",
         }
         if purpose in dm_only_purposes and membership.role not in CAMPAIGN_DM_ROLES:
             raise ValueError(f"{purpose} context is available only to Owner/DM")
-        if purpose in {"npc_turn", "actor_turn"} and not actor_id:
+        if purpose in {"npc_turn", "actor_turn", "actor_memory"} and not actor_id:
             raise ValueError(f"actor_id is required for {purpose} context")
         if membership.role not in CAMPAIGN_DM_ROLES:
             audience = "player"
@@ -29913,6 +30086,56 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             budget_chars=budget_chars,
             related_refs=sorted(resolved_related_refs),
         )
+        if purpose == "actor_memory":
+            assert actor_id is not None
+            actor = characters.get(actor_id)
+            if actor.campaign_id != campaign_id:
+                raise ValueError("actor memory belongs to another campaign")
+            memory_view = actor_memory_projection(
+                campaign_id=campaign_id,
+                branch_id=branch_id,
+                actor=actor,
+                query=query,
+                current_refs=resolved_related_refs,
+                budget_chars=budget_chars,
+                retrieved_events=list(result.get("events") or []),
+                knowledge_disclosure_scopes=(
+                    ACTOR_KNOWLEDGE_DISCLOSURE_SCOPES
+                    if membership.role in CAMPAIGN_DM_ROLES
+                    else PLAYER_OWNED_ACTOR_DISCLOSURE_SCOPES
+                ),
+            )
+            response = {
+                "schema_version": 1,
+                "purpose": "actor_memory",
+                "campaign_id": campaign_id,
+                "branch_id": branch_id,
+                "actor": npc_turn_actor_projection(actor),
+                "scene": npc_turn_scene_projection(result.get("scoped_scene")),
+                "memory": memory_view,
+                "retrieval": {
+                    **dict(result.get("retrieval") or {}),
+                    "strategy": memory_view["diagnostics"]["strategy"],
+                },
+                "host_context_binding": host_context_binding(
+                    campaign_id=campaign_id,
+                    branch_id=branch_id,
+                    principal_id=principal_id,
+                    role=membership.role,
+                    audience=audience,
+                ),
+            }
+            response["context_receipt"] = issue_context_receipt(
+                campaign_id=campaign_id,
+                branch_id=branch_id,
+                principal_id=principal_id,
+                audience=audience,
+                actor_id=actor_id,
+                scope_id=scope_id,
+                related_refs=sorted(resolved_related_refs),
+                context=response,
+            )
+            return response
         if purpose in BOUNDED_EVALUATION_PURPOSES:
             return bounded_evaluation_bundle(
                 purpose=purpose,
@@ -29978,7 +30201,31 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 item for item in actor_state if item.get("predicate") == "relationship_to"
             ]
             goals = [item for item in actor_state if item.get("predicate") == "goal"]
-            actor_knowledge = list(result.get("actor_knowledge") or [])
+            memory_query = " ".join(
+                item
+                for item in (
+                    query.strip(),
+                    str(normalized_stimulus.get("content") or "").strip(),
+                )
+                if item
+            )
+            memory_refs = {
+                *resolved_related_refs,
+                *(
+                    f"event:{item}"
+                    for item in normalized_stimulus.get("source_event_ids") or []
+                ),
+            }
+            actor_memory = actor_memory_projection(
+                campaign_id=campaign_id,
+                branch_id=branch_id,
+                actor=actor,
+                query=memory_query,
+                current_refs=memory_refs,
+                budget_chars=min(int(budget_chars), 8_000),
+                retrieved_events=list(result.get("events") or []),
+            )
+            actor_knowledge = [dict(item["record"]) for item in actor_memory["semantic"]]
             common_context = [
                 item
                 for item in list(result.get("facts") or [])
@@ -30128,6 +30375,11 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 *(f"fact:{item['id']}:{item['revision_id']}" for item in actor_state),
                 *(str(item["basis_ref"]) for item in perception),
                 *(f"event:{item['event_id']}" for item in conversation_events),
+                *(
+                    str(item["basis_ref"])
+                    for track in ("identity", "motivational", "semantic", "episodic")
+                    for item in actor_memory[track]
+                ),
             }
             portrayal_context = [
                 {
@@ -30163,6 +30415,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 "stimulus": {**normalized_stimulus, "basis_ref": stimulus_ref},
                 "perception": perception,
                 "actor_knowledge": actor_knowledge,
+                "actor_memory": actor_memory,
                 "common_context": common_context,
                 "relationships": relationships,
                 "goals": goals,
@@ -30193,6 +30446,9 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 "retrieval": {
                     **dict(result.get("retrieval") or {}),
                     "actor_state_count": len(actor_state),
+                    "actor_memory_selected_count": actor_memory["diagnostics"][
+                        "selected_count"
+                    ],
                     "conversation_event_count": len(conversation_events),
                 },
             }
@@ -30300,13 +30556,29 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     f"c{int(session['conversation_revision']) + 1}"
                 )
                 runtime["working_state_revision"] += 1
-                for activation in session["activations"].values():
+                replacement_activations = []
+                for activation in list(session["activations"].values()):
                     if activation["actor_id"] == actor_id and activation["status"] in {
                         "pending",
                         "claimed",
                     }:
+                        replacement = {
+                            "activation_id": str(uuid4()),
+                            "actor_runtime_id": runtime["actor_runtime_id"],
+                            "actor_id": str(actor_id),
+                            "reason": str(activation["reason"]),
+                            "response_required": bool(activation["response_required"]),
+                            "from_cursor": int(activation["from_cursor"]),
+                            "to_cursor": int(activation["to_cursor"]),
+                            "status": "pending",
+                            "lease": None,
+                            "replacement_for": str(activation["activation_id"]),
+                        }
                         activation["status"] = "invalidated"
                         activation["lease"] = None
+                        replacement_activations.append(replacement)
+                for replacement in replacement_activations:
+                    session["activations"][replacement["activation_id"]] = replacement
                 invalidated_activation_ids = {
                     str(activation["activation_id"])
                     for activation in session["activations"].values()
@@ -30359,7 +30631,14 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         }
         context["constraints"] = {
             **dict(context["constraints"]),
-            "output_contract": "npc-conversation-proposal.v4",
+            "utterance_content_modes": [
+                "nonfactual",
+                "grounded",
+                "deception",
+                "uncertain",
+            ],
+            "factual_content_requires_actor_owned_basis_refs": True,
+            "output_contract": "npc-conversation-proposal.v5",
         }
         context["delegation"] = {
             "schema_version": 1,
@@ -30370,7 +30649,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             "tools_exposed": False,
             "persist_worker_session": True,
             "authoritative_result": False,
-            "output_contract": "npc-conversation-proposal.v4",
+            "output_contract": "npc-conversation-proposal.v5",
         }
         actor_id = str(dict(context["actor"])["id"])
         commitments = [

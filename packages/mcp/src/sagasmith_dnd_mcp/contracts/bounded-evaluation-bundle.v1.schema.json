@@ -7,7 +7,7 @@
   "properties": {
     "schema_version": {"const": 1},
     "bundle_id": {"type": "string", "minLength": 1, "maxLength": 100},
-    "purpose": {"enum": ["actor_turn", "audience_render", "faction_turn", "source_interpretation", "bounded_ruling"]},
+    "purpose": {"enum": ["actor_turn", "audience_render", "faction_turn", "campaign_expansion", "source_interpretation", "bounded_ruling"]},
     "authority": {
       "type": "object",
       "required": ["campaign_id", "branch_id", "head_snapshot_id", "campaign_revision", "latest_event_sequence", "host_context_binding"],
@@ -25,7 +25,7 @@
       "type": "object",
       "required": ["kind", "id", "name"],
       "properties": {
-        "kind": {"enum": ["actor", "audience", "faction", "source", "ruling"]},
+        "kind": {"enum": ["actor", "audience", "faction", "campaign_line", "source", "ruling"]},
         "id": {"type": "string", "minLength": 1, "maxLength": 200},
         "name": {"type": "string", "maxLength": 300}
       },
@@ -33,13 +33,15 @@
     },
     "context": {
       "type": "object",
-      "required": ["question", "question_basis_ref", "actor", "interlocutors", "stimulus", "facts", "actor_knowledge", "events", "scene", "source_evidence", "audience"],
+      "required": ["question", "question_basis_ref", "actor", "interlocutors", "stimulus", "actor_memory", "campaign_design", "facts", "actor_knowledge", "events", "scene", "source_evidence", "audience"],
       "properties": {
         "question": {"type": "string"},
         "question_basis_ref": {"type": "string"},
         "actor": {"type": ["object", "null"]},
         "interlocutors": {"type": "array", "items": {"type": "object"}},
         "stimulus": {"type": ["object", "null"]},
+        "actor_memory": {"type": ["object", "null"]},
+        "campaign_design": {"type": ["object", "null"]},
         "facts": {"type": "array", "items": {"type": "object"}},
         "actor_knowledge": {"type": "array", "items": {"type": "object"}},
         "events": {"type": "array", "items": {"type": "object"}},
@@ -60,7 +62,7 @@
         "may_roll_dice": {"const": false},
         "may_call_tools": {"const": false},
         "may_write_state": {"const": false},
-        "output_contract": {"enum": ["actor-turn-proposal.v1", "audience-render-proposal.v1", "faction-turn-proposal.v1", "source-interpretation-proposal.v1", "bounded-ruling-proposal.v1"]}
+        "output_contract": {"enum": ["actor-turn-proposal.v1", "audience-render-proposal.v1", "faction-turn-proposal.v1", "campaign-expansion-proposal.v1", "source-interpretation-proposal.v1", "bounded-ruling-proposal.v1"]}
       },
       "additionalProperties": false
     },
@@ -69,7 +71,7 @@
       "required": ["schema_version", "purpose", "bundle_id", "bundle_digest", "principal_fingerprint", "subject_ref", "allowed_basis_refs", "allowed_claim_basis_refs", "allowed_target_refs", "question_digest", "signature"],
       "properties": {
         "schema_version": {"const": 1},
-        "purpose": {"enum": ["actor_turn", "audience_render", "faction_turn", "source_interpretation", "bounded_ruling"]},
+        "purpose": {"enum": ["actor_turn", "audience_render", "faction_turn", "campaign_expansion", "source_interpretation", "bounded_ruling"]},
         "bundle_id": {"type": "string"},
         "bundle_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "principal_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
@@ -104,6 +106,7 @@
     {"if": {"properties": {"purpose": {"const": "actor_turn"}}}, "then": {"properties": {"constraints": {"properties": {"output_contract": {"const": "actor-turn-proposal.v1"}}}}}},
     {"if": {"properties": {"purpose": {"const": "audience_render"}}}, "then": {"properties": {"constraints": {"properties": {"output_contract": {"const": "audience-render-proposal.v1"}}}}}},
     {"if": {"properties": {"purpose": {"const": "faction_turn"}}}, "then": {"properties": {"constraints": {"properties": {"output_contract": {"const": "faction-turn-proposal.v1"}}}}}},
+    {"if": {"properties": {"purpose": {"const": "campaign_expansion"}}}, "then": {"properties": {"constraints": {"properties": {"output_contract": {"const": "campaign-expansion-proposal.v1"}}}}}},
     {"if": {"properties": {"purpose": {"const": "source_interpretation"}}}, "then": {"properties": {"constraints": {"properties": {"output_contract": {"const": "source-interpretation-proposal.v1"}}}}}},
     {"if": {"properties": {"purpose": {"const": "bounded_ruling"}}}, "then": {"properties": {"constraints": {"properties": {"output_contract": {"const": "bounded-ruling-proposal.v1"}}}}}}
   ],

@@ -7,10 +7,17 @@ These notes constrain Agent decisions; they do not replace native schemas.
 
 - `system_id`: `dnd5e`
 - portable Module id prefix: `dnd5e.module.`
-- supported Module classifications: `adventure`, `campaign`
+- supported Package content classifications: `adventure`, `campaign`,
+  `emergent_seed`, and `emergent_episode`
+- runtime-manifest v2 classifications: `authored_module`, `emergent_seed`, and
+  `emergent_episode`
 - editions: `2014`, `2024`, or both, exactly as supported by the source
 - current Module capability: `module_pack_v2` when required by the source
-- campaigns require at least one reachable ending
+- authored campaigns require at least one reachable ending
+- emergent seeds and episodes may remain open, but must declare lineage and
+  playable scene links through the current runtime-manifest schema
+- playthrough campaign modes are `authored_module`,
+  `authored_with_extensions`, and `emergent`
 
 ## Required play-profile review
 

@@ -896,7 +896,7 @@ enter the rebuilt domain prompt. See
 
 ### Generic bounded semantic evaluations
 
-`continuity_context` supports five proposal-only purposes in addition to the
+`continuity_context` supports six proposal-only purposes in addition to the
 specialized NPC contract:
 
 | Purpose | Boundary |
@@ -904,6 +904,7 @@ specialized NPC contract:
 | `actor_turn` | NPC/monster intent/action only; rejects PCs and dialogue |
 | `audience_render` | requires `audience="player"`; renders an already filtered projection |
 | `faction_turn` | one faction's `faction_state` and `faction_knowledge` only |
+| `campaign_expansion` | Lobby-only, review-only proposal for an emergent line or an authored Module's off-Atlas extension |
 | `source_interpretation` | interpretation of current exact managed evidence |
 | `bounded_ruling` | one Agent-owned semantic ruling question |
 
@@ -941,10 +942,10 @@ receives private actor context, transport credentials, or leases.
 
 An isolated host NPC subagent checks out its own capsule, retaining the same
 `conversation_id + actor_runtime_id` model context across activations. It has
-zero tools and returns only `npc-conversation-proposal.v4`. Every speakable byte
-is inside an utterance segment whose only required field is `text`. Speech act,
-truth posture, basis refs, targets, language, and delivery are optional; supplied
-actor-scoped refs are validated. Actions declare narrative or mechanical
+zero tools and returns only `npc-conversation-proposal.v5`. Every speakable byte
+is inside an utterance segment with required `text` and `content_mode`.
+`grounded`, `deception`, and `uncertain` segments require actor-owned basis refs; all supplied
+refs and targets are validated against the capsule. Actions declare narrative or mechanical
 settlement. MCP is the sole semantic validator. A Host may repair structured
 validation failures inside the same lease, then receives a publication candidate.
 
@@ -971,9 +972,9 @@ model or provider KV. See
 During Play or Combat, Owner/DM may call `continuity_context` with
 `purpose="npc_turn"`, one NPC/monster `actor_id`, explicit
 `interlocutor_actor_ids`, and a normalized stimulus. The result is a bounded
-`npc-turn-bundle.v1`: the actor's sanitized card/self-state, its own
-ActorKnowledge, exact actor-state relationship/goal heads, public facts,
-events where it is an indexed participant, immediate outward perception, a
+`npc-turn-bundle.v3`: the actor's sanitized card/self-state, its own
+four-track ActorMemoryContext, exact actor-state relationship/goal/commitment
+heads, public facts, relevant events where it is an indexed participant, immediate outward perception, a
 small scene projection, and DM-only world/module portrayal context. Public
 world facts and module evidence are marked non-epistemic and excluded from
 `allowed_basis_refs`; only ActorKnowledge, the actor's own relationship/goal

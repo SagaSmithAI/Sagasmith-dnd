@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sagasmith.ai/contracts/campaign-expansion-proposal.v1.schema.json",
+  "title": "SagaSmith campaign expansion proposal v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "bundle_id",
+    "purpose",
+    "campaign_line_id",
+    "title",
+    "source_markdown",
+    "generation_basis_refs",
+    "claims",
+    "unresolved",
+    "requires_director_review",
+    "decision_summary"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "bundle_id": {"type": "string", "minLength": 1, "maxLength": 100},
+    "purpose": {"const": "campaign_expansion"},
+    "campaign_line_id": {"type": "string", "minLength": 1, "maxLength": 200},
+    "title": {"type": "string", "minLength": 1, "maxLength": 300},
+    "source_markdown": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200000,
+      "pattern": "sagasmith-runtime-manifest"
+    },
+    "generation_basis_refs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 1, "maxLength": 300},
+      "uniqueItems": true
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["statement", "basis_refs", "posture"],
+        "properties": {
+          "statement": {"type": "string", "minLength": 1, "maxLength": 2000},
+          "basis_refs": {
+            "type": "array",
+            "items": {"type": "string"},
+            "uniqueItems": true
+          },
+          "posture": {
+            "enum": ["supported", "inference", "uncertain", "opinion", "nonfactual"]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "unresolved": {
+      "type": "array",
+      "items": {"type": "string", "maxLength": 1000},
+      "uniqueItems": true
+    },
+    "requires_director_review": {"const": true},
+    "decision_summary": {"type": "string", "maxLength": 500}
+  },
+  "additionalProperties": false
+}

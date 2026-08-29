@@ -12,6 +12,8 @@ Read [workflow.md](references/workflow.md) before starting or editing a draft.
 Read [system-profile.md](references/system-profile.md) before saving Package
 decisions. Read [narrative-patterns.md](references/narrative-patterns.md) only
 when choosing the composition shape for a long adventure or campaign.
+Read [emergent-campaign.md](references/emergent-campaign.md) when play starts
+from a small world seed and later sessions are generated from established play.
 
 ## Boundaries
 
@@ -24,6 +26,8 @@ when choosing the composition shape for a long adventure or campaign.
   evidence receipts, idempotency, finalization, installation, and activation.
 - Keep single-book interpretation in the draft evidence and audit history. Do
   not add a book-specific parser heuristic to Core, the D&D package, or MCP.
+- For emergent play, author immutable seed and episode shards. Treat campaign
+  state as runtime truth; never rewrite an earlier shard to match later play.
 - Never fabricate evidence, checksums, actor identities, dependencies, scene
   keys, statblocks, or mechanical fields.
 - Default to building the immutable artifact only. Installation and campaign

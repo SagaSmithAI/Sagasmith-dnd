@@ -1,0 +1,177 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sagasmith.ai/contracts/npc-turn-bundle.v3.schema.json",
+  "title": "SagaSmith isolated NPC turn bundle v3",
+  "type": "object",
+  "required": [
+    "schema_version", "bundle_id", "purpose", "authority", "actor",
+    "interlocutors", "stimulus", "perception", "actor_knowledge",
+    "actor_memory", "common_context", "relationships", "goals",
+    "conversation", "scene", "portrayal_context", "constraints",
+    "delegation", "retrieval", "bundle_receipt"
+  ],
+  "properties": {
+    "schema_version": {"const": 3},
+    "bundle_id": {"type": "string", "minLength": 1},
+    "purpose": {"const": "npc_turn"},
+    "authority": {
+      "type": "object",
+      "required": [
+        "campaign_id", "branch_id", "head_snapshot_id", "campaign_revision",
+        "latest_event_sequence", "actor_revision", "scene_state_version",
+        "host_context_binding"
+      ],
+      "properties": {
+        "host_context_binding": {"$ref": "#/$defs/hostContextBinding"}
+      }
+    },
+    "actor": {
+      "type": "object",
+      "required": ["id", "name", "character_type", "revision", "profile", "self_state"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "character_type": {"enum": ["npc", "monster"]}
+      }
+    },
+    "interlocutors": {"type": "array", "items": {"type": "object"}},
+    "stimulus": {"type": "object"},
+    "perception": {"type": "array"},
+    "actor_knowledge": {"type": "array"},
+    "actor_memory": {"$ref": "#/$defs/actorMemory"},
+    "common_context": {"type": "array"},
+    "relationships": {"type": "array"},
+    "goals": {"type": "array"},
+    "conversation": {
+      "type": "object",
+      "required": [
+        "schema_version", "campaign_id", "branch_id", "scope_id", "scene_id",
+        "cursor", "participants", "events"
+      ],
+      "properties": {
+        "schema_version": {"const": 1},
+        "campaign_id": {"type": "string", "minLength": 1},
+        "branch_id": {"type": "string", "minLength": 1},
+        "scope_id": {"type": "string", "minLength": 1},
+        "scene_id": {"type": "string"},
+        "cursor": {
+          "type": "object",
+          "required": ["latest_event_sequence", "event_count"],
+          "properties": {
+            "latest_event_sequence": {"type": "integer", "minimum": 0},
+            "event_count": {"type": "integer", "minimum": 0}
+          },
+          "additionalProperties": false
+        },
+        "participants": {"type": "array", "items": {"type": "object"}},
+        "events": {"type": "array", "items": {"type": "object"}}
+      },
+      "additionalProperties": false
+    },
+    "scene": {"type": ["object", "null"]},
+    "portrayal_context": {"type": "array"},
+    "constraints": {
+      "type": "object",
+      "required": [
+        "allowed_basis_refs", "allowed_target_actor_ids",
+        "module_evidence_is_actor_knowledge", "common_context_is_actor_knowledge",
+        "may_roll_dice", "may_call_tools", "may_write_state", "output_contract"
+      ],
+      "properties": {
+        "allowed_basis_refs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "allowed_target_actor_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "module_evidence_is_actor_knowledge": {"const": false},
+        "common_context_is_actor_knowledge": {"const": false},
+        "may_roll_dice": {"const": false},
+        "may_call_tools": {"const": false},
+        "may_write_state": {"const": false},
+        "output_contract": {"const": "npc-turn-proposal.v1"}
+      },
+      "additionalProperties": false
+    },
+    "delegation": {
+      "type": "object",
+      "required": [
+        "schema_version", "contract", "task", "execution", "inherit_agent_history",
+        "tools_exposed", "persist_worker_session", "authoritative_result", "output_contract"
+      ],
+      "properties": {
+        "schema_version": {"const": 1},
+        "contract": {"const": "sagasmith.delegation.v1"},
+        "task": {"const": "propose_npc_turn"},
+        "execution": {"const": "awaited_fresh_context"},
+        "inherit_agent_history": {"const": false},
+        "tools_exposed": {"const": false},
+        "persist_worker_session": {"const": false},
+        "authoritative_result": {"const": false},
+        "output_contract": {"const": "npc-turn-proposal.v1"}
+      },
+      "additionalProperties": false
+    },
+    "retrieval": {"type": "object"},
+    "bundle_receipt": {
+      "type": "object",
+      "required": [
+        "schema_version", "purpose", "bundle_id", "bundle_digest",
+        "principal_fingerprint", "actor_id", "allowed_basis_refs", "signature"
+      ],
+      "properties": {
+        "schema_version": {"const": 2},
+        "purpose": {"const": "npc_turn"},
+        "bundle_id": {"type": "string"},
+        "bundle_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "principal_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "actor_id": {"type": "string"},
+        "allowed_basis_refs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "signature": {"type": "string", "minLength": 1}
+      }
+    }
+  },
+  "$defs": {
+    "actorMemoryItem": {
+      "type": "object",
+      "required": ["basis_ref", "source", "content", "refs", "record", "score", "signals"],
+      "properties": {
+        "basis_ref": {"type": "string", "minLength": 1},
+        "source": {"type": "string", "minLength": 1},
+        "content": {"type": "string"},
+        "refs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "record": {"type": "object"},
+        "score": {"type": "integer"},
+        "signals": {"type": "object"}
+      },
+      "additionalProperties": false
+    },
+    "actorMemory": {
+      "type": "object",
+      "required": ["identity", "motivational", "semantic", "episodic", "diagnostics"],
+      "properties": {
+        "identity": {"type": "array", "items": {"$ref": "#/$defs/actorMemoryItem"}},
+        "motivational": {"type": "array", "items": {"$ref": "#/$defs/actorMemoryItem"}},
+        "semantic": {"type": "array", "items": {"$ref": "#/$defs/actorMemoryItem"}},
+        "episodic": {"type": "array", "items": {"$ref": "#/$defs/actorMemoryItem"}},
+        "diagnostics": {"type": "object"}
+      },
+      "additionalProperties": false
+    },
+    "hostContextBinding": {
+      "type": "object",
+      "required": [
+        "domain", "campaign_id", "principal_fingerprint", "role", "audience",
+        "branch_id", "authorization_fingerprint", "memory_policy", "context_epoch"
+      ],
+      "properties": {
+        "domain": {"const": "sagasmith-dnd"},
+        "campaign_id": {"type": "string", "minLength": 1},
+        "principal_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "authorization_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "role": {"enum": ["owner", "dm", "player"]},
+        "audience": {"enum": ["dm", "player"]},
+        "branch_id": {"type": "string", "minLength": 1},
+        "memory_policy": {"const": "domain_authoritative"},
+        "context_epoch": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

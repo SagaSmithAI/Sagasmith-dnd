@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sagasmith.ai/contracts/actor-memory-context.v1.schema.json",
+  "title": "SagaSmith actor memory context v1",
+  "type": "object",
+  "required": ["identity", "motivational", "semantic", "episodic", "diagnostics"],
+  "properties": {
+    "identity": {"type": "array", "items": {"$ref": "#/$defs/item"}},
+    "motivational": {"type": "array", "items": {"$ref": "#/$defs/item"}},
+    "semantic": {"type": "array", "items": {"$ref": "#/$defs/item"}},
+    "episodic": {"type": "array", "items": {"$ref": "#/$defs/item"}},
+    "diagnostics": {
+      "type": "object",
+      "required": [
+        "strategy", "budget_chars", "used_chars", "remaining_chars",
+        "candidate_count", "deduplicated_count", "duplicates_dropped",
+        "selected_count", "omitted_for_budget", "current_refs", "query_terms",
+        "track_candidates", "track_selected", "selection_order"
+      ],
+      "properties": {
+        "strategy": {"const": "exact_refs_lexical_recency_confidence_salience_v1"},
+        "budget_chars": {"type": "integer", "minimum": 0},
+        "used_chars": {"type": "integer", "minimum": 0},
+        "remaining_chars": {"type": "integer", "minimum": 0},
+        "candidate_count": {"type": "integer", "minimum": 0},
+        "deduplicated_count": {"type": "integer", "minimum": 0},
+        "duplicates_dropped": {"type": "integer", "minimum": 0},
+        "selected_count": {"type": "integer", "minimum": 0},
+        "omitted_for_budget": {"type": "integer", "minimum": 0},
+        "current_refs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "query_terms": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "track_candidates": {"$ref": "#/$defs/trackCounts"},
+        "track_selected": {"$ref": "#/$defs/trackCounts"},
+        "selection_order": {"type": "array", "items": {"type": "object"}}
+      },
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "item": {
+      "type": "object",
+      "required": ["basis_ref", "source", "content", "refs", "record", "score", "signals"],
+      "properties": {
+        "basis_ref": {"type": "string", "minLength": 1},
+        "source": {"enum": ["actor_state", "actor_state_fact", "actor_knowledge", "event"]},
+        "content": {"type": "string"},
+        "refs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "record": {"type": "object"},
+        "score": {"type": "integer", "minimum": 0},
+        "signals": {
+          "type": "object",
+          "required": ["exact_ref_matches", "query", "recency", "confidence", "salience"],
+          "properties": {
+            "exact_ref_matches": {"type": "integer", "minimum": 0},
+            "query": {"type": "integer", "minimum": 0},
+            "recency": {"type": "integer", "minimum": 0},
+            "confidence": {"type": "integer", "minimum": 0},
+            "salience": {"type": "integer", "minimum": 0}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "trackCounts": {
+      "type": "object",
+      "required": ["identity", "motivational", "semantic", "episodic"],
+      "properties": {
+        "identity": {"type": "integer", "minimum": 0},
+        "motivational": {"type": "integer", "minimum": 0},
+        "semantic": {"type": "integer", "minimum": 0},
+        "episodic": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -333,23 +333,75 @@ _MANIFEST_COLLECTIONS = (
     "foreshadowing",
     "branches",
 )
+_MANIFEST_V2_COLLECTIONS = (
+    *_MANIFEST_COLLECTIONS,
+    "fronts",
+    "story_threads",
+    "character_arcs",
+    "scene_links",
+)
+_MANIFEST_V2_FIELDS = {
+    "schema_version",
+    "module_key",
+    "classification",
+    "lineage",
+    *_MANIFEST_V2_COLLECTIONS,
+}
+_MANIFEST_V2_CLASSIFICATIONS = {
+    "authored_module",
+    "emergent_seed",
+    "emergent_episode",
+}
 
 
-def _runtime_manifest_metadata(content: str) -> dict[str, object]:
-    matches = list(_RUNTIME_MANIFEST.finditer(content))
-    if not matches:
-        return {}
+def _manifest_exact_fields(
+    item: dict[str, object],
+    *,
+    allowed: set[str],
+    field: str,
+    errors: list[str],
+) -> None:
+    unknown = sorted(set(item) - allowed)
+    if unknown:
+        errors.append(f"runtime manifest {field} contains unsupported fields: {', '.join(unknown)}")
+
+
+def _manifest_string_list(
+    value: object,
+    *,
+    field: str,
+    errors: list[str],
+    require_ids: bool = False,
+) -> list[str]:
+    if not isinstance(value, list) or any(not isinstance(item, str) or not item for item in value):
+        errors.append(f"runtime manifest {field} must be a list of non-empty strings")
+        return []
+    result = list(value)
+    if len(result) != len(set(result)):
+        errors.append(f"runtime manifest {field} must not contain duplicates")
+    if require_ids and any(not _MANIFEST_ID.fullmatch(item) for item in result):
+        errors.append(f"runtime manifest {field} must contain stable lowercase ids")
+    return result
+
+
+def _manifest_required_text(
+    item: dict[str, object],
+    key: str,
+    *,
+    field: str,
+    errors: list[str],
+) -> str:
+    value = item.get(key)
+    if not isinstance(value, str) or not value.strip():
+        errors.append(f"runtime manifest {field}.{key} is required")
+        return ""
+    return value.strip()
+
+
+def _runtime_manifest_v1_errors(manifest: dict[str, object]) -> list[str]:
+    """Retain the permissive generated-module v1 contract unchanged."""
+
     errors: list[str] = []
-    if len(matches) > 1:
-        errors.append("module must contain at most one runtime manifest")
-    try:
-        manifest = json.loads(matches[0].group("body"))
-    except json.JSONDecodeError as exc:
-        return {"runtime_manifest_errors": [f"runtime manifest is invalid JSON: {exc.msg}"]}
-    if not isinstance(manifest, dict):
-        return {"runtime_manifest_errors": ["runtime manifest must be an object"]}
-    if manifest.get("schema_version") != 1:
-        errors.append("runtime manifest schema_version must be 1")
     module_key = manifest.get("module_key")
     if not isinstance(module_key, str) or not _MANIFEST_ID.fullmatch(module_key):
         errors.append("runtime manifest module_key must be a stable lowercase id")
@@ -381,6 +433,304 @@ def _runtime_manifest_metadata(content: str) -> dict[str, object]:
                 item.get("consequences", []), list
             ):
                 errors.append(f"runtime manifest {collection}[{index}].consequences must be a list")
+    return errors
+
+
+def _runtime_manifest_v2_errors(manifest: dict[str, object]) -> list[str]:
+    """Validate immutable authored or emergent runtime-design shards."""
+
+    errors: list[str] = []
+    _manifest_exact_fields(
+        manifest,
+        allowed=_MANIFEST_V2_FIELDS,
+        field="v2",
+        errors=errors,
+    )
+    module_key = manifest.get("module_key")
+    if not isinstance(module_key, str) or not _MANIFEST_ID.fullmatch(module_key):
+        errors.append("runtime manifest module_key must be a stable lowercase id")
+        module_key = ""
+    classification = manifest.get("classification")
+    if classification not in _MANIFEST_V2_CLASSIFICATIONS:
+        errors.append(
+            "runtime manifest classification must be authored_module, "
+            "emergent_seed, or emergent_episode"
+        )
+
+    lineage = manifest.get("lineage")
+    if not isinstance(lineage, dict):
+        errors.append("runtime manifest lineage must be an object")
+    else:
+        _manifest_exact_fields(
+            lineage,
+            allowed={"root_module_key", "parent_module_key", "generation"},
+            field="lineage",
+            errors=errors,
+        )
+        root = lineage.get("root_module_key")
+        parent = lineage.get("parent_module_key")
+        generation = lineage.get("generation")
+        if not isinstance(root, str) or not _MANIFEST_ID.fullmatch(root):
+            errors.append("runtime manifest lineage.root_module_key must be a stable lowercase id")
+        if parent not in {None, ""} and (
+            not isinstance(parent, str) or not _MANIFEST_ID.fullmatch(parent)
+        ):
+            errors.append(
+                "runtime manifest lineage.parent_module_key must be empty or a stable lowercase id"
+            )
+        if isinstance(generation, bool) or not isinstance(generation, int) or generation < 0:
+            errors.append("runtime manifest lineage.generation must be a non-negative integer")
+        elif classification == "authored_module":
+            if root != module_key or parent not in {None, ""} or generation != 0:
+                errors.append(
+                    "authored_module lineage must root at module_key with no parent "
+                    "and generation 0"
+                )
+        elif classification == "emergent_seed":
+            if root != module_key or parent not in {None, ""} or generation != 0:
+                errors.append(
+                    "emergent_seed lineage must root at module_key with no parent and generation 0"
+                )
+        elif classification == "emergent_episode" and (
+            not isinstance(parent, str) or not parent or generation < 1
+        ):
+            errors.append(
+                "emergent_episode lineage requires a parent_module_key and positive generation"
+            )
+
+    collection_values: dict[str, list[dict[str, object]]] = {}
+    seen: set[str] = set()
+    for collection in _MANIFEST_V2_COLLECTIONS:
+        raw_values = manifest.get(collection, [])
+        if not isinstance(raw_values, list):
+            errors.append(f"runtime manifest {collection} must be a list")
+            collection_values[collection] = []
+            continue
+        values: list[dict[str, object]] = []
+        for index, raw_item in enumerate(raw_values):
+            field = f"{collection}[{index}]"
+            if not isinstance(raw_item, dict):
+                errors.append(f"runtime manifest {field} must be an object")
+                continue
+            item = raw_item
+            item_id = item.get("id")
+            if not isinstance(item_id, str) or not _MANIFEST_ID.fullmatch(item_id):
+                errors.append(f"runtime manifest {field}.id must be a stable lowercase id")
+            elif item_id in seen:
+                errors.append(f"runtime manifest contains duplicate id: {item_id}")
+            else:
+                seen.add(item_id)
+            values.append(item)
+        collection_values[collection] = values
+
+    shapes = {
+        "entities": {"id", "kind", "name"},
+        "secrets": {"id", "initial_knowers", "reveal_trigger"},
+        "clues": {
+            "id",
+            "label",
+            "trigger",
+            "revelation",
+            "linked_thread_ids",
+            "fallback_scene_ids",
+        },
+        "plot_nodes": {"id", "trigger", "consequences", "linked_thread_ids"},
+        "foreshadowing": {
+            "id",
+            "signal",
+            "reveal_trigger",
+            "linked_thread_ids",
+            "payoff_scene_ids",
+        },
+        "branches": {"id", "trigger", "consequences", "scene_ids"},
+        "fronts": {"id", "name", "goal", "stakes", "grim_portents", "linked_thread_ids"},
+        "story_threads": {
+            "id",
+            "title",
+            "question",
+            "linked_front_ids",
+            "linked_clue_ids",
+        },
+        "character_arcs": {
+            "id",
+            "actor_id",
+            "actor_kind",
+            "opportunities",
+            "planned_beats",
+            "possible_endings",
+        },
+        "scene_links": {"id", "from_scene_id", "to_scene_id", "kind", "trigger"},
+    }
+    required_text = {
+        "entities": ("kind", "name"),
+        "secrets": ("reveal_trigger",),
+        "clues": ("label", "trigger", "revelation"),
+        "plot_nodes": ("trigger",),
+        "foreshadowing": ("signal", "reveal_trigger"),
+        "branches": ("trigger",),
+        "fronts": ("name", "goal", "stakes"),
+        "story_threads": ("title", "question"),
+        "scene_links": ("from_scene_id", "to_scene_id", "kind"),
+    }
+    list_fields = {
+        "secrets": (("initial_knowers", True),),
+        "clues": (("linked_thread_ids", True), ("fallback_scene_ids", True)),
+        "plot_nodes": (("consequences", False), ("linked_thread_ids", True)),
+        "foreshadowing": (("linked_thread_ids", True), ("payoff_scene_ids", True)),
+        "branches": (("consequences", False), ("scene_ids", True)),
+        "fronts": (("grim_portents", False), ("linked_thread_ids", True)),
+        "story_threads": (("linked_front_ids", True), ("linked_clue_ids", True)),
+    }
+    for collection, values in collection_values.items():
+        for index, item in enumerate(values):
+            field = f"{collection}[{index}]"
+            _manifest_exact_fields(item, allowed=shapes[collection], field=field, errors=errors)
+            for key in required_text.get(collection, ()):
+                _manifest_required_text(item, key, field=field, errors=errors)
+            for key, require_ids in list_fields.get(collection, ()):
+                _manifest_string_list(
+                    item.get(key, []),
+                    field=f"{field}.{key}",
+                    errors=errors,
+                    require_ids=require_ids,
+                )
+
+    opportunity_ids: set[str] = set()
+    for index, arc in enumerate(collection_values["character_arcs"]):
+        field = f"character_arcs[{index}]"
+        actor_id = _manifest_required_text(arc, "actor_id", field=field, errors=errors)
+        if actor_id and not _MANIFEST_ID.fullmatch(actor_id):
+            errors.append(f"runtime manifest {field}.actor_id must be a stable lowercase id")
+        actor_kind = arc.get("actor_kind")
+        if actor_kind not in {"pc", "npc"}:
+            errors.append(f"runtime manifest {field}.actor_kind must be pc or npc")
+        opportunities = arc.get("opportunities", [])
+        if not isinstance(opportunities, list):
+            errors.append(f"runtime manifest {field}.opportunities must be a list")
+            opportunities = []
+        for opportunity_index, opportunity in enumerate(opportunities):
+            opportunity_field = f"{field}.opportunities[{opportunity_index}]"
+            if not isinstance(opportunity, dict):
+                errors.append(f"runtime manifest {opportunity_field} must be an object")
+                continue
+            _manifest_exact_fields(
+                opportunity,
+                allowed={"id", "prompt", "scene_ids", "thread_ids"},
+                field=opportunity_field,
+                errors=errors,
+            )
+            opportunity_id = opportunity.get("id")
+            if not isinstance(opportunity_id, str) or not _MANIFEST_ID.fullmatch(opportunity_id):
+                errors.append(
+                    f"runtime manifest {opportunity_field}.id must be a stable lowercase id"
+                )
+            elif opportunity_id in opportunity_ids:
+                errors.append(
+                    f"runtime manifest contains duplicate opportunity id: {opportunity_id}"
+                )
+            else:
+                opportunity_ids.add(opportunity_id)
+            _manifest_required_text(opportunity, "prompt", field=opportunity_field, errors=errors)
+            for key in ("scene_ids", "thread_ids"):
+                _manifest_string_list(
+                    opportunity.get(key, []),
+                    field=f"{opportunity_field}.{key}",
+                    errors=errors,
+                    require_ids=True,
+                )
+        planned_beats = _manifest_string_list(
+            arc.get("planned_beats", []),
+            field=f"{field}.planned_beats",
+            errors=errors,
+        )
+        possible_endings = _manifest_string_list(
+            arc.get("possible_endings", []),
+            field=f"{field}.possible_endings",
+            errors=errors,
+        )
+        if actor_kind == "pc":
+            if not opportunities:
+                errors.append(f"runtime manifest {field} for a PC requires opportunities")
+            if planned_beats or possible_endings:
+                errors.append(
+                    f"runtime manifest {field} for a PC may only define opportunities; "
+                    "planned beats and endings belong to player choice"
+                )
+
+    for index, link in enumerate(collection_values["scene_links"]):
+        field = f"scene_links[{index}]"
+        start = link.get("from_scene_id")
+        end = link.get("to_scene_id")
+        if isinstance(start, str) and start and not _MANIFEST_ID.fullmatch(start):
+            errors.append(f"runtime manifest {field}.from_scene_id must be a stable lowercase id")
+        if isinstance(end, str) and end and not _MANIFEST_ID.fullmatch(end):
+            errors.append(f"runtime manifest {field}.to_scene_id must be a stable lowercase id")
+        if start and start == end:
+            errors.append(f"runtime manifest {field} cannot link a scene to itself")
+
+    valid_ids = {
+        collection: {str(item.get("id")) for item in values if item.get("id")}
+        for collection, values in collection_values.items()
+    }
+    reference_sets = (
+        ("clues", "linked_thread_ids", "story_threads"),
+        ("plot_nodes", "linked_thread_ids", "story_threads"),
+        ("foreshadowing", "linked_thread_ids", "story_threads"),
+        ("fronts", "linked_thread_ids", "story_threads"),
+        ("story_threads", "linked_front_ids", "fronts"),
+        ("story_threads", "linked_clue_ids", "clues"),
+    )
+    for collection, key, target_collection in reference_sets:
+        for index, item in enumerate(collection_values[collection]):
+            for reference in item.get(key, []) if isinstance(item.get(key, []), list) else []:
+                if reference not in valid_ids[target_collection]:
+                    errors.append(
+                        f"runtime manifest {collection}[{index}].{key} references unknown "
+                        f"{target_collection} id: {reference}"
+                    )
+    thread_ids = valid_ids["story_threads"]
+    for arc_index, arc in enumerate(collection_values["character_arcs"]):
+        opportunities = arc.get("opportunities", [])
+        if not isinstance(opportunities, list):
+            continue
+        for opportunity_index, opportunity in enumerate(opportunities):
+            if not isinstance(opportunity, dict):
+                continue
+            references = opportunity.get("thread_ids", [])
+            if not isinstance(references, list):
+                continue
+            for reference in references:
+                if reference not in thread_ids:
+                    errors.append(
+                        "runtime manifest "
+                        f"character_arcs[{arc_index}].opportunities[{opportunity_index}]."
+                        f"thread_ids references unknown story_threads id: {reference}"
+                    )
+    if classification == "emergent_episode" and not collection_values["scene_links"]:
+        errors.append("emergent_episode runtime manifest requires at least one scene_link")
+    return errors
+
+
+def _runtime_manifest_metadata(content: str) -> dict[str, object]:
+    matches = list(_RUNTIME_MANIFEST.finditer(content))
+    if not matches:
+        return {}
+    errors: list[str] = []
+    if len(matches) > 1:
+        errors.append("module must contain at most one runtime manifest")
+    try:
+        manifest = json.loads(matches[0].group("body"))
+    except json.JSONDecodeError as exc:
+        return {"runtime_manifest_errors": [f"runtime manifest is invalid JSON: {exc.msg}"]}
+    if not isinstance(manifest, dict):
+        return {"runtime_manifest_errors": ["runtime manifest must be an object"]}
+    schema_version = manifest.get("schema_version")
+    if schema_version == 1:
+        errors.extend(_runtime_manifest_v1_errors(manifest))
+    elif schema_version == 2:
+        errors.extend(_runtime_manifest_v2_errors(manifest))
+    else:
+        errors.append("runtime manifest schema_version must be 1 or 2")
     return {"runtime_manifest": manifest, "runtime_manifest_errors": errors}
 
 
@@ -798,7 +1148,7 @@ def _spatial_manifest(
 
 class DndModuleProfile(GenericModuleProfile):
     name = "dnd5e"
-    version = "30"
+    version = "31"
 
     def document_metadata(self, content: str) -> dict[str, object]:
         """Parse and validate the optional generated-module runtime manifest."""

@@ -608,7 +608,7 @@ def test_server_capabilities_publish_the_rulebook_import_contract(tmp_path: Path
             "contract": "npc-conversation.v3",
             "phase": "play",
             "execution_mode": "client_subagents_required",
-            "proposal_contract": "npc-conversation-proposal.v4",
+            "proposal_contract": "npc-conversation-proposal.v5",
             "public_tool": "npc_conversation",
             "public_actions": [
                 "open",
@@ -643,6 +643,20 @@ def test_server_capabilities_publish_the_rulebook_import_contract(tmp_path: Path
                 "structured_json_output",
                 "private_host_side_mcp_routing",
             ],
+        }
+        assert capabilities["campaign_expansion"] == {
+            "purpose": "campaign_expansion",
+            "phase": "lobby",
+            "campaign_modes": [
+                "authored_module",
+                "authored_with_extensions",
+                "emergent",
+            ],
+            "proposal_contract": "campaign-expansion-proposal.v1",
+            "review_only": True,
+            "may_write_state": False,
+            "authored_root_immutable": True,
+            "off_atlas_episode_classification": "emergent_episode",
         }
         assert capabilities["features"]["structured_rulebook_import"] is True
         assert capabilities["features"]["source_bound_rule_packs"] is True
@@ -782,7 +796,8 @@ def test_server_capabilities_publish_the_rulebook_import_contract(tmp_path: Path
                 "use_combat_choice_only_for_an_owned_window",
             ],
         }
-        assert capabilities["module_draft"]["runtime_manifest_schema"] == 1
+        assert capabilities["module_draft"]["runtime_manifest_schema"] == 2
+        assert capabilities["module_draft"]["runtime_manifest_legacy_schemas"] == [1]
         assert capabilities["rulebook_import"]["settlement_tools"] == {
             "play": "character_check",
             "combat": "combat_check",
