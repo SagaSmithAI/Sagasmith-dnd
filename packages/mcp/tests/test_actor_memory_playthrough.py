@@ -404,6 +404,26 @@ def test_player_actor_memory_filters_dm_only_knowledge_while_dm_keeps_it(
                     "idempotency_key": knowledge_key,
                 },
             )
+        dm_participant_event = await _call(
+            server,
+            "memory_change",
+            {
+                "campaign_id": campaign["id"],
+                "action": "commit",
+                "payload": {
+                    "event": {
+                        "summary": "DM participant privacy marker.",
+                        "retrieval_text": "DM participant privacy marker memory.",
+                        "audience_scope": "dm",
+                        "participants": [
+                            {"actor_id": pc["id"], "role": "witness"}
+                        ],
+                    }
+                },
+                "expected_revision": campaign["revision"],
+                "idempotency_key": "dm-participant-event",
+            },
+        )
 
         arguments = {
             "campaign_id": campaign["id"],
@@ -430,6 +450,13 @@ def test_player_actor_memory_filters_dm_only_knowledge_while_dm_keeps_it(
         assert dm_keys == {"owner-memory", "public-memory", "dm-only-memory"}
         assert player_keys == {"owner-memory", "public-memory"}
         assert "dm-only-memory" not in str(player_context["memory"])
+        assert dm_participant_event["event"]["id"] in {
+            item["record"]["id"] for item in dm_context["memory"]["episodic"]
+        }
+        assert dm_participant_event["event"]["id"] not in {
+            item["record"]["id"] for item in player_context["memory"]["episodic"]
+        }
+        assert "DM participant privacy marker" not in str(player_context["memory"])
 
     asyncio.run(exercise())
 
