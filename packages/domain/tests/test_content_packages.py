@@ -324,6 +324,91 @@ def test_finalized_module_does_not_require_party_size_recommendation(
     assert validated["content"]["play_profile"]["party_size"]["minimum"] is None
 
 
+def test_emergent_module_shard_requires_scene_and_lineage_but_not_ending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_ref = {"source_key": "seed", "chunk_key": "scene-1"}
+    package = {
+        "kind": "module",
+        "system_id": "dnd5e",
+        "metadata": {
+            "agent_finalization": {
+                "confirmed": True,
+                "reviewer": "agent:test",
+                "note": "Reviewed the open-ended seed shard.",
+            }
+        },
+        "content": {
+            "classification": "emergent_seed",
+            "lineage": {
+                "root_module_key": "campaign-seed",
+                "parent_module_key": "",
+                "generation": 0,
+            },
+            "scene_atlas": [{"stable_key": "scene:arrival", "metadata": {}}],
+            "artifacts": [],
+            "narrative": {"endings": []},
+            "play_profile": {
+                "party_size": {"minimum": None, "maximum": None, "source_refs": []},
+                "starting_level": {"value": 1, "source_refs": [source_ref]},
+                "expected_end_level": {"value": 1, "source_refs": [source_ref]},
+                "advancement": {
+                    "recommended": "milestone",
+                    "modes": ["milestone"],
+                    "source_refs": [source_ref],
+                },
+                "pregenerated_characters": {"present": False, "source_refs": [source_ref]},
+            },
+        },
+        "actors": [],
+        "assets": [],
+    }
+    monkeypatch.setattr(
+        "sagasmith_dnd.content_packages.validate_core_content_package",
+        lambda value: copy.deepcopy(value),
+    )
+
+    assert validate_dnd_content_package(package)["content"]["narrative"]["endings"] == []
+
+    missing_scene = copy.deepcopy(package)
+    missing_scene["content"]["scene_atlas"] = []
+    with pytest.raises(ValueError, match="at least one Scene Atlas scene"):
+        validate_dnd_content_package(missing_scene)
+
+    missing_lineage = copy.deepcopy(package)
+    missing_lineage["content"].pop("lineage")
+    with pytest.raises(ValueError, match="requires a lineage object"):
+        validate_dnd_content_package(missing_lineage)
+
+
+def test_emergent_episode_requires_parent_lineage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = {
+        "kind": "module",
+        "system_id": "dnd5e",
+        "metadata": {},
+        "content": {
+            "classification": "emergent_episode",
+            "lineage": {
+                "root_module_key": "campaign-seed",
+                "parent_module_key": "",
+                "generation": 1,
+            },
+            "scene_atlas": [{"stable_key": "scene:bargain"}],
+        },
+        "actors": [],
+        "assets": [],
+    }
+    monkeypatch.setattr(
+        "sagasmith_dnd.content_packages.validate_core_content_package",
+        lambda value: copy.deepcopy(value),
+    )
+
+    with pytest.raises(ValueError, match="requires a parent_module_key"):
+        validate_dnd_content_package(package)
+
+
 def test_preset_builder_repairs_reviewed_pdf_word_breaks_in_actor_cards() -> None:
     sheet = default_character_sheet()
     sheet["content"]["features"] = [

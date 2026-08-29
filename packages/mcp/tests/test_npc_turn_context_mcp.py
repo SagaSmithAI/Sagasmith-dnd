@@ -81,6 +81,78 @@ async def _campaign_with_npc(server):
     return campaign, npc, pc
 
 
+def test_actor_memory_context_is_available_for_pc_without_deciding_intent(
+    tmp_path: Path,
+) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        campaign, _npc, pc = await _campaign_with_npc(server)
+        current = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        await _call(
+            server,
+            "memory_change",
+            {
+                "campaign_id": campaign["id"],
+                "action": "commit",
+                "payload": {
+                    "event": {
+                        "summary": "Envoy heard the observatory bell.",
+                        "participants": [{"actor_id": pc["id"], "role": "witness"}],
+                        "audience_scope": "actor",
+                    },
+                    "actor_knowledge": [
+                        {
+                            "actor_id": pc["id"],
+                            "knowledge_key": "observatory-bell",
+                            "proposition": "The observatory bell rang twice.",
+                            "subject_ref": "scene:observatory",
+                            "confidence": 5,
+                            "disclosure_scope": "owner",
+                        }
+                    ],
+                },
+                "expected_revision": current["revision"],
+                "idempotency_key": "pc-memory",
+            },
+        )
+
+        context = await _call(
+            server,
+            "continuity_context",
+            {
+                "campaign_id": campaign["id"],
+                "purpose": "actor_memory",
+                "actor_id": pc["id"],
+                "query": "observatory bell",
+                "related_refs": ["scene:observatory"],
+            },
+        )
+
+        assert context["purpose"] == "actor_memory"
+        assert context["actor"]["character_type"] == "pc"
+        assert context["memory"]["semantic"][0]["record"]["knowledge_key"] == (
+            "observatory-bell"
+        )
+        assert context["memory"]["episodic"][0]["record"]["summary"] == (
+            "Envoy heard the observatory bell."
+        )
+        memory_schema = json.loads(
+            files("sagasmith_dnd_mcp")
+            .joinpath("contracts")
+            .joinpath("actor-memory-context.v1.schema.json")
+            .read_text(encoding="utf-8")
+        )
+        Draft202012Validator(memory_schema).validate(context["memory"])
+        assert "intent" not in str(context["memory"]).casefold()
+        assert context["context_receipt"]["signature"]
+
+    asyncio.run(exercise())
+
+
 def test_npc_turn_bundle_is_actor_scoped_and_commits_only_accepted_deltas(
     tmp_path: Path,
 ) -> None:
@@ -143,13 +215,16 @@ def test_npc_turn_bundle_is_actor_scoped_and_commits_only_accepted_deltas(
         bundle_schema = json.loads(
             files("sagasmith_dnd_mcp")
             .joinpath("contracts")
-            .joinpath("npc-turn-bundle.v2.schema.json")
+            .joinpath("npc-turn-bundle.v3.schema.json")
             .read_text(encoding="utf-8")
         )
         Draft202012Validator(bundle_schema).validate(bundle)
 
         assert bundle["purpose"] == "npc_turn"
-        assert bundle["schema_version"] == 2
+        assert bundle["schema_version"] == 3
+        assert bundle["actor_memory"]["motivational"][0]["record"]["predicate"] == (
+            "relationship_to"
+        )
         assert bundle["conversation"]["campaign_id"] == campaign["id"]
         assert bundle["conversation"]["participants"][0]["actor_id"] == npc["id"]
         assert bundle["delegation"]["contract"] == "sagasmith.delegation.v1"
@@ -505,7 +580,7 @@ def test_npc_turn_is_live_phase_only_and_contract_schemas_ship(tmp_path: Path) -
     bundle_schema = json.loads(
         files("sagasmith_dnd_mcp")
         .joinpath("contracts")
-        .joinpath("npc-turn-bundle.v2.schema.json")
+        .joinpath("npc-turn-bundle.v3.schema.json")
         .read_text(encoding="utf-8")
     )
     proposal_schema = json.loads(

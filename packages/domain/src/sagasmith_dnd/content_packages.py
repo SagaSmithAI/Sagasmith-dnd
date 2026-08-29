@@ -123,6 +123,51 @@ def _refresh_reviewed_content_hashes(artifact: Mapping[str, Any]) -> dict[str, A
     return value
 
 
+_EMERGENT_MODULE_CLASSIFICATIONS = {"emergent_seed", "emergent_episode"}
+_EMERGENT_LINEAGE_FIELDS = {"root_module_key", "parent_module_key", "generation"}
+_EMERGENT_MODULE_KEY = re.compile(r"^[a-z0-9][a-z0-9:_-]{0,199}$")
+
+
+def _validate_emergent_module_shape(content: Mapping[str, Any]) -> None:
+    """Require an immutable lineage and at least one authored scene per shard."""
+
+    classification = content.get("classification")
+    if classification not in _EMERGENT_MODULE_CLASSIFICATIONS:
+        return
+    scenes = content.get("scene_atlas")
+    if not isinstance(scenes, list) or not scenes:
+        raise ValueError("emergent module shard requires at least one Scene Atlas scene")
+    lineage = content.get("lineage")
+    if not isinstance(lineage, Mapping):
+        raise ValueError("emergent module shard requires a lineage object")
+    unknown = sorted(set(lineage) - _EMERGENT_LINEAGE_FIELDS)
+    if unknown:
+        raise ValueError(
+            "emergent module lineage contains unsupported fields: " + ", ".join(unknown)
+        )
+    root = lineage.get("root_module_key")
+    parent = lineage.get("parent_module_key")
+    generation = lineage.get("generation")
+    if not isinstance(root, str) or not _EMERGENT_MODULE_KEY.fullmatch(root):
+        raise ValueError("emergent module lineage.root_module_key must be a stable lowercase id")
+    if parent not in {None, ""} and (
+        not isinstance(parent, str) or not _EMERGENT_MODULE_KEY.fullmatch(parent)
+    ):
+        raise ValueError(
+            "emergent module lineage.parent_module_key must be empty or a stable lowercase id"
+        )
+    if isinstance(generation, bool) or not isinstance(generation, int) or generation < 0:
+        raise ValueError("emergent module lineage.generation must be a non-negative integer")
+    if classification == "emergent_seed" and (parent not in {None, ""} or generation != 0):
+        raise ValueError("emergent_seed lineage requires no parent and generation 0")
+    if classification == "emergent_episode" and (
+        not isinstance(parent, str) or not parent or generation < 1
+    ):
+        raise ValueError(
+            "emergent_episode lineage requires a parent_module_key and positive generation"
+        )
+
+
 def validate_dnd_content_package(package: Mapping[str, Any]) -> dict[str, Any]:
     """Validate D&D presentation references layered onto the generic package."""
 
@@ -169,6 +214,7 @@ def validate_dnd_content_package(package: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError(f"D&D content attestations are stale: {preview}{suffix}")
     assets = {str(asset["asset_key"]): asset for asset in value["assets"]}
     if value["kind"] == "module":
+        _validate_emergent_module_shape(value["content"])
         finalization = value["metadata"].get("agent_finalization")
         if not isinstance(finalization, Mapping) or set(finalization) != {
             "confirmed",
@@ -1595,6 +1641,8 @@ def build_module_content_package(
             chunk_hash_keys=hash_keys,
         ),
     }
+    if translated_manifest["classification"] in _EMERGENT_MODULE_CLASSIFICATIONS:
+        content["lineage"] = copy.deepcopy(translated_manifest.get("lineage"))
     package_result = build_content_package(
         kind="module",
         package_id=str(descriptor["id"]),

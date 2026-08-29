@@ -6,7 +6,7 @@ from sagasmith_dnd.module_profile import DndModuleProfile
 
 
 def test_module_profile_version_includes_inline_ocr_room_recovery() -> None:
-    assert DndModuleProfile.version == "30"
+    assert DndModuleProfile.version == "31"
 
 
 def test_dnd_scene_parser_matches_agent_hierarchy_behavior() -> None:
@@ -94,6 +94,115 @@ Text.
         in metadata["runtime_manifest_errors"]
     )
     assert "runtime manifest clues[0].trigger is required" in metadata["runtime_manifest_errors"]
+
+
+def test_dnd_profile_strictly_validates_emergent_runtime_manifest_v2() -> None:
+    content = """<!-- sagasmith-runtime-manifest
+{
+  "schema_version": 2,
+  "module_key": "campaign-seed",
+  "classification": "emergent_seed",
+  "lineage": {
+    "root_module_key": "campaign-seed",
+    "parent_module_key": "",
+    "generation": 0
+  },
+  "entities": [{"id": "npc:keeper", "kind": "npc", "name": "Keeper"}],
+  "clues": [{
+    "id": "clue:seal",
+    "label": "Broken seal",
+    "trigger": "inspect the gate",
+    "revelation": "The seal was broken from within.",
+    "linked_thread_ids": ["thread:gate"],
+    "fallback_scene_ids": ["scene:archive"]
+  }],
+  "foreshadowing": [{
+    "id": "foreshadow:red-ravens",
+    "signal": "Red feathers appear near the gate.",
+    "reveal_trigger": "follow the smugglers",
+    "linked_thread_ids": ["thread:gate"],
+    "payoff_scene_ids": ["scene:archive"]
+  }],
+  "fronts": [{
+    "id": "front:smugglers",
+    "name": "Smuggler advance",
+    "goal": "Open the border gate.",
+    "stakes": "The keep will fall.",
+    "grim_portents": ["The watch disappears."],
+    "linked_thread_ids": ["thread:gate"]
+  }],
+  "story_threads": [{
+    "id": "thread:gate",
+    "title": "Who broke the seal?",
+    "question": "Who benefits from an open gate?",
+    "linked_front_ids": ["front:smugglers"],
+    "linked_clue_ids": ["clue:seal"]
+  }],
+  "character_arcs": [{
+    "id": "arc:warden",
+    "actor_id": "pc:warden",
+    "actor_kind": "pc",
+    "opportunities": [{
+      "id": "opportunity:choose-trust",
+      "prompt": "The keeper asks for trust without proof.",
+      "scene_ids": ["scene:arrival"],
+      "thread_ids": ["thread:gate"]
+    }],
+    "planned_beats": [],
+    "possible_endings": []
+  }],
+  "scene_links": []
+}
+-->
+# Seed
+## Arrival
+The party reaches the keep.
+"""
+
+    metadata = MarkdownModuleParser(profile=DndModuleProfile()).document_metadata(content)
+
+    assert metadata["runtime_manifest"]["classification"] == "emergent_seed"
+    assert metadata["runtime_manifest_errors"] == []
+
+
+def test_runtime_manifest_v2_preserves_pc_agency_and_episode_lineage() -> None:
+    content = """<!-- sagasmith-runtime-manifest
+{
+  "schema_version": 2,
+  "module_key": "episode-one",
+  "classification": "emergent_episode",
+  "lineage": {
+    "root_module_key": "campaign-seed",
+    "parent_module_key": "campaign-seed",
+    "generation": 1
+  },
+  "character_arcs": [{
+    "id": "arc:warden",
+    "actor_id": "pc:warden",
+    "actor_kind": "pc",
+    "opportunities": [{
+      "id": "opportunity:betrayal",
+      "prompt": "A rival offers a dangerous bargain.",
+      "scene_ids": ["scene:bargain"],
+      "thread_ids": []
+    }],
+    "planned_beats": ["The warden accepts the bargain."],
+    "possible_endings": ["The warden betrays the keep."]
+  }],
+  "scene_links": []
+}
+-->
+# Episode
+## Bargain
+The rival waits.
+"""
+
+    errors = MarkdownModuleParser(profile=DndModuleProfile()).document_metadata(content)[
+        "runtime_manifest_errors"
+    ]
+
+    assert any("for a PC may only define opportunities" in error for error in errors)
+    assert "emergent_episode runtime manifest requires at least one scene_link" in errors
 
 
 def test_dnd_scene_parser_promotes_h3_when_it_dominates_h2() -> None:

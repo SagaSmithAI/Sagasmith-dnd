@@ -8,7 +8,7 @@ where persistent conversations are intentionally not exposed.
 
 This is the NPC-dialogue specialization of
 `host-integration-bounded-context.md`. Read and enforce that document first.
-It adds the richer `npc-turn-bundle.v1` proposal and atomic accepted-delta
+It adds the richer `npc-turn-bundle.v3` proposal and atomic accepted-delta
 commit; it does not weaken the common context-epoch or zero-tool boundary.
 
 ## Capability levels

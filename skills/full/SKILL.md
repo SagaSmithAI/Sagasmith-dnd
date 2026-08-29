@@ -154,6 +154,10 @@ For Module or rules Pack authoring, load the repository-local
   reviewed reason and both old/new fingerprints.
 - Keep each PC/NPC's `actor_id` explicit when reading or writing ActorKnowledge;
   never merge one actor's memories into another actor's context.
+- For long-running PC/NPC continuity, read
+  `continuity_context(purpose="actor_memory")`. Its identity, motivational,
+  semantic, and episodic tracks are bounded retrieval projections, not a source
+  of player intent or a second persistence ledger.
 - Treat campaign messages as domain-private. When campaign, authenticated
   principal, role, audience, branch, or restore changes, discard old model
   history, summaries, workspace/Dream memory, cached retrieval, receipts, and
@@ -183,7 +187,7 @@ For Module or rules Pack authoring, load the repository-local
   signed single-turn `npc_turn` path only for a standalone reaction or Combat;
   follow `references/host-integration-npc-turn.md` for that current single-turn
   boundary.
-- For autonomous actor, player-audience rendering, faction, source
+- For autonomous actor, player-audience rendering, faction, campaign expansion, source
   interpretation, or Agent-owned ruling isolation, request the matching
   `continuity_context` purpose, run the fixed zero-tool evaluation, and submit
   the proposal to `bounded_evaluation(action="validate")`. Human-owned PCs
@@ -191,6 +195,16 @@ For Module or rules Pack authoring, load the repository-local
   mechanics with ordinary public MCP tools and persist only actual accepted
   outcomes. SagaSmith Agent uses `isolated_evaluate`; other hosts follow
   `references/host-integration-bounded-context.md`.
+- For an emergent campaign, close conversations, leave Combat, and return to
+  Lobby before requesting `purpose="campaign_expansion"`. Treat the result as a
+  reviewed proposal only, then follow
+  `../dnd-module-generator/references/emergent-campaign.md` to author and append
+  an immutable seed or episode shard.
+- A complete authored Module is not a world boundary. If players choose a
+  source-consistent off-Atlas location, use the same Lobby expansion path and
+  append an `emergent_episode` under
+  `campaign_mode="authored_with_extensions"`; never mutate the authored root or
+  present table-created material as publisher canon.
 - A returned `narrative_followup` is a generic Agent review request caused by a
   consequential named-NPC state change. It is not a hard-coded module trigger
   and never authorizes movement, speech, surrender, or item transfer by itself.

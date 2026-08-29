@@ -5,10 +5,12 @@ from pathlib import Path
 
 import pytest
 from jsonschema import Draft202012Validator
+from sagasmith_dnd.playthrough import new_playthrough_manifest
 
 from sagasmith_dnd_mcp.bounded_evaluations import normalize_bounded_proposal
 from sagasmith_dnd_mcp.config import McpConfig
 from sagasmith_dnd_mcp.server import create_server
+from tests.authoring_helpers import finalize_and_activate_module
 
 
 def _config(tmp_path: Path) -> McpConfig:
@@ -134,6 +136,8 @@ def test_actor_audience_and_faction_bundles_validate_without_writing_state(
         assert actor_bundle["constraints"]["output_contract"] == (
             "actor-turn-proposal.v1"
         )
+        assert actor_bundle["context"]["actor_memory"]["identity"]
+        assert actor_bundle["context"]["campaign_design"] is None
         actor_proposal = _actor_proposal(actor_bundle, npc["id"])
         validated = await _call(
             server,
@@ -477,12 +481,228 @@ def test_source_interpretation_requires_evidence_and_reviews_uncertainty() -> No
         normalize_bounded_proposal("source_interpretation", proposal)
 
 
+def test_campaign_expansion_is_a_review_only_evidence_bound_module_source() -> None:
+    proposal = {
+        "schema_version": 1,
+        "bundle_id": "bundle",
+        "purpose": "campaign_expansion",
+        "campaign_line_id": "ashen-road",
+        "title": "The road bends east",
+        "source_markdown": (
+            "<!-- sagasmith-runtime-manifest\n"
+            '{"schema_version":2,"module_key":"ashen-road-episode-2"}\n'
+            "-->\n# The road bends east\n"
+        ),
+        "generation_basis_refs": ["event:choice-east"],
+        "claims": [],
+        "unresolved": ["The ferryman's allegiance needs Director review."],
+        "requires_director_review": True,
+        "decision_summary": "Prepare an episode shard; do not activate it.",
+    }
+
+    normalized = normalize_bounded_proposal("campaign_expansion", proposal)
+
+    assert normalized["campaign_line_id"] == "ashen-road"
+    assert normalized["requires_director_review"] is True
+    with pytest.raises(ValueError, match="requires Director review"):
+        normalize_bounded_proposal(
+            "campaign_expansion",
+            {**proposal, "requires_director_review": False},
+        )
+    with pytest.raises(ValueError, match="runtime-manifest"):
+        normalize_bounded_proposal(
+            "campaign_expansion",
+            {**proposal, "source_markdown": "# Unstructured draft"},
+        )
+    with pytest.raises(ValueError, match="generation_basis_refs"):
+        normalize_bounded_proposal(
+            "campaign_expansion",
+            {**proposal, "generation_basis_refs": []},
+        )
+
+
+@pytest.mark.parametrize(
+    ("campaign_mode", "root_classification"),
+    [
+        ("emergent", "emergent_seed"),
+        ("authored_module", "authored_module"),
+    ],
+)
+def test_campaign_expansion_bundle_is_lobby_only_and_bound_to_campaign_line(
+    tmp_path: Path,
+    campaign_mode: str,
+    root_classification: str,
+) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {"name": "Ashen Road", "idempotency_key": "campaign"},
+        )
+        staged = await _call(
+            server,
+            "module_draft",
+            {
+                "campaign_id": campaign["id"],
+                "action": "start",
+                "payload": {
+                    "name": "Seed.md",
+                    "title": "Ashen Road Seed",
+                    "source_key": "seed",
+                    "content": (
+                        "<!-- sagasmith-runtime-manifest\n"
+                        '{"schema_version":2,"module_key":"ashen-road-seed",'
+                        f'"classification":"{root_classification}","lineage":{{'
+                        '"root_module_key":"ashen-road-seed","parent_module_key":"",'
+                        '"generation":0},"entities":[],"secrets":[],"clues":[],'
+                        '"plot_nodes":[],"foreshadowing":[],"branches":[],"fronts":[],'
+                        '"story_threads":[],"character_arcs":[],"scene_links":[]}\n'
+                        "-->\n# The Ashen Road\n\n## Crossroads\n\nThe road divides."
+                    ),
+                },
+                "idempotency_key": "stage",
+            },
+        )
+        activation = await finalize_and_activate_module(
+            _call,
+            server,
+            campaign["id"],
+            staged,
+            source_key="seed",
+            title="Ashen Road Seed",
+            portable_id="dnd5e.module.ashen-road-seed",
+        )
+        module_id = activation["activated"]["activation"]["module_id"]
+        current = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        manifest = new_playthrough_manifest(
+            run_id="run-ashen-road",
+            campaign_line_id="ashen-road",
+            module_ids=[module_id],
+            recommended_party_minimum=None,
+            recommended_party_maximum=None,
+            selected_party_size=None,
+            source_refs=[],
+            campaign_mode=campaign_mode,
+            content_lineage=[
+                {
+                    "module_id": module_id,
+                    "classification": root_classification,
+                    "root_module_id": module_id,
+                    "parent_module_id": "",
+                    "generation": 0,
+                    "scene_ids": [],
+                    "source_refs": [],
+                }
+            ],
+        )
+        await _call(
+            server,
+            "playthrough_manifest",
+            {
+                "campaign_id": campaign["id"],
+                "action": "initialize",
+                "payload": {"manifest": manifest},
+                "expected_revision": current["revision"],
+                "idempotency_key": "manifest",
+            },
+        )
+
+        bundle = await _call(
+            server,
+            "continuity_context",
+            {
+                "campaign_id": campaign["id"],
+                "purpose": "campaign_expansion",
+                "query": "Follow the consequences of choosing the eastern road.",
+            },
+        )
+        schema = json.loads(
+            files("sagasmith_dnd_mcp")
+            .joinpath("contracts")
+            .joinpath("bounded-evaluation-bundle.v1.schema.json")
+            .read_text(encoding="utf-8")
+        )
+        Draft202012Validator(schema).validate(bundle)
+        design_ref = bundle["context"]["campaign_design"]["basis_ref"]
+        assert bundle["subject"]["id"] == "ashen-road"
+        assert bundle["context"]["campaign_design"]["installed_shards"][0][
+            "module_id"
+        ] == module_id
+        assert bundle["context"]["campaign_design"]["installed_shards"][0][
+            "runtime_manifest"
+        ]["classification"] == root_classification
+        assert design_ref in bundle["constraints"]["allowed_claim_basis_refs"]
+        proposal = {
+            "schema_version": 1,
+            "bundle_id": bundle["bundle_id"],
+            "purpose": "campaign_expansion",
+            "campaign_line_id": "ashen-road",
+            "title": "The eastern tollhouse",
+            "source_markdown": (
+                "<!-- sagasmith-runtime-manifest\n"
+                '{"schema_version":2,"module_key":"ashen-road-episode-1"}\n'
+                "-->\n# The eastern tollhouse\n"
+            ),
+            "generation_basis_refs": [design_ref],
+            "claims": [],
+            "unresolved": [],
+            "requires_director_review": True,
+            "decision_summary": "Review and author as an inactive episode shard.",
+        }
+        validated = await _call(
+            server,
+            "bounded_evaluation",
+            {
+                "campaign_id": campaign["id"],
+                "action": "validate",
+                "proposal": proposal,
+                "bundle_receipt": bundle["bundle_receipt"],
+            },
+        )
+        assert validated["proposal"]["campaign_line_id"] == "ashen-road"
+
+        latest = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        await _call(
+            server,
+            "game_phase",
+            {
+                "campaign_id": campaign["id"],
+                "action": "set",
+                "tool_profile": "play",
+                "expected_revision": latest["revision"],
+                "idempotency_key": "play",
+            },
+        )
+        with pytest.raises(Exception, match="only during Lobby"):
+            await _call(
+                server,
+                "continuity_context",
+                {
+                    "campaign_id": campaign["id"],
+                    "purpose": "campaign_expansion",
+                    "query": "Generate while play is live.",
+                },
+            )
+
+    asyncio.run(exercise())
+
+
 def test_bounded_evaluation_contract_schemas_ship_and_are_strict() -> None:
     names = [
         "bounded-evaluation-bundle.v1.schema.json",
         "actor-turn-proposal.v1.schema.json",
         "audience-render-proposal.v1.schema.json",
         "faction-turn-proposal.v1.schema.json",
+        "campaign-expansion-proposal.v1.schema.json",
         "source-interpretation-proposal.v1.schema.json",
         "bounded-ruling-proposal.v1.schema.json",
     ]

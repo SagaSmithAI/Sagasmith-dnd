@@ -22,7 +22,7 @@ from typing import Any
 from uuid import uuid4
 
 NPC_CONVERSATION_SCHEMA_VERSION = 3
-NPC_CONVERSATION_PROPOSAL_SCHEMA_VERSION = 4
+NPC_CONVERSATION_PROPOSAL_SCHEMA_VERSION = 5
 NPC_CONVERSATION_CONTRACT = "npc-conversation.v3"
 
 NPC_RESOLUTION_KINDS = frozenset(
@@ -74,7 +74,7 @@ def _string_list(value: Any, field: str, *, maximum: int = 200) -> list[str]:
 
 
 def normalize_conversation_proposal(value: Any) -> dict[str, Any]:
-    """Normalize the minimal authoritative v4 NPC proposal contract."""
+    """Normalize the authoritative v5 NPC proposal contract."""
 
     data = _object(value, "npc_conversation.proposal")
     allowed = {
@@ -93,7 +93,7 @@ def normalize_conversation_proposal(value: Any) -> dict[str, Any]:
     }
     _strict(data, "npc_conversation.proposal", allowed)
     if data.get("schema_version") != NPC_CONVERSATION_PROPOSAL_SCHEMA_VERSION:
-        raise ValueError("npc_conversation.proposal.schema_version must be 4")
+        raise ValueError("npc_conversation.proposal.schema_version must be 5")
 
     response_bid = _object(data.get("response_bid") or {}, "response_bid")
     _strict(response_bid, "response_bid", {"should_respond", "urgency", "reason"})
@@ -114,6 +114,7 @@ def normalize_conversation_proposal(value: Any) -> dict[str, Any]:
             f"utterance_segments[{index}]",
             {
                 "text",
+                "content_mode",
                 "speech_act",
                 "truth_posture",
                 "basis_refs",
@@ -127,6 +128,22 @@ def normalize_conversation_proposal(value: Any) -> dict[str, Any]:
             f"utterance_segments[{index}].basis_refs",
             maximum=300,
         )
+        content_mode = _text(
+            item.get("content_mode"),
+            f"utterance_segments[{index}].content_mode",
+            required=True,
+            maximum=20,
+        )
+        if content_mode not in {"nonfactual", "grounded", "deception", "uncertain"}:
+            raise ValueError(
+                f"utterance_segments[{index}].content_mode must be nonfactual, grounded, "
+                "deception, or uncertain"
+            )
+        if content_mode in {"grounded", "deception", "uncertain"} and not basis_refs:
+            raise ValueError(
+                f"utterance_segments[{index}] with content_mode={content_mode!r} "
+                "requires actor-owned basis_refs"
+            )
         segments.append(
             {
                 "text": _text(
@@ -135,6 +152,7 @@ def normalize_conversation_proposal(value: Any) -> dict[str, Any]:
                     required=True,
                     maximum=2_000,
                 ),
+                "content_mode": content_mode,
                 "speech_act": _text(
                     item.get("speech_act"),
                     f"utterance_segments[{index}].speech_act",
@@ -1107,7 +1125,7 @@ class ConversationStore:
     def _public_activation(
         self, session: dict[str, Any], activation: dict[str, Any]
     ) -> dict[str, Any]:
-        return {
+        result = {
             key: deepcopy(activation[key])
             for key in (
                 "actor_id",
@@ -1122,6 +1140,11 @@ class ConversationStore:
             "conversation_revision": int(session["conversation_revision"])
             + (1 if session.get("_pending_mutation") else 0),
         }
+        replacement_for = str(activation.get("replacement_for") or "")
+        replaced = dict(session["activations"]).get(replacement_for)
+        if replaced is not None:
+            result["replacement_for"] = self._capability(session, replaced)
+        return result
 
     def _activation_from_ref(self, session: dict[str, Any], activation_ref: str) -> dict[str, Any]:
         for activation in session["activations"].values():
@@ -1160,6 +1183,8 @@ class ConversationStore:
         if replay is not None:
             return replay
         activation = self._activation_from_ref(session, activation_ref)
+        if activation["status"] == "invalidated":
+            raise ValueError("activation is invalidated; use its replacement activation")
         if activation["status"] == "completed":
             raise ValueError("activation is already completed")
         now_ns = time.time_ns()
@@ -1211,7 +1236,14 @@ class ConversationStore:
                 "may_call_tools": False,
                 "may_roll_dice": False,
                 "may_write_state": False,
-                "output_contract": "npc-conversation-proposal.v4",
+                "utterance_content_modes": [
+                    "nonfactual",
+                    "grounded",
+                    "deception",
+                    "uncertain",
+                ],
+                "factual_content_requires_actor_owned_basis_refs": True,
+                "output_contract": "npc-conversation-proposal.v5",
             },
         }
         return self.finish_mutation(session, capsule)

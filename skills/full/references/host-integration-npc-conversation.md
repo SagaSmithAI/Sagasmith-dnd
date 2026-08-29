@@ -8,7 +8,7 @@ workers and ephemeral provider caches.
 ## Required Host boundary
 
 Require `server_capabilities.npc_conversations.schema_version=3`,
-`proposal_contract="npc-conversation-proposal.v4"`, and
+`proposal_contract="npc-conversation-proposal.v5"`, and
 `host_transport="private_authenticated_unlisted"`.
 
 - Keep one zero-tool message context per `conversation_id + actor_runtime_id`.
@@ -105,13 +105,15 @@ MCP projects a separate inbox per actor:
 - partial: only the Agent-supplied rendition;
 - understood: full allowed content.
 
-## Proposal v4 and knowledge ownership
+## Proposal v5 and knowledge ownership
 
-The NPC worker returns `npc-conversation-proposal.v4`. Every speakable byte
-belongs to `utterance_segments`, and each segment requires only `text`.
-`speech_act`, truth posture, basis refs, targets, language, and delivery are
-optional expression metadata. When supplied, basis refs and targets must remain
-within the actor capsule constraints. `proposed_action` uses
+The NPC worker returns `npc-conversation-proposal.v5`. Every speakable byte
+belongs to `utterance_segments`, and each segment requires `text` plus a
+`content_mode`: `nonfactual`, `grounded`, `deception`, or `uncertain`.
+Grounded, deceptive, and uncertain claims require actor-owned `basis_refs`; those refs and
+all targets must remain within the actor capsule constraints. `speech_act`,
+truth posture, language, and delivery remain optional expression metadata.
+`proposed_action` uses
 `summary`, `target_refs`, `settlement` (`narrative` or `mechanical`), and
 `mechanic_hint`; a mechanical action requires a resolution request.
 

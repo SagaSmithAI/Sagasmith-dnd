@@ -8,6 +8,16 @@ from typing import Any
 from sagasmith_core.modules import EXACT_MODULE_SOURCE_FIELDS, canonical_heading_path
 
 SCHEMA_VERSION = 2
+CAMPAIGN_MODES = {"authored_module", "authored_with_extensions", "emergent"}
+CONTENT_CLASSIFICATIONS = {
+    "authored_module",
+    "emergent_seed",
+    "emergent_episode",
+}
+FRONT_PROGRESS_STATUSES = {"dormant", "active", "advanced", "resolved", "averted"}
+THREAD_PROGRESS_STATUSES = {"dormant", "open", "advanced", "resolved", "abandoned"}
+ARC_PROGRESS_STATUSES = {"dormant", "available", "advanced", "resolved", "closed"}
+EVIDENCE_KINDS = {"event", "snapshot", "scene", "memory_fact", "conversation"}
 PLAYTHROUGH_STATUSES = {
     "lobby",
     "ready",
@@ -52,6 +62,8 @@ def new_playthrough_manifest(
     review_blocks: list[dict[str, Any]] | None = None,
     party_size_status: str | None = None,
     party_size_review: dict[str, Any] | None = None,
+    campaign_mode: str = "authored_module",
+    content_lineage: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Create the complete empty shape used before party construction."""
 
@@ -62,12 +74,29 @@ def new_playthrough_manifest(
     if resolved_party_size_status in {"dm_review_required", "dm_review_completed"}:
         resolved_party_size_review["default_resolver"] = "agent"
         resolved_party_size_review["ruling_kind"] = "source_or_scene_fact"
+    resolved_lineage = content_lineage or [
+        {
+            "module_id": module_id,
+            "classification": "authored_module",
+            "root_module_id": module_id,
+            "parent_module_id": "",
+            "generation": 0,
+            "scene_ids": [],
+            "source_refs": [],
+        }
+        for module_id in module_ids
+    ]
     return validate_playthrough_manifest(
         {
             "schema_version": SCHEMA_VERSION,
             "run_id": run_id,
             "campaign_line_id": campaign_line_id,
             "module_ids": list(module_ids),
+            "campaign_mode": campaign_mode,
+            "content_lineage": resolved_lineage,
+            "front_progress": [],
+            "thread_progress": [],
+            "arc_progress": [],
             "status": "lobby",
             "source_refs": source_refs,
             "current": {
@@ -119,8 +148,45 @@ def new_playthrough_manifest(
     )
 
 
+def migrate_playthrough_manifest(value: Any) -> dict[str, Any]:
+    """Explicitly migrate the legacy v1 shape into the current v2 contract."""
+
+    manifest = _object(value, "playthrough_manifest")
+    schema_version = _integer(manifest.get("schema_version"), "schema_version", minimum=1)
+    if schema_version == SCHEMA_VERSION:
+        return manifest
+    if schema_version != 1:
+        raise ValueError(f"unsupported playthrough manifest schema {schema_version}")
+    module_ids = manifest.get("module_ids")
+    if not isinstance(module_ids, list):
+        raise ValueError("playthrough_manifest.module_ids must be an array before migration")
+    manifest["schema_version"] = SCHEMA_VERSION
+    manifest.setdefault("campaign_mode", "authored_module")
+    manifest.setdefault(
+        "content_lineage",
+        [
+            {
+                "module_id": module_id,
+                "classification": "authored_module",
+                "root_module_id": module_id,
+                "parent_module_id": "",
+                "generation": 0,
+                "scene_ids": [],
+                "source_refs": [],
+            }
+            for module_id in module_ids
+        ],
+    )
+    manifest.setdefault("front_progress", [])
+    manifest.setdefault("thread_progress", [])
+    manifest.setdefault("arc_progress", [])
+    return manifest
+
+
 def validate_playthrough_manifest(value: Any) -> dict[str, Any]:
     manifest = _object(value, "playthrough_manifest")
+    if manifest.get("schema_version") == 1:
+        manifest = migrate_playthrough_manifest(manifest)
     _only(
         manifest,
         "playthrough_manifest",
@@ -129,6 +195,11 @@ def validate_playthrough_manifest(value: Any) -> dict[str, Any]:
             "run_id",
             "campaign_line_id",
             "module_ids",
+            "campaign_mode",
+            "content_lineage",
+            "front_progress",
+            "thread_progress",
+            "arc_progress",
             "status",
             "source_refs",
             "current",
@@ -165,11 +236,41 @@ def validate_playthrough_manifest(value: Any) -> dict[str, Any]:
     _require_unique(quests, "id", "quests")
     _require_unique(clues, "id", "clues")
     ending = _validate_ending(manifest.get("ending"))
+    campaign_mode = _choice(
+        manifest.get("campaign_mode", "authored_module"),
+        "campaign_mode",
+        CAMPAIGN_MODES,
+    )
+    content_lineage = _validate_content_lineage(
+        manifest.get("content_lineage"),
+        module_ids=module_ids,
+        campaign_mode=campaign_mode,
+    )
+    front_progress = [
+        _validate_front_progress(item, index)
+        for index, item in enumerate(_list(manifest.get("front_progress")))
+    ]
+    thread_progress = [
+        _validate_thread_progress(item, index)
+        for index, item in enumerate(_list(manifest.get("thread_progress")))
+    ]
+    arc_progress = [
+        _validate_arc_progress(item, index)
+        for index, item in enumerate(_list(manifest.get("arc_progress")))
+    ]
+    _require_unique(front_progress, "id", "front_progress")
+    _require_unique(thread_progress, "id", "thread_progress")
+    _require_unique(arc_progress, "id", "arc_progress")
     normalized = {
         "schema_version": SCHEMA_VERSION,
         "run_id": _required_text(manifest.get("run_id"), "run_id"),
         "campaign_line_id": _required_text(manifest.get("campaign_line_id"), "campaign_line_id"),
         "module_ids": module_ids,
+        "campaign_mode": campaign_mode,
+        "content_lineage": content_lineage,
+        "front_progress": front_progress,
+        "thread_progress": thread_progress,
+        "arc_progress": arc_progress,
         "status": status,
         "source_refs": [
             validate_source_ref(item, field=f"source_refs[{index}]")
@@ -282,7 +383,254 @@ def playthrough_source_bindings(
         (f"ending.conditions[{index}].source_ref", item["source_ref"])
         for index, item in enumerate(value["ending"]["conditions"])
     )
+    for lineage_index, item in enumerate(value["content_lineage"]):
+        bindings.extend(
+            (f"content_lineage[{lineage_index}].source_refs[{index}]", source_ref)
+            for index, source_ref in enumerate(item["source_refs"])
+        )
+    for collection in ("front_progress", "thread_progress", "arc_progress"):
+        bindings.extend(
+            (f"{collection}[{index}].source_ref", item["source_ref"])
+            for index, item in enumerate(value[collection])
+            if item["source_ref"] is not None
+        )
     return bindings
+
+
+def _authored_lineage(module_ids: list[str]) -> list[dict[str, Any]]:
+    return [
+        {
+            "module_id": module_id,
+            "classification": "authored_module",
+            "root_module_id": module_id,
+            "parent_module_id": "",
+            "generation": 0,
+            "scene_ids": [],
+            "source_refs": [],
+        }
+        for module_id in module_ids
+    ]
+
+
+def _validate_content_lineage(
+    value: Any,
+    *,
+    module_ids: list[str],
+    campaign_mode: str,
+) -> list[dict[str, Any]]:
+    raw_items = _authored_lineage(module_ids) if value is None else _list(value)
+    items: list[dict[str, Any]] = []
+    for index, raw in enumerate(raw_items):
+        field = f"content_lineage[{index}]"
+        item = _object(raw, field)
+        _only(
+            item,
+            field,
+            {
+                "module_id",
+                "classification",
+                "root_module_id",
+                "parent_module_id",
+                "generation",
+                "scene_ids",
+                "source_refs",
+            },
+        )
+        classification = _choice(
+            item.get("classification"),
+            f"{field}.classification",
+            CONTENT_CLASSIFICATIONS,
+        )
+        module_id = _required_text(item.get("module_id"), f"{field}.module_id")
+        root_module_id = _required_text(
+            item.get("root_module_id"), f"{field}.root_module_id"
+        )
+        parent_module_id = _text(item.get("parent_module_id"))
+        generation = _integer(item.get("generation"), f"{field}.generation", minimum=0)
+        if classification == "emergent_seed" and (
+            root_module_id != module_id or parent_module_id or generation != 0
+        ):
+            raise ValueError(
+                f"{field} emergent_seed must root at module_id with no parent and generation 0"
+            )
+        if classification == "emergent_episode" and (
+            not parent_module_id or generation < 1
+        ):
+            raise ValueError(
+                f"{field} emergent_episode requires parent_module_id and positive generation"
+            )
+        if classification == "authored_module" and (
+            root_module_id != module_id or parent_module_id or generation != 0
+        ):
+            raise ValueError(
+                f"{field} authored_module must be a generation-0 root without a parent"
+            )
+        items.append(
+            {
+                "module_id": module_id,
+                "classification": classification,
+                "root_module_id": root_module_id,
+                "parent_module_id": parent_module_id,
+                "generation": generation,
+                "scene_ids": _unique_strings(item.get("scene_ids"), f"{field}.scene_ids"),
+                "source_refs": [
+                    validate_source_ref(source_ref, field=f"{field}.source_refs[{source_index}]")
+                    for source_index, source_ref in enumerate(_list(item.get("source_refs")))
+                ],
+            }
+        )
+    _require_unique(items, "module_id", "content_lineage")
+    lineage_module_ids = [item["module_id"] for item in items]
+    if campaign_mode == "authored_module" and lineage_module_ids != module_ids:
+        by_module_id = {item["module_id"]: item for item in items}
+        unknown = sorted(set(by_module_id) - set(module_ids))
+        if unknown:
+            raise ValueError("content_lineage contains module ids outside module_ids")
+        defaults = {item["module_id"]: item for item in _authored_lineage(module_ids)}
+        items = [by_module_id.get(module_id, defaults[module_id]) for module_id in module_ids]
+        lineage_module_ids = [item["module_id"] for item in items]
+    if lineage_module_ids != module_ids:
+        raise ValueError("content_lineage module ids must match module_ids in order")
+    all_module_ids = set(lineage_module_ids)
+    all_scene_ids = [scene_id for item in items for scene_id in item["scene_ids"]]
+    if len(all_scene_ids) != len(set(all_scene_ids)):
+        raise ValueError("content_lineage scene_ids must be unique across shards")
+    for index, item in enumerate(items):
+        if item["classification"] != "emergent_episode":
+            continue
+        if item["parent_module_id"] not in all_module_ids:
+            raise ValueError(
+                f"content_lineage[{index}].parent_module_id is not in module_ids"
+            )
+        roots = {
+            candidate["module_id"]: candidate
+            for candidate in items
+            if candidate["classification"] in {"emergent_seed", "authored_module"}
+        }
+        if item["root_module_id"] not in roots:
+            raise ValueError(f"content_lineage[{index}].root_module_id is not a declared root")
+        parent = next(
+            candidate
+            for candidate in items
+            if candidate["module_id"] == item["parent_module_id"]
+        )
+        if parent["root_module_id"] != item["root_module_id"]:
+            raise ValueError(
+                f"content_lineage[{index}].root_module_id must match its parent lineage"
+            )
+        if item["generation"] != parent["generation"] + 1:
+            raise ValueError(
+                f"content_lineage[{index}].generation must equal its parent generation plus one"
+            )
+    has_emergent = any(
+        item["classification"] in {"emergent_seed", "emergent_episode"} for item in items
+    )
+    if campaign_mode == "authored_module" and has_emergent:
+        raise ValueError("authored_module campaign_mode cannot contain emergent shards")
+    if campaign_mode == "authored_with_extensions":
+        if not any(item["classification"] == "authored_module" for item in items):
+            raise ValueError(
+                "authored_with_extensions campaign_mode requires an authored_module root"
+            )
+        if any(item["classification"] == "emergent_seed" for item in items):
+            raise ValueError(
+                "authored_with_extensions uses emergent_episode shards rooted in an "
+                "authored module, not emergent_seed"
+            )
+    if campaign_mode == "emergent" and not any(
+        item["classification"] == "emergent_seed" for item in items
+    ):
+        raise ValueError("emergent campaign_mode requires an emergent_seed shard")
+    return items
+
+
+def _validate_evidence_ref(value: Any, *, field: str) -> dict[str, str]:
+    item = _object(value, field)
+    _only(item, field, {"kind", "ref_id"})
+    return {
+        "kind": _choice(item.get("kind"), f"{field}.kind", EVIDENCE_KINDS),
+        "ref_id": _required_text(item.get("ref_id"), f"{field}.ref_id"),
+    }
+
+
+def _validate_progress_common(
+    value: Any,
+    *,
+    field: str,
+    allowed: set[str],
+    statuses: set[str],
+    evidence_required_statuses: set[str],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    item = _object(value, field)
+    _only(item, field, allowed | {"id", "status", "source_ref", "evidence_refs"})
+    common = {
+        "id": _required_text(item.get("id"), f"{field}.id"),
+        "status": _choice(item.get("status"), f"{field}.status", statuses),
+        "source_ref": (
+            validate_source_ref(item["source_ref"], field=f"{field}.source_ref")
+            if item.get("source_ref") is not None
+            else None
+        ),
+        "evidence_refs": [
+            _validate_evidence_ref(evidence, field=f"{field}.evidence_refs[{index}]")
+            for index, evidence in enumerate(_list(item.get("evidence_refs")))
+        ],
+    }
+    identities = [
+        (evidence["kind"], evidence["ref_id"]) for evidence in common["evidence_refs"]
+    ]
+    if len(identities) != len(set(identities)):
+        raise ValueError(f"{field}.evidence_refs must not contain duplicates")
+    if common["status"] in evidence_required_statuses and not common["evidence_refs"]:
+        raise ValueError(f"{field}.status={common['status']!r} requires evidence_refs")
+    return item, common
+
+
+def _validate_front_progress(value: Any, index: int) -> dict[str, Any]:
+    field = f"front_progress[{index}]"
+    item, common = _validate_progress_common(
+        value,
+        field=field,
+        allowed={"stage"},
+        statuses=FRONT_PROGRESS_STATUSES,
+        evidence_required_statuses={"advanced", "resolved", "averted"},
+    )
+    return {
+        **common,
+        "stage": _integer(item.get("stage"), f"{field}.stage", minimum=0),
+    }
+
+
+def _validate_thread_progress(value: Any, index: int) -> dict[str, Any]:
+    field = f"thread_progress[{index}]"
+    _item, common = _validate_progress_common(
+        value,
+        field=field,
+        allowed=set(),
+        statuses=THREAD_PROGRESS_STATUSES,
+        evidence_required_statuses={"advanced", "resolved", "abandoned"},
+    )
+    return common
+
+
+def _validate_arc_progress(value: Any, index: int) -> dict[str, Any]:
+    field = f"arc_progress[{index}]"
+    item, common = _validate_progress_common(
+        value,
+        field=field,
+        allowed={"actor_id", "actor_kind", "completed_opportunity_ids"},
+        statuses=ARC_PROGRESS_STATUSES,
+        evidence_required_statuses={"advanced", "resolved", "closed"},
+    )
+    actor_kind = _choice(item.get("actor_kind"), f"{field}.actor_kind", {"pc", "npc"})
+    return {
+        **common,
+        "actor_id": _required_text(item.get("actor_id"), f"{field}.actor_id"),
+        "actor_kind": actor_kind,
+        "completed_opportunity_ids": _unique_strings(
+            item.get("completed_opportunity_ids"), f"{field}.completed_opportunity_ids"
+        ),
+    }
 
 
 def _validate_current(value: Any) -> dict[str, str]:

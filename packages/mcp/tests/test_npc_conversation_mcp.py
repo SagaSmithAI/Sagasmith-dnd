@@ -589,7 +589,7 @@ def test_conversation_facade_private_transport_and_commit(tmp_path: Path) -> Non
         )
         identity_ref = f"actor:{npc['id']}:identity"
         proposal = {
-            "schema_version": 4,
+            "schema_version": 5,
             "conversation_id": conversation_id,
             "activation_id": capsule["activation_id"],
             "actor_runtime_id": capsule["actor_runtime_id"],
@@ -598,6 +598,7 @@ def test_conversation_facade_private_transport_and_commit(tmp_path: Path) -> Non
             "utterance_segments": [
                 {
                     "text": "No. I stayed home.",
+                    "content_mode": "deception",
                     "speech_act": "deny",
                     "truth_posture": "intentional_deception",
                     "basis_refs": [identity_ref],
@@ -911,6 +912,145 @@ def test_new_actor_knowledge_refreshes_the_open_actor_runtime(tmp_path: Path) ->
         )
         assert status["conversation_revision"] == 1
         assert status["refreshed_actor_ids"] == [npc["id"]]
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("claim_before_refresh", [False, True])
+def test_actor_refresh_replaces_pending_or_claimed_activation(
+    tmp_path: Path, claim_before_refresh: bool
+) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        campaign, npc, pc = await _campaign_with_actors(server)
+        opened = await _call(
+            server,
+            "npc_conversation",
+            {
+                "campaign_id": campaign["id"],
+                "action": "open",
+                "payload": {
+                    "participant_actor_ids": [pc["id"], npc["id"]],
+                    "idempotency_key": "open",
+                },
+            },
+        )
+        ingested = await _call(
+            server,
+            "npc_conversation",
+            {
+                "campaign_id": campaign["id"],
+                "action": "ingest",
+                "payload": {
+                    "conversation_id": opened["conversation_id"],
+                    "event": {
+                        "type": "speech",
+                        "speaker_actor_id": pc["id"],
+                        "content": "Do you know where the duke is?",
+                    },
+                    "audience_facts": _audience(
+                        "audience-refresh",
+                        perceived=[pc["id"], npc["id"]],
+                        understood=[pc["id"], npc["id"]],
+                        response=[npc["id"]],
+                    ),
+                    "expected_conversation_revision": 0,
+                    "idempotency_key": "ingest",
+                },
+            },
+        )
+        original = ingested["activations"][0]
+        conversation_revision = 1
+        if claim_before_refresh:
+            await _call(
+                server,
+                "npc_conversation_transport",
+                {
+                    "campaign_id": campaign["id"],
+                    "conversation_id": opened["conversation_id"],
+                    "action": "claim_activation",
+                    "host_token": HOST_TOKEN,
+                    "payload": {
+                        "activation_ref": original["activation_ref"],
+                        "expected_conversation_revision": conversation_revision,
+                        "idempotency_key": "claim-original",
+                        "cursor": 0,
+                    },
+                },
+            )
+            conversation_revision += 1
+
+        await _call(
+            server,
+            "actor_knowledge_change",
+            {
+                "action": "add",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "actor_id": npc["id"],
+                    "knowledge_key": "duke-location",
+                    "proposition": "The duke is at the old observatory.",
+                    "subject_ref": "actor:duke",
+                    "epistemic_status": "known",
+                },
+                "idempotency_key": "knowledge-refresh",
+            },
+        )
+        status = await _call(
+            server,
+            "npc_conversation",
+            {
+                "campaign_id": campaign["id"],
+                "action": "get",
+                "payload": {"conversation_id": opened["conversation_id"]},
+            },
+        )
+        conversation_revision += 1
+        assert status["conversation_revision"] == conversation_revision
+        assert len(status["activations"]) == 1
+        replacement = status["activations"][0]
+        assert replacement["replacement_for"] == original["activation_ref"]
+        assert replacement["actor_id"] == original["actor_id"]
+        assert replacement["from_cursor"] == original["from_cursor"]
+        assert replacement["to_cursor"] == original["to_cursor"]
+
+        with pytest.raises(Exception, match="activation is invalidated"):
+            await _call(
+                server,
+                "npc_conversation_transport",
+                {
+                    "campaign_id": campaign["id"],
+                    "conversation_id": opened["conversation_id"],
+                    "action": "claim_activation",
+                    "host_token": HOST_TOKEN,
+                    "payload": {
+                        "activation_ref": original["activation_ref"],
+                        "expected_conversation_revision": conversation_revision,
+                        "idempotency_key": "reclaim-invalidated",
+                        "cursor": 0,
+                    },
+                },
+            )
+        capsule = await _call(
+            server,
+            "npc_conversation_transport",
+            {
+                "campaign_id": campaign["id"],
+                "conversation_id": opened["conversation_id"],
+                "action": "claim_activation",
+                "host_token": HOST_TOKEN,
+                "payload": {
+                    "activation_ref": replacement["activation_ref"],
+                    "expected_conversation_revision": conversation_revision,
+                    "idempotency_key": "claim-replacement",
+                    "cursor": 0,
+                },
+            },
+        )
+        assert capsule["inbox"][0]["content"] == "Do you know where the duke is?"
+        assert capsule["actor_runtime_id"] != (
+            f"{opened['conversation_id']}:{npc['id']}"
+        )
 
     asyncio.run(exercise())
 

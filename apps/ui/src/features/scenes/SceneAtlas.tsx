@@ -55,10 +55,19 @@ export default function SceneAtlas({ campaignId }: { campaignId: string }) {
   const types = useMemo(() => [...new Set(scenes.map((scene) => scene.scene_type))], [scenes]);
   const filtered = useMemo(() => scenes.filter((scene) => {
     const matchesType = filter === 'all' || scene.scene_type === filter;
-    const haystack = `${scene.title} ${scene.chapter} ${scene.keywords.join(' ')} ${scene.tags.join(' ')}`.toLowerCase();
+    const haystack = `${scene.title} ${scene.module} ${scene.chapter} ${scene.keywords.join(' ')} ${scene.tags.join(' ')}`.toLowerCase();
     return matchesType && (!search || haystack.includes(search.toLowerCase()));
   }), [filter, scenes, search]);
-  const chapters = useMemo(() => [...new Map(scenes.map((scene) => [scene.chapter_id || scene.chapter, scene.chapter])).entries()], [scenes]);
+  const chapters = useMemo(() => [...new Map(scenes.map((scene) => {
+    const moduleKey = scene.module_id || scene.module;
+    const chapterKey = scene.chapter_id || scene.chapter;
+    return [`${moduleKey}::${chapterKey}`, {
+      moduleKey,
+      chapterKey,
+      moduleTitle: scene.module,
+      chapterTitle: scene.chapter,
+    }] as const;
+  })).entries()], [scenes]);
   const progressByScene = useMemo(() => new Map(progress.map((item) => [item.scene_id, item])), [progress]);
   const selected = scenes.find((scene) => scene.scene_id === selectedId) || filtered[0] || scenes[0];
   const selectedProgress = selected ? progressByScene.get(selected.scene_id) : undefined;
@@ -90,12 +99,18 @@ export default function SceneAtlas({ campaignId }: { campaignId: string }) {
         {types.map((type) => <button key={type} className={filter === type ? 'active' : ''} onClick={() => setFilter(type)}>{type.toUpperCase()}</button>)}
       </div>
       <div className="atlas-layout">
-        <nav className="atlas-chapters" aria-label="Module chapters">
-          <small>CHAPTERS</small>
-          {chapters.map(([key, title], index) => <button key={key} onClick={() => {
-            const scene = scenes.find((item) => (item.chapter_id || item.chapter) === key);
+        <nav className="atlas-chapters" aria-label="Content shards and chapters">
+          <small>SHARDS / CHAPTERS</small>
+          {chapters.map(([key, group], index) => <button key={key} onClick={() => {
+            const scene = scenes.find((item) => (
+              (item.module_id || item.module) === group.moduleKey
+              && (item.chapter_id || item.chapter) === group.chapterKey
+            ));
             if (scene) selectScene(scene);
-          }}><i>{String(index + 1).padStart(2, '0')}</i><span>{title}</span><b>{scenes.filter((item) => (item.chapter_id || item.chapter) === key).length}</b></button>)}
+          }}><i>{String(index + 1).padStart(2, '0')}</i><span>{group.moduleTitle}<small>{group.chapterTitle}</small></span><b>{scenes.filter((item) => (
+            (item.module_id || item.module) === group.moduleKey
+            && (item.chapter_id || item.chapter) === group.chapterKey
+          )).length}</b></button>)}
         </nav>
         <div className="atlas-scenes">
           {filtered.map((scene) => {
@@ -104,7 +119,7 @@ export default function SceneAtlas({ campaignId }: { campaignId: string }) {
               <img src={placeholder(scene)} alt="" />
               <span className="atlas-scene-order">{String((scene.scene_ordinal ?? 0) + 1).padStart(2, '0')}</span>
               <div><small>{scene.chapter}</small><strong>{scene.title}</strong><p>{scene.tags.slice(0, 3).join(' · ') || scene.scene_type}</p></div>
-              <aside><em className={`visibility ${scene.visibility}`}>{scene.visibility}</em><b>{state ? `${state.percent}%` : '—'}</b></aside>
+              <aside><em className={`visibility ${scene.visibility}`}>{scene.visibility}</em><b>{state ? `${state.status} · ${state.percent}%` : 'untracked'}</b></aside>
             </button>;
           })}
           {!filtered.length && <div className="empty">没有匹配的场景。</div>}

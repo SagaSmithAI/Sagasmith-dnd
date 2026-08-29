@@ -6,6 +6,7 @@ from sagasmith_dnd.character_schema import validate_party_state
 from sagasmith_dnd.playthrough import (
     PARTY_MEMBER_SOURCES,
     PLAYTHROUGH_SOURCE_FIELDS,
+    migrate_playthrough_manifest,
     new_playthrough_manifest,
     playthrough_source_bindings,
     validate_source_defined_ending_condition,
@@ -44,6 +45,11 @@ def test_manifest_records_every_required_resume_section() -> None:
     assert manifest["party"]["use_pregenerated_first"] is True
     assert manifest["current"]["scene_id"] == ""
     assert set(manifest) >= {
+        "campaign_mode",
+        "content_lineage",
+        "front_progress",
+        "thread_progress",
+        "arc_progress",
         "current",
         "traversal",
         "party",
@@ -57,6 +63,196 @@ def test_manifest_records_every_required_resume_section() -> None:
     }
     state = validate_party_state({"playthrough_manifest": manifest})
     assert state["playthrough_manifest"] == manifest
+
+
+def test_emergent_manifest_tracks_immutable_shards_and_design_progress() -> None:
+    seed_ref = {**SOURCE_REF, "purpose": "emergent_seed", "module_id": "seed-1"}
+    episode_ref = {
+        **SOURCE_REF,
+        "purpose": "emergent_episode",
+        "module_id": "episode-1",
+        "scene_id": "scene:bargain",
+    }
+    manifest = new_playthrough_manifest(
+        run_id="emergent-run",
+        campaign_line_id="emergent-line",
+        module_ids=["seed-1", "episode-1"],
+        recommended_party_minimum=None,
+        recommended_party_maximum=None,
+        selected_party_size=None,
+        source_refs=[],
+        campaign_mode="emergent",
+        content_lineage=[
+            {
+                "module_id": "seed-1",
+                "classification": "emergent_seed",
+                "root_module_id": "seed-1",
+                "parent_module_id": "",
+                "generation": 0,
+                "scene_ids": ["scene:arrival"],
+                "source_refs": [seed_ref],
+            },
+            {
+                "module_id": "episode-1",
+                "classification": "emergent_episode",
+                "root_module_id": "seed-1",
+                "parent_module_id": "seed-1",
+                "generation": 1,
+                "scene_ids": ["scene:bargain"],
+                "source_refs": [episode_ref],
+            },
+        ],
+    )
+    manifest["front_progress"] = [
+        {
+            "id": "front:smugglers",
+            "status": "advanced",
+            "stage": 1,
+            "source_ref": seed_ref,
+            "evidence_refs": [{"kind": "event", "ref_id": "event-17"}],
+        }
+    ]
+    manifest["thread_progress"] = [
+        {
+            "id": "thread:gate",
+            "status": "open",
+            "source_ref": seed_ref,
+            "evidence_refs": [{"kind": "scene", "ref_id": "scene:arrival"}],
+        }
+    ]
+    manifest["arc_progress"] = [
+        {
+            "id": "arc:warden",
+            "actor_id": "pc:warden",
+            "actor_kind": "pc",
+            "status": "available",
+            "completed_opportunity_ids": [],
+            "source_ref": episode_ref,
+            "evidence_refs": [{"kind": "conversation", "ref_id": "conversation-3"}],
+        }
+    ]
+
+    validated = validate_party_state({"playthrough_manifest": manifest})[
+        "playthrough_manifest"
+    ]
+
+    assert validated["campaign_mode"] == "emergent"
+    assert validated["content_lineage"][1]["parent_module_id"] == "seed-1"
+    assert validated["front_progress"][0]["evidence_refs"] == [
+        {"kind": "event", "ref_id": "event-17"}
+    ]
+    assert [path for path, _ref in playthrough_source_bindings(validated)] == [
+        "content_lineage[0].source_refs[0]",
+        "content_lineage[1].source_refs[0]",
+        "front_progress[0].source_ref",
+        "thread_progress[0].source_ref",
+        "arc_progress[0].source_ref",
+    ]
+
+
+def test_playthrough_v1_has_an_explicit_compatible_migration() -> None:
+    legacy = _manifest()
+    legacy["schema_version"] = 1
+    for field in (
+        "campaign_mode",
+        "content_lineage",
+        "front_progress",
+        "thread_progress",
+        "arc_progress",
+    ):
+        legacy.pop(field)
+
+    migrated = migrate_playthrough_manifest(legacy)
+    validated = validate_party_state({"playthrough_manifest": legacy})[
+        "playthrough_manifest"
+    ]
+
+    assert migrated["schema_version"] == 2
+    assert validated["campaign_mode"] == "authored_module"
+    assert validated["content_lineage"] == [
+        {
+            "module_id": "module-1",
+            "classification": "authored_module",
+            "root_module_id": "module-1",
+            "parent_module_id": "",
+            "generation": 0,
+            "scene_ids": [],
+            "source_refs": [],
+        }
+    ]
+
+
+def test_existing_v2_authored_manifest_can_append_a_module_without_lineage_edit() -> None:
+    manifest = _manifest()
+    manifest["module_ids"].append("module-2")
+
+    validated = validate_party_state({"playthrough_manifest": manifest})[
+        "playthrough_manifest"
+    ]
+
+    assert [item["module_id"] for item in validated["content_lineage"]] == [
+        "module-1",
+        "module-2",
+    ]
+    assert validated["content_lineage"][1]["classification"] == "authored_module"
+
+
+def test_authored_campaign_can_add_an_off_atlas_episode_without_mutating_its_root() -> None:
+    manifest = _manifest()
+    manifest["campaign_mode"] = "authored_with_extensions"
+    manifest["module_ids"].append("module-off-atlas-1")
+    manifest["content_lineage"].append(
+        {
+            "module_id": "module-off-atlas-1",
+            "classification": "emergent_episode",
+            "root_module_id": "module-1",
+            "parent_module_id": "module-1",
+            "generation": 1,
+            "scene_ids": ["scene:windmill-road"],
+            "source_refs": [],
+        }
+    )
+
+    validated = validate_party_state({"playthrough_manifest": manifest})[
+        "playthrough_manifest"
+    ]
+
+    assert validated["campaign_mode"] == "authored_with_extensions"
+    assert validated["content_lineage"][0]["classification"] == "authored_module"
+    assert validated["content_lineage"][1] == manifest["content_lineage"][1]
+
+    invalid = deepcopy(manifest)
+    invalid["content_lineage"][1]["classification"] = "emergent_seed"
+    invalid["content_lineage"][1]["root_module_id"] = "module-off-atlas-1"
+    invalid["content_lineage"][1]["parent_module_id"] = ""
+    invalid["content_lineage"][1]["generation"] = 0
+    with pytest.raises(ValueError, match="not emergent_seed"):
+        validate_party_state({"playthrough_manifest": invalid})
+
+
+def test_progress_evidence_and_pc_arc_fields_are_strict() -> None:
+    manifest = _manifest()
+    manifest["arc_progress"] = [
+        {
+            "id": "arc:warden",
+            "actor_id": "pc:warden",
+            "actor_kind": "pc",
+            "status": "available",
+            "completed_opportunity_ids": [],
+            "source_ref": None,
+            "evidence_refs": [
+                {"kind": "event", "ref_id": "event-1", "summary": "unsupported"}
+            ],
+        }
+    ]
+
+    with pytest.raises(ValueError, match=r"evidence_refs\[0\] contains unsupported fields"):
+        validate_party_state({"playthrough_manifest": manifest})
+
+    manifest["arc_progress"][0]["evidence_refs"] = []
+    manifest["arc_progress"][0]["planned_choice"] = "Accept the bargain"
+    with pytest.raises(ValueError, match="planned_choice"):
+        validate_party_state({"playthrough_manifest": manifest})
 
 
 def test_manifest_rejects_retired_chunk_hash_name() -> None:

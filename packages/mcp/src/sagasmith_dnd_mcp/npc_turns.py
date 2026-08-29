@@ -6,7 +6,7 @@ from copy import deepcopy
 from typing import Any
 
 NPC_TURN_SCHEMA_VERSION = 1
-NPC_TURN_BUNDLE_SCHEMA_VERSION = 2
+NPC_TURN_BUNDLE_SCHEMA_VERSION = 3
 NPC_TURN_PURPOSES = frozenset({"general", "npc_turn"})
 NPC_TRUTH_POSTURES = frozenset(
     {"believes_true", "uncertain", "intentional_deception", "opinion", "nonfactual"}
