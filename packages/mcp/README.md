@@ -21,6 +21,65 @@ modern path, `exposure(open)` returns an explicit owner-bound, expiring
 `tools/list`. The Host chooses a phase/task subset for the model while every call is
 re-authorized by the domain server.
 
+### Durable Tasks / 持久长任务
+
+Clients that advertise `clientCapabilities.extensions["io.modelcontextprotocol/tasks"]`
+may receive a standard SEP-2663 task from `module_draft(action="start")`. This is the
+only task-enabled workflow; ordinary reads and writes remain synchronous. A task
+creation result contains only `resultType="task"`, `taskId`, status, timestamps, TTL,
+and polling interval. Poll with `tasks/get`, send requested input with `tasks/update`,
+or request cooperative cancellation with `tasks/cancel`. There are deliberately no
+`tasks/list` or `tasks/result` methods. For Streamable HTTP, every task method carries
+`Mcp-Name: <taskId>`; stdio uses the same method handlers and schemas.
+
+`taskId` is a name, never a capability. Every follow-up request needs a newly signed
+delegation-v2 envelope for exactly one literal operation (`tasks/get`, `tasks/update`,
+or `tasks/cancel`) and the original requester, resource owner, acting Host, campaign,
+room turn, and base revision. The Host must retain that trusted context outside model
+text and mint a new target-service/audience-bound delegation for each request. The
+server never persists or replays an old signature. Tasks survive worker/server
+restarts in bounded `mcp-tasks.sqlite3` state; results are destroyed at TTL expiry and
+terminal rows are evicted oldest-first under the configured hard capacity. Clients
+that do not negotiate the extension, including legacy clients, receive the existing
+synchronous `CallToolResult` instead.
+
+Agent follow-up request shape (the signing library supplies the remaining required
+delegation-v2 fields and signature):
+
+```json
+{
+  "method": "tasks/get",
+  "params": {
+    "taskId": "task_<opaque>",
+    "_meta": {
+      "sagasmith_auth_context": {
+        "schema": "sagasmith.auth-context/v2",
+        "target_service": "sagasmith-dnd-mcp",
+        "authorized_audience": "sagasmith-dnd-mcp",
+        "allowed_operations": ["tasks/get"],
+        "requester_principal": "<original requester>",
+        "resource_owner_principal": "<original resource owner>",
+        "acting_host_principal": "<stable workload principal>",
+        "campaign_id": "<original campaign>",
+        "room_turn_id": "<original room turn>",
+        "base_revision": 42
+      }
+    }
+  }
+}
+```
+
+For update or cancellation, replace both the method and the sole operation with
+`tasks/update` or `tasks/cancel`. The HTTP `Mcp-Name` header remains the task ID.
+
+声明 `io.modelcontextprotocol/tasks` 扩展的客户端，只有在调用
+`module_draft(action="start")` 时才会收到标准 SEP-2663 task；普通短工具仍同步执行。
+`taskId` 只是名称，不是能力凭证。每次 `tasks/get`、`tasks/update`、`tasks/cancel`
+都必须携带新签发、只允许该单一操作的 delegation-v2，并与创建时的 requester、
+resource owner、acting Host、campaign、room turn 和 base revision 完全一致。服务端不持久化、
+也不重放旧签名；任务状态可在 worker/服务重启后恢复，但结果在 TTL 到期后销毁，持久状态有
+行数与容量上限。未协商扩展或 legacy 客户端继续获得同步 `CallToolResult`。
+
 现代路径不依赖隐藏 transport session。跨调用状态使用服务端签发的显式 handle，或显式
 campaign/revision 参数；每次调用都重新校验身份、角色、阶段和 revision。Host 可以缩小提供给
 模型的稳定目录，但不能把模型选择或提示词当作授权边界。
@@ -38,8 +97,10 @@ campaign/revision 参数；每次调用都重新校验身份、角色、阶段�
    both configured transports before moving hosted traffic.
 3. Roll back Host traffic to the documented legacy adapter if a client cannot yet
    negotiate 2026-07-28; do not restore session identity as an authority boundary.
-4. Roll back this package and its lockfile together. No database migration is required
-   by the protocol change.
+4. Before rollback, stop accepting new module tasks and let active tasks complete or
+   cancel them. Roll back this package and its lockfile together. `mcp-tasks.sqlite3`
+   is additive and separate from campaign authority data; retaining it is safe. Delete
+   it only after all task TTLs have elapsed and no prior server can resume those tasks.
 
 ## Content Pack gateway
 
