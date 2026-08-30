@@ -458,3 +458,31 @@ def test_narrative_npc_accepts_two_part_name_split_by_source_appositive(
         assert created["narrative_npc"]["combat_eligible"] is False
 
     asyncio.run(exercise())
+def test_narrative_npc_missing_fields_are_actionable(tmp_path: Path) -> None:
+    async def exercise() -> None:
+        config = McpConfig(
+            home=tmp_path / "home",
+            database_url=None,
+            chroma_url=None,
+            chroma_path_override=None,
+            dnd_skills_dir=tmp_path / "dnd",
+            modulegen_skills_dir=tmp_path / "modulegen",
+            auto_seed_rules=False,
+        )
+        server = create_server(config)
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {"name": "NPC missing", "edition": "2014", "idempotency_key": "campaign"},
+        )
+        with pytest.raises(Exception, match="missing fields:.*role.*source_excerpt"):
+            await server.call_tool(
+                "character_create_from",
+                {
+                    "mode": "narrative_npc",
+                    "payload": {"campaign_id": campaign["id"], "name": "Neris"},
+                    "idempotency_key": "npc",
+                },
+            )
+
+    asyncio.run(exercise())

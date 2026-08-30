@@ -30085,6 +30085,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         actor_id: str,
         branch_id: str | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
+        include_inactive: bool = False,
     ) -> list[dict[str, Any]]:
         resolved_branch_id = readable_branch(campaign_id, branch_id, principal_id)
         access.require_actor(
@@ -30099,6 +30100,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             campaign_id,
             actor_id=actor_id,
             branch_id=resolved_branch_id,
+            include_inactive=include_inactive,
         )
         if membership.role not in CAMPAIGN_DM_ROLES:
             values = [
@@ -30116,6 +30118,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         limit: int = 8,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
         offset: int = 0,
+        include_inactive: bool = False,
     ) -> list[dict[str, Any]]:
         """Search one actor's current subjective knowledge without leaking other actors."""
         resolved_branch_id = readable_branch(campaign_id, branch_id, principal_id)
@@ -30134,6 +30137,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             branch_id=resolved_branch_id,
             limit=limit,
             offset=offset,
+            include_inactive=include_inactive,
             disclosure_scopes=(
                 PLAYER_OWNED_ACTOR_DISCLOSURE_SCOPES
                 if membership.role not in CAMPAIGN_DM_ROLES
@@ -31910,7 +31914,10 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     "there are no npc_actor_ids or npc_ids fields"
                 )
             if not str(data.get("idempotency_key") or "").strip():
-                raise ValueError("npc_conversation open requires payload.idempotency_key")
+                raise ValueError(
+                    "Field payload.idempotency_key is required for npc_conversation(open); "
+                    "retry with a stable non-empty business idempotency key."
+                )
             return npc_conversation_open_impl(
                 campaign_id=campaign_id,
                 participant_actor_ids=list(data["participant_actor_ids"]),
@@ -45619,7 +45626,10 @@ boundary.
                     details.append("missing fields: " + ", ".join(missing_narrative_fields))
                 if unsupported_narrative_fields:
                     details.append("unsupported fields: " + ", ".join(unsupported_narrative_fields))
-                raise ValueError("narrative NPC payload has " + "; ".join(details))
+                raise ValueError(
+                    "narrative NPC payload has " + "; ".join(details) + "; "
+                    "provide every listed field and retry with the same idempotency key"
+                )
             if not scoped_campaign_id:
                 raise ValueError("narrative NPC campaign_id must be a non-empty string")
             if not idempotency_key:
@@ -47716,14 +47726,25 @@ boundary.
             "configure_ending",
             "sync",
             "verify_ending",
-        ],
+        ] | None = None,
         payload: dict[str, Any] | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
         expected_revision: int | None = None,
         branch_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Read or atomically maintain the snapshot-managed full-playthrough manifest."""
+        """Read or atomically maintain the snapshot-managed full-playthrough manifest.
+
+        Actions are ``get``, ``initialize``, ``replace``, ``extend_modules``,
+        ``configure_ending``, ``sync``, and ``verify_ending``.  ``initialize``
+        requires ``payload.manifest``; mutation actions require their documented
+        payload plus optimistic-concurrency fields.
+        """
+        if action is None:
+            raise ValueError(
+                "Field action is required for playthrough_manifest; choose one of "
+                "get, initialize, replace, extend_modules, configure_ending, sync, verify_ending."
+            )
         access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
         campaign = campaigns.get(campaign_id)
         current_manifest = dict(campaign.state.get("playthrough_manifest") or {})
@@ -48075,7 +48096,9 @@ boundary.
     @public_tool()
     def memory_change(
         campaign_id: str,
-        action: Literal["add", "upsert", "revise", "supersede", "commit"] = "add",
+        action: Literal[
+            "add", "upsert", "revise", "supersede", "retract", "forget", "commit"
+        ] = "add",
         payload: dict[str, Any] | None = None,
         content: str | None = None,
         kind: str | None = None,
@@ -48086,7 +48109,11 @@ boundary.
         expected_revision: int | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Add, upsert, revise, or supersede an objective branch-scoped fact."""
+        """Add, upsert, supersede, retract, or forget an objective fact.
+
+        Writes preserve immutable history. ``expected_revision`` is the campaign
+        revision guard; revision UUIDs belong in ``payload.expected_revision_id``.
+        """
         access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
         if not idempotency_key:
             raise ValueError("idempotency_key is required for memory writes")
@@ -48131,11 +48158,27 @@ boundary.
                 kind=data.get("kind") or "fact",
                 subject_ref=data.get("subject_ref") or "",
             )
-        request_payload = {"action": action, **data, "branch_id": resolved_branch_id}
+        request_payload = {
+            "action": action,
+            **data,
+            "branch_id": resolved_branch_id,
+            # The campaign CAS token is part of the idempotency fingerprint.
+            # Reusing a business key with a different base revision must be a
+            # conflict, never a replay of the earlier mutation.
+            "expected_revision": expected_revision,
+        }
         scope = f"memory-change:{action}:{campaign_id}:{resolved_branch_id}:{principal_id}"
         replay = replay_idempotent(scope, idempotency_key, request_payload)
         if replay is not None:
             return facade_result(action, replay)
+        if expected_revision is not None:
+            current_campaign = campaigns.get(campaign_id)
+            if current_campaign.revision != expected_revision:
+                raise ValueError(
+                    f"stale campaign revision: expected {expected_revision}, "
+                    f"found {current_campaign.revision}; refresh campaign state and retry "
+                    "with the same idempotency key"
+                )
 
         visible = memories.list(
             campaign_id,
@@ -48221,13 +48264,18 @@ boundary.
                 memory_id,
                 content=(
                     current.content
-                    if action == "supersede" and not data.get("content")
+                    if action in {"supersede", "retract", "forget"} and not data.get("content")
                     else str(required(data, "content"))
                 ),
                 metadata=(dict(data["metadata"]) if data.get("metadata") is not None else None),
                 branch_id=resolved_branch_id,
                 expected_revision_id=expected_revision_id,
-                status="superseded" if action == "supersede" else data.get("status"),
+                status=(
+                    "superseded" if action == "supersede"
+                    else "retracted" if action == "retract"
+                    else "forgotten" if action == "forget"
+                    else data.get("status")
+                ),
                 valid_from=optional_datetime(data.get("valid_from"), "valid_from"),
                 valid_to=optional_datetime(data.get("valid_to"), "valid_to"),
                 source_event_ids=(
@@ -48261,7 +48309,8 @@ boundary.
         page_limit = _page_limit(data.get("limit", limit))
         page_scope = (
             f"actor_knowledge_query:{campaign_id}:{actor_id}:{view}:{principal_id}:"
-            f"{str(data.get('branch_id') or '')}:{json_sha256(effective_query)}"
+            f"{str(data.get('branch_id') or '')}:{bool(data.get('include_inactive'))}:"
+            f"{json_sha256(effective_query)}"
         )
         if view == "search":
             fingerprint, page_offset = _cursor_offset(
@@ -48277,6 +48326,7 @@ boundary.
                 page_limit + 1,
                 principal_id,
                 page_offset,
+                bool(data.get("include_inactive")),
             )
             result, page = _authority_page(
                 result,
@@ -48286,7 +48336,8 @@ boundary.
             )
         else:
             result = actor_knowledge_list(
-                campaign_id, actor_id, data.get("branch_id"), principal_id
+                campaign_id, actor_id, data.get("branch_id"), principal_id,
+                bool(data.get("include_inactive")),
             )
             result, page = _bounded_page(
                 result,
@@ -48300,7 +48351,7 @@ boundary.
 
     @public_tool()
     def actor_knowledge_change(
-        action: Literal["add", "revise"],
+        action: Literal["add", "revise", "retract", "forget"],
         payload: dict[str, Any],
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
         idempotency_key: str | None = None,
@@ -48324,6 +48375,13 @@ boundary.
                 idempotency_key,
             )
         else:
+            if action in {"retract", "forget"}:
+                current = knowledge.get(required(data, "knowledge_id"))
+                data = {
+                    **data,
+                    "proposition": data.get("proposition") or current.proposition,
+                    "epistemic_status": "superseded" if action == "retract" else "forgotten",
+                }
             result = actor_knowledge_revise(
                 knowledge_id=required(data, "knowledge_id"),
                 proposition=required(data, "proposition"),
