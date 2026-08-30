@@ -5359,10 +5359,12 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                             f"official dependency rebind no longer matches {definition_id}"
                         )
                     runtime_checksum = str(rebind["runtime_checksum"])
+                    runtime_version = str(rebind["runtime_version"])
+                    matches[0]["version"] = runtime_version
                     try:
                         runtime_dependency = rule_packs.get_version(
                             str(rebind["dependency_id"]),
-                            str(rebind["dependency_version"]),
+                            runtime_version,
                         )
                     except LookupError:
                         runtime_dependency = None

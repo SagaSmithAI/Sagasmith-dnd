@@ -9,6 +9,8 @@ from zipfile import ZIP_DEFLATED, ZipFile
 import pytest
 
 from sagasmith_dnd import cli, official_expansions
+from sagasmith_dnd.core_content import PACK_ID as CORE_CONTENT_PACK_ID
+from sagasmith_dnd.core_content import PACK_VERSION as CORE_CONTENT_PACK_VERSION
 from sagasmith_dnd.official_expansions import (
     OFFICIAL_EXPANSION_LOCK_SCHEMA,
     installed_official_definition_matches,
@@ -68,6 +70,27 @@ def test_official_rebinds_never_match_custom_packages_or_components() -> None:
         package_id=first["package_id"],
         definition_id="dnd5e.addon.user.injected-component",
     ) == ()
+
+
+def test_shipped_core_rebinds_upgrade_the_immutable_content_version() -> None:
+    lock = load_official_expansion_lock()
+    builtin = next(
+        definition
+        for definition in lock["builtin_rule_definitions"]
+        if definition["id"] == CORE_CONTENT_PACK_ID
+    )
+    rebinds = [
+        rebind
+        for rebind in lock["dependency_rebinds"]
+        if rebind["dependency_id"] == CORE_CONTENT_PACK_ID
+    ]
+
+    assert builtin["version"] == CORE_CONTENT_PACK_VERSION
+    assert rebinds
+    assert {rebind["dependency_version"] for rebind in rebinds} == {"1.24.0"}
+    assert {rebind["runtime_version"] for rebind in rebinds} == {
+        CORE_CONTENT_PACK_VERSION
+    }
 
 
 def test_shipped_lock_covers_every_current_official_expansion_artifact() -> None:

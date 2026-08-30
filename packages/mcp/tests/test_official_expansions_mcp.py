@@ -116,5 +116,5 @@ def test_official_expansion_lock_matches_seeded_core_content(tmp_path: Path) -> 
         rebind["runtime_checksum"]
         for rebind in lock["dependency_rebinds"]
         if rebind["dependency_id"] == CORE_CONTENT_PACK_ID
-        and rebind["dependency_version"] == CORE_CONTENT_PACK_VERSION
+        and rebind["runtime_version"] == CORE_CONTENT_PACK_VERSION
     } == {installed_checksum}
