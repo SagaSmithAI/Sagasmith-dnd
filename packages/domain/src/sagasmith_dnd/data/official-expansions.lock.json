@@ -31,8 +31,98 @@
   ],
   "dependency_rebinds": [
     {
-      "package_id": "*",
-      "definition_id": "*",
+      "package_id": "dnd5e.addon.rulebook.d-d-5e-eberron-rising-from-the-last-war.31293633134f.addon",
+      "definition_id": "dnd5e.addon.rulebook.d-d-5e-eberron-rising-from-the-last-war.31293633134f",
+      "dependency_id": "dnd5e.content.srd2014",
+      "dependency_version": "1.24.0",
+      "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
+      "runtime_checksum": "9e42e92859667e7e5f4cbd520004dba62845f7309c70bd1657c6f52c5be051a3",
+      "basis": "The built-in 2014 catalog retained its version while its reviewed definition advanced after the library migration."
+    },
+    {
+      "package_id": "dnd5e.addon.rulebook.d-d-5e-elemental-evil-player-s-companion.490f88d2c84c.addon",
+      "definition_id": "dnd5e.addon.rulebook.d-d-5e-elemental-evil-player-s-companion.490f88d2c84c",
+      "dependency_id": "dnd5e.content.srd2014",
+      "dependency_version": "1.24.0",
+      "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
+      "runtime_checksum": "9e42e92859667e7e5f4cbd520004dba62845f7309c70bd1657c6f52c5be051a3",
+      "basis": "The built-in 2014 catalog retained its version while its reviewed definition advanced after the library migration."
+    },
+    {
+      "package_id": "dnd5e.addon.rulebook.d-d-5e-guildmasters-guide-to-ravnica.59317c5cf3da.addon",
+      "definition_id": "dnd5e.addon.rulebook.d-d-5e-guildmasters-guide-to-ravnica.59317c5cf3da",
+      "dependency_id": "dnd5e.content.srd2014",
+      "dependency_version": "1.24.0",
+      "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
+      "runtime_checksum": "9e42e92859667e7e5f4cbd520004dba62845f7309c70bd1657c6f52c5be051a3",
+      "basis": "The built-in 2014 catalog retained its version while its reviewed definition advanced after the library migration."
+    },
+    {
+      "package_id": "dnd5e.addon.rulebook.d-d-5e-mordenkainen-s-tome-of-foes.2768304ef1af.addon",
+      "definition_id": "dnd5e.addon.rulebook.d-d-5e-mordenkainen-s-tome-of-foes.2768304ef1af",
+      "dependency_id": "dnd5e.content.srd2014",
+      "dependency_version": "1.24.0",
+      "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
+      "runtime_checksum": "9e42e92859667e7e5f4cbd520004dba62845f7309c70bd1657c6f52c5be051a3",
+      "basis": "The built-in 2014 catalog retained its version while its reviewed definition advanced after the library migration."
+    },
+    {
+      "package_id": "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a.addon",
+      "definition_id": "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a",
+      "dependency_id": "dnd5e.content.srd2014",
+      "dependency_version": "1.24.0",
+      "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
+      "runtime_checksum": "9e42e92859667e7e5f4cbd520004dba62845f7309c70bd1657c6f52c5be051a3",
+      "basis": "The built-in 2014 catalog retained its version while its reviewed definition advanced after the library migration."
+    },
+    {
+      "package_id": "dnd5e.addon.rulebook.d-d-5e-tasha-s-cauldron-of-everything.89a729b37a4b.addon",
+      "definition_id": "dnd5e.addon.rulebook.d-d-5e-tasha-s-cauldron-of-everything.89a729b37a4b",
+      "dependency_id": "dnd5e.content.srd2014",
+      "dependency_version": "1.24.0",
+      "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
+      "runtime_checksum": "9e42e92859667e7e5f4cbd520004dba62845f7309c70bd1657c6f52c5be051a3",
+      "basis": "The built-in 2014 catalog retained its version while its reviewed definition advanced after the library migration."
+    },
+    {
+      "package_id": "dnd5e.addon.rulebook.d-d-5e-the-tortle-package.e3234de670da.addon",
+      "definition_id": "dnd5e.addon.rulebook.d-d-5e-the-tortle-package.e3234de670da",
+      "dependency_id": "dnd5e.content.srd2014",
+      "dependency_version": "1.24.0",
+      "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
+      "runtime_checksum": "9e42e92859667e7e5f4cbd520004dba62845f7309c70bd1657c6f52c5be051a3",
+      "basis": "The built-in 2014 catalog retained its version while its reviewed definition advanced after the library migration."
+    },
+    {
+      "package_id": "dnd5e.addon.rulebook.d-d-5e-volo-s-guide-to-monsters.962933255634.addon",
+      "definition_id": "dnd5e.addon.rulebook.d-d-5e-volo-s-guide-to-monsters.962933255634",
+      "dependency_id": "dnd5e.content.srd2014",
+      "dependency_version": "1.24.0",
+      "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
+      "runtime_checksum": "9e42e92859667e7e5f4cbd520004dba62845f7309c70bd1657c6f52c5be051a3",
+      "basis": "The built-in 2014 catalog retained its version while its reviewed definition advanced after the library migration."
+    },
+    {
+      "package_id": "dnd5e.addon.rulebook.d-d-5e-wayfinders-guide-to-eberron.38e71ffb60c7.addon",
+      "definition_id": "dnd5e.addon.rulebook.d-d-5e-wayfinders-guide-to-eberron.38e71ffb60c7",
+      "dependency_id": "dnd5e.content.srd2014",
+      "dependency_version": "1.24.0",
+      "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
+      "runtime_checksum": "9e42e92859667e7e5f4cbd520004dba62845f7309c70bd1657c6f52c5be051a3",
+      "basis": "The built-in 2014 catalog retained its version while its reviewed definition advanced after the library migration."
+    },
+    {
+      "package_id": "dnd5e.addon.rulebook.d-d-5e-xanathar-s-guide-to-everything.72d56f4f8dae.addon",
+      "definition_id": "dnd5e.addon.rulebook.d-d-5e-xanathar-s-guide-to-everything.72d56f4f8dae",
+      "dependency_id": "dnd5e.content.srd2014",
+      "dependency_version": "1.24.0",
+      "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
+      "runtime_checksum": "9e42e92859667e7e5f4cbd520004dba62845f7309c70bd1657c6f52c5be051a3",
+      "basis": "The built-in 2014 catalog retained its version while its reviewed definition advanced after the library migration."
+    },
+    {
+      "package_id": "dnd5e.addon.rulebook.d-d-5e-player-s-handbook.7ad6d3e9c93c.addon",
+      "definition_id": "dnd5e.addon.rulebook.d-d-5e-player-s-handbook.7ad6d3e9c93c",
       "dependency_id": "dnd5e.content.srd2014",
       "dependency_version": "1.24.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
