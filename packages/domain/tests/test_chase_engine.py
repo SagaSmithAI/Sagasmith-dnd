@@ -116,6 +116,22 @@ def test_source_reviewed_chase_speed_adjustment_is_contextual() -> None:
     assert quarry["derived"]["speed"]["walk"] == 30
 
 
+def test_chase_preserves_an_explicit_zero_walk_speed() -> None:
+    pursuer = _actor("pursuer", initiative=20)
+    quarry = _actor("quarry", initiative=10, speed=0)
+
+    chase = start_chase(
+        [pursuer, quarry],
+        quarry_ids=["quarry"],
+        initial_distance_ft=100,
+    )
+    quarry_state = next(item for item in chase["participants"] if item["actor_id"] == "quarry")
+
+    assert quarry["derived"]["speed"]["walk"] == 0
+    assert quarry_state["base_speed_ft"] == 0
+    assert quarry_state["speed_ft"] == 0
+
+
 def test_urban_complication_affects_next_participant() -> None:
     pursuer = _actor("pursuer", initiative=20)
     quarry = _actor("quarry", initiative=10)

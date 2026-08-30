@@ -342,6 +342,58 @@ def _actor(identifier: str, *, hp: int = 12, ac: int = 10) -> dict:
     }
 
 
+def test_zero_walk_speed_is_preserved_when_a_combat_turn_starts() -> None:
+    first = _actor("first")
+    stopped = _actor("stopped")
+    first["initiative"] = 20
+    stopped["initiative"] = 10
+    stopped["sheet"]["combat"]["speed"]["walk"] = 0
+    stopped["derived"] = derive_character_sheet(stopped["sheet"])
+
+    encounter = start_encounter([first, stopped])
+    stopped_state = next(
+        item for item in encounter["combatants"] if item["actor_id"] == "stopped"
+    )
+    assert stopped_state["base_speed"] == 0
+    assert stopped_state["turn_budget"]["movement"] == 0
+
+    stopped_turn = end_turn(encounter, actor_id_value="first")
+    assert current_combatant(stopped_turn)["actor_id"] == "stopped"
+    assert current_combatant(stopped_turn)["turn_budget"]["speed"] == 0
+    assert current_combatant(stopped_turn)["turn_budget"]["movement"] == 0
+
+
+def test_zero_speed_multiplier_is_preserved_when_a_combat_turn_starts() -> None:
+    first = _actor("first")
+    immobilized = _actor("immobilized")
+    first["initiative"] = 20
+    immobilized["initiative"] = 10
+    immobilized["sheet"]["effects"] = [
+        {
+            "id": "immobilized-by-effect",
+            "active": True,
+            "changes": [
+                {
+                    "path": "combat.speed.multiplier",
+                    "mode": "multiply",
+                    "value": 0,
+                }
+            ],
+        }
+    ]
+
+    encounter = start_encounter([first, immobilized])
+    immobilized_state = next(
+        item for item in encounter["combatants"] if item["actor_id"] == "immobilized"
+    )
+    assert immobilized_state["speed_multiplier"] == 0.0
+    assert immobilized_state["turn_budget"]["movement"] == 0
+
+    immobilized_turn = end_turn(encounter, actor_id_value="first")
+    assert current_combatant(immobilized_turn)["actor_id"] == "immobilized"
+    assert current_combatant(immobilized_turn)["turn_budget"]["movement"] == 0
+
+
 def test_nonproficient_armor_and_heavy_encumbrance_apply_check_disadvantage() -> None:
     actor = _actor("encumbered")
     actor["sheet"]["abilities"]["strength"]["score"] = 10

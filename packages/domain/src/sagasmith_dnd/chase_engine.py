@@ -139,7 +139,8 @@ def start_chase(
         identifier = str(combatant["actor_id"])
         actor = actors[identifier]
         sheet = actor_sheet(actor)
-        base_speed = int(actor_derived(actor).get("speed", {}).get("walk", 30) or 30)
+        recorded_walk_speed = actor_derived(actor).get("speed", {}).get("walk")
+        base_speed = int(30 if recorded_walk_speed is None else recorded_walk_speed)
         speed_adjustment = actor.get("chase_speed_adjustment_ft", 0)
         if (
             isinstance(speed_adjustment, bool)
