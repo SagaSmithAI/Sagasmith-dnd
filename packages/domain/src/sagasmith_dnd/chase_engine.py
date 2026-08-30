@@ -69,7 +69,11 @@ def current_chase_participant(chase: dict[str, Any]) -> dict[str, Any] | None:
     index = int(chase.get("turn_index", 0) or 0)
     if not 0 <= index < len(participants):
         raise CombatEngineError("chase turn_index is outside the participant list")
-    return participants[index]
+    for offset in range(len(participants)):
+        participant = participants[(index + offset) % len(participants)]
+        if participant.get("active", True):
+            return participant
+    return None
 
 
 def start_chase(
@@ -659,11 +663,24 @@ def advance_chase_turn(
     value.setdefault("log", []).append(deepcopy(turn_result))
 
     participants_list = list(value.get("participants") or [])
-    next_index = int(value.get("turn_index", 0) or 0) + 1
-    round_ended = next_index >= len(participants_list)
+    current_index = next(
+        index
+        for index, item in enumerate(participants_list)
+        if str(item.get("actor_id") or "") == str(actor_id_value)
+    )
+    next_index = (current_index + 1) % len(participants_list)
+    round_ended = next_index == 0
     if round_ended:
-        next_index = 0
         value["round"] = int(value.get("round", 1) or 1) + 1
+    checked = 0
+    while checked < len(participants_list) and not participants_list[next_index].get(
+        "active", True
+    ):
+        checked += 1
+        next_index = (next_index + 1) % len(participants_list)
+        if next_index == 0 and not round_ended:
+            round_ended = True
+            value["round"] = int(value.get("round", 1) or 1) + 1
     value["turn_index"] = next_index
 
     active_pursuers = [

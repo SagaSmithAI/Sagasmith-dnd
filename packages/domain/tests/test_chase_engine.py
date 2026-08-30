@@ -258,6 +258,43 @@ def test_chase_exhaustion_level_six_marks_the_actor_dead() -> None:
     assert result["chase"]["participants"][0]["dropped_reason"] == "exhaustion_death"
 
 
+def test_inactive_participants_are_skipped_when_turn_order_wraps() -> None:
+    first_pursuer = _actor("first-pursuer", initiative=30)
+    second_pursuer = _actor("second-pursuer", initiative=20)
+    quarry = _actor("quarry", initiative=10)
+    chase = start_chase(
+        [first_pursuer, second_pursuer, quarry],
+        quarry_ids=["quarry"],
+        initial_distance_ft=100,
+    )
+
+    first = advance_chase_turn(
+        chase,
+        first_pursuer,
+        actor_id_value="first-pursuer",
+        action="drop_out",
+        rng=_SequenceRng(20),
+    )
+    second = advance_chase_turn(
+        first["chase"],
+        second_pursuer,
+        actor_id_value="second-pursuer",
+        action="move",
+        rng=_SequenceRng(20),
+    )
+    wrapped = advance_chase_turn(
+        second["chase"],
+        quarry,
+        actor_id_value="quarry",
+        action="move",
+        rng=_SequenceRng(20),
+    )
+
+    assert wrapped["chase"]["active"] is True
+    assert wrapped["chase"]["round"] == 2
+    assert current_chase_participant(wrapped["chase"])["actor_id"] == "second-pursuer"
+
+
 def test_starting_exhaustion_halves_chase_speed_only_once() -> None:
     pursuer = _actor("pursuer", initiative=20)
     pursuer["sheet"]["combat"]["exhaustion"] = 2
