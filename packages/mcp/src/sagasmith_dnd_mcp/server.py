@@ -7769,7 +7769,9 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             ],
             "hit_points": hit_points,
             "maximum_hit_points": int(dict(derived.get("hit_points") or {}).get("max", 0) or 0),
-            "armor_class": int(derived.get("armor_class", 10) or 10),
+            "armor_class": (
+                10 if derived.get("armor_class") is None else int(derived["armor_class"])
+            ),
             "weapon_attack_ids": [str(item.get("item_id") or "") for item in attacks],
             "multiattack_option_ids": [str(item.get("id") or "") for item in multiattacks],
             "prepared_spell_ids": prepared_spells,

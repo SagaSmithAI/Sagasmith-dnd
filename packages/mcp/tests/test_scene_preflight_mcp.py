@@ -272,6 +272,50 @@ def test_scene_preflight_blocks_only_missing_or_invalid_combatants(tmp_path: Pat
             },
         )
 
+        zero_ac_sheet = deepcopy(actors["bandit2"]["sheet"])
+        zero_ac_sheet["combat"]["ac"] = {"base": 0, "override": 0}
+        zero_ac_bandit = await _call(
+            server,
+            "character_sheet_replace",
+            {
+                "character_id": actors["bandit2"]["id"],
+                "sheet": zero_ac_sheet,
+                "expected_revision": actors["bandit2"]["revision"],
+                "idempotency_key": "zero-ac-bandit-card",
+            },
+        )
+        zero_ac_preflight = await _call(
+            server,
+            "module_query",
+            {
+                "campaign_id": campaign["id"],
+                "view": "preflight",
+                "payload": {
+                    "scene_id": scene["scene_id"],
+                    "participant_manifest": manifest(
+                        [actors["bandit1"]["id"], actors["bandit2"]["id"]]
+                    ),
+                },
+            },
+        )
+        zero_ac_group = next(
+            item for item in zero_ac_preflight["groups"] if item["key"] == "rusk-bandits"
+        )
+        zero_ac_actor = next(
+            item for item in zero_ac_group["actors"] if item["id"] == actors["bandit2"]["id"]
+        )
+        assert zero_ac_actor["combat_card"]["armor_class"] == 0
+        actors["bandit2"] = await _call(
+            server,
+            "character_sheet_replace",
+            {
+                "character_id": actors["bandit2"]["id"],
+                "sheet": original_bandit_sheet,
+                "expected_revision": zero_ac_bandit["revision"],
+                "idempotency_key": "restore-zero-ac-bandit-card",
+            },
+        )
+
         mixed_sheet = deepcopy(actors["bandit1"]["sheet"])
         mixed_sheet["inventory"]["items"] = [
             {
