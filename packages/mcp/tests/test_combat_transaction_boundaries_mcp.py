@@ -1422,3 +1422,146 @@ def test_combat_move_charges_reviewed_difficult_cells_and_records_core_receipt(
         ]
 
     asyncio.run(exercise())
+
+
+def test_forced_and_teleport_movement_are_off_turn_effect_position_changes(
+    tmp_path: Path,
+) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {"name": "Effect movement", "edition": "2014", "idempotency_key": "campaign"},
+        )
+        controller = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {"campaign_id": campaign["id"], "name": "Controller"},
+                "principal_id": "system:local",
+                "idempotency_key": "controller",
+            },
+        )
+        target_sheet = default_character_sheet()
+        target_sheet["conditions"] = ["restrained", "prone"]
+        target = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": "Target",
+                    "sheet": target_sheet,
+                },
+                "principal_id": "system:local",
+                "idempotency_key": "target",
+            },
+        )
+        campaign = await _call(
+            server,
+            "campaign_query",
+            {
+                "view": "get",
+                "payload": {"campaign_id": campaign["id"]},
+                "principal_id": "system:local",
+            },
+        )
+        started = await _call_raw(
+            server,
+            "combat_start",
+            {
+                "positioning_mode": "grid",
+                "campaign_id": campaign["id"],
+                "participant_ids": [controller["id"], target["id"]],
+                "participant_config": [
+                    {
+                        "actor_id": controller["id"],
+                        "initiative": 20,
+                        "position": {"x": 0, "y": 0},
+                        "disposition": "hostile",
+                    },
+                    {
+                        "actor_id": target["id"],
+                        "initiative": 10,
+                        "position": {"x": 1, "y": 0},
+                        "disposition": "friendly",
+                    },
+                ],
+                "battle_map": {"width_cells": 12, "height_cells": 4},
+                "expected_revision": campaign["revision"],
+                "idempotency_key": "start",
+            },
+        )
+        target_before = next(
+            item for item in started["combat"]["combatants"] if item["actor_id"] == target["id"]
+        )
+        movement_before = target_before["turn_budget"]["movement"]
+
+        forced = await _call_raw(
+            server,
+            "combat_movement",
+            {
+                "campaign_id": campaign["id"],
+                "actor_id": target["id"],
+                "action": "move",
+                "payload": {
+                    "distance": 5,
+                    "destination": {"x": 2, "y": 0},
+                    "movement_mode": "forced",
+                },
+                "principal_id": "system:local",
+                "expected_revision": started["campaign_revision"],
+                "idempotency_key": "forced",
+            },
+        )
+        forced_target = next(
+            item for item in forced["combat"]["combatants"] if item["actor_id"] == target["id"]
+        )
+        assert forced_target["position"] == {"x": 2, "y": 0}
+        assert forced_target["turn_budget"]["movement"] == movement_before
+        assert forced["combat"]["pending"] == []
+
+        teleported = await _call_raw(
+            server,
+            "combat_movement",
+            {
+                "campaign_id": campaign["id"],
+                "actor_id": target["id"],
+                "action": "move",
+                "payload": {
+                    "distance": 40,
+                    "destination": {"x": 10, "y": 0},
+                    "movement_mode": "teleport",
+                },
+                "principal_id": "system:local",
+                "expected_revision": forced["campaign_revision"],
+                "idempotency_key": "teleport",
+            },
+        )
+        teleported_target = next(
+            item
+            for item in teleported["combat"]["combatants"]
+            if item["actor_id"] == target["id"]
+        )
+        assert teleported_target["position"] == {"x": 10, "y": 0}
+        assert teleported_target["turn_budget"]["movement"] == movement_before
+        assert teleported["combat"]["pending"] == []
+        receipts = await _call(
+            server,
+            "campaign_rules",
+            {
+                "campaign_id": campaign["id"],
+                "action": "receipts",
+                "payload": {},
+                "principal_id": "system:local",
+            },
+        )
+        assert any(
+            item["mechanic_id"] == "dnd5e.core.movement.forced_and_teleport"
+            for item in receipts
+        )
+
+    asyncio.run(exercise())

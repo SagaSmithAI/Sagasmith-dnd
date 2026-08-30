@@ -18106,7 +18106,12 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         branch_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Spend movement and open owned opportunity-reaction windows from known positions."""
+        """Apply voluntary, forced, or teleport movement from known positions.
+
+        Only voluntary movement spends the actor's turn budget or opens owned
+        opportunity-reaction windows.  Effect-driven forced movement and
+        teleportation may move a combatant off-turn without consuming speed.
+        """
         access.require_actor(campaign_id, actor_id, principal_id, control=True)
         require_write_contract(expected_revision, idempotency_key)
         resolved_branch_id = require_current_branch(campaign_id, branch_id)
@@ -18190,6 +18195,8 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 )
             )
         movement_boundary_ids: list[str] = []
+        if str(movement_mode).strip().lower().replace("-", "_") in {"forced", "teleport"}:
+            movement_boundary_ids.append("dnd5e.core.movement.forced_and_teleport")
         if "prone" in moving_conditions:
             movement_boundary_ids.append("dnd5e.core.movement.prone_crawl_stand")
         if "grappled" in moving_conditions:

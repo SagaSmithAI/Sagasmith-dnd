@@ -4031,11 +4031,13 @@ def spend_movement(
     crawl: bool = False,
     spatial_facts: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Consume movement and open opportunity-reaction windows from known geometry.
+    """Apply voluntary, forced, or teleport movement from known geometry.
 
     Explicit token positions, reach values, map bounds/blocked cells, and
-    difficult cells crossed by a cell-by-cell path are automated. Other terrain,
-    forced-movement causes, and line-of-effect remain DM-rulable.
+    difficult cells crossed by a voluntary cell-by-cell path are automated.
+    Forced movement and teleportation never spend the target's turn movement or
+    trigger opportunity attacks; their source-specific target and line-of-effect
+    legality must be settled before this generic position mutation.
     """
     value = deepcopy(encounter)
     distance = int(distance)
@@ -4045,6 +4047,10 @@ def spend_movement(
     if movement_mode not in {"voluntary", "forced", "teleport"}:
         raise CombatEngineError("movement_mode must be voluntary, forced, or teleport")
     willing_movement = movement_mode == "voluntary"
+    if not willing_movement and crawl:
+        raise CombatEngineError("forced movement and teleportation cannot be declared as crawling")
+    if movement_mode == "teleport" and path is not None:
+        raise CombatEngineError("teleportation accepts only its destination, not a traversed path")
     positioning_mode = str(value.get("positioning_mode") or "grid")
     agent_facts: dict[str, Any] | None = None
     if positioning_mode == "agent":
@@ -4081,10 +4087,10 @@ def spend_movement(
     current = current_combatant(value)
     if current is None:
         raise CombatEngineError("combat has no current actor")
-    if current.get("actor_id") != actor_id_value:
+    if willing_movement and current.get("actor_id") != actor_id_value:
         raise CombatEngineError("it is not this actor's turn")
     conditions = _condition_set(combatant.get("conditions"))
-    if conditions & {
+    if willing_movement and conditions & {
         "dead",
         "unconscious",
         "stunned",
@@ -4093,15 +4099,19 @@ def spend_movement(
         "restrained",
     }:
         raise CombatEngineError("actor cannot move under its current conditions")
-    if "grappled" in conditions:
+    if willing_movement and "grappled" in conditions:
         raise NeedsRulingError(
             "grapple source is needed to determine movement",
             missing=("grapple_source",),
             ruling_kind="missing_or_conflicting_source_review",
         )
-    if "prone" in conditions and not crawl:
+    if willing_movement and "prone" in conditions and not crawl:
         raise CombatEngineError("a prone actor must crawl or stand before moving")
-    if combatant.get("surprised") and _normalize_ruleset(value.get("ruleset")) == "2014":
+    if (
+        willing_movement
+        and combatant.get("surprised")
+        and _normalize_ruleset(value.get("ruleset")) == "2014"
+    ):
         raise CombatEngineError("surprised actor cannot move on its first turn")
     budget = dict(combatant.get("turn_budget") or {})
     available = int(budget.get("movement", 0) or 0)
@@ -4164,8 +4174,8 @@ def spend_movement(
             for point in route
             if point is not None and f"{int(point[0])},{int(point[1])}" in difficult_cells
         )
-    movement_cost = distance + (distance if crawl else 0) + terrain_cost
-    if movement_cost > available:
+    movement_cost = distance + (distance if crawl else 0) + terrain_cost if willing_movement else 0
+    if willing_movement and movement_cost > available:
         raise CombatEngineError("movement exceeds the remaining speed")
     if target_position is not None:
         occupants = [
@@ -4280,8 +4290,9 @@ def spend_movement(
         raise CombatEngineError(
             "a frightened creature cannot willingly move closer to its visible fear source"
         )
-    budget["movement"] = available - movement_cost
-    combatant["turn_budget"] = budget
+    if willing_movement:
+        budget["movement"] = available - movement_cost
+        combatant["turn_budget"] = budget
     if destination is not None:
         from sagasmith_dnd.spatial import validate_position
 

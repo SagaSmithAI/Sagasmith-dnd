@@ -4893,6 +4893,59 @@ def test_forced_movement_into_occupied_space_requires_effect_specific_ruling() -
     assert error.value.missing == ("occupied_destination_resolution",)
 
 
+def test_forced_movement_and_teleport_bypass_turn_speed_and_condition_limits() -> None:
+    controller = _actor("controller")
+    controller.update(initiative=20, position={"x": 0, "y": 0}, disposition="hostile")
+    target = _actor("target")
+    target["sheet"]["conditions"] = ["restrained", "prone"]
+    target["derived"] = derive_character_sheet(target["sheet"])
+    target.update(initiative=10, position={"x": 2, "y": 0}, disposition="friendly")
+    encounter = _grid_encounter([controller, target])
+    target_before = next(
+        item for item in encounter["combatants"] if item["actor_id"] == "target"
+    )
+    movement_before = target_before["turn_budget"]["movement"]
+
+    with pytest.raises(CombatEngineError, match="not this actor's turn"):
+        spend_movement(encounter, "target", 5, destination={"x": 3, "y": 0})
+
+    forced = spend_movement(
+        encounter,
+        "target",
+        5,
+        destination={"x": 3, "y": 0},
+        movement_mode="forced",
+    )
+    forced_target = next(item for item in forced["combatants"] if item["actor_id"] == "target")
+    assert forced_target["position"] == {"x": 3, "y": 0}
+    assert forced_target["turn_budget"]["movement"] == movement_before
+    assert forced["pending"] == []
+
+    teleported = spend_movement(
+        encounter,
+        "target",
+        35,
+        destination={"x": 9, "y": 0},
+        movement_mode="teleport",
+    )
+    teleported_target = next(
+        item for item in teleported["combatants"] if item["actor_id"] == "target"
+    )
+    assert teleported_target["position"] == {"x": 9, "y": 0}
+    assert teleported_target["turn_budget"]["movement"] == movement_before
+    assert teleported["pending"] == []
+
+    with pytest.raises(CombatEngineError, match="not a traversed path"):
+        spend_movement(
+            encounter,
+            "target",
+            35,
+            destination={"x": 9, "y": 0},
+            path=[{"x": 2, "y": 0}, {"x": 9, "y": 0}],
+            movement_mode="teleport",
+        )
+
+
 def test_hidden_mover_does_not_automatically_reveal_itself_with_a_reaction_window() -> None:
     mover = _actor("mover")
     mover.update(

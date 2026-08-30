@@ -1613,7 +1613,11 @@ In grid mode, `combat_movement(action="move")` verifies the declared grid
 distance and creates an owned `opportunity_attack` reaction window only when a
 mover leaves an eligible hostile's reach; `combat_reaction_attack` settles that
 window and its attack in one mutation. Collision, terrain, reach, visibility,
-and geometry are evaluated from the encounter map. In agent mode, movement has
+and geometry are evaluated from the encounter map. `movement_mode="forced"`
+and `movement_mode="teleport"` are effect-driven position changes: they may
+move a combatant outside its turn, do not spend its voluntary movement pool,
+and do not open opportunity-attack windows. Teleportation accepts a destination
+but no traversed `path`. In agent mode, movement has
 no destination coordinates and requires exactly `decision_id`, `reason`,
 `destination_legal`, `distance_ft`, `difficult_terrain_extra_ft`,
 `moves_farther_from_turn_source`, `enters_turn_source_30_ft`,

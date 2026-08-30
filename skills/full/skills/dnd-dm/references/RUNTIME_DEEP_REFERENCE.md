@@ -1340,9 +1340,11 @@ forced movement, line of sight, or a trigger not represented in encounter state.
 Use `combat_movement(action="move")` with `payload.path` for bent grid routes.
 Set `movement_mode` to `aggressive` only after the engine-owned Aggressive
 activity has created that separate grant. Set it to `forced` or `teleport` when
-the scene establishes that the move does not provoke a normal
-opportunity attack; do not encode terrain cost or collision unless it is part of
-the supplied scene facts.
+the scene establishes an effect-driven position change. Those two modes can
+move a combatant outside its turn, never spend its voluntary movement pool, and
+do not provoke a normal opportunity attack. A teleport accepts only its
+destination, never a traversed `payload.path`; do not encode terrain cost or
+collision unless it is part of the supplied scene facts.
 When the temporary battle map records `difficult_cells`, provide a cell-by-cell
 `payload.path` for any move longer than one square. The engine charges one extra
 foot per foot spent entering those reviewed cells and returns the reduced movement

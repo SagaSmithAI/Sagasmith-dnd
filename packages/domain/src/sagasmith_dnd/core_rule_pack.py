@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.66.0"
+CORE_RULE_PACK_VERSION = "1.67.0"
 
 
 @dataclass(frozen=True)
@@ -600,6 +600,16 @@ BOUNDARIES = (
         "combat_engine.spend_movement",
         ("tests/test_combat_engine.py::test_explicit_path_pays_difficult_terrain_cost",),
         "bundled:srd/difficult-terrain",
+    ),
+    CoreBoundary(
+        "dnd5e.core.movement.forced_and_teleport",
+        ("2014", "2024"),
+        "combat_engine.spend_movement",
+        (
+            "tests/test_combat_engine.py::"
+            "test_forced_movement_and_teleport_bypass_turn_speed_and_condition_limits",
+        ),
+        "bundled:srd/opportunity-attacks",
     ),
     CoreBoundary(
         "dnd5e.core.reaction.opportunity_path",
