@@ -346,6 +346,7 @@ from sagasmith_dnd.official_expansions import (
 from sagasmith_dnd.playthrough import (
     playthrough_source_bindings,
     validate_playthrough_manifest,
+    validate_playthrough_transition,
     validate_source_defined_ending_condition,
 )
 from sagasmith_dnd.progression import (
@@ -4170,6 +4171,167 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     f"{field}.asset_sha256 does not identify a managed source asset for its module"
                 )
 
+    def attest_playthrough_progress(
+        campaign_id: str,
+        branch_id: str,
+        manifest: dict[str, Any],
+    ) -> None:
+        """Bind plot clocks and their evidence to campaign-owned authorities."""
+
+        module_ids = {str(item) for item in manifest["module_ids"]}
+        installed = {
+            str(item["id"]): item
+            for item in modules.list(campaign_id, include_retired=True)
+            if str(item["id"]) in module_ids
+        }
+        atlas_scene_ids: set[str] = set()
+        front_ids: set[str] = set()
+        thread_ids: set[str] = set()
+        arc_designs: dict[str, tuple[str, str, frozenset[str]]] = {}
+        for module_id in manifest["module_ids"]:
+            module = installed.get(str(module_id))
+            if module is None:
+                raise ValueError(f"playthrough module {module_id!r} is not in this campaign")
+            for scene in modules.scene_index(campaign_id, module_id=str(module_id)):
+                for scene_ref in (scene.get("scene_id"), scene.get("stable_key")):
+                    value = str(scene_ref or "").strip()
+                    if value:
+                        atlas_scene_ids.update({value, f"scene:{value}"})
+            design = module.get("runtime_manifest")
+            if not isinstance(design, dict):
+                continue
+            front_ids.update(
+                str(item["id"])
+                for item in list(design.get("fronts") or [])
+                if isinstance(item, dict) and item.get("id")
+            )
+            thread_ids.update(
+                str(item["id"])
+                for item in list(design.get("story_threads") or [])
+                if isinstance(item, dict) and item.get("id")
+            )
+            for raw_arc in list(design.get("character_arcs") or []):
+                if not isinstance(raw_arc, dict) or not raw_arc.get("id"):
+                    continue
+                arc_id = str(raw_arc["id"])
+                candidate = (
+                    str(raw_arc.get("actor_id") or ""),
+                    str(raw_arc.get("actor_kind") or ""),
+                    frozenset(
+                        str(item["id"])
+                        for item in list(raw_arc.get("opportunities") or [])
+                        if isinstance(item, dict) and item.get("id")
+                    ),
+                )
+                if arc_id in arc_designs and arc_designs[arc_id] != candidate:
+                    raise ValueError(f"runtime_manifest arc id is ambiguous: {arc_id}")
+                arc_designs[arc_id] = candidate
+
+        for field, known_ids in (
+            ("front_progress", front_ids),
+            ("thread_progress", thread_ids),
+        ):
+            unknown = sorted(
+                item["id"] for item in manifest[field] if item["id"] not in known_ids
+            )
+            if unknown:
+                raise ValueError(
+                    f"{field} references unknown runtime_manifest ids: {', '.join(unknown)}"
+                )
+        for arc in manifest["arc_progress"]:
+            design = arc_designs.get(str(arc["id"]))
+            if design is None:
+                raise ValueError(
+                    f"arc_progress references unknown runtime_manifest id: {arc['id']}"
+                )
+            actor_id, actor_kind, opportunity_ids = design
+            if (arc["actor_id"], arc["actor_kind"]) != (actor_id, actor_kind):
+                raise ValueError(
+                    f"arc_progress {arc['id']!r} actor identity does not match runtime_manifest"
+                )
+            unknown = sorted(set(arc["completed_opportunity_ids"]) - opportunity_ids)
+            if unknown:
+                raise ValueError(
+                    f"arc_progress {arc['id']!r} references unknown opportunities: "
+                    + ", ".join(unknown)
+                )
+
+        requested = {
+            (str(ref["kind"]), str(ref["ref_id"]))
+            for field in ("front_progress", "thread_progress", "arc_progress")
+            for progress in manifest[field]
+            for ref in progress["evidence_refs"]
+        }
+        if not requested:
+            return
+        available: dict[str, set[str]] = {
+            "event": set(),
+            "snapshot": set(),
+            "scene": set(atlas_scene_ids),
+            "memory_fact": set(),
+            "conversation": set(),
+        }
+        if any(kind in {"event", "conversation"} for kind, _ref in requested):
+            offset = 0
+            while offset <= 100_000:
+                batch = events.list(
+                    campaign_id,
+                    limit=500,
+                    offset=offset,
+                    branch_id=branch_id,
+                )
+                for event in batch:
+                    available["event"].update({event.id, f"event:{event.id}"})
+                    payload = dict(event.payload or {})
+                    conversation_id = (
+                        str(payload.get("conversation_id") or "")
+                        if event.event_type == "npc_conversation"
+                        else ""
+                    )
+                    if conversation_id:
+                        available["conversation"].update(
+                            {
+                                conversation_id,
+                                f"conversation:{conversation_id}",
+                                event.id,
+                            }
+                        )
+                offset += len(batch)
+                if len(batch) < 500:
+                    break
+        if any(kind == "snapshot" for kind, _ref in requested):
+            for snapshot in snapshots.list(campaign_id):
+                if str(snapshot.branch_id) != branch_id:
+                    continue
+                available["snapshot"].update(
+                    {snapshot.id, f"snapshot:{snapshot.id}", str(snapshot.slot)}
+                )
+        if any(kind == "memory_fact" for kind, _ref in requested):
+            for fact in memories.list(
+                campaign_id,
+                branch_id=branch_id,
+                include_inactive=True,
+            ):
+                available["memory_fact"].update(
+                    {
+                        fact.id,
+                        fact.fact_key,
+                        fact.revision_id,
+                        f"memory:{fact.id}",
+                        f"memory_fact:{fact.fact_key}",
+                    }
+                )
+        missing = sorted(
+            f"{kind}:{ref_id}"
+            for kind, ref_id in requested
+            if ref_id not in available[kind]
+        )
+        if missing:
+            raise ValueError(
+                "playthrough progress evidence_refs are not attested on the active branch: "
+                + ", ".join(missing)
+            )
+
     def effective_ruleset_view_from(effective: Any, profile: Any) -> dict[str, Any]:
         """Render one already-resolved lock, including its built-in core."""
 
@@ -6470,43 +6632,77 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             branch_id,
             str(actor.id),
         )
+        actor_state = [
+            item
+            for item in actor_state
+            if str(item.get("disclosure_scope") or "dm")
+            in knowledge_disclosure_scopes
+        ]
         actor_knowledge = knowledge.list(
             campaign_id,
             actor_id=str(actor.id),
             branch_id=branch_id,
             disclosure_scopes=knowledge_disclosure_scopes,
         )
-        actor_events = [
-            *events.list_for_actor(
+        recent_events = events.list_for_actor(
+            campaign_id,
+            actor_id=str(actor.id),
+            branch_id=branch_id,
+            knowledge_disclosure_scopes=knowledge_disclosure_scopes,
+            audience=audience,
+            limit=200,
+        )
+        searched_events = (
+            events.search_for_actor(
                 campaign_id,
                 actor_id=str(actor.id),
-                branch_id=branch_id,
+                query=query,
                 knowledge_disclosure_scopes=knowledge_disclosure_scopes,
                 audience=audience,
-                limit=200,
-            ),
-            *(
-                events.search_for_actor(
-                    campaign_id,
-                    actor_id=str(actor.id),
-                    query=query,
-                    knowledge_disclosure_scopes=knowledge_disclosure_scopes,
-                    audience=audience,
-                    branch_id=branch_id,
-                    limit=50,
-                )
-                if query.strip()
-                else []
-            ),
+                branch_id=branch_id,
+                limit=50,
+            )
+            if query.strip()
+            else []
+        )
+        requested_event_ids = list(
+            dict.fromkeys(
+                item.removeprefix("event:")
+                for item in sorted(current_refs)
+                if item.startswith("event:") and item != "event:"
+            )
+        )
+        exact_events = (
+            events.list_for_actor_event_ids(
+                campaign_id,
+                actor_id=str(actor.id),
+                event_ids=requested_event_ids,
+                knowledge_disclosure_scopes=knowledge_disclosure_scopes,
+                audience=audience,
+                branch_id=branch_id,
+            )
+            if requested_event_ids
+            else []
+        )
+        actor_events_by_id: dict[str, Any] = {}
+        for item in [
+            *recent_events,
+            *searched_events,
+            *exact_events,
             *list(retrieved_events or []),
-        ]
+        ]:
+            event_id = str(
+                item.get("id") if isinstance(item, dict) else getattr(item, "id", "")
+            )
+            if event_id:
+                actor_events_by_id[event_id] = item
         return select_actor_memory_context(
             actor_state={
                 **npc_turn_actor_projection(actor),
                 "state_facts": actor_state,
             },
             actor_knowledge=actor_knowledge,
-            events=actor_events,
+            events=list(actor_events_by_id.values()),
             current_refs=current_refs,
             query=query,
             budget_chars=max(0, min(int(budget_chars), 12_000)),
@@ -29589,6 +29785,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         branch_id: str | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
         include_inactive: bool = False,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         """Retrieve branch-scoped durable world facts for DM administration."""
         access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
@@ -29598,6 +29795,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 campaign_id,
                 query,
                 limit=limit,
+                offset=offset,
                 branch_id=branch_id,
                 include_inactive=include_inactive,
             )
@@ -29787,11 +29985,12 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
     def actor_knowledge_revise(
         knowledge_id: str,
         proposition: str,
-        epistemic_status: str = "known",
-        confidence: int = 3,
+        epistemic_status: str | None = None,
+        confidence: int | None = None,
         source_event_id: str | None = None,
-        cause: str = "told_by",
-        disclosure_scope: str = "dm",
+        source_event_id_provided: bool = False,
+        cause: str | None = None,
+        disclosure_scope: str | None = None,
         branch_id: str | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
         expected_revision_id: str | None = None,
@@ -29810,12 +30009,14 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             "proposition": proposition,
             "epistemic_status": epistemic_status,
             "confidence": confidence,
-            "source_event_id": source_event_id,
+            "source_event_id_provided": source_event_id_provided,
             "cause": cause,
             "disclosure_scope": disclosure_scope,
             "branch_id": branch_id,
             "expected_revision_id": expected_revision_id,
         }
+        if source_event_id_provided:
+            request_payload["source_event_id"] = source_event_id
         scope = (
             f"actor-knowledge-revise:{current.campaign_id}:{branch_id}:"
             f"{principal_id}:{knowledge_id}"
@@ -29828,25 +30029,24 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 f"knowledge revision conflict: expected {expected_revision_id}, "
                 f"found {current.revision_id}"
             )
-        response = asdict(
-            knowledge.revise(
-                knowledge_id,
-                proposition=proposition,
-                epistemic_status=epistemic_status,
-                confidence=confidence,
-                source_event_id=source_event_id,
-                cause=cause,
-                disclosure_scope=disclosure_scope,
-                branch_id=branch_id,
-                expected_revision_id=expected_revision_id,
-                idempotency_key=idempotency_key,
-                idempotency_write=IdempotencyWrite(
-                    scope=scope,
-                    payload=request_payload,
-                    response=lambda result: asdict(result),
-                ),
-            )
-        )
+        revise_kwargs: dict[str, Any] = {
+            "proposition": proposition,
+            "epistemic_status": epistemic_status,
+            "confidence": confidence,
+            "cause": cause,
+            "disclosure_scope": disclosure_scope,
+            "branch_id": branch_id,
+            "expected_revision_id": expected_revision_id,
+            "idempotency_key": idempotency_key,
+            "idempotency_write": IdempotencyWrite(
+                scope=scope,
+                payload=request_payload,
+                response=lambda result: asdict(result),
+            ),
+        }
+        if source_event_id_provided:
+            revise_kwargs["source_event_id"] = source_event_id
+        response = asdict(knowledge.revise(knowledge_id, **revise_kwargs))
         return response
 
     def actor_knowledge_list(
@@ -29884,6 +30084,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         branch_id: str | None = None,
         limit: int = 8,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         """Search one actor's current subjective knowledge without leaking other actors."""
         resolved_branch_id = readable_branch(campaign_id, branch_id, principal_id)
@@ -29901,13 +30102,13 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             query=query,
             branch_id=resolved_branch_id,
             limit=limit,
+            offset=offset,
+            disclosure_scopes=(
+                PLAYER_OWNED_ACTOR_DISCLOSURE_SCOPES
+                if membership.role not in CAMPAIGN_DM_ROLES
+                else None
+            ),
         )
-        if membership.role not in CAMPAIGN_DM_ROLES:
-            values = [
-                item
-                for item in values
-                if item.disclosure_scope in PLAYER_OWNED_ACTOR_DISCLOSURE_SCOPES
-            ]
         return [asdict(item) for item in values]
 
     def state_idempotency_receipt(
@@ -30412,10 +30613,19 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             )
         if purpose == "audience_render" and audience != "player":
             raise ValueError("audience_render requires audience='player'")
-        resolved_related_refs = {
-            normalize_context_entity_ref(item, field="related_refs[]")
-            for item in list(related_refs or [])
-        }
+        resolved_related_refs: set[str] = set()
+        for item in list(related_refs or []):
+            candidate = str(item or "").strip()
+            if candidate.startswith("event:"):
+                if re.fullmatch(r"event:[^\s:][^\s]{0,279}", candidate) is None:
+                    raise ValueError(
+                        "related_refs[] event refs must use event:<non-empty-id>"
+                    )
+                resolved_related_refs.add(candidate)
+            else:
+                resolved_related_refs.add(
+                    normalize_context_entity_ref(item, field="related_refs[]")
+                )
         if actor_id:
             resolved_related_refs.add(f"actor:{actor_id}")
         normalized_interlocutor_ids: list[str] = []
@@ -30472,7 +30682,9 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             branch_id=branch_id,
             limit=limit,
             budget_chars=budget_chars,
-            related_refs=sorted(resolved_related_refs),
+            related_refs=sorted(
+                item for item in resolved_related_refs if not item.startswith("event:")
+            ),
         )
         if purpose == "actor_memory":
             assert actor_id is not None
@@ -44557,6 +44769,13 @@ boundary.
                 raise LookupError(module_id)
             if bool(module.get("active")):
                 raise ValueError("an active module Pack cannot be removed")
+            playthrough = dict(
+                campaigns.get(campaign_id).state.get("playthrough_manifest") or {}
+            )
+            if module_id in {str(item) for item in playthrough.get("module_ids") or []}:
+                raise ValueError(
+                    "a module Pack referenced by the playthrough manifest cannot be removed"
+                )
             modules.delete(campaign_id, module_id)
             result = {"status": "removed", "module_id": module_id}
         return facade_result(action, result)
@@ -47550,30 +47769,29 @@ boundary.
                     next_manifest["ending"]["conditions"].append(condition)
                 next_manifest = validate_playthrough_manifest(next_manifest)
             elif action == "replace":
-                next_manifest = validate_playthrough_manifest(required(data, "manifest"))
-                immutable = ("run_id", "campaign_line_id", "module_ids")
-                if any(next_manifest[key] != current_manifest[key] for key in immutable):
-                    raise ValueError(
-                        "replace cannot change run_id, campaign_line_id, or module_ids"
-                    )
+                next_manifest = validate_playthrough_transition(
+                    current_manifest,
+                    required(data, "manifest"),
+                )
+                if next_manifest["module_ids"] != current_manifest["module_ids"]:
+                    raise ValueError("replace cannot append modules; use extend_modules")
             elif action == "extend_modules":
-                next_manifest = validate_playthrough_manifest(required(data, "manifest"))
-                immutable = ("run_id", "campaign_line_id")
-                if any(next_manifest[key] != current_manifest[key] for key in immutable):
-                    raise ValueError("extend_modules cannot change run_id or campaign_line_id")
+                next_manifest = validate_playthrough_transition(
+                    current_manifest,
+                    required(data, "manifest"),
+                )
                 current_module_ids = set(current_manifest["module_ids"])
                 next_module_ids = set(next_manifest["module_ids"])
                 if not current_module_ids < next_module_ids:
                     raise ValueError(
                         "extend_modules must retain every module and add at least one module"
                     )
-                known_module_ids = {
-                    str(item["id"]) for item in modules.list(campaign_id, include_retired=True)
-                }
-                missing = sorted(next_module_ids - known_module_ids)
+                active_module_ids = {str(item["id"]) for item in modules.list(campaign_id)}
+                appended_module_ids = next_module_ids - current_module_ids
+                missing = sorted(appended_module_ids - active_module_ids)
                 if missing:
                     raise ValueError(
-                        "playthrough manifest references modules outside the campaign: "
+                        "playthrough manifest extensions require active campaign modules: "
                         + ", ".join(missing)
                     )
             elif action == "sync":
@@ -47603,6 +47821,7 @@ boundary.
         # Never persist a caller's stale copy through replace/extend_modules.
         next_manifest = sync_playthrough_manifest(campaign_id, next_manifest)
         validate_playthrough_source_bindings(campaign_id, next_manifest)
+        attest_playthrough_progress(campaign_id, resolved_branch_id, next_manifest)
         persisted_manifest = deepcopy(next_manifest)
         # Snapshot nodes are authoritative in core tables and are projected on
         # every public manifest read. Persisting the full derived DAG inside
@@ -47776,39 +47995,50 @@ boundary.
             )
         data = facade_payload(payload)
         effective_query = query or str(data.get("query") or "")
-        result = (
-            memory_search(
+        page_limit = _page_limit(data.get("limit", limit))
+        page_scope = (
+            f"memory_query:{campaign_id}:{view}:{principal_id}:"
+            f"{str(data.get('branch_id') or '')}:{bool(data.get('include_inactive'))}:"
+            f"{json_sha256(effective_query)}"
+        )
+        if view == "search":
+            fingerprint, page_offset = _cursor_offset(
+                scope=page_scope,
+                cursor=cursor or data.get("cursor"),
+                offset=data.get("offset", 0),
+            )
+            result = memory_search(
                 campaign_id,
                 required(data, "query") if not query else query,
-                100,
+                page_limit + 1,
                 data.get("branch_id"),
                 principal_id,
                 data.get("include_inactive", False),
+                page_offset,
             )
-            if view == "search"
-            else memory_list(
+            result, page = _authority_page(
+                result,
+                fingerprint=fingerprint,
+                offset=page_offset,
+                limit=page_limit,
+            )
+        else:
+            result = memory_list(
                 campaign_id,
                 data.get("kind"),
                 data.get("branch_id"),
                 principal_id,
                 data.get("include_inactive", False),
             )
-        )
-        if isinstance(result, list):
             result, page = _bounded_page(
                 result,
-                scope=(
-                    f"memory_query:{campaign_id}:{view}:{principal_id}:"
-                    f"{str(data.get('branch_id') or '')}:{bool(data.get('include_inactive'))}:"
-                    f"{json_sha256(effective_query)}"
-                ),
-                query="" if view == "search" else effective_query,
-                limit=data.get("limit", limit),
+                scope=page_scope,
+                query=effective_query,
+                limit=page_limit,
                 cursor=cursor or data.get("cursor"),
                 offset=data.get("offset", 0),
             )
-            return facade_result(view, result, page=page)
-        return facade_result(view, result)
+        return facade_result(view, result, page=page)
 
     @public_tool()
     def memory_change(
@@ -47996,29 +48226,44 @@ boundary.
         """Read only one actor's branch-scoped, subjective knowledge."""
         data = facade_payload(payload)
         effective_query = query or str(data.get("query") or "")
-        result = (
-            actor_knowledge_search(
+        page_limit = _page_limit(data.get("limit", limit))
+        page_scope = (
+            f"actor_knowledge_query:{campaign_id}:{actor_id}:{view}:{principal_id}:"
+            f"{str(data.get('branch_id') or '')}:{json_sha256(effective_query)}"
+        )
+        if view == "search":
+            fingerprint, page_offset = _cursor_offset(
+                scope=page_scope,
+                cursor=cursor or data.get("cursor"),
+                offset=data.get("offset", 0),
+            )
+            result = actor_knowledge_search(
                 campaign_id,
                 actor_id,
                 required(data, "query") if not query else query,
                 data.get("branch_id"),
-                100,
+                page_limit + 1,
                 principal_id,
+                page_offset,
             )
-            if view == "search"
-            else actor_knowledge_list(campaign_id, actor_id, data.get("branch_id"), principal_id)
-        )
-        result, page = _bounded_page(
-            result,
-            scope=(
-                f"actor_knowledge_query:{campaign_id}:{actor_id}:{view}:{principal_id}:"
-                f"{str(data.get('branch_id') or '')}:{json_sha256(effective_query)}"
-            ),
-            query="" if view == "search" else effective_query,
-            limit=data.get("limit", limit),
-            cursor=cursor or data.get("cursor"),
-            offset=data.get("offset", 0),
-        )
+            result, page = _authority_page(
+                result,
+                fingerprint=fingerprint,
+                offset=page_offset,
+                limit=page_limit,
+            )
+        else:
+            result = actor_knowledge_list(
+                campaign_id, actor_id, data.get("branch_id"), principal_id
+            )
+            result, page = _bounded_page(
+                result,
+                scope=page_scope,
+                query=effective_query,
+                limit=page_limit,
+                cursor=cursor or data.get("cursor"),
+                offset=data.get("offset", 0),
+            )
         return facade_result(view, result, page=page)
 
     @public_tool()
@@ -48048,17 +48293,18 @@ boundary.
             )
         else:
             result = actor_knowledge_revise(
-                required(data, "knowledge_id"),
-                required(data, "proposition"),
-                data.get("epistemic_status", "known"),
-                data.get("confidence", 3),
-                data.get("source_event_id"),
-                data.get("cause", "told_by"),
-                data.get("disclosure_scope", "dm"),
-                data.get("branch_id"),
-                principal_id,
-                required(data, "expected_revision_id"),
-                idempotency_key,
+                knowledge_id=required(data, "knowledge_id"),
+                proposition=required(data, "proposition"),
+                epistemic_status=data.get("epistemic_status"),
+                confidence=data.get("confidence"),
+                source_event_id=data.get("source_event_id"),
+                source_event_id_provided="source_event_id" in data,
+                cause=data.get("cause"),
+                disclosure_scope=data.get("disclosure_scope"),
+                branch_id=data.get("branch_id"),
+                principal_id=principal_id,
+                expected_revision_id=required(data, "expected_revision_id"),
+                idempotency_key=idempotency_key,
             )
         return facade_result(action, result)
 

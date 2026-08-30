@@ -197,6 +197,9 @@ episode rather than rewriting the root Module.
   validation, finalization, and activation remain separate authority gates.
 - A generator or subagent may propose content but may not roll dice, call state
   mutation tools, publish narration, or write campaign truth directly.
+- Extend a campaign line only with a currently active finalized Module Pack.
+  A retired Pack already cited by the line remains historical evidence and
+  cannot be removed while the playthrough manifest still references it.
 
 ## Long-running continuity
 
@@ -204,7 +207,11 @@ At each intermission, compare the campaign's branch-local `front_progress`,
 `thread_progress`, and `arc_progress` with the latest installed shard design.
 Use stable ids across episodes so progress survives expansion. Close an item
 only when established play supports closure; otherwise advance, branch, pause,
-or transform it with an explicit runtime update.
+or transform it with an explicit runtime update. Every front, thread, and arc id
+must come from an installed shard runtime manifest. Every progress advance must
+cite branch-visible event, snapshot, Scene Atlas, memory-fact, or settled NPC
+conversation evidence; invented ids and evidence from another branch are
+rejected. Completed arc opportunities must also exist in that arc's design.
 
 When the table eventually wants a bounded finale, add an episode that supplies
 reachable ending scenes. Emergent play does not require choosing that ending in

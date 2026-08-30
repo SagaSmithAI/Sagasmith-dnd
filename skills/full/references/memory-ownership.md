@@ -50,8 +50,13 @@ whole unit; never finish only the remaining calls from a partially imagined save
 - Player narration uses `continuity_context` with the exact actor and scene scope.
   For a long-running PC or NPC, use `purpose="actor_memory"` to obtain the
   branch-local identity, motivational, semantic, and episodic tracks under one
-  deterministic character budget. This is retrieval only and never supplies an
-  intent for the actor.
+  deterministic character budget. When one candidate from every represented
+  track fits, retrieval reserves that four-track floor before filling by global
+  relevance. Player projections exclude DM-only actor-state and knowledge facts.
+  Pass a bounded `event:<id>` current ref when an old, branch-visible event is
+  already known to be relevant; exact actor/audience authorization is reapplied
+  before it can outrank the recent window. This is retrieval only and never
+  supplies an intent for the actor.
 - DM narrative adjudication supplies the relevant actor/scene/location/quest/item
   `related_refs`; exact `module_evidence` selected by `context_anchor` facts is
   source context for Agent reasoning, not a trigger, world fact, or player belief.

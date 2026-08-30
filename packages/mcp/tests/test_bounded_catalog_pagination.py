@@ -234,3 +234,95 @@ def test_event_and_revision_cursors_reach_beyond_first_hundred_records(
         assert len(revisions) == len({item["sequence"] for item in revisions})
 
     asyncio.run(exercise())
+
+
+def test_memory_and_actor_knowledge_search_cursors_reach_beyond_first_hundred_records(
+    tmp_path: Path,
+) -> None:
+    async def collect(server, name: str, arguments: dict[str, Any]) -> list[dict[str, Any]]:
+        values: list[dict[str, Any]] = []
+        cursor: str | None = None
+        while True:
+            request = {**arguments, "limit": 40}
+            if cursor is not None:
+                request["cursor"] = cursor
+            _, structured = await _raw(server, name, request)
+            values.extend(structured["result"])
+            cursor = structured["next_cursor"]
+            if cursor is None:
+                return values
+
+    async def exercise() -> None:
+        server = _server(tmp_path)
+        _, created = await _raw(
+            server,
+            "campaign_create",
+            {"name": "Search pagination", "idempotency_key": "search-pagination"},
+        )
+        campaign_id = created["id"]
+        _, actor_result = await _raw(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign_id,
+                    "name": "Archivist",
+                    "character_type": "npc",
+                },
+                "idempotency_key": "search-pagination:actor",
+            },
+        )
+        actor_id = actor_result["result"]["id"]
+        memory_ids: set[str] = set()
+        knowledge_ids: set[str] = set()
+        for ordinal in range(125):
+            _, memory_result = await _raw(
+                server,
+                "memory_change",
+                {
+                    "campaign_id": campaign_id,
+                    "action": "add",
+                    "content": f"Needle archive fact {ordinal:03d}",
+                    "idempotency_key": f"search-pagination:memory:{ordinal}",
+                },
+            )
+            memory_ids.add(memory_result["result"]["id"])
+            _, knowledge_result = await _raw(
+                server,
+                "actor_knowledge_change",
+                {
+                    "action": "add",
+                    "payload": {
+                        "campaign_id": campaign_id,
+                        "actor_id": actor_id,
+                        "knowledge_key": f"needle-{ordinal:03d}",
+                        "proposition": f"Needle archive knowledge {ordinal:03d}",
+                    },
+                    "idempotency_key": f"search-pagination:knowledge:{ordinal}",
+                },
+            )
+            knowledge_ids.add(knowledge_result["result"]["id"])
+
+        memories = await collect(
+            server,
+            "memory_query",
+            {"campaign_id": campaign_id, "view": "search", "query": "needle"},
+        )
+        knowledge = await collect(
+            server,
+            "actor_knowledge_query",
+            {
+                "campaign_id": campaign_id,
+                "actor_id": actor_id,
+                "view": "search",
+                "query": "needle",
+            },
+        )
+
+        assert len(memories) == len({item["id"] for item in memories}) == 125
+        assert {item["id"] for item in memories} == memory_ids
+        assert len(knowledge) == len({item["id"] for item in knowledge}) == 125
+        assert {item["id"] for item in knowledge} == knowledge_ids
+
+    asyncio.run(exercise())

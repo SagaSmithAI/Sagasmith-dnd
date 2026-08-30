@@ -18,6 +18,7 @@ from sagasmith_dnd.playthrough import (
     new_playthrough_manifest,
     playthrough_source_bindings,
     validate_playthrough_manifest,
+    validate_playthrough_transition,
 )
 
 SOURCE_REF = {
@@ -542,3 +543,44 @@ def test_material_progress_requires_runtime_evidence(
 
     with pytest.raises(ValueError, match="requires evidence_refs"):
         validate_playthrough_manifest(manifest)
+
+
+def test_campaign_line_transition_preserves_lineage_atlas_and_progress_history() -> None:
+    current = _playthrough(
+        campaign_mode="emergent",
+        lineage=[
+            _lineage(
+                "seed",
+                "emergent_seed",
+                root="seed",
+                scenes=("scene:crossroads",),
+            )
+        ],
+    )
+    current["front_progress"] = [
+        {
+            "id": "front:road",
+            "status": "advanced",
+            "stage": 2,
+            "source_ref": None,
+            "evidence_refs": [{"kind": "event", "ref_id": "event:road-closed"}],
+        }
+    ]
+    current = validate_playthrough_manifest(current)
+
+    rewritten = copy.deepcopy(current)
+    rewritten["content_lineage"][0]["scene_ids"] = ["scene:rewritten-root"]
+    with pytest.raises(ValueError, match="lineage and Scene Atlas metadata are immutable"):
+        validate_playthrough_transition(current, rewritten)
+
+    regressed = copy.deepcopy(current)
+    regressed["front_progress"][0].update({"status": "active", "stage": 1})
+    with pytest.raises(ValueError, match="cannot transition"):
+        validate_playthrough_transition(current, regressed)
+
+    erased = copy.deepcopy(current)
+    erased["front_progress"][0]["evidence_refs"] = [
+        {"kind": "event", "ref_id": "event:replacement"}
+    ]
+    with pytest.raises(ValueError, match="evidence history may not be removed"):
+        validate_playthrough_transition(current, erased)

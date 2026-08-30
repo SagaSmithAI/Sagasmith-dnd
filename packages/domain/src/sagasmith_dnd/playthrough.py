@@ -312,6 +312,132 @@ def validate_playthrough_manifest(value: Any) -> dict[str, Any]:
     return normalized
 
 
+def validate_playthrough_transition(current_value: Any, next_value: Any) -> dict[str, Any]:
+    """Validate one monotonic update to an established campaign line.
+
+    A caller may advance runtime progress or append a reviewed shard, but it
+    cannot rewrite the Atlas/lineage that earlier events and memories cite or
+    erase already-observed progress evidence.
+    """
+
+    current = validate_playthrough_manifest(current_value)
+    successor = validate_playthrough_manifest(next_value)
+    for field in ("run_id", "campaign_line_id"):
+        if successor[field] != current[field]:
+            raise ValueError(f"playthrough {field} is immutable")
+
+    old_module_ids = current["module_ids"]
+    if successor["module_ids"][: len(old_module_ids)] != old_module_ids:
+        raise ValueError("playthrough module_ids may only append reviewed shards")
+    old_lineage = current["content_lineage"]
+    if successor["content_lineage"][: len(old_lineage)] != old_lineage:
+        raise ValueError("existing playthrough lineage and Scene Atlas metadata are immutable")
+
+    old_mode = current["campaign_mode"]
+    new_mode = successor["campaign_mode"]
+    appended = successor["content_lineage"][len(old_lineage) :]
+    if new_mode != old_mode:
+        legal_authored_extension = (
+            old_mode == "authored_module"
+            and new_mode == "authored_with_extensions"
+            and bool(appended)
+            and all(item["classification"] == "emergent_episode" for item in appended)
+        )
+        if not legal_authored_extension:
+            raise ValueError("campaign_mode transition is not permitted")
+
+    if not set(current["traversal"]["visited_scene_ids"]).issubset(
+        successor["traversal"]["visited_scene_ids"]
+    ):
+        raise ValueError("visited Scene Atlas history may not be removed")
+    if successor["traversal"]["branch_decisions"][: len(
+        current["traversal"]["branch_decisions"]
+    )] != current["traversal"]["branch_decisions"]:
+        raise ValueError("existing branch decisions are immutable")
+    if successor["source_refs"][: len(current["source_refs"])] != current["source_refs"]:
+        raise ValueError("existing playthrough source_refs are immutable")
+    if successor["ending"] != current["ending"]:
+        raise ValueError("replace/extend cannot edit ending state; use ending operations")
+
+    _validate_progress_transition(
+        current["front_progress"],
+        successor["front_progress"],
+        field="front_progress",
+        transitions={
+            "dormant": {"dormant", "active", "advanced", "resolved", "averted"},
+            "active": {"active", "advanced", "resolved", "averted"},
+            "advanced": {"advanced", "resolved", "averted"},
+            "resolved": {"resolved"},
+            "averted": {"averted"},
+        },
+        immutable_fields=(),
+        monotonic_fields=("stage",),
+    )
+    _validate_progress_transition(
+        current["thread_progress"],
+        successor["thread_progress"],
+        field="thread_progress",
+        transitions={
+            "dormant": {"dormant", "open", "advanced", "resolved", "abandoned"},
+            "open": {"open", "advanced", "resolved", "abandoned"},
+            "advanced": {"advanced", "resolved", "abandoned"},
+            "resolved": {"resolved"},
+            "abandoned": {"abandoned"},
+        },
+        immutable_fields=(),
+    )
+    _validate_progress_transition(
+        current["arc_progress"],
+        successor["arc_progress"],
+        field="arc_progress",
+        transitions={
+            "dormant": {"dormant", "available", "advanced", "resolved", "closed"},
+            "available": {"available", "advanced", "resolved", "closed"},
+            "advanced": {"advanced", "resolved", "closed"},
+            "resolved": {"resolved"},
+            "closed": {"closed"},
+        },
+        immutable_fields=("actor_id", "actor_kind"),
+        append_only_fields=("completed_opportunity_ids",),
+    )
+    return successor
+
+
+def _validate_progress_transition(
+    current: list[dict[str, Any]],
+    successor: list[dict[str, Any]],
+    *,
+    field: str,
+    transitions: dict[str, set[str]],
+    immutable_fields: tuple[str, ...],
+    monotonic_fields: tuple[str, ...] = (),
+    append_only_fields: tuple[str, ...] = (),
+) -> None:
+    next_by_id = {item["id"]: item for item in successor}
+    for old in current:
+        item_id = old["id"]
+        new = next_by_id.get(item_id)
+        if new is None:
+            raise ValueError(f"{field} may not remove existing id {item_id!r}")
+        if new["status"] not in transitions[old["status"]]:
+            raise ValueError(
+                f"{field} {item_id!r} cannot transition from "
+                f"{old['status']!r} to {new['status']!r}"
+            )
+        if any(new[name] != old[name] for name in immutable_fields):
+            raise ValueError(f"{field} {item_id!r} identity fields are immutable")
+        if any(new[name] < old[name] for name in monotonic_fields):
+            raise ValueError(f"{field} {item_id!r} numeric progress may not regress")
+        if any(not set(old[name]).issubset(new[name]) for name in append_only_fields):
+            raise ValueError(f"{field} {item_id!r} completed progress may not be removed")
+        old_evidence = {(value["kind"], value["ref_id"]) for value in old["evidence_refs"]}
+        new_evidence = {(value["kind"], value["ref_id"]) for value in new["evidence_refs"]}
+        if not old_evidence.issubset(new_evidence):
+            raise ValueError(f"{field} {item_id!r} evidence history may not be removed")
+        if old["source_ref"] is not None and new["source_ref"] != old["source_ref"]:
+            raise ValueError(f"{field} {item_id!r} source_ref is immutable once recorded")
+
+
 def validate_source_ref(value: Any, *, field: str = "source_ref") -> dict[str, Any]:
     ref = _object(value, field)
     _only(

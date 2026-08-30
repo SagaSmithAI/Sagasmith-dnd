@@ -155,6 +155,62 @@ def test_tracks_share_one_selector_without_proposing_pc_intent() -> None:
     assert "intent" not in str(context.as_dict()).casefold()
 
 
+def test_budget_preserves_each_represented_track_when_the_floor_fits() -> None:
+    noisy_identity = [
+        {
+            "id": f"identity-{index}",
+            "kind": "identity",
+            "content": f"Urgent current hero identity {index}",
+            "salience": 5,
+            "updated_at": f"2026-08-30T00:{index:02d}:00Z",
+        }
+        for index in range(10)
+    ]
+    actor_state = [
+        *noisy_identity,
+        {
+            "id": "goal",
+            "kind": "goal",
+            "predicate": "goal",
+            "content": "Protect the witness.",
+            "importance": 1,
+        },
+    ]
+    knowledge = [_knowledge(1, proposition="The east door uses a brass key.")]
+    events = [_event(1, summary="The witness renewed an old promise.")]
+    complete = select_actor_memory_context(
+        actor_state=actor_state,
+        actor_knowledge=knowledge,
+        events=events,
+        query="urgent current hero identity",
+        budget_chars=100_000,
+    )
+    floor_budget = sum(
+        next(
+            item["cost_chars"]
+            for item in complete.diagnostics["selection_order"]
+            if item["track"] == track
+        )
+        for track in ("identity", "motivational", "semantic", "episodic")
+    )
+
+    bounded = select_actor_memory_context(
+        actor_state=actor_state,
+        actor_knowledge=knowledge,
+        events=events,
+        query="urgent current hero identity",
+        budget_chars=floor_budget,
+    )
+
+    assert bounded.diagnostics["track_selected"] == {
+        "identity": 1,
+        "motivational": 1,
+        "semantic": 1,
+        "episodic": 1,
+    }
+    assert bounded.diagnostics["used_chars"] <= floor_budget
+
+
 def test_budget_is_strict_and_smaller_lower_ranked_items_can_still_fit() -> None:
     oversized = _knowledge(
         1,
