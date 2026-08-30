@@ -421,6 +421,62 @@ def test_actor_knowledge_revise_preserves_omitted_fields_and_can_clear_source(
         )
         assert len(history) == 1 and history[0]["epistemic_status"] == "forgotten"
 
+        await _call(
+            server,
+            "access_grant",
+            {
+                "scope": "campaign",
+                "campaign_id": campaign["id"],
+                "principal_id": "player:witness",
+                "payload": {"role": "player"},
+            },
+        )
+        await _call(
+            server,
+            "access_grant",
+            {
+                "scope": "actor",
+                "campaign_id": campaign["id"],
+                "principal_id": "player:witness",
+                "payload": {"actor_id": actor["id"], "can_view_private": True},
+            },
+        )
+        for view in ("list", "search"):
+            with pytest.raises(ToolError, match="restricted to DM roles"):
+                await _call(
+                    server,
+                    "actor_knowledge_query",
+                    {
+                        "campaign_id": campaign["id"],
+                        "actor_id": actor["id"],
+                        "view": view,
+                        "query": "sigil",
+                        "payload": {"include_inactive": True},
+                        "principal_id": "player:witness",
+                    },
+                )
+        for tool_name, arguments in (
+            (
+                "memory_query",
+                {
+                    "campaign_id": campaign["id"],
+                    "view": "list",
+                    "payload": {"include_inactive": "false"},
+                },
+            ),
+            (
+                "actor_knowledge_query",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": actor["id"],
+                    "view": "list",
+                    "payload": {"include_inactive": "false"},
+                },
+            ),
+        ):
+            with pytest.raises(ToolError, match="include_inactive must be a boolean"):
+                await _call(server, tool_name, arguments)
+
     asyncio.run(exercise())
 
 

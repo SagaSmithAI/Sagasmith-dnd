@@ -30096,6 +30096,8 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             branch_id=resolved_branch_id,
         )
         membership = access.require_campaign(campaign_id, principal_id)
+        if include_inactive and membership.role not in CAMPAIGN_DM_ROLES:
+            raise ExposureError("inactive actor knowledge history is restricted to DM roles")
         values = knowledge.list(
             campaign_id,
             actor_id=actor_id,
@@ -30130,6 +30132,8 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             branch_id=resolved_branch_id,
         )
         membership = access.require_campaign(campaign_id, principal_id)
+        if include_inactive and membership.role not in CAMPAIGN_DM_ROLES:
+            raise ExposureError("inactive actor knowledge history is restricted to DM roles")
         values = knowledge.search(
             campaign_id,
             actor_id=actor_id,
@@ -42367,6 +42371,12 @@ boundary.
             raise ValueError("payload must be an object")
         return dict(payload)
 
+    def facade_bool(payload: dict[str, Any], name: str, *, default: bool = False) -> bool:
+        value = payload.get(name, default)
+        if not isinstance(value, bool):
+            raise ValueError(f"payload.{name} must be a boolean")
+        return value
+
     def required(payload: dict[str, Any], name: str) -> Any:
         value = payload.get(name)
         if value is None or value == "":
@@ -48047,11 +48057,12 @@ boundary.
                 ),
             )
         data = facade_payload(payload)
+        include_inactive = facade_bool(data, "include_inactive")
         effective_query = query or str(data.get("query") or "")
         page_limit = _page_limit(data.get("limit", limit))
         page_scope = (
             f"memory_query:{campaign_id}:{view}:{principal_id}:"
-            f"{str(data.get('branch_id') or '')}:{bool(data.get('include_inactive'))}:"
+            f"{str(data.get('branch_id') or '')}:{include_inactive}:"
             f"{json_sha256(effective_query)}"
         )
         if view == "search":
@@ -48066,7 +48077,7 @@ boundary.
                 page_limit + 1,
                 data.get("branch_id"),
                 principal_id,
-                data.get("include_inactive", False),
+                include_inactive,
                 page_offset,
             )
             result, page = _authority_page(
@@ -48081,7 +48092,7 @@ boundary.
                 data.get("kind"),
                 data.get("branch_id"),
                 principal_id,
-                data.get("include_inactive", False),
+                include_inactive,
             )
             result, page = _bounded_page(
                 result,
@@ -48305,11 +48316,12 @@ boundary.
     ) -> dict[str, Any]:
         """Read only one actor's branch-scoped, subjective knowledge."""
         data = facade_payload(payload)
+        include_inactive = facade_bool(data, "include_inactive")
         effective_query = query or str(data.get("query") or "")
         page_limit = _page_limit(data.get("limit", limit))
         page_scope = (
             f"actor_knowledge_query:{campaign_id}:{actor_id}:{view}:{principal_id}:"
-            f"{str(data.get('branch_id') or '')}:{bool(data.get('include_inactive'))}:"
+            f"{str(data.get('branch_id') or '')}:{include_inactive}:"
             f"{json_sha256(effective_query)}"
         )
         if view == "search":
@@ -48326,7 +48338,7 @@ boundary.
                 page_limit + 1,
                 principal_id,
                 page_offset,
-                bool(data.get("include_inactive")),
+                include_inactive,
             )
             result, page = _authority_page(
                 result,
@@ -48337,7 +48349,7 @@ boundary.
         else:
             result = actor_knowledge_list(
                 campaign_id, actor_id, data.get("branch_id"), principal_id,
-                bool(data.get("include_inactive")),
+                include_inactive,
             )
             result, page = _bounded_page(
                 result,
