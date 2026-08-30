@@ -150,6 +150,40 @@ def test_urban_complication_affects_next_participant() -> None:
     assert second["turn"]["moved_ft"] == 50
 
 
+def test_urban_complication_incapacitation_prevents_movement() -> None:
+    pursuer = _actor("pursuer", initiative=20)
+    quarry = _actor("quarry", initiative=10)
+    quarry["sheet"]["combat"]["hp"] = {"value": 1, "max": 20, "temp": 0}
+    quarry["derived"] = derive_character_sheet(quarry["sheet"])
+    chase = start_chase(
+        [pursuer, quarry],
+        quarry_ids=["quarry"],
+        initial_distance_ft=100,
+    )
+    chase["turn_index"] = 1
+    chase["pending_complication"] = {
+        "number": 6,
+        "source_actor_id": "pursuer",
+        "rolled_round": 1,
+    }
+
+    result = advance_chase_turn(
+        chase,
+        quarry,
+        actor_id_value="quarry",
+        action="move",
+        complication_choice="acrobatics",
+        rng=_SequenceRng(1, 1, 20),
+    )
+
+    assert result["sheet"]["combat"]["hp"]["value"] == 0
+    assert "unconscious" in result["sheet"]["conditions"]
+    assert result["turn"]["moved_ft"] == 0
+    assert result["chase"]["participants"][1]["position_ft"] == 100
+    assert result["chase"]["participants"][1]["active"] is False
+    assert result["chase"]["participants"][1]["dropped_reason"] == "incapacitated"
+
+
 def test_chase_prone_changes_share_immunity_and_effect_ownership() -> None:
     pursuer = _actor("pursuer", initiative=20)
     quarry = _actor("quarry", initiative=10)
