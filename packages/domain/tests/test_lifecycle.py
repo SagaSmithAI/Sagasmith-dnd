@@ -947,6 +947,63 @@ def test_rest_rejects_irrelevant_recovery_inputs_before_rng() -> None:
         apply_rest(sheet, rest_type="short_rest", food_and_drink=True)
 
 
+def test_2014_long_rest_applies_only_the_explicit_hit_die_allocation() -> None:
+    sheet = default_character_sheet()
+    sheet["edition"] = "2014"
+    sheet["combat"]["hp"] = {"value": 5, "max": 10, "temp": 0}
+    sheet["combat"]["hit_dice"] = {
+        "fighter:d10": {
+            "label": "d10",
+            "value": 0,
+            "max": 2,
+            "recovers_on": "none",
+        },
+        "cleric:d8": {
+            "label": "d8",
+            "value": 0,
+            "max": 2,
+            "recovers_on": "none",
+        },
+    }
+
+    rested = apply_rest(
+        sheet,
+        rest_type="long_rest",
+        hit_dice_recovery={"fighter:d10": 1},
+    )
+
+    assert rested["sheet"]["combat"]["hit_dice"]["fighter:d10"]["value"] == 1
+    assert rested["sheet"]["combat"]["hit_dice"]["cleric:d8"]["value"] == 0
+    assert rested["recovered"] == {
+        "hit_dice:fighter:d10": 1,
+        "hit_dice:cleric:d8": 0,
+    }
+
+
+@pytest.mark.parametrize("allocation", [{"unknown:d8": 1}, {"fighter:d10": True}])
+def test_2014_long_rest_rejects_invalid_explicit_hit_die_allocations(
+    allocation: dict[str, object],
+) -> None:
+    sheet = default_character_sheet()
+    sheet["edition"] = "2014"
+    sheet["combat"]["hp"] = {"value": 5, "max": 10, "temp": 0}
+    sheet["combat"]["hit_dice"] = {
+        "fighter:d10": {
+            "label": "d10",
+            "value": 0,
+            "max": 2,
+            "recovers_on": "none",
+        }
+    }
+
+    with pytest.raises(CombatEngineError, match="2014 hit-die recovery"):
+        apply_rest(
+            sheet,
+            rest_type="long_rest",
+            hit_dice_recovery=allocation,  # type: ignore[arg-type]
+        )
+
+
 def test_arcane_recovery_is_a_once_per_day_short_rest_choice() -> None:
     sheet = default_character_sheet()
     sheet["progression"] = {
