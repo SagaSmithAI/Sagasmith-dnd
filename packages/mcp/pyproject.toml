@@ -13,22 +13,22 @@ license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "SagaSmithAI" }]
 dependencies = [
     "mcp>=2.1.1,<3.0.0",
-    "sagasmith-core>=0.2.0,<0.3.0",
+    "sagasmith-core>=0.2.1,<0.3.0",
     "sagasmith-dnd>=0.2.0,<0.3.0",
 ]
 
 [project.optional-dependencies]
-documents = ["sagasmith-core[documents]>=0.2.0,<0.3.0"]
+documents = ["sagasmith-core[documents]>=0.2.1,<0.3.0"]
 images = [
     "Pillow>=10.0.0,<13.0.0",
     "sagasmith-dnd[images]>=0.2.0,<0.3.0",
 ]
-ocr = ["sagasmith-core[documents,ocr]>=0.2.0,<0.3.0"]
-embedding = ["sagasmith-core[embedding]>=0.2.0,<0.3.0"]
-vector = ["sagasmith-core[vector]>=0.2.0,<0.3.0"]
-dense = ["sagasmith-core[embedding,vector]>=0.2.0,<0.3.0"]
+ocr = ["sagasmith-core[documents,ocr]>=0.2.1,<0.3.0"]
+embedding = ["sagasmith-core[embedding]>=0.2.1,<0.3.0"]
+vector = ["sagasmith-core[vector]>=0.2.1,<0.3.0"]
+dense = ["sagasmith-core[embedding,vector]>=0.2.1,<0.3.0"]
 all = [
-    "sagasmith-core[documents,embedding,ocr,vector]>=0.2.0,<0.3.0",
+    "sagasmith-core[documents,embedding,ocr,vector]>=0.2.1,<0.3.0",
     "sagasmith-dnd[images]>=0.2.0,<0.3.0",
     "Pillow>=10.0.0,<13.0.0",
 ]

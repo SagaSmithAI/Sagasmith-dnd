@@ -18,7 +18,7 @@ jobs:
         include:
           - profile: locked-py311
             python-version: "3.11"
-            core-ref: d72fb114881b71c8c417647cd6ccef0a64e4dd35
+            core-ref: 73ea9d74d19657b2038c3c6a958bb58c5300f3b5
             sync-args: --frozen
           - profile: compatibility-py312
             python-version: "3.12"

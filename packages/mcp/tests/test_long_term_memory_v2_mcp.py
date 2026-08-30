@@ -224,7 +224,7 @@ def test_memory_facade_retract_forget_preserve_history_and_guard_revision(tmp_pa
                     "idempotency_key": "fact-add",
                 },
             )
-        with pytest.raises(ToolError, match="stale campaign revision"):
+        with pytest.raises(ToolError, match="campaign revision conflict"):
             await _call(
                 server,
                 "memory_change",
@@ -420,6 +420,34 @@ def test_actor_knowledge_revise_preserves_omitted_fields_and_can_clear_source(
             },
         )
         assert len(history) == 1 and history[0]["epistemic_status"] == "forgotten"
+
+        later = await _call(
+            server,
+            "actor_knowledge_change",
+            {
+                "action": "revise",
+                "payload": {
+                    "knowledge_id": original["id"],
+                    "proposition": "The sigil was later described as violet.",
+                    "expected_revision_id": forgotten["revision_id"],
+                },
+                "idempotency_key": "knowledge-later-revision",
+            },
+        )
+        replayed_forget = await _call(
+            server,
+            "actor_knowledge_change",
+            {
+                "action": "forget",
+                "payload": {
+                    "knowledge_id": original["id"],
+                    "expected_revision_id": retracted["revision_id"],
+                },
+                "idempotency_key": "knowledge-forget",
+            },
+        )
+        assert replayed_forget == forgotten
+        assert later["proposition"] == "The sigil was later described as violet."
 
         await _call(
             server,

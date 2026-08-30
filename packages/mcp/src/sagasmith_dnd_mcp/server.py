@@ -30025,6 +30025,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         branch_id: str | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
         expected_revision_id: str | None = None,
+        proposition_provided: bool = True,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Append a new subjective revision, e.g. a rumor or Modify Memory effect."""
@@ -30037,7 +30038,6 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         branch_id = require_current_branch(current.campaign_id, branch_id)
         request_payload = {
             "knowledge_id": knowledge_id,
-            "proposition": proposition,
             "epistemic_status": epistemic_status,
             "confidence": confidence,
             "source_event_id_provided": source_event_id_provided,
@@ -30046,6 +30046,10 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             "branch_id": branch_id,
             "expected_revision_id": expected_revision_id,
         }
+        if proposition_provided:
+            request_payload["proposition"] = proposition
+        else:
+            request_payload["proposition_omitted"] = True
         if source_event_id_provided:
             request_payload["source_event_id"] = source_event_id
         scope = (
@@ -48182,14 +48186,6 @@ boundary.
         replay = replay_idempotent(scope, idempotency_key, request_payload)
         if replay is not None:
             return facade_result(action, replay)
-        if expected_revision is not None:
-            current_campaign = campaigns.get(campaign_id)
-            if current_campaign.revision != expected_revision:
-                raise ValueError(
-                    f"stale campaign revision: expected {expected_revision}, "
-                    f"found {current_campaign.revision}; refresh campaign state and retry "
-                    "with the same idempotency key"
-                )
 
         visible = memories.list(
             campaign_id,
@@ -48220,6 +48216,7 @@ boundary.
                 source_event_ids=list(data.get("source_event_ids") or []),
                 importance=int(data.get("importance", 3)),
                 disclosure_scope=data.get("disclosure_scope"),
+                expected_campaign_revision=expected_revision,
                 idempotency_key=idempotency_key,
                 idempotency_write=atomic_write,
             )
@@ -48262,6 +48259,7 @@ boundary.
                     else 3
                 ),
                 disclosure_scope=data.get("disclosure_scope"),
+                expected_campaign_revision=expected_revision,
                 idempotency_key=idempotency_key,
                 idempotency_write=atomic_write,
             )
@@ -48298,6 +48296,7 @@ boundary.
                     int(data["importance"]) if data.get("importance") is not None else None
                 ),
                 disclosure_scope=data.get("disclosure_scope"),
+                expected_campaign_revision=expected_revision,
                 idempotency_key=idempotency_key,
                 idempotency_write=atomic_write,
             )
@@ -48387,6 +48386,7 @@ boundary.
                 idempotency_key,
             )
         else:
+            proposition_provided = bool(data.get("proposition"))
             if action in {"retract", "forget"}:
                 current = knowledge.get(required(data, "knowledge_id"))
                 data = {
@@ -48406,6 +48406,7 @@ boundary.
                 branch_id=data.get("branch_id"),
                 principal_id=principal_id,
                 expected_revision_id=required(data, "expected_revision_id"),
+                proposition_provided=proposition_provided,
                 idempotency_key=idempotency_key,
             )
         return facade_result(action, result)
