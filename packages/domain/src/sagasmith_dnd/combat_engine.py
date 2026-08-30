@@ -772,7 +772,8 @@ def start_encounter(
         )
         initiative_bonus = int(exhaustion_adjustment["bonus"])
         initiative_disadvantage = bool(exhaustion_adjustment["disadvantage"])
-        speed = int(derived.get("speed", {}).get("walk", 30) or 30)
+        recorded_walk_speed = derived.get("speed", {}).get("walk")
+        speed = int(30 if recorded_walk_speed is None else recorded_walk_speed)
         if normalized_ruleset == "2024":
             speed = max(0, speed - 5 * exhaustion)
         elif exhaustion >= 5:
@@ -6941,16 +6942,19 @@ def end_turn(encounter: dict[str, Any], *, actor_id_value: str | None = None) ->
             ]
             or [0]
         )
-        base_turn_speed = int(next_actor.get("base_speed", budget.get("speed", 30)) or 30)
+        recorded_base_speed = next_actor.get("base_speed", budget.get("speed"))
+        base_turn_speed = int(30 if recorded_base_speed is None else recorded_base_speed)
+        recorded_speed_multiplier = next_actor.get("speed_multiplier")
+        speed_multiplier = float(
+            1.0 if recorded_speed_multiplier is None else recorded_speed_multiplier
+        )
         effective_turn_speed = max(0, base_turn_speed - slow_penalty)
         budget.update(
             main_action=1,
             bonus_action=1,
             reaction=1,
             speed=effective_turn_speed,
-            movement=int(
-                effective_turn_speed * float(next_actor.get("speed_multiplier", 1.0) or 1.0)
-            ),
+            movement=int(effective_turn_speed * speed_multiplier),
             object_interaction=1,
             attack_budget=0,
             extra_action=0,
