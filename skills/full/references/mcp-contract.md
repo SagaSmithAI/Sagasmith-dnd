@@ -1841,17 +1841,18 @@ Omit it for the legal default (`two_handed` for a Two-Handed weapon, otherwise
 `one_handed`). Never add a Versatile die to ordinary damage or repeat additional
 dice already folded into the printed alternate.
 
-Standard monster activities remain engine-owned. `Aggressive` is paid through
+Standard Orc `Aggressive` is engine-owned. It is paid through
 `combat_use_activity` with `declaration={target_id: "..."}` naming one recorded
 living, visible hostile; spend only its separate grant with
 `combat_movement(action="move", payload.movement_mode="aggressive")`, which
 must move every submitted path segment toward the recorded visible hostile.
 Under Agent positioning, the structured spatial decision must also set
 `moves_toward_aggressive_target=true`.
-`Battle Cry (1/Day)` consumes its card-local daily use and main action. Its
-declaration uses `targets=[{actor_id,can_hear,reason}]`; the Agent supplies the
-current hearing fact, while the engine enforces range, Deafened, duration,
-attack advantage, and the source's optional bonus-action attack.
+Orc War Chief `Battle Cry (1/Day)` is not engine-owned. Its matching official
+source fragment remains `catalog_only`; keep resolution at the Agent/DM ruling
+boundary and do not spend an action or daily use, grant advantage, or offer a
+bonus-action attack through `combat_use_activity` until an executable reviewed
+card and runtime mechanic exist.
 For engine-owned point-radius, self-line, and Wing Attack save areas,
 `combat_use_activity.declaration` includes the exact `origin` or `endpoint`,
 optional Wing Attack `destination`, and a complete
