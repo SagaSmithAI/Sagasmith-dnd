@@ -514,6 +514,9 @@ def advance_chase_turn(
         value["pending_complication"] = None
 
     conditions = _conditions(sheet)
+    if int(dict(sheet.get("combat") or {}).get("hp", {}).get("value", 0) or 0) <= 0:
+        participant["active"] = False
+        participant["dropped_reason"] = "incapacitated"
     speed = int(participant.get("speed_ft", 0) or 0)
     exhaustion = int(dict(sheet.get("combat") or {}).get("exhaustion", 0) or 0)
     if exhaustion >= 5:
@@ -532,10 +535,12 @@ def advance_chase_turn(
         else:
             speed //= 2
 
-    movement_ft = max(0, speed - stand_cost)
+    movement_ft = (
+        max(0, speed - stand_cost) if participant.get("active", True) else 0
+    )
     dash_check = None
     exhaustion_gained = 0
-    if normalized_action == "dash":
+    if normalized_action == "dash" and participant.get("active", True):
         participant["dash_count"] = int(participant.get("dash_count", 0) or 0) + 1
         movement_ft += speed
         if participant["dash_count"] > int(participant.get("free_dash_limit", 0) or 0):
@@ -610,7 +615,7 @@ def advance_chase_turn(
                 elif int(combat["exhaustion"]) >= 5:
                     participant["active"] = False
                     participant["dropped_reason"] = "exhaustion_speed_zero"
-    elif normalized_action == "drop_out":
+    elif normalized_action == "drop_out" and participant.get("active", True):
         movement_ft = 0
         participant["active"] = False
         participant["dropped_reason"] = "voluntary"
