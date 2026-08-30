@@ -42520,7 +42520,8 @@ boundary.
         require_facade_phase(campaign_id, f"chase({action})", PROFILE_PLAY)
         if action == "query":
             data = facade_payload(payload)
-            assert not data
+            if data:
+                raise ValueError("chase(query).payload must be empty")
             return facade_result(action, chase_query(campaign_id, principal_id))
         if action == "start":
             data = facade_payload(payload)
