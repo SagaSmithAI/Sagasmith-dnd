@@ -451,6 +451,7 @@ from sagasmith_dnd.standard_content import (
     build_standard2014_content,
 )
 from sagasmith_dnd.standard_feature_ids import (
+    CORE_ORC_AGGRESSIVE_MECHANIC_ID,
     CORE_RELENTLESS_ENDURANCE_MECHANIC_ID,
 )
 from sagasmith_dnd.standard_spell_ids import (
@@ -712,6 +713,7 @@ ENGINE_SETTLED_CARD_MECHANIC_IDS = frozenset(
         "dnd5e.core.action.multiattack_choice",
         "dnd5e.core.activity.action_surge",
         "dnd5e.core.activity.cunning_action",
+        CORE_ORC_AGGRESSIVE_MECHANIC_ID,
         "dnd5e.core.activity.divine_spark",
         CORE_DRAGONBORN_BREATH_MECHANIC_ID,
         "dnd5e.core.activity.legendary_action",
@@ -10187,6 +10189,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             "moves_farther_from_turn_source",
             "enters_turn_source_30_ft",
             "moves_closer_to_visible_fear_source",
+            "moves_toward_aggressive_target",
             "opportunity_attack_actor_ids",
         }
         required_fields = {"decision_id", "reason", "destination_legal", "distance_ft"}
@@ -10204,6 +10207,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             "moves_farther_from_turn_source",
             "enters_turn_source_30_ft",
             "moves_closer_to_visible_fear_source",
+            "moves_toward_aggressive_target",
         }:
             if not isinstance(spatial_facts.get(field, False), bool):
                 raise CombatEngineError(f"Agent movement spatial fact {field} must be boolean")
@@ -10239,6 +10243,9 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             "enters_turn_source_30_ft": bool(spatial_facts.get("enters_turn_source_30_ft", False)),
             "moves_closer_to_visible_fear_source": bool(
                 spatial_facts.get("moves_closer_to_visible_fear_source", False)
+            ),
+            "moves_toward_aggressive_target": bool(
+                spatial_facts.get("moves_toward_aggressive_target", False)
             ),
             "opportunity_attack_actor_ids": list(threat_ids),
         }
@@ -18302,7 +18309,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         branch_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Apply voluntary, forced, or teleport movement from known positions.
+        """Apply voluntary, Aggressive, forced, or teleport movement from known positions.
 
         Only voluntary movement spends the actor's turn budget or opens owned
         opportunity-reaction windows.  Effect-driven forced movement and
@@ -18391,7 +18398,10 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 )
             )
         movement_boundary_ids: list[str] = []
-        if str(movement_mode).strip().lower().replace("-", "_") in {"forced", "teleport"}:
+        normalized_movement_mode = str(movement_mode).strip().lower().replace("-", "_")
+        if normalized_movement_mode == "aggressive":
+            movement_boundary_ids.append(CORE_ORC_AGGRESSIVE_MECHANIC_ID)
+        if normalized_movement_mode in {"forced", "teleport"}:
             movement_boundary_ids.append("dnd5e.core.movement.forced_and_teleport")
         if "prone" in moving_conditions:
             movement_boundary_ids.append("dnd5e.core.movement.prone_crawl_stand")
@@ -18435,6 +18445,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             response_fields={
                 "status": "committed",
                 "combat": next_encounter,
+                "rule_receipts": movement_receipts,
                 "ended_witch_bolt_tether_ids": [
                     str(item.get("id") or "") for item in ended_tethers
                 ],
@@ -21890,6 +21901,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             actor_id_value=actor_id,
             activity_id=activity_id,
             declaration=declaration,
+            source_card=activity_card,
         )
         additional_updates: list[CharacterStateUpdate] = []
         if legendary_spec is not None:
@@ -22151,6 +22163,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             mechanic_id = {
                 "action_surge": "dnd5e.core.activity.action_surge",
                 "cunning_action": "dnd5e.core.activity.cunning_action",
+                "orc_aggressive": CORE_ORC_AGGRESSIVE_MECHANIC_ID,
                 "divine_spark": "dnd5e.core.activity.divine_spark",
                 "dragonborn_breath_weapon": CORE_DRAGONBORN_BREATH_MECHANIC_ID,
                 "legendary_action": ("dnd5e.core.activity.legendary_action"),
@@ -48567,7 +48580,7 @@ boundary.
         branch_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Move or stand a combatant while preserving movement and reaction checks."""
+        """Move or stand, including source-granted Aggressive movement."""
         data = facade_payload(payload)
         result = (
             combat_move(

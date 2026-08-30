@@ -5,6 +5,10 @@ from sagasmith_dnd.activity_identity import (
     is_multiattack_source_name,
 )
 from sagasmith_dnd.character_schema import derive_character_sheet, validate_character_sheet
+from sagasmith_dnd.standard_feature_ids import (
+    CORE_ORC_AGGRESSIVE_MECHANIC_ID,
+    ORC_AGGRESSIVE_ACTIVITY_ID,
+)
 from sagasmith_dnd.statblock_spells import hydrate_statblock_spellcasting
 from sagasmith_dnd.statblocks import (
     StatblockImportError,
@@ -1146,6 +1150,34 @@ ally isn't incapacitated.
 ***Sling***. *Ranged Weapon Attack:* +4 to hit, range 30/120 ft., one target.
 *Hit:* 4 (1d4 + 2) bludgeoning damage.
 """
+
+
+def test_orc_aggressive_is_a_source_bound_bonus_action() -> None:
+    source = KOBOLD.replace("# Kobold", "# Orc").replace(
+        "***Pack Tactics***. The kobold has advantage on an attack roll against a creature\n"
+        "if at least one of the kobold's allies is within 5 feet of the creature and the\n"
+        "ally isn't incapacitated.",
+        "***Aggressive***. As a bonus action, the orc can move up to its speed toward a "
+        "hostile creature that it can see.",
+    )
+
+    parsed = parse_2014_statblock(source, source_key="bundled:srd2014/orc")
+    aggressive = next(
+        item for item in parsed.sheet["content"]["activities"] if item["name"] == "Aggressive"
+    )
+
+    assert aggressive["id"] == ORC_AGGRESSIVE_ACTIVITY_ID
+    assert aggressive["activation"] == {"type": "bonus_action", "cost": 1, "trigger": ""}
+    assert aggressive["mechanic_refs"] == [CORE_ORC_AGGRESSIVE_MECHANIC_ID]
+    assert aggressive["choices"] == {
+        "standard_resolution": {
+            "kind": "aggressive_movement",
+            "maximum": "speed",
+            "target": "one_visible_hostile",
+        }
+    }
+    assert all("Aggressive" not in warning for warning in parsed.warnings)
+
 
 MAGMIN = """# Magmin
 
