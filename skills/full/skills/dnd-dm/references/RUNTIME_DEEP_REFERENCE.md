@@ -891,19 +891,18 @@ the Stealth/observer boundary by default. Never spend
 a second main action for the same declaration, and never mark the actor Hidden
 merely because the bonus action was paid.
 
-Standard Orc `Aggressive` and Orc War Chief `Battle Cry` cards are also
-engine-owned. Pay `Aggressive` with `combat_use_activity` and
+Standard Orc `Aggressive` is engine-owned. Pay it with `combat_use_activity` and
 `declaration={target_id: "..."}`, naming one recorded living, visible hostile
 target, then spend that distinct movement grant with
 `combat_movement(action="move", payload.movement_mode="aggressive")`; every
 submitted path segment must move toward that target, while ordinary movement
 remains a separate pool. Agent-positioned movement additionally records
-`moves_toward_aggressive_target=true` in its spatial decision. For `Battle Cry
-(1/Day)`, submit
-`declaration.targets=[{actor_id,can_hear,reason}]`. The Agent decides the current
-hearing fact; the engine consumes the card's daily use and action, enforces 30
-feet and Deafened, maintains advantage until the war chief's next turn, and
-offers exactly one bonus-action attack when the bonus action remains.
+`moves_toward_aggressive_target=true` in its spatial decision. Orc War Chief
+`Battle Cry (1/Day)` is not engine-owned: its matching official source fragment
+remains `catalog_only`. Keep it at the Agent/DM ruling boundary and do not mutate
+the action budget, daily uses, attack advantage, or bonus-action availability
+through `combat_use_activity` until an executable reviewed card and runtime
+mechanic exist.
 
 The canonical 2014 and 2024 Cleric Channel Divinity cards' `Turn Undead`
 options are engine-owned. Call `combat_use_activity` with the exact
