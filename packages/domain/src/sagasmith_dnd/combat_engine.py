@@ -65,7 +65,9 @@ from sagasmith_dnd.spell_resolution import (
     scaled_roll_expression,
 )
 from sagasmith_dnd.standard_feature_ids import (
+    CORE_ORC_AGGRESSIVE_MECHANIC_ID,
     CORE_RELENTLESS_ENDURANCE_MECHANIC_ID,
+    ORC_AGGRESSIVE_ACTIVITY_ID,
 )
 from sagasmith_dnd.standard_spell_ids import (
     CORE_BLADE_WARD_MECHANIC_ID,
@@ -4031,7 +4033,7 @@ def spend_movement(
     crawl: bool = False,
     spatial_facts: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Apply voluntary, forced, or teleport movement from known geometry.
+    """Apply voluntary, Aggressive, forced, or teleport movement from known geometry.
 
     Explicit token positions, reach values, map bounds/blocked cells, and
     difficult cells crossed by a voluntary cell-by-cell path are automated.
@@ -4044,9 +4046,10 @@ def spend_movement(
     if distance < 0:
         raise CombatEngineError("movement distance cannot be negative")
     movement_mode = str(movement_mode).strip().lower().replace("-", "_")
-    if movement_mode not in {"voluntary", "forced", "teleport"}:
-        raise CombatEngineError("movement_mode must be voluntary, forced, or teleport")
-    willing_movement = movement_mode == "voluntary"
+    if movement_mode not in {"voluntary", "aggressive", "forced", "teleport"}:
+        raise CombatEngineError("movement_mode must be voluntary, aggressive, forced, or teleport")
+    uses_aggressive_grant = movement_mode == "aggressive"
+    willing_movement = movement_mode in {"voluntary", "aggressive"}
     if not willing_movement and crawl:
         raise CombatEngineError("forced movement and teleportation cannot be declared as crawling")
     if movement_mode == "teleport" and path is not None:
@@ -4089,6 +4092,31 @@ def spend_movement(
         raise CombatEngineError("combat has no current actor")
     if willing_movement and current.get("actor_id") != actor_id_value:
         raise CombatEngineError("it is not this actor's turn")
+    flags = dict(combatant.get("turn_flags") or {})
+    aggressive_grant: dict[str, Any] | None = None
+    aggressive_target: dict[str, Any] | None = None
+    if uses_aggressive_grant:
+        aggressive_grant = dict(flags.get("aggressive_movement") or {})
+        if aggressive_grant.get("source_activity_id") != ORC_AGGRESSIVE_ACTIVITY_ID or not str(
+            aggressive_grant.get("target_actor_id") or ""
+        ):
+            raise CombatEngineError("Aggressive movement requires an active source-bound grant")
+        aggressive_target = next(
+            (
+                item
+                for item in value.get("combatants", [])
+                if str(item.get("actor_id") or "") == str(aggressive_grant["target_actor_id"])
+            ),
+            None,
+        )
+        if aggressive_target is None or "dead" in _condition_set(
+            aggressive_target.get("conditions")
+        ):
+            raise CombatEngineError("Aggressive target must be a living combatant")
+        if not _are_hostile(combatant, aggressive_target):
+            raise CombatEngineError("Aggressive target is no longer hostile")
+        if not _can_see(combatant, aggressive_target):
+            raise CombatEngineError("Aggressive target is no longer visible")
     conditions = _condition_set(combatant.get("conditions"))
     if willing_movement and conditions & {
         "dead",
@@ -4114,7 +4142,11 @@ def spend_movement(
     ):
         raise CombatEngineError("surprised actor cannot move on its first turn")
     budget = dict(combatant.get("turn_budget") or {})
-    available = int(budget.get("movement", 0) or 0)
+    available = int(
+        (aggressive_grant or {}).get("remaining", 0)
+        if uses_aggressive_grant
+        else budget.get("movement", 0) or 0
+    )
     origin = _position(combatant.get("position"))
     waypoints: list[tuple[float, float]] = []
     if path is not None:
@@ -4142,6 +4174,29 @@ def spend_movement(
             raise CombatEngineError(
                 "movement distance must equal the grid distance between origin and destination"
             )
+    if uses_aggressive_grant:
+        if agent_facts is not None:
+            if agent_facts.get("moves_toward_aggressive_target") is not True:
+                raise CombatEngineError(
+                    "Aggressive movement must move toward its recorded hostile target"
+                )
+        else:
+            aggressive_target_position = _position((aggressive_target or {}).get("position"))
+            if origin is None or target_position is None or aggressive_target_position is None:
+                raise NeedsRulingError(
+                    "Aggressive movement requires mover, destination, and target positions",
+                    missing=("aggressive_movement_positions",),
+                )
+            route = waypoints[1:] if path is not None else [target_position]
+            previous = origin
+            for point in route:
+                if _grid_distance(point, aggressive_target_position) >= _grid_distance(
+                    previous, aggressive_target_position
+                ):
+                    raise CombatEngineError(
+                        "every Aggressive movement segment must move toward its recorded target"
+                    )
+                previous = point
     battle_map = dict(value.get("battle_map") or {})
     difficult_cells = set(battle_map.get("difficult_cells") or [])
     terrain_cost = 0
@@ -4176,7 +4231,11 @@ def spend_movement(
         )
     movement_cost = distance + (distance if crawl else 0) + terrain_cost if willing_movement else 0
     if willing_movement and movement_cost > available:
-        raise CombatEngineError("movement exceeds the remaining speed")
+        raise CombatEngineError(
+            "movement exceeds the remaining Aggressive grant"
+            if uses_aggressive_grant
+            else "movement exceeds the remaining speed"
+        )
     if target_position is not None:
         occupants = [
             item
@@ -4290,7 +4349,12 @@ def spend_movement(
         raise CombatEngineError(
             "a frightened creature cannot willingly move closer to its visible fear source"
         )
-    if willing_movement:
+    if uses_aggressive_grant:
+        assert aggressive_grant is not None
+        aggressive_grant["remaining"] = available - movement_cost
+        flags["aggressive_movement"] = aggressive_grant
+        combatant["turn_flags"] = flags
+    elif willing_movement:
         budget["movement"] = available - movement_cost
         combatant["turn_budget"] = budget
     if destination is not None:
@@ -5375,6 +5439,7 @@ def settle_core_activity_effect(
     actor_id_value: str,
     activity_id: str,
     declaration: dict[str, Any] | None = None,
+    source_card: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Settle narrow engine-owned effects for canonical Core activity cards."""
     value = deepcopy(encounter)
@@ -5386,10 +5451,27 @@ def settle_core_activity_effect(
         "dnd5e.content.srd2014.feature.rogue-cunning-action",
         "dnd5e.content.srd2024.feature.rogue-cunning-action",
     }
-    if activity_id not in {
-        *action_surge_ids,
-        *cunning_action_ids,
-    }:
+    aggressive_spec = dict(dict(source_card or {}).get("choices") or {}).get("standard_resolution")
+    orc_aggressive = (
+        activity_id == ORC_AGGRESSIVE_ACTIVITY_ID
+        and CORE_ORC_AGGRESSIVE_MECHANIC_ID
+        in {str(item) for item in dict(source_card or {}).get("mechanic_refs") or []}
+        and dict(dict(source_card or {}).get("activation") or {}).get("type") == "bonus_action"
+        and aggressive_spec
+        == {
+            "kind": "aggressive_movement",
+            "maximum": "speed",
+            "target": "one_visible_hostile",
+        }
+    )
+    if (
+        activity_id
+        not in {
+            *action_surge_ids,
+            *cunning_action_ids,
+        }
+        and not orc_aggressive
+    ):
         return value, None
     current = current_combatant(value)
     if current is None or current.get("actor_id") != actor_id_value:
@@ -5397,6 +5479,51 @@ def settle_core_activity_effect(
     combatant = next(
         item for item in value.get("combatants", []) if item.get("actor_id") == actor_id_value
     )
+    if orc_aggressive:
+        declared = dict(declaration or {})
+        if set(declared) != {"target_id"} or not str(declared.get("target_id") or "").strip():
+            raise CombatEngineError("Aggressive declaration requires exactly one target_id")
+        target_id = str(declared["target_id"]).strip()
+        if target_id == actor_id_value:
+            raise CombatEngineError("Aggressive must target another creature")
+        target = next(
+            (
+                item
+                for item in value.get("combatants", [])
+                if str(item.get("actor_id") or "") == target_id
+            ),
+            None,
+        )
+        if target is None or "dead" in _condition_set(target.get("conditions")):
+            raise CombatEngineError("Aggressive target must be a living combatant")
+        if not _are_hostile(combatant, target):
+            raise CombatEngineError("Aggressive target must be hostile")
+        if not _can_see(combatant, target):
+            raise CombatEngineError("Aggressive target must be visible to the Orc")
+        flags = dict(combatant.get("turn_flags") or {})
+        if "aggressive_movement" in flags:
+            raise CombatEngineError("Aggressive already granted movement on this turn")
+        budget = dict(combatant.get("turn_budget") or {})
+        granted = int(budget.get("speed", 0) or 0)
+        flags["aggressive_movement"] = {
+            "source_activity_id": activity_id,
+            "target_actor_id": target_id,
+            "granted": granted,
+            "remaining": granted,
+        }
+        combatant["turn_flags"] = flags
+        effect = {
+            "kind": "orc_aggressive",
+            "target_id": target_id,
+            "movement_granted": granted,
+            "movement_remaining": granted,
+            "requires_ruling": False,
+        }
+        value["log"] = [
+            *list(value.get("log") or []),
+            {"type": "orc_aggressive", "actor_id": actor_id_value, "effect": effect},
+        ][-100:]
+        return value, effect
     if activity_id in cunning_action_ids:
         selected = str(dict(declaration or {}).get("action") or "")
         selected = selected.strip().lower().replace("-", "_").replace(" ", "_")
@@ -6939,6 +7066,13 @@ def _are_hostile(left: dict[str, Any], right: dict[str, Any]) -> bool:
 
 def _can_see(viewer: dict[str, Any], subject: dict[str, Any]) -> bool:
     """Resolve only recorded visibility, defaulting ordinary creatures to visible."""
+    viewer_conditions = (
+        viewer.get("conditions")
+        if "conditions" in viewer
+        else actor_sheet(viewer).get("conditions")
+    )
+    if "blinded" in _condition_set(viewer_conditions):
+        return False
     visible_to = subject.get("visible_to_actor_ids")
     if isinstance(visible_to, list):
         return actor_id(viewer) in {str(item) for item in visible_to}

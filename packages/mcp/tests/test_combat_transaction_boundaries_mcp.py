@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from sagasmith_dnd.character_schema import default_character_sheet
+from sagasmith_dnd.content_actors import build_srd2014_preset_actors
 
 import sagasmith_dnd_mcp.server as server_module
 from sagasmith_dnd_mcp.config import McpConfig
@@ -1235,6 +1236,194 @@ def test_cunning_action_dash_uses_bonus_action_and_doubles_movement(tmp_path: Pa
     asyncio.run(exercise())
 
 
+def test_srd_orc_preset_aggressive_settles_and_spends_a_separate_grant(
+    tmp_path: Path,
+) -> None:
+    async def exercise() -> None:
+        config = McpConfig(
+            home=tmp_path / "home",
+            database_url=None,
+            chroma_url=None,
+            chroma_path_override=None,
+            dnd_skills_dir=Path(__file__).resolve().parents[3] / "skills",
+            modulegen_skills_dir=tmp_path / "modulegen",
+            auto_seed_rules=False,
+        )
+        server = create_server(config)
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {"name": "Orc Aggressive", "edition": "2014", "idempotency_key": "campaign"},
+        )
+        orc_card = next(
+            item
+            for item in build_srd2014_preset_actors(config.dnd_skills_dir)
+            if item["id"] == "dnd5e.presets.srd2014.actor.orc"
+        )
+        orc = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": orc_card["name"],
+                    "character_type": orc_card["actor_type"],
+                    "sheet": orc_card["sheet"],
+                    "notes": orc_card["notes"],
+                },
+                "principal_id": "system:local",
+                "idempotency_key": "orc",
+            },
+        )
+        aggressive = next(
+            item for item in orc["sheet"]["content"]["activities"] if item["name"] == "Aggressive"
+        )
+        assert aggressive["activation"]["type"] == "bonus_action"
+        hostile = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {"campaign_id": campaign["id"], "name": "Hostile"},
+                "principal_id": "system:local",
+                "idempotency_key": "hostile",
+            },
+        )
+        campaign = await _call(
+            server,
+            "campaign_query",
+            {
+                "view": "get",
+                "payload": {"campaign_id": campaign["id"]},
+                "principal_id": "system:local",
+            },
+        )
+        await _call(
+            server,
+            "game_phase",
+            {
+                "campaign_id": campaign["id"],
+                "action": "set",
+                "tool_profile": "play",
+                "expected_revision": campaign["revision"],
+                "idempotency_key": "phase",
+            },
+        )
+        campaign = await _call(
+            server,
+            "campaign_query",
+            {
+                "view": "get",
+                "payload": {"campaign_id": campaign["id"]},
+                "principal_id": "system:local",
+            },
+        )
+        started = await _call_raw(
+            server,
+            "combat_start",
+            {
+                "positioning_mode": "grid",
+                "battle_map": {"width_cells": 12, "height_cells": 12},
+                "campaign_id": campaign["id"],
+                "participant_ids": [orc["id"], hostile["id"]],
+                "participant_config": [
+                    {
+                        "actor_id": orc["id"],
+                        "initiative": 20,
+                        "position": {"x": 2, "y": 2},
+                        "disposition": "friendly",
+                    },
+                    {
+                        "actor_id": hostile["id"],
+                        "initiative": 10,
+                        "position": {"x": 8, "y": 2},
+                        "disposition": "hostile",
+                    },
+                ],
+                "expected_revision": campaign["revision"],
+                "idempotency_key": "start",
+            },
+        )
+        activated = await _call_raw(
+            server,
+            "combat_use_activity",
+            {
+                "campaign_id": campaign["id"],
+                "actor_id": orc["id"],
+                "activity_id": aggressive["id"],
+                "declaration": {"target_id": hostile["id"]},
+                "expected_revision": started["campaign_revision"],
+                "idempotency_key": "aggressive",
+            },
+        )
+        assert activated["status"] == "committed"
+        assert activated["result"]["core_effect"] == {
+            "kind": "orc_aggressive",
+            "target_id": hostile["id"],
+            "movement_granted": 30,
+            "movement_remaining": 30,
+            "requires_ruling": False,
+        }
+        assert any(
+            item["mechanic_id"] == "dnd5e.core.activity.orc_aggressive"
+            for item in activated["result"]["rule_receipts"]
+        )
+
+        with pytest.raises(Exception, match="every Aggressive movement segment"):
+            await _call_raw(
+                server,
+                "combat_movement",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": orc["id"],
+                    "action": "move",
+                    "payload": {
+                        "distance": 5,
+                        "destination": {"x": 1, "y": 2},
+                        "path": [{"x": 2, "y": 2}, {"x": 1, "y": 2}],
+                        "movement_mode": "aggressive",
+                    },
+                    "expected_revision": activated["campaign_revision"],
+                    "idempotency_key": "away",
+                },
+            )
+
+        moved = await _call_raw(
+            server,
+            "combat_movement",
+            {
+                "campaign_id": campaign["id"],
+                "actor_id": orc["id"],
+                "action": "move",
+                "payload": {
+                    "distance": 20,
+                    "destination": {"x": 6, "y": 2},
+                    "path": [
+                        {"x": 2, "y": 2},
+                        {"x": 3, "y": 2},
+                        {"x": 4, "y": 2},
+                        {"x": 5, "y": 2},
+                        {"x": 6, "y": 2},
+                    ],
+                    "movement_mode": "aggressive",
+                },
+                "expected_revision": activated["campaign_revision"],
+                "idempotency_key": "toward",
+            },
+        )
+        current = moved["combat"]["combatants"][moved["combat"]["turn_index"]]
+        assert current["position"] == {"x": 6, "y": 2}
+        assert current["turn_budget"]["movement"] == 30
+        assert current["turn_flags"]["aggressive_movement"]["remaining"] == 10
+        assert any(
+            item["mechanic_id"] == "dnd5e.core.activity.orc_aggressive"
+            for item in moved["rule_receipts"]
+        )
+
+    asyncio.run(exercise())
+
+
 def test_combat_move_charges_reviewed_difficult_cells_and_records_core_receipt(
     tmp_path: Path,
 ) -> None:
@@ -1542,9 +1731,7 @@ def test_forced_and_teleport_movement_are_off_turn_effect_position_changes(
             },
         )
         teleported_target = next(
-            item
-            for item in teleported["combat"]["combatants"]
-            if item["actor_id"] == target["id"]
+            item for item in teleported["combat"]["combatants"] if item["actor_id"] == target["id"]
         )
         assert teleported_target["position"] == {"x": 10, "y": 0}
         assert teleported_target["turn_budget"]["movement"] == movement_before
@@ -1560,8 +1747,7 @@ def test_forced_and_teleport_movement_are_off_turn_effect_position_changes(
             },
         )
         assert any(
-            item["mechanic_id"] == "dnd5e.core.movement.forced_and_teleport"
-            for item in receipts
+            item["mechanic_id"] == "dnd5e.core.movement.forced_and_teleport" for item in receipts
         )
 
     asyncio.run(exercise())

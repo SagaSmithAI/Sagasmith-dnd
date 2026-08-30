@@ -30,6 +30,10 @@ from sagasmith_dnd.resolution_plan import (
     resolution_plan_template,
 )
 from sagasmith_dnd.resources import mutate_bounded_resource
+from sagasmith_dnd.standard_feature_ids import (
+    CORE_ORC_AGGRESSIVE_MECHANIC_ID,
+    ORC_AGGRESSIVE_ACTIVITY_ID,
+)
 from sagasmith_dnd.vocabulary import ATTACK_MODES, DAMAGE_TYPES
 
 
@@ -1792,7 +1796,19 @@ def _parse_srd_statblock(
             descriptive.append(("actions", entry_name, description))
     for section, entry_name, description in descriptive:
         recharge = _recharge_contract(entry_name)
-        if "reaction" in section:
+        normalized_description = " ".join(description.split())
+        orc_aggressive = (
+            edition == "2014"
+            and entry_name == "Aggressive"
+            and normalized_description
+            == (
+                "As a bonus action, the orc can move up to its speed toward a hostile "
+                "creature that it can see."
+            )
+        )
+        if orc_aggressive:
+            activation = "bonus_action"
+        elif "reaction" in section:
             activation = "reaction"
         elif "bonus action" in section:
             activation = "bonus_action"
@@ -1811,7 +1827,11 @@ def _parse_srd_statblock(
         else:
             activation = "passive"
         entry = {
-            "id": f"{_slug(entry_name)}-{activation}",
+            "id": (
+                ORC_AGGRESSIVE_ACTIVITY_ID
+                if orc_aggressive
+                else f"{_slug(entry_name)}-{activation}"
+            ),
             "name": entry_name,
             "source_key": source_key,
             "description": description,
@@ -1840,7 +1860,16 @@ def _parse_srd_statblock(
                     "dnd5e.core.activity.legendary_action",
                 }
             )
-        if legendary_action is None:
+        if orc_aggressive:
+            entry["choices"] = {
+                "standard_resolution": {
+                    "kind": "aggressive_movement",
+                    "maximum": "speed",
+                    "target": "one_visible_hostile",
+                }
+            }
+            entry["mechanic_refs"] = [CORE_ORC_AGGRESSIVE_MECHANIC_ID]
+        elif legendary_action is None:
             entry["choices"] = {
                 "manual_ruling": {
                     "kind": (
@@ -1872,7 +1901,7 @@ def _parse_srd_statblock(
                     }
                 )
         sheet["content"]["activities" if activation != "passive" else "features"].append(entry)
-        if legendary_action is None:
+        if legendary_action is None and not orc_aggressive:
             warnings.append(
                 f"{entry_name}: Multiattack composition requires a DM ruling"
                 if entry_name in unresolved_multiattacks

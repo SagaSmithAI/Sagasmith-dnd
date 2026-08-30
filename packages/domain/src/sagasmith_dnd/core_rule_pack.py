@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.67.0"
+CORE_RULE_PACK_VERSION = "1.68.0"
 
 
 @dataclass(frozen=True)
@@ -296,6 +296,17 @@ BOUNDARIES = (
         "combat_engine.settle_core_activity_effect",
         ("tests/test_combat_engine.py",),
         "bundled:srd2014/02_Classes/Rogue.md#cunning-action",
+    ),
+    CoreBoundary(
+        "dnd5e.core.activity.orc_aggressive",
+        ("2014",),
+        "statblocks._parse_srd_statblock|combat_engine.settle_core_activity_effect|"
+        "combat_engine.spend_movement",
+        (
+            "tests/test_statblocks.py::test_orc_aggressive_is_a_source_bound_bonus_action",
+            "tests/test_combat_engine.py::test_orc_aggressive_grants_separate_toward_only_movement",
+        ),
+        "bundled:srd2014/10_Monsters/Monsters_Each/Orc.md#aggressive",
     ),
     CoreBoundary(
         "dnd5e.core.activity.preserve_life",

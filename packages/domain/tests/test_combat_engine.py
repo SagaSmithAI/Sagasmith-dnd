@@ -76,7 +76,9 @@ from sagasmith_dnd.resolution_plan import (
 from sagasmith_dnd.rule_engine import resolution_context
 from sagasmith_dnd.spatial import compile_battle_map
 from sagasmith_dnd.standard_feature_ids import (
+    CORE_ORC_AGGRESSIVE_MECHANIC_ID,
     CORE_RELENTLESS_ENDURANCE_MECHANIC_ID,
+    ORC_AGGRESSIVE_ACTIVITY_ID,
 )
 from sagasmith_dnd.standard_spell_ids import (
     CORE_2024_HYPNOTIC_PATTERN_SPELL_ID,
@@ -4485,6 +4487,160 @@ def test_cunning_action_settles_dash_and_disengage_but_not_hide_outcome() -> Non
     assert dashed_2024["combatants"][0]["turn_budget"]["movement"] == 60
 
 
+def test_orc_aggressive_grants_separate_toward_only_movement() -> None:
+    orc = _actor("orc")
+    orc.update(
+        initiative=20,
+        position={"x": 2, "y": 2},
+        disposition="friendly",
+    )
+    hostile = _actor("hostile")
+    hostile.update(
+        initiative=10,
+        position={"x": 8, "y": 2},
+        disposition="hostile",
+    )
+    encounter = _grid_encounter([orc, hostile])
+    source_card = {
+        "id": ORC_AGGRESSIVE_ACTIVITY_ID,
+        "activation": {"type": "bonus_action", "cost": 1, "trigger": ""},
+        "mechanic_refs": [CORE_ORC_AGGRESSIVE_MECHANIC_ID],
+        "choices": {
+            "standard_resolution": {
+                "kind": "aggressive_movement",
+                "maximum": "speed",
+                "target": "one_visible_hostile",
+            }
+        },
+    }
+    paid = pay_activity_activation(
+        encounter,
+        actor_id_value="orc",
+        activation_type="bonus_action",
+    )
+    granted, effect = settle_core_activity_effect(
+        paid,
+        actor_id_value="orc",
+        activity_id=ORC_AGGRESSIVE_ACTIVITY_ID,
+        declaration={"target_id": "hostile"},
+        source_card=source_card,
+    )
+
+    assert effect == {
+        "kind": "orc_aggressive",
+        "target_id": "hostile",
+        "movement_granted": 30,
+        "movement_remaining": 30,
+        "requires_ruling": False,
+    }
+    current = current_combatant(granted)
+    assert current["turn_budget"]["bonus_action"] == 0
+    assert current["turn_budget"]["movement"] == 30
+    assert current["turn_flags"]["aggressive_movement"]["remaining"] == 30
+
+    hidden_target = deepcopy(granted)
+    next(
+        item for item in hidden_target["combatants"] if item["actor_id"] == "hostile"
+    )["hidden"] = True
+    with pytest.raises(CombatEngineError, match="no longer visible"):
+        spend_movement(
+            hidden_target,
+            "orc",
+            5,
+            destination={"x": 3, "y": 2},
+            movement_mode="aggressive",
+        )
+
+    with pytest.raises(
+        CombatEngineError,
+        match="every Aggressive movement segment must move toward",
+    ):
+        spend_movement(
+            granted,
+            "orc",
+            5,
+            destination={"x": 1, "y": 2},
+            path=[{"x": 2, "y": 2}, {"x": 1, "y": 2}],
+            movement_mode="aggressive",
+        )
+
+    moved = spend_movement(
+        granted,
+        "orc",
+        20,
+        destination={"x": 6, "y": 2},
+        path=[
+            {"x": 2, "y": 2},
+            {"x": 3, "y": 2},
+            {"x": 4, "y": 2},
+            {"x": 5, "y": 2},
+            {"x": 6, "y": 2},
+        ],
+        movement_mode="aggressive",
+    )
+    current = current_combatant(moved)
+    assert current["position"] == {"x": 6, "y": 2}
+    assert current["turn_budget"]["movement"] == 30
+    assert current["turn_flags"]["aggressive_movement"]["remaining"] == 10
+
+    ended = end_turn(moved, actor_id_value="orc")
+    orc_after = next(item for item in ended["combatants"] if item["actor_id"] == "orc")
+    assert "aggressive_movement" not in dict(orc_after.get("turn_flags") or {})
+
+
+def test_orc_aggressive_agent_positioning_requires_a_toward_decision() -> None:
+    orc = _actor("orc")
+    orc.update(initiative=20, disposition="friendly")
+    hostile = _actor("hostile")
+    hostile.update(initiative=10, disposition="hostile")
+    encounter = start_encounter([orc, hostile], positioning_mode="agent")
+    source_card = {
+        "activation": {"type": "bonus_action", "cost": 1},
+        "mechanic_refs": [CORE_ORC_AGGRESSIVE_MECHANIC_ID],
+        "choices": {
+            "standard_resolution": {
+                "kind": "aggressive_movement",
+                "maximum": "speed",
+                "target": "one_visible_hostile",
+            }
+        },
+    }
+    granted, _ = settle_core_activity_effect(
+        encounter,
+        actor_id_value="orc",
+        activity_id=ORC_AGGRESSIVE_ACTIVITY_ID,
+        declaration={"target_id": "hostile"},
+        source_card=source_card,
+    )
+    facts = {
+        "destination_legal": True,
+        "distance_ft": 20,
+        "difficult_terrain_extra_ft": 0,
+        "moves_toward_aggressive_target": False,
+    }
+
+    with pytest.raises(CombatEngineError, match="must move toward"):
+        spend_movement(
+            granted,
+            "orc",
+            20,
+            movement_mode="aggressive",
+            spatial_facts=facts,
+        )
+
+    facts["moves_toward_aggressive_target"] = True
+    moved = spend_movement(
+        granted,
+        "orc",
+        20,
+        movement_mode="aggressive",
+        spatial_facts=facts,
+    )
+    current = current_combatant(moved)
+    assert current["turn_budget"]["movement"] == 30
+    assert current["turn_flags"]["aggressive_movement"]["remaining"] == 10
+
+
 def test_versatile_weapon_grip_uses_exact_alternate_damage_once() -> None:
     orc = _actor("orc")
     target = _actor("target")
@@ -4901,9 +5057,7 @@ def test_forced_movement_and_teleport_bypass_turn_speed_and_condition_limits() -
     target["derived"] = derive_character_sheet(target["sheet"])
     target.update(initiative=10, position={"x": 2, "y": 0}, disposition="friendly")
     encounter = _grid_encounter([controller, target])
-    target_before = next(
-        item for item in encounter["combatants"] if item["actor_id"] == "target"
-    )
+    target_before = next(item for item in encounter["combatants"] if item["actor_id"] == "target")
     movement_before = target_before["turn_budget"]["movement"]
 
     with pytest.raises(CombatEngineError, match="not this actor's turn"):

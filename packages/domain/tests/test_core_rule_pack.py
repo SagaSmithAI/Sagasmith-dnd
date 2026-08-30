@@ -50,6 +50,7 @@ REQUIRED_BOUNDARIES = {
 
 EDITION_BOUNDARIES = {
     "2014": {
+        "dnd5e.core.activity.orc_aggressive",
         "dnd5e.core.activity.recharge",
         "dnd5e.core.check.jack_of_all_trades",
         "dnd5e.core.damage.relentless_endurance",

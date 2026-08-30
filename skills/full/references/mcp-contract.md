@@ -1842,9 +1842,12 @@ Omit it for the legal default (`two_handed` for a Two-Handed weapon, otherwise
 dice already folded into the printed alternate.
 
 Standard monster activities remain engine-owned. `Aggressive` is paid through
-`combat_use_activity`; spend only its separate grant with
+`combat_use_activity` with `declaration={target_id: "..."}` naming one recorded
+living, visible hostile; spend only its separate grant with
 `combat_movement(action="move", payload.movement_mode="aggressive")`, which
 must move every submitted path segment toward the recorded visible hostile.
+Under Agent positioning, the structured spatial decision must also set
+`moves_toward_aggressive_target=true`.
 `Battle Cry (1/Day)` consumes its card-local daily use and main action. Its
 declaration uses `targets=[{actor_id,can_hear,reason}]`; the Agent supplies the
 current hearing fact, while the engine enforces range, Deafened, duration,
