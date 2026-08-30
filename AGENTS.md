@@ -36,7 +36,7 @@ uv sync --all-packages --all-extras
 uv run --package sagasmith-dnd pytest packages/domain/tests
 uv run --package sagasmith-dnd-mcp pytest packages/mcp/tests
 uv run ruff check packages/domain packages/mcp
-npm --prefix apps/ui ci
+npm ci
 npm --prefix apps/ui test
 npm --prefix apps/ui run build
 ```

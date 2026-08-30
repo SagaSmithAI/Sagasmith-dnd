@@ -66,7 +66,7 @@ authorized index. Import validates a Pack but does not activate it.
 Node.js 22.12 or newer is required. From the repository root:
 
 ```bash
-npm --prefix apps/ui ci
+npm ci
 npm --prefix apps/ui run typecheck
 npm --prefix apps/ui test
 npm --prefix apps/ui run dev
