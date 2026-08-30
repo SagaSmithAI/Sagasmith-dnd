@@ -2,21 +2,21 @@
   "schema": "sagasmith.dnd-official-expansions-lock.v1",
   "generated_on": "2026-08-30",
   "source_repository": "https://github.com/SagaSmithAI/SagaSmith-dnd-content-library",
-  "source_commit": "c12bd06f79a9a41b07791e6450ece852ff15a425",
+  "source_commit": "770e9912c9c55ba5ec942b984e6ced286ce10076",
   "builtin_rule_definitions": [
     {
       "id": "dnd5e.content.srd2014",
       "version": "1.24.0",
-      "checksum": "9e42e92859667e7e5f4cbd520004dba62845f7309c70bd1657c6f52c5be051a3"
+      "checksum": "e66fb3dc022c203e9dead374f0fe0b89e8d1a535ea0df48fe3b7cd1542f04b2d"
     }
   ],
   "support_packages": [
     {
       "role": "official_core_dependency",
       "id": "dnd5e.addon.rulebook.d-d-5e-player-s-handbook.7ad6d3e9c93c.addon",
-      "version": "1.0.1",
-      "checksum": "e879447c1dd00139f12a30ee42e3e30b323af771d3abceacbd6e6e6d17c9de00",
-      "archive_sha256": "500a8bf596e58ba1f6fe8b7fbea2fba2c69da1f58e548c0d8c6993d1280a2c76",
+      "version": "1.0.2",
+      "checksum": "1f5afda5790bd4d3f892ff092cd7d114fcb39d3b552e09a26414e2a851f17192",
+      "archive_sha256": "155e821ef67ac9d6dbc78ff9c3b2b0b5059462c6cc1f7d95783de60674ad7109",
       "title": "D&D 5E - Player's Handbook",
       "classification": "official_core",
       "editions": ["2014"],
@@ -36,7 +36,7 @@
       "dependency_id": "dnd5e.content.srd2014",
       "dependency_version": "1.24.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "9e42e92859667e7e5f4cbd520004dba62845f7309c70bd1657c6f52c5be051a3",
+      "runtime_checksum": "e66fb3dc022c203e9dead374f0fe0b89e8d1a535ea0df48fe3b7cd1542f04b2d",
       "basis": "The built-in 2014 catalog retained its version while its reviewed definition advanced after the library migration."
     },
     {
@@ -45,7 +45,7 @@
       "dependency_id": "dnd5e.content.srd2014",
       "dependency_version": "1.24.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "9e42e92859667e7e5f4cbd520004dba62845f7309c70bd1657c6f52c5be051a3",
+      "runtime_checksum": "e66fb3dc022c203e9dead374f0fe0b89e8d1a535ea0df48fe3b7cd1542f04b2d",
       "basis": "The built-in 2014 catalog retained its version while its reviewed definition advanced after the library migration."
     },
     {
@@ -54,7 +54,7 @@
       "dependency_id": "dnd5e.content.srd2014",
       "dependency_version": "1.24.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "9e42e92859667e7e5f4cbd520004dba62845f7309c70bd1657c6f52c5be051a3",
+      "runtime_checksum": "e66fb3dc022c203e9dead374f0fe0b89e8d1a535ea0df48fe3b7cd1542f04b2d",
       "basis": "The built-in 2014 catalog retained its version while its reviewed definition advanced after the library migration."
     },
     {
@@ -63,7 +63,7 @@
       "dependency_id": "dnd5e.content.srd2014",
       "dependency_version": "1.24.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "9e42e92859667e7e5f4cbd520004dba62845f7309c70bd1657c6f52c5be051a3",
+      "runtime_checksum": "e66fb3dc022c203e9dead374f0fe0b89e8d1a535ea0df48fe3b7cd1542f04b2d",
       "basis": "The built-in 2014 catalog retained its version while its reviewed definition advanced after the library migration."
     },
     {
@@ -72,7 +72,7 @@
       "dependency_id": "dnd5e.content.srd2014",
       "dependency_version": "1.24.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "9e42e92859667e7e5f4cbd520004dba62845f7309c70bd1657c6f52c5be051a3",
+      "runtime_checksum": "e66fb3dc022c203e9dead374f0fe0b89e8d1a535ea0df48fe3b7cd1542f04b2d",
       "basis": "The built-in 2014 catalog retained its version while its reviewed definition advanced after the library migration."
     },
     {
@@ -81,7 +81,7 @@
       "dependency_id": "dnd5e.content.srd2014",
       "dependency_version": "1.24.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "9e42e92859667e7e5f4cbd520004dba62845f7309c70bd1657c6f52c5be051a3",
+      "runtime_checksum": "e66fb3dc022c203e9dead374f0fe0b89e8d1a535ea0df48fe3b7cd1542f04b2d",
       "basis": "The built-in 2014 catalog retained its version while its reviewed definition advanced after the library migration."
     },
     {
@@ -90,7 +90,7 @@
       "dependency_id": "dnd5e.content.srd2014",
       "dependency_version": "1.24.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "9e42e92859667e7e5f4cbd520004dba62845f7309c70bd1657c6f52c5be051a3",
+      "runtime_checksum": "e66fb3dc022c203e9dead374f0fe0b89e8d1a535ea0df48fe3b7cd1542f04b2d",
       "basis": "The built-in 2014 catalog retained its version while its reviewed definition advanced after the library migration."
     },
     {
@@ -99,7 +99,7 @@
       "dependency_id": "dnd5e.content.srd2014",
       "dependency_version": "1.24.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "9e42e92859667e7e5f4cbd520004dba62845f7309c70bd1657c6f52c5be051a3",
+      "runtime_checksum": "e66fb3dc022c203e9dead374f0fe0b89e8d1a535ea0df48fe3b7cd1542f04b2d",
       "basis": "The built-in 2014 catalog retained its version while its reviewed definition advanced after the library migration."
     },
     {
@@ -108,7 +108,7 @@
       "dependency_id": "dnd5e.content.srd2014",
       "dependency_version": "1.24.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "9e42e92859667e7e5f4cbd520004dba62845f7309c70bd1657c6f52c5be051a3",
+      "runtime_checksum": "e66fb3dc022c203e9dead374f0fe0b89e8d1a535ea0df48fe3b7cd1542f04b2d",
       "basis": "The built-in 2014 catalog retained its version while its reviewed definition advanced after the library migration."
     },
     {
@@ -117,7 +117,7 @@
       "dependency_id": "dnd5e.content.srd2014",
       "dependency_version": "1.24.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "9e42e92859667e7e5f4cbd520004dba62845f7309c70bd1657c6f52c5be051a3",
+      "runtime_checksum": "e66fb3dc022c203e9dead374f0fe0b89e8d1a535ea0df48fe3b7cd1542f04b2d",
       "basis": "The built-in 2014 catalog retained its version while its reviewed definition advanced after the library migration."
     },
     {
@@ -126,7 +126,7 @@
       "dependency_id": "dnd5e.content.srd2014",
       "dependency_version": "1.24.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "9e42e92859667e7e5f4cbd520004dba62845f7309c70bd1657c6f52c5be051a3",
+      "runtime_checksum": "e66fb3dc022c203e9dead374f0fe0b89e8d1a535ea0df48fe3b7cd1542f04b2d",
       "basis": "The built-in 2014 catalog retained its version while its reviewed definition advanced after the library migration."
     },
     {
