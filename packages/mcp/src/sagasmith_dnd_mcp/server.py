@@ -337,6 +337,8 @@ from sagasmith_dnd.lifecycle import (
 )
 from sagasmith_dnd.module_profile import DndModuleProfile
 from sagasmith_dnd.official_expansions import (
+    installed_official_definition_matches,
+    matching_official_expansion_dependency_rebinds,
     official_expansion_catalog,
     official_expansion_dependency_rebinds,
     official_expansion_support_catalog,
@@ -5278,11 +5280,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         }:
             raise ValueError("content package must be a dnd5e addon, core_rules, or preset")
         managed_archive = storage.write_content_archive(value, blobs)
-        dependency_rebinds = [
-            item
-            for item in official_expansion_dependency_rebinds()
-            if item["package_id"] in {"*", value["id"]}
-        ]
+        dependency_rebinds = official_expansion_dependency_rebinds()
         component_equivalence: list[dict[str, str]] = []
 
         assets = {str(item["asset_key"]): item for item in value["assets"]}
@@ -5341,9 +5339,11 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             for definition_id, definition in list(pending.items()):
                 manifest = deepcopy(dict(definition["manifest"]))
                 applied_rebinds = []
-                for rebind in dependency_rebinds:
-                    if rebind["definition_id"] not in {"*", definition_id}:
-                        continue
+                for rebind in matching_official_expansion_dependency_rebinds(
+                    dependency_rebinds,
+                    package_id=str(value["id"]),
+                    definition_id=definition_id,
+                ):
                     matches = [
                         item
                         for item in manifest.get("dependencies") or []
@@ -5352,8 +5352,6 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                         and str(item.get("version") or "") == rebind["dependency_version"]
                         and str(item.get("checksum") or "") == rebind["source_checksum"]
                     ]
-                    if not matches and rebind["package_id"] == "*":
-                        continue
                     if len(matches) != 1:
                         raise ValueError(
                             f"official dependency rebind no longer matches {definition_id}"
@@ -5449,9 +5447,11 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                             artifacts=existing.artifacts,
                             mechanics=existing.mechanics,
                         )
-                    if (
-                        recorded != str(definition["definition_checksum"])
-                        and recorded_source != str(definition["definition_checksum"])
+                    if not installed_official_definition_matches(
+                        source_checksum=str(definition["definition_checksum"]),
+                        runtime_checksum=runtime_definition_checksum,
+                        recorded_checksum=recorded,
+                        recorded_source_checksum=recorded_source,
                     ):
                         raise ValueError(f"content rule definition conflict: {definition_id}")
                 else:

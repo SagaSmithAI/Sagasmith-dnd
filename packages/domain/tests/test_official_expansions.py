@@ -11,11 +11,63 @@ import pytest
 from sagasmith_dnd import cli, official_expansions
 from sagasmith_dnd.official_expansions import (
     OFFICIAL_EXPANSION_LOCK_SCHEMA,
+    installed_official_definition_matches,
     load_official_expansion_lock,
+    matching_official_expansion_dependency_rebinds,
     official_expansion_catalog,
     resolve_official_expansion_archives,
     verify_official_expansion_library,
 )
+
+
+def test_dependency_rebind_lock_rejects_wildcard_scope(tmp_path: Path) -> None:
+    lock = load_official_expansion_lock()
+    lock["dependency_rebinds"][0]["package_id"] = "*"
+    path = tmp_path / "lock.json"
+    path.write_text(json.dumps(lock), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="explicitly scoped"):
+        load_official_expansion_lock(path)
+
+
+def test_rebound_installed_definition_requires_exact_effective_checksum() -> None:
+    source = "1" * 64
+    runtime = "2" * 64
+
+    assert not installed_official_definition_matches(
+        source_checksum=source,
+        runtime_checksum=runtime,
+        recorded_checksum=source,
+        recorded_source_checksum=source,
+    )
+    assert installed_official_definition_matches(
+        source_checksum=source,
+        runtime_checksum=runtime,
+        recorded_checksum=runtime,
+        recorded_source_checksum=source,
+    )
+    assert not installed_official_definition_matches(
+        source_checksum=source,
+        runtime_checksum=runtime,
+        recorded_checksum=runtime,
+        recorded_source_checksum="3" * 64,
+    )
+
+
+def test_official_rebinds_never_match_custom_packages_or_components() -> None:
+    rebinds = official_expansions.official_expansion_dependency_rebinds()
+
+    assert matching_official_expansion_dependency_rebinds(
+        rebinds,
+        package_id="dnd5e.addon.user.homebrew",
+        definition_id="dnd5e.addon.user.homebrew.rules",
+    ) == ()
+    first = rebinds[0]
+    assert matching_official_expansion_dependency_rebinds(
+        rebinds,
+        package_id=first["package_id"],
+        definition_id="dnd5e.addon.user.injected-component",
+    ) == ()
 
 
 def test_shipped_lock_covers_every_current_official_expansion_artifact() -> None:

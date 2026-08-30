@@ -15,7 +15,7 @@ from collections import Counter
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from sagasmith_dnd.content_packages import validate_dnd_content_package
 from sagasmith_dnd.content_validation import DND_SELECTION_MATERIALIZERS
@@ -182,6 +182,7 @@ def load_official_expansion_lock(path: Path | None = None) -> dict[str, Any]:
     rebinds = value.get("dependency_rebinds")
     if not isinstance(rebinds, list):
         raise ValueError("official expansion lock dependency_rebinds must be an array")
+    rebind_keys: set[tuple[str, str, str, str, str]] = set()
     for index, raw in enumerate(rebinds):
         if not isinstance(raw, dict) or set(raw) != {
             "package_id",
@@ -197,8 +198,24 @@ def load_official_expansion_lock(path: Path | None = None) -> dict[str, Any]:
             *{item[0] for item in identities},
             *{str(item["id"]) for item in support_packages},
         }
-        if str(raw["package_id"]) != "*" and str(raw["package_id"]) not in known_packages:
+        package_id = str(raw["package_id"])
+        definition_id = str(raw["definition_id"])
+        if package_id == "*" or definition_id == "*":
+            raise ValueError("official expansion dependency rebinds must be explicitly scoped")
+        if package_id not in known_packages:
             raise ValueError("official expansion dependency rebind references an unknown package")
+        if not definition_id:
+            raise ValueError("official expansion dependency rebind definition id must not be empty")
+        rebind_key = (
+            package_id,
+            definition_id,
+            str(raw["dependency_id"]),
+            str(raw["dependency_version"]),
+            str(raw["source_checksum"]),
+        )
+        if rebind_key in rebind_keys:
+            raise ValueError("official expansion dependency rebind is duplicated")
+        rebind_keys.add(rebind_key)
         runtime = support_definitions.get(
             (str(raw["dependency_id"]), str(raw["dependency_version"]))
         )
@@ -270,6 +287,39 @@ def official_expansion_dependency_rebinds(
 
     value = dict(lock or load_official_expansion_lock())
     return tuple(dict(item) for item in value["dependency_rebinds"])
+
+
+def matching_official_expansion_dependency_rebinds(
+    rebinds: Iterable[Mapping[str, str]],
+    *,
+    package_id: str,
+    definition_id: str,
+) -> tuple[dict[str, str], ...]:
+    """Select only rebinds explicitly locked to one package component."""
+
+    return tuple(
+        dict(item)
+        for item in rebinds
+        if item.get("package_id") == package_id
+        and item.get("definition_id") == definition_id
+    )
+
+
+def installed_official_definition_matches(
+    *,
+    source_checksum: str,
+    runtime_checksum: str,
+    recorded_checksum: str,
+    recorded_source_checksum: str,
+) -> bool:
+    """Return whether an installed definition proves the expected effective identity."""
+
+    if runtime_checksum != source_checksum:
+        return (
+            recorded_checksum == runtime_checksum
+            and recorded_source_checksum == source_checksum
+        )
+    return recorded_checksum == source_checksum or recorded_source_checksum == source_checksum
 
 
 def _portable_archive_path(root: Path, value: object) -> Path:
