@@ -351,5 +351,15 @@ def test_public_chase_uses_exact_module_source_and_no_combat_map(
             {"campaign_id": campaign["id"], "action": "query"},
         )
         assert queried["chase"]["outcome"] == turn["chase"]["outcome"]
+        with pytest.raises(Exception, match=r"chase\(query\)\.payload must be empty"):
+            await _call(
+                server,
+                "chase",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "query",
+                    "payload": {"unexpected": True},
+                },
+            )
 
     asyncio.run(exercise())
