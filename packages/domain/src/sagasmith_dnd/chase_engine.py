@@ -418,7 +418,8 @@ def _guard_attack(
         return sheet, {"triggered": False, "reason": "moved less than 20 feet"}
     attack = roll_d20(rng=rng)
     attack_total = int(attack["natural"]) + 3
-    ac = int(actor_derived(actor).get("armor_class", 10) or 10)
+    derived_ac = actor_derived(actor).get("armor_class")
+    ac = 10 if derived_ac is None else int(derived_ac)
     hit = attack_total >= ac
     result: dict[str, Any] = {
         "triggered": True,

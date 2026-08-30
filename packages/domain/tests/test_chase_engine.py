@@ -150,6 +150,38 @@ def test_urban_complication_affects_next_participant() -> None:
     assert second["turn"]["moved_ft"] == 50
 
 
+def test_urban_guard_attack_preserves_zero_armor_class() -> None:
+    pursuer = _actor("pursuer", initiative=20)
+    quarry = _actor("quarry", initiative=10)
+    quarry["sheet"]["combat"]["ac"] = {"base": 0, "override": 0}
+    quarry["derived"] = derive_character_sheet(quarry["sheet"])
+    chase = start_chase(
+        [pursuer, quarry],
+        quarry_ids=["quarry"],
+        initial_distance_ft=100,
+    )
+    chase["turn_index"] = 1
+    chase["pending_complication"] = {
+        "number": 9,
+        "source_actor_id": "pursuer",
+        "rolled_round": 1,
+    }
+
+    result = advance_chase_turn(
+        chase,
+        quarry,
+        actor_id_value="quarry",
+        action="move",
+        rng=_SequenceRng(5, 1, 20),
+    )
+
+    guard_attack = result["turn"]["guard_attack"]
+    assert guard_attack["target_ac"] == 0
+    assert guard_attack["total"] == 8
+    assert guard_attack["hit"] is True
+    assert guard_attack["damage"]["total"] == 2
+
+
 def test_urban_complication_incapacitation_prevents_movement() -> None:
     pursuer = _actor("pursuer", initiative=20)
     quarry = _actor("quarry", initiative=10)
