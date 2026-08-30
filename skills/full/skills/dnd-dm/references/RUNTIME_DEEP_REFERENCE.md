@@ -441,6 +441,10 @@ After item writes, treat `character_query(view="get").derived.inventory.weapon_a
 `character_query(view="get").derived.inventory.encumbrance` as authoritative. Represent one
 active concentration spell as one active effect with `concentration: true` and its
 `source_spell_id`.
+The same derived response applies actor weapon proficiencies and Finesse ability
+selection, armor category proficiency, heavy-armor Strength speed penalties,
+variant encumbrance speed and d20 penalties, and nonproficient-armor spellcasting
+blocks. Do not duplicate those penalties in client-authored roll arguments.
 
 When a source magic item casts spells from charges, add it through
 `inventory_change(action="add")` with the exact module `source_key`, charge

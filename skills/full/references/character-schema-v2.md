@@ -249,22 +249,31 @@ Armor and shields have strict mechanics:
 {
   "armor": {
     "base_ac": 14,
+    "category": "medium",
     "dexterity_mode": "max",
     "dexterity_max": 2,
     "magic_bonus": 0,
-    "stealth_disadvantage": true
+    "stealth_disadvantage": true,
+    "strength_requirement": 0
   },
   "shield": { "ac_bonus": 2, "magic_bonus": 0 },
   "magic_item": { "ac_bonus": 1 }
 }
 ```
 
-Armor uses `dexterity_mode: "none"`, `"full"`, or `"max"`; `dexterity_max` is
-required only for `"max"`. Set `stealth_disadvantage` from the exact armor table;
+Armor uses `category: "light|medium|heavy"` and `strength_requirement` to settle
+2014 proficiency and heavy-armor movement rules. It uses `dexterity_mode: "none"`,
+`"full"`, or `"max"`; `dexterity_max` is required only for `"max"`. Set
+`stealth_disadvantage` from the exact armor table;
 when such armor is equipped the runtime automatically rolls Dexterity (Stealth)
 checks with disadvantage in play and combat. Do not also pass a client-authored
 disadvantage for the same armor source. Armor may only occupy `armor`, shields
 only `shield`, and rings must be `magic_item` records in a ring slot.
+
+`derived.armor_proficiency`, `derived.armor_strength`, and
+`derived.equipment_penalties` report nonproficiency, Strength shortfalls, roll
+disadvantage, and spellcasting blocks. These fields are authoritative and are
+applied by attack, check, save, spell-casting, and combat-speed settlement.
 
 `derived.armor_class` is calculated in this order: explicit `combat.ac.override`;
 otherwise armor or `combat.ac.base`; then shield, equipped magic-item AC bonuses,
@@ -287,13 +296,18 @@ with `container_id`; containers cannot form cycles. Container mechanics record
 `capacity_oz`, `weightless_contents`, and `extra_dimensional`, and the runtime
 rejects direct contents that exceed capacity. Inventory encumbrance records
 `mode: "standard|variant"` and currency-weight handling. `derived.inventory`
-returns carried weight, 5e load thresholds/state, and weapon attack cards.
+returns carried weight, 5e load thresholds/state, applied speed penalties,
+heavy-encumbrance roll penalties, and weapon attack cards. Over-capacity actors
+have no available movement until their carried load is made legal.
 
 Weapon mechanics are structured, not free prose: category, melee/ranged attack
 type, selected attack ability, damage formula/type, versatile formula, properties,
 normal/long and thrown ranges, proficiency, magic bonus, and an optional linked
-ammunition item ID. `derived.inventory.weapon_attacks` is the authoritative card
-view for attack bonus and damage expression.
+ammunition item ID. Catalog weapons set the item-local proficiency flag false;
+the runtime matches the actor's exact or simple/martial weapon proficiencies.
+For a melee Finesse weapon it chooses the better Strength or Dexterity modifier.
+`derived.inventory.weapon_attacks` is the authoritative card view for attack
+ability, proficiency, attack bonus, and damage expression.
 
 ## Effects And Narrative
 

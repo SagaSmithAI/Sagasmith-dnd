@@ -1003,10 +1003,12 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
             field,
             {
                 "base_ac",
+                "category",
                 "dexterity_mode",
                 "dexterity_max",
                 "magic_bonus",
                 "stealth_disadvantage",
+                "strength_requirement",
             },
         )
         if "base_ac" not in mechanics:
@@ -1023,8 +1025,12 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
             dexterity_max = _integer(dexterity_max, f"{field}.dexterity_max", minimum=0, maximum=10)
         elif dexterity_max is not None:
             raise ValueError(f"{field}.dexterity_max is only valid when dexterity_mode is max")
+        category = _text(mechanics.get("category"), f"{field}.category").casefold()
+        if category not in {"", "light", "medium", "heavy"}:
+            raise ValueError(f"{field}.category is invalid")
         return {
             "base_ac": _integer(mechanics["base_ac"], f"{field}.base_ac", minimum=1),
+            "category": category,
             "dexterity_mode": dexterity_mode,
             "dexterity_max": dexterity_max,
             "magic_bonus": _integer(mechanics.get("magic_bonus"), f"{field}.magic_bonus"),
@@ -1032,6 +1038,12 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
                 mechanics.get("stealth_disadvantage"),
                 f"{field}.stealth_disadvantage",
                 default=False,
+            ),
+            "strength_requirement": _integer(
+                mechanics.get("strength_requirement"),
+                f"{field}.strength_requirement",
+                minimum=0,
+                maximum=30,
             ),
         }
     if kind == "shield":
@@ -3631,6 +3643,84 @@ def validate_world_effect(value: Any, *, field: str = "world_effect") -> dict[st
     return normalized
 
 
+def _proficiency_keys(values: list[str]) -> set[str]:
+    return {
+        str(value).strip().casefold().replace("-", " ").replace("_", " ")
+        for value in values
+        if str(value).strip()
+    }
+
+
+def _weapon_is_proficient(item: dict[str, Any], proficiencies: list[str]) -> bool:
+    mechanics = dict(item.get("mechanics") or {})
+    if bool(mechanics.get("proficient", False)):
+        return True
+    keys = _proficiency_keys(proficiencies)
+    name = str(item.get("name") or "").strip().casefold()
+    category = str(mechanics.get("category") or "").strip().casefold()
+    return bool(
+        name in keys
+        or f"{name} weapon" in keys
+        or (category and f"{category} weapons" in keys)
+        or "all weapons" in keys
+    )
+
+
+def _armor_proficiency_state(value: dict[str, Any]) -> dict[str, Any]:
+    inventory = value["inventory"]
+    items = {item["id"]: item for item in inventory["items"]}
+    keys = _proficiency_keys(value["traits"]["proficiencies"]["armor"])
+    equipped: list[dict[str, Any]] = []
+    armor_id = inventory["equipment_slots"]["armor"]
+    if armor_id:
+        armor = items[armor_id]
+        category = str(dict(armor.get("mechanics") or {}).get("category") or "").casefold()
+        if category:
+            proficient = bool(
+                "all armor" in keys
+                or f"{category} armor" in keys
+                or str(armor.get("name") or "").casefold() in keys
+            )
+            equipped.append(
+                {
+                    "item_id": armor_id,
+                    "name": armor["name"],
+                    "category": category,
+                    "proficient": proficient,
+                }
+            )
+    shield_id = inventory["equipment_slots"]["shield"]
+    if shield_id:
+        shield = items[shield_id]
+        proficient = bool(
+            "shields" in keys
+            or "shield" in keys
+            or str(shield.get("name") or "").casefold() in keys
+        )
+        equipped.append(
+            {
+                "item_id": shield_id,
+                "name": shield["name"],
+                "category": "shield",
+                "proficient": proficient,
+            }
+        )
+    nonproficient = [item for item in equipped if not item["proficient"]]
+    return {
+        "equipped": equipped,
+        "proficient": not nonproficient,
+        "nonproficient_item_ids": [item["item_id"] for item in nonproficient],
+        "disadvantage_abilities": ["strength", "dexterity"] if nonproficient else [],
+        "blocks_spellcasting": bool(nonproficient),
+    }
+
+
+def armor_proficiency_state(sheet: dict[str, Any]) -> dict[str, Any]:
+    """Return 2014 armor-proficiency penalties for the equipped loadout."""
+
+    return _armor_proficiency_state(validate_character_sheet(sheet))
+
+
 def _derive_armor_class(
     value: dict[str, Any], ability_modifiers: dict[str, int], active_effects: list[dict[str, Any]]
 ) -> tuple[int, dict[str, Any], set[str]]:
@@ -3934,6 +4024,7 @@ def _weapon_attacks(
     inventory: dict[str, Any],
     ability_modifiers: dict[str, int],
     proficiency: int,
+    weapon_proficiencies: list[str],
     spell_ability: str | None,
     active_effects: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
@@ -3957,15 +4048,26 @@ def _weapon_attacks(
         magic_properties_active = item.get("attunement") != "required"
         magic_bonus = mechanics["magic_bonus"] if magic_properties_active else 0
         ability = mechanics["attack_ability"]
+        property_keys = {str(value).strip().casefold() for value in mechanics["properties"]}
+        if (
+            mechanics["attack_type"] == "melee"
+            and "finesse" in property_keys
+            and ability in {"strength", "dexterity"}
+        ):
+            ability = max(
+                ("strength", "dexterity"),
+                key=lambda candidate: ability_modifiers[candidate],
+            )
         modifier = (
             ability_modifiers.get(spell_ability or "", 0)
             if ability == "spell"
             else ability_modifiers.get(ability, 0)
         )
+        proficient = _weapon_is_proficient(item, weapon_proficiencies)
         attack_bonus = mechanics.get("attack_bonus_override")
         if attack_bonus is None:
             attack_bonus = modifier + magic_bonus
-            if mechanics["proficient"]:
+            if proficient:
                 attack_bonus += proficiency
         damage_bonus = mechanics.get("damage_bonus_override")
         if damage_bonus is None:
@@ -3991,6 +4093,7 @@ def _weapon_attacks(
                     else int(mechanics.get("reach_ft", 5) or 5)
                 ),
                 "attack_ability": ability,
+                "proficient": proficient,
                 "attack_bonus": attack_bonus,
                 "damage_formula": damage_formula,
                 "damage_bonus": damage_bonus,
@@ -4239,6 +4342,25 @@ def derive_character_sheet(
             else "normal"
         ),
     }
+    armor_proficiency = _armor_proficiency_state(value)
+    equipped_armor_mechanics = (
+        dict(equipped_armor.get("mechanics") or {}) if equipped_armor else {}
+    )
+    armor_strength_requirement = int(
+        equipped_armor_mechanics.get("strength_requirement", 0) or 0
+    )
+    armor_strength_shortfall = bool(armor_strength_requirement > strength)
+    encumbrance_disadvantage_abilities = (
+        ["strength", "dexterity", "constitution"]
+        if encumbrance_summary["state"] == "heavily_encumbered"
+        else []
+    )
+    equipment_disadvantage_abilities = sorted(
+        {
+            *armor_proficiency["disadvantage_abilities"],
+            *encumbrance_disadvantage_abilities,
+        }
+    )
     multiattack_options = []
     for activity in value["content"]["activities"]:
         if (
@@ -4268,6 +4390,29 @@ def derive_character_sheet(
                 raise ValueError("active speed override effect is malformed")
             mode = match.group(1)
             effective_speed[mode] = max(int(effective_speed.get(mode, 0) or 0), speed)
+    if encumbrance_summary["state"] == "over_capacity":
+        effective_speed = {mode: 0 for mode in effective_speed}
+    else:
+        speed_penalty = (
+            (10 if armor_strength_shortfall else 0)
+            + (10 if encumbrance_summary["state"] == "encumbered" else 0)
+            + (20 if encumbrance_summary["state"] == "heavily_encumbered" else 0)
+        )
+        if speed_penalty:
+            effective_speed = {
+                mode: max(0, int(speed or 0) - speed_penalty)
+                for mode, speed in effective_speed.items()
+            }
+    encumbrance_summary["speed_penalty_ft"] = (
+        None
+        if encumbrance_summary["state"] == "over_capacity"
+        else 10
+        if encumbrance_summary["state"] == "encumbered"
+        else 20
+        if encumbrance_summary["state"] == "heavily_encumbered"
+        else 0
+    )
+    encumbrance_summary["disadvantage_abilities"] = encumbrance_disadvantage_abilities
     effective_hp_max = effective_hit_point_maximum(value)
     derived = {
         "proficiency_bonus": proficiency,
@@ -4281,6 +4426,18 @@ def derive_character_sheet(
         + value["traits"]["senses"]["passive_perception_bonus"],
         "armor_class": armor_class,
         "armor_class_breakdown": armor_class_breakdown,
+        "armor_proficiency": armor_proficiency,
+        "armor_strength": {
+            "requirement": armor_strength_requirement,
+            "meets_requirement": not armor_strength_shortfall,
+            "speed_penalty_ft": 10 if armor_strength_shortfall else 0,
+        },
+        "equipment_penalties": {
+            "attack_disadvantage_abilities": equipment_disadvantage_abilities,
+            "check_disadvantage_abilities": equipment_disadvantage_abilities,
+            "save_disadvantage_abilities": equipment_disadvantage_abilities,
+            "spellcasting_blocked": armor_proficiency["blocks_spellcasting"],
+        },
         "stealth_disadvantage": stealth_disadvantage,
         "initiative": ability_modifiers[value["combat"]["initiative"]["ability"]]
         + value["combat"]["initiative"]["bonus"],
@@ -4327,6 +4484,7 @@ def derive_character_sheet(
                 inventory,
                 ability_modifiers,
                 proficiency,
+                value["traits"]["proficiencies"]["weapons"],
                 spell_ability,
                 active_effects,
             ),
@@ -4374,6 +4532,12 @@ def derive_character_sheet(
         int(item.get("reach_ft", 5) or 5) > 5 for item in derived["inventory"]["weapon_attacks"]
     ):
         core_boundary_ids.append("dnd5e.core.weapon.reach")
+    if derived["inventory"]["weapon_attacks"]:
+        core_boundary_ids.append("dnd5e.core.weapon.proficiency_and_finesse")
+    if armor_proficiency["equipped"]:
+        core_boundary_ids.append("dnd5e.core.armor.proficiency_and_strength")
+    if value["edition"] == "2014" and encumbrance["mode"] == "variant":
+        core_boundary_ids.append("dnd5e.core.encumbrance")
     derived["rule_receipts"] = [
         *core_receipts(rules, core_boundary_ids, "character.derive"),
         *extension.receipts,

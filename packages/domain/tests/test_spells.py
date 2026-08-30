@@ -74,6 +74,32 @@ def test_spell_slot_and_concentration_are_settled_from_card_data() -> None:
     assert result["concentration_started"] is True
 
 
+def test_nonproficient_equipped_armor_blocks_spell_casting() -> None:
+    sheet = default_character_sheet()
+    sheet["spellcasting"]["spell_slots"] = {
+        "1": {"label": "1st", "value": 1, "max": 1, "recovers_on": "long_rest"}
+    }
+    sheet["content"]["spells"] = [_spell("bless", level=1)]
+    sheet["inventory"]["items"] = [
+        {
+            "id": "chain-mail",
+            "name": "Chain mail",
+            "kind": "armor",
+            "equipped": True,
+            "equipped_slot": "armor",
+            "mechanics": {
+                "base_ac": 16,
+                "category": "heavy",
+                "dexterity_mode": "none",
+            },
+        }
+    ]
+    sheet["inventory"]["equipment_slots"]["armor"] = "chain-mail"
+
+    with pytest.raises(CombatEngineError, match="nonproficient equipped armor"):
+        consume_spell_cast(validate_character_sheet(sheet), spell_id="bless")
+
+
 def test_ordinary_mage_armor_cast_applies_its_engine_owned_effect() -> None:
     sheet = default_character_sheet()
     sheet["spellcasting"]["spell_slots"] = {

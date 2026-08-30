@@ -139,10 +139,17 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
         "charges": {},
         "mechanics": {
             "base_ac": 16,
+            "category": "heavy",
             "dexterity_mode": "none",
             "stealth_disadvantage": True,
+            "strength_requirement": 13,
         },
     }
+    dagger = next(
+        item for item in artifacts if item["id"] == "dnd5e.content.srd2014.item.dagger"
+    )
+    assert dagger["card"]["inventory_template"]["mechanics"]["proficient"] is False
+    assert "Finesse" in dagger["card"]["inventory_template"]["mechanics"]["properties"]
     shields = [
         item
         for item in artifacts

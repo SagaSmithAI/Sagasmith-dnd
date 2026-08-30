@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.65.0"
+CORE_RULE_PACK_VERSION = "1.66.0"
 
 
 @dataclass(frozen=True)
@@ -98,6 +98,7 @@ _2024_CATEGORY_CITATIONS = {
     "action": "bundled:srd2024/DND5eSRD_176-191.md#actions",
     "activity": "bundled:srd2024/DND5eSRD_176-191.md#limited-use",
     "armor_class": "bundled:srd2024/DND5eSRD_087-103.md#armor",
+    "armor": "bundled:srd2024/DND5eSRD_087-103.md#armor-training",
     "attack": "bundled:srd2024/DND5eSRD_176-191.md#attack-roll",
     "check": "bundled:srd2024/DND5eSRD_176-191.md#ability-check",
     "damage": "bundled:srd2024/DND5eSRD_176-191.md#damage-and-healing",
@@ -358,6 +359,42 @@ BOUNDARIES = (
             "tests/test_statblocks.py",
         ),
         "bundled:srd2014/04_Equipment/Armor.md",
+    ),
+    CoreBoundary(
+        "dnd5e.core.armor.proficiency_and_strength",
+        ("2014", "2024"),
+        "character_schema._armor_proficiency_state|derive_character_sheet|"
+        "combat_engine.resolve_actor_check|spells.consume_spell_cast",
+        (
+            "tests/test_character_schema.py::"
+            "test_2014_armor_proficiency_strength_and_encumbrance_affect_derived_rules",
+            "tests/test_combat_engine.py::"
+            "test_nonproficient_armor_and_heavy_encumbrance_apply_check_disadvantage",
+            "tests/test_spells.py::test_nonproficient_equipped_armor_blocks_spell_casting",
+        ),
+        "bundled:srd2014/04_Equipment/Armor.md",
+    ),
+    CoreBoundary(
+        "dnd5e.core.encumbrance",
+        ("2014",),
+        "character_schema.derive_character_sheet|combat_engine.resolve_actor_check",
+        (
+            "tests/test_character_schema.py::"
+            "test_2014_armor_proficiency_strength_and_encumbrance_affect_derived_rules",
+            "tests/test_combat_engine.py::"
+            "test_nonproficient_armor_and_heavy_encumbrance_apply_check_disadvantage",
+        ),
+        "bundled:srd2014/04_Equipment#lifting-and-carrying",
+    ),
+    CoreBoundary(
+        "dnd5e.core.weapon.proficiency_and_finesse",
+        ("2014", "2024"),
+        "character_schema._weapon_attacks",
+        (
+            "tests/test_character_schema.py::"
+            "test_weapon_attacks_derive_actor_proficiency_and_finesse_ability",
+        ),
+        "bundled:srd/weapon-properties",
     ),
     CoreBoundary(
         "dnd5e.core.check.jack_of_all_trades",
