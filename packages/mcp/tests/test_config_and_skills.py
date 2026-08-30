@@ -88,6 +88,31 @@ def test_storage_accepts_only_the_unified_content_archive_extension(tmp_path: Pa
     assert not hasattr(storage, "write_module_archive")
 
 
+def test_official_content_library_is_not_a_generic_import_root(tmp_path: Path) -> None:
+    library = tmp_path / "official-library"
+    packages = library / "packages"
+    packages.mkdir(parents=True)
+    (library / "index.json").write_text("{}", encoding="utf-8")
+    archive = packages / "private.sagasmith-pack"
+    archive.write_bytes(b"not a package")
+    storage = SagaSmithStorage(
+        McpConfig(
+            home=tmp_path / "home",
+            database_url=None,
+            chroma_url=None,
+            chroma_path_override=None,
+            dnd_skills_dir=tmp_path / "dnd",
+            modulegen_skills_dir=tmp_path / "modulegen",
+            official_content_library=library,
+        )
+    )
+
+    with pytest.raises(PermissionError, match="outside configured import roots"):
+        storage.read_content_archive(source_path=archive)
+    with pytest.raises(ValueError):
+        storage.read_official_content_archive(archive)
+
+
 def test_environment_config_has_separate_rule_and_module_import_roots(monkeypatch) -> None:
     monkeypatch.setenv(
         "SAGASMITH_DND_MCP_RULE_IMPORT_ROOTS", os.pathsep.join(("rules-a", "rules-b"))
