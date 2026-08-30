@@ -129,6 +129,35 @@ async def _catalog_selection(
     return selection
 
 
+async def _all_catalog_entries(
+    server: Any,
+    campaign_id: str,
+    kind: str,
+) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    offset = 0
+    while True:
+        page = await _call(
+            server,
+            "character_query",
+            {
+                "view": "catalog",
+                "payload": {
+                    "campaign_id": campaign_id,
+                    "kind": kind,
+                    "limit": 100,
+                    "offset": offset,
+                },
+            },
+        )
+        if not page:
+            return entries
+        entries.extend(page)
+        if len(page) < 100:
+            return entries
+        offset += len(page)
+
+
 async def _run(content_library: Path, home: Path) -> dict[str, Any]:
     base = McpConfig.from_environment()
     config = McpConfig(
@@ -290,14 +319,7 @@ async def _run(content_library: Path, home: Path) -> dict[str, Any]:
         "statblock",
         "subclass",
     ):
-        entries = await _call(
-            server,
-            "character_query",
-            {
-                "view": "catalog",
-                "payload": {"campaign_id": campaign["id"], "kind": kind},
-            },
-        )
+        entries = await _all_catalog_entries(server, campaign["id"], kind)
         catalog_counts[kind] = sum(
             1 for item in entries if str(item.get("pack_id") or "") in official_pack_ids
         )

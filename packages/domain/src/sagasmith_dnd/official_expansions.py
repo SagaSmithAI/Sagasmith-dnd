@@ -189,6 +189,7 @@ def load_official_expansion_lock(path: Path | None = None) -> dict[str, Any]:
             "definition_id",
             "dependency_id",
             "dependency_version",
+            "runtime_version",
             "source_checksum",
             "runtime_checksum",
             "basis",
@@ -217,11 +218,14 @@ def load_official_expansion_lock(path: Path | None = None) -> dict[str, Any]:
             raise ValueError("official expansion dependency rebind is duplicated")
         rebind_keys.add(rebind_key)
         runtime = support_definitions.get(
-            (str(raw["dependency_id"]), str(raw["dependency_version"]))
+            (str(raw["dependency_id"]), str(raw["runtime_version"]))
         )
         if runtime != raw["runtime_checksum"]:
             raise ValueError("official expansion dependency rebind is not bound to support")
-        if raw["source_checksum"] == raw["runtime_checksum"] or not str(raw["basis"]).strip():
+        if (
+            raw["source_checksum"] == raw["runtime_checksum"]
+            and raw["dependency_version"] == raw["runtime_version"]
+        ) or not str(raw["basis"]).strip():
             raise ValueError("official expansion dependency rebind requires a reasoned change")
     return value
 

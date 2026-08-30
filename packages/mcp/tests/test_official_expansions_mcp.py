@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from pathlib import Path
 from typing import Any
+
+from sagasmith_dnd.core_content import PACK_ID as CORE_CONTENT_PACK_ID
+from sagasmith_dnd.core_content import PACK_VERSION as CORE_CONTENT_PACK_VERSION
+from sagasmith_dnd.official_expansions import load_official_expansion_lock
 
 from sagasmith_dnd_mcp.config import McpConfig
 from sagasmith_dnd_mcp.server import create_server
@@ -76,3 +81,40 @@ def test_official_expansion_registry_is_core_visible_but_unmounted_by_default(
         assert profile_2024["available_official_expansions"] == []
 
     asyncio.run(exercise())
+
+
+def test_official_expansion_lock_matches_seeded_core_content(tmp_path: Path) -> None:
+    repository_root = Path(__file__).resolve().parents[3]
+    config = McpConfig(
+        home=tmp_path / "home",
+        database_url=None,
+        chroma_url=None,
+        chroma_path_override=None,
+        dnd_skills_dir=repository_root / "skills",
+        modulegen_skills_dir=tmp_path / "modulegen-skills",
+        auto_seed_rules=True,
+    )
+
+    create_server(config)
+
+    with sqlite3.connect(config.home / "data" / "ttrpgbase.db") as connection:
+        row = connection.execute(
+            "SELECT checksum FROM rule_pack_versions WHERE pack_id = ? AND version = ?",
+            (CORE_CONTENT_PACK_ID, CORE_CONTENT_PACK_VERSION),
+        ).fetchone()
+    assert row is not None
+    installed_checksum = str(row[0])
+    lock = load_official_expansion_lock()
+    builtin = next(
+        definition
+        for definition in lock["builtin_rule_definitions"]
+        if definition["id"] == CORE_CONTENT_PACK_ID
+        and definition["version"] == CORE_CONTENT_PACK_VERSION
+    )
+    assert builtin["checksum"] == installed_checksum
+    assert {
+        rebind["runtime_checksum"]
+        for rebind in lock["dependency_rebinds"]
+        if rebind["dependency_id"] == CORE_CONTENT_PACK_ID
+        and rebind["runtime_version"] == CORE_CONTENT_PACK_VERSION
+    } == {installed_checksum}

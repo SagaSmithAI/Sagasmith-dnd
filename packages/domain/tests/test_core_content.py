@@ -6,12 +6,20 @@ from sagasmith_dnd.core_content import (
     PACK_VERSION,
     _feat_prerequisites,
     _known_feature_structure,
+    _markdown_files,
     build_srd2014_content,
 )
 from sagasmith_dnd.core_rule_pack import get_core_rule_pack
 from sagasmith_dnd.standard_feature_ids import (
     CORE_RELENTLESS_ENDURANCE_MECHANIC_ID,
 )
+
+
+def test_markdown_file_order_is_platform_independent(tmp_path: Path) -> None:
+    for name in ("alpha.md", "Zeta.md"):
+        (tmp_path / name).touch()
+
+    assert [path.name for path in _markdown_files(tmp_path)] == ["Zeta.md", "alpha.md"]
 
 
 def test_non_numeric_feat_prerequisite_defaults_to_agent_review() -> None:
@@ -46,7 +54,7 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     manifest, artifacts = build_srd2014_content(workspace / "skills")
     counts = Counter(item["kind"] for item in artifacts)
 
-    assert manifest["version"] == PACK_VERSION == "1.24.0"
+    assert manifest["version"] == PACK_VERSION == "1.25.0"
     assert "dnd5e.core.spell.structured_resolution" in manifest["native_mechanic_refs"]
     registered = {boundary.id for boundary in get_core_rule_pack("2014").boundaries}
     assert set(manifest["native_mechanic_refs"]) <= registered

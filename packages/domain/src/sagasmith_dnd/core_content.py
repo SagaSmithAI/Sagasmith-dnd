@@ -29,7 +29,7 @@ from sagasmith_dnd.standard_spell_ids import (
 )
 
 PACK_ID = "dnd5e.content.srd2014"
-PACK_VERSION = "1.24.0"
+PACK_VERSION = "1.25.0"
 
 _SUBCLASS_LEVELS = {
     "barbarian": 3,
@@ -2021,7 +2021,12 @@ def _deduplicate(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _markdown_files(folder: Path) -> list[Path]:
     return (
-        sorted(path for path in folder.rglob("*.md") if path.is_file()) if folder.is_dir() else []
+        sorted(
+            (path for path in folder.rglob("*.md") if path.is_file()),
+            key=lambda path: path.relative_to(folder).as_posix(),
+        )
+        if folder.is_dir()
+        else []
     )
 
 
