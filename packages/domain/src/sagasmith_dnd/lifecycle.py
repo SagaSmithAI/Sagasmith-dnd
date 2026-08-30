@@ -956,17 +956,39 @@ def apply_rest(
                 )
                 // 2,
             )
-            if (
-                hit_dice_recovery is None
-                and sum(1 for amount in missing.values() if amount > 0) > 1
-                and sum(missing.values()) > allowance
-            ):
-                raise CombatEngineError("2014 long-rest hit-die recovery needs a player allocation")
-            requested = hit_dice_recovery or {}
-            allocation = {
-                key: int(requested.get(key, min(amount, allowance)))
-                for key, amount in missing.items()
-            }
+            if hit_dice_recovery is None:
+                if (
+                    sum(1 for amount in missing.values() if amount > 0) > 1
+                    and sum(missing.values()) > allowance
+                ):
+                    raise CombatEngineError(
+                        "2014 long-rest hit-die recovery needs a player allocation"
+                    )
+                allocation = {
+                    key: min(amount, allowance) for key, amount in missing.items()
+                }
+            else:
+                if not isinstance(hit_dice_recovery, dict):
+                    raise CombatEngineError(
+                        "2014 hit-die recovery allocation must be an object"
+                    )
+                unknown_keys = set(hit_dice_recovery) - set(missing)
+                if unknown_keys:
+                    raise CombatEngineError(
+                        "2014 hit-die recovery allocation contains an unknown hit die"
+                    )
+                if any(
+                    isinstance(amount, bool)
+                    or not isinstance(amount, int)
+                    or amount < 0
+                    for amount in hit_dice_recovery.values()
+                ):
+                    raise CombatEngineError(
+                        "2014 hit-die recovery counts must be non-negative integers"
+                    )
+                allocation = {
+                    key: hit_dice_recovery.get(key, 0) for key in missing
+                }
             if (
                 any(amount < 0 or amount > missing[key] for key, amount in allocation.items())
                 or sum(allocation.values()) > allowance
