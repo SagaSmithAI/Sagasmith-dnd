@@ -24,6 +24,10 @@ Character-sheet notes never contain actor knowledge or campaign facts. Public
 `character_state_change` deliberately has no `memory_add` or `memory_resolve`
 action; use stable-keyed `actor_knowledge_change(add/revise)` for subjective
 knowledge and `memory_change` for objective facts or an atomic continuity event.
+An administrative ActorKnowledge revision requires a new proposition, preserves
+every omitted optional revision field, and treats an explicitly supplied
+`source_event_id: null` as a request to clear that source link. This direct-revise
+contract is distinct from continuity-commit source inference.
 
 ## Provenance and reads
 
@@ -35,7 +39,9 @@ restore retains the workflow version that produced the outcome. `skill_list` and
 Default `memory_query` results contain active revisions only. Set
 `include_inactive` for audit history. Actor knowledge remains isolated by actor
 authorization and disclosure scope; objective facts must never be used to infer
-what a character knows.
+what a character knows. Search views page at the authority store, so clients can
+follow the opaque cursor beyond the first 100 matching facts or beliefs without
+loading the full ledger.
 
 `continuity_context` ranks all eligible ledgers under one `budget_chars` limit and
 returns retrieval counts so truncation is visible. Owner/DM callers can use

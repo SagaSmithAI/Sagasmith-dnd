@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from copy import deepcopy
 from pathlib import Path
 
@@ -31,6 +32,43 @@ def _config(tmp_path: Path) -> McpConfig:
         dnd_skills_dir=workspace / "skills",
         modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
         auto_seed_rules=False,
+    )
+
+
+def _progress_runtime_markdown() -> str:
+    runtime_manifest = {
+        "schema_version": 2,
+        "module_key": "progress-pack",
+        "classification": "authored_module",
+        "lineage": {
+            "root_module_key": "progress-pack",
+            "parent_module_key": "",
+            "generation": 0,
+        },
+        "entities": [],
+        "secrets": [],
+        "clues": [],
+        "plot_nodes": [],
+        "foreshadowing": [],
+        "branches": [],
+        "fronts": [
+            {
+                "id": "front:river-cult",
+                "name": "The river cult completes the rite",
+                "goal": "Complete the rite before the party intervenes.",
+                "stakes": "The drowned gate opens.",
+                "grim_portents": ["The river turns black."],
+                "linked_thread_ids": [],
+            }
+        ],
+        "story_threads": [],
+        "character_arcs": [],
+        "scene_links": [],
+    }
+    return (
+        "<!-- sagasmith-runtime-manifest\n"
+        + json.dumps(runtime_manifest, separators=(",", ":"), sort_keys=True)
+        + "\n-->\n# Chapter One\n\n## River Gate\n\nThe party reaches the river gate.\n"
     )
 
 
@@ -209,6 +247,23 @@ def test_manifest_syncs_canonical_state_and_verifies_source_defined_ending(
             },
         )
         assert replay == initialized
+        rewritten_atlas = deepcopy(initialized["manifest"])
+        rewritten_atlas["content_lineage"][0]["scene_ids"] = ["scene:forged-history"]
+        with pytest.raises(
+            Exception,
+            match="lineage and Scene Atlas metadata are immutable",
+        ):
+            await _call(
+                server,
+                "playthrough_manifest",
+                {
+                    "campaign_id": campaign_id,
+                    "action": "replace",
+                    "payload": {"manifest": rewritten_atlas},
+                    "expected_revision": initialized["campaign_revision"],
+                    "idempotency_key": "rewrite-established-atlas",
+                },
+            )
         invalid_runtime_ref = {
             key: source_ref[key]
             for key in (
@@ -300,6 +355,22 @@ def test_manifest_syncs_canonical_state_and_verifies_source_defined_ending(
             request_key="campaign-v2",
         )
         revision_module_id = revision_activation["activated"]["activation"]["module_id"]
+        with pytest.raises(
+            Exception,
+            match="referenced by the playthrough manifest cannot be removed",
+        ):
+            await _call(
+                server,
+                "content_pack",
+                {
+                    "action": "remove",
+                    "payload": {
+                        "campaign_id": campaign_id,
+                        "kind": "module",
+                        "module_id": module_id,
+                    },
+                },
+            )
         extended_manifest = deepcopy(initialized["manifest"])
         extended_manifest["module_ids"].append(revision_module_id)
         before_extend = await _call(
@@ -622,5 +693,268 @@ def test_manifest_syncs_canonical_state_and_verifies_source_defined_ending(
         assert ended["manifest"]["status"] == "completed"
         assert ended["manifest"]["ending"]["achieved_condition_id"] == "victory"
         assert all(item["passed"] for item in ended["manifest"]["ending"]["verification"])
+
+    asyncio.run(exercise())
+
+
+def test_progress_evidence_is_design_bound_and_branch_attested(tmp_path: Path) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {
+                "name": "Attested progress",
+                "edition": "2014",
+                "idempotency_key": "campaign",
+            },
+        )
+        campaign_id = campaign["id"]
+        staged = await _call(
+            server,
+            "module_draft",
+            {
+                "campaign_id": campaign_id,
+                "action": "start",
+                "payload": {
+                    "name": "progress.md",
+                    "content": _progress_runtime_markdown(),
+                    "source_key": "progress-pack",
+                    "title": "Progress Pack",
+                },
+                "idempotency_key": "stage",
+            },
+        )
+        activation = await finalize_and_activate_module(
+            _call,
+            server,
+            campaign_id,
+            staged,
+            source_key="progress-pack",
+            title="Progress Pack",
+            portable_id="dnd5e.module.progress-pack",
+        )
+        module_id = activation["activated"]["activation"]["module_id"]
+        current = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign_id}},
+        )
+        initialized = await _call(
+            server,
+            "playthrough_manifest",
+            {
+                "campaign_id": campaign_id,
+                "action": "initialize",
+                "payload": {
+                    "manifest": new_playthrough_manifest(
+                        run_id="attested-run",
+                        campaign_line_id="attested-line",
+                        module_ids=[module_id],
+                        recommended_party_minimum=None,
+                        recommended_party_maximum=None,
+                        selected_party_size=None,
+                        source_refs=[],
+                    )
+                },
+                "expected_revision": current["revision"],
+                "idempotency_key": "initialize",
+            },
+        )
+        branches = await _call(
+            server,
+            "branch_query",
+            {"campaign_id": campaign_id, "view": "list"},
+        )
+        main_branch = next(item for item in branches if item["is_current"])
+        base = await _call(
+            server,
+            "snapshot_create",
+            {
+                "campaign_id": campaign_id,
+                "label": "Before evidence",
+                "expected_revision": initialized["campaign_revision"],
+                "expected_head_snapshot_id": "",
+                "idempotency_key": "base",
+            },
+        )
+        main_event = await _call(
+            server,
+            "campaign_event",
+            {
+                "campaign_id": campaign_id,
+                "action": "add",
+                "payload": {
+                    "summary": "The river cult begins the final rite.",
+                    "event_type": "front_advance",
+                },
+                "idempotency_key": "main-evidence",
+            },
+        )
+        current = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign_id}},
+        )
+        await _call(
+            server,
+            "snapshot_create",
+            {
+                "campaign_id": campaign_id,
+                "label": "Main evidence",
+                "expected_revision": current["revision"],
+                "expected_head_snapshot_id": base["id"],
+                "idempotency_key": "main-snapshot",
+            },
+        )
+        current = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign_id}},
+        )
+        await _call(
+            server,
+            "branch_change",
+            {
+                "campaign_id": campaign_id,
+                "action": "create",
+                "payload": {
+                    "name": "before-rite",
+                    "from_snapshot_id": base["id"],
+                    "checkout": True,
+                },
+                "expected_revision": current["revision"],
+                "expected_branch_id": main_branch["id"],
+                "idempotency_key": "fork",
+            },
+        )
+        branches = await _call(
+            server,
+            "branch_query",
+            {"campaign_id": campaign_id, "view": "list"},
+        )
+        fork_branch = next(item for item in branches if item["is_current"])
+        fork_manifest = await _call(
+            server,
+            "playthrough_manifest",
+            {"campaign_id": campaign_id, "action": "get"},
+        )
+
+        def advanced_manifest(front_id: str, kind: str, ref_id: str) -> dict:
+            value = deepcopy(fork_manifest["manifest"])
+            value["front_progress"] = [
+                {
+                    "id": front_id,
+                    "status": "advanced",
+                    "stage": 1,
+                    "source_ref": None,
+                    "evidence_refs": [{"kind": kind, "ref_id": ref_id}],
+                }
+            ]
+            return value
+
+        with pytest.raises(Exception, match="unknown runtime_manifest ids"):
+            await _call(
+                server,
+                "playthrough_manifest",
+                {
+                    "campaign_id": campaign_id,
+                    "action": "replace",
+                    "payload": {
+                        "manifest": advanced_manifest(
+                            "front:forged",
+                            "event",
+                            main_event["id"],
+                        )
+                    },
+                    "expected_revision": fork_manifest["campaign_revision"],
+                    "idempotency_key": "forged-design",
+                },
+            )
+        for index, (kind, ref_id) in enumerate(
+            (
+                ("event", "event:forged"),
+                ("snapshot", "snapshot:forged"),
+                ("scene", "scene:forged"),
+                ("memory_fact", "memory_fact:forged"),
+                ("conversation", "conversation:forged"),
+                ("event", main_event["id"]),
+            )
+        ):
+            with pytest.raises(Exception, match="evidence_refs are not attested"):
+                await _call(
+                    server,
+                    "playthrough_manifest",
+                    {
+                        "campaign_id": campaign_id,
+                        "action": "replace",
+                        "payload": {
+                            "manifest": advanced_manifest(
+                                "front:river-cult",
+                                kind,
+                                ref_id,
+                            )
+                        },
+                        "expected_revision": fork_manifest["campaign_revision"],
+                        "idempotency_key": f"forged-evidence-{index}",
+                    },
+                )
+
+        current = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign_id}},
+        )
+        await _call(
+            server,
+            "snapshot_create",
+            {
+                "campaign_id": campaign_id,
+                "label": "Fork evidence rejection",
+                "expected_revision": current["revision"],
+                "expected_head_snapshot_id": base["id"],
+                "idempotency_key": "fork-snapshot",
+            },
+        )
+        current = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign_id}},
+        )
+        await _call(
+            server,
+            "branch_change",
+            {
+                "campaign_id": campaign_id,
+                "action": "checkout",
+                "payload": {"branch_id": main_branch["id"]},
+                "expected_revision": current["revision"],
+                "expected_branch_id": fork_branch["id"],
+                "idempotency_key": "checkout-main",
+            },
+        )
+        main_manifest = await _call(
+            server,
+            "playthrough_manifest",
+            {"campaign_id": campaign_id, "action": "get"},
+        )
+        supported = deepcopy(main_manifest["manifest"])
+        supported["front_progress"] = advanced_manifest(
+            "front:river-cult",
+            "event",
+            main_event["id"],
+        )["front_progress"]
+        replaced = await _call(
+            server,
+            "playthrough_manifest",
+            {
+                "campaign_id": campaign_id,
+                "action": "replace",
+                "payload": {"manifest": supported},
+                "expected_revision": main_manifest["campaign_revision"],
+                "idempotency_key": "supported-progress",
+            },
+        )
+        assert replaced["manifest"]["front_progress"][0]["status"] == "advanced"
 
     asyncio.run(exercise())

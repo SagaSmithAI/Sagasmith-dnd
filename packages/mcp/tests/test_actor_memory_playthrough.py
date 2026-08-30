@@ -284,6 +284,13 @@ def test_old_relevant_episode_is_recalled_after_more_than_two_hundred_actor_even
             character_type="pc",
             key="actor",
         )
+        other = await _create_actor(
+            server,
+            campaign["id"],
+            name="Unrelated witness",
+            character_type="npc",
+            key="other-actor",
+        )
         old_event = await _call(
             server,
             "campaign_event",
@@ -299,6 +306,41 @@ def test_old_relevant_episode_is_recalled_after_more_than_two_hundred_actor_even
                     "knowledge_proposition": "The old ferry passphrase is silver cicada.",
                 },
                 "idempotency_key": "old-event",
+            },
+        )
+        other_event = await _call(
+            server,
+            "campaign_event",
+            {
+                "campaign_id": campaign["id"],
+                "action": "add",
+                "payload": {
+                    "summary": "Only the unrelated witness heard the copper moth password.",
+                    "event_type": "revelation",
+                    "audience_scope": "actor",
+                    "known_by_actor_ids": [other["id"]],
+                    "knowledge_key": "copper-moth-password",
+                    "knowledge_proposition": "The password is copper moth.",
+                },
+                "idempotency_key": "other-event",
+            },
+        )
+        hidden_event = await _call(
+            server,
+            "campaign_event",
+            {
+                "campaign_id": campaign["id"],
+                "action": "add",
+                "payload": {
+                    "summary": "A DM-only source underlies one of Mira's beliefs.",
+                    "event_type": "secret",
+                    "audience_scope": "dm",
+                    "known_by_actor_ids": [actor["id"]],
+                    "knowledge_key": "hidden-source-belief",
+                    "knowledge_proposition": "Mira retains the belief without seeing its source.",
+                    "knowledge_disclosure_scope": "owner",
+                },
+                "idempotency_key": "hidden-event",
             },
         )
         for index in range(200):
@@ -339,6 +381,74 @@ def test_old_relevant_episode_is_recalled_after_more_than_two_hundred_actor_even
         assert old_event["id"] in {
             item["record"]["id"] for item in context["memory"]["episodic"]
         }
+
+        exact = await _call(
+            server,
+            "continuity_context",
+            {
+                "campaign_id": campaign["id"],
+                "purpose": "actor_memory",
+                "actor_id": actor["id"],
+                "query": "",
+                "related_refs": [
+                    f"event:{old_event['id']}",
+                    f"event:{other_event['id']}",
+                ],
+                "budget_chars": 12_000,
+            },
+        )
+        exact_event_ids = [
+            item["record"]["id"] for item in exact["memory"]["episodic"]
+        ]
+        assert exact_event_ids[0] == old_event["id"]
+        assert other_event["id"] not in exact_event_ids
+
+        await _call(
+            server,
+            "access_grant",
+            {
+                "scope": "campaign",
+                "campaign_id": campaign["id"],
+                "principal_id": "player:mira",
+                "payload": {"role": "player"},
+            },
+        )
+        await _call(
+            server,
+            "access_grant",
+            {
+                "scope": "actor",
+                "campaign_id": campaign["id"],
+                "principal_id": "player:mira",
+                "payload": {
+                    "actor_id": actor["id"],
+                    "can_view_private": True,
+                },
+            },
+        )
+        player_exact = await _call(
+            server,
+            "continuity_context",
+            {
+                "campaign_id": campaign["id"],
+                "purpose": "actor_memory",
+                "actor_id": actor["id"],
+                "query": "",
+                "related_refs": [
+                    f"event:{old_event['id']}",
+                    f"event:{other_event['id']}",
+                    f"event:{hidden_event['id']}",
+                ],
+                "principal_id": "player:mira",
+                "budget_chars": 12_000,
+            },
+        )
+        player_event_ids = {
+            item["record"]["id"] for item in player_exact["memory"]["episodic"]
+        }
+        assert old_event["id"] in player_event_ids
+        assert other_event["id"] not in player_event_ids
+        assert hidden_event["id"] not in player_event_ids
 
     asyncio.run(exercise())
 
@@ -404,6 +514,23 @@ def test_player_actor_memory_filters_dm_only_knowledge_while_dm_keeps_it(
                     "idempotency_key": knowledge_key,
                 },
             )
+        await _call(
+            server,
+            "memory_change",
+            {
+                "campaign_id": campaign["id"],
+                "action": "add",
+                "payload": {
+                    "fact_key": f"actor:{pc['id']}:goal:dm-secret",
+                    "kind": "actor_state",
+                    "subject_ref": f"actor:{pc['id']}",
+                    "predicate": "goal",
+                    "content": "DM-only goal privacy marker.",
+                    "disclosure_scope": "dm",
+                },
+                "idempotency_key": "dm-only-actor-state",
+            },
+        )
         dm_participant_event = await _call(
             server,
             "memory_change",
@@ -457,6 +584,8 @@ def test_player_actor_memory_filters_dm_only_knowledge_while_dm_keeps_it(
             item["record"]["id"] for item in player_context["memory"]["episodic"]
         }
         assert "DM participant privacy marker" not in str(player_context["memory"])
+        assert "DM-only goal privacy marker" in str(dm_context["memory"])
+        assert "DM-only goal privacy marker" not in str(player_context["memory"])
 
     asyncio.run(exercise())
 

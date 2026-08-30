@@ -190,6 +190,99 @@ def test_memory_facade_supports_stable_upsert_revision_and_supersede(tmp_path: P
     asyncio.run(exercise())
 
 
+def test_actor_knowledge_revise_preserves_omitted_fields_and_can_clear_source(
+    tmp_path: Path,
+) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {"name": "Knowledge revisions", "idempotency_key": "campaign"},
+        )
+        actor = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": "Witness",
+                    "character_type": "npc",
+                },
+                "idempotency_key": "actor",
+            },
+        )
+        event = await _call(
+            server,
+            "campaign_event",
+            {
+                "campaign_id": campaign["id"],
+                "action": "add",
+                "payload": {"summary": "The witness studies the sigil."},
+                "idempotency_key": "source-event",
+            },
+        )
+        original = await _call(
+            server,
+            "actor_knowledge_change",
+            {
+                "action": "add",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "actor_id": actor["id"],
+                    "knowledge_key": "sigil-color",
+                    "proposition": "The sigil is blue.",
+                    "epistemic_status": "belief",
+                    "confidence": 5,
+                    "source_event_id": event["id"],
+                    "cause": "inferred",
+                    "disclosure_scope": "owner",
+                },
+                "idempotency_key": "knowledge-add",
+            },
+        )
+        revised = await _call(
+            server,
+            "actor_knowledge_change",
+            {
+                "action": "revise",
+                "payload": {
+                    "knowledge_id": original["id"],
+                    "proposition": "The sigil is azure.",
+                    "expected_revision_id": original["revision_id"],
+                },
+                "idempotency_key": "knowledge-revise-preserve",
+            },
+        )
+        assert (
+            revised["epistemic_status"],
+            revised["confidence"],
+            revised["source_event_id"],
+            revised["cause"],
+            revised["disclosure_scope"],
+        ) == ("belief", 5, event["id"], "inferred", "owner")
+
+        cleared = await _call(
+            server,
+            "actor_knowledge_change",
+            {
+                "action": "revise",
+                "payload": {
+                    "knowledge_id": original["id"],
+                    "proposition": "The source is no longer remembered.",
+                    "source_event_id": None,
+                    "expected_revision_id": revised["revision_id"],
+                },
+                "idempotency_key": "knowledge-revise-clear",
+            },
+        )
+        assert cleared["source_event_id"] is None
+        assert cleared["disclosure_scope"] == "owner"
+
+    asyncio.run(exercise())
+
+
 def test_memory_commit_is_atomic_idempotent_and_pins_skill_manifest(tmp_path: Path) -> None:
     async def exercise() -> None:
         server = create_server(_config(tmp_path))

@@ -142,7 +142,9 @@ def select_actor_memory_context(
     ranked: list[tuple[tuple[Any, ...], _Candidate, dict[str, int], int]] = []
     current_ref_set = set(normalized_refs)
     for candidate in unique:
-        exact_ref_matches = len(current_ref_set.intersection(candidate.refs))
+        exact_ref_matches = len(
+            current_ref_set.intersection({candidate.basis_ref, *candidate.refs})
+        )
         query_score = _query_score(query, query_terms, candidate)
         signals = {
             "exact_ref_matches": exact_ref_matches,
@@ -175,8 +177,36 @@ def select_actor_memory_context(
     used_chars = 0
     omitted_for_budget = 0
     selection_order: list[dict[str, Any]] = []
+
+    # A four-track context is useful only when a busy identity or recent-event
+    # stream cannot crowd every other kind of memory out.  Preserve the global
+    # relevance order for genuinely tiny budgets, but when one candidate from
+    # every represented track fits, reserve that deterministic floor before
+    # filling the remaining budget by the ordinary rank.
+    first_by_track = [
+        next((entry for entry in ranked if entry[1].track == track), None)
+        for track in MEMORY_TRACKS
+    ]
+    floor_refs = {
+        entry[1].basis_ref for entry in first_by_track if entry is not None
+    }
+    floor_entries = [
+        entry for entry in ranked if entry[1].basis_ref in floor_refs
+    ]
+    floor_cost = sum(
+        _item_cost(entry[1], entry[2], entry[3]) for entry in floor_entries
+    )
+    reserve_track_floor = bool(floor_entries) and floor_cost <= budget_chars
+    remaining_floor_cost = floor_cost if reserve_track_floor else 0
+
     for _, candidate, signals, score in ranked:
         cost = _item_cost(candidate, signals, score)
+        is_floor_entry = reserve_track_floor and candidate.basis_ref in floor_refs
+        if is_floor_entry:
+            remaining_floor_cost -= cost
+        elif used_chars + cost + remaining_floor_cost > budget_chars:
+            omitted_for_budget += 1
+            continue
         if used_chars + cost > budget_chars:
             omitted_for_budget += 1
             continue
