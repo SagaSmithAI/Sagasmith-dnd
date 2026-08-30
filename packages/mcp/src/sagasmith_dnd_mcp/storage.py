@@ -393,12 +393,39 @@ class SagaSmithStorage:
             allowed_roots=[
                 *self.config.module_import_roots,
                 *self.config.rule_import_roots,
-                *(
-                    [self.config.official_content_library]
-                    if self.config.official_content_library is not None
-                    else []
-                ),
             ],
+        )
+
+    def read_official_content_archive(
+        self, source_path: str | Path
+    ) -> tuple[dict[str, Any], dict[str, bytes]]:
+        """Read an archive selected by the locked official-content resolver.
+
+        The official library is intentionally separate from user-configured
+        import roots.  Callers must first resolve and verify an exact archive
+        identity through the built-in official expansion registry.
+        """
+
+        configured = self.config.official_content_library
+        if configured is None:
+            raise PermissionError("official content library is not configured")
+        root = Path(configured).expanduser().resolve()
+        if (root / "index.json").is_file():
+            package_root = (root / "packages").resolve()
+        elif (root / "content-library" / "index.json").is_file():
+            package_root = (root / "content-library" / "packages").resolve()
+        else:
+            raise ValueError(
+                "official content library must contain index.json or "
+                "content-library/index.json"
+            )
+        source = Path(source_path).expanduser().resolve()
+        if source.parent != package_root:
+            raise PermissionError("official content archive is outside the packages directory")
+        return read_managed_content_archive(
+            self.config.content_packages_dir,
+            source_path=source,
+            allowed_roots=[package_root],
         )
 
     def store_actor_image(self, asset: dict[str, Any], content: bytes) -> dict[str, Any]:

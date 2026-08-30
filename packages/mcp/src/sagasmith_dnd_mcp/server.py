@@ -5687,7 +5687,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 raise ValueError(
                     f"official expansion archive changed after verification: {archive.id}"
                 )
-            package, blobs = storage.read_content_archive(source_path=archive.path)
+            package, blobs = storage.read_official_content_archive(archive.path)
             if (
                 package.get("id") != archive.id
                 or package.get("version") != archive.version
