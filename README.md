@@ -275,7 +275,7 @@ uv run ruff check packages/domain packages/mcp
 UI checks are independent:
 
 ```bash
-npm --prefix apps/ui ci
+npm ci
 npm --prefix apps/ui test
 npm --prefix apps/ui run typecheck
 npm --prefix apps/ui run build

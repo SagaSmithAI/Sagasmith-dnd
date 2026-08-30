@@ -17,7 +17,7 @@ surface for the authoritative sibling `packages/mcp` gateway.
 Validate UI changes from the repository root:
 
 ```powershell
-npm --prefix apps/ui ci
+npm ci
 npm --prefix apps/ui test
 npm --prefix apps/ui run build
 ```
