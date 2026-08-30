@@ -3703,6 +3703,13 @@ class RequestScopedMCPServer(MCPServer):
 SessionExposureFastMCP = RequestScopedMCPServer
 
 
+def close_server(server: MCPServer) -> None:
+    """Release resources owned by a server created for direct Python use."""
+    close = getattr(server, "_sagasmith_close", None)
+    if callable(close):
+        close()
+
+
 def create_server(config: McpConfig | None = None) -> MCPServer:
     """Create one dual-era MCP server over either supported transport."""
     config = config or McpConfig.from_environment()
@@ -49303,6 +49310,10 @@ boundary.
         if registered_tool.name == "campaign_query":
             registered_tool.meta["sagasmith_context_sync"] = True
 
+    # Direct-Python callers do not enter FastMCP's transport lifecycle. Give
+    # them an explicit, idempotent way to release SQLite handles and other
+    # database pool resources before removing a temporary home directory.
+    setattr(mcp, "_sagasmith_close", storage.database.dispose)
     return mcp
 
 
@@ -49324,15 +49335,18 @@ def main() -> None:
     ):
         raise ValueError("D&D non-loopback Streamable HTTP requires SAGASMITH_AUTH_CONTEXT_SECRET")
     server = create_server(config)
-    if transport == "streamable-http":
-        server.run(
-            transport="streamable-http",
-            host=config.http_host,
-            port=config.http_port,
-            streamable_http_path=config.http_path,
-        )
-    else:
-        server.run(transport="stdio")
+    try:
+        if transport == "streamable-http":
+            server.run(
+                transport="streamable-http",
+                host=config.http_host,
+                port=config.http_port,
+                streamable_http_path=config.http_path,
+            )
+        else:
+            server.run(transport="stdio")
+    finally:
+        close_server(server)
 
 
 if __name__ == "__main__":

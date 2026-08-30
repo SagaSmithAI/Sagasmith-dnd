@@ -6,7 +6,7 @@ import pytest
 from sagasmith_dnd.module_profile import DndModuleProfile
 
 from sagasmith_dnd_mcp.config import McpConfig
-from sagasmith_dnd_mcp.server import create_server
+from sagasmith_dnd_mcp.server import close_server, create_server
 from sagasmith_dnd_mcp.skills import SkillCatalog
 from sagasmith_dnd_mcp.storage import SagaSmithStorage
 from sagasmith_dnd_mcp.tool_profiles import campaign_phase, profile_catalog
@@ -30,6 +30,25 @@ def test_config_owns_local_storage(tmp_path: Path) -> None:
     assert config.rulebooks_dir.is_dir()
     assert config.normalized_rulebooks_dir.is_dir()
     assert config.normalized_modules_dir.is_dir()
+
+
+def test_direct_server_close_releases_its_local_database(tmp_path: Path) -> None:
+    config = McpConfig(
+        home=tmp_path / "home",
+        database_url=None,
+        chroma_url=None,
+        chroma_path_override=None,
+        dnd_skills_dir=tmp_path / "dnd",
+        modulegen_skills_dir=tmp_path / "modulegen",
+        auto_seed_rules=False,
+    )
+    server = create_server(config)
+
+    close_server(server)
+    close_server(server)
+    config.database_path.unlink()
+
+    assert not config.database_path.exists()
 
 
 def test_config_can_share_only_content_addressed_document_cache(tmp_path: Path) -> None:

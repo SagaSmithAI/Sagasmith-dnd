@@ -21,7 +21,7 @@ from sagasmith_dnd.core_content import PACK_VERSION as CORE_CONTENT_PACK_VERSION
 from sagasmith_dnd.official_expansions import official_expansion_catalog
 
 from sagasmith_dnd_mcp.config import McpConfig
-from sagasmith_dnd_mcp.server import create_server
+from sagasmith_dnd_mcp.server import close_server, create_server
 
 _ADVANCEMENT_SOURCE = "bundled:srd2014/03_Characterization/Beyond_1st_Level.md"
 _ARTIFICER = (
@@ -158,7 +158,7 @@ async def _all_catalog_entries(
         offset += len(page)
 
 
-async def _run(content_library: Path, home: Path) -> dict[str, Any]:
+def _create_regression_server(content_library: Path, home: Path) -> Any:
     base = McpConfig.from_environment()
     config = McpConfig(
         home=home,
@@ -172,7 +172,10 @@ async def _run(content_library: Path, home: Path) -> dict[str, Any]:
         module_import_roots=(),
         official_content_library=content_library.expanduser().resolve(),
     )
-    server = create_server(config)
+    return create_server(config)
+
+
+async def _run(server: Any) -> dict[str, Any]:
     campaign = await _call(
         server,
         "campaign_create",
@@ -482,18 +485,24 @@ async def _run(content_library: Path, home: Path) -> dict[str, Any]:
     }
 
 
+def _execute(content_library: Path, home: Path) -> dict[str, Any]:
+    server = _create_regression_server(content_library, home)
+    try:
+        return asyncio.run(_run(server))
+    finally:
+        close_server(server)
+
+
 def main() -> int:
     args = _arguments()
     if args.home is not None:
-        report = asyncio.run(
-            _run(
-                args.content_library,
-                args.home.expanduser().resolve(),
-            )
+        report = _execute(
+            args.content_library,
+            args.home.expanduser().resolve(),
         )
     else:
         with tempfile.TemporaryDirectory(prefix="sagasmith-official-expansions-") as value:
-            report = asyncio.run(_run(args.content_library, Path(value)))
+            report = _execute(args.content_library, Path(value))
     output = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
     if args.output:
         args.output.expanduser().resolve().write_text(output, encoding="utf-8")
