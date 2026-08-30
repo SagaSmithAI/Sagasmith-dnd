@@ -4081,6 +4081,8 @@ def _weapon_attacks(
             damage_expression = (
                 f"{damage_formula} {'+' if damage_bonus > 0 else '-'} {abs(damage_bonus)}"
             )
+        recorded_reach = mechanics.get("reach_ft")
+        reach_ft = int(5 if recorded_reach is None else recorded_reach)
         attacks.append(
             {
                 "item_id": item["id"],
@@ -4088,9 +4090,9 @@ def _weapon_attacks(
                 "equipped_slot": item["equipped_slot"],
                 "attack_type": mechanics["attack_type"],
                 "reach_ft": (
-                    int(mechanics.get("reach_ft", 5) or 5) + melee_reach_bonus
+                    reach_ft + melee_reach_bonus
                     if mechanics["attack_type"] == "melee"
-                    else int(mechanics.get("reach_ft", 5) or 5)
+                    else reach_ft
                 ),
                 "attack_ability": ability,
                 "proficient": proficient,
@@ -4529,7 +4531,8 @@ def derive_character_sheet(
     if derived["armor_class_breakdown"].get("mode") == "unarmored":
         core_boundary_ids.append("dnd5e.core.armor_class.unarmored")
     if any(
-        int(item.get("reach_ft", 5) or 5) > 5 for item in derived["inventory"]["weapon_attacks"]
+        int(5 if item.get("reach_ft") is None else item["reach_ft"]) > 5
+        for item in derived["inventory"]["weapon_attacks"]
     ):
         core_boundary_ids.append("dnd5e.core.weapon.reach")
     if derived["inventory"]["weapon_attacks"]:
