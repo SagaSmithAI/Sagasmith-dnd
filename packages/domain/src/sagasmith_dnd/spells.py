@@ -6,6 +6,7 @@ from copy import deepcopy
 from typing import Any
 from uuid import uuid4
 
+from sagasmith_dnd.character_schema import armor_proficiency_state
 from sagasmith_dnd.combat_engine import CombatEngineError, NeedsRulingError
 from sagasmith_dnd.conditions import (
     apply_effect_conditions,
@@ -435,6 +436,8 @@ def consume_magic_item_spell_cast(
             "pending": list(before.pending),
         }
     value = before.sheet
+    if armor_proficiency_state(value)["blocks_spellcasting"]:
+        raise CombatEngineError("spell casting is blocked by nonproficient equipped armor")
     item, specification, card = _magic_item_spell_binding(
         value,
         source_item_id=source_item_id,
@@ -1067,6 +1070,8 @@ def consume_spell_cast(
             "pending": list(before.pending),
         }
     value = before.sheet
+    if armor_proficiency_state(value)["blocks_spellcasting"]:
+        raise CombatEngineError("spell casting is blocked by nonproficient equipped armor")
     spell = next(
         (item for item in value.get("content", {}).get("spells", []) if item.get("id") == spell_id),
         None,

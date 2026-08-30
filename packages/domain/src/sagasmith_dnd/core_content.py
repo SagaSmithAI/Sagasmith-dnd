@@ -1687,6 +1687,12 @@ def _equipment_items(folder: Path) -> list[dict[str, Any]]:
                 continue
             item_name, amount = _equipment_item_name(raw_name)
             properties = {_name_key(key).replace("-", "_"): value for key, value in fields.items()}
+            if table_name == "Armor" and group.casefold() in {
+                "light armor",
+                "medium armor",
+                "heavy armor",
+            }:
+                properties["armor_category"] = group.casefold().removesuffix(" armor")
             if table_name == "Cost of Trade Goods":
                 properties["cost"] = fields.get("Cost", "")
             effective_table = (
@@ -1821,7 +1827,7 @@ def _inventory_template(
                 if not ranged and "thrown" in property_text.casefold() and range_match
                 else 0
             ),
-            "proficient": True,
+            "proficient": False,
             "mastery": "",
         }
     elif table == "armor":
@@ -1833,14 +1839,21 @@ def _inventory_template(
         else:
             base = re.match(r"(\d+)", ac_text)
             maximum = re.search(r"max\s+(\d+)", ac_text, re.I)
+            strength_requirement = re.search(
+                r"(\d+)", str(properties.get("strength") or "")
+            )
             dexterity_mode = (
                 "max" if maximum else "full" if "dex modifier" in ac_text.casefold() else "none"
             )
             mechanics: dict[str, Any] = {
                 "base_ac": int(base.group(1)) if base else 10,
+                "category": str(properties.get("armor_category") or ""),
                 "dexterity_mode": dexterity_mode,
                 "stealth_disadvantage": (
                     str(properties.get("stealth") or "").casefold() == "disadvantage"
+                ),
+                "strength_requirement": (
+                    int(strength_requirement.group(1)) if strength_requirement else 0
                 ),
             }
             if maximum:

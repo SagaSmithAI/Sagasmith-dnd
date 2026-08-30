@@ -340,6 +340,51 @@ def _actor(identifier: str, *, hp: int = 12, ac: int = 10) -> dict:
     }
 
 
+def test_nonproficient_armor_and_heavy_encumbrance_apply_check_disadvantage() -> None:
+    actor = _actor("encumbered")
+    actor["sheet"]["abilities"]["strength"]["score"] = 10
+    actor["sheet"]["inventory"]["encumbrance"]["mode"] = "variant"
+    actor["sheet"], armor_id = add_inventory_item(
+        actor["sheet"],
+        {
+            "id": "chain-mail",
+            "name": "Chain mail",
+            "kind": "armor",
+            "weight_oz": 1800,
+            "mechanics": {
+                "base_ac": 16,
+                "category": "heavy",
+                "dexterity_mode": "none",
+                "strength_requirement": 13,
+            },
+        },
+    )
+    actor["sheet"] = equip_inventory_item(actor["sheet"], armor_id, "armor")
+    actor["derived"] = derive_character_sheet(actor["sheet"])
+
+    strength_check = resolve_actor_check(
+        actor,
+        kind="ability",
+        ability="strength",
+        dc=10,
+        rng=_SequenceRng(18, 2),
+    )
+    constitution_save = resolve_actor_check(
+        actor,
+        kind="save",
+        ability="constitution",
+        dc=10,
+        rng=_SequenceRng(17, 3),
+    )
+
+    assert strength_check["equipment_disadvantage"] is True
+    assert strength_check["rolls"] == [18, 2]
+    assert strength_check["natural"] == 2
+    assert constitution_save["equipment_disadvantage"] is True
+    assert constitution_save["rolls"] == [17, 3]
+    assert constitution_save["natural"] == 3
+
+
 def _grid_encounter(
     participants: list[dict],
     *,

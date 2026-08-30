@@ -1731,7 +1731,7 @@ def _inventory_template(
                 if not ranged and "thrown" in property_text.casefold() and range_match
                 else 0
             ),
-            "proficient": True,
+            "proficient": False,
             "mastery": str(properties.get("mastery") or "").casefold(),
         }
     elif table == "armor":

@@ -1810,6 +1810,15 @@ def preflight_attack(
     effect_roll_bonus = active_effect_roll_bonus(actor_sheet(attacker), "attack")
     attack_bonus = int(weapon.get("attack_bonus", 0)) + effect_roll_bonus
     context = dict(action.get("context") or {})
+    attack_ability = str(weapon.get("attack_ability") or "strength").casefold()
+    equipment_attack_disadvantage = attack_ability in set(
+        actor_derived(attacker)
+        .get("equipment_penalties", {})
+        .get("attack_disadvantage_abilities", [])
+    )
+    if equipment_attack_disadvantage:
+        context["disadvantage"] = True
+        context.setdefault("disadvantage_sources", []).append("equipment_penalty")
     positioning_mode = (
         str(encounter.get("positioning_mode") or "grid") if encounter is not None else "grid"
     )
@@ -6073,6 +6082,14 @@ def resolve_actor_check(
         elif modifier["op"] == "disadvantage.add":
             disadvantage = True
     normalized_ability = str(ability).strip().casefold().replace(" ", "_")
+    check_ability = SKILL_ABILITIES.get(normalized_ability, _long_ability_name(ability))
+    equipment_penalties = dict(derived.get("equipment_penalties") or {})
+    penalty_field = (
+        "save_disadvantage_abilities" if kind == "save" else "check_disadvantage_abilities"
+    )
+    equipment_disadvantage = check_ability in set(equipment_penalties.get(penalty_field) or [])
+    if equipment_disadvantage:
+        disadvantage = True
     level = int(sheet.get("progression", {}).get("level", 1) or 1)
     skill = dict(sheet.get("skills", {}).get(normalized_ability) or {})
     skill_proficiency = str(skill.get("proficiency") or "none")
@@ -6116,11 +6133,24 @@ def resolve_actor_check(
         boundary_ids.append("dnd5e.core.save.restrained_dexterity")
     if armor_stealth_disadvantage:
         boundary_ids.append("dnd5e.core.check.armor_stealth_disadvantage")
+    if equipment_disadvantage:
+        boundary_ids.extend(
+            boundary_id
+            for boundary_id in (
+                "dnd5e.core.armor.proficiency_and_strength",
+                "dnd5e.core.encumbrance",
+            )
+            if boundary_id in {
+                str(item.get("mechanic_id") or "")
+                for item in derived.get("rule_receipts", [])
+            }
+        )
     if jack_of_all_trades_bonus:
         boundary_ids.append(_JACK_OF_ALL_TRADES_BOUNDARY_ID)
 
     def with_rule_receipts(result: dict[str, Any]) -> dict[str, Any]:
         result["effect_roll_bonus"] = effect_roll_bonus
+        result["equipment_disadvantage"] = equipment_disadvantage
         result["rule_receipts"] = [
             *core_receipts(rules, boundary_ids, "check.resolve"),
             *extension.receipts,

@@ -61,6 +61,131 @@ def test_runtime_notes_reject_unbound_portrait_uri() -> None:
         validate_character_notes({"profile": {"portrait_uri": "https://example.com/goblin.png"}})
 
 
+def test_weapon_attacks_derive_actor_proficiency_and_finesse_ability() -> None:
+    sheet = default_character_sheet()
+    sheet["abilities"]["strength"]["score"] = 10
+    sheet["abilities"]["dexterity"]["score"] = 16
+    sheet, greatsword_id = add_inventory_item(
+        sheet,
+        {
+            "id": "greatsword",
+            "name": "Greatsword",
+            "kind": "weapon",
+            "mechanics": {
+                "category": "martial",
+                "attack_type": "melee",
+                "attack_ability": "strength",
+                "damage_formula": "2d6",
+                "damage_type": "slashing",
+                "proficient": False,
+            },
+        },
+    )
+    sheet = equip_inventory_item(sheet, greatsword_id, "main_hand")
+
+    attack = derive_character_sheet(sheet)["inventory"]["weapon_attacks"][0]
+    assert attack["proficient"] is False
+    assert attack["attack_bonus"] == 0
+
+    sheet["traits"]["proficiencies"]["weapons"] = ["martial weapons"]
+    proficient_attack = derive_character_sheet(sheet)["inventory"]["weapon_attacks"][0]
+    assert proficient_attack["proficient"] is True
+    assert proficient_attack["attack_bonus"] == 2
+
+    sheet, _ = remove_inventory_item(sheet, greatsword_id)
+    sheet["traits"]["proficiencies"]["weapons"] = ["simple weapons"]
+    sheet, dagger_id = add_inventory_item(
+        sheet,
+        {
+            "id": "dagger",
+            "name": "Dagger",
+            "kind": "weapon",
+            "mechanics": {
+                "category": "simple",
+                "attack_type": "melee",
+                "attack_ability": "strength",
+                "damage_formula": "1d4",
+                "damage_type": "piercing",
+                "properties": ["Finesse", "light", "thrown"],
+                "proficient": False,
+            },
+        },
+    )
+    sheet = equip_inventory_item(sheet, dagger_id, "main_hand")
+
+    finesse_attack = derive_character_sheet(sheet)["inventory"]["weapon_attacks"][0]
+    assert finesse_attack["attack_ability"] == "dexterity"
+    assert finesse_attack["attack_bonus"] == 5
+    assert finesse_attack["damage_expression"] == "1d4 + 3"
+
+
+def test_2014_armor_proficiency_strength_and_encumbrance_affect_derived_rules() -> None:
+    sheet = default_character_sheet()
+    sheet["abilities"]["strength"]["score"] = 8
+    sheet, armor_id = add_inventory_item(
+        sheet,
+        {
+            "id": "chain-mail",
+            "name": "Chain mail",
+            "kind": "armor",
+            "weight_oz": 880,
+            "mechanics": {
+                "base_ac": 16,
+                "category": "heavy",
+                "dexterity_mode": "none",
+                "strength_requirement": 13,
+                "stealth_disadvantage": True,
+            },
+        },
+    )
+    sheet = equip_inventory_item(sheet, armor_id, "armor")
+
+    derived = derive_character_sheet(sheet)
+    assert derived["armor_class"] == 16
+    assert derived["speed"]["walk"] == 20
+    assert derived["armor_proficiency"]["proficient"] is False
+    assert derived["equipment_penalties"] == {
+        "attack_disadvantage_abilities": ["dexterity", "strength"],
+        "check_disadvantage_abilities": ["dexterity", "strength"],
+        "save_disadvantage_abilities": ["dexterity", "strength"],
+        "spellcasting_blocked": True,
+    }
+
+    sheet["traits"]["proficiencies"]["armor"] = ["heavy armor"]
+    proficient = derive_character_sheet(sheet)
+    assert proficient["armor_proficiency"]["proficient"] is True
+    assert proficient["equipment_penalties"]["spellcasting_blocked"] is False
+    assert proficient["speed"]["walk"] == 20
+
+    sheet["abilities"]["strength"]["score"] = 13
+    assert derive_character_sheet(sheet)["speed"]["walk"] == 30
+
+    unarmored = default_character_sheet()
+    unarmored["inventory"]["encumbrance"]["mode"] = "variant"
+    unarmored, _ = add_inventory_item(
+        unarmored,
+        {"id": "load", "name": "Load", "kind": "equipment", "weight_oz": 900},
+    )
+    encumbered = derive_character_sheet(unarmored)
+    assert encumbered["inventory"]["encumbrance"]["state"] == "encumbered"
+    assert encumbered["speed"]["walk"] == 20
+
+    unarmored["inventory"]["items"][0]["weight_oz"] = 1800
+    heavily_encumbered = derive_character_sheet(unarmored)
+    assert heavily_encumbered["inventory"]["encumbrance"]["state"] == "heavily_encumbered"
+    assert heavily_encumbered["speed"]["walk"] == 10
+    assert heavily_encumbered["equipment_penalties"]["save_disadvantage_abilities"] == [
+        "constitution",
+        "dexterity",
+        "strength",
+    ]
+
+    unarmored["inventory"]["items"][0]["weight_oz"] = 2500
+    over_capacity = derive_character_sheet(unarmored)
+    assert over_capacity["inventory"]["encumbrance"]["state"] == "over_capacity"
+    assert over_capacity["speed"]["walk"] == 0
+
+
 def test_effective_ability_modifier_uses_the_shared_override_projection() -> None:
     sheet = default_character_sheet()
     sheet["abilities"]["constitution"]["score"] = 10
