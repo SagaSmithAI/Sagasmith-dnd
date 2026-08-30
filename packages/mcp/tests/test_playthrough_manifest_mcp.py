@@ -958,3 +958,15 @@ def test_progress_evidence_is_design_bound_and_branch_attested(tmp_path: Path) -
         assert replaced["manifest"]["front_progress"][0]["status"] == "advanced"
 
     asyncio.run(exercise())
+def test_playthrough_manifest_missing_action_reports_field_guidance(tmp_path: Path) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {"name": "Missing action", "edition": "2014", "idempotency_key": "campaign"},
+        )
+        with pytest.raises(Exception, match="Field action is required.*initialize"):
+            await server.call_tool("playthrough_manifest", {"campaign_id": campaign["id"]})
+
+    asyncio.run(exercise())

@@ -2,6 +2,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from mcp.server.mcpserver.exceptions import ToolError
 
 from sagasmith_dnd_mcp.config import McpConfig
 from sagasmith_dnd_mcp.server import create_server
@@ -190,6 +191,104 @@ def test_memory_facade_supports_stable_upsert_revision_and_supersede(tmp_path: P
     asyncio.run(exercise())
 
 
+def test_memory_facade_retract_forget_preserve_history_and_guard_revision(tmp_path: Path) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        campaign = await _call(
+            server, "campaign_create", {"name": "Retractions", "idempotency_key": "campaign"}
+        )
+        created = await _call(
+            server,
+            "memory_change",
+            {
+                "campaign_id": campaign["id"],
+                "action": "add",
+                "content": "The bell rings at dusk.",
+                "kind": "fact",
+                "subject": "bell",
+                "expected_revision": campaign["revision"],
+                "idempotency_key": "fact-add",
+            },
+        )
+        with pytest.raises(ToolError, match="idempotency"):
+            await _call(
+                server,
+                "memory_change",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "add",
+                    "content": "The bell rings at dusk.",
+                    "kind": "fact",
+                    "subject": "bell",
+                    "expected_revision": 999,
+                    "idempotency_key": "fact-add",
+                },
+            )
+        with pytest.raises(ToolError, match="campaign revision conflict"):
+            await _call(
+                server,
+                "memory_change",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "retract",
+                    "payload": {
+                        "memory_id": created["id"],
+                        "expected_revision_id": created["revision_id"],
+                    },
+                    "expected_revision": 0,
+                    "idempotency_key": "fact-retract-stale",
+                },
+            )
+        current = await _call(
+            server,
+            "memory_query",
+            {"campaign_id": campaign["id"], "view": "list", "payload": {"include_inactive": True}},
+        )
+        retracted = await _call(
+            server,
+            "memory_change",
+            {
+                "campaign_id": campaign["id"],
+                "action": "retract",
+                "payload": {
+                    "memory_id": created["id"],
+                    "expected_revision_id": current[0]["revision_id"],
+                },
+                "idempotency_key": "fact-retract",
+            },
+        )
+        assert retracted["status"] == "retracted"
+        assert await _call(
+            server, "memory_query", {"campaign_id": campaign["id"], "view": "list"}
+        ) == []
+        forgotten = await _call(
+            server,
+            "memory_change",
+            {
+                "campaign_id": campaign["id"],
+                "action": "forget",
+                "payload": {
+                    "memory_id": created["id"],
+                    "expected_revision_id": retracted["revision_id"],
+                },
+                "idempotency_key": "fact-forget",
+            },
+        )
+        assert forgotten["status"] == "forgotten"
+        history = await _call(
+            server,
+            "memory_query",
+            {
+                "campaign_id": campaign["id"],
+                "view": "list",
+                "payload": {"include_inactive": True},
+            },
+        )
+        assert len(history) == 1 and history[0]["status"] == "forgotten"
+
+    asyncio.run(exercise())
+
+
 def test_actor_knowledge_revise_preserves_omitted_fields_and_can_clear_source(
     tmp_path: Path,
 ) -> None:
@@ -279,6 +378,132 @@ def test_actor_knowledge_revise_preserves_omitted_fields_and_can_clear_source(
         )
         assert cleared["source_event_id"] is None
         assert cleared["disclosure_scope"] == "owner"
+        retracted = await _call(
+            server,
+            "actor_knowledge_change",
+            {
+                "action": "retract",
+                "payload": {
+                    "knowledge_id": original["id"],
+                    "expected_revision_id": cleared["revision_id"],
+                },
+                "idempotency_key": "knowledge-retract",
+            },
+        )
+        assert retracted["epistemic_status"] == "superseded"
+        assert await _call(
+            server,
+            "actor_knowledge_query",
+            {"campaign_id": campaign["id"], "actor_id": actor["id"], "view": "list"},
+        ) == []
+        forgotten = await _call(
+            server,
+            "actor_knowledge_change",
+            {
+                "action": "forget",
+                "payload": {
+                    "knowledge_id": original["id"],
+                    "expected_revision_id": retracted["revision_id"],
+                },
+                "idempotency_key": "knowledge-forget",
+            },
+        )
+        assert forgotten["epistemic_status"] == "forgotten"
+        history = await _call(
+            server,
+            "actor_knowledge_query",
+            {
+                "campaign_id": campaign["id"],
+                "actor_id": actor["id"],
+                "view": "list",
+                "payload": {"include_inactive": True},
+            },
+        )
+        assert len(history) == 1 and history[0]["epistemic_status"] == "forgotten"
+
+        later = await _call(
+            server,
+            "actor_knowledge_change",
+            {
+                "action": "revise",
+                "payload": {
+                    "knowledge_id": original["id"],
+                    "proposition": "The sigil was later described as violet.",
+                    "expected_revision_id": forgotten["revision_id"],
+                },
+                "idempotency_key": "knowledge-later-revision",
+            },
+        )
+        replayed_forget = await _call(
+            server,
+            "actor_knowledge_change",
+            {
+                "action": "forget",
+                "payload": {
+                    "knowledge_id": original["id"],
+                    "expected_revision_id": retracted["revision_id"],
+                },
+                "idempotency_key": "knowledge-forget",
+            },
+        )
+        assert replayed_forget == forgotten
+        assert later["proposition"] == "The sigil was later described as violet."
+
+        await _call(
+            server,
+            "access_grant",
+            {
+                "scope": "campaign",
+                "campaign_id": campaign["id"],
+                "principal_id": "player:witness",
+                "payload": {"role": "player"},
+            },
+        )
+        await _call(
+            server,
+            "access_grant",
+            {
+                "scope": "actor",
+                "campaign_id": campaign["id"],
+                "principal_id": "player:witness",
+                "payload": {"actor_id": actor["id"], "can_view_private": True},
+            },
+        )
+        for view in ("list", "search"):
+            with pytest.raises(ToolError, match="restricted to DM roles"):
+                await _call(
+                    server,
+                    "actor_knowledge_query",
+                    {
+                        "campaign_id": campaign["id"],
+                        "actor_id": actor["id"],
+                        "view": view,
+                        "query": "sigil",
+                        "payload": {"include_inactive": True},
+                        "principal_id": "player:witness",
+                    },
+                )
+        for tool_name, arguments in (
+            (
+                "memory_query",
+                {
+                    "campaign_id": campaign["id"],
+                    "view": "list",
+                    "payload": {"include_inactive": "false"},
+                },
+            ),
+            (
+                "actor_knowledge_query",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": actor["id"],
+                    "view": "list",
+                    "payload": {"include_inactive": "false"},
+                },
+            ),
+        ):
+            with pytest.raises(ToolError, match="include_inactive must be a boolean"):
+                await _call(server, tool_name, arguments)
 
     asyncio.run(exercise())
 

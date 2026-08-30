@@ -30025,6 +30025,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         branch_id: str | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
         expected_revision_id: str | None = None,
+        proposition_provided: bool = True,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Append a new subjective revision, e.g. a rumor or Modify Memory effect."""
@@ -30037,7 +30038,6 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         branch_id = require_current_branch(current.campaign_id, branch_id)
         request_payload = {
             "knowledge_id": knowledge_id,
-            "proposition": proposition,
             "epistemic_status": epistemic_status,
             "confidence": confidence,
             "source_event_id_provided": source_event_id_provided,
@@ -30046,6 +30046,10 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             "branch_id": branch_id,
             "expected_revision_id": expected_revision_id,
         }
+        if proposition_provided:
+            request_payload["proposition"] = proposition
+        else:
+            request_payload["proposition_omitted"] = True
         if source_event_id_provided:
             request_payload["source_event_id"] = source_event_id
         scope = (
@@ -30085,6 +30089,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         actor_id: str,
         branch_id: str | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
+        include_inactive: bool = False,
     ) -> list[dict[str, Any]]:
         resolved_branch_id = readable_branch(campaign_id, branch_id, principal_id)
         access.require_actor(
@@ -30095,10 +30100,13 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             branch_id=resolved_branch_id,
         )
         membership = access.require_campaign(campaign_id, principal_id)
+        if include_inactive and membership.role not in CAMPAIGN_DM_ROLES:
+            raise ExposureError("inactive actor knowledge history is restricted to DM roles")
         values = knowledge.list(
             campaign_id,
             actor_id=actor_id,
             branch_id=resolved_branch_id,
+            include_inactive=include_inactive,
         )
         if membership.role not in CAMPAIGN_DM_ROLES:
             values = [
@@ -30116,6 +30124,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         limit: int = 8,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
         offset: int = 0,
+        include_inactive: bool = False,
     ) -> list[dict[str, Any]]:
         """Search one actor's current subjective knowledge without leaking other actors."""
         resolved_branch_id = readable_branch(campaign_id, branch_id, principal_id)
@@ -30127,6 +30136,8 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             branch_id=resolved_branch_id,
         )
         membership = access.require_campaign(campaign_id, principal_id)
+        if include_inactive and membership.role not in CAMPAIGN_DM_ROLES:
+            raise ExposureError("inactive actor knowledge history is restricted to DM roles")
         values = knowledge.search(
             campaign_id,
             actor_id=actor_id,
@@ -30134,6 +30145,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             branch_id=resolved_branch_id,
             limit=limit,
             offset=offset,
+            include_inactive=include_inactive,
             disclosure_scopes=(
                 PLAYER_OWNED_ACTOR_DISCLOSURE_SCOPES
                 if membership.role not in CAMPAIGN_DM_ROLES
@@ -31910,7 +31922,10 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     "there are no npc_actor_ids or npc_ids fields"
                 )
             if not str(data.get("idempotency_key") or "").strip():
-                raise ValueError("npc_conversation open requires payload.idempotency_key")
+                raise ValueError(
+                    "Field payload.idempotency_key is required for npc_conversation(open); "
+                    "retry with a stable non-empty business idempotency key."
+                )
             return npc_conversation_open_impl(
                 campaign_id=campaign_id,
                 participant_actor_ids=list(data["participant_actor_ids"]),
@@ -42360,6 +42375,12 @@ boundary.
             raise ValueError("payload must be an object")
         return dict(payload)
 
+    def facade_bool(payload: dict[str, Any], name: str, *, default: bool = False) -> bool:
+        value = payload.get(name, default)
+        if not isinstance(value, bool):
+            raise ValueError(f"payload.{name} must be a boolean")
+        return value
+
     def required(payload: dict[str, Any], name: str) -> Any:
         value = payload.get(name)
         if value is None or value == "":
@@ -45619,7 +45640,10 @@ boundary.
                     details.append("missing fields: " + ", ".join(missing_narrative_fields))
                 if unsupported_narrative_fields:
                     details.append("unsupported fields: " + ", ".join(unsupported_narrative_fields))
-                raise ValueError("narrative NPC payload has " + "; ".join(details))
+                raise ValueError(
+                    "narrative NPC payload has " + "; ".join(details) + "; "
+                    "provide every listed field and retry with the same idempotency key"
+                )
             if not scoped_campaign_id:
                 raise ValueError("narrative NPC campaign_id must be a non-empty string")
             if not idempotency_key:
@@ -47716,14 +47740,25 @@ boundary.
             "configure_ending",
             "sync",
             "verify_ending",
-        ],
+        ] | None = None,
         payload: dict[str, Any] | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
         expected_revision: int | None = None,
         branch_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Read or atomically maintain the snapshot-managed full-playthrough manifest."""
+        """Read or atomically maintain the snapshot-managed full-playthrough manifest.
+
+        Actions are ``get``, ``initialize``, ``replace``, ``extend_modules``,
+        ``configure_ending``, ``sync``, and ``verify_ending``.  ``initialize``
+        requires ``payload.manifest``; mutation actions require their documented
+        payload plus optimistic-concurrency fields.
+        """
+        if action is None:
+            raise ValueError(
+                "Field action is required for playthrough_manifest; choose one of "
+                "get, initialize, replace, extend_modules, configure_ending, sync, verify_ending."
+            )
         access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
         campaign = campaigns.get(campaign_id)
         current_manifest = dict(campaign.state.get("playthrough_manifest") or {})
@@ -48026,11 +48061,12 @@ boundary.
                 ),
             )
         data = facade_payload(payload)
+        include_inactive = facade_bool(data, "include_inactive")
         effective_query = query or str(data.get("query") or "")
         page_limit = _page_limit(data.get("limit", limit))
         page_scope = (
             f"memory_query:{campaign_id}:{view}:{principal_id}:"
-            f"{str(data.get('branch_id') or '')}:{bool(data.get('include_inactive'))}:"
+            f"{str(data.get('branch_id') or '')}:{include_inactive}:"
             f"{json_sha256(effective_query)}"
         )
         if view == "search":
@@ -48045,7 +48081,7 @@ boundary.
                 page_limit + 1,
                 data.get("branch_id"),
                 principal_id,
-                data.get("include_inactive", False),
+                include_inactive,
                 page_offset,
             )
             result, page = _authority_page(
@@ -48060,7 +48096,7 @@ boundary.
                 data.get("kind"),
                 data.get("branch_id"),
                 principal_id,
-                data.get("include_inactive", False),
+                include_inactive,
             )
             result, page = _bounded_page(
                 result,
@@ -48075,7 +48111,9 @@ boundary.
     @public_tool()
     def memory_change(
         campaign_id: str,
-        action: Literal["add", "upsert", "revise", "supersede", "commit"] = "add",
+        action: Literal[
+            "add", "upsert", "revise", "supersede", "retract", "forget", "commit"
+        ] = "add",
         payload: dict[str, Any] | None = None,
         content: str | None = None,
         kind: str | None = None,
@@ -48086,7 +48124,11 @@ boundary.
         expected_revision: int | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Add, upsert, revise, or supersede an objective branch-scoped fact."""
+        """Add, upsert, supersede, retract, or forget an objective fact.
+
+        Writes preserve immutable history. ``expected_revision`` is the campaign
+        revision guard; revision UUIDs belong in ``payload.expected_revision_id``.
+        """
         access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
         if not idempotency_key:
             raise ValueError("idempotency_key is required for memory writes")
@@ -48131,7 +48173,15 @@ boundary.
                 kind=data.get("kind") or "fact",
                 subject_ref=data.get("subject_ref") or "",
             )
-        request_payload = {"action": action, **data, "branch_id": resolved_branch_id}
+        request_payload = {
+            "action": action,
+            **data,
+            "branch_id": resolved_branch_id,
+            # The campaign CAS token is part of the idempotency fingerprint.
+            # Reusing a business key with a different base revision must be a
+            # conflict, never a replay of the earlier mutation.
+            "expected_revision": expected_revision,
+        }
         scope = f"memory-change:{action}:{campaign_id}:{resolved_branch_id}:{principal_id}"
         replay = replay_idempotent(scope, idempotency_key, request_payload)
         if replay is not None:
@@ -48166,6 +48216,7 @@ boundary.
                 source_event_ids=list(data.get("source_event_ids") or []),
                 importance=int(data.get("importance", 3)),
                 disclosure_scope=data.get("disclosure_scope"),
+                expected_campaign_revision=expected_revision,
                 idempotency_key=idempotency_key,
                 idempotency_write=atomic_write,
             )
@@ -48208,6 +48259,7 @@ boundary.
                     else 3
                 ),
                 disclosure_scope=data.get("disclosure_scope"),
+                expected_campaign_revision=expected_revision,
                 idempotency_key=idempotency_key,
                 idempotency_write=atomic_write,
             )
@@ -48221,13 +48273,18 @@ boundary.
                 memory_id,
                 content=(
                     current.content
-                    if action == "supersede" and not data.get("content")
+                    if action in {"supersede", "retract", "forget"} and not data.get("content")
                     else str(required(data, "content"))
                 ),
                 metadata=(dict(data["metadata"]) if data.get("metadata") is not None else None),
                 branch_id=resolved_branch_id,
                 expected_revision_id=expected_revision_id,
-                status="superseded" if action == "supersede" else data.get("status"),
+                status=(
+                    "superseded" if action == "supersede"
+                    else "retracted" if action == "retract"
+                    else "forgotten" if action == "forget"
+                    else data.get("status")
+                ),
                 valid_from=optional_datetime(data.get("valid_from"), "valid_from"),
                 valid_to=optional_datetime(data.get("valid_to"), "valid_to"),
                 source_event_ids=(
@@ -48239,6 +48296,7 @@ boundary.
                     int(data["importance"]) if data.get("importance") is not None else None
                 ),
                 disclosure_scope=data.get("disclosure_scope"),
+                expected_campaign_revision=expected_revision,
                 idempotency_key=idempotency_key,
                 idempotency_write=atomic_write,
             )
@@ -48257,11 +48315,13 @@ boundary.
     ) -> dict[str, Any]:
         """Read only one actor's branch-scoped, subjective knowledge."""
         data = facade_payload(payload)
+        include_inactive = facade_bool(data, "include_inactive")
         effective_query = query or str(data.get("query") or "")
         page_limit = _page_limit(data.get("limit", limit))
         page_scope = (
             f"actor_knowledge_query:{campaign_id}:{actor_id}:{view}:{principal_id}:"
-            f"{str(data.get('branch_id') or '')}:{json_sha256(effective_query)}"
+            f"{str(data.get('branch_id') or '')}:{include_inactive}:"
+            f"{json_sha256(effective_query)}"
         )
         if view == "search":
             fingerprint, page_offset = _cursor_offset(
@@ -48277,6 +48337,7 @@ boundary.
                 page_limit + 1,
                 principal_id,
                 page_offset,
+                include_inactive,
             )
             result, page = _authority_page(
                 result,
@@ -48286,7 +48347,8 @@ boundary.
             )
         else:
             result = actor_knowledge_list(
-                campaign_id, actor_id, data.get("branch_id"), principal_id
+                campaign_id, actor_id, data.get("branch_id"), principal_id,
+                include_inactive,
             )
             result, page = _bounded_page(
                 result,
@@ -48300,7 +48362,7 @@ boundary.
 
     @public_tool()
     def actor_knowledge_change(
-        action: Literal["add", "revise"],
+        action: Literal["add", "revise", "retract", "forget"],
         payload: dict[str, Any],
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
         idempotency_key: str | None = None,
@@ -48324,6 +48386,14 @@ boundary.
                 idempotency_key,
             )
         else:
+            proposition_provided = bool(data.get("proposition"))
+            if action in {"retract", "forget"}:
+                current = knowledge.get(required(data, "knowledge_id"))
+                data = {
+                    **data,
+                    "proposition": data.get("proposition") or current.proposition,
+                    "epistemic_status": "superseded" if action == "retract" else "forgotten",
+                }
             result = actor_knowledge_revise(
                 knowledge_id=required(data, "knowledge_id"),
                 proposition=required(data, "proposition"),
@@ -48336,6 +48406,7 @@ boundary.
                 branch_id=data.get("branch_id"),
                 principal_id=principal_id,
                 expected_revision_id=required(data, "expected_revision_id"),
+                proposition_provided=proposition_provided,
                 idempotency_key=idempotency_key,
             )
         return facade_result(action, result)
