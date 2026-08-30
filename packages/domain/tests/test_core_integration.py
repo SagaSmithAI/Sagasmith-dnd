@@ -147,6 +147,33 @@ def test_dnd_temporary_map_rejects_non_five_foot_cells() -> None:
         raise AssertionError("the combat engine only resolves five-foot grid cells")
 
 
+def test_dnd_temporary_map_rejects_explicit_invalid_dimensions() -> None:
+    invalid_requests = (
+        ({"cell_ft": 0}, "cell_ft"),
+        ({"cell_ft": True}, "cell_ft"),
+        ({"cell_ft": None}, "cell_ft"),
+        ({"cell_ft": 5.9}, "cell_ft"),
+        ({"cell_ft": "5"}, "cell_ft"),
+        ({"width_cells": 0}, "width_cells"),
+        ({"width_cells": -1}, "width_cells"),
+        ({"width_cells": 12.5}, "width_cells"),
+        ({"height_cells": 0}, "height_cells"),
+        ({"height_cells": False}, "height_cells"),
+    )
+
+    for request, field in invalid_requests:
+        try:
+            compile_battle_map(
+                {"scene_id": "scene-1", "spatial": {}},
+                request,
+            )
+        except BattleMapError as exc:
+            assert field in str(exc)
+            assert "integer between" in str(exc)
+        else:
+            raise AssertionError(f"explicit invalid {field} must be rejected")
+
+
 def test_combat_grid_template_is_canonical_and_compiles_to_a_fresh_map() -> None:
     template = {
         "schema_version": 1,

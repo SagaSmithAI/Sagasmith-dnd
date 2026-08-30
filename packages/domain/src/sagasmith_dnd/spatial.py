@@ -347,15 +347,32 @@ def compile_battle_map(
     grid = dict(spatial.get("grid") or {"kind": "square", "cell_ft": 5})
     if str(grid.get("kind") or "square") != "square":
         raise BattleMapError("D&D temporary battle maps require a square grid")
-    cell_ft = int(request.get("cell_ft") or grid.get("cell_ft") or 5)
+    cell_ft = _bounded_int(
+        request["cell_ft"] if "cell_ft" in request else grid.get("cell_ft", 5),
+        "battle-map cell_ft",
+        1,
+        200,
+    )
     if cell_ft != 5:
         raise BattleMapError("D&D combat resolution requires five-foot grid cells")
     width_ft = int(dimensions.get("width", 0) or 0)
     height_ft = int(dimensions.get("height", 0) or 0)
-    width = int(request.get("width_cells") or (max(6, width_ft // cell_ft) if width_ft else 12))
-    height = int(request.get("height_cells") or (max(6, height_ft // cell_ft) if height_ft else 12))
-    if not 1 <= width <= 200 or not 1 <= height <= 200:
-        raise BattleMapError("battle-map bounds must be between 1 and 200 cells")
+    width = _bounded_int(
+        request["width_cells"]
+        if "width_cells" in request
+        else (max(6, width_ft // cell_ft) if width_ft else 12),
+        "battle-map width_cells",
+        1,
+        200,
+    )
+    height = _bounded_int(
+        request["height_cells"]
+        if "height_cells" in request
+        else (max(6, height_ft // cell_ft) if height_ft else 12),
+        "battle-map height_cells",
+        1,
+        200,
+    )
     blocked = _cells(request.get("blocked_cells") or [], width, height, "blocked_cells")
     difficult = _cells(request.get("difficult_cells") or [], width, height, "difficult_cells")
     source = {
