@@ -3197,6 +3197,7 @@ def test_zero_reach_weapon_can_attack_only_a_target_in_the_same_space() -> None:
     target["position"] = {"x": 0, "y": 0}
 
     plan = preflight_attack(attacker, target, action={"weapon_id": "bites"})
+    assert plan["weapon_reach_ft"] == 0
     assert plan["range"]["normal_ft"] == 0
     assert plan["range"]["distance_ft"] == 0
 

@@ -2181,7 +2181,8 @@ def _variant_attack_description(item: dict[str, Any], source_ref: str) -> str:
         long = int(mechanics.get("long_range_ft", 0) or 0)
         range_text = f"range {normal}/{long} ft." if long > normal else f"range {normal} ft."
     else:
-        range_text = f"reach {int(mechanics.get('reach_ft', 5) or 5)} ft."
+        recorded_reach = mechanics.get("reach_ft")
+        range_text = f"reach {int(5 if recorded_reach is None else recorded_reach)} ft."
     formula = str(mechanics.get("damage_formula") or "structured damage")
     damage_bonus = mechanics.get("damage_bonus_override")
     if damage_bonus:

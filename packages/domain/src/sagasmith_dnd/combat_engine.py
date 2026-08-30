@@ -2024,7 +2024,8 @@ def preflight_attack(
             primary_position = _position(target.get("position"))
             secondary_position = _position((secondary or {}).get("position"))
             attacker_position = _position(attacker.get("position"))
-            reach = int(weapon.get("reach_ft", 5) or 5)
+            recorded_reach = weapon.get("reach_ft")
+            reach = int(5 if recorded_reach is None else recorded_reach)
             agent_cleave_eligible = bool(
                 spatial_facts is not None
                 and spatial_facts.get("cleave_secondary_eligible") is True
@@ -2421,7 +2422,9 @@ def preflight_attack(
         "rulings": list(action.get("rulings") or []),
         "weapon_id": weapon.get("item_id"),
         "weapon_recharge": deepcopy(weapon.get("recharge") or {}),
-        "weapon_reach_ft": int(weapon.get("reach_ft", 5) or 5),
+        "weapon_reach_ft": int(
+            5 if weapon.get("reach_ft") is None else weapon["reach_ft"]
+        ),
         "ammunition_item_id": str(ammunition_item_id or ""),
         "ammunition_slaying": ammunition_slaying,
         "attack_mode": attack_mode,

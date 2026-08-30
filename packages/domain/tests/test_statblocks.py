@@ -16,6 +16,7 @@ from sagasmith_dnd.statblocks import (
     _ocr_column_split,
     _ocr_probable_peer_heading,
     _repair_layout_ocr_text,
+    _variant_attack_description,
     apply_dependent_actor_template_variant,
     apply_reviewed_statblock_fill,
     apply_statblock_variant,
@@ -479,6 +480,23 @@ COMMONER = """### Commoner
 ***Club***. *Melee Weapon Attack:* +2 to hit, reach 5 ft., one target.
 *Hit:* 2 (1d4) bludgeoning damage.
 """
+
+
+def test_zero_reach_statblock_attack_survives_derivation_and_rendering() -> None:
+    source = COMMONER.replace("### Commoner", "### Swarm").replace(
+        "reach 5 ft.", "reach 0 ft."
+    )
+
+    parsed = parse_2014_statblock(source, source_key="bundled:srd2014/swarm")
+    item = next(entry for entry in parsed.sheet["inventory"]["items"] if entry["id"] == "club")
+    derived = derive_character_sheet(parsed.sheet)
+    attack = next(
+        entry for entry in derived["inventory"]["weapon_attacks"] if entry["item_id"] == "club"
+    )
+
+    assert item["mechanics"]["reach_ft"] == 0
+    assert attack["reach_ft"] == 0
+    assert "reach 0 ft." in _variant_attack_description(item, "bundled:srd2014/swarm")
 
 
 def test_layout_discovery_finds_each_column_without_prose_guesses() -> None:
