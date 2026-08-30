@@ -49,6 +49,22 @@ pip install "sagasmith-dnd-mcp[gateway]"
 A missing optional runtime produces an actionable install error instead of
 breaking text-only startup or silently degrading the operation.
 
+### ChromaDB trust boundary
+
+Vector retrieval is optional. Without `CHROMA_DB_URL`, the MCP uses its own
+local `CHROMA_DB_PATH`; it does not publish Chroma's HTTP API. Setting
+`CHROMA_DB_URL` instead delegates storage and authorization to a separately
+operated Chroma service. That service does not inherit the D&D gateway's
+authentication, principals, campaign roles, or tenant boundaries.
+
+The current optional lock selects ChromaDB 0.6.3, for which upstream advisory
+databases report unfixed cross-tenant authorization and remote-model code
+injection issues. Do not expose that server to untrusted clients, use it as a
+multi-tenant authorization boundary, or enable untrusted model configuration.
+Keep vector retrieval disabled when those guarantees cannot be made, and track
+[the upstream-risk issue](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/51)
+for a patched-version upgrade.
+
 ## Transport and protocol matrix
 
 | Transport/client | Protocol | Discovery | Catalog | Identity |
