@@ -1,8 +1,8 @@
 {
   "schema": "sagasmith.dnd-official-expansions-lock.v1",
-  "generated_on": "2026-08-29",
+  "generated_on": "2026-08-30",
   "source_repository": "https://github.com/SagaSmithAI/SagaSmith-dnd-content-library",
-  "source_commit": "51bb33c9ba16f1b097c090ce24c8a45334f2a3ff",
+  "source_commit": "c12bd06f79a9a41b07791e6450ece852ff15a425",
   "builtin_rule_definitions": [
     {
       "id": "dnd5e.content.srd2014",
@@ -142,9 +142,9 @@
   "packages": [
     {
       "id": "dnd5e.addon.rulebook.d-d-5e-eberron-rising-from-the-last-war.31293633134f.addon",
-      "version": "1.0.1",
-      "checksum": "208e603266337eca76b52e036bd8ecca95c48ffa02c910dd006f445c5b868e7e",
-      "archive_sha256": "7311b8460842ccecbbed9e51820ef41ee017be23803c58f02f6b4452ff26a5cb",
+      "version": "1.0.2",
+      "checksum": "41088d90a6a8cc8cf325cc61143b95f7c46e50bdd6a590fa9689701affd9fa98",
+      "archive_sha256": "19ae3b071dfd25f0133c6159190e62fe4ae480299611e8ee8893106053c5038b",
       "publication_id": "erlw2014",
       "title": "D&D 5E - Eberron - Rising from the Last War",
       "classification": "official_supplement",
@@ -168,9 +168,9 @@
     },
     {
       "id": "dnd5e.addon.rulebook.d-d-5e-guildmasters-guide-to-ravnica.59317c5cf3da.addon",
-      "version": "1.0.1",
-      "checksum": "852a5d488e25745daa6f4633fa14af00849fab71a8f1f050ad428946f2f36e83",
-      "archive_sha256": "b6cbed528c5f54b5a6e11cba44c5b423eb97636e055228754aa93248e346c1bf",
+      "version": "1.0.2",
+      "checksum": "ec8c5c3080db2071148fb430e0aeaca4a207e15fb9a02de5f91e00b6d5d719b3",
+      "archive_sha256": "f5f45016482354c213f7a3c84fb68f7db96b1da890e35da3e428cd9d579dd15a",
       "publication_id": "ggr2014",
       "title": "D&D 5E - Guildmasters' Guide to Ravnica",
       "classification": "official_supplement",
@@ -181,9 +181,9 @@
     },
     {
       "id": "dnd5e.addon.rulebook.d-d-5e-mordenkainen-s-tome-of-foes.2768304ef1af.addon",
-      "version": "1.0.1",
-      "checksum": "f4fb310143b6c908f528c60e6db0eab0cd0120cdc576c302a565a83dc8ac7e13",
-      "archive_sha256": "17853e1d46a7a29bba0239bf41a28c369fe5c3abe0a884cc37414712f0b45841",
+      "version": "1.0.2",
+      "checksum": "2b514e0e1c6de5aed1ceb02ce4a0944b1f920e4a1ab3b4d5bb4ef923559bf480",
+      "archive_sha256": "05d58309398497623edc426b6c32c0627035e18d08412bcbec753edd7f2aa761",
       "publication_id": "mtof2014",
       "title": "D&D 5E - Mordenkainen's Tome of Foes",
       "classification": "official_supplement",
@@ -233,9 +233,9 @@
     },
     {
       "id": "dnd5e.addon.rulebook.d-d-5e-volo-s-guide-to-monsters.962933255634.addon",
-      "version": "1.0.1",
-      "checksum": "58a355611d7a685f60bca9620bf84cdfcd0310f4b98a6059a3c8488aafaa06f4",
-      "archive_sha256": "e2f7d2ba7435ea68f9dc0a36a6466bc7dd3ce19a9f5d1d4c71af7b2047592607",
+      "version": "1.0.2",
+      "checksum": "a43fe91cf1d6a10944ff266edb319ac463cb3b5a8555f8d8b5f73d05413a8189",
+      "archive_sha256": "2e31b033956cb621e2e55f69fb820f91a664c098d508d9b4d8ab73e0ce368e84",
       "publication_id": "vgm2014",
       "title": "D&D 5E - Volo's Guide to Monsters",
       "classification": "official_supplement",
