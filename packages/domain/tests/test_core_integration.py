@@ -151,7 +151,11 @@ def test_dnd_temporary_map_rejects_explicit_invalid_dimensions() -> None:
     invalid_requests = (
         ({"cell_ft": 0}, "cell_ft"),
         ({"cell_ft": True}, "cell_ft"),
+        ({"cell_ft": None}, "cell_ft"),
+        ({"cell_ft": 5.9}, "cell_ft"),
+        ({"cell_ft": "5"}, "cell_ft"),
         ({"width_cells": 0}, "width_cells"),
+        ({"width_cells": -1}, "width_cells"),
         ({"width_cells": 12.5}, "width_cells"),
         ({"height_cells": 0}, "height_cells"),
         ({"height_cells": False}, "height_cells"),

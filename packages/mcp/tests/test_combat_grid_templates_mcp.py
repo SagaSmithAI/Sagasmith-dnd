@@ -701,6 +701,25 @@ def test_finalized_combat_grid_template_starts_isolated_encounter_map(tmp_path: 
             "campaign_query",
             {"view": "get", "payload": {"campaign_id": override_campaign["id"]}},
         )
+        invalid_start = await _call(
+            server,
+            "combat_start",
+            {
+                "campaign_id": override_campaign["id"],
+                "positioning_mode": "grid",
+                "battle_map": {"cell_ft": 0, "width_cells": 4, "height_cells": 4},
+                "battle_map_override_reason": "Invalid zero-foot cells.",
+                "participant_ids": [override_actor["id"]],
+                "participant_config": [
+                    {"actor_id": override_actor["id"], "position": {"x": 1, "y": 1}}
+                ],
+                "expected_revision": override_state["revision"],
+                "idempotency_key": "invalid-zero-cell-combat",
+            },
+        )
+        assert invalid_start["status"] == "pending_ruling"
+        assert invalid_start["missing"] == ["battle_map"]
+        assert "cell_ft must be an integer between" in invalid_start["reason"]
         override_combat = await _call(
             server,
             "combat_start",
