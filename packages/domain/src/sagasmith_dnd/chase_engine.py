@@ -193,7 +193,11 @@ def start_chase(
         "quarry_ids": normalized_quarry_ids,
         "pursuer_ids": pursuer_ids,
         "pursuer_passive_perception_max": max(
-            int(actor_derived(actors[item]).get("passive_perception", 10) or 10)
+            (
+                10
+                if actor_derived(actors[item]).get("passive_perception") is None
+                else int(actor_derived(actors[item])["passive_perception"])
+            )
             for item in pursuer_ids
         ),
         "participants": chase_participants,
@@ -724,7 +728,10 @@ def advance_chase_turn(
     escape_checks = []
     if round_ended and outcome is None:
         visibility = {str(key): bool(item) for key, item in (quarry_visibility or {}).items()}
-        passive_ceiling = int(value.get("pursuer_passive_perception_max", 0) or 0)
+        raw_passive_ceiling = value.get("pursuer_passive_perception_max")
+        passive_ceiling = (
+            None if raw_passive_ceiling is None else int(raw_passive_ceiling)
+        )
         for quarry in active_quarries:
             quarry_id = str(quarry["actor_id"])
             visible = visibility.get(quarry_id, True)
@@ -738,7 +745,7 @@ def advance_chase_turn(
                     }
                 )
                 continue
-            if passive_ceiling <= 0:
+            if passive_ceiling is None:
                 raise CombatEngineError("an unseen quarry requires pursuer_passive_perception_max")
             quarry_actor = dict(quarry_actors or {}).get(quarry_id)
             if quarry_actor is None:
