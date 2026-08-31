@@ -722,6 +722,18 @@ def advance_chase_turn(
         }
 
     turn_round = int(value.get("round", 1) or 1)
+    complication_roll = None
+    next_pending = None
+    if outcome is None:
+        complication_roll = asdict_roll(roll("1d20", rng=rng))
+        if int(complication_roll["total"]) <= 10:
+            next_pending = {
+                "number": int(complication_roll["total"]),
+                "source_actor_id": str(actor_id_value),
+                "rolled_round": turn_round,
+            }
+    value["pending_complication"] = next_pending
+
     current_index = next(
         index
         for index, item in enumerate(participants_list)
@@ -793,17 +805,9 @@ def advance_chase_turn(
         ):
             outcome = {"status": "quarry_escaped", "summary": "Every quarry escaped."}
 
-    complication_roll = None
-    next_pending = None
-    if outcome is None:
-        complication_roll = asdict_roll(roll("1d20", rng=rng))
-        if int(complication_roll["total"]) <= 10:
-            next_pending = {
-                "number": int(complication_roll["total"]),
-                "source_actor_id": str(actor_id_value),
-                "rolled_round": turn_round,
-            }
-    value["pending_complication"] = next_pending
+    if outcome is not None:
+        next_pending = None
+        value["pending_complication"] = None
 
     turn_result = {
         "round": turn_round,

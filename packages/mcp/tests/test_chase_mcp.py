@@ -572,9 +572,9 @@ def test_public_chase_uses_exact_module_source_and_no_combat_map(
         assert escaped["chase"]["active"] is False
         assert escaped["chase"]["pending_complication"] is None
         assert escaped["chase"]["outcome"]["status"] == "quarry_escaped"
-        assert escaped["turn"]["next_complication_roll"] is None
+        assert escaped["turn"]["next_complication_roll"] is not None
         assert escaped["turn"]["next_complication"] is None
-        assert escaped["random_stream_receipt"]["draw_count"] >= 1
+        assert escaped["random_stream_receipt"]["draw_count"] >= 2
         assert replayed["chase"] == escaped["chase"]
         assert replayed["campaign_revision"] == escaped["campaign_revision"]
         assert replayed["random_stream_receipt"] == escaped["random_stream_receipt"]
@@ -726,10 +726,10 @@ def test_public_chase_uses_exact_module_source_and_no_combat_map(
         ordered_success_replay = await _call(server, "chase", success_arguments)
 
         assert ordered_success["turn"]["escape_checks"][0]["escaped"] is True
-        assert ordered_success["turn"]["next_complication_roll"] is None
+        assert ordered_success["turn"]["next_complication_roll"] is not None
         assert ordered_success["turn"]["next_complication"] is None
         assert ordered_success["chase"]["pending_complication"] is None
-        assert ordered_success["random_stream_receipt"]["draw_count"] == 1
+        assert ordered_success["random_stream_receipt"]["draw_count"] == 2
         assert ordered_success_replay == ordered_success
 
         ordered_failure_started = await _call(
