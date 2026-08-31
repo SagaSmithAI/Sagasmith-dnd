@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 from pathlib import Path
 
@@ -30,6 +31,43 @@ def test_config_owns_local_storage(tmp_path: Path) -> None:
     assert config.rulebooks_dir.is_dir()
     assert config.normalized_rulebooks_dir.is_dir()
     assert config.normalized_modules_dir.is_dir()
+
+
+def test_storage_status_redacts_credentials_and_host_paths(tmp_path: Path) -> None:
+    storage = SagaSmithStorage(
+        McpConfig(
+            home=tmp_path / "home",
+            database_url=None,
+            chroma_url=(
+                "http://vector-user:vector-password@chroma.internal:8000"
+            ),
+            chroma_path_override=None,
+            dnd_skills_dir=tmp_path / "dnd",
+            modulegen_skills_dir=tmp_path / "modulegen",
+            rule_ocr_model=str(tmp_path / "private-rule-model"),
+            module_ocr_model=str(tmp_path / "private-module-model"),
+        )
+    )
+    storage.database.url = (
+        "postgresql+psycopg://alice:secret-password@db.internal/sagasmith"
+    )
+
+    status = storage.status()
+    encoded = json.dumps(status)
+
+    assert status["database"] == {
+        "backend": "postgresql",
+        "local": False,
+        "configured": True,
+        "exists": None,
+    }
+    assert "alice" not in encoded
+    assert "secret-password" not in encoded
+    assert "db.internal" not in encoded
+    assert "vector-user" not in encoded
+    assert "vector-password" not in encoded
+    assert "chroma.internal" not in encoded
+    assert str(tmp_path) not in encoded
 
 
 def test_direct_server_close_releases_its_local_database(tmp_path: Path) -> None:
