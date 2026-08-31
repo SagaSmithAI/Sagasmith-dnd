@@ -1279,9 +1279,12 @@ def _movement_accounting(combatant: dict[str, Any]) -> tuple[int, int]:
     # never manufacture a historical Dash grant, and preserve a visible spend
     # when a mid-turn speed change left the remaining total stale.
     stored = max(0, int(budget.get("movement", 0) or 0))
-    effective = _effective_speed_ft(combatant)
     recorded_speed = max(0, int(budget.get("speed", 0) or 0))
-    spent = effective - stored if stored <= effective else recorded_speed - stored
+    # A legacy half-speed snapshot cannot reveal whether it started at that
+    # speed or spent movement before being slowed. Treat the difference from
+    # recorded speed as spent: exact when speed is unchanged, conservative
+    # under ambiguous speed changes, and incapable of inventing Dash grants.
+    spent = recorded_speed - stored
     return max(0, spent), 0
 
 
@@ -1324,7 +1327,9 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
         raise CombatEngineError(f"combatant not found: {actor_id_value}")
     conditions = _condition_set(combatant.get("conditions"))
     budget = dict(combatant.get("turn_budget") or {})
-    has_movement = _remaining_movement_ft(combatant) > 0
+    has_movement = (
+        _effective_speed_ft(combatant) > 0 and _remaining_movement_ft(combatant) > 0
+    )
     current = current_combatant(encounter)
     if current is None or current.get("actor_id") != actor_id_value:
         return []
@@ -4222,16 +4227,15 @@ def spend_movement(
             missing=("grapple_source",),
             ruling_kind="missing_or_conflicting_source_review",
         )
-    no_current_movement = (
-        _effective_speed_ft(combatant) <= 0
-        if uses_aggressive_grant
-        else _remaining_movement_ft(combatant) <= 0
-    )
-    if willing_movement and no_current_movement:
+    if willing_movement and _effective_speed_ft(combatant) <= 0:
+        raise CombatEngineError("actor cannot move while its effective speed is zero")
+    if (
+        willing_movement
+        and not uses_aggressive_grant
+        and _remaining_movement_ft(combatant) <= 0
+    ):
         raise CombatEngineError(
-            "actor cannot move while its effective speed is zero"
-            if _effective_speed_ft(combatant) <= 0
-            else "actor has no movement remaining at its current speed"
+            "actor has no movement remaining at its current speed"
         )
     if willing_movement and "prone" in conditions and not crawl:
         raise CombatEngineError("a prone actor must crawl or stand before moving")

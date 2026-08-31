@@ -865,10 +865,17 @@ def test_dash_grants_only_current_effective_speed(
             server,
             "combat_start",
             {
-                "positioning_mode": "agent",
+                "positioning_mode": "grid",
+                "battle_map": {"width_cells": 12, "height_cells": 4},
                 "campaign_id": campaign["id"],
                 "participant_ids": [actor["id"]],
-                "participant_config": [{"actor_id": actor["id"], "initiative": 10}],
+                "participant_config": [
+                    {
+                        "actor_id": actor["id"],
+                        "initiative": 10,
+                        "position": {"x": 0, "y": 0},
+                    }
+                ],
                 "expected_revision": campaign["revision"],
                 "idempotency_key": "start",
             },
@@ -911,6 +918,29 @@ def test_dash_grants_only_current_effective_speed(
         assert after.state["combat"]["combatants"][0]["turn_budget"][
             "movement"
         ] == expected_movement
+        if speed_multiplier == 0.5 and condition is None:
+            state_at_zero_speed = deepcopy(after.state)
+            state_at_zero_speed["combat"]["combatants"][0]["speed_multiplier"] = 0.0
+            zero_speed = campaigns.update(
+                campaign["id"],
+                state=state_at_zero_speed,
+                expected_revision=after.revision,
+            )
+            server = create_server(config)
+            before_blocked = campaigns.get(campaign["id"])
+            blocked = {
+                "campaign_id": campaign["id"],
+                "actor_id": actor["id"],
+                "action": "move",
+                "payload": {"distance": 5, "destination": {"x": 1, "y": 0}},
+                "expected_revision": zero_speed.revision,
+                "idempotency_key": "blocked-after-dash",
+            }
+            with pytest.raises(Exception, match="effective speed is zero"):
+                await _call_raw(server, "combat_movement", blocked)
+            after_blocked = campaigns.get(campaign["id"])
+            assert after_blocked.revision == before_blocked.revision
+            assert after_blocked.state == before_blocked.state
 
     asyncio.run(exercise())
 
@@ -1846,10 +1876,17 @@ def test_cunning_action_dash_uses_bonus_action_and_current_effective_speed(
             server,
             "combat_start",
             {
-                "positioning_mode": "agent",
+                "positioning_mode": "grid",
+                "battle_map": {"width_cells": 12, "height_cells": 4},
                 "campaign_id": campaign["id"],
                 "participant_ids": [actor["id"]],
-                "participant_config": [{"actor_id": actor["id"], "initiative": 10}],
+                "participant_config": [
+                    {
+                        "actor_id": actor["id"],
+                        "initiative": 10,
+                        "position": {"x": 0, "y": 0},
+                    }
+                ],
                 "expected_revision": campaign["revision"],
                 "idempotency_key": "start",
             },
@@ -1891,6 +1928,30 @@ def test_cunning_action_dash_uses_bonus_action_and_current_effective_speed(
             item["mechanic_id"] == "dnd5e.core.activity.cunning_action"
             for item in result["result"]["rule_receipts"]
         )
+        if speed_multiplier == 0.5:
+            after_dash = campaigns.get(campaign["id"])
+            state_at_zero_speed = deepcopy(after_dash.state)
+            state_at_zero_speed["combat"]["combatants"][0]["speed_multiplier"] = 0.0
+            zero_speed = campaigns.update(
+                campaign["id"],
+                state=state_at_zero_speed,
+                expected_revision=after_dash.revision,
+            )
+            server = create_server(config)
+            before_blocked = campaigns.get(campaign["id"])
+            blocked = {
+                "campaign_id": campaign["id"],
+                "actor_id": actor["id"],
+                "action": "move",
+                "payload": {"distance": 5, "destination": {"x": 1, "y": 0}},
+                "expected_revision": zero_speed.revision,
+                "idempotency_key": "blocked-after-cunning-dash",
+            }
+            with pytest.raises(Exception, match="effective speed is zero"):
+                await _call_raw(server, "combat_movement", blocked)
+            after_blocked = campaigns.get(campaign["id"])
+            assert after_blocked.revision == before_blocked.revision
+            assert after_blocked.state == before_blocked.state
 
     asyncio.run(exercise())
 

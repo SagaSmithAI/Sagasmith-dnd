@@ -579,6 +579,13 @@ def test_mid_turn_speed_change_caps_base_movement_and_preserves_locked_dash_gran
     assert dash_budget["movement"] == 30
     assert dash_budget["extra_movement_granted"] == 15
 
+    current_combatant(dashed)["speed_multiplier"] = 0.0
+    before_zero_speed_attempt = deepcopy(dashed)
+    assert "move" not in available_actions(dashed, "mover")
+    with pytest.raises(CombatEngineError, match="effective speed is zero"):
+        spend_movement(dashed, "mover", 5, destination={"x": 1, "y": 0})
+    assert dashed == before_zero_speed_attempt
+
     current_combatant(dashed)["speed_multiplier"] = 1.0
     restored = spend_movement(dashed, "mover", 45, destination={"x": 9, "y": 0})
     restored_budget = current_combatant(restored)["turn_budget"]
@@ -599,10 +606,10 @@ def test_legacy_movement_budget_is_inferred_without_manufacturing_dash_grants() 
     slow_budget.pop("movement_spent")
     slow_budget.pop("extra_movement_granted")
     slow_budget["movement"] = 15
-    slow_moved = spend_movement(
-        started_slow, "legacy", 15, destination={"x": 3, "y": 0}
-    )
-    assert current_combatant(slow_moved)["turn_budget"]["movement"] == 0
+    before_started_slow_move = deepcopy(started_slow)
+    with pytest.raises(CombatEngineError, match="no movement remaining"):
+        spend_movement(started_slow, "legacy", 5, destination={"x": 1, "y": 0})
+    assert started_slow == before_started_slow_move
 
     stale_after_spend = deepcopy(encounter)
     stale_current = current_combatant(stale_after_spend)
@@ -615,6 +622,20 @@ def test_legacy_movement_budget_is_inferred_without_manufacturing_dash_grants() 
         stale_after_spend, "legacy", 5, destination={"x": 1, "y": 0}
     )
     assert current_combatant(stale_moved)["turn_budget"]["movement"] == 0
+
+    ambiguous_spend = deepcopy(encounter)
+    ambiguous_current = current_combatant(ambiguous_spend)
+    ambiguous_current["speed_multiplier"] = 0.5
+    ambiguous_budget = ambiguous_current["turn_budget"]
+    ambiguous_budget.pop("movement_spent")
+    ambiguous_budget.pop("extra_movement_granted")
+    ambiguous_budget["movement"] = 10
+    before_ambiguous_move = deepcopy(ambiguous_spend)
+    with pytest.raises(CombatEngineError, match="no movement remaining"):
+        spend_movement(
+            ambiguous_spend, "legacy", 5, destination={"x": 1, "y": 0}
+        )
+    assert ambiguous_spend == before_ambiguous_move
 
     unknown_old_dash = deepcopy(encounter)
     dash_current = current_combatant(unknown_old_dash)
@@ -5003,7 +5024,8 @@ def test_cunning_action_dash_uses_current_effective_speed(
     expected_movement: int,
 ) -> None:
     rogue = _actor("rogue")
-    encounter = start_encounter([rogue], ruleset=ruleset)
+    rogue["position"] = {"x": 0, "y": 0}
+    encounter = _grid_encounter([rogue], ruleset=ruleset)
     current = current_combatant(encounter)
     assert current is not None
     current["speed_multiplier"] = speed_multiplier
@@ -5019,6 +5041,13 @@ def test_cunning_action_dash_uses_current_effective_speed(
     )
 
     assert current_combatant(dashed)["turn_budget"]["movement"] == expected_movement
+    if speed_multiplier == 0.5:
+        current_combatant(dashed)["speed_multiplier"] = 0.0
+        before_move = deepcopy(dashed)
+        assert "move" not in available_actions(dashed, "rogue")
+        with pytest.raises(CombatEngineError, match="effective speed is zero"):
+            spend_movement(dashed, "rogue", 5, destination={"x": 1, "y": 0})
+        assert dashed == before_move
 
 
 def test_orc_aggressive_grants_separate_toward_only_movement() -> None:
