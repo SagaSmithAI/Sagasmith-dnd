@@ -406,6 +406,171 @@ def test_party_short_rest_advances_and_settles_every_member_atomically(
     asyncio.run(exercise())
 
 
+def test_2014_stable_zero_hp_short_rest_uses_public_rest_flow(tmp_path: Path) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {"name": "Stable rest", "edition": "2014", "idempotency_key": "campaign"},
+        )
+        sheet = default_character_sheet()
+        sheet["edition"] = "2014"
+        sheet["combat"]["hp"] = {"value": 0, "max": 10, "temp": 0}
+        sheet["combat"]["hit_dice"] = {
+            "fighter:d8": {
+                "label": "Fighter d8",
+                "value": 1,
+                "max": 1,
+                "recovers_on": "long_rest",
+            }
+        }
+        sheet["conditions"] = ["stable", "unconscious", "prone"]
+        actor = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": "Stable adventurer",
+                    "sheet": sheet,
+                },
+                "idempotency_key": "actor",
+            },
+        )
+        current_campaign = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+
+        with pytest.raises(Exception, match="at least 1 hit point"):
+            await _call(
+                server,
+                "campaign_change",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "party_rest",
+                    "payload": {
+                        "rest_type": "long_rest",
+                        "members": [
+                            {
+                                "character_id": actor["id"],
+                                "expected_revision": actor["revision"],
+                            }
+                        ],
+                    },
+                    "expected_revision": current_campaign["revision"],
+                    "idempotency_key": "blocked-long-rest",
+                },
+            )
+        after_blocked_long_rest = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        actor_after_blocked_long_rest = await _call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": actor["id"]}},
+        )
+        assert after_blocked_long_rest["revision"] == current_campaign["revision"]
+        assert actor_after_blocked_long_rest["revision"] == actor["revision"]
+        assert actor_after_blocked_long_rest["sheet"]["combat"]["hp"]["value"] == 0
+
+        preflight = await _call(
+            server,
+            "character_query",
+            {
+                "view": "rest",
+                "payload": {
+                    "character_id": actor["id"],
+                    "rest_type": "short_rest",
+                    "duration_minutes": 60,
+                    "hit_dice_spends": [{"key": "fighter:d8", "count": 1}],
+                },
+            },
+        )
+        assert preflight["ready"] is True
+        assert preflight["hit_dice_spends"] == [{"key": "fighter:d8", "count": 1}]
+
+        arguments = {
+            "campaign_id": campaign["id"],
+            "action": "party_rest",
+            "payload": {
+                "rest_type": "short_rest",
+                "duration_minutes": 60,
+                "members": [
+                    {
+                        "character_id": actor["id"],
+                        "expected_revision": actor["revision"],
+                        "hit_dice_spends": [{"key": "fighter:d8", "count": 1}],
+                    }
+                ],
+            },
+            "expected_revision": current_campaign["revision"],
+            "idempotency_key": "stable-short-rest",
+        }
+        stream = CampaignRandomStream.from_campaign_state(
+            campaign["id"],
+            current_campaign["state"],
+            operation="campaign_change",
+            idempotency_key="stable-short-rest",
+        )
+        with use_random_stream(stream):
+            rested = await _call(server, "campaign_change", arguments)
+        assert await _call(server, "campaign_change", arguments) == rested
+        assert rested["random_stream_receipt"]["draw_count"] == 1
+
+        updated = await _call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": actor["id"]}},
+        )
+        assert updated["sheet"]["combat"]["hp"]["value"] > 0
+        assert updated["sheet"]["combat"]["hit_dice"]["fighter:d8"]["value"] == 0
+        assert updated["sheet"]["conditions"] == ["prone"]
+
+        with pytest.raises(Exception, match="not enough hit dice"):
+            await _call(
+                server,
+                "campaign_change",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "party_rest",
+                    "payload": {
+                        "rest_type": "short_rest",
+                        "duration_minutes": 60,
+                        "members": [
+                            {
+                                "character_id": actor["id"],
+                                "expected_revision": updated["revision"],
+                                "hit_dice_spends": [{"key": "fighter:d8", "count": 1}],
+                            }
+                        ],
+                    },
+                    "expected_revision": rested["campaign_revision"],
+                    "idempotency_key": "exhausted-hit-die",
+                },
+            )
+        after_exhausted_spend = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        actor_after_exhausted_spend = await _call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": actor["id"]}},
+        )
+        assert after_exhausted_spend["revision"] == rested["campaign_revision"]
+        assert actor_after_exhausted_spend["revision"] == updated["revision"]
+        assert actor_after_exhausted_spend["sheet"] == updated["sheet"]
+
+    asyncio.run(exercise())
+
+
 def test_party_rest_uses_game_time_without_requiring_a_calendar(tmp_path: Path) -> None:
     async def exercise() -> None:
         server = create_server(_config(tmp_path))
