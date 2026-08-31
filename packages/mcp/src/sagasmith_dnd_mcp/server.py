@@ -29966,6 +29966,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         disclosure_scope: str = "dm",
         branch_id: str | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
+        expected_revision: int | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Record what one live PC, NPC, or monster knows or believes."""
@@ -29974,6 +29975,9 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         if not idempotency_key:
             raise ValueError("idempotency_key is required for actor knowledge writes")
         branch_id = require_current_branch(campaign_id, branch_id)
+        base_revision = (
+            mutation_revision(campaign_id) if expected_revision is None else expected_revision
+        )
         request_payload = {
             "actor_id": actor_id,
             "knowledge_key": knowledge_key,
@@ -29985,6 +29989,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             "cause": cause,
             "disclosure_scope": disclosure_scope,
             "branch_id": branch_id,
+            "expected_revision": expected_revision,
         }
         scope = f"actor-knowledge:{campaign_id}:{branch_id}:{principal_id}:{actor_id}"
         replay = replay_idempotent(scope, idempotency_key, request_payload)
@@ -30003,6 +30008,8 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 cause=cause,
                 disclosure_scope=disclosure_scope,
                 branch_id=branch_id,
+                expected_campaign_revision=base_revision,
+                expected_branch_id=branch_id,
                 idempotency_key=idempotency_key,
                 idempotency_write=IdempotencyWrite(
                     scope=scope,
@@ -30025,6 +30032,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         branch_id: str | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
         expected_revision_id: str | None = None,
+        expected_revision: int | None = None,
         proposition_provided: bool = True,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
@@ -30036,6 +30044,11 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 "expected_revision_id and idempotency_key are required for knowledge revisions"
             )
         branch_id = require_current_branch(current.campaign_id, branch_id)
+        base_revision = (
+            mutation_revision(current.campaign_id)
+            if expected_revision is None
+            else expected_revision
+        )
         request_payload = {
             "knowledge_id": knowledge_id,
             "epistemic_status": epistemic_status,
@@ -30045,6 +30058,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             "disclosure_scope": disclosure_scope,
             "branch_id": branch_id,
             "expected_revision_id": expected_revision_id,
+            "expected_revision": expected_revision,
         }
         if proposition_provided:
             request_payload["proposition"] = proposition
@@ -30072,6 +30086,8 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             "disclosure_scope": disclosure_scope,
             "branch_id": branch_id,
             "expected_revision_id": expected_revision_id,
+            "expected_campaign_revision": base_revision,
+            "expected_branch_id": branch_id,
             "idempotency_key": idempotency_key,
             "idempotency_write": IdempotencyWrite(
                 scope=scope,
@@ -48365,6 +48381,7 @@ boundary.
         action: Literal["add", "revise", "retract", "forget"],
         payload: dict[str, Any],
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
+        expected_revision: int | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Add or revise actor knowledge without crossing actor-knowledge boundaries."""
@@ -48383,6 +48400,7 @@ boundary.
                 data.get("disclosure_scope", "dm"),
                 data.get("branch_id"),
                 principal_id,
+                expected_revision,
                 idempotency_key,
             )
         else:
@@ -48406,6 +48424,7 @@ boundary.
                 branch_id=data.get("branch_id"),
                 principal_id=principal_id,
                 expected_revision_id=required(data, "expected_revision_id"),
+                expected_revision=expected_revision,
                 proposition_provided=proposition_provided,
                 idempotency_key=idempotency_key,
             )
