@@ -191,7 +191,7 @@ def test_chase_preserves_non_positive_passive_perception_for_escape_checks() -> 
         action="move",
         quarry_visibility={"quarry": False},
         quarry_actors={"quarry": quarry},
-        rng=_SequenceRng(20, 1),
+        rng=_SequenceRng(1),
     )
 
     escape = result["turn"]["escape_checks"][0]
@@ -199,6 +199,9 @@ def test_chase_preserves_non_positive_passive_perception_for_escape_checks() -> 
     assert negative_chase["pursuer_passive_perception_max"] == -1
     assert escape["passive_perception_max"] == -1
     assert escape["check"]["dc"] == 0
+    assert result["chase"]["pending_complication"] is None
+    assert result["turn"]["next_complication_roll"] is None
+    assert result["turn"]["next_complication"] is None
 
 
 @pytest.mark.parametrize(
@@ -272,7 +275,7 @@ def test_escape_dc_uses_only_active_pursuers(
         action="move",
         quarry_visibility={"quarry": False},
         quarry_actors={"quarry": quarry},
-        rng=_SequenceRng(20, 12),
+        rng=_SequenceRng(12),
     )
 
     escape = escaped["turn"]["escape_checks"][0]
@@ -280,6 +283,9 @@ def test_escape_dc_uses_only_active_pursuers(
     assert escape["check"]["dc"] == 11
     assert escape["check"]["total"] == 12
     assert escape["escaped"] is True
+    assert escaped["chase"]["pending_complication"] is None
+    assert escaped["turn"]["next_complication_roll"] is None
+    assert escaped["turn"]["next_complication"] is None
 
 
 def test_last_active_pursuer_dropout_ends_chase_without_escape_check() -> None:
@@ -380,13 +386,16 @@ def test_legacy_chase_cache_remains_valid_while_all_pursuers_are_active() -> Non
         action="move",
         quarry_visibility={"quarry": False},
         quarry_actors={"quarry": quarry},
-        rng=_SequenceRng(20, 12),
+        rng=_SequenceRng(12, 7),
     )
 
     escape = result["turn"]["escape_checks"][0]
     assert escape["passive_perception_max"] == 20
     assert escape["check"]["dc"] == 21
     assert escape["escaped"] is False
+    assert result["turn"]["next_complication_roll"]["total"] == 7
+    assert result["turn"]["next_complication"]["number"] == 7
+    assert result["chase"]["pending_complication"]["number"] == 7
 
 
 def test_urban_complication_affects_next_participant() -> None:

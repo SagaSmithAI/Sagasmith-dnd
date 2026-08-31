@@ -721,38 +721,7 @@ def advance_chase_turn(
             "distance": deepcopy(distance["lead"]),
         }
 
-    complication_roll = None
-    next_pending = None
-    if outcome is None:
-        complication_roll = asdict_roll(roll("1d20", rng=rng))
-        if int(complication_roll["total"]) <= 10:
-            next_pending = {
-                "number": int(complication_roll["total"]),
-                "source_actor_id": str(actor_id_value),
-                "rolled_round": int(value.get("round", 1) or 1),
-            }
-    value["pending_complication"] = next_pending
-
-    turn_result = {
-        "round": int(value.get("round", 1) or 1),
-        "actor_id": str(actor_id_value),
-        "action": normalized_action,
-        "speed_ft": speed,
-        "stand_cost_ft": stand_cost,
-        "movement_penalty_ft": movement_penalty,
-        "moved_ft": moved_ft,
-        "position_ft": int(participant["position_ft"]),
-        "dash_count": int(participant.get("dash_count", 0) or 0),
-        "free_dash_limit": int(participant.get("free_dash_limit", 0) or 0),
-        "dash_check": dash_check,
-        "exhaustion_gained": exhaustion_gained,
-        "complication": complication_result,
-        "guard_attack": guard_attack,
-        "next_complication_roll": complication_roll,
-        "next_complication": deepcopy(next_pending),
-    }
-    value.setdefault("log", []).append(deepcopy(turn_result))
-
+    turn_round = int(value.get("round", 1) or 1)
     current_index = next(
         index
         for index, item in enumerate(participants_list)
@@ -823,6 +792,38 @@ def advance_chase_turn(
             if item.get("role") == "quarry"
         ):
             outcome = {"status": "quarry_escaped", "summary": "Every quarry escaped."}
+
+    complication_roll = None
+    next_pending = None
+    if outcome is None:
+        complication_roll = asdict_roll(roll("1d20", rng=rng))
+        if int(complication_roll["total"]) <= 10:
+            next_pending = {
+                "number": int(complication_roll["total"]),
+                "source_actor_id": str(actor_id_value),
+                "rolled_round": turn_round,
+            }
+    value["pending_complication"] = next_pending
+
+    turn_result = {
+        "round": turn_round,
+        "actor_id": str(actor_id_value),
+        "action": normalized_action,
+        "speed_ft": speed,
+        "stand_cost_ft": stand_cost,
+        "movement_penalty_ft": movement_penalty,
+        "moved_ft": moved_ft,
+        "position_ft": int(participant["position_ft"]),
+        "dash_count": int(participant.get("dash_count", 0) or 0),
+        "free_dash_limit": int(participant.get("free_dash_limit", 0) or 0),
+        "dash_check": dash_check,
+        "exhaustion_gained": exhaustion_gained,
+        "complication": complication_result,
+        "guard_attack": guard_attack,
+        "next_complication_roll": complication_roll,
+        "next_complication": deepcopy(next_pending),
+    }
+    value.setdefault("log", []).append(deepcopy(turn_result))
 
     if outcome is not None:
         value["active"] = False

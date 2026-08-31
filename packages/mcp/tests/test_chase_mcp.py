@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -97,7 +98,8 @@ def test_public_chase_uses_exact_module_source_and_no_combat_map(
 
     monkeypatch.setattr(server_module, "advance_chase_turn", deterministic_advance)
     async def exercise() -> None:
-        server = create_server(_config(tmp_path, import_root))
+        config = _config(tmp_path, import_root)
+        server = create_server(config)
         campaign = await _call(
             server,
             "campaign_create",
@@ -568,8 +570,11 @@ def test_public_chase_uses_exact_module_source_and_no_combat_map(
         assert escape["check"]["dc"] == 1
         assert escape["escaped"] is True
         assert escaped["chase"]["active"] is False
+        assert escaped["chase"]["pending_complication"] is None
         assert escaped["chase"]["outcome"]["status"] == "quarry_escaped"
-        assert escaped["random_stream_receipt"]["draw_count"] >= 2
+        assert escaped["turn"]["next_complication_roll"] is None
+        assert escaped["turn"]["next_complication"] is None
+        assert escaped["random_stream_receipt"]["draw_count"] >= 1
         assert replayed["chase"] == escaped["chase"]
         assert replayed["campaign_revision"] == escaped["campaign_revision"]
         assert replayed["random_stream_receipt"] == escaped["random_stream_receipt"]
@@ -646,5 +651,147 @@ def test_public_chase_uses_exact_module_source_and_no_combat_map(
         assert "random_stream_receipt" not in terminal
         assert terminal_replay == terminal
         assert "random_stream_receipt" not in terminal_replay
+
+        campaigns = server_module.CampaignService(
+            server_module.SagaSmithStorage(config).database
+        )
+
+        def prepare_quarry_turn() -> object:
+            stored = campaigns.get(campaign["id"])
+            state = deepcopy(stored.state)
+            chase = state["chase"]
+            chase["turn_index"] = next(
+                index
+                for index, item in enumerate(chase["participants"])
+                if item["actor_id"] == quarry["id"]
+            )
+            chase["pending_complication"] = None
+            return campaigns.update(
+                campaign["id"],
+                state=state,
+                expected_revision=stored.revision,
+            )
+
+        ordered_success_started = await _call(
+            server,
+            "chase",
+            {
+                "campaign_id": campaign["id"],
+                "action": "start",
+                "payload": {
+                    "participant_ids": [pursuer["id"], quarry["id"]],
+                    "quarry_ids": [quarry["id"]],
+                    "initial_distance_ft": 60,
+                    "scene_id": expanded["scene"]["id"],
+                    "source_ref": source_ref,
+                    "source_excerpt": source_excerpt,
+                    "participant_config": [
+                        {"actor_id": pursuer["id"], "initiative": 20, "tie_breaker": 0},
+                        {"actor_id": quarry["id"], "initiative": 10, "tie_breaker": 0},
+                    ],
+                },
+                "expected_revision": terminal["campaign_revision"],
+                "idempotency_key": "ordered-success-start",
+            },
+        )
+        assert ordered_success_started["chase"]["pursuer_passive_perception_max"] == 0
+        prepared_success = prepare_quarry_turn()
+        current_quarry = await _call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": quarry["id"]}},
+        )
+        success_arguments = {
+            "campaign_id": campaign["id"],
+            "action": "take_turn",
+            "payload": {
+                "actor_id": quarry["id"],
+                "turn_action": "move",
+                "complication_choice": "",
+                "stand_from_prone": True,
+                "quarry_visibility": {quarry["id"]: False},
+                "expected_actor_revision": current_quarry["revision"],
+            },
+            "expected_revision": prepared_success.revision,
+            "idempotency_key": "ordered-success",
+        }
+        success_stream = CampaignRandomStream.from_campaign_state(
+            campaign["id"],
+            prepared_success.state,
+            operation="chase",
+            idempotency_key="ordered-success",
+        )
+        with use_random_stream(success_stream):
+            ordered_success = await _call(server, "chase", success_arguments)
+        ordered_success_replay = await _call(server, "chase", success_arguments)
+
+        assert ordered_success["turn"]["escape_checks"][0]["escaped"] is True
+        assert ordered_success["turn"]["next_complication_roll"] is None
+        assert ordered_success["turn"]["next_complication"] is None
+        assert ordered_success["chase"]["pending_complication"] is None
+        assert ordered_success["random_stream_receipt"]["draw_count"] == 1
+        assert ordered_success_replay == ordered_success
+
+        ordered_failure_started = await _call(
+            server,
+            "chase",
+            {
+                "campaign_id": campaign["id"],
+                "action": "start",
+                "payload": {
+                    "participant_ids": [high_pursuer["id"], quarry["id"]],
+                    "quarry_ids": [quarry["id"]],
+                    "initial_distance_ft": 60,
+                    "scene_id": expanded["scene"]["id"],
+                    "source_ref": source_ref,
+                    "source_excerpt": source_excerpt,
+                    "participant_config": [
+                        {
+                            "actor_id": high_pursuer["id"],
+                            "initiative": 20,
+                            "tie_breaker": 0,
+                        },
+                        {"actor_id": quarry["id"], "initiative": 10, "tie_breaker": 0},
+                    ],
+                },
+                "expected_revision": ordered_success["campaign_revision"],
+                "idempotency_key": "ordered-failure-start",
+            },
+        )
+        assert ordered_failure_started["chase"]["pursuer_passive_perception_max"] == 20
+        prepared_failure = prepare_quarry_turn()
+        current_quarry = await _call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": quarry["id"]}},
+        )
+        failure_arguments = {
+            "campaign_id": campaign["id"],
+            "action": "take_turn",
+            "payload": {
+                "actor_id": quarry["id"],
+                "turn_action": "move",
+                "complication_choice": "",
+                "stand_from_prone": True,
+                "quarry_visibility": {quarry["id"]: False},
+                "expected_actor_revision": current_quarry["revision"],
+            },
+            "expected_revision": prepared_failure.revision,
+            "idempotency_key": "ordered-failure",
+        }
+        failure_stream = CampaignRandomStream.from_campaign_state(
+            campaign["id"],
+            prepared_failure.state,
+            operation="chase",
+            idempotency_key="ordered-failure",
+        )
+        with use_random_stream(failure_stream):
+            ordered_failure = await _call(server, "chase", failure_arguments)
+        ordered_failure_replay = await _call(server, "chase", failure_arguments)
+
+        assert ordered_failure["turn"]["escape_checks"][0]["escaped"] is False
+        assert ordered_failure["turn"]["next_complication_roll"] is not None
+        assert ordered_failure["random_stream_receipt"]["draw_count"] == 2
+        assert ordered_failure_replay == ordered_failure
 
     asyncio.run(exercise())
