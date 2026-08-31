@@ -5,11 +5,12 @@ import sys
 from pathlib import Path
 
 import pytest
-from mcp import ClientSession
+from mcp import Client, ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
+from mcp.server.mcpserver.exceptions import UnexpectedToolError
 
 from sagasmith_dnd_mcp.config import McpConfig
-from sagasmith_dnd_mcp.server import create_server
+from sagasmith_dnd_mcp.server import _safe_tool_error_message, create_server
 from sagasmith_dnd_mcp.tool_profiles import HOST_PRIVATE_TOOLS, policy_for_tool
 
 HOST_TOKEN = "test-host-token-with-sufficient-entropy"
@@ -96,6 +97,125 @@ def _audience(decision_id, *, perceived, understood, response):
 def test_public_surface_is_one_facade_and_host_transport_is_unloadable() -> None:
     assert policy_for_tool("npc_conversation").phases == frozenset({"play"})
     assert HOST_PRIVATE_TOOLS == frozenset({"npc_conversation_transport"})
+
+
+def test_unexpected_tool_error_only_unwraps_safe_repairable_causes() -> None:
+    for cause_type in (ValueError, LookupError, PermissionError):
+        try:
+            raise cause_type("actionable validation detail")
+        except cause_type as cause:
+            try:
+                raise UnexpectedToolError("Error executing tool npc_conversation") from cause
+            except UnexpectedToolError as error:
+                assert _safe_tool_error_message(error) == "actionable validation detail"
+
+    try:
+        raise ValueError("x" * 3_000)
+    except ValueError as cause:
+        try:
+            raise UnexpectedToolError("Error executing tool npc_conversation") from cause
+        except UnexpectedToolError as error:
+            assert _safe_tool_error_message(error) == "x" * 2_000
+
+    try:
+        raise RuntimeError("database secret")
+    except RuntimeError as cause:
+        try:
+            raise UnexpectedToolError("Error executing tool npc_conversation") from cause
+        except UnexpectedToolError as error:
+            assert _safe_tool_error_message(error) == "Error executing tool npc_conversation"
+
+
+@pytest.mark.parametrize("mode", ["legacy", "2026-07-28"])
+def test_public_ingest_repairs_invalid_stimulus_for_both_protocol_eras(
+    tmp_path: Path, mode: str
+) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path / mode.replace("-", "_")))
+        campaign, npc, pc = await _campaign_with_actors(server)
+        async with Client(server, mode=mode) as client:
+            if mode == "legacy":
+                opened = await client.call_tool(
+                    "exposure",
+                    {
+                        "action": "open",
+                        "campaign_id": campaign["id"],
+                        "principal_id": "system:local",
+                    },
+                )
+                assert opened.is_error is False
+                loaded = await client.call_tool(
+                    "exposure",
+                    {
+                        "action": "set",
+                        "add_tool_ids": ["npc_conversation"],
+                        "principal_id": "system:local",
+                    },
+                )
+                assert loaded.is_error is False
+
+            catalog = await client.list_tools(cache_mode="reload")
+            conversation_tool = next(
+                tool for tool in catalog.tools if tool.name == "npc_conversation"
+            )
+            assert "payload.event" in conversation_tool.description
+            assert "speaker_actor_id" in conversation_tool.description
+            assert "content" in conversation_tool.description
+            assert "audience_facts" in conversation_tool.description
+
+            payload = {
+                "conversation_id": "",
+                "event": {
+                    "type": "speech",
+                    "speaker_actor_id": pc["id"],
+                    "text": "Where is the key?",
+                },
+                "audience_facts": _audience(
+                    f"audience-invalid-{mode}",
+                    perceived=[pc["id"], npc["id"]],
+                    understood=[pc["id"], npc["id"]],
+                    response=[npc["id"]],
+                ),
+                "expected_conversation_revision": 0,
+                "idempotency_key": f"invalid-{mode}",
+            }
+            opened = await client.call_tool(
+                "npc_conversation",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "open",
+                    "payload": {
+                        "participant_actor_ids": [pc["id"], npc["id"]],
+                        "idempotency_key": f"open-{mode}",
+                    },
+                },
+            )
+            assert opened.is_error is False
+            conversation = opened.structured_content or {}
+            conversation_id = conversation.get("conversation_id")
+            assert conversation_id
+            payload["conversation_id"] = conversation_id
+
+            invalid = await client.call_tool(
+                "npc_conversation",
+                {"campaign_id": campaign["id"], "action": "ingest", "payload": payload},
+            )
+            assert invalid.is_error is True
+            assert "unknown fields" in invalid.content[0].text
+            assert "text" in invalid.content[0].text
+            assert "Traceback" not in invalid.content[0].text
+
+            payload["event"].pop("text")
+            payload["event"]["content"] = "Where is the key?"
+            payload["idempotency_key"] = f"valid-{mode}"
+            ingested = await client.call_tool(
+                "npc_conversation",
+                {"campaign_id": campaign["id"], "action": "ingest", "payload": payload},
+            )
+            assert ingested.is_error is False
+            assert "activations" in str(ingested.structured_content)
+
+    asyncio.run(exercise())
 
 
 def test_open_errors_explain_the_single_participant_array(tmp_path: Path) -> None:
