@@ -2966,6 +2966,17 @@ def _tool_output_schema(tool_name: str) -> dict[str, Any]:
     }
 
 
+def _safe_tool_error_message(exc: ToolError) -> str:
+    """Expose only bounded, caller-repairable causes from SDK wrappers."""
+
+    cause = exc.__cause__
+    if isinstance(exc, UnexpectedToolError) and isinstance(
+        cause, (ValueError, LookupError, PermissionError)
+    ):
+        return str(cause)[:2000]
+    return str(exc)[:2000]
+
+
 class RequestScopedMCPServer(MCPServer):
     """Dual-era MCP server with request-scoped identity and a stable catalog.
 
@@ -3580,7 +3591,7 @@ class RequestScopedMCPServer(MCPServer):
                     if isinstance(exc, UnexpectedToolError) and exc.__cause__ is not None:
                         raise ToolError(str(exc.__cause__)) from exc.__cause__
                     raise
-                return self._structured_tool_error(str(exc))
+                return self._structured_tool_error(_safe_tool_error_message(exc))
             if (
                 context is None
                 and isinstance(private_result, CallToolResult)
@@ -3661,7 +3672,7 @@ class RequestScopedMCPServer(MCPServer):
                 if isinstance(exc, UnexpectedToolError) and exc.__cause__ is not None:
                     raise ToolError(str(exc.__cause__)) from exc.__cause__
                 raise
-            message = str(exc)
+            message = _safe_tool_error_message(exc)
             if message.startswith("Unknown tool") or "validation error" in message.casefold():
                 raise
             return self._structured_tool_error(message)
@@ -6257,11 +6268,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 context,
             )
         except ToolError as exc:
-            message = (
-                str(exc.__cause__)
-                if isinstance(exc, UnexpectedToolError) and exc.__cause__ is not None
-                else str(exc)
-            )
+            message = _safe_tool_error_message(exc)
             result = mcp._structured_tool_error(message)
         if not isinstance(result, CallToolResult):
             raise RuntimeError("durable task tool returned an unsupported result type")
@@ -31972,7 +31979,18 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         limit: Annotated[int, Field(ge=1, le=100)] = 50,
         cursor: Annotated[str | None, Field(max_length=1024)] = None,
     ) -> dict[str, Any]:
-        """Run the complete public NPC conversation workflow through one facade."""
+        """Run the complete public NPC conversation workflow through one facade.
+
+        For ``action='ingest'``, put the public stimulus in ``payload.event``
+        with ``type`` (speech, action, scene_prompt, or resolution),
+        ``speaker_actor_id``, and ``content`` (not ``text``); optional fields
+        include ``language``, ``delivery``, and ``declared_target_actor_ids``.
+        Include ``payload.audience_facts`` with ``decision_id``,
+        ``resolver='agent'``, perceived/understood/response actor id lists,
+        ``partial_renditions``, ``basis_refs``, and a scene-specific ``reason``.
+        Understood and response actors must be perceived, and response actors
+        must have NPC runtimes.
+        """
 
         data = dict(payload or {})
         if action == "open":
