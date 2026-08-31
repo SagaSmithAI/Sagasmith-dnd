@@ -76,6 +76,49 @@ def current_chase_participant(chase: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def _actor_passive_perception(actor: dict[str, Any]) -> int:
+    recorded = actor_derived(actor).get("passive_perception")
+    if recorded is None:
+        return 10
+    if isinstance(recorded, bool) or not isinstance(recorded, int):
+        raise CombatEngineError("chase passive Perception must be an integer")
+    return recorded
+
+
+def _active_pursuer_passive_perception_max(
+    chase: dict[str, Any],
+    active_pursuers: list[dict[str, Any]],
+) -> int | None:
+    if not active_pursuers:
+        return None
+    recorded: list[int] = []
+    missing: list[str] = []
+    for participant in active_pursuers:
+        if "passive_perception" not in participant:
+            missing.append(str(participant.get("actor_id") or ""))
+            continue
+        passive_perception = participant["passive_perception"]
+        if isinstance(passive_perception, bool) or not isinstance(passive_perception, int):
+            raise CombatEngineError("chase participant passive Perception must be an integer")
+        recorded.append(passive_perception)
+    if not missing:
+        return max(recorded)
+
+    active_ids = {str(item.get("actor_id") or "") for item in active_pursuers}
+    original_pursuer_ids = {str(item) for item in chase.get("pursuer_ids") or []}
+    cached = chase.get("pursuer_passive_perception_max")
+    if (
+        active_ids == original_pursuer_ids
+        and not isinstance(cached, bool)
+        and isinstance(cached, int)
+    ):
+        return cached
+    raise CombatEngineError(
+        "legacy chase participants are missing passive Perception after the pursuer set "
+        "changed; restart the chase"
+    )
+
+
 def start_chase(
     participants: list[dict[str, Any]],
     *,
@@ -153,6 +196,7 @@ def start_chase(
         if speed_adjustment and not speed_source_excerpt:
             raise CombatEngineError("a chase speed adjustment requires its reviewed source excerpt")
         role = "quarry" if identifier in quarry_set else "pursuer"
+        passive_perception = _actor_passive_perception(actor)
         chase_participants.append(
             {
                 "actor_id": identifier,
@@ -166,6 +210,7 @@ def start_chase(
                 "speed_adjustment_ft": speed_adjustment,
                 "speed_source_excerpt": speed_source_excerpt,
                 "speed_ft": speed,
+                "passive_perception": passive_perception,
                 "position_ft": int(initial_distance_ft) if role == "quarry" else 0,
                 "dash_count": 0,
                 "free_dash_limit": max(
@@ -193,12 +238,9 @@ def start_chase(
         "quarry_ids": normalized_quarry_ids,
         "pursuer_ids": pursuer_ids,
         "pursuer_passive_perception_max": max(
-            (
-                10
-                if actor_derived(actors[item]).get("passive_perception") is None
-                else int(actor_derived(actors[item])["passive_perception"])
-            )
-            for item in pursuer_ids
+            item["passive_perception"]
+            for item in chase_participants
+            if item["role"] == "pursuer"
         ),
         "participants": chase_participants,
         "pending_complication": None,
@@ -645,57 +687,7 @@ def advance_chase_turn(
         participant["active"] = False
         participant["dropped_reason"] = "incapacitated"
 
-    complication_roll = asdict_roll(roll("1d20", rng=rng))
-    next_pending = None
-    if int(complication_roll["total"]) <= 10:
-        next_pending = {
-            "number": int(complication_roll["total"]),
-            "source_actor_id": str(actor_id_value),
-            "rolled_round": int(value.get("round", 1) or 1),
-        }
-    value["pending_complication"] = next_pending
-
-    turn_result = {
-        "round": int(value.get("round", 1) or 1),
-        "actor_id": str(actor_id_value),
-        "action": normalized_action,
-        "speed_ft": speed,
-        "stand_cost_ft": stand_cost,
-        "movement_penalty_ft": movement_penalty,
-        "moved_ft": moved_ft,
-        "position_ft": int(participant["position_ft"]),
-        "dash_count": int(participant.get("dash_count", 0) or 0),
-        "free_dash_limit": int(participant.get("free_dash_limit", 0) or 0),
-        "dash_check": dash_check,
-        "exhaustion_gained": exhaustion_gained,
-        "complication": complication_result,
-        "guard_attack": guard_attack,
-        "next_complication_roll": complication_roll,
-        "next_complication": deepcopy(next_pending),
-    }
-    value.setdefault("log", []).append(deepcopy(turn_result))
-
     participants_list = list(value.get("participants") or [])
-    current_index = next(
-        index
-        for index, item in enumerate(participants_list)
-        if str(item.get("actor_id") or "") == str(actor_id_value)
-    )
-    next_index = (current_index + 1) % len(participants_list)
-    round_ended = next_index == 0
-    if round_ended:
-        value["round"] = int(value.get("round", 1) or 1) + 1
-    checked = 0
-    while checked < len(participants_list) and not participants_list[next_index].get(
-        "active", True
-    ):
-        checked += 1
-        next_index = (next_index + 1) % len(participants_list)
-        if next_index == 0 and not round_ended:
-            round_ended = True
-            value["round"] = int(value.get("round", 1) or 1) + 1
-    value["turn_index"] = next_index
-
     active_pursuers = [
         item
         for item in participants_list
@@ -706,6 +698,8 @@ def advance_chase_turn(
         for item in participants_list
         if item.get("role") == "quarry" and item.get("active", True)
     ]
+    passive_ceiling = _active_pursuer_passive_perception_max(value, active_pursuers)
+    value["pursuer_passive_perception_max"] = passive_ceiling
     distance = _distance_summary(value)
     outcome = None
     if not active_pursuers:
@@ -727,13 +721,42 @@ def advance_chase_turn(
             "distance": deepcopy(distance["lead"]),
         }
 
+    turn_round = int(value.get("round", 1) or 1)
+    complication_roll = None
+    next_pending = None
+    if outcome is None:
+        complication_roll = asdict_roll(roll("1d20", rng=rng))
+        if int(complication_roll["total"]) <= 10:
+            next_pending = {
+                "number": int(complication_roll["total"]),
+                "source_actor_id": str(actor_id_value),
+                "rolled_round": turn_round,
+            }
+    value["pending_complication"] = next_pending
+
+    current_index = next(
+        index
+        for index, item in enumerate(participants_list)
+        if str(item.get("actor_id") or "") == str(actor_id_value)
+    )
+    next_index = (current_index + 1) % len(participants_list)
+    round_ended = next_index == 0
+    if round_ended:
+        value["round"] = int(value.get("round", 1) or 1) + 1
+    checked = 0
+    while checked < len(participants_list) and not participants_list[next_index].get(
+        "active", True
+    ):
+        checked += 1
+        next_index = (next_index + 1) % len(participants_list)
+        if next_index == 0 and not round_ended:
+            round_ended = True
+            value["round"] = int(value.get("round", 1) or 1) + 1
+    value["turn_index"] = next_index
+
     escape_checks = []
     if round_ended and outcome is None:
         visibility = {str(key): bool(item) for key, item in (quarry_visibility or {}).items()}
-        raw_passive_ceiling = value.get("pursuer_passive_perception_max")
-        passive_ceiling = (
-            None if raw_passive_ceiling is None else int(raw_passive_ceiling)
-        )
         for quarry in active_quarries:
             quarry_id = str(quarry["actor_id"])
             visible = visibility.get(quarry_id, True)
@@ -748,7 +771,7 @@ def advance_chase_turn(
                 )
                 continue
             if passive_ceiling is None:
-                raise CombatEngineError("an unseen quarry requires pursuer_passive_perception_max")
+                raise CombatEngineError("an unseen quarry requires an active pursuer")
             quarry_actor = dict(quarry_actors or {}).get(quarry_id)
             if quarry_actor is None:
                 raise CombatEngineError(
@@ -781,6 +804,30 @@ def advance_chase_turn(
             if item.get("role") == "quarry"
         ):
             outcome = {"status": "quarry_escaped", "summary": "Every quarry escaped."}
+
+    if outcome is not None:
+        next_pending = None
+        value["pending_complication"] = None
+
+    turn_result = {
+        "round": turn_round,
+        "actor_id": str(actor_id_value),
+        "action": normalized_action,
+        "speed_ft": speed,
+        "stand_cost_ft": stand_cost,
+        "movement_penalty_ft": movement_penalty,
+        "moved_ft": moved_ft,
+        "position_ft": int(participant["position_ft"]),
+        "dash_count": int(participant.get("dash_count", 0) or 0),
+        "free_dash_limit": int(participant.get("free_dash_limit", 0) or 0),
+        "dash_check": dash_check,
+        "exhaustion_gained": exhaustion_gained,
+        "complication": complication_result,
+        "guard_attack": guard_attack,
+        "next_complication_roll": complication_roll,
+        "next_complication": deepcopy(next_pending),
+    }
+    value.setdefault("log", []).append(deepcopy(turn_result))
 
     if outcome is not None:
         value["active"] = False
