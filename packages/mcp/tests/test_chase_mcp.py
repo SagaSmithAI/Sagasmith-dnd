@@ -67,9 +67,17 @@ def test_public_chase_uses_exact_module_source_and_no_combat_map(
     )
     original_advance = server_module.advance_chase_turn
 
-    def deterministic_advance(*args, **kwargs):
-        kwargs["rng"] = _SequenceRng(20)
-        return original_advance(*args, **kwargs)
+    def deterministic_advance(chase, *args, **kwargs):
+        chase = {
+            **chase,
+            "pending_complication": {
+                "number": 9,
+                "source_actor_id": chase["quarry_ids"][0],
+                "rolled_round": 1,
+            },
+        }
+        kwargs["rng"] = _SequenceRng(20, 3, 4, 20)
+        return original_advance(chase, *args, **kwargs)
 
     monkeypatch.setattr(server_module, "advance_chase_turn", deterministic_advance)
 
@@ -346,6 +354,19 @@ def test_public_chase_uses_exact_module_source_and_no_combat_map(
         )
 
         assert turn["turn"]["moved_ft"] == 60
+        guard_attack = turn["turn"]["guard_attack"]
+        assert guard_attack["attack_roll"]["critical"] is True
+        assert guard_attack["hit"] is True
+        assert guard_attack["damage"]["expression"] == "2d6+1"
+        assert guard_attack["damage"]["rolls"] == [3, 4]
+        assert guard_attack["damage"]["total"] == 8
+        assert turn["status"] == "committed"
+        assert turn["character"]["sheet"]["combat"]["hp"]["value"] == 12
+        assert turn["character"]["revision"] == current_pursuer["revision"] + 1
+        assert any(
+            receipt["mechanic_id"] == "dnd5e.core.chase.urban_complications"
+            for receipt in turn["rule_receipts"]
+        )
         assert turn["chase"]["active"] is False
         assert turn["chase"]["outcome"]["status"] == "destination_reached"
         queried = await _call(
