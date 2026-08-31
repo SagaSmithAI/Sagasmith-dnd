@@ -531,42 +531,35 @@ def test_module_start_finalize_writes_a_finalized_module_pack(tmp_path: Path) ->
             "chunk_hash": evidence_chunks[0]["content_hash"],
             "note": "Agent-reviewed source fixture.",
         }
-        malformed = await _call(
-            server,
-            "module_draft",
-            {
-                "campaign_id": campaign["id"],
-                "action": "edit",
-                "payload": {
-                    "job_id": started["job"]["id"],
-                    "operation": "package",
-                    "narrative": {"endings": "The end"},
-                },
-                "expected_revision": started["job"]["revision"],
-                "idempotency_key": "module-malformed-narrative",
-            },
-        )
         with pytest.raises(
             Exception,
-            match="module narrative is missing required fields: dossiers",
+            match="module Pack narrative requires exactly dossiers and endings arrays",
         ):
             await _call(
                 server,
                 "module_draft",
                 {
                     "campaign_id": campaign["id"],
-                    "action": "finalize",
+                    "action": "edit",
                     "payload": {
                         "job_id": started["job"]["id"],
-                        "pack_id": "dnd5e.module.malformed",
-                        "confirmation": {
-                            "confirmed": True,
-                            "note": "This malformed draft must not finalize.",
-                        },
+                        "operation": "package",
+                        "narrative": {"endings": "The end"},
                     },
-                    "idempotency_key": "reject-malformed-narrative",
+                    "expected_revision": started["job"]["revision"],
+                    "idempotency_key": "module-malformed-narrative",
                 },
             )
+        unchanged = await _call(
+            server,
+            "module_draft",
+            {
+                "campaign_id": campaign["id"],
+                "action": "get",
+                "payload": {"job_id": started["job"]["id"]},
+            },
+        )
+        assert unchanged["job"] == started["job"]
         edited = await _call(
             server,
             "module_draft",
@@ -614,7 +607,7 @@ def test_module_start_finalize_writes_a_finalized_module_pack(tmp_path: Path) ->
                         "content_summary": {},
                     },
                 },
-                "expected_revision": malformed["job"]["revision"],
+                "expected_revision": started["job"]["revision"],
                 "idempotency_key": "module-package-edit",
             },
         )
@@ -851,7 +844,7 @@ def test_module_get_lists_compact_restart_handles(tmp_path: Path) -> None:
                 "payload": {
                     "job_id": started["job_id"],
                     "operation": "package",
-                    "manifest": {"title": "Restart Source"},
+                    "version": "1.0.0",
                 },
                 "expected_revision": started["job"]["revision"],
                 "idempotency_key": "restart-package-edit",
@@ -870,9 +863,9 @@ def test_module_get_lists_compact_restart_handles(tmp_path: Path) -> None:
             "job": {
                 **listed["jobs"][0],
                 "revision": package_edit["job"]["revision"],
-                "pack_decision_fields": ["manifest"],
+                "pack_decision_fields": ["version"],
             },
-            "pack_draft": {"manifest": {"title": "Restart Source"}},
+            "pack_draft": {"version": "1.0.0"},
             "finalized_package": {},
         }
         assert "inspection" not in package_view["job"]

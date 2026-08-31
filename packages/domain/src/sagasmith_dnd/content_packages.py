@@ -126,6 +126,15 @@ def _refresh_reviewed_content_hashes(artifact: Mapping[str, Any]) -> dict[str, A
 _EMERGENT_MODULE_CLASSIFICATIONS = {"emergent_seed", "emergent_episode"}
 _EMERGENT_LINEAGE_FIELDS = {"root_module_key", "parent_module_key", "generation"}
 _EMERGENT_MODULE_KEY = re.compile(r"^[a-z0-9][a-z0-9:_-]{0,199}$")
+_MODULE_CLASSIFICATIONS = {"adventure", "campaign", *_EMERGENT_MODULE_CLASSIFICATIONS}
+_MODULE_CATALOG_FIELDS = {"items", "encounters", "hazards", "handouts", "mechanics"}
+_MODULE_PLAY_PROFILE_FIELDS = {
+    "party_size",
+    "starting_level",
+    "expected_end_level",
+    "advancement",
+    "pregenerated_characters",
+}
 
 
 def _validate_emergent_module_shape(content: Mapping[str, Any]) -> None:
@@ -166,6 +175,285 @@ def _validate_emergent_module_shape(content: Mapping[str, Any]) -> None:
         raise ValueError(
             "emergent_episode lineage requires a parent_module_key and positive generation"
         )
+
+
+def _validate_module_source_refs(value: Mapping[str, Any], field: str, *, required: bool) -> None:
+    refs = value.get("source_refs")
+    if not isinstance(refs, list) or (required and not refs):
+        requirement = "at least one source_ref" if required else "a source_refs array"
+        raise ValueError(f"{field} requires {requirement}")
+    for index, raw_ref in enumerate(refs):
+        ref_field = f"{field}.source_refs[{index}]"
+        if not isinstance(raw_ref, Mapping):
+            raise ValueError(f"{ref_field} must be an object")
+        if set(raw_ref) != {"source_key", "page", "chunk_hash", "note"}:
+            raise ValueError(
+                f"{ref_field} requires exactly source_key, page, chunk_hash, and note"
+            )
+        if not str(raw_ref.get("source_key") or "").strip():
+            raise ValueError(f"{ref_field}.source_key must not be empty")
+        page = raw_ref.get("page")
+        if page is not None and (
+            isinstance(page, bool) or not isinstance(page, int) or page < 1
+        ):
+            raise ValueError(f"{ref_field}.page must be null or a positive integer")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(raw_ref.get("chunk_hash") or "")):
+            raise ValueError(f"{ref_field}.chunk_hash must be a lowercase SHA-256")
+        note = str(raw_ref.get("note") or "").strip()
+        if not 1 <= len(note) <= 2000:
+            raise ValueError(f"{ref_field}.note must contain 1 to 2000 characters")
+
+
+def _validate_module_play_profile(value: Mapping[str, Any]) -> None:
+    missing = sorted(_MODULE_PLAY_PROFILE_FIELDS - set(value))
+    unsupported = sorted(set(value) - _MODULE_PLAY_PROFILE_FIELDS)
+    if missing or unsupported:
+        details = []
+        if missing:
+            details.append("missing fields: " + ", ".join(missing))
+        if unsupported:
+            details.append("unsupported fields: " + ", ".join(unsupported))
+        raise ValueError("D&D module play_profile has " + "; ".join(details))
+
+    party_size = value["party_size"]
+    if not isinstance(party_size, Mapping) or set(party_size) != {
+        "minimum",
+        "maximum",
+        "source_refs",
+    }:
+        raise ValueError(
+            "D&D module play_profile.party_size requires exactly minimum, maximum, "
+            "and source_refs"
+        )
+    party_minimum = party_size.get("minimum")
+    party_maximum = party_size.get("maximum")
+    if (party_minimum is None) != (party_maximum is None):
+        raise ValueError("D&D module party_size minimum and maximum must both be set or null")
+    if party_minimum is not None and (
+        any(
+            isinstance(item, bool) or not isinstance(item, int) or not 1 <= item <= 20
+            for item in (party_minimum, party_maximum)
+        )
+        or party_maximum < party_minimum
+    ):
+        raise ValueError("D&D module party_size requires a valid 1 to 20 range")
+    _validate_module_source_refs(
+        party_size,
+        "D&D module play_profile.party_size",
+        required=party_minimum is not None,
+    )
+
+    level_values: dict[str, int] = {}
+    for field in ("starting_level", "expected_end_level"):
+        item = value[field]
+        if not isinstance(item, Mapping) or set(item) != {"value", "source_refs"}:
+            raise ValueError(
+                f"D&D module play_profile.{field} requires exactly value and source_refs"
+            )
+        level = item.get("value")
+        if isinstance(level, bool) or not isinstance(level, int) or not 1 <= level <= 20:
+            raise ValueError(f"D&D module play_profile.{field}.value must be from 1 to 20")
+        level_values[field] = level
+        _validate_module_source_refs(
+            item,
+            f"D&D module play_profile.{field}",
+            required=True,
+        )
+    if level_values["expected_end_level"] < level_values["starting_level"]:
+        raise ValueError("D&D module expected_end_level must not precede starting_level")
+
+    advancement = value["advancement"]
+    if not isinstance(advancement, Mapping) or set(advancement) != {
+        "modes",
+        "recommended",
+        "source_refs",
+    }:
+        raise ValueError(
+            "D&D module play_profile.advancement requires exactly modes, recommended, "
+            "and source_refs"
+        )
+    modes = advancement.get("modes")
+    recommended = str(advancement.get("recommended") or "")
+    if (
+        not isinstance(modes, list)
+        or not modes
+        or any(not isinstance(item, str) or not item.strip() or item == "unknown" for item in modes)
+        or recommended not in modes
+    ):
+        raise ValueError(
+            "D&D module advancement requires non-unknown modes and a recommended member"
+        )
+    _validate_module_source_refs(
+        advancement,
+        "D&D module play_profile.advancement",
+        required=True,
+    )
+
+    pregenerated = value["pregenerated_characters"]
+    if not isinstance(pregenerated, Mapping) or set(pregenerated) != {
+        "available",
+        "applicability",
+        "source_refs",
+    }:
+        raise ValueError(
+            "D&D module play_profile.pregenerated_characters requires exactly available, "
+            "applicability, and source_refs"
+        )
+    if not isinstance(pregenerated.get("available"), bool):
+        raise ValueError("D&D module pregenerated_characters.available must be a boolean")
+    applicability = str(pregenerated.get("applicability") or "").strip()
+    if not 1 <= len(applicability) <= 2000:
+        raise ValueError(
+            "D&D module pregenerated_characters.applicability must contain 1 to 2000 characters"
+        )
+    _validate_module_source_refs(
+        pregenerated,
+        "D&D module play_profile.pregenerated_characters",
+        required=True,
+    )
+
+
+def validate_module_pack_decisions(value: Mapping[str, Any]) -> None:
+    """Validate each supplied Module Pack draft decision before it is persisted."""
+
+    manifest = value.get("manifest")
+    if manifest is not None:
+        if not isinstance(manifest, Mapping):
+            raise ValueError("module Pack manifest must be an object")
+        required = {
+            "title",
+            "classification",
+            "compatibility",
+            "play_profile",
+            "continuity",
+            "activation",
+            "content_summary",
+        }
+        missing = sorted(required - set(manifest))
+        unsupported = sorted(set(manifest) - required)
+        if missing or unsupported:
+            details = []
+            if missing:
+                details.append("missing fields: " + ", ".join(missing))
+            if unsupported:
+                details.append("unsupported fields: " + ", ".join(unsupported))
+            raise ValueError("module Pack manifest has " + "; ".join(details))
+        title = str(manifest.get("title") or "").strip()
+        if not 1 <= len(title) <= 500:
+            raise ValueError("module Pack manifest.title must contain 1 to 500 characters")
+        classification = str(manifest.get("classification") or "")
+        if classification not in _MODULE_CLASSIFICATIONS:
+            raise ValueError(
+                "module Pack manifest.classification must be adventure, campaign, "
+                "emergent_seed, or emergent_episode"
+            )
+        compatibility = manifest.get("compatibility")
+        if not isinstance(compatibility, Mapping) or set(compatibility) != {
+            "editions",
+            "required_capabilities",
+        }:
+            raise ValueError(
+                "module Pack manifest.compatibility requires exactly editions and "
+                "required_capabilities"
+            )
+        editions = compatibility.get("editions")
+        if (
+            not isinstance(editions, list)
+            or not editions
+            or any(item not in {"2014", "2024"} for item in editions)
+        ):
+            raise ValueError("module Pack manifest.compatibility.editions must use 2014 or 2024")
+        capabilities = compatibility.get("required_capabilities")
+        if not isinstance(capabilities, list) or any(
+            not isinstance(item, str) or not item.strip() for item in capabilities
+        ):
+            raise ValueError(
+                "module Pack manifest.compatibility.required_capabilities must be a string array"
+            )
+        profile = manifest.get("play_profile")
+        if not isinstance(profile, Mapping):
+            raise ValueError("module Pack manifest.play_profile must be an object")
+        _validate_module_play_profile(profile)
+        continuity = manifest.get("continuity")
+        if not isinstance(continuity, Mapping) or set(continuity) != {
+            "series_id",
+            "order",
+            "continues_from",
+            "state_policy",
+        }:
+            raise ValueError(
+                "module Pack manifest.continuity requires exactly series_id, order, "
+                "continues_from, and state_policy"
+            )
+        if not isinstance(continuity.get("state_policy"), Mapping):
+            raise ValueError("module Pack manifest.continuity.state_policy must be an object")
+        activation = manifest.get("activation")
+        if not isinstance(activation, Mapping) or set(activation) != {
+            "mode",
+            "default_active",
+        }:
+            raise ValueError(
+                "module Pack manifest.activation requires exactly mode and default_active"
+            )
+        if activation.get("mode") != "campaign_attach":
+            raise ValueError("module Pack manifest.activation.mode must be campaign_attach")
+        if not isinstance(activation.get("default_active"), bool):
+            raise ValueError("module Pack manifest.activation.default_active must be a boolean")
+        if not isinstance(manifest.get("content_summary"), Mapping):
+            raise ValueError("module Pack manifest.content_summary must be an object")
+
+    catalogs = value.get("catalogs")
+    if catalogs is not None:
+        if not isinstance(catalogs, Mapping) or not catalogs:
+            raise ValueError("module Pack catalogs must be a non-empty object")
+        unsupported = sorted(set(catalogs) - _MODULE_CATALOG_FIELDS)
+        non_arrays = sorted(name for name, items in catalogs.items() if not isinstance(items, list))
+        if unsupported or non_arrays:
+            raise ValueError(
+                "module Pack catalogs may contain only items, encounters, hazards, handouts, "
+                "and mechanics arrays"
+            )
+
+    narrative = value.get("narrative")
+    if narrative is not None:
+        if not isinstance(narrative, Mapping) or set(narrative) != {"dossiers", "endings"}:
+            raise ValueError("module Pack narrative requires exactly dossiers and endings arrays")
+        if any(not isinstance(narrative.get(field), list) for field in ("dossiers", "endings")):
+            raise ValueError("module Pack narrative requires exactly dossiers and endings arrays")
+
+    dependencies = value.get("dependencies")
+    if dependencies is not None:
+        if not isinstance(dependencies, list):
+            raise ValueError("module Pack dependencies must be an array")
+        for index, dependency in enumerate(dependencies):
+            field = f"module Pack dependencies[{index}]"
+            if not isinstance(dependency, Mapping) or set(dependency) != {
+                "kind",
+                "id",
+                "version",
+                "checksum",
+                "optional",
+            }:
+                raise ValueError(
+                    f"{field} requires exactly kind, id, version, checksum, and optional"
+                )
+            if dependency.get("kind") not in {"addon", "module", "preset", "core_rules"}:
+                raise ValueError(f"{field}.kind is unsupported")
+            if not str(dependency.get("id") or "").strip():
+                raise ValueError(f"{field}.id must not be empty")
+            if not str(dependency.get("version") or "").strip():
+                raise ValueError(f"{field}.version must not be empty")
+            if not re.fullmatch(r"[0-9a-f]{64}", str(dependency.get("checksum") or "")):
+                raise ValueError(f"{field}.checksum must be a lowercase SHA-256")
+            if not isinstance(dependency.get("optional"), bool):
+                raise ValueError(f"{field}.optional must be a boolean")
+
+    metadata = value.get("metadata")
+    if metadata is not None and not isinstance(metadata, Mapping):
+        raise ValueError("module Pack metadata must be an object")
+    version = value.get("version")
+    if version is not None and not str(version).strip():
+        raise ValueError("module Pack version must not be empty")
 
 
 def validate_dnd_content_package(package: Mapping[str, Any]) -> dict[str, Any]:
