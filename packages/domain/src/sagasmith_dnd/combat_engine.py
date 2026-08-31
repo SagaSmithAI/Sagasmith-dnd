@@ -854,21 +854,27 @@ def start_encounter(
         for items in ties.values()
         if (
             len(items) > 1
-            and all(item["_initiative_supplied"] for item in items)
-            and not all(item["_tie_breaker_supplied"] for item in items)
+            and (
+                not all(item["_tie_breaker_supplied"] for item in items)
+                or len({int(item["tie_breaker"]) for item in items}) != len(items)
+            )
         )
     ]
     if unresolved_ties:
-        ruling_kind = (
-            "player_owned_choice"
-            if any(
-                all(item.get("character_type") == "pc" for item in items)
-                for items in unresolved_ties
-            )
-            else "agent_dm_adjudication"
+        player_owned_ties = [
+            items
+            for items in unresolved_ties
+            if all(item.get("character_type") == "pc" for item in items)
+        ]
+        selected_ties = player_owned_ties or unresolved_ties
+        ruling_kind = "player_owned_choice" if player_owned_ties else "agent_dm_adjudication"
+        tied_actor_groups = "; ".join(
+            ", ".join(str(item["actor_id"]) for item in items)
+            for items in selected_ties
         )
         raise NeedsRulingError(
-            "initiative ties need explicit tie_breaker choices",
+            "initiative ties need explicit unique tie_breaker choices for "
+            f"{tied_actor_groups}",
             missing=("tie_breaker",),
             ruling_kind=ruling_kind,
         )
@@ -948,7 +954,13 @@ def queue_combatant(
         ]
         if int(item.get("initiative", 0) or 0) == int(generated["initiative"])
     ]
-    if same_initiative and "tie_breaker" not in actor:
+    supplied_tie_breaker_conflicts = "tie_breaker" in actor and any(
+        int(item.get("tie_breaker", 0) or 0) == int(generated["tie_breaker"])
+        for item in same_initiative
+    )
+    if same_initiative and (
+        "tie_breaker" not in actor or supplied_tie_breaker_conflicts
+    ):
         ruling_kind = (
             "player_owned_choice"
             if actor.get("character_type") == "pc"
@@ -956,7 +968,7 @@ def queue_combatant(
             else "agent_dm_adjudication"
         )
         raise NeedsRulingError(
-            "joining initiative ties need an explicit tie_breaker choice",
+            "joining initiative ties need an explicit unique tie_breaker choice",
             missing=("tie_breaker",),
             ruling_kind=ruling_kind,
         )

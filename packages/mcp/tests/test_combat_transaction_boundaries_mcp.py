@@ -37,6 +37,148 @@ def _config(tmp_path: Path) -> McpConfig:
     )
 
 
+def test_engine_rolled_initiative_tie_rewinds_before_explicit_retry(
+    tmp_path: Path,
+) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {
+                "name": "Initiative tie retry",
+                "edition": "2014",
+                "random_seed": "initiative-tie-5",
+                "idempotency_key": "campaign",
+            },
+        )
+        actors = []
+        for index in range(2):
+            actor = await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "direct",
+                    "payload": {
+                        "campaign_id": campaign["id"],
+                        "name": f"Tie actor {index}",
+                        "sheet": default_character_sheet(),
+                    },
+                    "principal_id": "system:local",
+                    "idempotency_key": f"actor-{index}",
+                },
+            )
+            actors.append(actor)
+        campaign = await _call(
+            server,
+            "campaign_query",
+            {
+                "view": "get",
+                "payload": {"campaign_id": campaign["id"]},
+                "principal_id": "system:local",
+            },
+        )
+        phase = await _call(
+            server,
+            "game_phase",
+            {
+                "campaign_id": campaign["id"],
+                "action": "set",
+                "tool_profile": "play",
+                "expected_revision": campaign["revision"],
+                "idempotency_key": "phase",
+            },
+        )
+        before = await _call(
+            server,
+            "campaign_query",
+            {
+                "view": "get",
+                "payload": {"campaign_id": campaign["id"]},
+                "principal_id": "system:local",
+            },
+        )
+        assert before["state"]["random_stream"]["position"] == 0
+
+        pending_stream = server_module.CampaignRandomStream.from_campaign_state(
+            campaign["id"],
+            before["state"],
+            operation="combat_start",
+            idempotency_key="start-pending",
+        )
+        with server_module.use_random_stream(pending_stream):
+            pending = await _call(
+                server,
+                "combat_start",
+                {
+                    "positioning_mode": "agent",
+                    "campaign_id": campaign["id"],
+                    "participant_ids": [actor["id"] for actor in actors],
+                    "participant_config": [
+                        {"actor_id": actor["id"]} for actor in actors
+                    ],
+                    "expected_revision": phase["campaign_revision"],
+                    "idempotency_key": "start-pending",
+                },
+            )
+        assert pending["status"] == "pending_ruling"
+        assert pending["ruling_kind"] == "player_owned_choice"
+        assert pending["committed"] is False
+        assert pending_stream.position == 0
+
+        unchanged = await _call(
+            server,
+            "campaign_query",
+            {
+                "view": "get",
+                "payload": {"campaign_id": campaign["id"]},
+                "principal_id": "system:local",
+            },
+        )
+        assert unchanged["revision"] == phase["campaign_revision"]
+        assert unchanged["state"]["random_stream"]["position"] == 0
+
+        retry_stream = server_module.CampaignRandomStream.from_campaign_state(
+            campaign["id"],
+            unchanged["state"],
+            operation="combat_start",
+            idempotency_key="start-resolved",
+        )
+        with server_module.use_random_stream(retry_stream):
+            started = await _call(
+                server,
+                "combat_start",
+                {
+                    "positioning_mode": "agent",
+                    "campaign_id": campaign["id"],
+                    "participant_ids": [actor["id"] for actor in actors],
+                    "participant_config": [
+                        {"actor_id": actor["id"], "tie_breaker": index}
+                        for index, actor in enumerate(actors)
+                    ],
+                    "expected_revision": phase["campaign_revision"],
+                    "idempotency_key": "start-resolved",
+                },
+            )
+        assert retry_stream.has_unpersisted_draws is False
+        assert retry_stream.receipt()["position_before"] == 0
+        assert retry_stream.receipt()["position_after"] == 2
+        assert len({item["initiative"] for item in started["combat"]["combatants"]}) == 1
+
+        committed = await _call(
+            server,
+            "campaign_query",
+            {
+                "view": "get",
+                "payload": {"campaign_id": campaign["id"]},
+                "principal_id": "system:local",
+            },
+        )
+        assert committed["state"]["random_stream"]["position"] == 2
+
+    asyncio.run(exercise())
+
+
 def test_combat_query_exposes_dm_transaction_history_and_receipts(
     tmp_path: Path,
 ) -> None:

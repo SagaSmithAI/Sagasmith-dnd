@@ -445,6 +445,10 @@ def _grid_encounter(
     ruleset: str = "2014",
 ) -> dict:
     positions = [dict(actor["position"]) for actor in participants]
+    ordered_participants = [
+        {**actor, "tie_breaker": actor.get("tie_breaker", index)}
+        for index, actor in enumerate(participants)
+    ]
     battle_map = compile_battle_map(
         {"scene_id": "test-grid", "spatial": {}},
         {
@@ -453,7 +457,7 @@ def _grid_encounter(
         },
     )
     return start_encounter(
-        participants,
+        ordered_participants,
         ruleset=ruleset,
         battle_map=battle_map,
         positioning_mode="grid",
@@ -3248,6 +3252,90 @@ def test_initiative_ties_require_explicit_tie_breakers() -> None:
     assert pc_tie.value.ruling_kind == "player_owned_choice"
 
 
+@pytest.mark.parametrize("ruleset", ["2014", "2024"])
+def test_engine_rolled_initiative_ties_require_the_rules_owner_to_choose(
+    ruleset: str,
+) -> None:
+    participants = [
+        {**_actor("pc-a"), "character_type": "pc"},
+        {**_actor("pc-b"), "character_type": "pc"},
+    ]
+
+    with pytest.raises(NeedsRulingError, match="tie_breaker") as tied:
+        start_encounter(participants, ruleset=ruleset, rng=_SequenceRng(10, 10))
+
+    assert tied.value.ruling_kind == "player_owned_choice"
+
+    settled = start_encounter(
+        [
+            {**participants[0], "tie_breaker": 1},
+            {**participants[1], "tie_breaker": 0},
+        ],
+        ruleset=ruleset,
+        rng=_SequenceRng(10, 10),
+    )
+    assert [item["actor_id"] for item in settled["combatants"]] == ["pc-b", "pc-a"]
+
+
+@pytest.mark.parametrize(
+    ("participants", "ruling_kind"),
+    [
+        (
+            [
+                {**_actor("pc-a"), "character_type": "pc"},
+                {**_actor("pc-b"), "character_type": "pc"},
+            ],
+            "player_owned_choice",
+        ),
+        ([_actor("npc-a"), _actor("npc-b")], "agent_dm_adjudication"),
+        (
+            [{**_actor("pc"), "character_type": "pc"}, _actor("npc")],
+            "agent_dm_adjudication",
+        ),
+    ],
+)
+def test_initiative_ties_reject_duplicate_explicit_tie_breakers(
+    participants: list[dict[str, object]],
+    ruling_kind: str,
+) -> None:
+    with pytest.raises(NeedsRulingError, match="unique tie_breaker") as engine_rolled:
+        start_encounter(participants, rng=_SequenceRng(10, 10))
+    assert engine_rolled.value.ruling_kind == ruling_kind
+
+    tied = [
+        {**participant, "initiative": 10, "tie_breaker": 0}
+        for participant in participants
+    ]
+
+    with pytest.raises(NeedsRulingError, match="unique tie_breaker") as raised:
+        start_encounter(tied)
+
+    assert raised.value.ruling_kind == ruling_kind
+
+
+def test_initiative_tie_groups_request_player_choices_before_dm_choices() -> None:
+    participants = [
+        {**_actor("pc-a"), "character_type": "pc", "initiative": 20},
+        {**_actor("pc-b"), "character_type": "pc", "initiative": 20},
+        {**_actor("npc-a"), "initiative": 10},
+        {**_actor("npc-b"), "initiative": 10},
+    ]
+
+    with pytest.raises(NeedsRulingError, match="pc-a, pc-b") as player_choice:
+        start_encounter(participants)
+    assert player_choice.value.ruling_kind == "player_owned_choice"
+
+    player_settled = [
+        {**participant, "tie_breaker": index}
+        if participant.get("character_type") == "pc"
+        else participant
+        for index, participant in enumerate(participants)
+    ]
+    with pytest.raises(NeedsRulingError, match="npc-a, npc-b") as dm_choice:
+        start_encounter(player_settled)
+    assert dm_choice.value.ruling_kind == "agent_dm_adjudication"
+
+
 def test_half_cover_uses_the_rules_ac_bonus() -> None:
     attacker = _actor("attacker")
     target = _actor("target", ac=10)
@@ -4899,6 +4987,13 @@ def test_queued_combatant_requires_explicit_tie_breaker_for_initiative_tie() -> 
     with pytest.raises(NeedsRulingError, match="tie_breaker") as raised:
         queue_combatant(encounter, {**_actor("ally"), "initiative": 10})
     assert raised.value.ruling_kind == "agent_dm_adjudication"
+
+    with pytest.raises(NeedsRulingError, match="unique tie_breaker") as duplicate:
+        queue_combatant(
+            encounter,
+            {**_actor("ally"), "initiative": 10, "tie_breaker": 1},
+        )
+    assert duplicate.value.ruling_kind == "agent_dm_adjudication"
 
 
 def test_generic_ready_rejects_spell_payload_that_would_bypass_resources() -> None:
