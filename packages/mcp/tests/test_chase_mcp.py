@@ -146,6 +146,8 @@ def test_public_chase_uses_exact_module_source_and_no_combat_map(
         actor_sheet = default_character_sheet()
         actor_sheet["edition"] = "2014"
         actor_sheet["combat"]["hp"] = {"value": 20, "max": 20, "temp": 0}
+        actor_sheet["abilities"]["wisdom"]["score"] = 1
+        actor_sheet["traits"]["senses"]["passive_perception_bonus"] = -5
         pursuer = await _call(
             server,
             "character_create_from",
@@ -252,6 +254,7 @@ def test_public_chase_uses_exact_module_source_and_no_combat_map(
         )
 
         assert started["chase"]["mode"] == "theater_of_the_mind"
+        assert started["chase"]["pursuer_passive_perception_max"] == 0
         assert "battle_map" not in started["chase"]
         assert started["chase"]["source_ref"]["chunk_id"] == expanded["chunk_id"]
         assert (

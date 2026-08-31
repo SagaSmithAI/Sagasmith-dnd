@@ -132,6 +132,46 @@ def test_chase_preserves_an_explicit_zero_walk_speed() -> None:
     assert quarry_state["speed_ft"] == 0
 
 
+def test_chase_preserves_non_positive_passive_perception_for_escape_checks() -> None:
+    pursuer = _actor("pursuer", initiative=20)
+    pursuer["sheet"]["abilities"]["wisdom"]["score"] = 1
+    pursuer["sheet"]["traits"]["senses"]["passive_perception_bonus"] = -5
+    pursuer["derived"] = derive_character_sheet(pursuer["sheet"])
+    quarry = _actor("quarry", initiative=10)
+
+    zero_chase = start_chase(
+        [pursuer, quarry],
+        quarry_ids=["quarry"],
+        initial_distance_ft=100,
+    )
+    assert pursuer["derived"]["passive_perception"] == 0
+    assert zero_chase["pursuer_passive_perception_max"] == 0
+
+    pursuer["sheet"]["traits"]["senses"]["passive_perception_bonus"] = -6
+    pursuer["derived"] = derive_character_sheet(pursuer["sheet"])
+    negative_chase = start_chase(
+        [pursuer, quarry],
+        quarry_ids=["quarry"],
+        initial_distance_ft=100,
+    )
+    negative_chase["turn_index"] = 1
+    result = advance_chase_turn(
+        negative_chase,
+        quarry,
+        actor_id_value="quarry",
+        action="move",
+        quarry_visibility={"quarry": False},
+        quarry_actors={"quarry": quarry},
+        rng=_SequenceRng(20, 1),
+    )
+
+    escape = result["turn"]["escape_checks"][0]
+    assert pursuer["derived"]["passive_perception"] == -1
+    assert negative_chase["pursuer_passive_perception_max"] == -1
+    assert escape["passive_perception_max"] == -1
+    assert escape["check"]["dc"] == 0
+
+
 def test_urban_complication_affects_next_participant() -> None:
     pursuer = _actor("pursuer", initiative=20)
     quarry = _actor("quarry", initiative=10)
