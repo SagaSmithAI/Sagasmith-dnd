@@ -42969,6 +42969,46 @@ boundary.
             **({"content_package": package} if data.get("include_package") is True else {}),
         }
 
+    def _campaign_official_addon_catalog(
+        campaign_id: str,
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], set[str]]:
+        """Return edition-visible built-ins and every governed official addon id."""
+
+        profile = rule_profiles.get(campaign_id)
+        edition = str(profile.edition) if profile is not None else ""
+        all_official = {
+            str(item["id"]): dict(item) for item in official_expansion_catalog()
+        }
+        all_support = {
+            str(item["id"]): dict(item) for item in official_expansion_support_catalog()
+        }
+        official = (
+            {
+                str(item["id"]): dict(item)
+                for item in official_expansion_catalog(edition)
+            }
+            if edition
+            else {}
+        )
+        support = (
+            {
+                package_id: item
+                for package_id, item in all_support.items()
+                if edition in {str(value) for value in item.get("editions") or []}
+            }
+            if edition
+            else {}
+        )
+        return official, support, {*all_official, *all_support}
+
+    def _require_campaign_addon_visible(
+        campaign_id: str,
+        addon_id: str,
+    ) -> None:
+        official, support, governed_ids = _campaign_official_addon_catalog(campaign_id)
+        if addon_id in governed_ids and addon_id not in official and addon_id not in support:
+            raise LookupError(addon_id)
+
     def _content_pack_addons(
         payload: dict[str, Any] | None,
         principal_id: str,
@@ -42984,8 +43024,7 @@ boundary.
                 branch_id=(str(data["branch_id"]) if data.get("branch_id") else None),
             )
         }
-        official = {item["id"]: item for item in official_expansion_catalog()}
-        support = {item["id"]: item for item in official_expansion_support_catalog()}
+        official, support, governed_ids = _campaign_official_addon_catalog(campaign_id)
         result = [
             {
                 **asdict(item),
@@ -43014,6 +43053,9 @@ boundary.
                 ),
             }
             for item in versions
+            if item.addon_id not in governed_ids
+            or item.addon_id in official
+            or item.addon_id in support
         ]
         return result
 
@@ -43026,6 +43068,7 @@ boundary.
         access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
         addon_id = str(data["addon_id"])
         version = str(data["version"])
+        _require_campaign_addon_visible(campaign_id, addon_id)
         info = addons.get_version(addon_id, version)
         package = addons.get_package(addon_id, version)
         archive_name = str(info.provenance.get("content_archive_artifact") or "")
@@ -44536,6 +44579,11 @@ boundary.
                 )
                 if str(package.get("kind") or "") != kind:
                     raise ValueError("payload.kind does not match the finalized Pack archive")
+                if kind == "addon":
+                    _require_campaign_addon_visible(
+                        campaign_id,
+                        str(package.get("id") or ""),
+                    )
                 result = package
             elif kind == "core_rules":
                 pack_id = str(required(data, "pack_id"))
