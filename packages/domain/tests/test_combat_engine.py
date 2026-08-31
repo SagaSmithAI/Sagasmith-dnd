@@ -62,6 +62,7 @@ from sagasmith_dnd.combat_engine import (
     source_speed_multiplier,
     spend_movement,
     stabilize_sheet,
+    stand_up,
     standard_save_damage_reduction,
     start_encounter,
     trigger_readied_spell,
@@ -467,6 +468,63 @@ def test_zero_effective_speed_does_not_block_forced_movement_or_teleportation() 
 
     assert current_combatant(teleported)["position"] == {"x": 5.0, "y": 0.0}
     assert current_combatant(teleported)["turn_budget"]["movement"] == 30
+
+
+@pytest.mark.parametrize(
+    ("speed_multiplier", "condition"),
+    [(0.0, None), (1.0, "grappled"), (1.0, "restrained")],
+)
+def test_stand_up_rejects_current_zero_speed_with_stale_movement_budget(
+    speed_multiplier: float,
+    condition: str | None,
+) -> None:
+    actor = _actor("prone")
+    actor["sheet"]["conditions"] = ["prone"]
+    actor["position"] = {"x": 0, "y": 0}
+    encounter = _grid_encounter([actor])
+    current = current_combatant(encounter)
+    assert current is not None
+    assert current["turn_budget"]["movement"] == 30
+    current["speed_multiplier"] = speed_multiplier
+    if condition is not None:
+        current["conditions"].append(condition)
+    before = deepcopy(encounter)
+
+    with pytest.raises(CombatEngineError, match="effective speed is zero"):
+        stand_up(encounter, "prone")
+
+    assert encounter == before
+
+
+@pytest.mark.parametrize(
+    ("speed_multiplier", "condition", "expected_movement"),
+    [
+        (0.0, None, 30),
+        (0.5, None, 45),
+        (1.0, "grappled", 30),
+        (1.0, "restrained", 30),
+    ],
+)
+def test_dash_uses_current_effective_speed_instead_of_stale_base_speed(
+    speed_multiplier: float,
+    condition: str | None,
+    expected_movement: int,
+) -> None:
+    actor = _actor("dasher")
+    actor["position"] = {"x": 0, "y": 0}
+    encounter = _grid_encounter([actor])
+    current = current_combatant(encounter)
+    assert current is not None
+    assert current["turn_budget"]["movement"] == 30
+    current["speed_multiplier"] = speed_multiplier
+    if condition is not None:
+        current["conditions"].append(condition)
+
+    dashed = resolve_common_action(encounter, actor_id_value="dasher", action="dash")
+
+    budget = current_combatant(dashed)["turn_budget"]
+    assert budget["movement"] == expected_movement
+    assert budget["main_action"] == 0
 
 
 @pytest.mark.parametrize("movement_block", ["speed_zero", "spent", "grappled", "restrained"])

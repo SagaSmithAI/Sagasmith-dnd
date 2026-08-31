@@ -1254,13 +1254,19 @@ def pay_witch_bolt_sustain_action(
     }
 
 
-def _has_positive_effective_speed(combatant: dict[str, Any]) -> bool:
+def _effective_speed_ft(combatant: dict[str, Any]) -> int:
+    if _condition_set(combatant.get("conditions")) & {"grappled", "restrained"}:
+        return 0
     budget = dict(combatant.get("turn_budget") or {})
     recorded_speed_multiplier = combatant.get("speed_multiplier")
     speed_multiplier = float(
         1.0 if recorded_speed_multiplier is None else recorded_speed_multiplier
     )
-    return int(budget.get("speed", 0) or 0) > 0 and speed_multiplier > 0
+    return max(0, int(int(budget.get("speed", 0) or 0) * speed_multiplier))
+
+
+def _has_positive_effective_speed(combatant: dict[str, Any]) -> bool:
+    return _effective_speed_ft(combatant) > 0
 
 
 def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[str]:
@@ -4534,6 +4540,9 @@ def stand_up(encounter: dict[str, Any], actor_id_value: str) -> dict[str, Any]:
         raise CombatEngineError("actor is not prone")
     if conditions & {"dead", "unconscious", "stunned", "paralyzed", "petrified"}:
         raise CombatEngineError("actor cannot stand under its current conditions")
+    effective_speed = _effective_speed_ft(combatant)
+    if effective_speed <= 0:
+        raise CombatEngineError("actor cannot stand while its effective speed is zero")
     budget = dict(combatant.get("turn_budget") or {})
     cost = int(budget.get("speed", 0) or 0) // 2
     if int(budget.get("movement", 0) or 0) < cost:
@@ -5016,7 +5025,9 @@ def resolve_common_action(
     if action == "cast":
         flags["cast_declared"] = deepcopy(payload or {})
     elif action == "dash":
-        budget["movement"] = int(budget.get("movement", 0) or 0) + int(budget.get("speed", 0) or 0)
+        budget["movement"] = int(budget.get("movement", 0) or 0) + _effective_speed_ft(
+            acting
+        )
     elif action == "disengage":
         flags["disengaged"] = True
     elif action == "dodge":

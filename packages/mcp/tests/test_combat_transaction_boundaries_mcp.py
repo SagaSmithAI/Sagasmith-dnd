@@ -442,7 +442,7 @@ def test_incapacitated_actor_can_settle_free_object_interaction(tmp_path: Path) 
             },
         )
         sheet = default_character_sheet()
-        sheet["conditions"] = ["incapacitated"]
+        sheet["conditions"] = ["incapacitated", "prone"]
         actor = await _call(
             server,
             "character_create_from",
@@ -552,6 +552,17 @@ def test_incapacitated_actor_can_settle_free_object_interaction(tmp_path: Path) 
         for _attempt in range(2):
             with pytest.raises(Exception, match="effective speed is zero"):
                 await _call_raw(server, "combat_movement", blocked_move)
+        blocked_stand = {
+            "campaign_id": campaign["id"],
+            "actor_id": actor["id"],
+            "action": "stand",
+            "payload": {},
+            "expected_revision": effect_applied.revision,
+            "idempotency_key": "blocked-stand",
+        }
+        for _attempt in range(2):
+            with pytest.raises(Exception, match="effective speed is zero"):
+                await _call_raw(server, "combat_movement", blocked_stand)
         after_blocked_move = await _call(
             server,
             "campaign_query",
@@ -610,6 +621,110 @@ def test_incapacitated_actor_can_settle_free_object_interaction(tmp_path: Path) 
             },
         )
         assert after["actions"] == []
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize(
+    ("speed_multiplier", "condition", "expected_movement"),
+    [
+        (0.0, None, 30),
+        (0.5, None, 45),
+        (1.0, "grappled", 30),
+        (1.0, "restrained", 30),
+    ],
+)
+def test_dash_grants_only_current_effective_speed(
+    tmp_path: Path,
+    speed_multiplier: float,
+    condition: str | None,
+    expected_movement: int,
+) -> None:
+    async def exercise() -> None:
+        config = _config(tmp_path)
+        server = create_server(config)
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {
+                "name": "Effective-speed Dash",
+                "edition": "2014",
+                "idempotency_key": "campaign",
+            },
+        )
+        actor = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": "Dasher",
+                    "sheet": default_character_sheet(),
+                },
+                "principal_id": "system:local",
+                "idempotency_key": "actor",
+            },
+        )
+        campaign = await _call(
+            server,
+            "campaign_query",
+            {
+                "view": "get",
+                "payload": {"campaign_id": campaign["id"]},
+                "principal_id": "system:local",
+            },
+        )
+        await _call(
+            server,
+            "combat_start",
+            {
+                "positioning_mode": "agent",
+                "campaign_id": campaign["id"],
+                "participant_ids": [actor["id"]],
+                "participant_config": [{"actor_id": actor["id"], "initiative": 10}],
+                "expected_revision": campaign["revision"],
+                "idempotency_key": "start",
+            },
+        )
+
+        storage = server_module.SagaSmithStorage(config)
+        campaigns = server_module.CampaignService(storage.database)
+        stored = campaigns.get(campaign["id"])
+        state_with_effect = deepcopy(stored.state)
+        affected = state_with_effect["combat"]["combatants"][0]
+        assert affected["turn_budget"]["movement"] == 30
+        affected["speed_multiplier"] = speed_multiplier
+        if condition is not None:
+            affected["conditions"].append(condition)
+        effect_applied = campaigns.update(
+            campaign["id"],
+            state=state_with_effect,
+            expected_revision=stored.revision,
+        )
+
+        dash_request = {
+            "campaign_id": campaign["id"],
+            "actor_id": actor["id"],
+            "action": "dash",
+            "expected_revision": effect_applied.revision,
+            "idempotency_key": "dash",
+        }
+        dashed = await _call(server, "combat_common_action", dash_request)
+        replayed = await _call(server, "combat_common_action", dash_request)
+
+        assert replayed == dashed
+        assert dashed["status"] == "committed"
+        assert dashed["campaign_revision"] == effect_applied.revision + 1
+        combatant = dashed["combat"]["combatants"][0]
+        assert combatant["turn_budget"]["movement"] == expected_movement
+        assert combatant["turn_budget"]["main_action"] == 0
+        assert dashed["combat"]["log"][-1]["action"] == "dash"
+        after = campaigns.get(campaign["id"])
+        assert after.revision == effect_applied.revision + 1
+        assert after.state["combat"]["combatants"][0]["turn_budget"][
+            "movement"
+        ] == expected_movement
 
     asyncio.run(exercise())
 
