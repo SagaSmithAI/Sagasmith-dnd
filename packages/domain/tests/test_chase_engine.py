@@ -274,12 +274,40 @@ def test_last_active_pursuer_dropout_ends_chase_without_escape_check() -> None:
         pursuer,
         actor_id_value="pursuer",
         action="drop_out",
-        rng=_SequenceRng(20),
+        rng=_SequenceRng(),
     )
 
     assert dropped["chase"]["active"] is False
     assert dropped["chase"]["pursuer_passive_perception_max"] is None
+    assert dropped["chase"]["pending_complication"] is None
     assert dropped["chase"]["outcome"]["status"] == "quarry_escaped"
+    assert dropped["turn"]["next_complication_roll"] is None
+    assert dropped["turn"]["next_complication"] is None
+    assert dropped["turn"]["escape_checks"] == []
+
+
+def test_last_active_quarry_dropout_ends_chase_without_next_complication() -> None:
+    quarry = _actor("quarry", initiative=20)
+    pursuer = _actor("pursuer", initiative=10, passive_perception=15)
+    chase = start_chase(
+        [quarry, pursuer],
+        quarry_ids=["quarry"],
+        initial_distance_ft=100,
+    )
+
+    dropped = advance_chase_turn(
+        chase,
+        quarry,
+        actor_id_value="quarry",
+        action="drop_out",
+        rng=_SequenceRng(),
+    )
+
+    assert dropped["chase"]["active"] is False
+    assert dropped["chase"]["pending_complication"] is None
+    assert dropped["chase"]["outcome"]["status"] == "quarry_incapacitated"
+    assert dropped["turn"]["next_complication_roll"] is None
+    assert dropped["turn"]["next_complication"] is None
     assert dropped["turn"]["escape_checks"] == []
 
 
@@ -428,7 +456,7 @@ def test_urban_complication_incapacitation_prevents_movement() -> None:
         actor_id_value="quarry",
         action="move",
         complication_choice="acrobatics",
-        rng=_SequenceRng(1, 1, 20),
+        rng=_SequenceRng(1, 1),
     )
 
     assert result["sheet"]["combat"]["hp"]["value"] == 0
@@ -437,6 +465,10 @@ def test_urban_complication_incapacitation_prevents_movement() -> None:
     assert result["chase"]["participants"][1]["position_ft"] == 100
     assert result["chase"]["participants"][1]["active"] is False
     assert result["chase"]["participants"][1]["dropped_reason"] == "incapacitated"
+    assert result["chase"]["pending_complication"] is None
+    assert result["chase"]["outcome"]["status"] == "quarry_incapacitated"
+    assert result["turn"]["next_complication_roll"] is None
+    assert result["turn"]["next_complication"] is None
 
 
 def test_chase_prone_changes_share_immunity_and_effect_ownership() -> None:
@@ -538,13 +570,16 @@ def test_chase_exhaustion_level_six_marks_the_actor_dead() -> None:
         pursuer,
         actor_id_value="pursuer",
         action="dash",
-        rng=_SequenceRng(1, 20, 20),
+        rng=_SequenceRng(1, 20),
     )
 
     assert result["sheet"]["combat"]["exhaustion"] == 6
     assert "dead" in result["sheet"]["conditions"]
     assert result["chase"]["participants"][0]["active"] is False
     assert result["chase"]["participants"][0]["dropped_reason"] == "exhaustion_death"
+    assert result["chase"]["pending_complication"] is None
+    assert result["turn"]["next_complication_roll"] is None
+    assert result["turn"]["next_complication"] is None
 
 
 def test_inactive_participants_are_skipped_when_turn_order_wraps() -> None:

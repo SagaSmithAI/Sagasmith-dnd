@@ -685,57 +685,7 @@ def advance_chase_turn(
         participant["active"] = False
         participant["dropped_reason"] = "incapacitated"
 
-    complication_roll = asdict_roll(roll("1d20", rng=rng))
-    next_pending = None
-    if int(complication_roll["total"]) <= 10:
-        next_pending = {
-            "number": int(complication_roll["total"]),
-            "source_actor_id": str(actor_id_value),
-            "rolled_round": int(value.get("round", 1) or 1),
-        }
-    value["pending_complication"] = next_pending
-
-    turn_result = {
-        "round": int(value.get("round", 1) or 1),
-        "actor_id": str(actor_id_value),
-        "action": normalized_action,
-        "speed_ft": speed,
-        "stand_cost_ft": stand_cost,
-        "movement_penalty_ft": movement_penalty,
-        "moved_ft": moved_ft,
-        "position_ft": int(participant["position_ft"]),
-        "dash_count": int(participant.get("dash_count", 0) or 0),
-        "free_dash_limit": int(participant.get("free_dash_limit", 0) or 0),
-        "dash_check": dash_check,
-        "exhaustion_gained": exhaustion_gained,
-        "complication": complication_result,
-        "guard_attack": guard_attack,
-        "next_complication_roll": complication_roll,
-        "next_complication": deepcopy(next_pending),
-    }
-    value.setdefault("log", []).append(deepcopy(turn_result))
-
     participants_list = list(value.get("participants") or [])
-    current_index = next(
-        index
-        for index, item in enumerate(participants_list)
-        if str(item.get("actor_id") or "") == str(actor_id_value)
-    )
-    next_index = (current_index + 1) % len(participants_list)
-    round_ended = next_index == 0
-    if round_ended:
-        value["round"] = int(value.get("round", 1) or 1) + 1
-    checked = 0
-    while checked < len(participants_list) and not participants_list[next_index].get(
-        "active", True
-    ):
-        checked += 1
-        next_index = (next_index + 1) % len(participants_list)
-        if next_index == 0 and not round_ended:
-            round_ended = True
-            value["round"] = int(value.get("round", 1) or 1) + 1
-    value["turn_index"] = next_index
-
     active_pursuers = [
         item
         for item in participants_list
@@ -768,6 +718,58 @@ def advance_chase_turn(
             "summary": "A pursuer reached the quarry.",
             "distance": deepcopy(distance["lead"]),
         }
+
+    complication_roll = None
+    next_pending = None
+    if outcome is None:
+        complication_roll = asdict_roll(roll("1d20", rng=rng))
+        if int(complication_roll["total"]) <= 10:
+            next_pending = {
+                "number": int(complication_roll["total"]),
+                "source_actor_id": str(actor_id_value),
+                "rolled_round": int(value.get("round", 1) or 1),
+            }
+    value["pending_complication"] = next_pending
+
+    turn_result = {
+        "round": int(value.get("round", 1) or 1),
+        "actor_id": str(actor_id_value),
+        "action": normalized_action,
+        "speed_ft": speed,
+        "stand_cost_ft": stand_cost,
+        "movement_penalty_ft": movement_penalty,
+        "moved_ft": moved_ft,
+        "position_ft": int(participant["position_ft"]),
+        "dash_count": int(participant.get("dash_count", 0) or 0),
+        "free_dash_limit": int(participant.get("free_dash_limit", 0) or 0),
+        "dash_check": dash_check,
+        "exhaustion_gained": exhaustion_gained,
+        "complication": complication_result,
+        "guard_attack": guard_attack,
+        "next_complication_roll": complication_roll,
+        "next_complication": deepcopy(next_pending),
+    }
+    value.setdefault("log", []).append(deepcopy(turn_result))
+
+    current_index = next(
+        index
+        for index, item in enumerate(participants_list)
+        if str(item.get("actor_id") or "") == str(actor_id_value)
+    )
+    next_index = (current_index + 1) % len(participants_list)
+    round_ended = next_index == 0
+    if round_ended:
+        value["round"] = int(value.get("round", 1) or 1) + 1
+    checked = 0
+    while checked < len(participants_list) and not participants_list[next_index].get(
+        "active", True
+    ):
+        checked += 1
+        next_index = (next_index + 1) % len(participants_list)
+        if next_index == 0 and not round_ended:
+            round_ended = True
+            value["round"] = int(value.get("round", 1) or 1) + 1
+    value["turn_index"] = next_index
 
     escape_checks = []
     if round_ended and outcome is None:

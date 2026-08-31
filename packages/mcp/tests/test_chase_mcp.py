@@ -535,4 +535,70 @@ def test_public_chase_uses_exact_module_source_and_no_combat_map(tmp_path: Path)
         assert settled_query["chase"] == escaped["chase"]
         assert settled_query["campaign_revision"] == escaped["campaign_revision"]
 
+        terminal_started = await _call(
+            server,
+            "chase",
+            {
+                "campaign_id": campaign["id"],
+                "action": "start",
+                "payload": {
+                    "participant_ids": [pursuer["id"], quarry["id"]],
+                    "quarry_ids": [quarry["id"]],
+                    "initial_distance_ft": 60,
+                    "scene_id": expanded["scene"]["id"],
+                    "source_ref": source_ref,
+                    "source_excerpt": source_excerpt,
+                    "participant_config": [
+                        {"actor_id": pursuer["id"], "initiative": 20, "tie_breaker": 0},
+                        {"actor_id": quarry["id"], "initiative": 10, "tie_breaker": 0},
+                    ],
+                },
+                "expected_revision": escaped["campaign_revision"],
+                "idempotency_key": "terminal-chase-start",
+            },
+        )
+        current_pursuer = await _call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": pursuer["id"]}},
+        )
+        current_campaign = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        terminal_arguments = {
+            "campaign_id": campaign["id"],
+            "action": "take_turn",
+            "payload": {
+                "actor_id": pursuer["id"],
+                "turn_action": "drop_out",
+                "complication_choice": "",
+                "stand_from_prone": True,
+                "quarry_visibility": {quarry["id"]: True},
+                "expected_actor_revision": current_pursuer["revision"],
+            },
+            "expected_revision": terminal_started["campaign_revision"],
+            "idempotency_key": "last-pursuer-drops",
+        }
+        terminal_stream = CampaignRandomStream.from_campaign_state(
+            campaign["id"],
+            current_campaign["state"],
+            operation="chase",
+            idempotency_key="last-pursuer-drops",
+        )
+        with use_random_stream(terminal_stream):
+            terminal = await _call(server, "chase", terminal_arguments)
+        terminal_replay = await _call(server, "chase", terminal_arguments)
+
+        assert terminal_stream.draw_count == 0
+        assert terminal["chase"]["active"] is False
+        assert terminal["chase"]["pending_complication"] is None
+        assert terminal["chase"]["outcome"]["status"] == "quarry_escaped"
+        assert terminal["turn"]["next_complication_roll"] is None
+        assert terminal["turn"]["next_complication"] is None
+        assert "random_stream_receipt" not in terminal
+        assert terminal_replay == terminal
+        assert "random_stream_receipt" not in terminal_replay
+
     asyncio.run(exercise())
