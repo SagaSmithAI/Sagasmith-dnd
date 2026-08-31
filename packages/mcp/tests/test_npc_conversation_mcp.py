@@ -110,6 +110,14 @@ def test_unexpected_tool_error_only_unwraps_safe_repairable_causes() -> None:
                 assert _safe_tool_error_message(error) == "actionable validation detail"
 
     try:
+        raise ValueError("x" * 3_000)
+    except ValueError as cause:
+        try:
+            raise UnexpectedToolError("Error executing tool npc_conversation") from cause
+        except UnexpectedToolError as error:
+            assert _safe_tool_error_message(error) == "x" * 2_000
+
+    try:
         raise RuntimeError("database secret")
     except RuntimeError as cause:
         try:

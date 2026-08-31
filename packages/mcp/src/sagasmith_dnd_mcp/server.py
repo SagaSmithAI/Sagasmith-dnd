@@ -2972,8 +2972,8 @@ def _safe_tool_error_message(exc: ToolError) -> str:
     if isinstance(exc, UnexpectedToolError) and isinstance(
         cause, (ValueError, LookupError, PermissionError)
     ):
-        return str(cause)
-    return str(exc)
+        return str(cause)[:2000]
+    return str(exc)[:2000]
 
 
 class RequestScopedMCPServer(MCPServer):
