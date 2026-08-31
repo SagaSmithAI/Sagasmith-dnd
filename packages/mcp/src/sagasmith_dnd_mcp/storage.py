@@ -51,54 +51,63 @@ class SagaSmithStorage:
         return create_embedder(env_prefix="DND5E"), self.vectors
 
     def status(self) -> dict[str, Any]:
+        database_scheme = str(self.database.url).partition(":")[0].casefold()
+        database_backend = {
+            "postgres": "postgresql",
+            "postgresql": "postgresql",
+            "sqlite": "sqlite",
+        }.get(database_scheme.partition("+")[0], "other")
         return {
-            "home": str(self.config.home),
             "database": {
-                "url": self.database.url,
-                "path": str(self.config.database_path),
-                "exists": self.config.database_path.exists(),
+                "backend": database_backend,
+                "local": database_backend == "sqlite",
+                "configured": True,
+                "exists": (
+                    self.config.database_path.exists()
+                    if database_backend == "sqlite"
+                    else None
+                ),
             },
             "chroma": {
-                "url": self.config.chroma_url,
-                "path": str(self.config.chroma_path),
+                "mode": "remote" if self.config.chroma_url else "local",
                 "configured": self.vectors.enabled,
                 "dense_enabled": self._dense_enabled(),
                 "rules": self._collection_status("rules"),
                 "modules": self._collection_status("modules"),
             },
-            "artifacts_dir": str(self.config.artifacts_dir),
-            "content_packages_dir": str(self.config.content_packages_dir),
-            "actor_images_dir": str(self.config.actor_images_dir),
+            "artifacts": {
+                "ready": self.config.artifacts_dir.is_dir(),
+                "content_packages_ready": self.config.content_packages_dir.is_dir(),
+                "actor_images_ready": self.config.actor_images_dir.is_dir(),
+            },
             "rules": {
                 "auto_seed": self.config.auto_seed_rules,
-                "seed_root": str(self.config.dnd_skills_dir / "full" / "skills" / "dnd-dm" / "srd"),
-                "rulebooks_dir": str(self.config.rulebooks_dir),
-                "normalized_rulebooks_dir": str(self.config.normalized_rulebooks_dir),
-                "import_roots": [str(path) for path in self.config.rule_import_roots],
+                "seed_available": (
+                    self.config.dnd_skills_dir / "full" / "skills" / "dnd-dm" / "srd"
+                ).is_dir(),
+                "storage_ready": (
+                    self.config.rulebooks_dir.is_dir()
+                    and self.config.normalized_rulebooks_dir.is_dir()
+                ),
+                "import_root_count": len(self.config.rule_import_roots),
                 "ocr": {
                     "enabled": self.config.rule_ocr_enabled,
                     "provider": ("rapidocr-cascade" if self.config.rule_ocr_enabled else None),
                     "scale": self.config.rule_ocr_scale,
-                    "models": (
-                        self.ocr_model_chain(self.config.rule_ocr_model)
-                        if self.config.rule_ocr_enabled
-                        else []
-                    ),
+                    "model_count": 2 if self.config.rule_ocr_enabled else 0,
                 },
             },
             "modules": {
-                "artifacts_dir": str(self.config.modules_dir),
-                "normalized_modules_dir": str(self.config.normalized_modules_dir),
-                "import_roots": [str(path) for path in self.config.module_import_roots],
+                "storage_ready": (
+                    self.config.modules_dir.is_dir()
+                    and self.config.normalized_modules_dir.is_dir()
+                ),
+                "import_root_count": len(self.config.module_import_roots),
                 "ocr": {
                     "enabled": self.config.module_ocr_enabled,
                     "provider": ("rapidocr-cascade" if self.config.module_ocr_enabled else None),
                     "scale": self.config.module_ocr_scale,
-                    "models": (
-                        self.ocr_model_chain(self.config.module_ocr_model)
-                        if self.config.module_ocr_enabled
-                        else []
-                    ),
+                    "model_count": 2 if self.config.module_ocr_enabled else 0,
                 },
             },
         }
@@ -527,4 +536,10 @@ class SagaSmithStorage:
     def _collection_status(self, name: str) -> dict[str, Any]:
         if not self._dense_enabled():
             return {"name": self.vectors.scoped_name(name), "count": None, "status": "disabled"}
-        return self.vectors.collection_stats(name)
+        stats = self.vectors.collection_stats(name)
+        count = stats.get("count")
+        return {
+            "name": self.vectors.scoped_name(name),
+            "count": count if isinstance(count, int) else None,
+            "status": "ready" if isinstance(count, int) else "error",
+        }

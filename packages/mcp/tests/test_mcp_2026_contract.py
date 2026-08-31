@@ -221,6 +221,108 @@ def test_modern_requester_authorizes_and_acting_host_owns_audit(tmp_path: Path) 
     asyncio.run(exercise())
 
 
+def test_modern_hosted_tool_policy_rejects_player_and_allows_local_dm(
+    tmp_path: Path,
+) -> None:
+    async def exercise() -> None:
+        bootstrap = create_server(
+            McpConfig(
+                home=tmp_path / "home",
+                database_url=None,
+                chroma_url=None,
+                chroma_path_override=None,
+                dnd_skills_dir=tmp_path / "dnd",
+                modulegen_skills_dir=tmp_path / "modulegen",
+                auto_seed_rules=False,
+            )
+        )
+        campaign = await _direct(
+            bootstrap,
+            "campaign_create",
+            {"name": "Hosted Policy", "idempotency_key": "hosted-policy-campaign"},
+        )
+        for principal_id, role in (
+            ("player:hosted-policy", "player"),
+            ("dm:hosted-policy", "dm"),
+        ):
+            await _direct(
+                bootstrap,
+                "access_grant",
+                {
+                    "scope": "campaign",
+                    "campaign_id": campaign["id"],
+                    "principal_id": principal_id,
+                    "payload": {"role": role},
+                    "by_principal_id": "system:local",
+                },
+            )
+
+        server = _server(tmp_path)
+        async with Client(server, mode="2026-07-28") as client:
+            player_migrate = await client.call_tool(
+                "storage_migrate",
+                {},
+                meta=_meta(
+                    operation="storage_migrate",
+                    nonce="player-storage-migrate",
+                    campaign_id=str(campaign["id"]),
+                    requester_principal="player:hosted-policy",
+                    resource_owner_principal="owner:campaign",
+                    acting_host_principal="workload:sagasmith-agent",
+                ),
+            )
+            assert player_migrate.is_error is True
+            assert player_migrate.structured_content["error"]["code"] == (
+                "authorization_denied"
+            )
+            assert "local system principal" in player_migrate.content[0].text
+
+            player_seed = await client.call_tool(
+                "rule_seed_bundled",
+                {},
+                meta=_meta(
+                    operation="rule_seed_bundled",
+                    nonce="player-rule-seed",
+                    campaign_id=str(campaign["id"]),
+                    requester_principal="player:hosted-policy",
+                    resource_owner_principal="owner:campaign",
+                    acting_host_principal="workload:sagasmith-agent",
+                ),
+            )
+            assert player_seed.is_error is True
+            assert player_seed.structured_content["error"]["code"] == (
+                "authorization_denied"
+            )
+
+            local_migrate = await client.call_tool(
+                "storage_migrate",
+                {},
+                meta=_meta(
+                    operation="storage_migrate",
+                    nonce="local-storage-migrate",
+                    campaign_id=str(campaign["id"]),
+                ),
+            )
+            assert local_migrate.is_error is False
+            assert local_migrate.structured_content["status"] == "ok"
+
+            dm_seed = await client.call_tool(
+                "rule_seed_bundled",
+                {},
+                meta=_meta(
+                    operation="rule_seed_bundled",
+                    nonce="dm-rule-seed",
+                    campaign_id=str(campaign["id"]),
+                    requester_principal="dm:hosted-policy",
+                    resource_owner_principal="owner:campaign",
+                    acting_host_principal="workload:sagasmith-agent",
+                ),
+            )
+            assert dm_seed.is_error is False
+
+    asyncio.run(exercise())
+
+
 @pytest.mark.parametrize(
     ("mode", "expected_count"),
     [("legacy", 7), ("2026-07-28", 77)],

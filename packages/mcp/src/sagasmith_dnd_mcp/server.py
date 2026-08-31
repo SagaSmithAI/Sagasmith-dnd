@@ -2980,6 +2980,7 @@ class RequestScopedMCPServer(MCPServer):
         phase_lookup: Any,
         allowed_tools_lookup: Any,
         scope_validator: Any,
+        tool_policy_authorizer: Any,
         random_context_factory: Any,
         context_binding_factory: Any,
         authorization_fingerprint_lookup: Any,
@@ -2991,6 +2992,7 @@ class RequestScopedMCPServer(MCPServer):
         self._phase_lookup = phase_lookup
         self._allowed_tools_lookup = allowed_tools_lookup
         self._scope_validator = scope_validator
+        self._tool_policy_authorizer = tool_policy_authorizer
         self._random_context_factory = random_context_factory
         self._context_binding_factory = context_binding_factory
         self._authorization_fingerprint_lookup = authorization_fingerprint_lookup
@@ -3623,6 +3625,20 @@ class RequestScopedMCPServer(MCPServer):
                 context=context,
                 exposure=exposure,
             )
+            if auth_context is not None and legacy_session_key is None:
+                policy_campaign_id = self._argument_campaign_id(arguments) or None
+                policy = policy_for_tool(name)
+                if (
+                    policy_campaign_id is None
+                    and policy is not None
+                    and policy.requires_campaign
+                ):
+                    policy_campaign_id = auth_context.campaign_id
+                self._tool_policy_authorizer(
+                    name,
+                    auth_context.authorization_principal,
+                    policy_campaign_id,
+                )
         except ExposureError as exc:
             if context is None:
                 raise
@@ -5911,20 +5927,47 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         participated.discard("")
         return bool(participated) and str(character.id) not in participated
 
+    def authorize_tool_policy(
+        tool_id: str,
+        principal_id: str,
+        campaign_id: str | None,
+    ) -> None:
+        """Apply one ToolPolicy authorization check at every hosted boundary."""
+
+        if tool_id in CORE_TOOLS:
+            return
+        policy = policy_for_tool(tool_id)
+        if policy is None:
+            return
+        if policy.local_only and principal_id != LOCAL_SYSTEM_PRINCIPAL_ID:
+            raise ExposureError(
+                f"Tool {tool_id!r} is restricted to the local system principal."
+            )
+        if policy.requires_campaign and campaign_id is None:
+            raise ExposureError(f"Tool {tool_id!r} requires a campaign-bound request.")
+        if campaign_id is None:
+            return
+        try:
+            phase = authoritative_phase(campaign_id)
+        except LookupError as exc:
+            raise ExposureError(f"Campaign {campaign_id!r} does not exist.") from exc
+        if phase not in policy.phases:
+            raise ExposureError(
+                f"Tool {tool_id!r} is not available during campaign phase {phase!r}."
+            )
+        roles = policy.roles(phase)
+        if not roles:
+            return
+        try:
+            access.require_campaign(campaign_id, principal_id, roles=set(roles))
+        except AccessDeniedError as exc:
+            raise ExposureError(str(exc)) from exc
+
     def validate_exposure_scope(
         exposure: Exposure, tool_id: str, arguments: dict[str, Any]
     ) -> None:
         """Prevent one campaign's phase exposure from being reused for another campaign."""
-        policy = policy_for_tool(tool_id)
-        protected_roles = policy.roles(exposure.phase) if policy is not None else frozenset()
-        if protected_roles:
-            if exposure.campaign_id is None:
-                raise ExposureError(f"Tool {tool_id!r} requires a campaign-bound exposure.")
-            access.require_campaign(
-                exposure.campaign_id,
-                exposure.principal_id,
-                roles=set(protected_roles),
-            )
+        authorize_tool_policy(tool_id, exposure.principal_id, exposure.campaign_id)
         if exposure.campaign_id is None:
             return
 
@@ -6172,6 +6215,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         phase_lookup=authoritative_phase,
         allowed_tools_lookup=allowed_tools_for_exposure,
         scope_validator=validate_exposure_scope,
+        tool_policy_authorizer=authorize_tool_policy,
         random_context_factory=campaign_random_context,
         context_binding_factory=lambda campaign_id, principal_id, arguments: (
             authoritative_host_context_binding(campaign_id, principal_id, arguments)
@@ -12144,7 +12188,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
 
     @public_tool()
     def storage_status() -> dict[str, Any]:
-        """Return the MCP-owned SQLite, ChromaDB, and artifact locations."""
+        """Return storage health without exposing credentials or host paths."""
         return storage.status()
 
     @public_tool()
@@ -12527,10 +12571,10 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         }
 
     @public_tool()
-    def storage_migrate() -> dict[str, str]:
+    def storage_migrate() -> dict[str, Any]:
         """Run the embedded SQLite schema migrations."""
         storage.migrate()
-        return {"status": "ok", "database": storage.database.url}
+        return {"status": "ok", "database": storage.status()["database"]}
 
     @public_tool()
     def rule_seed_status(
