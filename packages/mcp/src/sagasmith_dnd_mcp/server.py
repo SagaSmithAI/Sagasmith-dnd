@@ -15243,6 +15243,9 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             "campaign_revision": campaign.revision + 1,
             "rule_receipts": receipts,
         }
+        stream = active_random_stream()
+        if stream is not None and stream.draw_count > 0:
+            response["random_stream_receipt"] = stream.receipt()
         StateMutationService(storage.database).replace(
             campaign_id,
             campaign_state=validate_party_state(next_state),

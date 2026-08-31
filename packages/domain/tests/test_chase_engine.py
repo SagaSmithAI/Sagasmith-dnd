@@ -1,3 +1,5 @@
+import pytest
+
 from sagasmith_dnd.character_schema import default_character_sheet, derive_character_sheet
 from sagasmith_dnd.chase_engine import (
     CHASE_MANUAL_OUTCOME_STATUS_ORDER,
@@ -6,6 +8,7 @@ from sagasmith_dnd.chase_engine import (
     end_chase,
     start_chase,
 )
+from sagasmith_dnd.combat_engine import CombatEngineError
 
 
 class _SequenceRng:
@@ -24,11 +27,14 @@ def _actor(
     initiative: int,
     speed: int = 30,
     constitution: int = 10,
+    passive_perception: int | None = None,
 ) -> dict:
     sheet = default_character_sheet()
     sheet["combat"]["hp"] = {"value": 20, "max": 20, "temp": 0}
     sheet["combat"]["speed"]["walk"] = speed
     sheet["abilities"]["constitution"]["score"] = constitution
+    if passive_perception is not None:
+        sheet["traits"]["senses"]["passive_perception_bonus"] = passive_perception - 10
     return {
         "id": identifier,
         "name": identifier,
@@ -146,6 +152,7 @@ def test_chase_preserves_non_positive_passive_perception_for_escape_checks() -> 
     )
     assert pursuer["derived"]["passive_perception"] == 0
     assert zero_chase["pursuer_passive_perception_max"] == 0
+    assert zero_chase["participants"][0]["passive_perception"] == 0
 
     pursuer["sheet"]["traits"]["senses"]["passive_perception_bonus"] = -6
     pursuer["derived"] = derive_character_sheet(pursuer["sheet"])
@@ -170,6 +177,166 @@ def test_chase_preserves_non_positive_passive_perception_for_escape_checks() -> 
     assert negative_chase["pursuer_passive_perception_max"] == -1
     assert escape["passive_perception_max"] == -1
     assert escape["check"]["dc"] == 0
+
+
+@pytest.mark.parametrize(
+    ("drop_kind", "dropped_reason"),
+    [
+        ("incapacitated", "incapacitated"),
+        ("voluntary", "voluntary"),
+        ("exhaustion", "exhaustion_speed_zero"),
+    ],
+)
+def test_escape_dc_uses_only_active_pursuers(
+    drop_kind: str,
+    dropped_reason: str,
+) -> None:
+    high = _actor("high", initiative=30, passive_perception=20)
+    low = _actor("low", initiative=20, passive_perception=10)
+    quarry = _actor("quarry", initiative=10)
+    chase = start_chase(
+        [high, low, quarry],
+        quarry_ids=["quarry"],
+        initial_distance_ft=100,
+    )
+    if drop_kind == "incapacitated":
+        high["sheet"]["combat"]["hp"]["value"] = 0
+        dropped = advance_chase_turn(
+            chase,
+            high,
+            actor_id_value="high",
+            action="move",
+            rng=_SequenceRng(20),
+        )
+    elif drop_kind == "exhaustion":
+        high["sheet"]["combat"]["exhaustion"] = 4
+        chase["participants"][0]["dash_count"] = chase["participants"][0][
+            "free_dash_limit"
+        ]
+        dropped = advance_chase_turn(
+            chase,
+            high,
+            actor_id_value="high",
+            action="dash",
+            rng=_SequenceRng(1, 20, 20),
+        )
+    else:
+        dropped = advance_chase_turn(
+            chase,
+            high,
+            actor_id_value="high",
+            action="drop_out",
+            rng=_SequenceRng(20),
+        )
+
+    high_state = next(
+        item for item in dropped["chase"]["participants"] if item["actor_id"] == "high"
+    )
+    assert high_state["active"] is False
+    assert high_state["dropped_reason"] == dropped_reason
+    assert dropped["chase"]["pursuer_passive_perception_max"] == 10
+
+    low_turn = advance_chase_turn(
+        dropped["chase"],
+        low,
+        actor_id_value="low",
+        action="move",
+        rng=_SequenceRng(20),
+    )
+    escaped = advance_chase_turn(
+        low_turn["chase"],
+        quarry,
+        actor_id_value="quarry",
+        action="move",
+        quarry_visibility={"quarry": False},
+        quarry_actors={"quarry": quarry},
+        rng=_SequenceRng(20, 12),
+    )
+
+    escape = escaped["turn"]["escape_checks"][0]
+    assert escape["passive_perception_max"] == 10
+    assert escape["check"]["dc"] == 11
+    assert escape["check"]["total"] == 12
+    assert escape["escaped"] is True
+
+
+def test_last_active_pursuer_dropout_ends_chase_without_escape_check() -> None:
+    pursuer = _actor("pursuer", initiative=20, passive_perception=15)
+    quarry = _actor("quarry", initiative=10)
+    chase = start_chase(
+        [pursuer, quarry],
+        quarry_ids=["quarry"],
+        initial_distance_ft=100,
+    )
+
+    dropped = advance_chase_turn(
+        chase,
+        pursuer,
+        actor_id_value="pursuer",
+        action="drop_out",
+        rng=_SequenceRng(20),
+    )
+
+    assert dropped["chase"]["active"] is False
+    assert dropped["chase"]["pursuer_passive_perception_max"] is None
+    assert dropped["chase"]["outcome"]["status"] == "quarry_escaped"
+    assert dropped["turn"]["escape_checks"] == []
+
+
+def test_legacy_chase_cache_is_rejected_after_pursuer_set_changes() -> None:
+    high = _actor("high", initiative=30, passive_perception=20)
+    low = _actor("low", initiative=20, passive_perception=10)
+    quarry = _actor("quarry", initiative=10)
+    chase = start_chase(
+        [high, low, quarry],
+        quarry_ids=["quarry"],
+        initial_distance_ft=100,
+    )
+    for participant in chase["participants"]:
+        participant.pop("passive_perception")
+    chase["participants"][0]["active"] = False
+    chase["participants"][0]["dropped_reason"] = "voluntary"
+    chase["turn_index"] = 2
+
+    with pytest.raises(CombatEngineError, match="legacy chase participants"):
+        advance_chase_turn(
+            chase,
+            quarry,
+            actor_id_value="quarry",
+            action="move",
+            quarry_visibility={"quarry": False},
+            quarry_actors={"quarry": quarry},
+            rng=_SequenceRng(20),
+        )
+
+
+def test_legacy_chase_cache_remains_valid_while_all_pursuers_are_active() -> None:
+    high = _actor("high", initiative=30, passive_perception=20)
+    low = _actor("low", initiative=20, passive_perception=10)
+    quarry = _actor("quarry", initiative=10)
+    chase = start_chase(
+        [high, low, quarry],
+        quarry_ids=["quarry"],
+        initial_distance_ft=100,
+    )
+    for participant in chase["participants"]:
+        participant.pop("passive_perception")
+    chase["turn_index"] = 2
+
+    result = advance_chase_turn(
+        chase,
+        quarry,
+        actor_id_value="quarry",
+        action="move",
+        quarry_visibility={"quarry": False},
+        quarry_actors={"quarry": quarry},
+        rng=_SequenceRng(20, 12),
+    )
+
+    escape = result["turn"]["escape_checks"][0]
+    assert escape["passive_perception_max"] == 20
+    assert escape["check"]["dc"] == 21
+    assert escape["escaped"] is False
 
 
 def test_urban_complication_affects_next_participant() -> None:
