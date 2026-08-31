@@ -616,6 +616,98 @@ def test_long_rest_clears_stable_and_unconscious_case_insensitively() -> None:
     assert result["sheet"]["conditions"] == ["prone"]
 
 
+def test_2014_stable_zero_hp_creature_can_short_rest_and_spend_hit_die() -> None:
+    sheet = default_character_sheet()
+    sheet["edition"] = "2014"
+    sheet["combat"]["hp"] = {"value": 0, "max": 10, "temp": 0}
+    sheet["combat"]["hit_dice"] = {
+        "fighter:d8": {
+            "label": "Fighter d8",
+            "value": 1,
+            "max": 1,
+            "recovers_on": "long_rest",
+        }
+    }
+    sheet["conditions"] = ["Stable", "UNCONSCIOUS", "prone"]
+
+    recorded = record_rest_completion(
+        sheet,
+        rest_type="short_rest",
+        started_elapsed_ticks=0,
+        completed_elapsed_ticks=600,
+    )
+    rested = apply_rest(
+        recorded,
+        rest_type="short_rest",
+        hit_dice_spends=[{"key": "fighter:d8", "count": 1}],
+        rng=_SequenceRng(5),
+    )
+
+    assert rested["status"] == "committed"
+    assert rested["hit_die_healing"] == 5
+    assert rested["hit_die_applied_healing"] == 5
+    assert rested["sheet"]["combat"]["hp"]["value"] == 5
+    assert rested["sheet"]["combat"]["hit_dice"]["fighter:d8"]["value"] == 0
+    assert rested["sheet"]["conditions"] == ["prone"]
+
+
+@pytest.mark.parametrize(
+    ("edition", "rest_type", "conditions", "message"),
+    [
+        ("2014", "short_rest", ["unconscious"], "must be stable"),
+        ("2014", "short_rest", ["stable", "unconscious", "dead"], "dead creature"),
+        ("2024", "short_rest", ["stable", "unconscious"], "at least 1 hit point"),
+        ("2014", "long_rest", ["stable", "unconscious"], "at least 1 hit point"),
+    ],
+)
+def test_zero_hp_rest_eligibility_boundaries(
+    edition: str,
+    rest_type: str,
+    conditions: list[str],
+    message: str,
+) -> None:
+    sheet = default_character_sheet()
+    sheet["edition"] = edition
+    sheet["combat"]["hp"] = {"value": 0, "max": 10, "temp": 0}
+    sheet["conditions"] = conditions
+    completed_ticks = 600 if rest_type == "short_rest" else 4800
+
+    with pytest.raises(CombatEngineError, match=message):
+        record_rest_completion(
+            sheet,
+            rest_type=rest_type,
+            started_elapsed_ticks=0,
+            completed_elapsed_ticks=completed_ticks,
+        )
+    with pytest.raises(CombatEngineError, match=message):
+        apply_rest(sheet, rest_type=rest_type)
+
+
+def test_stable_zero_hp_short_rest_rejects_exhausted_hit_die_atomically() -> None:
+    sheet = default_character_sheet()
+    sheet["edition"] = "2014"
+    sheet["combat"]["hp"] = {"value": 0, "max": 10, "temp": 0}
+    sheet["combat"]["hit_dice"] = {
+        "fighter:d8": {
+            "label": "Fighter d8",
+            "value": 0,
+            "max": 1,
+            "recovers_on": "long_rest",
+        }
+    }
+    sheet["conditions"] = ["stable", "unconscious"]
+    original = deepcopy(sheet)
+
+    with pytest.raises(CombatEngineError, match="not enough hit dice"):
+        apply_rest(
+            sheet,
+            rest_type="short_rest",
+            hit_dice_spends=[{"key": "fighter:d8", "count": 1}],
+        )
+
+    assert sheet == original
+
+
 def test_long_rest_does_not_remove_condition_owned_by_persistent_effect() -> None:
     sheet = default_character_sheet()
     sheet["combat"]["hp"] = {"value": 1, "max": 10, "temp": 0}

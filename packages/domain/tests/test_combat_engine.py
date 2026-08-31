@@ -3886,6 +3886,97 @@ def test_critical_multi_part_damage_at_zero_causes_two_failures_once() -> None:
     assert result["sheet"]["combat"]["death_saves"]["failures"] == 2
 
 
+@pytest.mark.parametrize(
+    (
+        "temp_hp",
+        "critical",
+        "stable",
+        "immune",
+        "expected_absorbed",
+        "expected_hp_damage",
+        "expected_failures",
+        "expected_temp_hp",
+    ),
+    [
+        (10, False, False, False, 5, 0, 1, 5),
+        (10, True, False, False, 5, 0, 2, 5),
+        (10, False, True, False, 5, 0, 1, 5),
+        (2, False, False, False, 2, 3, 1, 0),
+        (10, False, True, True, 0, 0, 0, 10),
+    ],
+)
+def test_damage_at_zero_uses_adjusted_damage_for_death_failures(
+    temp_hp: int,
+    critical: bool,
+    stable: bool,
+    immune: bool,
+    expected_absorbed: int,
+    expected_hp_damage: int,
+    expected_failures: int,
+    expected_temp_hp: int,
+) -> None:
+    actor = _actor("target", hp=20)
+    actor["sheet"]["combat"]["hp"].update(value=0, temp=temp_hp)
+    actor["sheet"]["conditions"] = [
+        "prone",
+        "unconscious",
+        *(["stable"] if stable else []),
+    ]
+    if immune:
+        actor["sheet"]["traits"]["immunities"] = ["fire"]
+
+    result = apply_damage_to_sheet(
+        actor["sheet"],
+        amount=5,
+        damage_type="fire",
+        critical=critical,
+    )
+
+    assert result["absorbed_temp"] == expected_absorbed
+    assert result["hp_damage"] == expected_hp_damage
+    assert result["after_temp"] == expected_temp_hp
+    assert result["sheet"]["combat"]["death_saves"]["failures"] == expected_failures
+    assert ("stable" in result["sheet"]["conditions"]) is (stable and immune)
+
+
+@pytest.mark.parametrize(
+    ("amount", "resistant", "immune", "expected_applied", "expected_dead"),
+    [
+        (20, False, False, 20, True),
+        (40, True, False, 20, True),
+        (38, True, False, 19, False),
+        (100, False, True, 0, False),
+    ],
+)
+def test_damage_at_zero_uses_pre_temp_damage_for_instant_death(
+    amount: int,
+    resistant: bool,
+    immune: bool,
+    expected_applied: int,
+    expected_dead: bool,
+) -> None:
+    actor = _actor("target", hp=20)
+    actor["sheet"]["combat"]["hp"].update(value=0, temp=10)
+    actor["sheet"]["conditions"] = ["prone", "unconscious"]
+    if resistant:
+        actor["sheet"]["traits"]["resistances"] = ["fire"]
+    if immune:
+        actor["sheet"]["traits"]["immunities"] = ["fire"]
+
+    result = apply_damage_to_sheet(
+        actor["sheet"],
+        amount=amount,
+        damage_type="fire",
+    )
+
+    assert result["applied_amount"] == expected_applied
+    assert result["massive_damage"] is expected_dead
+    assert ("dead" in result["sheet"]["conditions"]) is expected_dead
+    assert result["sheet"]["combat"]["death_saves"]["failures"] == (
+        0 if expected_dead or immune else 1
+    )
+
+
 def test_damage_at_zero_equal_to_maximum_causes_instant_death() -> None:
     actor = _actor("target", hp=10)
     actor["sheet"]["combat"]["hp"]["value"] = 0

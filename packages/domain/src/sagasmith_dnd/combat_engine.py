@@ -3608,6 +3608,7 @@ def _apply_adjusted_damage(
                 ended_effect_ids.append(str(effect.get("id") or ""))
     max_hp = effective_hit_point_maximum(value)
     massive_excess = max(0, hp_damage - before_hp)
+    massive_damage = adjusted >= max_hp if before_hp == 0 else massive_excess >= max_hp
     became_zero = hp["value"] == 0 and before_hp > 0
     if knock_out and not melee:
         raise CombatEngineError("only a melee attack can knock a creature out")
@@ -3634,10 +3635,10 @@ def _apply_adjusted_damage(
             conditions.discard("unconscious")
             conditions.add("dead")
     death = dict(combat.setdefault("death_saves", {"successes": 0, "failures": 0}))
-    if before_hp == 0 and hp_damage > 0 and "dead" not in conditions and death_saves:
+    if before_hp == 0 and adjusted > 0 and "dead" not in conditions and death_saves:
         conditions.discard("stable")
         conditions.update({"prone", "unconscious"})
-        if hp_damage >= max_hp:
+        if massive_damage:
             conditions.discard("unconscious")
             conditions.add("dead")
         else:
@@ -3692,7 +3693,7 @@ def _apply_adjusted_damage(
         "source": source,
         "concentration": concentration,
         "ended_effect_ids": ended_effect_ids,
-        "massive_damage": massive_excess >= max_hp,
+        "massive_damage": massive_damage,
         "zero_hp_recovery": zero_hp_recovery_result,
     }
 
