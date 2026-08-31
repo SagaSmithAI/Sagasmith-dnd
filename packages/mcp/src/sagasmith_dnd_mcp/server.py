@@ -330,6 +330,7 @@ from sagasmith_dnd.lifecycle import (
     validate_arcane_recovery_choice,
     validate_natural_recovery_choice,
     validate_rest_activity_minutes,
+    validate_rest_eligibility,
     validate_rest_hit_dice_requests,
     validate_rest_schedule,
     validate_song_of_rest_source,
@@ -45084,12 +45085,7 @@ boundary.
                 raise CombatEngineError(
                     "character rest preflight currently requires rest_type=short_rest"
                 )
-            hp = int(dict(current.sheet.get("combat", {}).get("hp") or {}).get("value", 0) or 0)
-            conditions = {str(item).casefold() for item in current.sheet.get("conditions", [])}
-            if hp <= 0 or "dead" in conditions:
-                raise CombatEngineError(
-                    "a creature at 0 hit points or dead cannot benefit from a rest"
-                )
+            validate_rest_eligibility(current.sheet, rest_type=rest_type)
             hit_dice = validate_rest_hit_dice_requests(current.sheet, data.get("hit_dice_spends"))
             game_day = rules_day_from_ticks(
                 int(
