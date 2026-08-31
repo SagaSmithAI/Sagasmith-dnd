@@ -24,8 +24,16 @@ from sagasmith_dnd.character_schema import (
     validate_party_state,
     validate_world_time,
 )
+from sagasmith_dnd.chase_engine import start_chase
+from sagasmith_dnd.combat_engine import start_encounter
 from sagasmith_dnd.content_solution import build_content_solution
 from sagasmith_dnd.resolution_plan import compile_resolution_plan
+from sagasmith_dnd.rule_engine import resolution_context
+from sagasmith_dnd.standard_feature_ids import (
+    CORE_DWARF_HEAVY_ARMOR_SPEED_MECHANIC_ID,
+    SRD2014_DWARF_SPEED_LEGACY_PACK_VERSIONS,
+    SRD2014_DWARF_SPEED_SOURCE_RULE_REF,
+)
 from sagasmith_dnd.vocabulary import DENOMINATION_CP_VALUES
 
 
@@ -140,7 +148,10 @@ def test_2014_armor_proficiency_strength_and_encumbrance_affect_derived_rules() 
     )
     sheet = equip_inventory_item(sheet, armor_id, "armor")
 
-    derived = derive_character_sheet(sheet)
+    rules_2014 = resolution_context(
+        {"edition": "2014", "fingerprint": "dwarf-test", "lock": [], "mechanics": []}
+    )
+    derived = derive_character_sheet(sheet, rules=rules_2014)
     assert derived["armor_class"] == 16
     assert derived["speed"]["walk"] == 20
     assert derived["armor_proficiency"]["proficient"] is False
@@ -184,6 +195,182 @@ def test_2014_armor_proficiency_strength_and_encumbrance_affect_derived_rules() 
     over_capacity = derive_character_sheet(unarmored)
     assert over_capacity["inventory"]["encumbrance"]["state"] == "over_capacity"
     assert over_capacity["speed"]["walk"] == 0
+
+
+@pytest.mark.parametrize("legacy_pack_version", sorted(SRD2014_DWARF_SPEED_LEGACY_PACK_VERSIONS))
+def test_2014_dwarf_heavy_armor_speed_exception_is_source_bound_and_narrow(
+    legacy_pack_version: str,
+) -> None:
+    assert SRD2014_DWARF_SPEED_LEGACY_PACK_VERSIONS == frozenset({"1.24.0", "1.25.0"})
+    rules_2014 = resolution_context(
+        {"edition": "2014", "fingerprint": "dwarf-test", "lock": [], "mechanics": []}
+    )
+    sheet = default_character_sheet()
+    sheet["progression"]["species"] = "Hill Dwarf"
+    sheet["abilities"]["strength"]["score"] = 10
+    sheet["combat"]["speed"]["walk"] = 25
+    sheet["content"]["features"].append(
+        {
+            "id": "dnd5e.content.srd2014.species-feature.hill-dwarf-speed",
+            "name": "Speed",
+            "source_key": "Hill Dwarf",
+            "description": (
+                "Your base walking speed is 25 feet. Your speed is not reduced "
+                "by wearing heavy armor."
+            ),
+            "choices": {
+                "source_trait": {
+                    "kind": "dwarf_heavy_armor_speed",
+                    "trigger": "heavy_armor_strength_shortfall",
+                    "ignored_penalty_ft": 10,
+                    "automatic": True,
+                    "source_excerpt": ("Your speed is not reduced by wearing heavy armor."),
+                }
+            },
+            "mechanic_refs": [CORE_DWARF_HEAVY_ARMOR_SPEED_MECHANIC_ID],
+        }
+    )
+    sheet, armor_id = add_inventory_item(
+        sheet,
+        {
+            "id": "chain-mail",
+            "name": "Chain mail",
+            "kind": "armor",
+            "weight_oz": 880,
+            "mechanics": {
+                "base_ac": 16,
+                "category": "heavy",
+                "dexterity_mode": "none",
+                "strength_requirement": 13,
+            },
+        },
+    )
+    sheet = equip_inventory_item(sheet, armor_id, "armor")
+
+    derived = derive_character_sheet(sheet, rules=rules_2014)
+    assert derived["speed"]["walk"] == 25
+    assert derived["armor_strength"] == {
+        "requirement": 13,
+        "meets_requirement": False,
+        "speed_penalty_ft": 0,
+    }
+    dwarf_receipt = next(
+        receipt
+        for receipt in derived["rule_receipts"]
+        if receipt["mechanic_id"] == CORE_DWARF_HEAVY_ARMOR_SPEED_MECHANIC_ID
+    )
+    assert dwarf_receipt["event"] == "character.derive"
+    assert dwarf_receipt["citations"] == [
+        {"source": SRD2014_DWARF_SPEED_SOURCE_RULE_REF + "#speed", "edition": "2014"}
+    ]
+
+    sheet["inventory"]["encumbrance"]["mode"] = "variant"
+    encumbered = derive_character_sheet(sheet)
+    assert encumbered["inventory"]["encumbrance"]["state"] == "encumbered"
+    assert encumbered["speed"]["walk"] == 15
+
+    ordinary_sheet = deepcopy(sheet)
+    ordinary_sheet["progression"]["species"] = "Human"
+    ordinary_sheet["content"]["features"] = []
+    ordinary_sheet["inventory"]["encumbrance"]["mode"] = "standard"
+    assert derive_character_sheet(ordinary_sheet)["speed"]["walk"] == 15
+
+    legacy_sheet = deepcopy(sheet)
+    legacy_sheet["content"]["features"] = []
+    legacy_sheet["content"]["selections"] = [
+        {
+            "artifact_id": "dnd5e.content.srd2014.species.hill-dwarf",
+            "kind": "species",
+            "name": "ignored display name",
+            "pack_id": "dnd5e.content.srd2014",
+            "pack_version": legacy_pack_version,
+            "rule_refs": [SRD2014_DWARF_SPEED_SOURCE_RULE_REF],
+            "mechanic_refs": [],
+            "selection": {"tools": ["smith's tools"]},
+        }
+    ]
+    legacy_sheet["inventory"]["encumbrance"]["mode"] = "standard"
+    legacy = derive_character_sheet(legacy_sheet, rules=rules_2014)
+    assert legacy["speed"]["walk"] == 25
+    assert CORE_DWARF_HEAVY_ARMOR_SPEED_MECHANIC_ID in {
+        receipt["mechanic_id"] for receipt in legacy["rule_receipts"]
+    }
+
+    for field, forged_value in (
+        ("artifact_id", "dnd5e.content.srd2014.species.forged-dwarf"),
+        ("pack_version", "1.23.0"),
+        ("rule_refs", ["bundled:srd2014/forged/Dwarf.md"]),
+        ("mechanic_refs", [CORE_DWARF_HEAVY_ARMOR_SPEED_MECHANIC_ID]),
+    ):
+        forged_legacy = deepcopy(legacy_sheet)
+        forged_legacy["content"]["selections"][0][field] = forged_value
+        assert derive_character_sheet(forged_legacy)["speed"]["walk"] == 15
+
+    non_heavy_sheet = deepcopy(sheet)
+    non_heavy_sheet["inventory"]["items"][0]["mechanics"]["category"] = "medium"
+    non_heavy_sheet["inventory"]["encumbrance"]["mode"] = "standard"
+    assert derive_character_sheet(non_heavy_sheet)["speed"]["walk"] == 15
+
+    modern_sheet = deepcopy(sheet)
+    modern_sheet["edition"] = "2024"
+    modern_sheet["inventory"]["encumbrance"]["mode"] = "standard"
+    assert derive_character_sheet(modern_sheet)["speed"]["walk"] == 15
+    rules_2024 = resolution_context(
+        {"edition": "2024", "fingerprint": "wrong-edition", "lock": [], "mechanics": []}
+    )
+    with pytest.raises(KeyError, match=CORE_DWARF_HEAVY_ARMOR_SPEED_MECHANIC_ID):
+        derive_character_sheet(sheet, rules=rules_2024)
+
+    sheet["inventory"]["encumbrance"]["mode"] = "standard"
+    dwarf_actor = {
+        "id": "dwarf",
+        "name": "Dwarf",
+        "initiative": 20,
+        "sheet": sheet,
+        "derived": derived,
+    }
+    pursuer_sheet = default_character_sheet()
+    pursuer_actor = {
+        "id": "pursuer",
+        "name": "Pursuer",
+        "initiative": 10,
+        "sheet": pursuer_sheet,
+        "derived": derive_character_sheet(pursuer_sheet),
+    }
+    encounter = start_encounter([dwarf_actor, pursuer_actor], ruleset="2014")
+    dwarf_combatant = next(item for item in encounter["combatants"] if item["actor_id"] == "dwarf")
+    assert dwarf_combatant["turn_budget"]["speed"] == 25
+    assert dwarf_combatant["turn_budget"]["movement"] == 25
+    grappled_actor = deepcopy(dwarf_actor)
+    grappled_actor["sheet"]["conditions"] = ["grappled"]
+    grappled_actor["sheet"]["effects"] = [
+        {
+            "id": "grappled-speed",
+            "active": True,
+            "changes": [
+                {
+                    "path": "combat.speed.multiplier",
+                    "mode": "multiply",
+                    "value": 0,
+                }
+            ],
+        }
+    ]
+    grappled_actor["derived"] = derive_character_sheet(grappled_actor["sheet"])
+    grappled_encounter = start_encounter([grappled_actor, pursuer_actor], ruleset="2014")
+    grappled_combatant = next(
+        item for item in grappled_encounter["combatants"] if item["actor_id"] == "dwarf"
+    )
+    assert grappled_combatant["speed_multiplier"] == 0
+    assert grappled_combatant["turn_budget"]["movement"] == 0
+    chase = start_chase(
+        [dwarf_actor, pursuer_actor],
+        quarry_ids=["dwarf"],
+        initial_distance_ft=60,
+    )
+    dwarf_participant = next(item for item in chase["participants"] if item["actor_id"] == "dwarf")
+    assert dwarf_participant["base_speed_ft"] == 25
+    assert dwarf_participant["speed_ft"] == 25
 
 
 def test_effective_ability_modifier_uses_the_shared_override_projection() -> None:

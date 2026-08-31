@@ -54,6 +54,7 @@ EDITION_BOUNDARIES = {
         "dnd5e.core.activity.recharge",
         "dnd5e.core.check.jack_of_all_trades",
         "dnd5e.core.damage.relentless_endurance",
+        "dnd5e.core.movement.dwarf_heavy_armor_speed",
         "dnd5e.core.rest.natural_recovery",
         "dnd5e.core.rest.song_of_rest",
         "dnd5e.core.rest.sorcerous_restoration",
