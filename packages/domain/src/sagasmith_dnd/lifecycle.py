@@ -70,6 +70,29 @@ def minimum_rest_minutes(rest_type: str, *, allows_trance: bool = False) -> int:
     return REST_MINIMUM_MINUTES[normalized]
 
 
+def validate_rest_eligibility(sheet: dict[str, Any], *, rest_type: str) -> str:
+    """Validate the creature-state prerequisites for starting one rest."""
+
+    normalized = str(rest_type).strip().lower().replace("-", "_")
+    minimum_rest_minutes(normalized)
+    hp = int(dict(sheet.get("combat", {}).get("hp") or {}).get("value", 0) or 0)
+    conditions = condition_ids(sheet.get("conditions"))
+    if "dead" in conditions:
+        raise CombatEngineError("a dead creature cannot benefit from a rest")
+    if hp <= 0:
+        requires_positive_hp = normalized == "long_rest" or _sheet_edition(sheet) != "2014"
+        if requires_positive_hp:
+            rest_label = normalized.replace("_", " ")
+            raise CombatEngineError(
+                f"a creature must have at least 1 hit point at the start of a {rest_label}"
+            )
+        if "stable" not in conditions:
+            raise CombatEngineError(
+                "a creature at 0 hit points must be stable to benefit from a short rest"
+            )
+    return normalized
+
+
 def apply_raise_dead_to_sheet(
     sheet: dict[str, Any],
     *,
@@ -296,10 +319,7 @@ def record_rest_completion(
         duration_minutes=duration_ticks // TICKS_PER_MINUTE,
         allows_trance=allows_trance,
     )
-    hp = int(dict(sheet.get("combat", {}).get("hp") or {}).get("value", 0) or 0)
-    conditions = condition_ids(sheet.get("conditions"))
-    if hp <= 0 or "dead" in conditions:
-        raise CombatEngineError("a creature must have at least 1 hit point at the start of a rest")
+    validate_rest_eligibility(sheet, rest_type=normalized)
     history = dict(dict(sheet.get("combat") or {}).get("rest_history") or {})
     previous_completed = history.get("last_rest_completed_elapsed_ticks")
     if previous_completed is not None and completed <= int(previous_completed):
@@ -785,10 +805,9 @@ def apply_rest(
         }
     chase_recovery = recover_chase_exhaustion(before_rules.sheet)
     value = chase_recovery["sheet"]
+    validate_rest_eligibility(value, rest_type=rest_type)
     combat = value.setdefault("combat", {})
     hp = dict(combat.get("hp") or {})
-    if int(hp.get("value", 0) or 0) <= 0 or "dead" in condition_ids(value.get("conditions")):
-        raise CombatEngineError("a creature at 0 hit points or dead cannot benefit from a rest")
     edition = _sheet_edition(value)
     recovered: dict[str, int] = {}
     unmet_recovery_requirements: dict[str, dict[str, Any]] = {}
