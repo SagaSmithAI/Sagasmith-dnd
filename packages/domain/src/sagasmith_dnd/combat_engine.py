@@ -4544,7 +4544,7 @@ def stand_up(encounter: dict[str, Any], actor_id_value: str) -> dict[str, Any]:
     if effective_speed <= 0:
         raise CombatEngineError("actor cannot stand while its effective speed is zero")
     budget = dict(combatant.get("turn_budget") or {})
-    cost = int(budget.get("speed", 0) or 0) // 2
+    cost = effective_speed // 2
     if int(budget.get("movement", 0) or 0) < cost:
         raise CombatEngineError("standing requires half the actor's speed in remaining movement")
     budget["movement"] = int(budget["movement"]) - cost
@@ -5562,8 +5562,7 @@ def settle_core_activity_effect(
         flags = dict(combatant.get("turn_flags") or {})
         if "aggressive_movement" in flags:
             raise CombatEngineError("Aggressive already granted movement on this turn")
-        budget = dict(combatant.get("turn_budget") or {})
-        granted = int(budget.get("speed", 0) or 0)
+        granted = _effective_speed_ft(combatant)
         flags["aggressive_movement"] = {
             "source_activity_id": activity_id,
             "target_actor_id": target_id,
@@ -5593,8 +5592,8 @@ def settle_core_activity_effect(
         budget = dict(combatant.get("turn_budget") or {})
         flags = dict(combatant.get("turn_flags") or {})
         if selected == "dash":
-            budget["movement"] = int(budget.get("movement", 0) or 0) + int(
-                budget.get("speed", 0) or 0
+            budget["movement"] = int(budget.get("movement", 0) or 0) + _effective_speed_ft(
+                combatant
             )
             combatant["turn_budget"] = budget
         elif selected == "disengage":

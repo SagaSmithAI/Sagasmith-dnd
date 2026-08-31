@@ -625,6 +625,94 @@ def test_incapacitated_actor_can_settle_free_object_interaction(tmp_path: Path) 
     asyncio.run(exercise())
 
 
+def test_combat_stand_charges_half_current_effective_speed(tmp_path: Path) -> None:
+    async def exercise() -> None:
+        config = _config(tmp_path)
+        server = create_server(config)
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {
+                "name": "Effective-speed stand",
+                "edition": "2014",
+                "idempotency_key": "campaign",
+            },
+        )
+        sheet = default_character_sheet()
+        sheet["conditions"] = ["prone"]
+        actor = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": "Slowed prone actor",
+                    "sheet": sheet,
+                },
+                "principal_id": "system:local",
+                "idempotency_key": "actor",
+            },
+        )
+        campaign = await _call(
+            server,
+            "campaign_query",
+            {
+                "view": "get",
+                "payload": {"campaign_id": campaign["id"]},
+                "principal_id": "system:local",
+            },
+        )
+        await _call(
+            server,
+            "combat_start",
+            {
+                "positioning_mode": "agent",
+                "campaign_id": campaign["id"],
+                "participant_ids": [actor["id"]],
+                "participant_config": [{"actor_id": actor["id"], "initiative": 10}],
+                "expected_revision": campaign["revision"],
+                "idempotency_key": "start",
+            },
+        )
+
+        storage = server_module.SagaSmithStorage(config)
+        campaigns = server_module.CampaignService(storage.database)
+        stored = campaigns.get(campaign["id"])
+        state_with_effect = deepcopy(stored.state)
+        affected = state_with_effect["combat"]["combatants"][0]
+        assert affected["turn_budget"]["movement"] == 30
+        affected["speed_multiplier"] = 0.5
+        effect_applied = campaigns.update(
+            campaign["id"],
+            state=state_with_effect,
+            expected_revision=stored.revision,
+        )
+
+        stand_request = {
+            "campaign_id": campaign["id"],
+            "actor_id": actor["id"],
+            "action": "stand",
+            "payload": {},
+            "expected_revision": effect_applied.revision,
+            "idempotency_key": "stand",
+        }
+        stood = await _call_raw(server, "combat_movement", stand_request)
+        replayed = await _call_raw(server, "combat_movement", stand_request)
+
+        assert replayed == stood
+        assert stood["status"] == "committed"
+        assert stood["campaign_revision"] == effect_applied.revision + 1
+        combatant = stood["combat"]["combatants"][0]
+        assert combatant["turn_budget"]["movement"] == 23
+        assert "prone" not in combatant["conditions"]
+        after = campaigns.get(campaign["id"])
+        assert after.revision == effect_applied.revision + 1
+        assert after.state["combat"]["combatants"][0]["turn_budget"]["movement"] == 23
+
+    asyncio.run(exercise())
+
+
 @pytest.mark.parametrize(
     ("speed_multiplier", "condition", "expected_movement"),
     [
@@ -1589,13 +1677,29 @@ def test_second_wind_heals_and_advances_random_stream_outside_combat(
     asyncio.run(exercise())
 
 
-def test_cunning_action_dash_uses_bonus_action_and_doubles_movement(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("edition", "speed_multiplier", "expected_movement"),
+    [
+        ("2014", 0.5, 45),
+        ("2014", 0.0, 30),
+        ("2024", 0.5, 45),
+        ("2024", 0.0, 30),
+    ],
+)
+def test_cunning_action_dash_uses_bonus_action_and_current_effective_speed(
+    tmp_path: Path,
+    edition: str,
+    speed_multiplier: float,
+    expected_movement: int,
+) -> None:
     async def exercise() -> None:
-        server = create_server(_config(tmp_path))
+        config = _config(tmp_path)
+        server = create_server(config)
+        activity_id = f"dnd5e.content.srd{edition}.feature.rogue-cunning-action"
         campaign = await _call(
             server,
             "campaign_create",
-            {"name": "Cunning Action", "edition": "2014", "idempotency_key": "campaign"},
+            {"name": "Cunning Action", "edition": edition, "idempotency_key": "campaign"},
         )
         sheet = default_character_sheet()
         sheet["progression"]["level"] = 2
@@ -1604,7 +1708,7 @@ def test_cunning_action_dash_uses_bonus_action_and_doubles_movement(tmp_path: Pa
         ]
         sheet["content"]["features"] = [
             {
-                "id": "dnd5e.content.srd2014.feature.rogue-cunning-action",
+                "id": activity_id,
                 "name": "Cunning Action",
                 "source_key": "Rogue",
                 "description": "Dash, Disengage, or Hide as a bonus action.",
@@ -1640,7 +1744,7 @@ def test_cunning_action_dash_uses_bonus_action_and_doubles_movement(tmp_path: Pa
                 "principal_id": "system:local",
             },
         )
-        started = await _call_raw(
+        await _call_raw(
             server,
             "combat_start",
             {
@@ -1653,15 +1757,28 @@ def test_cunning_action_dash_uses_bonus_action_and_doubles_movement(tmp_path: Pa
             },
         )
 
+        storage = server_module.SagaSmithStorage(config)
+        campaigns = server_module.CampaignService(storage.database)
+        stored = campaigns.get(campaign["id"])
+        state_with_effect = deepcopy(stored.state)
+        affected = state_with_effect["combat"]["combatants"][0]
+        assert affected["turn_budget"]["movement"] == 30
+        affected["speed_multiplier"] = speed_multiplier
+        effect_applied = campaigns.update(
+            campaign["id"],
+            state=state_with_effect,
+            expected_revision=stored.revision,
+        )
+
         result = await _call_raw(
             server,
             "combat_use_activity",
             {
                 "campaign_id": campaign["id"],
                 "actor_id": actor["id"],
-                "activity_id": "dnd5e.content.srd2014.feature.rogue-cunning-action",
+                "activity_id": activity_id,
                 "declaration": {"action": "dash"},
-                "expected_revision": started["campaign_revision"],
+                "expected_revision": effect_applied.revision,
                 "idempotency_key": "cunning-dash",
             },
         )
@@ -1669,7 +1786,7 @@ def test_cunning_action_dash_uses_bonus_action_and_doubles_movement(tmp_path: Pa
         assert result["status"] == "committed"
         assert result["result"]["requires_ruling"] is False
         current = result["combat"]["combatants"][result["combat"]["turn_index"]]
-        assert current["turn_budget"]["movement"] == 60
+        assert current["turn_budget"]["movement"] == expected_movement
         assert current["turn_budget"]["bonus_action"] == 0
         assert current["turn_budget"]["main_action"] == 1
         assert any(
@@ -1763,7 +1880,7 @@ def test_srd_orc_preset_aggressive_settles_and_spends_a_separate_grant(
                 "principal_id": "system:local",
             },
         )
-        started = await _call_raw(
+        await _call_raw(
             server,
             "combat_start",
             {
@@ -1789,6 +1906,21 @@ def test_srd_orc_preset_aggressive_settles_and_spends_a_separate_grant(
                 "idempotency_key": "start",
             },
         )
+        storage = server_module.SagaSmithStorage(config)
+        campaigns = server_module.CampaignService(storage.database)
+        stored = campaigns.get(campaign["id"])
+        state_with_effect = deepcopy(stored.state)
+        affected = next(
+            item
+            for item in state_with_effect["combat"]["combatants"]
+            if item["actor_id"] == orc["id"]
+        )
+        affected["speed_multiplier"] = 0.5
+        effect_applied = campaigns.update(
+            campaign["id"],
+            state=state_with_effect,
+            expected_revision=stored.revision,
+        )
         activated = await _call_raw(
             server,
             "combat_use_activity",
@@ -1797,7 +1929,7 @@ def test_srd_orc_preset_aggressive_settles_and_spends_a_separate_grant(
                 "actor_id": orc["id"],
                 "activity_id": aggressive["id"],
                 "declaration": {"target_id": hostile["id"]},
-                "expected_revision": started["campaign_revision"],
+                "expected_revision": effect_applied.revision,
                 "idempotency_key": "aggressive",
             },
         )
@@ -1805,8 +1937,8 @@ def test_srd_orc_preset_aggressive_settles_and_spends_a_separate_grant(
         assert activated["result"]["core_effect"] == {
             "kind": "orc_aggressive",
             "target_id": hostile["id"],
-            "movement_granted": 30,
-            "movement_remaining": 30,
+            "movement_granted": 15,
+            "movement_remaining": 15,
             "requires_ruling": False,
         }
         assert any(
@@ -1841,14 +1973,12 @@ def test_srd_orc_preset_aggressive_settles_and_spends_a_separate_grant(
                 "actor_id": orc["id"],
                 "action": "move",
                 "payload": {
-                    "distance": 20,
-                    "destination": {"x": 6, "y": 2},
+                    "distance": 10,
+                    "destination": {"x": 4, "y": 2},
                     "path": [
                         {"x": 2, "y": 2},
                         {"x": 3, "y": 2},
                         {"x": 4, "y": 2},
-                        {"x": 5, "y": 2},
-                        {"x": 6, "y": 2},
                     ],
                     "movement_mode": "aggressive",
                 },
@@ -1857,9 +1987,9 @@ def test_srd_orc_preset_aggressive_settles_and_spends_a_separate_grant(
             },
         )
         current = moved["combat"]["combatants"][moved["combat"]["turn_index"]]
-        assert current["position"] == {"x": 6, "y": 2}
+        assert current["position"] == {"x": 4, "y": 2}
         assert current["turn_budget"]["movement"] == 30
-        assert current["turn_flags"]["aggressive_movement"]["remaining"] == 10
+        assert current["turn_flags"]["aggressive_movement"]["remaining"] == 5
         assert any(
             item["mechanic_id"] == "dnd5e.core.activity.orc_aggressive"
             for item in moved["rule_receipts"]

@@ -496,6 +496,22 @@ def test_stand_up_rejects_current_zero_speed_with_stale_movement_budget(
     assert encounter == before
 
 
+def test_stand_up_cost_uses_current_effective_speed() -> None:
+    actor = _actor("prone")
+    actor["sheet"]["conditions"] = ["prone"]
+    actor["position"] = {"x": 0, "y": 0}
+    encounter = _grid_encounter([actor])
+    current = current_combatant(encounter)
+    assert current is not None
+    current["speed_multiplier"] = 0.5
+
+    stood = stand_up(encounter, "prone")
+
+    current = current_combatant(stood)
+    assert current["turn_budget"]["movement"] == 23
+    assert "prone" not in current["conditions"]
+
+
 @pytest.mark.parametrize(
     ("speed_multiplier", "condition", "expected_movement"),
     [
@@ -4882,6 +4898,40 @@ def test_cunning_action_settles_dash_and_disengage_but_not_hide_outcome() -> Non
     assert dashed_2024["combatants"][0]["turn_budget"]["movement"] == 60
 
 
+@pytest.mark.parametrize(
+    ("ruleset", "activity_id", "speed_multiplier", "expected_movement"),
+    [
+        ("2014", "dnd5e.content.srd2014.feature.rogue-cunning-action", 0.5, 45),
+        ("2014", "dnd5e.content.srd2014.feature.rogue-cunning-action", 0.0, 30),
+        ("2024", "dnd5e.content.srd2024.feature.rogue-cunning-action", 0.5, 45),
+        ("2024", "dnd5e.content.srd2024.feature.rogue-cunning-action", 0.0, 30),
+    ],
+)
+def test_cunning_action_dash_uses_current_effective_speed(
+    ruleset: str,
+    activity_id: str,
+    speed_multiplier: float,
+    expected_movement: int,
+) -> None:
+    rogue = _actor("rogue")
+    encounter = start_encounter([rogue], ruleset=ruleset)
+    current = current_combatant(encounter)
+    assert current is not None
+    current["speed_multiplier"] = speed_multiplier
+    paid = pay_activity_activation(
+        encounter, actor_id_value="rogue", activation_type="bonus_action"
+    )
+
+    dashed, _ = settle_core_activity_effect(
+        paid,
+        actor_id_value="rogue",
+        activity_id=activity_id,
+        declaration={"action": "dash"},
+    )
+
+    assert current_combatant(dashed)["turn_budget"]["movement"] == expected_movement
+
+
 def test_orc_aggressive_grants_separate_toward_only_movement() -> None:
     orc = _actor("orc")
     orc.update(
@@ -4896,6 +4946,7 @@ def test_orc_aggressive_grants_separate_toward_only_movement() -> None:
         disposition="hostile",
     )
     encounter = _grid_encounter([orc, hostile])
+    current_combatant(encounter)["speed_multiplier"] = 0.5
     source_card = {
         "id": ORC_AGGRESSIVE_ACTIVITY_ID,
         "activation": {"type": "bonus_action", "cost": 1, "trigger": ""},
@@ -4924,14 +4975,14 @@ def test_orc_aggressive_grants_separate_toward_only_movement() -> None:
     assert effect == {
         "kind": "orc_aggressive",
         "target_id": "hostile",
-        "movement_granted": 30,
-        "movement_remaining": 30,
+        "movement_granted": 15,
+        "movement_remaining": 15,
         "requires_ruling": False,
     }
     current = current_combatant(granted)
     assert current["turn_budget"]["bonus_action"] == 0
     assert current["turn_budget"]["movement"] == 30
-    assert current["turn_flags"]["aggressive_movement"]["remaining"] == 30
+    assert current["turn_flags"]["aggressive_movement"]["remaining"] == 15
 
     hidden_target = deepcopy(granted)
     next(
@@ -4962,21 +5013,19 @@ def test_orc_aggressive_grants_separate_toward_only_movement() -> None:
     moved = spend_movement(
         granted,
         "orc",
-        20,
-        destination={"x": 6, "y": 2},
+        10,
+        destination={"x": 4, "y": 2},
         path=[
             {"x": 2, "y": 2},
             {"x": 3, "y": 2},
             {"x": 4, "y": 2},
-            {"x": 5, "y": 2},
-            {"x": 6, "y": 2},
         ],
         movement_mode="aggressive",
     )
     current = current_combatant(moved)
-    assert current["position"] == {"x": 6, "y": 2}
+    assert current["position"] == {"x": 4, "y": 2}
     assert current["turn_budget"]["movement"] == 30
-    assert current["turn_flags"]["aggressive_movement"]["remaining"] == 10
+    assert current["turn_flags"]["aggressive_movement"]["remaining"] == 5
 
     ended = end_turn(moved, actor_id_value="orc")
     orc_after = next(item for item in ended["combatants"] if item["actor_id"] == "orc")
