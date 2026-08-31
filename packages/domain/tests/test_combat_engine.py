@@ -394,6 +394,53 @@ def test_zero_speed_multiplier_is_preserved_when_a_combat_turn_starts() -> None:
     assert current_combatant(immobilized_turn)["turn_budget"]["movement"] == 0
 
 
+def test_incapacitated_actor_retains_movement_and_free_object_interaction() -> None:
+    actor = _actor("incapacitated")
+    actor["sheet"]["conditions"] = ["incapacitated"]
+
+    encounter = start_encounter([actor], ruleset="2014")
+
+    assert available_actions(encounter, "incapacitated") == ["move", "interact_object"]
+    pending_reaction = add_choice_window(
+        encounter,
+        kind="reaction",
+        actor_id_value="incapacitated",
+        event="movement.leave_reach",
+        candidates=[{"id": "skip"}],
+    )
+    assert available_reactions(pending_reaction, "incapacitated") == []
+
+
+@pytest.mark.parametrize("movement_block", ["speed_zero", "spent", "grappled", "restrained"])
+def test_incapacitated_actor_with_no_legal_movement_does_not_offer_move(
+    movement_block: str,
+) -> None:
+    actor = _actor("incapacitated")
+    actor["sheet"]["conditions"] = ["incapacitated"]
+    if movement_block in {"grappled", "restrained"}:
+        actor["sheet"]["conditions"].append(movement_block)
+    if movement_block == "speed_zero":
+        actor["sheet"]["combat"]["speed"]["walk"] = 0
+        actor["derived"] = derive_character_sheet(actor["sheet"])
+    encounter = start_encounter([actor], ruleset="2014")
+    if movement_block == "spent":
+        current = current_combatant(encounter)
+        assert current is not None
+        current["turn_budget"]["movement"] = 0
+
+    assert available_actions(encounter, "incapacitated") == ["interact_object"]
+
+
+@pytest.mark.parametrize("condition", ["dead", "unconscious", "stunned", "paralyzed", "petrified"])
+def test_derived_incapacitating_states_still_offer_no_actions(condition: str) -> None:
+    actor = _actor(condition)
+    actor["sheet"]["conditions"] = [condition]
+
+    encounter = start_encounter([actor], ruleset="2014")
+
+    assert available_actions(encounter, condition) == []
+
+
 def test_nonproficient_armor_and_heavy_encumbrance_apply_check_disadvantage() -> None:
     actor = _actor("encumbered")
     actor["sheet"]["abilities"]["strength"]["score"] = 10

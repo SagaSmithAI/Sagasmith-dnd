@@ -1277,7 +1277,14 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
     if conditions & {"dead", "unconscious", "stunned", "paralyzed", "petrified"}:
         return []
     if "incapacitated" in conditions:
-        return ["move"] if "grappled" not in conditions and "restrained" not in conditions else []
+        actions = (
+            ["move"]
+            if budget.get("movement", 0) > 0 and not conditions & {"grappled", "restrained"}
+            else []
+        )
+        if budget.get("object_interaction", 0) > 0:
+            actions.append("interact_object")
+        return actions
     if "turned" in conditions:
         actions = (
             ["move"]

@@ -427,6 +427,119 @@ def test_available_actions_explicitly_discovers_required_death_save(
     asyncio.run(exercise())
 
 
+def test_incapacitated_actor_can_settle_free_object_interaction(tmp_path: Path) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {
+                "name": "Incapacitated interaction",
+                "edition": "2014",
+                "idempotency_key": "campaign",
+            },
+        )
+        sheet = default_character_sheet()
+        sheet["conditions"] = ["incapacitated"]
+        sheet["combat"]["speed"]["walk"] = 0
+        actor = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": "Incapacitated PC",
+                    "sheet": sheet,
+                },
+                "principal_id": "system:local",
+                "idempotency_key": "actor",
+            },
+        )
+        campaign = await _call(
+            server,
+            "campaign_query",
+            {
+                "view": "get",
+                "payload": {"campaign_id": campaign["id"]},
+                "principal_id": "system:local",
+            },
+        )
+        started = await _call(
+            server,
+            "combat_start",
+            {
+                "positioning_mode": "agent",
+                "campaign_id": campaign["id"],
+                "participant_ids": [actor["id"]],
+                "participant_config": [{"actor_id": actor["id"], "initiative": 10}],
+                "expected_revision": campaign["revision"],
+                "idempotency_key": "start",
+            },
+        )
+
+        available = await _call(
+            server,
+            "combat_query",
+            {
+                "campaign_id": campaign["id"],
+                "view": "available_actions",
+                "actor_id": actor["id"],
+                "principal_id": "system:local",
+            },
+        )
+        assert available["actions"] == ["interact_object"]
+
+        interacted = await _call(
+            server,
+            "combat_common_action",
+            {
+                "campaign_id": campaign["id"],
+                "actor_id": actor["id"],
+                "action": "interact_object",
+                "payload": {
+                    "object_description": "an unlocked door",
+                    "interaction": "open",
+                },
+                "expected_revision": started["campaign_revision"],
+                "idempotency_key": "open-door",
+            },
+        )
+        combatant = interacted["combat"]["combatants"][0]
+        assert interacted["status"] == "committed"
+        assert interacted["campaign_revision"] == started["campaign_revision"] + 1
+        assert combatant["turn_budget"]["object_interaction"] == 0
+        assert combatant["turn_budget"]["main_action"] == 1
+        assert combatant["turn_budget"]["bonus_action"] == 1
+        assert combatant["turn_budget"]["movement"] == 0
+        assert interacted["combat"]["log"][-1] == {
+            "type": "common_action",
+            "action": "interact_object",
+            "actor_id": actor["id"],
+            "target_id": None,
+            "payload": {
+                "object_description": "an unlocked door",
+                "interaction": "open",
+            },
+            "round": 1,
+            "turn_index": 0,
+        }
+
+        after = await _call(
+            server,
+            "combat_query",
+            {
+                "campaign_id": campaign["id"],
+                "view": "available_actions",
+                "actor_id": actor["id"],
+                "principal_id": "system:local",
+            },
+        )
+        assert after["actions"] == []
+
+    asyncio.run(exercise())
+
+
 def test_invalid_branch_is_rejected_before_noncombat_check_rolls(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
