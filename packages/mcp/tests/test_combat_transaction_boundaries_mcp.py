@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -429,7 +430,8 @@ def test_available_actions_explicitly_discovers_required_death_save(
 
 def test_incapacitated_actor_can_settle_free_object_interaction(tmp_path: Path) -> None:
     async def exercise() -> None:
-        server = create_server(_config(tmp_path))
+        config = _config(tmp_path)
+        server = create_server(config)
         campaign = await _call(
             server,
             "campaign_create",
@@ -441,7 +443,6 @@ def test_incapacitated_actor_can_settle_free_object_interaction(tmp_path: Path) 
         )
         sheet = default_character_sheet()
         sheet["conditions"] = ["incapacitated"]
-        sheet["combat"]["speed"]["walk"] = 0
         actor = await _call(
             server,
             "character_create_from",
@@ -469,13 +470,47 @@ def test_incapacitated_actor_can_settle_free_object_interaction(tmp_path: Path) 
             server,
             "combat_start",
             {
-                "positioning_mode": "agent",
+                "positioning_mode": "grid",
+                "battle_map": {"width_cells": 12, "height_cells": 4},
                 "campaign_id": campaign["id"],
                 "participant_ids": [actor["id"]],
-                "participant_config": [{"actor_id": actor["id"], "initiative": 10}],
+                "participant_config": [
+                    {
+                        "actor_id": actor["id"],
+                        "initiative": 10,
+                        "position": {"x": 0, "y": 0},
+                    }
+                ],
                 "expected_revision": campaign["revision"],
                 "idempotency_key": "start",
             },
+        )
+
+        available_before_effect = await _call(
+            server,
+            "combat_query",
+            {
+                "campaign_id": campaign["id"],
+                "view": "available_actions",
+                "actor_id": actor["id"],
+                "principal_id": "system:local",
+            },
+        )
+        assert available_before_effect["actions"] == ["move", "interact_object"]
+
+        storage = server_module.SagaSmithStorage(config)
+        campaigns = server_module.CampaignService(storage.database)
+        stored = campaigns.get(campaign["id"])
+        state_with_effect = deepcopy(stored.state)
+        affected = state_with_effect["combat"]["combatants"][0]
+        assert affected["turn_budget"]["movement"] == 30
+        # Match the encounter projection produced by a speed effect synced after
+        # turn start: the multiplier changes while the remaining budget is stale.
+        affected["speed_multiplier"] = 0.0
+        effect_applied = campaigns.update(
+            campaign["id"],
+            state=state_with_effect,
+            expected_revision=stored.revision,
         )
 
         available = await _call(
@@ -489,6 +524,45 @@ def test_incapacitated_actor_can_settle_free_object_interaction(tmp_path: Path) 
             },
         )
         assert available["actions"] == ["interact_object"]
+        before_blocked_move = await _call(
+            server,
+            "campaign_query",
+            {
+                "view": "get",
+                "payload": {"campaign_id": campaign["id"]},
+                "principal_id": "system:local",
+            },
+        )
+        stale_move = {
+            "campaign_id": campaign["id"],
+            "actor_id": actor["id"],
+            "action": "move",
+            "payload": {"distance": 5, "destination": {"x": 1, "y": 0}},
+            "expected_revision": started["campaign_revision"],
+            "idempotency_key": "stale-blocked-move",
+        }
+        with pytest.raises(Exception, match="campaign revision conflict"):
+            await _call_raw(server, "combat_movement", stale_move)
+
+        blocked_move = {
+            **stale_move,
+            "expected_revision": effect_applied.revision,
+            "idempotency_key": "blocked-move",
+        }
+        for _attempt in range(2):
+            with pytest.raises(Exception, match="effective speed is zero"):
+                await _call_raw(server, "combat_movement", blocked_move)
+        after_blocked_move = await _call(
+            server,
+            "campaign_query",
+            {
+                "view": "get",
+                "payload": {"campaign_id": campaign["id"]},
+                "principal_id": "system:local",
+            },
+        )
+        assert after_blocked_move["revision"] == before_blocked_move["revision"]
+        assert after_blocked_move["state"] == before_blocked_move["state"]
 
         interacted = await _call(
             server,
@@ -501,17 +575,17 @@ def test_incapacitated_actor_can_settle_free_object_interaction(tmp_path: Path) 
                     "object_description": "an unlocked door",
                     "interaction": "open",
                 },
-                "expected_revision": started["campaign_revision"],
+                "expected_revision": effect_applied.revision,
                 "idempotency_key": "open-door",
             },
         )
         combatant = interacted["combat"]["combatants"][0]
         assert interacted["status"] == "committed"
-        assert interacted["campaign_revision"] == started["campaign_revision"] + 1
+        assert interacted["campaign_revision"] == effect_applied.revision + 1
         assert combatant["turn_budget"]["object_interaction"] == 0
         assert combatant["turn_budget"]["main_action"] == 1
         assert combatant["turn_budget"]["bonus_action"] == 1
-        assert combatant["turn_budget"]["movement"] == 0
+        assert combatant["turn_budget"]["movement"] == 30
         assert interacted["combat"]["log"][-1] == {
             "type": "common_action",
             "action": "interact_object",

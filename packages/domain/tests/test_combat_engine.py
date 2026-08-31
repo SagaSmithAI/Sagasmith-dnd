@@ -397,8 +397,9 @@ def test_zero_speed_multiplier_is_preserved_when_a_combat_turn_starts() -> None:
 def test_incapacitated_actor_retains_movement_and_free_object_interaction() -> None:
     actor = _actor("incapacitated")
     actor["sheet"]["conditions"] = ["incapacitated"]
+    actor.update(position={"x": 0, "y": 0})
 
-    encounter = start_encounter([actor], ruleset="2014")
+    encounter = _grid_encounter([actor])
 
     assert available_actions(encounter, "incapacitated") == ["move", "interact_object"]
     pending_reaction = add_choice_window(
@@ -409,6 +410,63 @@ def test_incapacitated_actor_retains_movement_and_free_object_interaction() -> N
         candidates=[{"id": "skip"}],
     )
     assert available_reactions(pending_reaction, "incapacitated") == []
+    moved = spend_movement(
+        encounter,
+        "incapacitated",
+        5,
+        destination={"x": 1, "y": 0},
+    )
+    assert current_combatant(moved)["turn_budget"]["movement"] == 25
+
+
+def test_mid_turn_zero_speed_multiplier_blocks_projection_and_movement() -> None:
+    actor = _actor("incapacitated")
+    actor["sheet"]["conditions"] = ["incapacitated"]
+    actor.update(position={"x": 0, "y": 0})
+    encounter = _grid_encounter([actor])
+    current = current_combatant(encounter)
+    assert current is not None
+    assert current["turn_budget"]["movement"] == 30
+
+    current["speed_multiplier"] = 0.0
+
+    assert current["turn_budget"]["movement"] == 30
+    assert available_actions(encounter, "incapacitated") == ["interact_object"]
+    with pytest.raises(CombatEngineError, match="effective speed is zero"):
+        spend_movement(
+            encounter,
+            "incapacitated",
+            5,
+            destination={"x": 1, "y": 0},
+        )
+    assert current["turn_budget"]["movement"] == 30
+
+
+def test_zero_effective_speed_does_not_block_forced_movement_or_teleportation() -> None:
+    actor = _actor("immobilized")
+    actor.update(position={"x": 0, "y": 0})
+    encounter = _grid_encounter([actor])
+    current = current_combatant(encounter)
+    assert current is not None
+    current["speed_multiplier"] = 0.0
+
+    forced = spend_movement(
+        encounter,
+        "immobilized",
+        5,
+        destination={"x": 1, "y": 0},
+        movement_mode="forced",
+    )
+    teleported = spend_movement(
+        forced,
+        "immobilized",
+        20,
+        destination={"x": 5, "y": 0},
+        movement_mode="teleport",
+    )
+
+    assert current_combatant(teleported)["position"] == {"x": 5.0, "y": 0.0}
+    assert current_combatant(teleported)["turn_budget"]["movement"] == 30
 
 
 @pytest.mark.parametrize("movement_block", ["speed_zero", "spent", "grappled", "restrained"])

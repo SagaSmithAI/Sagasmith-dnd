@@ -1254,6 +1254,15 @@ def pay_witch_bolt_sustain_action(
     }
 
 
+def _has_positive_effective_speed(combatant: dict[str, Any]) -> bool:
+    budget = dict(combatant.get("turn_budget") or {})
+    recorded_speed_multiplier = combatant.get("speed_multiplier")
+    speed_multiplier = float(
+        1.0 if recorded_speed_multiplier is None else recorded_speed_multiplier
+    )
+    return int(budget.get("speed", 0) or 0) > 0 and speed_multiplier > 0
+
+
 def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[str]:
     if not encounter.get("active", True):
         return []
@@ -1269,6 +1278,7 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
         raise CombatEngineError(f"combatant not found: {actor_id_value}")
     conditions = _condition_set(combatant.get("conditions"))
     budget = dict(combatant.get("turn_budget") or {})
+    has_effective_speed = _has_positive_effective_speed(combatant)
     current = current_combatant(encounter)
     if current is None or current.get("actor_id") != actor_id_value:
         return []
@@ -1279,7 +1289,11 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
     if "incapacitated" in conditions:
         actions = (
             ["move"]
-            if budget.get("movement", 0) > 0 and not conditions & {"grappled", "restrained"}
+            if (
+                budget.get("movement", 0) > 0
+                and has_effective_speed
+                and not conditions & {"grappled", "restrained"}
+            )
             else []
         )
         if budget.get("object_interaction", 0) > 0:
@@ -1288,7 +1302,11 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
     if "turned" in conditions:
         actions = (
             ["move"]
-            if budget.get("movement", 0) > 0 and not conditions & {"grappled", "restrained"}
+            if (
+                budget.get("movement", 0) > 0
+                and has_effective_speed
+                and not conditions & {"grappled", "restrained"}
+            )
             else []
         )
         if budget.get("main_action", 0) > 0 or budget.get("extra_action", 0) > 0:
@@ -1298,7 +1316,11 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
         return actions
     actions = (
         ["move"]
-        if budget.get("movement", 0) > 0 and not conditions & {"grappled", "restrained"}
+        if (
+            budget.get("movement", 0) > 0
+            and has_effective_speed
+            and not conditions & {"grappled", "restrained"}
+        )
         else []
     )
     if budget.get("main_action", 0) > 0 or budget.get("extra_action", 0) > 0:
@@ -4156,6 +4178,8 @@ def spend_movement(
             missing=("grapple_source",),
             ruling_kind="missing_or_conflicting_source_review",
         )
+    if willing_movement and not _has_positive_effective_speed(combatant):
+        raise CombatEngineError("actor cannot move while its effective speed is zero")
     if willing_movement and "prone" in conditions and not crawl:
         raise CombatEngineError("a prone actor must crawl or stand before moving")
     if (
