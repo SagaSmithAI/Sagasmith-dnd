@@ -508,17 +508,18 @@ def test_stand_up_cost_uses_current_effective_speed() -> None:
     stood = stand_up(encounter, "prone")
 
     current = current_combatant(stood)
-    assert current["turn_budget"]["movement"] == 23
+    assert current["turn_budget"]["movement"] == 8
+    assert current["turn_budget"]["movement_spent"] == 7
     assert "prone" not in current["conditions"]
 
 
 @pytest.mark.parametrize(
     ("speed_multiplier", "condition", "expected_movement"),
     [
-        (0.0, None, 30),
-        (0.5, None, 45),
-        (1.0, "grappled", 30),
-        (1.0, "restrained", 30),
+        (0.0, None, 0),
+        (0.5, None, 30),
+        (1.0, "grappled", 0),
+        (1.0, "restrained", 0),
     ],
 )
 def test_dash_uses_current_effective_speed_instead_of_stale_base_speed(
@@ -543,6 +544,93 @@ def test_dash_uses_current_effective_speed_instead_of_stale_base_speed(
     assert budget["main_action"] == 0
 
 
+def test_mid_turn_speed_change_caps_base_movement_and_preserves_locked_dash_grant() -> None:
+    actor = _actor("mover")
+    actor["position"] = {"x": 0, "y": 0}
+    half_speed = _grid_encounter([actor])
+    half_current = current_combatant(half_speed)
+    assert half_current is not None
+    half_current["speed_multiplier"] = 0.5
+    exhausted_half_speed = spend_movement(
+        half_speed, "mover", 15, destination={"x": 3, "y": 0}
+    )
+    with pytest.raises(CombatEngineError, match="no movement remaining"):
+        spend_movement(
+            exhausted_half_speed, "mover", 5, destination={"x": 4, "y": 0}
+        )
+
+    encounter = _grid_encounter([actor])
+    moved = spend_movement(encounter, "mover", 10, destination={"x": 2, "y": 0})
+    current = current_combatant(moved)
+    assert current is not None
+    current["speed_multiplier"] = 0.5
+
+    with pytest.raises(CombatEngineError, match="remaining speed"):
+        spend_movement(moved, "mover", 10, destination={"x": 4, "y": 0})
+    slowed_move = spend_movement(moved, "mover", 5, destination={"x": 3, "y": 0})
+    assert current_combatant(slowed_move)["turn_budget"]["movement"] == 0
+
+    fresh = _grid_encounter([actor])
+    fresh_current = current_combatant(fresh)
+    assert fresh_current is not None
+    fresh_current["speed_multiplier"] = 0.5
+    dashed = resolve_common_action(fresh, actor_id_value="mover", action="dash")
+    dash_budget = current_combatant(dashed)["turn_budget"]
+    assert dash_budget["movement"] == 30
+    assert dash_budget["extra_movement_granted"] == 15
+
+    current_combatant(dashed)["speed_multiplier"] = 1.0
+    restored = spend_movement(dashed, "mover", 45, destination={"x": 9, "y": 0})
+    restored_budget = current_combatant(restored)["turn_budget"]
+    assert restored_budget["movement"] == 0
+    assert restored_budget["movement_spent"] == 45
+    assert restored_budget["extra_movement_granted"] == 15
+
+
+def test_legacy_movement_budget_is_inferred_without_manufacturing_dash_grants() -> None:
+    actor = _actor("legacy")
+    actor["position"] = {"x": 0, "y": 0}
+    encounter = _grid_encounter([actor])
+
+    started_slow = deepcopy(encounter)
+    slow_current = current_combatant(started_slow)
+    slow_current["speed_multiplier"] = 0.5
+    slow_budget = slow_current["turn_budget"]
+    slow_budget.pop("movement_spent")
+    slow_budget.pop("extra_movement_granted")
+    slow_budget["movement"] = 15
+    slow_moved = spend_movement(
+        started_slow, "legacy", 15, destination={"x": 3, "y": 0}
+    )
+    assert current_combatant(slow_moved)["turn_budget"]["movement"] == 0
+
+    stale_after_spend = deepcopy(encounter)
+    stale_current = current_combatant(stale_after_spend)
+    stale_current["speed_multiplier"] = 0.5
+    stale_budget = stale_current["turn_budget"]
+    stale_budget.pop("movement_spent")
+    stale_budget.pop("extra_movement_granted")
+    stale_budget["movement"] = 20
+    stale_moved = spend_movement(
+        stale_after_spend, "legacy", 5, destination={"x": 1, "y": 0}
+    )
+    assert current_combatant(stale_moved)["turn_budget"]["movement"] == 0
+
+    unknown_old_dash = deepcopy(encounter)
+    dash_current = current_combatant(unknown_old_dash)
+    dash_current["speed_multiplier"] = 0.5
+    dash_budget = dash_current["turn_budget"]
+    dash_budget.pop("movement_spent")
+    dash_budget.pop("extra_movement_granted")
+    dash_budget["movement"] = 45
+    capped = spend_movement(
+        unknown_old_dash, "legacy", 15, destination={"x": 3, "y": 0}
+    )
+    capped_budget = current_combatant(capped)["turn_budget"]
+    assert capped_budget["movement"] == 0
+    assert capped_budget["extra_movement_granted"] == 0
+
+
 @pytest.mark.parametrize("movement_block", ["speed_zero", "spent", "grappled", "restrained"])
 def test_incapacitated_actor_with_no_legal_movement_does_not_offer_move(
     movement_block: str,
@@ -559,6 +647,7 @@ def test_incapacitated_actor_with_no_legal_movement_does_not_offer_move(
         current = current_combatant(encounter)
         assert current is not None
         current["turn_budget"]["movement"] = 0
+        current["turn_budget"]["movement_spent"] = 30
 
     assert available_actions(encounter, "incapacitated") == ["interact_object"]
 
@@ -4901,10 +4990,10 @@ def test_cunning_action_settles_dash_and_disengage_but_not_hide_outcome() -> Non
 @pytest.mark.parametrize(
     ("ruleset", "activity_id", "speed_multiplier", "expected_movement"),
     [
-        ("2014", "dnd5e.content.srd2014.feature.rogue-cunning-action", 0.5, 45),
-        ("2014", "dnd5e.content.srd2014.feature.rogue-cunning-action", 0.0, 30),
-        ("2024", "dnd5e.content.srd2024.feature.rogue-cunning-action", 0.5, 45),
-        ("2024", "dnd5e.content.srd2024.feature.rogue-cunning-action", 0.0, 30),
+        ("2014", "dnd5e.content.srd2014.feature.rogue-cunning-action", 0.5, 30),
+        ("2014", "dnd5e.content.srd2014.feature.rogue-cunning-action", 0.0, 0),
+        ("2024", "dnd5e.content.srd2024.feature.rogue-cunning-action", 0.5, 30),
+        ("2024", "dnd5e.content.srd2024.feature.rogue-cunning-action", 0.0, 0),
     ],
 )
 def test_cunning_action_dash_uses_current_effective_speed(
@@ -4983,6 +5072,17 @@ def test_orc_aggressive_grants_separate_toward_only_movement() -> None:
     assert current["turn_budget"]["bonus_action"] == 0
     assert current["turn_budget"]["movement"] == 30
     assert current["turn_flags"]["aggressive_movement"]["remaining"] == 15
+
+    immobilized = deepcopy(granted)
+    current_combatant(immobilized)["speed_multiplier"] = 0.0
+    with pytest.raises(CombatEngineError, match="effective speed is zero"):
+        spend_movement(
+            immobilized,
+            "orc",
+            5,
+            destination={"x": 3, "y": 2},
+            movement_mode="aggressive",
+        )
 
     hidden_target = deepcopy(granted)
     next(

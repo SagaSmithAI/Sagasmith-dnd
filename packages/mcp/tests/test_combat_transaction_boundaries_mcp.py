@@ -704,11 +704,109 @@ def test_combat_stand_charges_half_current_effective_speed(tmp_path: Path) -> No
         assert stood["status"] == "committed"
         assert stood["campaign_revision"] == effect_applied.revision + 1
         combatant = stood["combat"]["combatants"][0]
-        assert combatant["turn_budget"]["movement"] == 23
+        assert combatant["turn_budget"]["movement"] == 8
+        assert combatant["turn_budget"]["movement_spent"] == 7
         assert "prone" not in combatant["conditions"]
         after = campaigns.get(campaign["id"])
         assert after.revision == effect_applied.revision + 1
-        assert after.state["combat"]["combatants"][0]["turn_budget"]["movement"] == 23
+        assert after.state["combat"]["combatants"][0]["turn_budget"]["movement"] == 8
+
+    asyncio.run(exercise())
+
+
+def test_mid_turn_slow_caps_public_movement_without_failed_writes(tmp_path: Path) -> None:
+    async def exercise() -> None:
+        config = _config(tmp_path)
+        server = create_server(config)
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {"name": "Mid-turn slow", "edition": "2014", "idempotency_key": "campaign"},
+        )
+        actor = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {"campaign_id": campaign["id"], "name": "Slowed mover"},
+                "principal_id": "system:local",
+                "idempotency_key": "actor",
+            },
+        )
+        campaign = await _call(
+            server,
+            "campaign_query",
+            {
+                "view": "get",
+                "payload": {"campaign_id": campaign["id"]},
+                "principal_id": "system:local",
+            },
+        )
+        started = await _call(
+            server,
+            "combat_start",
+            {
+                "positioning_mode": "grid",
+                "battle_map": {"width_cells": 12, "height_cells": 4},
+                "campaign_id": campaign["id"],
+                "participant_ids": [actor["id"]],
+                "participant_config": [
+                    {
+                        "actor_id": actor["id"],
+                        "initiative": 10,
+                        "position": {"x": 0, "y": 0},
+                    }
+                ],
+                "expected_revision": campaign["revision"],
+                "idempotency_key": "start",
+            },
+        )
+        storage = server_module.SagaSmithStorage(config)
+        campaigns = server_module.CampaignService(storage.database)
+        stored = campaigns.get(campaign["id"])
+        state_with_effect = deepcopy(stored.state)
+        affected = state_with_effect["combat"]["combatants"][0]
+        affected["speed_multiplier"] = 0.5
+        effect_applied = campaigns.update(
+            campaign["id"], state=state_with_effect, expected_revision=stored.revision
+        )
+        before = campaigns.get(campaign["id"])
+
+        stale = {
+            "campaign_id": campaign["id"],
+            "actor_id": actor["id"],
+            "action": "move",
+            "payload": {"distance": 20, "destination": {"x": 4, "y": 0}},
+            "expected_revision": started["campaign_revision"],
+            "idempotency_key": "stale-move",
+        }
+        with pytest.raises(Exception, match="campaign revision conflict"):
+            await _call_raw(server, "combat_movement", stale)
+        oversized = {
+            **stale,
+            "expected_revision": effect_applied.revision,
+            "idempotency_key": "oversized-move",
+        }
+        for _attempt in range(2):
+            with pytest.raises(Exception, match="remaining speed"):
+                await _call_raw(server, "combat_movement", oversized)
+        after_failed = campaigns.get(campaign["id"])
+        assert after_failed.revision == before.revision
+        assert after_failed.state == before.state
+
+        valid = {
+            **oversized,
+            "payload": {"distance": 15, "destination": {"x": 3, "y": 0}},
+            "idempotency_key": "valid-move",
+        }
+        moved = await _call_raw(server, "combat_movement", valid)
+        replayed = await _call_raw(server, "combat_movement", valid)
+        assert replayed == moved
+        assert moved["campaign_revision"] == effect_applied.revision + 1
+        budget = moved["combat"]["combatants"][0]["turn_budget"]
+        assert budget["movement"] == 0
+        assert budget["movement_spent"] == 15
+        assert budget["extra_movement_granted"] == 0
 
     asyncio.run(exercise())
 
@@ -716,10 +814,10 @@ def test_combat_stand_charges_half_current_effective_speed(tmp_path: Path) -> No
 @pytest.mark.parametrize(
     ("speed_multiplier", "condition", "expected_movement"),
     [
-        (0.0, None, 30),
-        (0.5, None, 45),
-        (1.0, "grappled", 30),
-        (1.0, "restrained", 30),
+        (0.0, None, 0),
+        (0.5, None, 30),
+        (1.0, "grappled", 0),
+        (1.0, "restrained", 0),
     ],
 )
 def test_dash_grants_only_current_effective_speed(
@@ -1680,10 +1778,10 @@ def test_second_wind_heals_and_advances_random_stream_outside_combat(
 @pytest.mark.parametrize(
     ("edition", "speed_multiplier", "expected_movement"),
     [
-        ("2014", 0.5, 45),
-        ("2014", 0.0, 30),
-        ("2024", 0.5, 45),
-        ("2024", 0.0, 30),
+        ("2014", 0.5, 30),
+        ("2014", 0.0, 0),
+        ("2024", 0.5, 30),
+        ("2024", 0.0, 0),
     ],
 )
 def test_cunning_action_dash_uses_bonus_action_and_current_effective_speed(
