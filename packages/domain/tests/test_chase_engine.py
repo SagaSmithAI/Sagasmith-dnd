@@ -62,6 +62,28 @@ def _give_magic_resistance(actor: dict) -> None:
     actor["derived"] = derive_character_sheet(actor["sheet"])
 
 
+def _guard_chase(*, armor_class: int = 10) -> tuple[dict, dict]:
+    pursuer = _actor("pursuer", initiative=20)
+    quarry = _actor("quarry", initiative=10)
+    quarry["sheet"]["combat"]["ac"] = {
+        "base": armor_class,
+        "override": armor_class,
+    }
+    quarry["derived"] = derive_character_sheet(quarry["sheet"])
+    chase = start_chase(
+        [pursuer, quarry],
+        quarry_ids=["quarry"],
+        initial_distance_ft=100,
+    )
+    chase["turn_index"] = 1
+    chase["pending_complication"] = {
+        "number": 9,
+        "source_actor_id": "pursuer",
+        "rolled_round": 1,
+    }
+    return chase, quarry
+
+
 def test_module_close_transition_ends_chase() -> None:
     pursuer = _actor("pursuer", initiative=20)
     quarry = _actor("quarry", initiative=10)
@@ -207,21 +229,7 @@ def test_urban_complication_affects_next_participant() -> None:
 
 
 def test_urban_guard_attack_preserves_zero_armor_class() -> None:
-    pursuer = _actor("pursuer", initiative=20)
-    quarry = _actor("quarry", initiative=10)
-    quarry["sheet"]["combat"]["ac"] = {"base": 0, "override": 0}
-    quarry["derived"] = derive_character_sheet(quarry["sheet"])
-    chase = start_chase(
-        [pursuer, quarry],
-        quarry_ids=["quarry"],
-        initial_distance_ft=100,
-    )
-    chase["turn_index"] = 1
-    chase["pending_complication"] = {
-        "number": 9,
-        "source_actor_id": "pursuer",
-        "rolled_round": 1,
-    }
+    chase, quarry = _guard_chase(armor_class=0)
 
     result = advance_chase_turn(
         chase,
@@ -236,6 +244,57 @@ def test_urban_guard_attack_preserves_zero_armor_class() -> None:
     assert guard_attack["total"] == 8
     assert guard_attack["hit"] is True
     assert guard_attack["damage"]["total"] == 2
+
+
+def test_urban_guard_attack_applies_natural_one_and_ordinary_miss_rules() -> None:
+    natural_one_chase, quarry = _guard_chase(armor_class=0)
+    natural_one = advance_chase_turn(
+        natural_one_chase,
+        quarry,
+        actor_id_value="quarry",
+        action="move",
+        rng=_SequenceRng(1, 20),
+    )["turn"]["guard_attack"]
+
+    assert natural_one["attack_roll"]["fumble"] is True
+    assert natural_one["hit"] is False
+    assert natural_one["damage"] is None
+
+    ordinary_chase, quarry = _guard_chase(armor_class=10)
+    ordinary_miss = advance_chase_turn(
+        ordinary_chase,
+        quarry,
+        actor_id_value="quarry",
+        action="move",
+        rng=_SequenceRng(6, 20),
+    )["turn"]["guard_attack"]
+
+    assert ordinary_miss["attack_roll"]["fumble"] is False
+    assert ordinary_miss["total"] == 9
+    assert ordinary_miss["hit"] is False
+    assert ordinary_miss["damage"] is None
+
+
+def test_urban_guard_attack_natural_twenty_hits_and_doubles_the_damage_die() -> None:
+    chase, quarry = _guard_chase(armor_class=30)
+
+    result = advance_chase_turn(
+        chase,
+        quarry,
+        actor_id_value="quarry",
+        action="move",
+        rng=_SequenceRng(20, 3, 4, 20),
+    )
+
+    guard_attack = result["turn"]["guard_attack"]
+    assert guard_attack["attack_roll"]["critical"] is True
+    assert guard_attack["total"] == 23
+    assert guard_attack["target_ac"] == 30
+    assert guard_attack["hit"] is True
+    assert guard_attack["damage"]["expression"] == "2d6+1"
+    assert guard_attack["damage"]["rolls"] == [3, 4]
+    assert guard_attack["damage"]["total"] == 8
+    assert result["sheet"]["combat"]["hp"]["value"] == 12
 
 
 def test_urban_complication_incapacitation_prevents_movement() -> None:
