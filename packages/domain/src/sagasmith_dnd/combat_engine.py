@@ -2118,7 +2118,7 @@ def preflight_attack(
                 or candidate_position is None
                 or _grid_distance(attacker_position, candidate_position) > 5
                 or not _are_hostile(candidate, attacker)
-                or not _can_see(candidate, attacker)
+                or not can_see(candidate, attacker)
                 or _condition_set(candidate.get("conditions")) & INCAPACITATING_STATE_IDS
             ):
                 continue
@@ -2152,10 +2152,10 @@ def preflight_attack(
         target.get("conditions") or actor_sheet(target).get("conditions")
     )
     attacker_can_see_target = bool(
-        context.get("attacker_can_see_target", _can_see(attacker, target))
+        context.get("attacker_can_see_target", can_see(attacker, target))
     )
     target_can_see_attacker = bool(
-        context.get("target_can_see_attacker", _can_see(target, attacker))
+        context.get("target_can_see_attacker", can_see(target, attacker))
     )
     if not target_can_see_attacker:
         context["advantage"] = True
@@ -2205,7 +2205,7 @@ def preflight_attack(
                 combatant
                 for combatant in encounter.get("combatants", [])
                 if str(combatant.get("actor_id") or "") in fear_sources
-                and _can_see(attacker, combatant)
+                and can_see(attacker, combatant)
             ]
             if visible_sources:
                 context["disadvantage"] = True
@@ -4132,7 +4132,7 @@ def spend_movement(
             raise CombatEngineError("Aggressive target must be a living combatant")
         if not _are_hostile(combatant, aggressive_target):
             raise CombatEngineError("Aggressive target is no longer hostile")
-        if not _can_see(combatant, aggressive_target):
+        if not can_see(combatant, aggressive_target):
             raise CombatEngineError("Aggressive target is no longer visible")
     conditions = _condition_set(combatant.get("conditions"))
     if willing_movement and conditions & {
@@ -4343,7 +4343,7 @@ def spend_movement(
                     "frightened movement source is not in the encounter",
                     missing=("frightened_source_combatant",),
                 )
-            if not _can_see(combatant, fear_source):
+            if not can_see(combatant, fear_source):
                 continue
             fear_source_position = _position(fear_source.get("position"))
             if fear_source_position is None:
@@ -5515,7 +5515,7 @@ def settle_core_activity_effect(
             raise CombatEngineError("Aggressive target must be a living combatant")
         if not _are_hostile(combatant, target):
             raise CombatEngineError("Aggressive target must be hostile")
-        if not _can_see(combatant, target):
+        if not can_see(combatant, target):
             raise CombatEngineError("Aggressive target must be visible to the Orc")
         flags = dict(combatant.get("turn_flags") or {})
         if "aggressive_movement" in flags:
@@ -7052,7 +7052,7 @@ def _disengaged(combatant: dict[str, Any]) -> bool:
 def _can_make_opportunity_attack(threat: dict[str, Any], moving: dict[str, Any]) -> bool:
     if threat.get("actor_id") == moving.get("actor_id"):
         return False
-    if not _can_see(threat, moving):
+    if not can_see(threat, moving):
         # Whether a particular creature can perceive a hidden or invisible
         # mover is a DM fact unless visible_to_actor_ids records it explicitly.
         return False
@@ -7084,7 +7084,7 @@ def _are_hostile(left: dict[str, Any], right: dict[str, Any]) -> bool:
     return {left_disposition, right_disposition} == {"hostile", "friendly"}
 
 
-def _can_see(viewer: dict[str, Any], subject: dict[str, Any]) -> bool:
+def can_see(viewer: dict[str, Any], subject: dict[str, Any]) -> bool:
     """Resolve only recorded visibility, defaulting ordinary creatures to visible."""
     viewer_conditions = (
         viewer.get("conditions")
