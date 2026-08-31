@@ -2121,6 +2121,10 @@ def test_combat_boundaries_and_private_knowledge_filter(tmp_path: Path) -> None:
                 "positioning_mode": "agent",
                 "campaign_id": campaign["id"],
                 "participant_ids": [first["id"], second["id"]],
+                "participant_config": [
+                    {"actor_id": first["id"], "initiative": 20},
+                    {"actor_id": second["id"], "initiative": 10},
+                ],
                 "expected_revision": campaign["revision"],
                 "idempotency_key": "start-boundary",
             },
