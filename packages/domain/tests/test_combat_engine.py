@@ -26,6 +26,7 @@ from sagasmith_dnd.combat_engine import (
     available_actions,
     available_attack_defenses,
     available_reactions,
+    can_see,
     consume_weapon_mastery_attack_effects,
     current_combatant,
     damage_amount_after_reduction,
@@ -5352,6 +5353,28 @@ def test_hidden_mover_does_not_automatically_reveal_itself_with_a_reaction_windo
     encounter = _grid_encounter([mover, threat])
     moved = spend_movement(encounter, "mover", 15, destination={"x": 3, "y": 0})
     assert available_reactions(moved, "threat") == []
+
+
+def test_recorded_visibility_is_authoritative_for_sight_checks() -> None:
+    viewer = _actor("viewer")
+    subject = _actor("subject")
+
+    assert can_see(viewer, subject) is True
+
+    excluded = deepcopy(subject)
+    excluded["visible_to_actor_ids"] = []
+    assert can_see(viewer, excluded) is False
+
+    concealed = deepcopy(subject)
+    concealed["hidden"] = True
+    concealed["conditions"] = ["invisible"]
+    assert can_see(viewer, concealed) is False
+    concealed["visible_to_actor_ids"] = ["viewer"]
+    assert can_see(viewer, concealed) is True
+
+    blinded = deepcopy(viewer)
+    blinded["sheet"]["conditions"] = ["blinded"]
+    assert can_see(blinded, concealed) is False
 
 
 def test_recorded_visibility_can_open_reaction_window_for_invisible_mover() -> None:

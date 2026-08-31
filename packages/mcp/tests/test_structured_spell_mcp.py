@@ -308,6 +308,31 @@ async def _campaign_with_combat(
     return campaign["id"], started["campaign_revision"], actors
 
 
+async def _campaign_actor_snapshot(server, campaign_id: str, actor_ids: list[str]) -> dict:
+    campaign = await _call(
+        server,
+        "campaign_query",
+        {
+            "view": "get",
+            "payload": {"campaign_id": campaign_id},
+            "principal_id": "system:local",
+        },
+    )
+    actors = [
+        await _call(
+            server,
+            "character_query",
+            {
+                "view": "get",
+                "payload": {"character_id": actor_id},
+                "principal_id": "system:local",
+            },
+        )
+        for actor_id in actor_ids
+    ]
+    return {"campaign": campaign, "actors": actors}
+
+
 def _deterministic_rolls(monkeypatch) -> None:
     monkeypatch.setattr(
         server_module,
@@ -395,6 +420,221 @@ def test_healing_word_cast_roll_and_feature_bonus_commit_once(tmp_path: Path, mo
             target_replayed["sheet"]["combat"]["hp"]["value"]
             == target_after["sheet"]["combat"]["hp"]["value"]
         )
+
+    asyncio.run(exercise())
+
+
+def test_sight_required_spell_rejects_blinded_caster_without_writes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    roll_expressions: list[str] = []
+
+    def tracked_roll(expression: str):
+        roll_expressions.append(expression)
+        return engine_roll(expression, rng=random.Random(7))
+
+    monkeypatch.setattr(server_module, "roll", tracked_roll)
+
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        caster = default_character_sheet()
+        caster["conditions"] = ["blinded"]
+        caster["spellcasting"].update(ability="wisdom", spell_slots=_slot(1, 2))
+        healing_word = _spell("Healing Word", 1, casting_time="1 bonus action", range_ft=60)
+        cure_wounds = _spell("Cure Wounds", 1, casting_time="1 action", range_ft=5)
+        caster["content"]["spells"] = [healing_word, cure_wounds]
+        caster["effects"] = [
+            {
+                "id": "existing-concentration",
+                "name": "Existing concentration",
+                "kind": "concentration",
+                "source": "spell.cast",
+                "source_spell_id": "test.spell.existing-concentration",
+                "active": True,
+                "concentration": True,
+                "duration": {"period": "minute", "remaining": 10},
+                "changes": [],
+                "description": "",
+            }
+        ]
+        target = default_character_sheet()
+        target["combat"]["hp"] = {"value": 1, "max": 20, "temp": 0}
+        campaign_id, revision, actors = await _campaign_with_combat(
+            server,
+            [("Blinded cleric", caster), ("Ally", target)],
+            positions=[(0, 0), (1, 0)],
+        )
+        actor_ids = [item["id"] for item in actors]
+        before = await _campaign_actor_snapshot(
+            server,
+            campaign_id,
+            actor_ids,
+        )
+        rejected_arguments = {
+            "campaign_id": campaign_id,
+            "actor_id": actors[0]["id"],
+            "spell_id": healing_word["id"],
+            "cast_level": 1,
+            "declaration": {"target_id": actors[1]["id"]},
+            "expected_revision": revision,
+            "idempotency_key": "blinded-healing-word",
+        }
+
+        for _attempt in range(2):
+            with pytest.raises(Exception, match="spell requires a target the caster can see"):
+                await _raw(server, "combat_cast_spell", rejected_arguments)
+
+        after = await _campaign_actor_snapshot(
+            server,
+            campaign_id,
+            actor_ids,
+        )
+        assert after == before
+        assert roll_expressions == []
+
+        non_sight_cast = await _raw(
+            server,
+            "combat_cast_spell",
+            {
+                **rejected_arguments,
+                "spell_id": cure_wounds["id"],
+                "idempotency_key": "blinded-cure-wounds",
+            },
+        )
+        assert non_sight_cast["status"] == "committed"
+        assert non_sight_cast["campaign_revision"] == revision + 1
+        assert roll_expressions == ["1d8"]
+        caster_after_cast = await _call(
+            server,
+            "character_query",
+            {
+                "view": "get",
+                "payload": {"character_id": actors[0]["id"]},
+                "principal_id": "system:local",
+            },
+        )
+        concentration = next(
+            item
+            for item in caster_after_cast["sheet"]["effects"]
+            if item["id"] == "existing-concentration"
+        )
+        assert concentration["active"] is True
+
+    asyncio.run(exercise())
+
+
+def test_sight_required_spell_honors_authoritative_visibility_acl(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    roll_expressions: list[str] = []
+
+    def tracked_roll(expression: str):
+        roll_expressions.append(expression)
+        return engine_roll(expression, rng=random.Random(7))
+
+    monkeypatch.setattr(server_module, "roll", tracked_roll)
+
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        caster = default_character_sheet()
+        caster["spellcasting"].update(ability="wisdom", spell_slots=_slot(1))
+        healing_word = _spell("Healing Word", 1, casting_time="1 bonus action", range_ft=60)
+        caster["content"]["spells"] = [healing_word]
+        target = default_character_sheet()
+        target["combat"]["hp"] = {"value": 1, "max": 20, "temp": 0}
+        campaign_id, revision, actors = await _campaign_with_combat(
+            server,
+            [("Cleric", caster), ("Hidden ally", target)],
+            positions=[(0, 0), (4, 0)],
+        )
+        excluded = await _raw(
+            server,
+            "combat_map_patch",
+            {
+                "campaign_id": campaign_id,
+                "patches": [
+                    {
+                        "key": "combatant_visibility",
+                        "value": {
+                            "actor_id": actors[1]["id"],
+                            "visible_to_actor_ids": [],
+                            "reason": "The target is fully obscured from the caster.",
+                        },
+                    }
+                ],
+                "expected_revision": revision,
+                "idempotency_key": "exclude-target",
+            },
+        )
+        actor_ids = [item["id"] for item in actors]
+        before = await _campaign_actor_snapshot(
+            server,
+            campaign_id,
+            actor_ids,
+        )
+        arguments = {
+            "campaign_id": campaign_id,
+            "actor_id": actors[0]["id"],
+            "spell_id": healing_word["id"],
+            "cast_level": 1,
+            "declaration": {"target_id": actors[1]["id"]},
+            "expected_revision": excluded["campaign_revision"],
+            "idempotency_key": "acl-healing-word",
+        }
+
+        with pytest.raises(Exception, match="spell requires a target the caster can see"):
+            await _raw(server, "combat_cast_spell", arguments)
+
+        after = await _campaign_actor_snapshot(
+            server,
+            campaign_id,
+            actor_ids,
+        )
+        assert after == before
+        assert roll_expressions == []
+
+        recorded_visible = await _raw(
+            server,
+            "combat_map_patch",
+            {
+                "campaign_id": campaign_id,
+                "patches": [
+                    {
+                        "key": "combatant_visibility",
+                        "value": {
+                            "actor_id": actors[1]["id"],
+                            "hidden": True,
+                            "visible_to_actor_ids": [actors[0]["id"]],
+                            "reason": "The caster pinpointed the hidden target.",
+                        },
+                    }
+                ],
+                "expected_revision": excluded["campaign_revision"],
+                "idempotency_key": "record-target-visible",
+            },
+        )
+        succeeded = await _raw(
+            server,
+            "combat_cast_spell",
+            {
+                **arguments,
+                "expected_revision": recorded_visible["campaign_revision"],
+            },
+        )
+        assert succeeded["status"] == "committed"
+        assert roll_expressions == ["1d4"]
+        target_after_cast = await _call(
+            server,
+            "character_query",
+            {
+                "view": "get",
+                "payload": {"character_id": actors[1]["id"]},
+                "principal_id": "system:local",
+            },
+        )
+        assert target_after_cast["sheet"]["combat"]["hp"]["value"] > 1
 
     asyncio.run(exercise())
 

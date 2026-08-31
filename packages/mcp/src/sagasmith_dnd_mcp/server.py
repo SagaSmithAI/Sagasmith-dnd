@@ -192,6 +192,7 @@ from sagasmith_dnd.combat_engine import (
     available_actions,
     available_attack_defenses,
     available_reactions,
+    can_see,
     consume_weapon_mastery_attack_effects,
     current_combatant,
     damage_amount_after_reduction,
@@ -11044,8 +11045,8 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             raise CombatEngineError("spell caster is not in this encounter")
         if target is None:
             raise CombatEngineError(f"spell target is not in this encounter: {target_id}")
-        conditions = {str(item).casefold() for item in target.get("conditions", [])}
-        if "dead" in conditions:
+        target_conditions = {str(item).casefold() for item in target.get("conditions", [])}
+        if "dead" in target_conditions:
             raise CombatEngineError("a dead combatant is not a creature target")
         distance = combat_distance(caster.get("position"), target.get("position"))
         if distance is None:
@@ -11063,9 +11064,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         if range_kind != "self" and distance > maximum:
             raise CombatEngineError("spell target is outside range")
         targeting = dict(resolution.get("targeting") or {})
-        concealed = bool(target.get("hidden", False)) or "invisible" in conditions
-        visible_to = {str(item) for item in target.get("visible_to_actor_ids") or []}
-        if targeting.get("requires_sight") and concealed and caster_id not in visible_to:
+        if targeting.get("requires_sight") and not can_see(caster, target):
             raise CombatEngineError("spell requires a target the caster can see")
         creature_type = str(
             characters.get(target_id).sheet.get("progression", {}).get("species") or ""
