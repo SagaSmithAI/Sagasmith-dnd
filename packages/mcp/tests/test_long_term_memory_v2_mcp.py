@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
+from sagasmith_core import ActorKnowledgeService, BranchService
 
 from sagasmith_dnd_mcp.config import McpConfig
 from sagasmith_dnd_mcp.server import create_server
@@ -504,6 +505,160 @@ def test_actor_knowledge_revise_preserves_omitted_fields_and_can_clear_source(
         ):
             with pytest.raises(ToolError, match="include_inactive must be a boolean"):
                 await _call(server, tool_name, arguments)
+
+    asyncio.run(exercise())
+
+
+def test_actor_knowledge_change_rejects_stale_revision_and_checkout_race(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {"name": "Knowledge CAS", "idempotency_key": "campaign"},
+        )
+        actor = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": "Witness",
+                    "character_type": "npc",
+                },
+                "idempotency_key": "actor",
+            },
+        )
+        current = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        branches = await _call(
+            server,
+            "branch_query",
+            {"campaign_id": campaign["id"], "view": "list", "payload": {}},
+        )
+        main = next(item for item in branches if item["is_current"])
+        base = await _call(
+            server,
+            "snapshot_create",
+            {
+                "campaign_id": campaign["id"],
+                "label": "Knowledge baseline",
+                "expected_revision": current["revision"],
+                "expected_head_snapshot_id": "",
+                "idempotency_key": "snapshot",
+            },
+        )
+        current = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        alternate = await _call(
+            server,
+            "branch_change",
+            {
+                "campaign_id": campaign["id"],
+                "action": "create",
+                "payload": {
+                    "name": "alternate",
+                    "from_snapshot_id": base["id"],
+                    "checkout": False,
+                },
+                "expected_revision": current["revision"],
+                "expected_branch_id": main["id"],
+                "idempotency_key": "branch",
+            },
+        )
+        current = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        request = {
+            "action": "add",
+            "payload": {
+                "campaign_id": campaign["id"],
+                "actor_id": actor["id"],
+                "knowledge_key": "door-state",
+                "proposition": "The door is closed.",
+            },
+        }
+        with pytest.raises(ToolError, match="campaign revision conflict"):
+            await _call(
+                server,
+                "actor_knowledge_change",
+                {
+                    **request,
+                    "expected_revision": current["revision"] - 1,
+                    "idempotency_key": "stale-revision",
+                },
+            )
+
+        original_add = ActorKnowledgeService.add
+
+        def checkout_before_add(service, campaign_id, **kwargs):
+            BranchService(service.database).checkout(campaign_id, alternate["id"])
+            return original_add(service, campaign_id, **kwargs)
+
+        monkeypatch.setattr(ActorKnowledgeService, "add", checkout_before_add)
+        with pytest.raises(ToolError, match="branch conflict"):
+            await _call(
+                server,
+                "actor_knowledge_change",
+                {
+                    **request,
+                    "expected_revision": current["revision"],
+                    "idempotency_key": "checkout-race",
+                },
+            )
+
+        for branch_id in (main["id"], alternate["id"]):
+            assert await _call(
+                server,
+                "actor_knowledge_query",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": actor["id"],
+                    "view": "list",
+                    "payload": {"branch_id": branch_id, "include_inactive": True},
+                },
+            ) == []
+
+        monkeypatch.setattr(ActorKnowledgeService, "add", original_add)
+        replay_request = {
+            "action": "add",
+            "payload": {
+                "campaign_id": campaign["id"],
+                "actor_id": actor["id"],
+                "knowledge_key": "stable-replay",
+                "proposition": "This write is replayable.",
+            },
+            "idempotency_key": "stable-replay",
+        }
+        created = await _call(server, "actor_knowledge_change", replay_request)
+        current = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        await _call(
+            server,
+            "campaign_change",
+            {
+                "campaign_id": campaign["id"],
+                "payload": {"description": "Campaign revision advances."},
+                "expected_revision": current["revision"],
+                "idempotency_key": "advance-campaign",
+            },
+        )
+        assert await _call(server, "actor_knowledge_change", replay_request) == created
 
     asyncio.run(exercise())
 
