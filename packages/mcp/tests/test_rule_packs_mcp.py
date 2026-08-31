@@ -1,12 +1,21 @@
 import asyncio
 import re
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
-from sagasmith_core import Database, RuleProfileService
+from sagasmith_core import Database, RulePackService, RuleProfileService
 from sagasmith_core.database import sqlite_database_url
 from sagasmith_dnd.character_schema import default_character_sheet
+from sagasmith_dnd.core_content import PACK_ID as CORE_CONTENT_PACK_ID
+from sagasmith_dnd.core_content import PACK_VERSION as CORE_CONTENT_PACK_VERSION
+from sagasmith_dnd.core_content import build_srd2014_content
 from sagasmith_dnd.core_rule_pack import get_core_rule_pack
+from sagasmith_dnd.standard_feature_ids import (
+    CORE_DWARF_HEAVY_ARMOR_SPEED_MECHANIC_ID,
+    SRD2014_DWARF_SPEED_LEGACY_PACK_VERSIONS,
+    SRD2014_DWARF_SPEED_SOURCE_RULE_REF,
+)
 
 from sagasmith_dnd_mcp.config import McpConfig
 from sagasmith_dnd_mcp.server import create_server
@@ -724,6 +733,66 @@ def test_core_srd_content_catalog_is_structured_and_selectable(tmp_path: Path) -
         assert any(
             item["name"] == "Dwarven Toughness" for item in dwarf["sheet"]["content"]["features"]
         )
+        dwarf_speed = next(
+            item for item in dwarf["sheet"]["content"]["features"] if item["name"] == "Speed"
+        )
+        assert dwarf_speed["mechanic_refs"] == ["dnd5e.core.movement.dwarf_heavy_armor_speed"]
+        chain_mail_catalog = await call(
+            server,
+            "character_query",
+            {
+                "view": "catalog",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "kind": "item",
+                    "query": "Chain mail",
+                },
+                "principal_id": "system:local",
+            },
+        )
+        chain_mail = next(item for item in chain_mail_catalog if item["name"] == "Chain mail")
+        dwarf = await call(
+            server,
+            "character_content_apply",
+            {
+                "character_id": dwarf["id"],
+                "artifact_id": chain_mail["id"],
+                "expected_revision": dwarf["revision"],
+                "idempotency_key": "catalog-dwarf-chain-mail",
+            },
+        )
+        inventory_item_id = next(
+            item["selection"]["inventory_item_id"]
+            for item in dwarf["sheet"]["content"]["selections"]
+            if item["artifact_id"] == chain_mail["id"]
+        )
+        equipped_dwarf = await call(
+            server,
+            "inventory_change",
+            {
+                "owner": "character",
+                "action": "equip",
+                "owner_id": dwarf["id"],
+                "payload": {"item_id": inventory_item_id, "slot": "armor"},
+                "expected_revision": dwarf["revision"],
+                "idempotency_key": "catalog-equip-dwarf-chain-mail",
+            },
+        )
+        assert equipped_dwarf["derived"]["speed"]["walk"] == 25
+        assert equipped_dwarf["derived"]["armor_strength"] == {
+            "requirement": 13,
+            "meets_requirement": False,
+            "speed_penalty_ft": 0,
+        }
+        dwarf_receipt = next(
+            receipt
+            for receipt in equipped_dwarf["derived"]["rule_receipts"]
+            if receipt["mechanic_id"] == CORE_DWARF_HEAVY_ARMOR_SPEED_MECHANIC_ID
+        )
+        assert dwarf_receipt["citations"] == [
+            {"source": SRD2014_DWARF_SPEED_SOURCE_RULE_REF + "#speed", "edition": "2014"}
+        ]
+        dwarf = equipped_dwarf
 
         half_orc_catalog = await call(
             server,
@@ -843,6 +912,382 @@ def test_core_srd_content_catalog_is_structured_and_selectable(tmp_path: Path) -
             "source_key": "High Elf",
             "method": "known",
         }
+        current_campaign = await call(
+            server,
+            "campaign_query",
+            {
+                "view": "get",
+                "payload": {"campaign_id": campaign["id"]},
+                "principal_id": "system:local",
+            },
+        )
+        phase = await call(
+            server,
+            "game_phase",
+            {
+                "campaign_id": campaign["id"],
+                "action": "set",
+                "tool_profile": "play",
+                "expected_revision": current_campaign["revision"],
+                "idempotency_key": "catalog-enter-play",
+            },
+        )
+        encounter = await call(
+            server,
+            "combat_start",
+            {
+                "campaign_id": campaign["id"],
+                "positioning_mode": "grid",
+                "battle_map": {"width_cells": 4, "height_cells": 4},
+                "participant_ids": [dwarf["id"], elf["id"]],
+                "participant_config": [
+                    {
+                        "actor_id": dwarf["id"],
+                        "initiative": 20,
+                        "position": {"x": 0, "y": 0},
+                    },
+                    {
+                        "actor_id": elf["id"],
+                        "initiative": 10,
+                        "position": {"x": 1, "y": 0},
+                    },
+                ],
+                "expected_revision": phase["campaign_revision"],
+                "idempotency_key": "catalog-start-dwarf-combat",
+            },
+        )
+        dwarf_combatant = next(
+            item for item in encounter["combat"]["combatants"] if item["actor_id"] == dwarf["id"]
+        )
+        assert dwarf_combatant["turn_budget"]["speed"] == 25
+        assert dwarf_combatant["turn_budget"]["movement"] == 25
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.fresh_database
+@pytest.mark.parametrize("legacy_pack_version", sorted(SRD2014_DWARF_SPEED_LEGACY_PACK_VERSIONS))
+def test_existing_legacy_dwarf_selection_survives_core_content_upgrade(
+    tmp_path: Path,
+    legacy_pack_version: str,
+) -> None:
+    assert SRD2014_DWARF_SPEED_LEGACY_PACK_VERSIONS == frozenset({"1.24.0", "1.25.0"})
+    workspace = Path(__file__).resolve().parents[3]
+    legacy_config = McpConfig(
+        home=tmp_path / "home",
+        database_url=None,
+        chroma_url=None,
+        chroma_path_override=None,
+        dnd_skills_dir=tmp_path / "legacy-missing-skills",
+        modulegen_skills_dir=tmp_path / "legacy-missing-modulegen",
+        auto_seed_rules=False,
+    )
+    current_config = McpConfig(
+        home=legacy_config.home,
+        database_url=None,
+        chroma_url=None,
+        chroma_path_override=None,
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
+        auto_seed_rules=False,
+    )
+
+    async def call(server, name: str, arguments: dict):
+        _, result = await server.call_tool(name, arguments)
+        return result.get("result", result) if isinstance(result, dict) else result
+
+    async def exercise() -> None:
+        legacy_server = create_server(legacy_config)
+        current_manifest, current_artifacts = build_srd2014_content(workspace / "skills")
+        legacy_manifest = deepcopy(current_manifest)
+        legacy_manifest["version"] = legacy_pack_version
+        legacy_manifest["native_mechanic_refs"] = [
+            mechanic_id
+            for mechanic_id in legacy_manifest["native_mechanic_refs"]
+            if mechanic_id != CORE_DWARF_HEAVY_ARMOR_SPEED_MECHANIC_ID
+        ]
+        core_2014 = get_core_rule_pack("2014")
+        legacy_manifest["native_provider_locks"] = [
+            {
+                "id": core_2014.id,
+                "version": core_2014.version,
+                "edition": core_2014.edition,
+                "fingerprint": core_2014.fingerprint,
+                "mechanic_refs": list(legacy_manifest["native_mechanic_refs"]),
+            }
+        ]
+        legacy_hill_dwarf = deepcopy(
+            next(
+                artifact
+                for artifact in current_artifacts
+                if artifact["id"] == f"{CORE_CONTENT_PACK_ID}.species.hill-dwarf"
+            )
+        )
+        legacy_hill_dwarf["mechanic_refs"] = []
+        legacy_hill_dwarf["embedded_mechanic_refs"] = []
+        legacy_hill_dwarf["card"]["mechanic_refs"] = []
+        legacy_hill_dwarf["card"]["grants"]["features"] = [
+            feature
+            for feature in legacy_hill_dwarf["card"]["grants"]["features"]
+            if feature["name"] != "Speed"
+        ]
+        legacy_hill_dwarf.pop("rule_clauses", None)
+        legacy_hill_dwarf.pop("semantic_resolution", None)
+
+        database = Database(sqlite_database_url(legacy_config.database_path))
+        try:
+            packs = RulePackService(database)
+            draft = packs.save_draft(
+                manifest=legacy_manifest,
+                artifacts=[legacy_hill_dwarf],
+                provenance={"source": "test-legacy-bundled-srd2014", "structured": True},
+            )
+            assert draft.status == "validated"
+            packs.install(CORE_CONTENT_PACK_ID, legacy_pack_version)
+        finally:
+            database.dispose()
+
+        campaign = await call(
+            legacy_server,
+            "campaign_create",
+            {"name": "Legacy dwarf", "idempotency_key": "legacy-dwarf-campaign"},
+        )
+        profile = await call(
+            legacy_server,
+            "campaign_rules",
+            {
+                "campaign_id": campaign["id"],
+                "action": "set_profile",
+                "payload": {"edition": "2014"},
+                "principal_id": "system:local",
+                "expected_revision": campaign["revision"],
+                "idempotency_key": "legacy-dwarf-profile",
+            },
+        )
+        await call(
+            legacy_server,
+            "content_pack",
+            {
+                "action": "activate",
+                "payload": {
+                    "kind": "core_rules",
+                    "campaign_id": campaign["id"],
+                    "pack_id": CORE_CONTENT_PACK_ID,
+                    "version": legacy_pack_version,
+                },
+                "principal_id": "system:local",
+                "expected_revision": profile["campaign_revision"],
+                "idempotency_key": "legacy-dwarf-activate",
+            },
+        )
+        species = await call(
+            legacy_server,
+            "character_query",
+            {
+                "view": "catalog",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "kind": "species",
+                    "query": "Hill Dwarf",
+                },
+                "principal_id": "system:local",
+            },
+        )
+        hill_dwarf = next(item for item in species if item["name"] == "Hill Dwarf")
+        assert hill_dwarf["pack_version"] == legacy_pack_version
+
+        sheet = default_character_sheet()
+        sheet["progression"]["species"] = "Dwarf"
+        sheet["abilities"]["strength"]["score"] = 10
+        character = await call(
+            legacy_server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": "Legacy dwarf",
+                    "sheet": sheet,
+                },
+                "principal_id": "system:local",
+                "idempotency_key": "legacy-dwarf-character",
+            },
+        )
+        character = await call(
+            legacy_server,
+            "character_content_apply",
+            {
+                "character_id": character["id"],
+                "artifact_id": hill_dwarf["id"],
+                "selection": {"tools": ["smith's tools"]},
+                "expected_revision": character["revision"],
+                "idempotency_key": "legacy-dwarf-species",
+            },
+        )
+        species_selection = next(
+            selection
+            for selection in character["sheet"]["content"]["selections"]
+            if selection["kind"] == "species"
+        )
+        assert species_selection["artifact_id"] == f"{CORE_CONTENT_PACK_ID}.species.hill-dwarf"
+        assert species_selection["pack_version"] == legacy_pack_version
+        assert species_selection["rule_refs"] == [SRD2014_DWARF_SPEED_SOURCE_RULE_REF]
+        assert species_selection["mechanic_refs"] == []
+
+        added = await call(
+            legacy_server,
+            "inventory_change",
+            {
+                "owner": "character",
+                "action": "add",
+                "owner_id": character["id"],
+                "payload": {
+                    "item": {
+                        "id": "legacy-chain-mail",
+                        "name": "Chain mail",
+                        "kind": "armor",
+                        "weight_oz": 880,
+                        "mechanics": {
+                            "base_ac": 16,
+                            "category": "heavy",
+                            "dexterity_mode": "none",
+                            "strength_requirement": 13,
+                        },
+                    }
+                },
+                "expected_revision": character["revision"],
+                "idempotency_key": "legacy-dwarf-chain-mail",
+            },
+        )
+        character = added["character"]
+        equipped = await call(
+            legacy_server,
+            "inventory_change",
+            {
+                "owner": "character",
+                "action": "equip",
+                "owner_id": character["id"],
+                "payload": {"item_id": "legacy-chain-mail", "slot": "armor"},
+                "expected_revision": character["revision"],
+                "idempotency_key": "legacy-dwarf-equip-chain-mail",
+            },
+        )
+        assert equipped["derived"]["speed"]["walk"] == 25
+
+        current_server = create_server(current_config)
+        upgraded_character = await call(
+            current_server,
+            "character_query",
+            {
+                "view": "get",
+                "payload": {"character_id": character["id"]},
+                "principal_id": "system:local",
+            },
+        )
+        assert upgraded_character["derived"]["speed"]["walk"] == 25
+        assert CORE_DWARF_HEAVY_ARMOR_SPEED_MECHANIC_ID in {
+            receipt["mechanic_id"] for receipt in upgraded_character["derived"]["rule_receipts"]
+        }
+        tampered_sheet = deepcopy(upgraded_character["sheet"])
+        tampered_species = next(
+            selection
+            for selection in tampered_sheet["content"]["selections"]
+            if selection["kind"] == "species"
+        )
+        tampered_species["rule_refs"] = ["bundled:srd2014/forged/Dwarf.md"]
+        tampered_character = await call(
+            current_server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": "Tampered legacy dwarf",
+                    "sheet": tampered_sheet,
+                },
+                "principal_id": "system:local",
+                "idempotency_key": "tampered-legacy-dwarf-character",
+            },
+        )
+        assert tampered_character["derived"]["speed"]["walk"] == 15
+        assert CORE_DWARF_HEAVY_ARMOR_SPEED_MECHANIC_ID not in {
+            receipt["mechanic_id"] for receipt in tampered_character["derived"]["rule_receipts"]
+        }
+
+        new_campaign = await call(
+            current_server,
+            "campaign_create",
+            {"name": "Current content", "idempotency_key": "current-content-campaign"},
+        )
+        await call(
+            current_server,
+            "campaign_rules",
+            {
+                "campaign_id": new_campaign["id"],
+                "action": "set_profile",
+                "payload": {"edition": "2014"},
+                "principal_id": "system:local",
+                "expected_revision": new_campaign["revision"],
+                "idempotency_key": "current-content-profile",
+            },
+        )
+        current_species = await call(
+            current_server,
+            "character_query",
+            {
+                "view": "catalog",
+                "payload": {
+                    "campaign_id": new_campaign["id"],
+                    "kind": "species",
+                    "query": "Hill Dwarf",
+                },
+                "principal_id": "system:local",
+            },
+        )
+        current_hill_dwarf = next(
+            item
+            for item in current_species
+            if item["name"] == "Hill Dwarf" and item["pack_version"] == CORE_CONTENT_PACK_VERSION
+        )
+        assert current_hill_dwarf["pack_id"] == CORE_CONTENT_PACK_ID
+        assert current_hill_dwarf["mechanic_refs"] == [CORE_DWARF_HEAVY_ARMOR_SPEED_MECHANIC_ID]
+        new_character = await call(
+            current_server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {"campaign_id": new_campaign["id"], "name": "Current dwarf"},
+                "principal_id": "system:local",
+                "idempotency_key": "current-dwarf-character",
+            },
+        )
+        new_character = await call(
+            current_server,
+            "character_content_apply",
+            {
+                "character_id": new_character["id"],
+                "artifact_id": current_hill_dwarf["id"],
+                "selection": {"tools": ["smith's tools"]},
+                "expected_revision": new_character["revision"],
+                "idempotency_key": "current-dwarf-species",
+            },
+        )
+        new_speed_feature = next(
+            feature
+            for feature in new_character["sheet"]["content"]["features"]
+            if feature["name"] == "Speed"
+        )
+        assert new_speed_feature["mechanic_refs"] == [CORE_DWARF_HEAVY_ARMOR_SPEED_MECHANIC_ID]
+        database = Database(sqlite_database_url(current_config.database_path))
+        try:
+            installed = {
+                version.version: version.status
+                for version in RulePackService(database).list_versions(CORE_CONTENT_PACK_ID)
+            }
+        finally:
+            database.dispose()
+        assert installed[legacy_pack_version] == "installed"
+        assert installed[CORE_CONTENT_PACK_VERSION] == "installed"
 
     asyncio.run(exercise())
 

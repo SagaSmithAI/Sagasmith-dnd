@@ -11,6 +11,7 @@ from sagasmith_dnd.core_content import (
 )
 from sagasmith_dnd.core_rule_pack import get_core_rule_pack
 from sagasmith_dnd.standard_feature_ids import (
+    CORE_DWARF_HEAVY_ARMOR_SPEED_MECHANIC_ID,
     CORE_RELENTLESS_ENDURANCE_MECHANIC_ID,
 )
 
@@ -54,7 +55,7 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     manifest, artifacts = build_srd2014_content(workspace / "skills")
     counts = Counter(item["kind"] for item in artifacts)
 
-    assert manifest["version"] == PACK_VERSION == "1.25.0"
+    assert manifest["version"] == PACK_VERSION == "1.26.0"
     assert "dnd5e.core.spell.structured_resolution" in manifest["native_mechanic_refs"]
     registered = {boundary.id for boundary in get_core_rule_pack("2014").boundaries}
     assert set(manifest["native_mechanic_refs"]) <= registered
@@ -684,6 +685,20 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     }
     assert hill_dwarf["card"]["grants"]["hp_per_level"] == 1
     assert hill_dwarf["card"]["grants"]["resistances"] == ["poison"]
+    dwarf_speed = next(
+        feature
+        for feature in hill_dwarf["card"]["grants"]["features"]
+        if feature["name"] == "Speed"
+    )
+    assert hill_dwarf["mechanic_refs"] == [CORE_DWARF_HEAVY_ARMOR_SPEED_MECHANIC_ID]
+    assert dwarf_speed["mechanic_refs"] == [CORE_DWARF_HEAVY_ARMOR_SPEED_MECHANIC_ID]
+    assert dwarf_speed["choices"]["source_trait"] == {
+        "kind": "dwarf_heavy_armor_speed",
+        "trigger": "heavy_armor_strength_shortfall",
+        "ignored_penalty_ft": 10,
+        "automatic": True,
+        "source_excerpt": dwarf_speed["description"],
+    }
 
     half_orc = next(
         item

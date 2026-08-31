@@ -20,6 +20,7 @@ from sagasmith_dnd.spell_resolution import (
     known_spell_resolution,
 )
 from sagasmith_dnd.standard_feature_ids import (
+    CORE_DWARF_HEAVY_ARMOR_SPEED_MECHANIC_ID,
     CORE_RELENTLESS_ENDURANCE_MECHANIC_ID,
 )
 from sagasmith_dnd.standard_spell_ids import (
@@ -29,7 +30,7 @@ from sagasmith_dnd.standard_spell_ids import (
 )
 
 PACK_ID = "dnd5e.content.srd2014"
-PACK_VERSION = "1.25.0"
+PACK_VERSION = "1.26.0"
 
 _SUBCLASS_LEVELS = {
     "barbarian": 3,
@@ -480,6 +481,26 @@ def _species_grants(name: str, traits: list[tuple[str, str]]) -> dict[str, Any]:
         if key == "speed":
             speed = re.search(r"walking speed is\s+(\d+)\s+feet", body, re.IGNORECASE)
             grants["walk_speed"] = int(speed.group(1)) if speed else 0
+            if re.search(r"speed is not reduced by wearing heavy armor", body, re.IGNORECASE):
+                grants["features"].append(
+                    {
+                        "id": f"{PACK_ID}.species-feature.{slug}-{_name_key(title)}",
+                        "name": title,
+                        "source_key": name,
+                        "description": body[:2000],
+                        "activation": {"type": "passive"},
+                        "choices": {
+                            "source_trait": {
+                                "kind": "dwarf_heavy_armor_speed",
+                                "trigger": "heavy_armor_strength_shortfall",
+                                "ignored_penalty_ft": 10,
+                                "automatic": True,
+                                "source_excerpt": body[:2000],
+                            }
+                        },
+                        "mechanic_refs": [CORE_DWARF_HEAVY_ARMOR_SPEED_MECHANIC_ID],
+                    }
+                )
             continue
         if key == "darkvision":
             distance = re.search(r"within\s+(\d+)\s+feet", body, re.IGNORECASE)

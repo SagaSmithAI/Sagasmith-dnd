@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.68.0"
+CORE_RULE_PACK_VERSION = "1.69.0"
 
 
 @dataclass(frozen=True)
@@ -562,6 +562,16 @@ BOUNDARIES = (
             "test_standard_relentless_endurance_is_core_card_bound_and_once_per_rest",
         ),
         "bundled:srd2014/01_Races/Races_Each/Half-Orc.md#relentless-endurance",
+    ),
+    CoreBoundary(
+        "dnd5e.core.movement.dwarf_heavy_armor_speed",
+        ("2014",),
+        "character_schema.derive_character_sheet",
+        (
+            "tests/test_character_schema.py::"
+            "test_2014_dwarf_heavy_armor_speed_exception_is_source_bound_and_narrow",
+        ),
+        "bundled:srd2014/01_Races/Races_Each/Dwarf.md#speed",
     ),
     CoreBoundary(
         "dnd5e.core.damage.knockout",

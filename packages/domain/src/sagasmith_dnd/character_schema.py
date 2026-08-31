@@ -42,6 +42,12 @@ from sagasmith_dnd.spell_resolution import (
     audit_spell_resolution_paths,
     normalize_spell_resolution,
 )
+from sagasmith_dnd.standard_feature_ids import (
+    CORE_DWARF_HEAVY_ARMOR_SPEED_MECHANIC_ID,
+    SRD2014_DWARF_SPEED_LEGACY_ARTIFACT_IDS,
+    SRD2014_DWARF_SPEED_LEGACY_PACK_VERSIONS,
+    SRD2014_DWARF_SPEED_SOURCE_RULE_REF,
+)
 from sagasmith_dnd.vocabulary import (
     ATTACK_MODES,
     CAMPAIGN_GAME_PHASES,
@@ -4271,6 +4277,53 @@ def active_effect_roll_bonus(sheet: dict[str, Any], kind: str) -> int:
     return bonus
 
 
+def _has_2014_dwarf_heavy_armor_speed_exception(sheet: dict[str, Any]) -> bool:
+    """Recognize the exact source-bound 2014 dwarf exception, never prose alone."""
+
+    if sheet.get("edition") != "2014":
+        return False
+    matches: list[dict[str, Any]] = []
+    for feature in dict(sheet.get("content") or {}).get("features", []):
+        if not isinstance(feature, dict):
+            continue
+        mechanic_refs = {str(item) for item in feature.get("mechanic_refs", [])}
+        if CORE_DWARF_HEAVY_ARMOR_SPEED_MECHANIC_ID not in mechanic_refs:
+            continue
+        trait = dict(dict(feature.get("choices") or {}).get("source_trait") or {})
+        if trait.get("kind") == "dwarf_heavy_armor_speed":
+            matches.append(trait)
+    if len(matches) > 1:
+        raise ValueError("actor card has more than one standard Dwarf heavy-armor speed trait")
+    if matches:
+        trait = matches[0]
+        valid = (
+            trait.get("trigger") == "heavy_armor_strength_shortfall"
+            and trait.get("ignored_penalty_ft") == 10
+            and trait.get("automatic") is True
+            and bool(str(trait.get("source_excerpt") or "").strip())
+        )
+        if not valid:
+            raise ValueError("standard Dwarf heavy-armor speed trait is malformed")
+        return True
+
+    legacy_matches = [
+        selection
+        for selection in dict(sheet.get("content") or {}).get("selections", [])
+        if isinstance(selection, dict)
+        and selection.get("kind") == "species"
+        and selection.get("pack_id") == "dnd5e.content.srd2014"
+        and isinstance(selection.get("pack_version"), str)
+        and selection.get("pack_version") in SRD2014_DWARF_SPEED_LEGACY_PACK_VERSIONS
+        and isinstance(selection.get("artifact_id"), str)
+        and selection.get("artifact_id") in SRD2014_DWARF_SPEED_LEGACY_ARTIFACT_IDS
+        and selection.get("rule_refs") == [SRD2014_DWARF_SPEED_SOURCE_RULE_REF]
+        and selection.get("mechanic_refs") == []
+    ]
+    if len(legacy_matches) > 1:
+        raise ValueError("actor card has more than one legacy Dwarf species provenance record")
+    return bool(legacy_matches)
+
+
 def derive_character_sheet(
     sheet: dict[str, Any], *, rules: ResolutionContext | None = None
 ) -> dict[str, Any]:
@@ -4345,13 +4398,17 @@ def derive_character_sheet(
         ),
     }
     armor_proficiency = _armor_proficiency_state(value)
-    equipped_armor_mechanics = (
-        dict(equipped_armor.get("mechanics") or {}) if equipped_armor else {}
-    )
-    armor_strength_requirement = int(
-        equipped_armor_mechanics.get("strength_requirement", 0) or 0
-    )
+    equipped_armor_mechanics = dict(equipped_armor.get("mechanics") or {}) if equipped_armor else {}
+    armor_strength_requirement = int(equipped_armor_mechanics.get("strength_requirement", 0) or 0)
     armor_strength_shortfall = bool(armor_strength_requirement > strength)
+    ignores_armor_strength_speed_penalty = (
+        armor_strength_shortfall
+        and str(equipped_armor_mechanics.get("category") or "").casefold() == "heavy"
+        and _has_2014_dwarf_heavy_armor_speed_exception(value)
+    )
+    armor_strength_speed_penalty = (
+        10 if armor_strength_shortfall and not ignores_armor_strength_speed_penalty else 0
+    )
     encumbrance_disadvantage_abilities = (
         ["strength", "dexterity", "constitution"]
         if encumbrance_summary["state"] == "heavily_encumbered"
@@ -4396,7 +4453,7 @@ def derive_character_sheet(
         effective_speed = {mode: 0 for mode in effective_speed}
     else:
         speed_penalty = (
-            (10 if armor_strength_shortfall else 0)
+            armor_strength_speed_penalty
             + (10 if encumbrance_summary["state"] == "encumbered" else 0)
             + (20 if encumbrance_summary["state"] == "heavily_encumbered" else 0)
         )
@@ -4432,7 +4489,7 @@ def derive_character_sheet(
         "armor_strength": {
             "requirement": armor_strength_requirement,
             "meets_requirement": not armor_strength_shortfall,
-            "speed_penalty_ft": 10 if armor_strength_shortfall else 0,
+            "speed_penalty_ft": armor_strength_speed_penalty,
         },
         "equipment_penalties": {
             "attack_disadvantage_abilities": equipment_disadvantage_abilities,
@@ -4539,6 +4596,8 @@ def derive_character_sheet(
         core_boundary_ids.append("dnd5e.core.weapon.proficiency_and_finesse")
     if armor_proficiency["equipped"]:
         core_boundary_ids.append("dnd5e.core.armor.proficiency_and_strength")
+    if ignores_armor_strength_speed_penalty:
+        core_boundary_ids.append(CORE_DWARF_HEAVY_ARMOR_SPEED_MECHANIC_ID)
     if value["edition"] == "2014" and encumbrance["mode"] == "variant":
         core_boundary_ids.append("dnd5e.core.encumbrance")
     derived["rule_receipts"] = [
