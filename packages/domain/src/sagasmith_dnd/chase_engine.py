@@ -24,7 +24,7 @@ from sagasmith_dnd.combat_engine import (
 )
 from sagasmith_dnd.conditions import apply_condition_change, condition_ids
 from sagasmith_dnd.editions import DEFAULT_CHARACTER_EDITION, normalize_dnd_edition
-from sagasmith_dnd.engine import roll, roll_d20
+from sagasmith_dnd.engine import resolve_attack, roll
 from sagasmith_dnd.rule_engine import ResolutionContext
 
 CHASE_BOUNDARY_IDS = (
@@ -463,24 +463,26 @@ def _guard_attack(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     if moved_ft < 20:
         return sheet, {"triggered": False, "reason": "moved less than 20 feet"}
-    attack = roll_d20(rng=rng)
-    attack_total = int(attack["natural"]) + 3
     derived_ac = actor_derived(actor).get("armor_class")
     ac = 10 if derived_ac is None else int(derived_ac)
-    hit = attack_total >= ac
+    attack = resolve_attack(armor_class=ac, attack_bonus=3, rng=rng)
     result: dict[str, Any] = {
         "triggered": True,
-        "attack_roll": attack,
-        "attack_bonus": 3,
-        "total": attack_total,
+        "attack_roll": {
+            key: value
+            for key, value in attack.items()
+            if key not in {"kind", "armor_class", "attack_bonus", "total", "hit"}
+        },
+        "attack_bonus": attack["attack_bonus"],
+        "total": attack["total"],
         "target_ac": ac,
-        "hit": hit,
+        "hit": attack["hit"],
         "damage": None,
     }
-    if hit:
+    if attack["hit"]:
         sheet, result["damage"] = _apply_chase_damage(
             sheet,
-            expression="1d6+1",
+            expression="2d6+1" if attack["critical"] else "1d6+1",
             damage_type="piercing",
             source="urban chase complication: overzealous guard spear",
             death_saves=death_saves,

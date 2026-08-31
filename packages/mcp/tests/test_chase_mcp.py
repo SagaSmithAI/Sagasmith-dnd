@@ -8,10 +8,21 @@ import pytest
 from sagasmith_dnd.character_schema import default_character_sheet
 from sagasmith_dnd.random_stream import CampaignRandomStream, use_random_stream
 
+import sagasmith_dnd_mcp.server as server_module
 from sagasmith_dnd_mcp.config import McpConfig
 from sagasmith_dnd_mcp.server import create_server
 from sagasmith_dnd_mcp.tool_profiles import policy_for_tool
 from tests.authoring_helpers import finalize_and_activate_module
+
+
+class _SequenceRng:
+    def __init__(self, *values: int) -> None:
+        self.values = list(values)
+
+    def randint(self, minimum: int, maximum: int) -> int:
+        value = self.values.pop(0)
+        assert minimum <= value <= maximum
+        return value
 
 
 async def _call(server, name: str, arguments: dict):
@@ -51,7 +62,9 @@ def test_chase_facade_is_play_only() -> None:
     assert policy_for_tool("chase").phases == frozenset({"play"})
 
 
-def test_public_chase_uses_exact_module_source_and_no_combat_map(tmp_path: Path) -> None:
+def test_public_chase_uses_exact_module_source_and_no_combat_map(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import_root = tmp_path / "modules"
     import_root.mkdir()
     source_excerpt = (
@@ -68,6 +81,21 @@ def test_public_chase_uses_exact_module_source_and_no_combat_map(tmp_path: Path)
         f"{source_excerpt}\n",
         encoding="utf-8",
     )
+    original_advance = server_module.advance_chase_turn
+
+    def deterministic_advance(chase, *args, **kwargs):
+        chase = {
+            **chase,
+            "pending_complication": {
+                "number": 9,
+                "source_actor_id": chase["quarry_ids"][0],
+                "rolled_round": 1,
+            },
+        }
+        kwargs["rng"] = _SequenceRng(20, 3, 4, 20)
+        return original_advance(chase, *args, **kwargs)
+
+    monkeypatch.setattr(server_module, "advance_chase_turn", deterministic_advance)
     async def exercise() -> None:
         server = create_server(_config(tmp_path, import_root))
         campaign = await _call(
@@ -364,6 +392,19 @@ def test_public_chase_uses_exact_module_source_and_no_combat_map(tmp_path: Path)
         )
 
         assert turn["turn"]["moved_ft"] == 60
+        guard_attack = turn["turn"]["guard_attack"]
+        assert guard_attack["attack_roll"]["critical"] is True
+        assert guard_attack["hit"] is True
+        assert guard_attack["damage"]["expression"] == "2d6+1"
+        assert guard_attack["damage"]["rolls"] == [3, 4]
+        assert guard_attack["damage"]["total"] == 8
+        assert turn["status"] == "committed"
+        assert turn["character"]["sheet"]["combat"]["hp"]["value"] == 12
+        assert turn["character"]["revision"] == current_pursuer["revision"] + 1
+        assert any(
+            receipt["mechanic_id"] == "dnd5e.core.chase.urban_complications"
+            for receipt in turn["rule_receipts"]
+        )
         assert turn["chase"]["active"] is False
         assert turn["chase"]["outcome"]["status"] == "destination_reached"
         queried = await _call(
@@ -382,6 +423,11 @@ def test_public_chase_uses_exact_module_source_and_no_combat_map(tmp_path: Path)
                     "payload": {"unexpected": True},
                 },
             )
+
+        # The deterministic guard attack belongs only to the source-reviewed
+        # chase above.  The dynamic-DC scenarios below assert real campaign
+        # random-stream draw and receipt behavior.
+        monkeypatch.setattr(server_module, "advance_chase_turn", original_advance)
 
         dynamic_started = await _call(
             server,
