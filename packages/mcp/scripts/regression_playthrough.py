@@ -6625,13 +6625,59 @@ async def _short_rest(
             continue
         recovering_choice_chain = rest_recovered
         for choice_index, hit_die_key in enumerate(sequential_hit_die_keys[actor_id]):
-            if not isinstance(window, dict) and not recovering_choice_chain:
-                break
             choice_key = _mutation_key(
                 run_id,
                 "short-rest-hit-die",
                 f"{rest_identity}:{actor_id}:{choice_index}:{hit_die_key}",
             )
+            if not isinstance(window, dict):
+                if not recovering_choice_chain:
+                    break
+                try:
+                    choice_receipt = await client.domain(
+                        "state_revision",
+                        {
+                            "campaign_id": campaign_id,
+                            "action": "receipt",
+                            "payload": {
+                                "idempotency_key": choice_key,
+                                "branch_id": str(branch["id"]),
+                            },
+                        },
+                    )
+                except Exception as error:
+                    missing_receipt = any(
+                        "idempotency receipt not found" in message
+                        for message in exception_leaf_messages(error)
+                    )
+                    if not missing_receipt:
+                        raise
+                    break
+                expected_choice_hash = _idempotency_request_hash(
+                    {
+                        "character_id": actor_id,
+                        "decision": "spend",
+                        "rest_completed_elapsed_ticks": completed_elapsed_ticks,
+                        "hit_die_key": hit_die_key,
+                        "expected_character_revision": actor_revision,
+                        "branch_id": str(branch["id"]),
+                    }
+                )
+                receipt_response = dict(choice_receipt.get("response") or {})
+                receipt_result = dict(receipt_response.get("result") or {})
+                receipt_character = dict(receipt_response.get("character") or {})
+                if (
+                    choice_receipt.get("key") != choice_key
+                    or choice_receipt.get("replayed") is not True
+                    or choice_receipt.get("request_hash") != expected_choice_hash
+                    or str(choice_receipt.get("branch_id") or "") != str(branch["id"])
+                    or receipt_result.get("decision") != "spend"
+                    or receipt_result.get("hit_die_key") != hit_die_key
+                    or receipt_character.get("id") != actor_id
+                ):
+                    raise RuntimeError(
+                        f"short-rest Hit Die recovery receipt does not match actor {actor_id}"
+                    )
             resolved = await client.domain(
                 "campaign_change",
                 {

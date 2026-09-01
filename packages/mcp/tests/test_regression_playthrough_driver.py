@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sqlite3
 import sys
 from copy import deepcopy
 from pathlib import Path
@@ -17,7 +18,7 @@ from sagasmith_dnd.playthrough import (
 
 import scripts.regression_playthrough as regression_playthrough
 from sagasmith_dnd_mcp.config import McpConfig
-from sagasmith_dnd_mcp.server import create_server
+from sagasmith_dnd_mcp.server import close_server, create_server
 from scripts.regression_modules import PRINCIPAL_ID, ExposureClient
 from scripts.regression_playthrough import (
     _acquire_source_loot,
@@ -8646,6 +8647,35 @@ def test_real_server_driver_recovers_after_the_last_hit_die_commit(tmp_path: Pat
         ):
             await _short_rest(crash_client, **arguments)
 
+        branch = next(
+            item
+            for item in await setup.domain(
+                "branch_query",
+                {"campaign_id": campaign["id"], "view": "list"},
+            )
+            if item["is_current"]
+        )
+        choice_key = _mutation_key(
+            "run-1",
+            "short-rest-hit-die",
+            f"last-die-rest:{actor['id']}:0:fighter:d10",
+        )
+        choice_receipt_after_crash = await setup.domain(
+            "state_revision",
+            {
+                "campaign_id": campaign["id"],
+                "action": "receipt",
+                "payload": {
+                    "idempotency_key": choice_key,
+                    "branch_id": branch["id"],
+                },
+            },
+        )
+        with sqlite3.connect(config.database_path) as connection:
+            choice_receipt_count_after_crash = connection.execute(
+                "SELECT COUNT(*) FROM idempotency_records WHERE key = ?",
+                (choice_key,),
+            ).fetchone()[0]
         after_crash = await setup.domain(
             "character_query",
             {"view": "get", "payload": {"character_id": actor["id"]}},
@@ -8657,24 +8687,272 @@ def test_real_server_driver_recovers_after_the_last_hit_die_commit(tmp_path: Pat
         assert after_crash["sheet"]["combat"]["hit_dice"]["fighter:d10"]["value"] == 0
         assert "short_rest_hit_dice" not in after_crash["sheet"]["combat"]
 
-        recovered = await _short_rest(ExposureClient(DirectSession()), **arguments)
-        final_actor = await setup.domain(
+        close_server(server)
+        server = create_server(config)
+        restarted = ExposureClient(DirectSession())
+        recovered = await _short_rest(restarted, **arguments)
+        final_actor = await restarted.domain(
             "character_query",
             {"view": "get", "payload": {"character_id": actor["id"]}},
         )
-        final_campaign = await setup.domain(
+        final_campaign = await restarted.domain(
             "campaign_query",
             {"view": "get", "payload": {"campaign_id": campaign["id"]}},
         )
+        choice_receipt_after_restart = await restarted.domain(
+            "state_revision",
+            {
+                "campaign_id": campaign["id"],
+                "action": "receipt",
+                "payload": {
+                    "idempotency_key": choice_key,
+                    "branch_id": branch["id"],
+                },
+            },
+        )
+        with sqlite3.connect(config.database_path) as connection:
+            choice_receipt_count_after_restart = connection.execute(
+                "SELECT COUNT(*) FROM idempotency_records WHERE key = ?",
+                (choice_key,),
+            ).fetchone()[0]
         assert recovered["rest_recovered"] is True
         assert len(recovered["hit_die_choices"]) == 1
-        assert recovered["hit_die_choices"][0]["result"]["decision"] == "spend"
+        assert recovered["hit_die_choices"][0] == {
+            "actor_id": actor["id"],
+            **choice_receipt_after_crash["response"],
+        }
+        assert choice_receipt_after_restart == choice_receipt_after_crash
+        assert choice_receipt_count_after_restart == choice_receipt_count_after_crash == 1
         assert final_actor["sheet"]["combat"]["hit_dice"]["fighter:d10"]["value"] == 0
         assert final_actor["sheet"]["combat"]["hp"] == after_crash["sheet"]["combat"]["hp"]
         assert (
             final_campaign["state"]["random_stream"]["position"]
             == campaign_after_crash["state"]["random_stream"]["position"]
         )
+        close_server(server)
+
+    asyncio.run(exercise())
+
+
+def test_real_server_driver_does_not_invent_a_choice_after_party_rest_response_loss(
+    tmp_path: Path,
+) -> None:
+    async def exercise() -> None:
+        config = McpConfig(
+            home=tmp_path / "home",
+            database_url=None,
+            chroma_url=None,
+            chroma_path_override=None,
+            dnd_skills_dir=tmp_path / "dnd",
+            modulegen_skills_dir=tmp_path / "modulegen",
+            auto_seed_rules=False,
+        )
+        server = create_server(config)
+        sequential_calls: list[dict] = []
+
+        class DirectSession:
+            def __init__(self, *, crash_after_party_rest: bool = False) -> None:
+                self.crash_after_party_rest = crash_after_party_rest
+                self.crashed = False
+
+            async def call_tool(self, tool_id: str, arguments: dict):
+                if tool_id == "playthrough_manifest":
+                    structured = {
+                        "status": "ok",
+                        "action": arguments["action"],
+                        "result": {
+                            "manifest": {"status": "in_progress"},
+                            "campaign_revision": arguments["expected_revision"],
+                        },
+                    }
+                else:
+                    if (
+                        tool_id == "campaign_change"
+                        and arguments.get("action") == "short_rest_hit_die"
+                    ):
+                        sequential_calls.append(deepcopy(arguments))
+                    _metadata, structured = await server.call_tool(tool_id, arguments)
+                if (
+                    self.crash_after_party_rest
+                    and not self.crashed
+                    and tool_id == "campaign_change"
+                    and arguments.get("action") == "party_rest"
+                ):
+                    self.crashed = True
+                    raise RuntimeError("simulated transport loss after the party rest commit")
+                return SimpleNamespace(
+                    content=[],
+                    structured_content=structured,
+                    is_error=False,
+                )
+
+        setup = ExposureClient(DirectSession())
+        campaign = await setup.domain(
+            "campaign_create",
+            {
+                "name": "Closed short-rest choice recovery",
+                "edition": "2014",
+                "idempotency_key": "closed-window-campaign",
+            },
+        )
+        sheet = default_character_sheet()
+        sheet["edition"] = "2014"
+        sheet["combat"]["hp"] = {"value": 1, "max": 2, "temp": 0}
+        sheet["combat"]["hit_dice"] = {
+            "fighter:d10": {
+                "label": "Fighter d10",
+                "value": 1,
+                "max": 1,
+                "recovers_on": "long_rest",
+            }
+        }
+        actor = await setup.domain(
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": "One Die Fighter",
+                    "sheet": sheet,
+                },
+                "idempotency_key": "closed-window-actor",
+            },
+        )
+        campaign_before_clock = await setup.domain(
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        await setup.domain(
+            "campaign_change",
+            {
+                "campaign_id": campaign["id"],
+                "action": "clock_set",
+                "payload": {"day": 1, "hour": 0, "minute": 0, "label": "Camp"},
+                "expected_revision": campaign_before_clock["revision"],
+                "idempotency_key": "closed-window-clock",
+            },
+        )
+        arguments = {
+            "campaign_id": campaign["id"],
+            "run_id": "run-1",
+            "occurrence_id": "closed-window-rest",
+            "members": [
+                {
+                    "actor_id": actor["id"],
+                    "hit_dice_spends": [{"key": "fighter:d10", "count": 2}],
+                }
+            ],
+            "start_clock": None,
+            "duration_minutes": 60,
+            "reason": "The only available Hit Die completed the rest.",
+        }
+        with pytest.raises(
+            RuntimeError,
+            match="transport loss after the party rest commit",
+        ):
+            await _short_rest(
+                ExposureClient(DirectSession(crash_after_party_rest=True)),
+                **arguments,
+            )
+
+        branch = next(
+            item
+            for item in await setup.domain(
+                "branch_query",
+                {"campaign_id": campaign["id"], "view": "list"},
+            )
+            if item["is_current"]
+        )
+        party_key = _mutation_key("run-1", "short-rest-party", "closed-window-rest")
+        choice_key = _mutation_key(
+            "run-1",
+            "short-rest-hit-die",
+            f"closed-window-rest:{actor['id']}:0:fighter:d10",
+        )
+        party_receipt_after_crash = await setup.domain(
+            "state_revision",
+            {
+                "campaign_id": campaign["id"],
+                "action": "receipt",
+                "payload": {
+                    "idempotency_key": party_key,
+                    "branch_id": branch["id"],
+                },
+            },
+        )
+        actor_after_crash = await setup.domain(
+            "character_query",
+            {"view": "get", "payload": {"character_id": actor["id"]}},
+        )
+        campaign_after_crash = await setup.domain(
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        with sqlite3.connect(config.database_path) as connection:
+            receipt_counts_after_crash = dict(
+                connection.execute(
+                    "SELECT key, COUNT(*) FROM idempotency_records "
+                    "WHERE key IN (?, ?) GROUP BY key",
+                    (party_key, choice_key),
+                ).fetchall()
+            )
+        assert actor_after_crash["sheet"]["combat"]["hp"]["value"] == 2
+        assert actor_after_crash["sheet"]["combat"]["hit_dice"]["fighter:d10"]["value"] == 0
+        assert "short_rest_hit_dice" not in actor_after_crash["sheet"]["combat"]
+        assert sequential_calls == []
+        assert receipt_counts_after_crash == {party_key: 1}
+
+        close_server(server)
+        server = create_server(config)
+        restarted = ExposureClient(DirectSession())
+        recovered = await _short_rest(restarted, **arguments)
+        final_actor = await restarted.domain(
+            "character_query",
+            {"view": "get", "payload": {"character_id": actor["id"]}},
+        )
+        final_campaign = await restarted.domain(
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        party_receipt_after_restart = await restarted.domain(
+            "state_revision",
+            {
+                "campaign_id": campaign["id"],
+                "action": "receipt",
+                "payload": {
+                    "idempotency_key": party_key,
+                    "branch_id": branch["id"],
+                },
+            },
+        )
+        with sqlite3.connect(config.database_path) as connection:
+            receipt_counts_after_restart = dict(
+                connection.execute(
+                    "SELECT key, COUNT(*) FROM idempotency_records "
+                    "WHERE key IN (?, ?) GROUP BY key",
+                    (party_key, choice_key),
+                ).fetchall()
+            )
+
+        assert recovered["rest_recovered"] is True
+        assert recovered["party_rest"] == party_receipt_after_crash["response"]
+        assert recovered["hit_die_choices"] == []
+        assert sequential_calls == []
+        assert party_receipt_after_restart == party_receipt_after_crash
+        assert receipt_counts_after_restart == receipt_counts_after_crash == {party_key: 1}
+        assert (
+            final_actor["sheet"]["combat"]["hp"]
+            == actor_after_crash["sheet"]["combat"]["hp"]
+        )
+        assert (
+            final_actor["sheet"]["combat"]["hit_dice"]
+            == actor_after_crash["sheet"]["combat"]["hit_dice"]
+        )
+        assert (
+            final_campaign["state"]["random_stream"]["position"]
+            == campaign_after_crash["state"]["random_stream"]["position"]
+        )
+        close_server(server)
 
     asyncio.run(exercise())
 
