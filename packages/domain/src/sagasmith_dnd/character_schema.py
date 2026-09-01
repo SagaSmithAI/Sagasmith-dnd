@@ -2377,6 +2377,7 @@ def validate_character_sheet(
             "inspiration",
             "wounded",
             "rest_history",
+            "short_rest_hit_dice",
         },
     )
     hp = _object(combat["hp"], "sheet.combat.hp")
@@ -2572,6 +2573,95 @@ def validate_character_sheet(
         raise ValueError("sheet.combat.rest_history must record rest start and completion together")
     if started is not None and completed is not None and completed < started:
         raise ValueError("sheet.combat.rest_history completion cannot precede its start")
+
+    normalized_short_rest_hit_dice = None
+    if "short_rest_hit_dice" in combat:
+        short_rest_hit_dice = _object(
+            combat["short_rest_hit_dice"],
+            "sheet.combat.short_rest_hit_dice",
+        )
+        _reject_unknown(
+            short_rest_hit_dice,
+            "sheet.combat.short_rest_hit_dice",
+            {
+                "rest_completed_elapsed_ticks",
+                "expected_character_revision",
+                "remaining",
+                "spent_count",
+                "song_of_rest_die_sides",
+                "song_of_rest_used",
+            },
+        )
+        remaining = _object(
+            short_rest_hit_dice.get("remaining"),
+            "sheet.combat.short_rest_hit_dice.remaining",
+        )
+        normalized_remaining = {
+            str(key): _integer(
+                amount,
+                f"sheet.combat.short_rest_hit_dice.remaining.{key}",
+                minimum=1,
+            )
+            for key, amount in remaining.items()
+        }
+        if not normalized_remaining:
+            raise ValueError("sheet.combat.short_rest_hit_dice must retain an available die")
+        for key, amount in normalized_remaining.items():
+            resource = normalized_hit_dice.get(key)
+            if resource is None:
+                raise ValueError(
+                    f"sheet.combat.short_rest_hit_dice references an unknown hit die: {key}"
+                )
+            if amount > int(resource.get("value", 0) or 0):
+                raise ValueError(
+                    "sheet.combat.short_rest_hit_dice cannot exceed current hit dice"
+                )
+        song_die = short_rest_hit_dice.get("song_of_rest_die_sides")
+        if song_die is not None:
+            song_die = _integer(
+                song_die,
+                "sheet.combat.short_rest_hit_dice.song_of_rest_die_sides",
+                minimum=1,
+            )
+            if song_die not in {6, 8, 10, 12}:
+                raise ValueError(
+                    "sheet.combat.short_rest_hit_dice.song_of_rest_die_sides is invalid"
+                )
+        normalized_short_rest_hit_dice = {
+            "rest_completed_elapsed_ticks": _integer(
+                short_rest_hit_dice.get("rest_completed_elapsed_ticks"),
+                "sheet.combat.short_rest_hit_dice.rest_completed_elapsed_ticks",
+                minimum=0,
+            ),
+            "expected_character_revision": _integer(
+                short_rest_hit_dice.get("expected_character_revision", 0),
+                "sheet.combat.short_rest_hit_dice.expected_character_revision",
+                minimum=0,
+            ),
+            "remaining": normalized_remaining,
+            "spent_count": _integer(
+                short_rest_hit_dice.get("spent_count", 0),
+                "sheet.combat.short_rest_hit_dice.spent_count",
+                minimum=0,
+            ),
+            "song_of_rest_die_sides": song_die,
+            "song_of_rest_used": _boolean(
+                short_rest_hit_dice.get("song_of_rest_used", False),
+                "sheet.combat.short_rest_hit_dice.song_of_rest_used",
+            ),
+        }
+        if normalized_short_rest_hit_dice["song_of_rest_used"] and song_die is None:
+            raise ValueError(
+                "sheet.combat.short_rest_hit_dice cannot mark absent Song of Rest as used"
+            )
+        if (
+            edition != "2014"
+            or normalized_short_rest_hit_dice["rest_completed_elapsed_ticks"] != completed
+            or last_rest_type != "short_rest"
+        ):
+            raise ValueError(
+                "sheet.combat.short_rest_hit_dice must belong to the latest short rest"
+            )
 
     traits = _object(value["traits"], "sheet.traits")
     _reject_unknown(
@@ -3279,6 +3369,11 @@ def validate_character_sheet(
             "inspiration": _boolean(combat["inspiration"], "sheet.combat.inspiration"),
             "wounded": _boolean(combat["wounded"], "sheet.combat.wounded"),
             "rest_history": normalized_rest_history,
+            **(
+                {"short_rest_hit_dice": normalized_short_rest_hit_dice}
+                if normalized_short_rest_hit_dice is not None
+                else {}
+            ),
         },
         "traits": {
             "size": _text(traits["size"], "sheet.traits.size", maximum=100),

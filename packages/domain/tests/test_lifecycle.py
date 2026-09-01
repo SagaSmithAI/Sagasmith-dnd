@@ -12,6 +12,7 @@ from sagasmith_dnd.lifecycle import (
     advance_world_effect_durations,
     apply_raise_dead_to_sheet,
     apply_rest,
+    apply_short_rest_hit_die_choice,
     expire_combat_bound_effects,
     initialize_source_state,
     knock_prone_outside_combat,
@@ -931,24 +932,46 @@ def test_song_of_rest_applies_once_per_eligible_creature() -> None:
     rested = apply_rest(
         target,
         rest_type="short_rest",
-        hit_dice_spends=[{"key": "d8", "count": 2}],
+        hit_dice_spends=[{"key": "d8", "count": 1}],
         song_of_rest_source_sheet=bard,
         rules=resolution_context({"edition": "2014"}),
-        rng=_SequenceRng(4, 5, 6),
+        rng=_SequenceRng(4, 6),
+    )
+    recorded = record_rest_completion(
+        rested["sheet"],
+        rest_type="short_rest",
+        started_elapsed_ticks=0,
+        completed_elapsed_ticks=600,
+        hit_dice_spent_count=1,
+        song_of_rest_die_sides=8,
+        song_of_rest_used=True,
+    )
+    additional = apply_short_rest_hit_die_choice(
+        recorded,
+        decision="spend",
+        hit_die_key="d8",
+        rest_completed_elapsed_ticks=600,
+        rules=resolution_context({"edition": "2014"}),
+        rng=_SequenceRng(5),
     )
 
-    assert rested["hit_die_healing"] == 13
-    assert rested["hit_die_applied_healing"] == 13
+    assert rested["hit_die_healing"] == 6
+    assert rested["hit_die_applied_healing"] == 6
     assert rested["song_of_rest"]["die"] == "1d8"
     assert rested["song_of_rest"]["roll"]["total"] == 6
     assert rested["song_of_rest"]["rolled_healing"] == 6
-    assert rested["song_of_rest"]["applied_healing"] == 5
-    assert rested["sheet"]["combat"]["hp"]["value"] == 20
+    assert rested["song_of_rest"]["applied_healing"] == 6
+    assert additional["rolled_healing"] == 7
+    assert additional["applied_healing"] == 6
+    assert additional["song_of_rest"] is None
+    assert additional["status"] == "closed"
+    assert additional["close_reason"] == "full_hp"
+    assert additional["sheet"]["combat"]["hp"]["value"] == 20
+    assert additional["sheet"]["combat"]["hit_dice"]["d8"]["value"] == 0
     assert {receipt["mechanic_id"] for receipt in rested["rule_receipts"]} >= {
         "dnd5e.core.rest.hit_dice",
         "dnd5e.core.rest.song_of_rest",
     }
-
     no_hit_die = apply_rest(
         target,
         rest_type="short_rest",
@@ -968,6 +991,105 @@ def test_song_of_rest_applies_once_per_eligible_creature() -> None:
     )
     assert no_recovery["hit_die_applied_healing"] == 0
     assert no_recovery["song_of_rest"] is None
+
+
+def test_2014_short_rest_requires_sequential_additional_hit_dice() -> None:
+    sheet = default_character_sheet()
+    sheet["edition"] = "2014"
+    sheet["abilities"]["constitution"]["score"] = 6
+    sheet["combat"]["hp"] = {"value": 0, "max": 20, "temp": 0}
+    sheet["combat"]["hit_dice"] = {
+        "wizard:d6": {
+            "label": "Wizard d6",
+            "value": 1,
+            "max": 1,
+            "recovers_on": "long_rest",
+        },
+        "fighter:d10": {
+            "label": "Fighter d10",
+            "value": 1,
+            "max": 1,
+            "recovers_on": "long_rest",
+        },
+    }
+    sheet["conditions"] = ["stable", "unconscious", "prone"]
+
+    with pytest.raises(CombatEngineError, match="one initial Hit Die"):
+        apply_rest(
+            sheet,
+            rest_type="short_rest",
+            hit_dice_spends=[
+                {"key": "wizard:d6", "count": 1},
+                {"key": "fighter:d10", "count": 1},
+            ],
+            rng=_SequenceRng(1, 10),
+        )
+
+    rested = apply_rest(sheet, rest_type="short_rest")
+    recorded = record_rest_completion(
+        rested["sheet"],
+        rest_type="short_rest",
+        started_elapsed_ticks=0,
+        completed_elapsed_ticks=600,
+    )
+    first = apply_short_rest_hit_die_choice(
+        recorded,
+        decision="spend",
+        hit_die_key="wizard:d6",
+        rest_completed_elapsed_ticks=600,
+        rng=_SequenceRng(1),
+    )
+    assert first["rolled_healing"] == 0
+    assert first["applied_healing"] == 0
+    assert first["status"] == "open"
+    assert set(first["sheet"]["conditions"]) == {"stable", "unconscious", "prone"}
+    assert first["remaining"] == {"fighter:d10": 1}
+
+    second = apply_short_rest_hit_die_choice(
+        first["sheet"],
+        decision="spend",
+        hit_die_key="fighter:d10",
+        rest_completed_elapsed_ticks=600,
+        rng=_SequenceRng(10),
+    )
+    assert second["rolled_healing"] == 8
+    assert second["applied_healing"] == 8
+    assert second["status"] == "closed"
+    assert second["close_reason"] == "no_hit_dice"
+    assert second["sheet"]["conditions"] == ["prone"]
+
+
+def test_2014_short_rest_hit_die_choice_can_be_declined_without_a_roll() -> None:
+    sheet = default_character_sheet()
+    sheet["edition"] = "2014"
+    sheet["combat"]["hp"] = {"value": 2, "max": 10, "temp": 0}
+    sheet["combat"]["hit_dice"] = {
+        "fighter:d10": {
+            "label": "Fighter d10",
+            "value": 1,
+            "max": 1,
+            "recovers_on": "long_rest",
+        }
+    }
+    recorded = record_rest_completion(
+        sheet,
+        rest_type="short_rest",
+        started_elapsed_ticks=0,
+        completed_elapsed_ticks=600,
+    )
+
+    stopped = apply_short_rest_hit_die_choice(
+        recorded,
+        decision="stop",
+        rest_completed_elapsed_ticks=600,
+        rng=_SequenceRng(),
+    )
+
+    assert stopped["status"] == "closed"
+    assert stopped["close_reason"] == "player_stopped"
+    assert stopped["sheet"]["combat"]["hp"]["value"] == 2
+    assert stopped["sheet"]["combat"]["hit_dice"]["fighter:d10"]["value"] == 1
+    assert "short_rest_hit_dice" not in stopped["sheet"]["combat"]
 
 
 def test_song_of_rest_rejects_unqualified_or_unconscious_sources() -> None:

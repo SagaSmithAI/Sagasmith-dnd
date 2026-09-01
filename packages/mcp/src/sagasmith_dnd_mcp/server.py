@@ -325,6 +325,7 @@ from sagasmith_dnd.lifecycle import (
     allows_trance_rest,
     apply_raise_dead_to_sheet,
     apply_rest,
+    apply_short_rest_hit_die_choice,
     expire_combat_bound_effects,
     initialize_source_state,
     knock_prone_outside_combat,
@@ -333,10 +334,10 @@ from sagasmith_dnd.lifecycle import (
     recover_stable_creature,
     stand_outside_combat,
     validate_arcane_recovery_choice,
+    validate_initial_rest_hit_dice_requests,
     validate_natural_recovery_choice,
     validate_rest_activity_minutes,
     validate_rest_eligibility,
-    validate_rest_hit_dice_requests,
     validate_rest_schedule,
     validate_song_of_rest_source,
     validate_sorcerous_restoration_choice,
@@ -12253,7 +12254,16 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         replay = replay_idempotent(scope, idempotency_key, request_payload)
         if replay is not None:
             return replay
-        normalized_sheet = validate_character_sheet(sheet if sheet is not None else before.sheet)
+        candidate_sheet = deepcopy(sheet if sheet is not None else before.sheet)
+        candidate_window = dict(candidate_sheet.get("combat") or {}).get(
+            "short_rest_hit_dice"
+        )
+        if isinstance(candidate_window, dict):
+            # Only campaign_short_rest_hit_die may carry this decision window
+            # forward. Every ordinary character write invalidates it, including
+            # a full-sheet update that tries to forge the next revision.
+            candidate_window["expected_character_revision"] = before.revision
+        normalized_sheet = validate_character_sheet(candidate_sheet)
         normalized_notes = (
             validate_character_notes(
                 canonical_character_notes(
@@ -12710,6 +12720,33 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         if key:
             idempotency.remember(scope, key, payload, response, campaign_id=campaign_id)
         return response
+
+    def require_resolved_short_rest_hit_dice(
+        campaign_id: str,
+        campaign_state: dict[str, Any],
+        *,
+        operation: str,
+    ) -> None:
+        """Keep rest-end choices ahead of later time and combat transitions."""
+
+        current_ticks = int(
+            dict(campaign_state.get("game_time") or {}).get("elapsed_ticks", 0) or 0
+        )
+        pending_actor_ids = []
+        for actor in characters.list(campaign_id=campaign_id):
+            window = dict(actor.sheet.get("combat") or {}).get("short_rest_hit_dice")
+            if not isinstance(window, dict):
+                continue
+            if int(window.get("rest_completed_elapsed_ticks", -1)) != current_ticks:
+                continue
+            if int(window.get("expected_character_revision", -1)) != actor.revision:
+                continue
+            pending_actor_ids.append(actor.id)
+        if pending_actor_ids:
+            raise CombatEngineError(
+                f"resolve or stop pending short-rest Hit Die choices before {operation}: "
+                + ", ".join(sorted(pending_actor_ids))
+            )
 
     @public_tool()
     def storage_status() -> dict[str, Any]:
@@ -15464,6 +15501,11 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 "campaign revision conflict: "
                 f"expected {expected_revision}, found {campaign.revision}"
             )
+        require_resolved_short_rest_hit_dice(
+            campaign_id,
+            validate_party_state(deepcopy(campaign.state or {})),
+            operation="starting a chase",
+        )
         if dict(campaign.state.get("combat") or {}).get("active", False):
             raise CombatEngineError("a chase cannot start while combat is active")
         if dict(campaign.state.get("chase") or {}).get("active", False):
@@ -15918,6 +15960,11 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 "campaign revision conflict: "
                 f"expected {expected_revision}, found {campaign.revision}"
             )
+        require_resolved_short_rest_hit_dice(
+            campaign_id,
+            validate_party_state(deepcopy(campaign.state or {})),
+            operation="starting combat",
+        )
         if not participant_ids:
             raise ValueError("participant_ids must not be empty")
         if isinstance(campaign.state, dict) and campaign.state.get("combat", {}).get("active"):
@@ -18033,6 +18080,11 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 f"expected {expected_revision}, found {campaign.revision}"
             )
         next_state = validate_party_state(deepcopy(campaign.state or {}))
+        require_resolved_short_rest_hit_dice(
+            campaign_id,
+            next_state,
+            operation="advancing campaign time",
+        )
         if bool(dict(next_state.get("combat") or {}).get("active")):
             raise CombatEngineError("campaign time cannot advance during active combat")
         world_time: dict[str, Any] | None = None
@@ -27346,6 +27398,11 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 f"expected {expected_revision}, found {campaign.revision}"
             )
         next_state = validate_party_state(deepcopy(campaign.state or {}))
+        require_resolved_short_rest_hit_dice(
+            campaign_id,
+            next_state,
+            operation="stable recovery",
+        )
         if bool(dict(next_state.get("combat") or {}).get("active")):
             raise CombatEngineError("stable recovery is not allowed while combat is active")
         all_characters = {item.id: item for item in characters.list(campaign_id=campaign_id)}
@@ -27370,7 +27427,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             require_character_control(current, principal_id)
             if current.revision != member["expected_revision"]:
                 raise ValueError(f"character revision conflict: {current.id}")
-            validate_rest_hit_dice_requests(
+            validate_initial_rest_hit_dice_requests(
                 current.sheet,
                 member["hit_dice_spends"],
             )
@@ -27498,6 +27555,11 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     },
                 )
                 song_source_id = resting_member["song_of_rest_source_actor_id"]
+                song_source_sheet = (
+                    all_characters[str(song_source_id)].sheet
+                    if song_source_id is not None
+                    else None
+                )
                 applied_rest = apply_rest(
                     sheet,
                     rest_type="short_rest",
@@ -27508,11 +27570,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     arcane_recovery=resting_member["arcane_recovery"],
                     natural_recovery=resting_member["natural_recovery"],
                     sorcerous_restoration_points=resting_member["sorcerous_restoration_points"],
-                    song_of_rest_source_sheet=(
-                        all_characters[str(song_source_id)].sheet
-                        if song_source_id is not None
-                        else None
-                    ),
+                    song_of_rest_source_sheet=song_source_sheet,
                 )
                 if applied_rest.get("status") != "committed":
                     raise CombatEngineError(
@@ -27530,12 +27588,23 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     rest_type="short_rest",
                     started_elapsed_ticks=started_elapsed_ticks,
                     completed_elapsed_ticks=int(time_transition["after"]["elapsed_ticks"]),
+                    hit_dice_spent_count=len(applied_rest.get("hit_dice_rolls") or []),
+                    expected_character_revision=current.revision + 1,
+                    song_of_rest_die_sides=(
+                        validate_song_of_rest_source(song_source_sheet)
+                        if song_source_sheet is not None
+                        else None
+                    ),
+                    song_of_rest_used=applied_rest.get("song_of_rest") is not None,
                 )
                 rested[current.id] = {
                     key: value
                     for key, value in applied_rest.items()
                     if key not in {"sheet", "rule_receipts"}
                 }
+                rested[current.id]["short_rest_hit_dice"] = deepcopy(
+                    dict(sheet.get("combat") or {}).get("short_rest_hit_dice")
+                )
                 receipts.extend(applied_rest.get("rule_receipts") or [])
             if sheet != current.sheet:
                 updates.append(
@@ -28589,6 +28658,11 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 f"expected {expected_revision}, found {campaign.revision}"
             )
         next_state = validate_party_state(deepcopy(campaign.state or {}))
+        require_resolved_short_rest_hit_dice(
+            campaign_id,
+            next_state,
+            operation="another rest",
+        )
         if bool(dict(next_state.get("combat") or {}).get("active")):
             raise CombatEngineError("rest is not allowed while combat is active")
         started_elapsed_ticks = int(next_state["game_time"]["elapsed_ticks"])
@@ -28629,7 +28703,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     event="long_rest",
                 )
             if normalized_rest_type == "short_rest":
-                validate_rest_hit_dice_requests(
+                validate_initial_rest_hit_dice_requests(
                     current.sheet,
                     member["hit_dice_spends"],
                 )
@@ -28721,6 +28795,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     "rules": rest_rules,
                     "game_day": completed_game_day,
                 }
+                song_source_sheet = None
                 if normalized_rest_type == "long_rest":
                     rest_arguments.update(
                         {
@@ -28730,17 +28805,18 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     )
                 else:
                     song_source_id = member["song_of_rest_source_actor_id"]
+                    song_source_sheet = (
+                        all_characters[str(song_source_id)].sheet
+                        if song_source_id is not None
+                        else None
+                    )
                     rest_arguments.update(
                         {
                             "hit_dice_spends": member["hit_dice_spends"],
                             "arcane_recovery": member["arcane_recovery"],
                             "natural_recovery": member["natural_recovery"],
                             "sorcerous_restoration_points": member["sorcerous_restoration_points"],
-                            "song_of_rest_source_sheet": (
-                                all_characters[str(song_source_id)].sheet
-                                if song_source_id is not None
-                                else None
-                            ),
+                            "song_of_rest_source_sheet": song_source_sheet,
                         }
                     )
                 applied = apply_rest(sheet, **rest_arguments)
@@ -28759,6 +28835,15 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     rest_type=normalized_rest_type,
                     started_elapsed_ticks=started_elapsed_ticks,
                     completed_elapsed_ticks=completed_elapsed_ticks,
+                    hit_dice_spent_count=len(applied.get("hit_dice_rolls") or []),
+                    expected_character_revision=current.revision + 1,
+                    song_of_rest_die_sides=(
+                        validate_song_of_rest_source(song_source_sheet)
+                        if normalized_rest_type == "short_rest"
+                        and song_source_sheet is not None
+                        else None
+                    ),
+                    song_of_rest_used=applied.get("song_of_rest") is not None,
                 )
                 preparation_result = None
                 if normalized_rest_type == "long_rest" and member["prepared_spell_ids"] is not None:
@@ -28785,6 +28870,10 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     for key, value in applied.items()
                     if key not in {"sheet", "rule_receipts"}
                 }
+                if normalized_rest_type == "short_rest":
+                    recovered[current.id]["short_rest_hit_dice"] = deepcopy(
+                        dict(sheet.get("combat") or {}).get("short_rest_hit_dice")
+                    )
                 rule_receipts.extend(applied.get("rule_receipts") or [])
                 if normalized_rest_type == "long_rest":
                     rule_receipts.extend(
@@ -28862,6 +28951,150 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             rule_receipts=rule_receipts,
         )
         return party_rest_response(list(revisions_result or []))
+
+    @_agent_ruling_boundary
+    def campaign_short_rest_hit_die(
+        campaign_id: str,
+        character_id: str,
+        decision: str,
+        rest_completed_elapsed_ticks: int,
+        hit_die_key: str | None = None,
+        principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
+        expected_revision: int | None = None,
+        expected_character_revision: int | None = None,
+        branch_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Resolve one spend-or-stop choice from a completed 2014 short rest."""
+
+        access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
+        require_write_contract(expected_revision, idempotency_key)
+        if isinstance(expected_character_revision, bool) or not isinstance(
+            expected_character_revision, int
+        ):
+            raise ValueError("expected_character_revision is required")
+        if isinstance(rest_completed_elapsed_ticks, bool) or not isinstance(
+            rest_completed_elapsed_ticks, int
+        ):
+            raise ValueError("rest_completed_elapsed_ticks must be an integer")
+        normalized_decision = str(decision).strip().casefold().replace("-", "_")
+        if normalized_decision not in {"spend", "stop"}:
+            raise ValueError("decision must be spend or stop")
+        normalized_key = str(hit_die_key or "").strip() or None
+        if normalized_decision == "spend" and normalized_key is None:
+            raise ValueError("hit_die_key is required when decision is spend")
+        if normalized_decision == "stop" and normalized_key is not None:
+            raise ValueError("hit_die_key must be omitted when decision is stop")
+        resolved_branch_id = require_current_branch(campaign_id, branch_id)
+        request_payload = {
+            "character_id": str(character_id),
+            "decision": normalized_decision,
+            "rest_completed_elapsed_ticks": rest_completed_elapsed_ticks,
+            "hit_die_key": normalized_key,
+            "expected_character_revision": expected_character_revision,
+            "branch_id": resolved_branch_id,
+        }
+        scope = (
+            f"campaign-short-rest-hit-die:{campaign_id}:"
+            f"{resolved_branch_id}:{principal_id}"
+        )
+        replay = replay_idempotent(scope, idempotency_key, request_payload)
+        if replay is not None:
+            return replay
+        campaign = campaigns.get(campaign_id)
+        if campaign.revision != expected_revision:
+            raise ValueError(
+                "campaign revision conflict: "
+                f"expected {expected_revision}, found {campaign.revision}"
+            )
+        current = characters.get(str(character_id))
+        if current.campaign_id != campaign_id:
+            raise ValueError("short-rest Hit Die actor is not in this campaign")
+        if current.revision != expected_character_revision:
+            raise ValueError(
+                "character revision conflict: "
+                f"expected {expected_character_revision}, found {current.revision}"
+            )
+        choice_window = dict(current.sheet.get("combat") or {}).get(
+            "short_rest_hit_dice"
+        )
+        if not isinstance(choice_window, dict):
+            raise CombatEngineError("no sequential Hit Die choice is open")
+        if int(choice_window.get("expected_character_revision", -1)) != current.revision:
+            raise CombatEngineError(
+                "the short-rest Hit Die choice was invalidated by a later character change"
+            )
+        state = validate_party_state(deepcopy(campaign.state or {}))
+        if bool(dict(state.get("combat") or {}).get("active")):
+            raise CombatEngineError("short-rest Hit Dice cannot be spent during combat")
+        if bool(dict(state.get("chase") or {}).get("active")):
+            raise CombatEngineError("short-rest Hit Dice cannot be spent during a chase")
+        current_ticks = int(dict(state.get("game_time") or {}).get("elapsed_ticks", 0) or 0)
+        if current_ticks != rest_completed_elapsed_ticks:
+            raise CombatEngineError(
+                "the short-rest Hit Die choice expired because campaign time advanced"
+            )
+        rest_rules = effective_rule_context(
+            campaign_id,
+            facts={
+                "actor_id": current.id,
+                "rest_type": "short_rest",
+            },
+        )
+        inherited_stream = active_random_stream()
+        stream = inherited_stream or CampaignRandomStream.from_campaign_state(
+            campaign_id,
+            campaign.state,
+            operation="campaign_change",
+            idempotency_key=str(idempotency_key),
+        )
+        context_manager = (
+            nullcontext(stream) if inherited_stream is not None else use_random_stream(stream)
+        )
+        with context_manager:
+            applied = apply_short_rest_hit_die_choice(
+                current.sheet,
+                decision=normalized_decision,
+                hit_die_key=normalized_key,
+                rest_completed_elapsed_ticks=rest_completed_elapsed_ticks,
+                rules=rest_rules,
+            )
+            continued_window = dict(applied["sheet"].get("combat") or {}).get(
+                "short_rest_hit_dice"
+            )
+            if isinstance(continued_window, dict):
+                continued_window["expected_character_revision"] = current.revision + 1
+            next_sheet = validate_character_sheet(applied["sheet"])
+            update = CharacterStateUpdate(
+                character_id=current.id,
+                sheet=next_sheet,
+                notes=validate_character_notes(current.notes),
+                expected_revision=current.revision,
+            )
+            result = {key: value for key, value in applied.items() if key != "sheet"}
+            response_fields = {
+                "status": str(result["status"]),
+                "result": result,
+                "character": character_view(
+                    replace(current, sheet=next_sheet, revision=current.revision + 1)
+                ),
+                "rule_receipts": list(applied.get("rule_receipts") or []),
+                "ruleset_fingerprint": rest_rules.fingerprint,
+            }
+            return commit_campaign_state(
+                campaign,
+                None,
+                operation="campaign.party.rest.short_rest.hit_die",
+                principal_id=principal_id,
+                branch_id=resolved_branch_id,
+                idempotency_key=str(idempotency_key),
+                scope=scope,
+                payload=request_payload,
+                response_fields=response_fields,
+                character_updates=[update],
+                rule_receipts=list(applied.get("rule_receipts") or []),
+                expected_campaign_revision=campaign.revision,
+            )
 
     def character_use_activity(
         character_id: str,
@@ -45954,7 +46187,10 @@ boundary.
                     "character rest preflight currently requires rest_type=short_rest"
                 )
             validate_rest_eligibility(current.sheet, rest_type=rest_type)
-            hit_dice = validate_rest_hit_dice_requests(current.sheet, data.get("hit_dice_spends"))
+            hit_dice = validate_initial_rest_hit_dice_requests(
+                current.sheet,
+                data.get("hit_dice_spends"),
+            )
             game_day = rules_day_from_ticks(
                 int(
                     dict(dict(campaign.state or {}).get("game_time") or {}).get(
@@ -48213,6 +48449,7 @@ boundary.
             "clock_set",
             "clock_advance",
             "party_rest",
+            "short_rest_hit_die",
             "stable_recovery",
             "effect_add",
             "effect_remove",
@@ -48249,6 +48486,21 @@ boundary.
             "party_rest": (
                 {"members", "duration_minutes", "rest_type"},
                 ("members",),
+            ),
+            "short_rest_hit_die": (
+                {
+                    "character_id",
+                    "expected_character_revision",
+                    "decision",
+                    "hit_die_key",
+                    "rest_completed_elapsed_ticks",
+                },
+                (
+                    "character_id",
+                    "expected_character_revision",
+                    "decision",
+                    "rest_completed_elapsed_ticks",
+                ),
             ),
             "stable_recovery": (
                 {"members", "resting_members"},
@@ -48336,6 +48588,25 @@ boundary.
                 rest_type=data.get("rest_type", "long_rest"),
                 principal_id=principal_id,
                 expected_revision=expected_revision,
+                branch_id=branch_id,
+                idempotency_key=idempotency_key,
+            )
+        elif action == "short_rest_hit_die":
+            result = campaign_short_rest_hit_die(
+                campaign_id=campaign_id,
+                character_id=required(data, "character_id"),
+                decision=required(data, "decision"),
+                rest_completed_elapsed_ticks=required(
+                    data,
+                    "rest_completed_elapsed_ticks",
+                ),
+                hit_die_key=data.get("hit_die_key"),
+                principal_id=principal_id,
+                expected_revision=expected_revision,
+                expected_character_revision=required(
+                    data,
+                    "expected_character_revision",
+                ),
                 branch_id=branch_id,
                 idempotency_key=idempotency_key,
             )
