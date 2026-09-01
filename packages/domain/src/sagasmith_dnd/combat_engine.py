@@ -813,6 +813,8 @@ def start_encounter(
                     "reaction": 1,
                     "movement": current_movement,
                     "speed": speed,
+                    "movement_spent": 0,
+                    "extra_movement_granted": 0,
                     "object_interaction": 1,
                     "attack_budget": 0,
                 },
@@ -845,6 +847,7 @@ def start_encounter(
                 movement=0,
                 reaction=0,
                 object_interaction=0,
+                movement_spent=current_movement,
             )
     ties: dict[int, list[dict[str, Any]]] = {}
     for combatant in combatants:
@@ -1254,6 +1257,61 @@ def pay_witch_bolt_sustain_action(
     }
 
 
+def _effective_speed_ft(combatant: dict[str, Any]) -> int:
+    if _condition_set(combatant.get("conditions")) & {"grappled", "restrained"}:
+        return 0
+    budget = dict(combatant.get("turn_budget") or {})
+    recorded_speed_multiplier = combatant.get("speed_multiplier")
+    speed_multiplier = float(
+        1.0 if recorded_speed_multiplier is None else recorded_speed_multiplier
+    )
+    return max(0, int(int(budget.get("speed", 0) or 0) * speed_multiplier))
+
+
+def _movement_accounting(combatant: dict[str, Any]) -> tuple[int, int]:
+    budget = dict(combatant.get("turn_budget") or {})
+    if "movement_spent" in budget and "extra_movement_granted" in budget:
+        return (
+            max(0, int(budget.get("movement_spent", 0) or 0)),
+            max(0, int(budget.get("extra_movement_granted", 0) or 0)),
+        )
+    # Legacy snapshots stored only a remaining total. Infer conservatively:
+    # never manufacture a historical Dash grant, and preserve a visible spend
+    # when a mid-turn speed change left the remaining total stale.
+    stored = max(0, int(budget.get("movement", 0) or 0))
+    recorded_speed = max(0, int(budget.get("speed", 0) or 0))
+    # A legacy half-speed snapshot cannot reveal whether it started at that
+    # speed or spent movement before being slowed. Treat the difference from
+    # recorded speed as spent: exact when speed is unchanged, conservative
+    # under ambiguous speed changes, and incapable of inventing Dash grants.
+    spent = recorded_speed - stored
+    return max(0, spent), 0
+
+
+def _remaining_movement_ft(combatant: dict[str, Any]) -> int:
+    spent, extra_granted = _movement_accounting(combatant)
+    return max(0, _effective_speed_ft(combatant) + extra_granted - spent)
+
+
+def _update_movement_accounting(
+    combatant: dict[str, Any],
+    budget: dict[str, Any],
+    *,
+    spent_delta: int = 0,
+    extra_grant_delta: int = 0,
+) -> None:
+    spent, extra_granted = _movement_accounting(combatant)
+    budget["movement_spent"] = spent + max(0, int(spent_delta))
+    budget["extra_movement_granted"] = extra_granted + max(0, int(extra_grant_delta))
+    budget["movement"] = max(
+        0,
+        _effective_speed_ft(combatant)
+        + int(budget["extra_movement_granted"])
+        - int(budget["movement_spent"]),
+    )
+    combatant["turn_budget"] = budget
+
+
 def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[str]:
     if not encounter.get("active", True):
         return []
@@ -1269,6 +1327,9 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
         raise CombatEngineError(f"combatant not found: {actor_id_value}")
     conditions = _condition_set(combatant.get("conditions"))
     budget = dict(combatant.get("turn_budget") or {})
+    has_movement = (
+        _effective_speed_ft(combatant) > 0 and _remaining_movement_ft(combatant) > 0
+    )
     current = current_combatant(encounter)
     if current is None or current.get("actor_id") != actor_id_value:
         return []
@@ -1277,11 +1338,24 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
     if conditions & {"dead", "unconscious", "stunned", "paralyzed", "petrified"}:
         return []
     if "incapacitated" in conditions:
-        return ["move"] if "grappled" not in conditions and "restrained" not in conditions else []
+        actions = (
+            ["move"]
+            if (
+                has_movement
+                and not conditions & {"grappled", "restrained"}
+            )
+            else []
+        )
+        if budget.get("object_interaction", 0) > 0:
+            actions.append("interact_object")
+        return actions
     if "turned" in conditions:
         actions = (
             ["move"]
-            if budget.get("movement", 0) > 0 and not conditions & {"grappled", "restrained"}
+            if (
+                has_movement
+                and not conditions & {"grappled", "restrained"}
+            )
             else []
         )
         if budget.get("main_action", 0) > 0 or budget.get("extra_action", 0) > 0:
@@ -1291,7 +1365,10 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
         return actions
     actions = (
         ["move"]
-        if budget.get("movement", 0) > 0 and not conditions & {"grappled", "restrained"}
+        if (
+            has_movement
+            and not conditions & {"grappled", "restrained"}
+        )
         else []
     )
     if budget.get("main_action", 0) > 0 or budget.get("extra_action", 0) > 0:
@@ -4150,6 +4227,16 @@ def spend_movement(
             missing=("grapple_source",),
             ruling_kind="missing_or_conflicting_source_review",
         )
+    if willing_movement and _effective_speed_ft(combatant) <= 0:
+        raise CombatEngineError("actor cannot move while its effective speed is zero")
+    if (
+        willing_movement
+        and not uses_aggressive_grant
+        and _remaining_movement_ft(combatant) <= 0
+    ):
+        raise CombatEngineError(
+            "actor has no movement remaining at its current speed"
+        )
     if willing_movement and "prone" in conditions and not crawl:
         raise CombatEngineError("a prone actor must crawl or stand before moving")
     if (
@@ -4162,7 +4249,7 @@ def spend_movement(
     available = int(
         (aggressive_grant or {}).get("remaining", 0)
         if uses_aggressive_grant
-        else budget.get("movement", 0) or 0
+        else _remaining_movement_ft(combatant)
     )
     origin = _position(combatant.get("position"))
     waypoints: list[tuple[float, float]] = []
@@ -4372,8 +4459,7 @@ def spend_movement(
         flags["aggressive_movement"] = aggressive_grant
         combatant["turn_flags"] = flags
     elif willing_movement:
-        budget["movement"] = available - movement_cost
-        combatant["turn_budget"] = budget
+        _update_movement_accounting(combatant, budget, spent_delta=movement_cost)
     if destination is not None:
         from sagasmith_dnd.spatial import validate_position
 
@@ -4488,7 +4574,7 @@ def spend_movement(
 
 
 def stand_up(encounter: dict[str, Any], actor_id_value: str) -> dict[str, Any]:
-    """Spend half the recorded speed to end Prone without spending an action."""
+    """Spend half the effective speed to end Prone without spending an action."""
     value = deepcopy(encounter)
     combatant = next(
         (item for item in value.get("combatants", []) if item.get("actor_id") == actor_id_value),
@@ -4503,12 +4589,14 @@ def stand_up(encounter: dict[str, Any], actor_id_value: str) -> dict[str, Any]:
         raise CombatEngineError("actor is not prone")
     if conditions & {"dead", "unconscious", "stunned", "paralyzed", "petrified"}:
         raise CombatEngineError("actor cannot stand under its current conditions")
+    effective_speed = _effective_speed_ft(combatant)
+    if effective_speed <= 0:
+        raise CombatEngineError("actor cannot stand while its effective speed is zero")
     budget = dict(combatant.get("turn_budget") or {})
-    cost = int(budget.get("speed", 0) or 0) // 2
-    if int(budget.get("movement", 0) or 0) < cost:
+    cost = effective_speed // 2
+    if _remaining_movement_ft(combatant) < cost:
         raise CombatEngineError("standing requires half the actor's speed in remaining movement")
-    budget["movement"] = int(budget["movement"]) - cost
-    combatant["turn_budget"] = budget
+    _update_movement_accounting(combatant, budget, spent_delta=cost)
     combatant["conditions"] = [
         item for item in combatant.get("conditions", []) if str(item).casefold() != "prone"
     ]
@@ -4985,7 +5073,11 @@ def resolve_common_action(
     if action == "cast":
         flags["cast_declared"] = deepcopy(payload or {})
     elif action == "dash":
-        budget["movement"] = int(budget.get("movement", 0) or 0) + int(budget.get("speed", 0) or 0)
+        _update_movement_accounting(
+            acting,
+            budget,
+            extra_grant_delta=_effective_speed_ft(acting),
+        )
     elif action == "disengage":
         flags["disengaged"] = True
     elif action == "dodge":
@@ -5520,8 +5612,7 @@ def settle_core_activity_effect(
         flags = dict(combatant.get("turn_flags") or {})
         if "aggressive_movement" in flags:
             raise CombatEngineError("Aggressive already granted movement on this turn")
-        budget = dict(combatant.get("turn_budget") or {})
-        granted = int(budget.get("speed", 0) or 0)
+        granted = _effective_speed_ft(combatant)
         flags["aggressive_movement"] = {
             "source_activity_id": activity_id,
             "target_actor_id": target_id,
@@ -5551,10 +5642,11 @@ def settle_core_activity_effect(
         budget = dict(combatant.get("turn_budget") or {})
         flags = dict(combatant.get("turn_flags") or {})
         if selected == "dash":
-            budget["movement"] = int(budget.get("movement", 0) or 0) + int(
-                budget.get("speed", 0) or 0
+            _update_movement_accounting(
+                combatant,
+                budget,
+                extra_grant_delta=_effective_speed_ft(combatant),
             )
-            combatant["turn_budget"] = budget
         elif selected == "disengage":
             flags["disengaged"] = True
             combatant["turn_flags"] = flags
@@ -6971,6 +7063,8 @@ def end_turn(encounter: dict[str, Any], *, actor_id_value: str | None = None) ->
             reaction=1,
             speed=effective_turn_speed,
             movement=int(effective_turn_speed * speed_multiplier),
+            movement_spent=0,
+            extra_movement_granted=0,
             object_interaction=1,
             attack_budget=0,
             extra_action=0,
@@ -6984,6 +7078,7 @@ def end_turn(encounter: dict[str, Any], *, actor_id_value: str | None = None) ->
                 movement=0,
                 reaction=0,
                 object_interaction=0,
+                movement_spent=int(effective_turn_speed * speed_multiplier),
             )
         next_actor["turn_budget"] = budget
     value["turn_spell_casts"] = {}
