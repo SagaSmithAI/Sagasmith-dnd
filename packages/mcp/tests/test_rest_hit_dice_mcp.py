@@ -3,7 +3,12 @@ from pathlib import Path
 
 import pytest
 import sagasmith_dnd.lifecycle as lifecycle_module
-from sagasmith_dnd.character_schema import default_character_sheet
+from sagasmith_core import CharacterService, Database
+from sagasmith_core.database import sqlite_database_url
+from sagasmith_dnd.character_schema import (
+    default_character_notes,
+    default_character_sheet,
+)
 
 import sagasmith_dnd_mcp.server as server_module
 from sagasmith_dnd_mcp.config import McpConfig
@@ -108,6 +113,140 @@ def _resting_sheet() -> dict:
         }
     }
     return sheet
+
+
+def _forged_short_rest_window_sheet() -> dict:
+    sheet = _resting_sheet()
+    sheet["edition"] = "2014"
+    sheet["combat"]["rest_history"] = {
+        "last_rest_type": "short_rest",
+        "last_rest_started_elapsed_ticks": 0,
+        "last_rest_completed_elapsed_ticks": 600,
+        "last_long_rest_elapsed_ticks": None,
+    }
+    sheet["combat"]["short_rest_hit_dice"] = {
+        "rest_completed_elapsed_ticks": 600,
+        "expected_character_revision": 1,
+        "remaining": {"fighter:d10": 2},
+        "spent_count": 0,
+        "song_of_rest_die_sides": None,
+        "song_of_rest_used": False,
+    }
+    return sheet
+
+
+def test_character_ingress_rejects_forged_short_rest_choice_capabilities(
+    tmp_path: Path,
+) -> None:
+    async def exercise() -> None:
+        config = _config(tmp_path)
+        server = create_server(config)
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {"name": "Engine-owned rest state", "edition": "2014", "idempotency_key": "c"},
+        )
+        forged = _forged_short_rest_window_sheet()
+        for mode, key in (("direct", "direct"), ("build", "build")):
+            with pytest.raises(Exception, match="short_rest_hit_dice is engine-owned"):
+                await _call(
+                    server,
+                    "character_create_from",
+                    {
+                        "mode": mode,
+                        "payload": {
+                            "campaign_id": campaign["id"],
+                            "name": f"Forged {mode}",
+                            "sheet": forged,
+                        },
+                        "idempotency_key": key,
+                    },
+                )
+
+        template = CharacterService(
+            Database(sqlite_database_url(config.database_path))
+        ).create(
+            system_id="dnd5e",
+            name="Legacy forged template",
+            sheet=forged,
+            notes=default_character_notes(),
+        )
+        with pytest.raises(Exception, match="short_rest_hit_dice"):
+            await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "template",
+                    "payload": {
+                        "campaign_id": campaign["id"],
+                        "template_id": template.id,
+                    },
+                    "idempotency_key": "template",
+                },
+            )
+
+        actor = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": "Legitimate Resting Hero",
+                    "sheet": _resting_sheet(),
+                },
+                "idempotency_key": "actor",
+            },
+        )
+        with pytest.raises(Exception, match="short_rest_hit_dice"):
+            await _call(
+                server,
+                "character_sheet_replace",
+                {
+                    "character_id": actor["id"],
+                    "sheet": forged,
+                    "expected_revision": actor["revision"],
+                    "idempotency_key": "replace-forged",
+                },
+            )
+        assert await _call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": actor["id"]}},
+        ) == actor
+
+        rested = await _party_short_rest(
+            server,
+            campaign["id"],
+            "real-rest",
+            [{"character_id": actor["id"], "expected_revision": actor["revision"]}],
+        )
+        current = rested["character"]
+        assert "short_rest_hit_dice" in current["sheet"]["combat"]
+        deleted = default_character_sheet()
+        deleted["edition"] = "2014"
+        deleted["combat"] = {
+            **current["sheet"]["combat"],
+        }
+        deleted["combat"].pop("short_rest_hit_dice")
+        with pytest.raises(Exception, match="short_rest_hit_dice is engine-owned"):
+            await _call(
+                server,
+                "character_sheet_replace",
+                {
+                    "character_id": actor["id"],
+                    "sheet": deleted,
+                    "expected_revision": current["revision"],
+                    "idempotency_key": "delete-window",
+                },
+            )
+        assert await _call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": actor["id"]}},
+        ) == current
+
+    asyncio.run(exercise())
 
 
 def _wizard_resting_sheet() -> dict:

@@ -160,6 +160,95 @@ def _config(
     )
 
 
+def _forged_rest_choice_actor_sheet() -> dict:
+    sheet = default_character_sheet()
+    sheet["edition"] = "2014"
+    sheet["combat"]["hp"] = {"value": 1, "max": 12, "temp": 0}
+    sheet["combat"]["hit_dice"] = {
+        "fighter:d10": {
+            "label": "Fighter d10",
+            "value": 1,
+            "max": 1,
+            "recovers_on": "long_rest",
+        }
+    }
+    sheet["combat"]["rest_history"] = {
+        "last_rest_type": "short_rest",
+        "last_rest_started_elapsed_ticks": 0,
+        "last_rest_completed_elapsed_ticks": 600,
+        "last_long_rest_elapsed_ticks": None,
+    }
+    sheet["combat"]["short_rest_hit_dice"] = {
+        "rest_completed_elapsed_ticks": 600,
+        "expected_character_revision": 1,
+        "remaining": {"fighter:d10": 1},
+        "spent_count": 0,
+        "song_of_rest_die_sides": None,
+        "song_of_rest_used": False,
+    }
+    return sheet
+
+
+def test_content_actor_archive_cannot_inject_engine_owned_rest_state(tmp_path: Path) -> None:
+    notes = default_character_notes()
+    notes["profile"]["summary"] = "A malicious content actor fixture."
+    card = build_dnd_content_actor(
+        actor_id="example.preset.forged-rest",
+        version="1.0.0",
+        actor_type="npc",
+        name="Forged Rest Actor",
+        sheet=_forged_rest_choice_actor_sheet(),
+        notes=notes,
+    )
+    package, blobs = build_preset_content_package(
+        package_id="example.forged-rest-actors",
+        version="1.0.0",
+        system_id="dnd5e",
+        title="Forged Rest Actors",
+        cards=[card],
+        metadata={
+            "edition": "2014",
+            "distribution": "private",
+            "license": "user-supplied",
+            "attribution": "Test fixture",
+        },
+    )
+
+    async def exercise() -> None:
+        config = _config(tmp_path)
+        server = create_server(config)
+        artifact = "forged-rest-actor.sagasmith-pack"
+        (config.content_packages_dir / artifact).write_bytes(
+            dumps_content_archive(package, blobs)
+        )
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {"name": "Content actor guard", "edition": "2014", "idempotency_key": "c"},
+        )
+        with pytest.raises(Exception, match="short_rest_hit_dice is engine-owned"):
+            await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "content_actor",
+                    "payload": {
+                        "campaign_id": campaign["id"],
+                        "artifact": artifact,
+                        "artifact_id": card["id"],
+                    },
+                    "idempotency_key": "forged-content-actor",
+                },
+            )
+        assert await _call(
+            server,
+            "character_query",
+            {"view": "list", "payload": {"campaign_id": campaign["id"]}},
+        ) == []
+
+    asyncio.run(exercise())
+
+
 def test_character_query_does_not_export_ad_hoc_actor_packages(tmp_path: Path) -> None:
     async def exercise() -> None:
         server = create_server(_config(tmp_path))
@@ -368,6 +457,57 @@ def test_module_package_round_trip_recreates_cast_bindings(
             "campaign_create",
             {"name": "Package target", "edition": "2014", "idempotency_key": "target"},
         )
+        forged_actor = build_dnd_content_actor(
+            actor_id=actor_with_image["id"],
+            version=actor_with_image["version"],
+            actor_type=actor_with_image["actor_type"],
+            name=actor_with_image["name"],
+            player_name=actor_with_image["player_name"],
+            summary=actor_with_image["summary"],
+            sheet=_forged_rest_choice_actor_sheet(),
+            notes=actor_with_image["notes"],
+            provenance=actor_with_image["provenance"],
+            bindings=actor_with_image["bindings"],
+            metadata=actor_with_image["metadata"],
+        )
+        forged_actor["image"] = deepcopy(actor_with_image["image"])
+        forged_package = build_content_package(
+            kind=exported_package["kind"],
+            package_id=exported_package["id"],
+            version=exported_package["version"],
+            system_id=exported_package["system_id"],
+            manifest=exported_package["manifest"],
+            sources=exported_package["sources"],
+            assets=[*exported_package["assets"], portrait_asset],
+            content_reviews=exported_package["content_reviews"],
+            actors=[forged_actor],
+            content=exported_package["content"],
+            dependencies=exported_package["dependencies"],
+            metadata=exported_package["metadata"],
+        )
+        forged_artifact = "forged-window-module.sagasmith-pack"
+        (config.content_packages_dir / forged_artifact).write_bytes(
+            dumps_content_archive(forged_package, exported_blobs)
+        )
+        with pytest.raises(Exception, match="short_rest_hit_dice is engine-owned"):
+            await _call(
+                server,
+                "content_pack",
+                {
+                    "action": "import",
+                    "payload": {
+                        "kind": "module",
+                        "campaign_id": target_campaign["id"],
+                        "artifact": forged_artifact,
+                    },
+                    "idempotency_key": "forged-module-import",
+                },
+            )
+        assert await _call(
+            server,
+            "module_query",
+            {"campaign_id": target_campaign["id"], "view": "list"},
+        ) == []
         import_arguments = {
             "action": "import",
             "payload": {

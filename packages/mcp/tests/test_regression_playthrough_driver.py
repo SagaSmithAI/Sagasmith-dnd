@@ -6,6 +6,7 @@ import json
 import sys
 from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from sagasmith_dnd.character_schema import default_character_sheet
@@ -15,7 +16,9 @@ from sagasmith_dnd.playthrough import (
 )
 
 import scripts.regression_playthrough as regression_playthrough
-from scripts.regression_modules import PRINCIPAL_ID
+from sagasmith_dnd_mcp.config import McpConfig
+from sagasmith_dnd_mcp.server import create_server
+from scripts.regression_modules import PRINCIPAL_ID, ExposureClient
 from scripts.regression_playthrough import (
     _acquire_source_loot,
     _advance_level,
@@ -7780,6 +7783,7 @@ def test_short_rest_advances_clock_and_applies_only_explicit_resource_choices() 
                 "tick_seconds": 6,
                 "elapsed_ticks": 0,
             }
+            self.actor_revisions = {"fighter": 2, "wizard": 2}
             self.keys: dict[str, list[str]] = {}
 
         def remember(self, kind: str, key: str) -> None:
@@ -7816,7 +7820,7 @@ def test_short_rest_advances_clock_and_applies_only_explicit_resource_choices() 
                 return {
                     "id": actor_id,
                     "campaign_id": "campaign-1",
-                    "revision": 2,
+                    "revision": self.actor_revisions[actor_id],
                     "sheet": {"edition": "2014"},
                 }
             if tool_id == "branch_query":
@@ -7860,6 +7864,7 @@ def test_short_rest_advances_clock_and_applies_only_explicit_resource_choices() 
                     "elapsed_minutes": 900,
                 }
                 self.revision += 1
+                self.actor_revisions = {"fighter": 3, "wizard": 3}
                 self.game_time = {
                     "schema_version": 1,
                     "tick_seconds": 6,
@@ -7916,6 +7921,7 @@ def test_short_rest_advances_clock_and_applies_only_explicit_resource_choices() 
                         "rest_completed_elapsed_ticks": 600,
                     }
                     self.revision += 1
+                    self.actor_revisions["fighter"] = 4
                     return {
                         "status": "closed",
                         "result": {
@@ -7941,6 +7947,7 @@ def test_short_rest_advances_clock_and_applies_only_explicit_resource_choices() 
                     "decision": "stop",
                     "rest_completed_elapsed_ticks": 600,
                 }
+                self.actor_revisions["wizard"] = 4
                 return {
                     "status": "closed",
                     "result": {
@@ -8120,9 +8127,14 @@ def test_short_rest_recovers_the_atomic_random_receipt_without_rerolling() -> No
                             "character_id": "fighter",
                             "expected_revision": 2,
                             "rest_activity_minutes": {},
+                            "derived_rest_timing": regression_playthrough.validate_rest_schedule(
+                                rest_type="short_rest",
+                                duration_minutes=60,
+                            ),
                             "hit_dice_spends": [{"key": "fighter:d10", "count": 1}],
                             "arcane_recovery": {},
                             "natural_recovery": {},
+                            "sorcerous_restoration_points": None,
                             "song_of_rest_source_actor_id": None,
                             "attune_item_id": None,
                             "attunement_prerequisite_confirmed": None,
@@ -8425,9 +8437,14 @@ def test_short_rest_restart_recovers_the_exact_sequential_receipt_chain(
                             "character_id": "fighter",
                             "expected_revision": 2,
                             "rest_activity_minutes": {},
+                            "derived_rest_timing": regression_playthrough.validate_rest_schedule(
+                                rest_type="short_rest",
+                                duration_minutes=60,
+                            ),
                             "hit_dice_spends": [{"key": "fighter:d10", "count": 1}],
                             "arcane_recovery": {},
                             "natural_recovery": {},
+                            "sorcerous_restoration_points": None,
                             "song_of_rest_source_actor_id": None,
                             "attune_item_id": None,
                             "attunement_prerequisite_confirmed": None,
@@ -8515,6 +8532,151 @@ def test_short_rest_restart_recovers_the_exact_sequential_receipt_chain(
     assert store.choice_commits == {"spend": 1, "stop": 1}
     assert store.actor_revision == 5
     assert "short_rest_hit_dice" not in store.sheet["combat"]
+
+
+def test_real_server_driver_recovers_after_the_last_hit_die_commit(tmp_path: Path) -> None:
+    async def exercise() -> None:
+        config = McpConfig(
+            home=tmp_path / "home",
+            database_url=None,
+            chroma_url=None,
+            chroma_path_override=None,
+            dnd_skills_dir=tmp_path / "dnd",
+            modulegen_skills_dir=tmp_path / "modulegen",
+            auto_seed_rules=False,
+        )
+        server = create_server(config)
+
+        class DirectSession:
+            def __init__(self, *, crash_after_last_die: bool = False) -> None:
+                self.crash_after_last_die = crash_after_last_die
+                self.crashed = False
+
+            async def call_tool(self, tool_id: str, arguments: dict):
+                if tool_id == "playthrough_manifest":
+                    structured = {
+                        "status": "ok",
+                        "action": arguments["action"],
+                        "result": {
+                            "manifest": {"status": "in_progress"},
+                            "campaign_revision": arguments["expected_revision"],
+                        },
+                    }
+                else:
+                    _metadata, structured = await server.call_tool(tool_id, arguments)
+                if (
+                    self.crash_after_last_die
+                    and not self.crashed
+                    and tool_id == "campaign_change"
+                    and arguments.get("action") == "short_rest_hit_die"
+                    and dict(arguments.get("payload") or {}).get("decision") == "spend"
+                ):
+                    self.crashed = True
+                    raise RuntimeError("simulated transport loss after the last Hit Die commit")
+                return SimpleNamespace(
+                    content=[],
+                    structured_content=structured,
+                    is_error=False,
+                )
+
+        setup = ExposureClient(DirectSession())
+        campaign = await setup.domain(
+            "campaign_create",
+            {
+                "name": "Last Hit Die recovery",
+                "edition": "2014",
+                "idempotency_key": "last-die-campaign",
+            },
+        )
+        sheet = default_character_sheet()
+        sheet["edition"] = "2014"
+        sheet["combat"]["hp"] = {"value": 1, "max": 30, "temp": 0}
+        sheet["combat"]["hit_dice"] = {
+            "fighter:d10": {
+                "label": "Fighter d10",
+                "value": 2,
+                "max": 2,
+                "recovers_on": "long_rest",
+            }
+        }
+        actor = await setup.domain(
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": "Last Die Fighter",
+                    "sheet": sheet,
+                },
+                "idempotency_key": "last-die-actor",
+            },
+        )
+        campaign_before_clock = await setup.domain(
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        await setup.domain(
+            "campaign_change",
+            {
+                "campaign_id": campaign["id"],
+                "action": "clock_set",
+                "payload": {"day": 1, "hour": 0, "minute": 0, "label": "Camp"},
+                "expected_revision": campaign_before_clock["revision"],
+                "idempotency_key": "last-die-clock",
+            },
+        )
+        crash_client = ExposureClient(DirectSession(crash_after_last_die=True))
+        arguments = {
+            "campaign_id": campaign["id"],
+            "run_id": "run-1",
+            "occurrence_id": "last-die-rest",
+            "members": [
+                {
+                    "actor_id": actor["id"],
+                    "hit_dice_spends": [{"key": "fighter:d10", "count": 2}],
+                }
+            ],
+            "start_clock": None,
+            "duration_minutes": 60,
+            "reason": "The fighter completed the rest despite a lost response.",
+        }
+        with pytest.raises(
+            RuntimeError,
+            match="transport loss after the last Hit Die commit",
+        ):
+            await _short_rest(crash_client, **arguments)
+
+        after_crash = await setup.domain(
+            "character_query",
+            {"view": "get", "payload": {"character_id": actor["id"]}},
+        )
+        campaign_after_crash = await setup.domain(
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        assert after_crash["sheet"]["combat"]["hit_dice"]["fighter:d10"]["value"] == 0
+        assert "short_rest_hit_dice" not in after_crash["sheet"]["combat"]
+
+        recovered = await _short_rest(ExposureClient(DirectSession()), **arguments)
+        final_actor = await setup.domain(
+            "character_query",
+            {"view": "get", "payload": {"character_id": actor["id"]}},
+        )
+        final_campaign = await setup.domain(
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        assert recovered["rest_recovered"] is True
+        assert len(recovered["hit_die_choices"]) == 1
+        assert recovered["hit_die_choices"][0]["result"]["decision"] == "spend"
+        assert final_actor["sheet"]["combat"]["hit_dice"]["fighter:d10"]["value"] == 0
+        assert final_actor["sheet"]["combat"]["hp"] == after_crash["sheet"]["combat"]["hp"]
+        assert (
+            final_campaign["state"]["random_stream"]["position"]
+            == campaign_after_crash["state"]["random_stream"]["position"]
+        )
+
+    asyncio.run(exercise())
 
 
 @pytest.mark.parametrize("defer_checkpoint", [False, True])

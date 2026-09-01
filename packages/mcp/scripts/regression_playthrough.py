@@ -45,7 +45,11 @@ from sagasmith_dnd.game_time import (
     game_time_ticks,
     validate_calendar_minute_point,
 )
-from sagasmith_dnd.lifecycle import allows_trance_rest, minimum_rest_minutes
+from sagasmith_dnd.lifecycle import (
+    allows_trance_rest,
+    minimum_rest_minutes,
+    validate_rest_schedule,
+)
 from sagasmith_dnd.module_profile import DndModuleProfile
 from sagasmith_dnd.playthrough import (
     PARTY_MEMBER_SOURCES,
@@ -6369,33 +6373,6 @@ async def _short_rest(
         else:
             initial_hit_dice_spends[actor_id] = deepcopy(member["hit_dice_spends"])
             sequential_hit_die_keys[actor_id] = []
-    member_by_id = {item["actor_id"]: item for item in normalized}
-    for actor in actors:
-        member = member_by_id[str(actor["id"])]
-        preflight = await client.domain(
-            "character_query",
-            {
-                "view": "rest",
-                "payload": {
-                    "character_id": str(actor["id"]),
-                    "rest_type": "short_rest",
-                    "hit_dice_spends": initial_hit_dice_spends[str(actor["id"])],
-                    "arcane_recovery": member["arcane_recovery"],
-                    "natural_recovery": member["natural_recovery"],
-                    "song_of_rest_source_actor_id": member["song_of_rest_source_actor_id"],
-                    "attune_item_id": member.get("attune_item_id"),
-                    "attunement_prerequisite_confirmed": member.get(
-                        "attunement_prerequisite_confirmed"
-                    ),
-                    "rest_activity_minutes": member["rest_activity_minutes"],
-                    "duration_minutes": duration_minutes,
-                },
-            },
-        )
-        if preflight.get("ready") is not True:
-            raise RuntimeError(
-                f"short rest preflight for {actor['id']} has unresolved rule choices"
-            )
     branches = await client.domain(
         "branch_query",
         {"campaign_id": campaign_id, "view": "list"},
@@ -6456,6 +6433,8 @@ async def _short_rest(
         party_members.append(party_member)
     party_rest_key = _mutation_key(run_id, "short-rest-party", rest_identity)
     rest_recovered = False
+    rest_actor_revisions: dict[str, int] = {}
+    rest_actor_windows: dict[str, dict[str, Any] | None] = {}
     try:
         rested = await client.domain(
             "campaign_change",
@@ -6537,9 +6516,14 @@ async def _short_rest(
                     "character_id": member["actor_id"],
                     "expected_revision": revision_row["before_revision"],
                     "rest_activity_minutes": member["rest_activity_minutes"],
+                    "derived_rest_timing": validate_rest_schedule(
+                        rest_type="short_rest",
+                        duration_minutes=duration_minutes,
+                    ),
                     "hit_dice_spends": initial_hit_dice_spends[member["actor_id"]],
                     "arcane_recovery": member["arcane_recovery"],
                     "natural_recovery": member["natural_recovery"],
+                    "sorcerous_restoration_points": None,
                     "song_of_rest_source_actor_id": member["song_of_rest_source_actor_id"],
                     "attune_item_id": member.get("attune_item_id"),
                     "attunement_prerequisite_confirmed": (
@@ -6569,7 +6553,37 @@ async def _short_rest(
             duration_minutes=duration_minutes,
             expected_request_hash=expected_request_hash,
         )
+        rest_actor_revisions = {
+            actor_id: int(revision_by_entity[("character", actor_id)]["after_revision"])
+            for actor_id in actor_ids
+        }
         rest_recovered = True
+    if not rest_recovered:
+        for actor_id in actor_ids:
+            rested_actor = await client.domain(
+                "character_query",
+                {"view": "get", "payload": {"character_id": actor_id}},
+            )
+            rested_revision = rested_actor.get("revision")
+            if (
+                rested_actor.get("campaign_id") != campaign_id
+                or isinstance(rested_revision, bool)
+                or not isinstance(rested_revision, int)
+            ):
+                raise RuntimeError(
+                    f"short rest did not expose the committed revision for actor {actor_id}"
+                )
+            rest_actor_revisions[actor_id] = rested_revision
+            candidate_window = dict(dict(rested_actor.get("sheet") or {}).get("combat") or {}).get(
+                "short_rest_hit_dice"
+            )
+            if not isinstance(candidate_window, dict):
+                candidate_window = dict(
+                    dict(rested.get("recovered") or {}).get(actor_id) or {}
+                ).get("short_rest_hit_dice")
+            rest_actor_windows[actor_id] = (
+                deepcopy(candidate_window) if isinstance(candidate_window, dict) else None
+            )
     if (
         rested.get("status") != "committed"
         or rested.get("rest_type") != "short_rest"
@@ -6583,14 +6597,7 @@ async def _short_rest(
         completed_elapsed_ticks, int
     ):
         raise RuntimeError("short rest did not return its completed game-time tick")
-    revision_rows = [
-        dict(item) for item in list(rested.get("revisions") or []) if isinstance(item, dict)
-    ]
-    actor_revisions = {
-        str(item.get("entity_id") or ""): item.get("after_revision")
-        for item in revision_rows
-        if item.get("entity_type") == "character"
-    }
+    actor_revisions = rest_actor_revisions
     final_actor_revisions = dict(actor_revisions)
     sequential_campaign_revision = rested.get("campaign_revision")
     if isinstance(sequential_campaign_revision, bool) or not isinstance(
@@ -6609,11 +6616,16 @@ async def _short_rest(
                 f"short rest did not return the committed revision for actor {actor_id}"
             )
         recovery = dict(dict(rested.get("recovered") or {}).get(actor_id) or {})
-        window = recovery.get("short_rest_hit_dice")
-        if not isinstance(window, dict):
+        window = (
+            recovery.get("short_rest_hit_dice")
+            if rest_recovered
+            else rest_actor_windows.get(actor_id)
+        )
+        if not isinstance(window, dict) and not rest_recovered:
             continue
+        recovering_choice_chain = rest_recovered
         for choice_index, hit_die_key in enumerate(sequential_hit_die_keys[actor_id]):
-            if not isinstance(window, dict):
+            if not isinstance(window, dict) and not recovering_choice_chain:
                 break
             choice_key = _mutation_key(
                 run_id,
@@ -6668,6 +6680,7 @@ async def _short_rest(
                 if isinstance(window, dict)
                 else None
             )
+            recovering_choice_chain = False
         if isinstance(window, dict):
             stop_key = _mutation_key(
                 run_id,

@@ -5641,6 +5641,8 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         if supported_editions and campaign_edition not in supported_editions:
             raise ValueError(f"module does not support campaign edition {campaign_edition}")
         validated_actors = [validate_dnd_content_actor(actor) for actor in normalized["actors"]]
+        for actor in validated_actors:
+            require_engine_owned_short_rest_hit_die_state(actor["sheet"])
         mismatched = [
             actor["id"]
             for actor in validated_actors
@@ -12229,6 +12231,11 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             return {"character": character, **response_extra}
 
         if before.campaign_id is None:
+            if sheet is not None:
+                require_engine_owned_short_rest_hit_die_state(
+                    sheet,
+                    current_sheet=before.sheet,
+                )
             updated = characters.update(
                 before.id,
                 sheet=sheet,
@@ -12254,6 +12261,11 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         replay = replay_idempotent(scope, idempotency_key, request_payload)
         if replay is not None:
             return replay
+        if sheet is not None:
+            require_engine_owned_short_rest_hit_die_state(
+                sheet,
+                current_sheet=before.sheet,
+            )
         candidate_sheet = deepcopy(sheet if sheet is not None else before.sheet)
         candidate_window = dict(candidate_sheet.get("combat") or {}).get(
             "short_rest_hit_dice"
@@ -12746,6 +12758,31 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             raise CombatEngineError(
                 f"resolve or stop pending short-rest Hit Die choices before {operation}: "
                 + ", ".join(sorted(pending_actor_ids))
+            )
+
+    def require_engine_owned_short_rest_hit_die_state(
+        candidate_sheet: Mapping[str, Any],
+        *,
+        current_sheet: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Reject caller creation or alteration of the persisted rest-choice capability."""
+
+        candidate_combat = dict(candidate_sheet.get("combat") or {})
+        candidate_has_window = "short_rest_hit_dice" in candidate_combat
+        current_combat = dict(current_sheet.get("combat") or {}) if current_sheet else {}
+        current_has_window = "short_rest_hit_dice" in current_combat
+        if current_sheet is None:
+            changed = candidate_has_window
+        else:
+            changed = candidate_has_window != current_has_window or (
+                candidate_has_window
+                and candidate_combat.get("short_rest_hit_dice")
+                != current_combat.get("short_rest_hit_dice")
+            )
+        if changed:
+            raise ValueError(
+                "sheet.combat.short_rest_hit_dice is engine-owned and may only be "
+                "created or changed by the completed short-rest transaction"
             )
 
     @public_tool()
@@ -26565,6 +26602,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         if not idempotency_key:
             raise ValueError("idempotency_key is required for character creation")
         sheet_value = deepcopy(sheet or default_character_sheet())
+        require_engine_owned_short_rest_hit_die_state(sheet_value)
         if campaign_id is not None:
             sheet_value["edition"] = campaign_rules_edition(campaign_id)
         sheet_value = finalize_actor_sheet_rulings(sheet_value, campaign_id)
@@ -26666,6 +26704,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             raise ValueError("idempotency_key is required for character instantiation")
         template = characters.get(template_id)
         sheet = deepcopy(template.sheet)
+        require_engine_owned_short_rest_hit_die_state(sheet)
         sheet["edition"] = campaign_rules_edition(campaign_id)
         sheet = finalize_actor_sheet_rulings(sheet, campaign_id)
         instance_name = name if name is not None else template.name
@@ -26710,6 +26749,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         if not idempotency_key:
             raise ValueError("idempotency_key is required for character build")
         sheet_value = deepcopy(sheet or default_character_sheet())
+        require_engine_owned_short_rest_hit_die_state(sheet_value)
         sheet_value["edition"] = campaign_rules_edition(campaign_id)
         sheet_value = finalize_actor_sheet_rulings(sheet_value, campaign_id)
         normalized_sheet = validate_character_sheet(
@@ -27581,6 +27621,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     natural_recovery=resting_member["natural_recovery"],
                     sorcerous_restoration_points=resting_member["sorcerous_restoration_points"],
                     song_of_rest_source_sheet=song_source_sheet,
+                    rng=active_random_stream(),
                 )
                 if applied_rest.get("status") != "committed":
                     raise CombatEngineError(
@@ -28496,6 +28537,26 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         normalized_rest_type = str(rest_type).strip().lower().replace("-", "_")
         if normalized_rest_type not in REST_TYPES:
             raise CombatEngineError("rest_type must be short_rest or long_rest")
+        if normalized_rest_type == "short_rest" and active_random_stream() is None:
+            campaign_snapshot = campaigns.get(campaign_id)
+            stream = CampaignRandomStream.from_campaign_state(
+                campaign_id,
+                campaign_snapshot.state,
+                operation="campaign_change",
+                idempotency_key=str(idempotency_key or ""),
+                campaign_revision=campaign_snapshot.revision,
+            )
+            with use_random_stream(stream):
+                return campaign_party_rest(
+                    campaign_id,
+                    members,
+                    duration_minutes=duration_minutes,
+                    rest_type=normalized_rest_type,
+                    principal_id=principal_id,
+                    expected_revision=expected_revision,
+                    branch_id=resolved_branch_id,
+                    idempotency_key=idempotency_key,
+                )
         if isinstance(duration_minutes, bool) or not isinstance(duration_minutes, int):
             raise ValueError("duration_minutes must be an integer")
         minimum_possible_minutes = minimum_rest_minutes(
@@ -28834,7 +28895,11 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                             "song_of_rest_source_sheet": song_source_sheet,
                         }
                     )
-                applied = apply_rest(sheet, **rest_arguments)
+                applied = apply_rest(
+                    sheet,
+                    **rest_arguments,
+                    rng=active_random_stream(),
+                )
                 if applied.get("status") != "committed":
                     raise CombatEngineError(
                         f"party rest for {current.id} requires an unresolved rule choice"
@@ -46673,6 +46738,7 @@ boundary.
             template_variant=template_variant,
         )
         sheet = finalize_actor_sheet_rulings(sheet, campaign_id)
+        require_engine_owned_short_rest_hit_die_state(sheet)
         if character_type not in NON_PLAYER_CHARACTER_TYPES:
             raise ValueError("addon actor templates create only npc or monster actors")
         requested_name = str(name or "").strip()
@@ -46998,6 +47064,7 @@ boundary.
                 if len(matches) != 1:
                     raise ValueError("artifact_id must identify exactly one package actor")
                 card = validate_dnd_content_actor(matches[0])
+                require_engine_owned_short_rest_hit_die_state(card["sheet"])
                 package_checksum = package["checksum"]
                 card = runtime_actor_with_portrait(card, package, package_blobs)
             if card.get("schema") != "sagasmith.actor-card.v3":

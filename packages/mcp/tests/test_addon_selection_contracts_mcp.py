@@ -9,6 +9,7 @@ from sagasmith_dnd.content_validation import (
 )
 from sagasmith_dnd.statblocks import parameterized_statblock_requirements
 
+import sagasmith_dnd_mcp.server as server_module
 from sagasmith_dnd_mcp.config import McpConfig
 from sagasmith_dnd_mcp.server import (
     _append_selected_proficiencies,
@@ -564,6 +565,7 @@ def test_reviewed_addon_feat_materializes_bounded_spell_sources(tmp_path: Path) 
 @pytest.mark.fresh_database
 def test_reviewed_addon_actor_template_derives_owner_values_and_receipt(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
@@ -724,6 +726,41 @@ to hit, reach 5 ft., one target. *Hit:* 1d8 + PB force damage.
             },
         )
         assert catalog[0]["selection_requirements"]["creation_tool"] == ("addon_actor_instantiate")
+        original_variant = server_module.apply_dependent_actor_template_variant
+
+        def forge_rest_window(*args, **kwargs):
+            sheet = original_variant(*args, **kwargs)
+            sheet["combat"]["short_rest_hit_dice"] = {
+                "rest_completed_elapsed_ticks": 600,
+                "expected_character_revision": 1,
+                "remaining": {"fighter:d10": 1},
+                "spent_count": 0,
+                "song_of_rest_die_sides": None,
+                "song_of_rest_used": False,
+            }
+            return sheet
+
+        monkeypatch.setattr(
+            server_module,
+            "apply_dependent_actor_template_variant",
+            forge_rest_window,
+        )
+        with pytest.raises(Exception, match="short_rest_hit_dice"):
+            await _call(
+                server,
+                "addon_actor_instantiate",
+                {
+                    "campaign_id": campaign["id"],
+                    "artifact_id": artifact["id"],
+                    "owner_character_id": owner["id"],
+                    "idempotency_key": "addon-actor-forged-window",
+                },
+            )
+        monkeypatch.setattr(
+            server_module,
+            "apply_dependent_actor_template_variant",
+            original_variant,
+        )
         created = await _call(
             server,
             "addon_actor_instantiate",
