@@ -47,6 +47,7 @@ from scripts.regression_playthrough import (
     _index_source,
     _initialize_clock,
     _initialize_source_state,
+    _is_exact_missing_idempotency_receipt,
     _level_spell_choice_counts,
     _long_rest,
     _manifest_recovery_inputs,
@@ -112,6 +113,70 @@ def _manifest_source_ref() -> dict:
         "chunk_id": "chunk-1",
         "excerpt": "The hostage is released.",
     }
+
+
+def test_missing_receipt_classifier_accepts_only_the_exact_current_key() -> None:
+    assert _is_exact_missing_idempotency_receipt(
+        RuntimeError("idempotency receipt not found: choice-key"),
+        idempotency_key="choice-key",
+    )
+    assert _is_exact_missing_idempotency_receipt(
+        RuntimeError("idempotency receipt not found: choice-key"),
+        idempotency_key="choice-key",
+        branch_id="branch-1",
+    )
+    assert _is_exact_missing_idempotency_receipt(
+        RuntimeError(
+            "idempotency receipt not found on branch branch-1: choice-key"
+        ),
+        idempotency_key="choice-key",
+        branch_id="branch-1",
+    )
+
+
+def test_missing_receipt_classifier_rejects_a_different_key() -> None:
+    assert not _is_exact_missing_idempotency_receipt(
+        RuntimeError("idempotency receipt not found: another-choice-key"),
+        idempotency_key="choice-key",
+        branch_id="branch-1",
+    )
+    assert not _is_exact_missing_idempotency_receipt(
+        RuntimeError(
+            "idempotency receipt not found on branch branch-2: choice-key"
+        ),
+        idempotency_key="choice-key",
+        branch_id="branch-1",
+    )
+    assert not _is_exact_missing_idempotency_receipt(
+        RuntimeError(
+            "idempotency receipt not found on branch branch-1: choice-key"
+        ),
+        idempotency_key="choice-key",
+    )
+
+
+def test_missing_receipt_classifier_rejects_mixed_exception_groups() -> None:
+    assert not _is_exact_missing_idempotency_receipt(
+        ExceptionGroup(
+            "parallel failures",
+            [
+                RuntimeError("idempotency receipt not found: choice-key"),
+                OSError("receipt store unavailable"),
+            ],
+        ),
+        idempotency_key="choice-key",
+        branch_id="branch-1",
+    )
+
+
+def test_missing_receipt_classifier_rejects_gateway_errors_containing_the_phrase() -> None:
+    assert not _is_exact_missing_idempotency_receipt(
+        RuntimeError(
+            "gateway failed while forwarding idempotency receipt not found: choice-key"
+        ),
+        idempotency_key="choice-key",
+        branch_id="branch-1",
+    )
 
 
 def test_scene_progress_writes_keep_current_scene_authoritative() -> None:

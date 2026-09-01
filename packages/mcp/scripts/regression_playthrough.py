@@ -1396,6 +1396,35 @@ def _idempotency_request_hash(payload: dict[str, Any]) -> str:
     return request_hash(payload)
 
 
+def _is_exact_missing_idempotency_receipt(
+    error: BaseException,
+    *,
+    idempotency_key: str,
+    branch_id: str | None = None,
+) -> bool:
+    """Accept only the server's single-leaf, key-bound missing-receipt errors."""
+
+    messages = exception_leaf_messages(error)
+    if len(messages) != 1:
+        return False
+    missing = f"idempotency receipt not found: {idempotency_key}"
+    accepted = {
+        f"RuntimeError: {missing}",
+        f"ToolError: {missing}",
+    }
+    if branch_id is not None:
+        branch_missing = (
+            f"idempotency receipt not found on branch {branch_id}: {idempotency_key}"
+        )
+        accepted.update(
+            {
+                f"RuntimeError: {branch_missing}",
+                f"ToolError: {branch_missing}",
+            }
+        )
+    return messages[0] in accepted
+
+
 def _validate_recovered_continuity(
     receipt: dict[str, Any],
     *,
@@ -6646,9 +6675,10 @@ async def _short_rest(
                         },
                     )
                 except Exception as error:
-                    missing_receipt = any(
-                        "idempotency receipt not found" in message
-                        for message in exception_leaf_messages(error)
+                    missing_receipt = _is_exact_missing_idempotency_receipt(
+                        error,
+                        idempotency_key=choice_key,
+                        branch_id=str(branch["id"]),
                     )
                     if not missing_receipt:
                         raise
@@ -9239,9 +9269,9 @@ async def _claim_party_item_for_character(
                 )
             )
         except Exception as error:
-            missing_receipt = any(
-                message.startswith("idempotency receipt not found:")
-                for message in exception_leaf_messages(error)
+            missing_receipt = _is_exact_missing_idempotency_receipt(
+                error,
+                idempotency_key=claim_key,
             )
             if not missing_receipt:
                 raise
