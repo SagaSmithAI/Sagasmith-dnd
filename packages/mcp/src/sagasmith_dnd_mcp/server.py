@@ -276,6 +276,7 @@ from sagasmith_dnd.content_packages import (
     content_actor_catalog_definition,
     content_definition_checksum,
     validate_dnd_content_package,
+    validate_module_pack_decisions,
 )
 from sagasmith_dnd.content_solution import (
     ContentSolutionError,
@@ -2965,6 +2966,498 @@ def _tool_output_schema(tool_name: str) -> dict[str, Any]:
         "properties": properties,
         "additionalProperties": True,
     }
+
+
+def _module_draft_parameters(parameters: Mapping[str, Any]) -> dict[str, Any]:
+    """Advertise the Module Pack authoring workflow as a bounded action contract."""
+
+    schema = deepcopy(dict(parameters))
+    properties = dict(schema.get("properties") or {})
+    payload_schema = dict(properties.get("payload") or {})
+    payload_schema["description"] = (
+        "Action-specific Module Pack payload; inspect the matching action branch in allOf. "
+        "Server-issued job_id/module_id values come from start/get, source_ref receipts come "
+        "verbatim from evidence, package edits are complete replacements, and finalize needs "
+        "the stable Agent-selected pack_id plus explicit confirmation."
+    )
+    properties["payload"] = payload_schema
+    properties["expected_revision"]["description"] = (
+        "Import-job revision returned by module_draft, not the campaign revision. Pass the "
+        "latest value for guarded edits; finalization rechecks the current job revision."
+    )
+    schema["properties"] = properties
+
+    source_ref = {
+        "type": "object",
+        "description": (
+            "Copy this real source receipt verbatim from module_draft(evidence); do not infer "
+            "or retype its chunk_hash."
+        ),
+        "required": ["source_key", "page", "chunk_hash", "note"],
+        "properties": {
+            "source_key": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512,
+                "description": "Source key from the returned evidence receipt.",
+            },
+            "page": {
+                "type": ["integer", "null"],
+                "minimum": 1,
+                "description": "One-based source page, or null for generated Markdown.",
+            },
+            "chunk_hash": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+                "description": "Lowercase SHA-256 returned by evidence as source_ref.chunk_hash.",
+            },
+            "note": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000,
+                "description": "Evidence note returned with or retained from the receipt.",
+            },
+        },
+        "additionalProperties": False,
+    }
+    source_refs = {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 128,
+        "items": deepcopy(source_ref),
+        "description": "One or more exact module_draft(evidence) receipts.",
+    }
+    optional_source_refs = {
+        "type": "array",
+        "maxItems": 128,
+        "items": deepcopy(source_ref),
+        "description": (
+            "Party-size receipts; use an empty array only when both bounds are null because "
+            "the source gives no party-size advice."
+        ),
+    }
+    party_size = {
+        "type": "object",
+        "description": (
+            "Source-backed party range. If the source gives no advice, set minimum/maximum "
+            "both to null and source_refs to an empty array."
+        ),
+        "required": ["minimum", "maximum", "source_refs"],
+        "properties": {
+            "minimum": {"type": ["integer", "null"], "minimum": 1, "maximum": 20},
+            "maximum": {"type": ["integer", "null"], "minimum": 1, "maximum": 20},
+            "source_refs": optional_source_refs,
+        },
+        "oneOf": [
+            {
+                "properties": {
+                    "minimum": {"type": "integer", "minimum": 1, "maximum": 20},
+                    "maximum": {"type": "integer", "minimum": 1, "maximum": 20},
+                    "source_refs": source_refs,
+                }
+            },
+            {
+                "properties": {
+                    "minimum": {"type": "null"},
+                    "maximum": {"type": "null"},
+                    "source_refs": {"type": "array", "maxItems": 0},
+                }
+            },
+        ],
+        "additionalProperties": False,
+    }
+    cited_level = {
+        "type": "object",
+        "required": ["value", "source_refs"],
+        "properties": {
+            "value": {"type": "integer", "minimum": 1, "maximum": 20},
+            "source_refs": source_refs,
+        },
+        "additionalProperties": False,
+    }
+    advancement = {
+        "type": "object",
+        "description": (
+            "Source-reviewed advancement modes; recommended must be one member of modes and "
+            "unknown is not finalizable."
+        ),
+        "required": ["modes", "recommended", "source_refs"],
+        "properties": {
+            "modes": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 16,
+                "items": {"type": "string", "minLength": 1, "maxLength": 80},
+                "examples": [["milestone"], ["xp"]],
+            },
+            "recommended": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "examples": ["milestone"],
+            },
+            "source_refs": source_refs,
+        },
+        "additionalProperties": False,
+    }
+    pregenerated = {
+        "type": "object",
+        "description": (
+            "Required review of whether complete module pregenerated characters exist and "
+            "are applicable; an explicit reviewed absence is valid."
+        ),
+        "required": ["available", "applicability", "source_refs"],
+        "properties": {
+            "available": {"type": "boolean"},
+            "applicability": {"type": "string", "minLength": 1, "maxLength": 2000},
+            "source_refs": source_refs,
+        },
+        "additionalProperties": False,
+    }
+    play_profile = {
+        "type": "object",
+        "description": (
+            "D&D play envelope. Level, advancement, and pregenerated-character review always "
+            "need real evidence; party-size advice alone is optional."
+        ),
+        "required": [
+            "party_size",
+            "starting_level",
+            "expected_end_level",
+            "advancement",
+            "pregenerated_characters",
+        ],
+        "properties": {
+            "party_size": party_size,
+            "starting_level": deepcopy(cited_level),
+            "expected_end_level": deepcopy(cited_level),
+            "advancement": advancement,
+            "pregenerated_characters": pregenerated,
+        },
+        "additionalProperties": False,
+    }
+    manifest = {
+        "type": "object",
+        "description": (
+            "Complete Module Pack manifest replacement. content_summary is an object whose "
+            "counts are recomputed by the server."
+        ),
+        "required": [
+            "title",
+            "classification",
+            "compatibility",
+            "play_profile",
+            "continuity",
+            "activation",
+            "content_summary",
+        ],
+        "properties": {
+            "title": {"type": "string", "minLength": 1, "maxLength": 500},
+            "classification": {
+                "enum": ["adventure", "campaign", "emergent_seed", "emergent_episode"],
+                "description": "Source-reviewed D&D Module Pack classification.",
+            },
+            "compatibility": {
+                "type": "object",
+                "required": ["editions", "required_capabilities"],
+                "properties": {
+                    "editions": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 2,
+                        "uniqueItems": True,
+                        "items": {"enum": ["2014", "2024"]},
+                    },
+                    "required_capabilities": {
+                        "type": "array",
+                        "maxItems": 64,
+                        "items": {"type": "string", "minLength": 1, "maxLength": 128},
+                        "examples": [["module_pack_v2"]],
+                    },
+                },
+                "additionalProperties": False,
+            },
+            "play_profile": play_profile,
+            "continuity": {
+                "type": "object",
+                "required": ["series_id", "order", "continues_from", "state_policy"],
+                "properties": {
+                    "series_id": {"type": ["string", "null"], "maxLength": 256},
+                    "order": {"type": ["integer", "null"], "minimum": 0},
+                    "continues_from": {"type": ["string", "null"], "maxLength": 256},
+                    "state_policy": {"type": "object", "maxProperties": 128},
+                },
+                "additionalProperties": False,
+            },
+            "activation": {
+                "type": "object",
+                "required": ["mode", "default_active"],
+                "properties": {
+                    "mode": {"const": "campaign_attach"},
+                    "default_active": {"type": "boolean"},
+                },
+                "additionalProperties": False,
+            },
+            "content_summary": {"type": "object", "maxProperties": 64},
+        },
+        "additionalProperties": False,
+    }
+    catalogs = {
+        "type": "object",
+        "description": "Complete replacements for supplied native D&D catalog arrays.",
+        "minProperties": 1,
+        "properties": {
+            field: {
+                "type": "array",
+                "maxItems": 1000,
+                "items": {"type": "object", "maxProperties": 128},
+            }
+            for field in ("items", "encounters", "hazards", "handouts", "mechanics")
+        },
+        "additionalProperties": False,
+    }
+    narrative = {
+        "type": "object",
+        "description": "Structured narrative dossiers and source-defined endings.",
+        "required": ["dossiers", "endings"],
+        "properties": {
+            "dossiers": {
+                "type": "array",
+                "maxItems": 256,
+                "items": {"type": "object", "maxProperties": 128},
+            },
+            "endings": {
+                "type": "array",
+                "maxItems": 128,
+                "items": {"type": "object", "maxProperties": 128},
+            },
+        },
+        "additionalProperties": False,
+    }
+    dependencies = {
+        "type": "array",
+        "description": "Immutable Pack dependencies with exact identity and checksum.",
+        "maxItems": 128,
+        "items": {
+            "type": "object",
+            "required": ["kind", "id", "version", "checksum", "optional"],
+            "properties": {
+                "kind": {"enum": ["addon", "module", "preset", "core_rules"]},
+                "id": {"type": "string", "minLength": 1, "maxLength": 300},
+                "version": {"type": "string", "minLength": 1, "maxLength": 100},
+                "checksum": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "optional": {"type": "boolean"},
+            },
+            "additionalProperties": False,
+        },
+    }
+    decision_properties = {
+        "manifest": manifest,
+        "catalogs": catalogs,
+        "narrative": narrative,
+        "dependencies": dependencies,
+        "metadata": {"type": "object", "maxProperties": 256},
+        "version": {"type": "string", "minLength": 1, "maxLength": 100},
+    }
+    package_edit = {
+        "type": "object",
+        "required": ["job_id", "operation"],
+        "properties": {
+            "job_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "description": "Server-issued import-job id from start/get.",
+            },
+            "operation": {"const": "package"},
+            "note": {"type": "string", "maxLength": 2000},
+            **decision_properties,
+        },
+        "anyOf": [{"required": [field]} for field in decision_properties],
+        "additionalProperties": False,
+    }
+    other_edit = {
+        "type": "object",
+        "required": ["operation"],
+        "properties": {
+            "job_id": {"type": "string", "minLength": 1, "maxLength": 256},
+            "module_id": {"type": "string", "minLength": 1, "maxLength": 256},
+            "operation": {
+                "enum": [
+                    "advance",
+                    "source_text",
+                    "content",
+                    "statblock",
+                    "asset",
+                    "actor",
+                    "combat_grid",
+                ]
+            },
+        },
+        "anyOf": [{"required": ["job_id"]}, {"required": ["module_id"]}],
+        "additionalProperties": True,
+        "maxProperties": 128,
+    }
+    confirmation = {
+        "type": "object",
+        "description": "Explicit Agent editorial decision before immutable finalization.",
+        "required": ["confirmed", "note"],
+        "properties": {
+            "confirmed": {"const": True},
+            "note": {"type": "string", "minLength": 1, "maxLength": 2000},
+        },
+        "additionalProperties": False,
+    }
+
+    schema["allOf"] = [
+        {
+            "if": {"properties": {"action": {"const": "start"}}, "required": ["action"]},
+            "then": {
+                "required": ["payload", "idempotency_key"],
+                "properties": {
+                    "payload": {
+                        "oneOf": [
+                            {
+                                "type": "object",
+                                "required": ["source_path"],
+                                "properties": {
+                                    "source_path": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 65536,
+                                    },
+                                    "title": {"type": "string", "maxLength": 500},
+                                    "source_key": {"type": "string", "maxLength": 512},
+                                },
+                                "additionalProperties": False,
+                            },
+                            {
+                                "type": "object",
+                                "required": ["name", "content"],
+                                "properties": {
+                                    "name": {"type": "string", "minLength": 1, "maxLength": 512},
+                                    "content": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 65536,
+                                        "description": (
+                                            "Complete UTF-8 Markdown module source with "
+                                            "meaningful ATX headings so scenes and evidence "
+                                            "chunks are indexable."
+                                        ),
+                                    },
+                                    "title": {"type": "string", "maxLength": 500},
+                                    "source_key": {"type": "string", "maxLength": 512},
+                                },
+                                "additionalProperties": False,
+                            },
+                        ]
+                    }
+                },
+            },
+        },
+        {
+            "if": {"properties": {"action": {"const": "get"}}, "required": ["action"]},
+            "then": {
+                "properties": {
+                    "payload": {
+                        "type": ["object", "null"],
+                        "properties": {
+                            "job_id": {"type": "string", "minLength": 1, "maxLength": 256},
+                            "view": {"enum": ["full", "package"]},
+                            "query": {"type": "string", "maxLength": 200},
+                            "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                            "cursor": {"type": "string", "maxLength": 1024},
+                            "offset": {"type": "integer", "minimum": 0, "maximum": 100000},
+                        },
+                        "additionalProperties": False,
+                    }
+                }
+            },
+        },
+        {
+            "if": {"properties": {"action": {"const": "evidence"}}, "required": ["action"]},
+            "then": {
+                "required": ["payload"],
+                "properties": {
+                    "payload": {
+                        "type": "object",
+                        "properties": {
+                            "job_id": {"type": "string", "minLength": 1, "maxLength": 256},
+                            "module_id": {"type": "string", "minLength": 1, "maxLength": 256},
+                            "kind": {"enum": ["chunks", "page"]},
+                            "query": {"type": "string", "maxLength": 200},
+                            "scene_id": {"type": "string", "maxLength": 256},
+                            "page_number": {"type": "integer", "minimum": 1},
+                            "scale": {"type": "number", "exclusiveMinimum": 0},
+                            "include_ocr_text": {"type": "boolean"},
+                            "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                            "cursor": {"type": "string", "maxLength": 1024},
+                            "offset": {"type": "integer", "minimum": 0, "maximum": 100000},
+                        },
+                        "anyOf": [{"required": ["job_id"]}, {"required": ["module_id"]}],
+                        "additionalProperties": False,
+                    }
+                },
+            },
+        },
+        {
+            "if": {"properties": {"action": {"const": "edit"}}, "required": ["action"]},
+            "then": {
+                "required": ["payload", "idempotency_key"],
+                "properties": {"payload": {"oneOf": [package_edit, other_edit]}},
+                "allOf": [
+                    {
+                        "if": {
+                            "properties": {
+                                "payload": {
+                                    "type": "object",
+                                    "properties": {"operation": {"const": "advance"}},
+                                    "required": ["operation"],
+                                }
+                            }
+                        },
+                        "else": {"required": ["expected_revision"]},
+                    }
+                ],
+            },
+        },
+        {
+            "if": {"properties": {"action": {"const": "finalize"}}, "required": ["action"]},
+            "then": {
+                "required": ["payload", "idempotency_key"],
+                "properties": {
+                    "payload": {
+                        "type": "object",
+                        "required": ["job_id", "pack_id", "confirmation"],
+                        "properties": {
+                            "job_id": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 256,
+                                "description": "Server-issued import-job id from start/get.",
+                            },
+                            "pack_id": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 300,
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                                "description": (
+                                    "Stable portable Agent-selected Pack identity, for example "
+                                    "dnd5e.module.the-lantern-below; it is not a job/module id."
+                                ),
+                            },
+                            "confirmation": confirmation,
+                            "include_package": {"type": "boolean"},
+                            **decision_properties,
+                        },
+                        "additionalProperties": False,
+                    }
+                },
+            },
+        },
+    ]
+    return schema
 
 
 def _safe_tool_error_message(exc: ToolError) -> str:
@@ -43785,7 +44278,12 @@ boundary.
         limit: Annotated[int, Field(ge=1, le=100)] = 50,
         cursor: Annotated[str | None, Field(max_length=1024)] = None,
     ) -> dict[str, Any]:
-        """Create, inspect, edit, and finalize one source-bound module draft."""
+        """Build a D&D Module Pack via start, get, evidence, edit, and finalize.
+
+        The public input schema exposes each action's payload shape. Reuse server-issued
+        job/module ids, pass the latest import-job revision on guarded edits, and copy only
+        real module_draft(evidence) source_ref receipts into play-profile decisions.
+        """
 
         require_facade_phase(campaign_id, f"module_draft({action})", PROFILE_LOBBY)
         if action == "get":
@@ -44333,6 +44831,7 @@ boundary.
                 }
                 if not decisions:
                     raise ValueError("module Pack edit requires at least one decision field")
+                validate_module_pack_decisions(decisions)
                 prior_result = dict(job.result or {})
                 pack_draft = {
                     **dict(prior_result.get("pack_draft") or {}),
@@ -44372,6 +44871,7 @@ boundary.
                     },
                     state="imported",
                     module_id=job.module_id,
+                    expected_revision=expected_revision,
                     idempotency_key=idempotency_key,
                     idempotency_write=idempotency_write,
                 )
@@ -44426,6 +44926,20 @@ boundary.
             raise ValueError("module draft must complete mechanical import before finalization")
         saved_pack_draft = dict(dict(job.result or {}).get("pack_draft") or {})
         final_data = {**saved_pack_draft, **data}
+        validate_module_pack_decisions(
+            {
+                key: deepcopy(final_data[key])
+                for key in (
+                    "catalogs",
+                    "dependencies",
+                    "manifest",
+                    "metadata",
+                    "narrative",
+                    "version",
+                )
+                if key in final_data
+            }
+        )
         confirmation = final_data.get("confirmation")
         if not isinstance(confirmation, dict) or set(confirmation) != {"confirmed", "note"}:
             raise ValueError("module draft confirmation requires exactly confirmed and note")
@@ -49487,6 +50001,8 @@ boundary.
                 parameter_schema.setdefault("maxLength", 256)
             if parameter_schema.get("type") == "array":
                 parameter_schema.setdefault("maxItems", _MAX_COLLECTION_ITEMS)
+        if registered_tool.name == "module_draft":
+            parameters = _module_draft_parameters(parameters)
         registered_tool.parameters = parameters
         registered_tool.__dict__.pop("output_schema", None)
         registered_tool.fn_metadata.output_schema = _tool_output_schema(registered_tool.name)
