@@ -1662,8 +1662,16 @@ def _validate_recovered_short_rest(
         or response.get("member_ids") != actor_ids
     ):
         raise RuntimeError("short-rest recovery receipt does not match the requested rest")
-    if response.get("campaign_revision") != campaign.get("revision"):
-        raise RuntimeError("short-rest recovery receipt is not the current campaign mutation")
+    response_revision = response.get("campaign_revision")
+    current_revision = campaign.get("revision")
+    if (
+        isinstance(response_revision, bool)
+        or not isinstance(response_revision, int)
+        or isinstance(current_revision, bool)
+        or not isinstance(current_revision, int)
+        or response_revision > current_revision
+    ):
+        raise RuntimeError("short-rest recovery receipt has invalid campaign revision evidence")
     current_clock = dict(dict(campaign.get("state") or {}).get("world_time") or {})
     current_game_time = dict(dict(campaign.get("state") or {}).get("game_time") or {})
     if dict(response.get("world_time") or {}) != current_clock:
@@ -6496,27 +6504,29 @@ async def _short_rest(
         ):
             raise RuntimeError("short-rest recovery receipt has unexpected revision evidence")
         campaign_revision_row = revision_by_entity[("campaign", campaign_id)]
+        campaign_before_revision = campaign_revision_row.get("before_revision")
+        campaign_after_revision = campaign_revision_row.get("after_revision")
         if (
-            campaign_revision_row.get("after_revision") != campaign.get("revision")
-            or campaign_revision_row.get("before_revision") != campaign.get("revision") - 1
+            isinstance(campaign_before_revision, bool)
+            or not isinstance(campaign_before_revision, int)
+            or isinstance(campaign_after_revision, bool)
+            or not isinstance(campaign_after_revision, int)
+            or campaign_after_revision != campaign_before_revision + 1
+            or campaign_after_revision
+            != dict(receipt.get("response") or {}).get("campaign_revision")
         ):
             raise RuntimeError("short-rest recovery campaign revisions do not match")
-        for (entity_type, entity_id), revision_row in revision_by_entity.items():
+        for (entity_type, _entity_id), revision_row in revision_by_entity.items():
             if entity_type != "character":
                 continue
-            current_actor = actor_by_id.get(entity_id)
-            if current_actor is None:
-                current_actor = await client.domain(
-                    "character_query",
-                    {"view": "get", "payload": {"character_id": entity_id}},
-                )
-            current_revision = current_actor.get("revision")
+            before_revision = revision_row.get("before_revision")
+            after_revision = revision_row.get("after_revision")
             if (
-                current_actor.get("campaign_id") != campaign_id
-                or isinstance(current_revision, bool)
-                or not isinstance(current_revision, int)
-                or revision_row.get("after_revision") != current_revision
-                or revision_row.get("before_revision") != current_revision - 1
+                isinstance(before_revision, bool)
+                or not isinstance(before_revision, int)
+                or isinstance(after_revision, bool)
+                or not isinstance(after_revision, int)
+                or after_revision != before_revision + 1
             ):
                 raise RuntimeError("short-rest recovery actor revisions do not match")
         recovery_members = []
@@ -6581,6 +6591,7 @@ async def _short_rest(
         for item in revision_rows
         if item.get("entity_type") == "character"
     }
+    final_actor_revisions = dict(actor_revisions)
     sequential_campaign_revision = rested.get("campaign_revision")
     if isinstance(sequential_campaign_revision, bool) or not isinstance(
         sequential_campaign_revision, int
@@ -6649,6 +6660,7 @@ async def _short_rest(
                 )
             hit_die_choices.append({"actor_id": actor_id, **deepcopy(resolved)})
             actor_revision = int(resolved_character["revision"])
+            final_actor_revisions[actor_id] = actor_revision
             sequential_campaign_revision = int(resolved["campaign_revision"])
             window = dict(resolved_character.get("sheet") or {}).get("combat")
             window = (
@@ -6690,8 +6702,31 @@ async def _short_rest(
                 raise RuntimeError(
                     f"short-rest Hit Die stop did not settle for actor {actor_id}"
                 )
+            final_actor_revisions[actor_id] = int(
+                dict(stopped.get("character") or {})["revision"]
+            )
             hit_die_choices.append({"actor_id": actor_id, **deepcopy(stopped)})
     campaign = await _campaign(client, campaign_id)
+    if campaign.get("revision") != sequential_campaign_revision:
+        raise RuntimeError("short-rest receipt chain is not the current campaign mutation")
+    if (
+        dict(dict(campaign.get("state") or {}).get("game_time") or {}).get("elapsed_ticks")
+        != completed_elapsed_ticks
+    ):
+        raise RuntimeError("short-rest receipt chain no longer owns the campaign timeline")
+    if rest_recovered:
+        for actor_id, expected_actor_revision in final_actor_revisions.items():
+            current_actor = await client.domain(
+                "character_query",
+                {"view": "get", "payload": {"character_id": actor_id}},
+            )
+            if (
+                current_actor.get("campaign_id") != campaign_id
+                or current_actor.get("revision") != expected_actor_revision
+            ):
+                raise RuntimeError(
+                    f"short-rest receipt chain is not current for actor {actor_id}"
+                )
     committed = await client.domain(
         "memory_change",
         {
@@ -6725,7 +6760,7 @@ async def _short_rest(
                 "snapshot": {"label": f"Full playthrough short rest: {reason.strip()}"},
                 "branch_id": str(branch["id"]),
             },
-            "expected_revision": campaign["revision"],
+            "expected_revision": sequential_campaign_revision,
             "idempotency_key": _mutation_key(run_id, "short-rest-continuity", rest_identity),
         },
     )
