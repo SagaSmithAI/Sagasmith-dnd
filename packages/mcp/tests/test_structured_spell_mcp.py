@@ -1674,13 +1674,35 @@ def test_fireball_settles_saves_and_area_enumeration(tmp_path: Path, monkeypatch
         second["combat"]["hp"] = {"value": 50, "max": 50, "temp": 0}
         campaign_id, revision, actors = await _campaign_with_combat(
             server,
-            [("Wizard", caster), ("Enemy", first), ("Bystander", second)],
-            positions=[(0, 0), (6, 0), (7, 0)],
+            [("Dodging Enemy", first), ("Wizard", caster), ("Bystander", second)],
+            positions=[(6, 0), (0, 0), (7, 0)],
         )
+        dodged = await _raw(
+            server,
+            "combat_common_action",
+            {
+                "campaign_id": campaign_id,
+                "actor_id": actors[0]["id"],
+                "action": "dodge",
+                "expected_revision": revision,
+                "idempotency_key": "dodge-before-fireball",
+            },
+        )
+        advanced = await _raw(
+            server,
+            "combat_end_turn",
+            {
+                "campaign_id": campaign_id,
+                "actor_id": actors[0]["id"],
+                "expected_revision": dodged["campaign_revision"],
+                "idempotency_key": "end-dodger-turn",
+            },
+        )
+        revision = advanced["campaign_revision"]
         declaration = {
             "origin": {"x": 6, "y": 0},
             "target_contexts": [
-                {"target_id": actors[1]["id"], "cover": "none"},
+                {"target_id": actors[0]["id"], "cover": "none"},
                 {"target_id": actors[2]["id"], "cover": "half"},
             ],
         }
@@ -1690,7 +1712,7 @@ def test_fireball_settles_saves_and_area_enumeration(tmp_path: Path, monkeypatch
                 "combat_cast_spell",
                 {
                     "campaign_id": campaign_id,
-                    "actor_id": actors[0]["id"],
+                    "actor_id": actors[1]["id"],
                     "spell_id": fireball["id"],
                     "cast_level": 3,
                     "declaration": {
@@ -1706,7 +1728,7 @@ def test_fireball_settles_saves_and_area_enumeration(tmp_path: Path, monkeypatch
             "character_query",
             {
                 "view": "get",
-                "payload": {"character_id": actors[0]["id"]},
+                "payload": {"character_id": actors[1]["id"]},
                 "principal_id": "system:local",
             },
         )
@@ -1716,7 +1738,7 @@ def test_fireball_settles_saves_and_area_enumeration(tmp_path: Path, monkeypatch
             "combat_cast_spell",
             {
                 "campaign_id": campaign_id,
-                "actor_id": actors[0]["id"],
+                "actor_id": actors[1]["id"],
                 "spell_id": fireball["id"],
                 "cast_level": 3,
                 "declaration": declaration,
@@ -1728,20 +1750,23 @@ def test_fireball_settles_saves_and_area_enumeration(tmp_path: Path, monkeypatch
         assert result["status"] == "committed"
         assert result["result"]["kind"] == "saving_throw"
         assert {item["target_id"] for item in result["result"]["targets"]} == {
-            actors[1]["id"],
+            actors[0]["id"],
             actors[2]["id"],
         }
         assert result["result"]["area"]["radius_ft"] == 20
         assert result["result"]["damage_roll"]["expression"] == "8d6"
         trait_target = next(
-            item for item in result["result"]["targets"] if item["target_id"] == actors[1]["id"]
+            item for item in result["result"]["targets"] if item["target_id"] == actors[0]["id"]
         )
         assert trait_target["damage_reduction"] in {"none", "half"}
-        assert trait_target["save"]["rule_receipts"] == []
+        assert len(trait_target["save"]["rolls"]) == 2
+        assert [
+            receipt["mechanic_id"] for receipt in trait_target["save"]["rule_receipts"]
+        ] == ["dnd5e.core.action.dodge"]
         assert [receipt["mechanic_id"] for receipt in trait_target["rule_receipts"]] == [
             "dnd5e.core.save.evasion"
         ]
-        assert result["combat"]["combatants"][0]["turn_budget"]["main_action"] == 0
+        assert result["combat"]["combatants"][1]["turn_budget"]["main_action"] == 0
 
     asyncio.run(exercise())
 

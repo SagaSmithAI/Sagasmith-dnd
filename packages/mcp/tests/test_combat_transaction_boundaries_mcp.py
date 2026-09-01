@@ -8,6 +8,11 @@ from pathlib import Path
 import pytest
 from sagasmith_dnd.character_schema import default_character_sheet
 from sagasmith_dnd.content_actors import build_srd2014_preset_actors
+from sagasmith_dnd.random_stream import (
+    CampaignRandomStream,
+    initial_random_stream,
+    use_random_stream,
+)
 
 import sagasmith_dnd_mcp.server as server_module
 from sagasmith_dnd_mcp.config import McpConfig
@@ -621,6 +626,143 @@ def test_incapacitated_actor_can_settle_free_object_interaction(tmp_path: Path) 
             },
         )
         assert after["actions"] == []
+
+    asyncio.run(exercise())
+
+
+def test_combat_dexterity_save_uses_dodge_normalization_and_atomic_randomness(
+    tmp_path: Path,
+) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {
+                "name": "Dodge Dexterity saves",
+                "edition": "2014",
+                "random_seed": "dodge-save-seed",
+                "idempotency_key": "campaign",
+            },
+        )
+        actors = []
+        for index, name in enumerate(("Dodger", "Sentinel")):
+            actors.append(
+                await _call(
+                    server,
+                    "character_create_from",
+                    {
+                        "mode": "direct",
+                        "payload": {
+                            "campaign_id": campaign["id"],
+                            "name": name,
+                            "character_type": "pc",
+                        },
+                        "idempotency_key": f"actor-{index}",
+                    },
+                )
+            )
+        campaign = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        started = await _call_raw(
+            server,
+            "combat_start",
+            {
+                "campaign_id": campaign["id"],
+                "positioning_mode": "agent",
+                "participant_ids": [item["id"] for item in actors],
+                "participant_config": [
+                    {"actor_id": actors[0]["id"], "initiative": 20},
+                    {"actor_id": actors[1]["id"], "initiative": 10},
+                ],
+                "expected_revision": campaign["revision"],
+                "idempotency_key": "start",
+            },
+        )
+        dodged = await _call_raw(
+            server,
+            "combat_common_action",
+            {
+                "campaign_id": campaign["id"],
+                "actor_id": actors[0]["id"],
+                "action": "dodge",
+                "expected_revision": started["campaign_revision"],
+                "idempotency_key": "dodge",
+            },
+        )
+        advanced = await _call_raw(
+            server,
+            "combat_end_turn",
+            {
+                "campaign_id": campaign["id"],
+                "actor_id": actors[0]["id"],
+                "expected_revision": dodged["campaign_revision"],
+                "idempotency_key": "end-turn",
+            },
+        )
+        stale_arguments = {
+            "campaign_id": campaign["id"],
+            "actor_id": actors[0]["id"],
+            "kind": "save",
+            "ability": " DEX ",
+            "dc": 12,
+            "expected_revision": dodged["campaign_revision"],
+            "idempotency_key": "stale-save",
+        }
+        with pytest.raises(Exception, match="revision conflict"):
+            await _call_raw(server, "combat_check", stale_arguments)
+        unchanged = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        assert unchanged["revision"] == advanced["campaign_revision"]
+
+        arguments = {
+            **stale_arguments,
+            "expected_revision": advanced["campaign_revision"],
+            "idempotency_key": "dodge-save",
+        }
+        stream = CampaignRandomStream(
+            campaign_id=campaign["id"],
+            seed=initial_random_stream("dodge-save-seed")["seed"],
+            position=0,
+            operation="combat_check",
+            idempotency_key="dodge-save",
+        )
+        with use_random_stream(stream):
+            settled = await _call_raw(server, "combat_check", arguments)
+        assert len(settled["result"]["rolls"]) == 2
+        assert [
+            receipt["mechanic_id"] for receipt in settled["result"]["rule_receipts"]
+        ] == ["dnd5e.core.action.dodge"]
+        assert settled["random_stream_receipt"]["draw_count"] == 2
+        assert await _call_raw(server, "combat_check", arguments) == settled
+
+        cancelled_stream = CampaignRandomStream(
+            campaign_id=campaign["id"],
+            seed=stream.seed,
+            position=stream.position,
+            operation="combat_check",
+            idempotency_key="cancelled-save",
+        )
+        with use_random_stream(cancelled_stream):
+            cancelled = await _call_raw(
+                server,
+                "combat_check",
+                {
+                    **arguments,
+                    "ability": "DEXTERITY",
+                    "disadvantage": True,
+                    "expected_revision": settled["campaign_revision"],
+                    "idempotency_key": "cancelled-save",
+                },
+            )
+        assert len(cancelled["result"]["rolls"]) == 1
+        assert cancelled["random_stream_receipt"]["draw_count"] == 1
 
     asyncio.run(exercise())
 
@@ -1675,17 +1817,38 @@ def test_locked_dragonborn_breath_uses_generic_area_and_save_primitives(
                 "participant_config": [
                     {
                         "actor_id": source["id"],
-                        "initiative": 20,
+                        "initiative": 10,
                         "position": {"x": 0, "y": 0},
                     },
                     {
                         "actor_id": target["id"],
-                        "initiative": 10,
+                        "initiative": 20,
                         "position": {"x": 2, "y": 0},
                     },
                 ],
                 "expected_revision": campaign["revision"],
                 "idempotency_key": "start",
+            },
+        )
+        dodged = await _call_raw(
+            server,
+            "combat_common_action",
+            {
+                "campaign_id": campaign["id"],
+                "actor_id": target["id"],
+                "action": "dodge",
+                "expected_revision": started["campaign_revision"],
+                "idempotency_key": "target-dodge",
+            },
+        )
+        advanced = await _call_raw(
+            server,
+            "combat_end_turn",
+            {
+                "campaign_id": campaign["id"],
+                "actor_id": target["id"],
+                "expected_revision": dodged["campaign_revision"],
+                "idempotency_key": "target-end",
             },
         )
 
@@ -1700,7 +1863,7 @@ def test_locked_dragonborn_breath_uses_generic_area_and_save_primitives(
                     "origin": {"x": 1, "y": 0},
                     "target_contexts": [{"target_id": target["id"], "cover": "none"}],
                 },
-                "expected_revision": started["campaign_revision"],
+                "expected_revision": advanced["campaign_revision"],
                 "idempotency_key": "breath",
             },
         )
@@ -1730,6 +1893,11 @@ def test_locked_dragonborn_breath_uses_generic_area_and_save_primitives(
         assert effect["target_contexts"] == [
             {"target_id": target["id"], "distance_ft": 10.0, "cover": "none"}
         ]
+        assert len(effect["targets"][0]["save"]["rolls"]) == 2
+        assert [
+            receipt["mechanic_id"]
+            for receipt in effect["targets"][0]["save"]["rule_receipts"]
+        ] == ["dnd5e.core.action.dodge"]
         assert source_after["sheet"]["content"]["activities"][0]["uses"]["value"] == 0
         assert target_after["sheet"]["combat"]["hp"]["value"] < 30
 

@@ -35,7 +35,7 @@ def test_agent_save_damage_requires_one_paid_immutable_action_and_replays(
     encounter_excerpt = "The dragon catches both heroes in its cone and uses Poison Breath."
     mechanic_excerpt = (
         "Poison Breath. Each creature in the area must make a DC 18 "
-        "Constitution saving throw, taking 16d6 poison damage on a failed "
+        "Dexterity saving throw, taking 16d6 poison damage on a failed "
         "save, or half as much damage on a successful one."
     )
     source = module_root / "tower.md"
@@ -229,17 +229,17 @@ def test_agent_save_damage_requires_one_paid_immutable_action_and_replays(
                 "participant_config": [
                     {
                         "actor_id": dragon["id"],
-                        "initiative": 20,
+                        "initiative": 10,
                         "disposition": "hostile",
                     },
                     {
                         "actor_id": agile["id"],
-                        "initiative": 10,
+                        "initiative": 20,
                         "disposition": "friendly",
                     },
                     {
                         "actor_id": clumsy["id"],
-                        "initiative": 5,
+                        "initiative": 15,
                         "disposition": "friendly",
                     },
                 ],
@@ -249,6 +249,38 @@ def test_agent_save_damage_requires_one_paid_immutable_action_and_replays(
                 "idempotency_key": "start",
             },
         )
+        dodged = await _raw(
+            server,
+            "combat_common_action",
+            {
+                "campaign_id": campaign["id"],
+                "actor_id": agile["id"],
+                "action": "dodge",
+                "expected_revision": started["campaign_revision"],
+                "idempotency_key": "agile-dodge",
+            },
+        )
+        agile_ended = await _raw(
+            server,
+            "combat_end_turn",
+            {
+                "campaign_id": campaign["id"],
+                "actor_id": agile["id"],
+                "expected_revision": dodged["campaign_revision"],
+                "idempotency_key": "agile-end",
+            },
+        )
+        clumsy_ended = await _raw(
+            server,
+            "combat_end_turn",
+            {
+                "campaign_id": campaign["id"],
+                "actor_id": clumsy["id"],
+                "expected_revision": agile_ended["campaign_revision"],
+                "idempotency_key": "clumsy-end",
+            },
+        )
+        current_revision = clumsy_ended["campaign_revision"]
         agent_ruling = {
             "application_id": "save-damage-application-1",
             "default_resolver": "agent",
@@ -263,7 +295,7 @@ def test_agent_save_damage_requires_one_paid_immutable_action_and_replays(
             "source_actor_id": dragon["id"],
             "source_card_id": "scene-poison-cloud",
             "source_card_kind": "scene_procedure",
-            "save_ability": "constitution",
+            "save_ability": "dexterity",
             "save_dc": 18,
             "save_advantage": False,
             "save_disadvantage": False,
@@ -291,7 +323,7 @@ def test_agent_save_damage_requires_one_paid_immutable_action_and_replays(
                     "action": "save_damage",
                     "payload": payload,
                     "principal_id": "player:hero",
-                    "expected_revision": started["campaign_revision"],
+                    "expected_revision": current_revision,
                     "idempotency_key": "player",
                 },
             )
@@ -307,7 +339,7 @@ def test_agent_save_damage_requires_one_paid_immutable_action_and_replays(
                         **payload,
                         "source_card_kind": "activity",
                     },
-                    "expected_revision": started["campaign_revision"],
+                    "expected_revision": current_revision,
                     "idempotency_key": "actor-card-bypass",
                 },
             )
@@ -320,7 +352,7 @@ def test_agent_save_damage_requires_one_paid_immutable_action_and_replays(
                     "target_id": agile["id"],
                     "action": "save_damage",
                     "payload": payload,
-                    "expected_revision": started["campaign_revision"],
+                    "expected_revision": current_revision,
                     "idempotency_key": "unpaid",
                 },
             )
@@ -329,7 +361,7 @@ def test_agent_save_damage_requires_one_paid_immutable_action_and_replays(
             "source_card_id": "scene-poison-cloud",
             "source_card_kind": "scene_procedure",
             "target_ids": [agile["id"], clumsy["id"]],
-            "save_ability": "constitution",
+            "save_ability": "dexterity",
             "save_dc": 18,
             "save_advantage": False,
             "save_disadvantage": False,
@@ -350,7 +382,7 @@ def test_agent_save_damage_requires_one_paid_immutable_action_and_replays(
                     "procedure_id": "scene-poison-cloud",
                     "agent_ruling_commitment": commitment,
                 },
-                "expected_revision": started["campaign_revision"],
+                "expected_revision": current_revision,
                 "idempotency_key": "pay",
             },
         )
@@ -393,6 +425,14 @@ def test_agent_save_damage_requires_one_paid_immutable_action_and_replays(
         targets = {item["target_id"]: item for item in settled["result"]["targets"]}
         assert targets[agile["id"]]["success"] is True
         assert targets[clumsy["id"]]["success"] is False
+        assert len(targets[agile["id"]]["save"]["rolls"]) == 2
+        assert targets[clumsy["id"]]["save"]["rolls"] == [
+            targets[clumsy["id"]]["save"]["natural"]
+        ]
+        assert [
+            receipt["mechanic_id"]
+            for receipt in targets[agile["id"]]["save"]["rule_receipts"]
+        ] == ["dnd5e.core.action.dodge"]
         assert targets[agile["id"]]["damage_amount"] == (
             settled["result"]["damage_roll"]["total"] // 2
         )

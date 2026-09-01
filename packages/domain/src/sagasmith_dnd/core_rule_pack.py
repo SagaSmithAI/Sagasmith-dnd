@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.70.0"
+CORE_RULE_PACK_VERSION = "1.71.0"
 
 
 @dataclass(frozen=True)
@@ -448,10 +448,17 @@ BOUNDARIES = (
     CoreBoundary(
         "dnd5e.core.action.dodge",
         ("2014",),
-        "combat_engine.dodge_benefit_active|combat_engine.reconcile_dodge_lifecycle",
+        (
+            "combat_engine.dodge_benefit_active|"
+            "combat_engine.reconcile_dodge_lifecycle|"
+            "combat_engine.encounter_dodge_save_advantage|"
+            "combat_engine.resolve_actor_check"
+        ),
         (
             "tests/test_combat_engine.py::test_dodge_lasts_until_start_of_next_turn_and_affects_attacks",
             "tests/test_combat_engine.py::test_dodge_lifecycle_does_not_reactivate_after_invalidating_state_ends",
+            "tests/test_combat_engine.py::test_dodge_advantage_uses_authoritative_encounter_and_normalized_dexterity",
+            "tests/test_combat_engine.py::test_area_save_damage_applies_dodge_per_authoritative_target",
         ),
         "bundled:srd2014/06_Gameplay/Order_of_Combat.md#dodge",
     ),

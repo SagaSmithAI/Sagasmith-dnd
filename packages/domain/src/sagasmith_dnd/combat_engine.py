@@ -138,6 +138,33 @@ def standard_save_damage_reduction(
     }
 
 
+def encounter_dodge_save_advantage(
+    encounter: dict[str, Any] | None,
+    actor_id_value: str,
+    *,
+    ability: str,
+) -> bool:
+    """Derive Dodge advantage for a save from authoritative encounter state.
+
+    The shared lifecycle helper owns all condition and effective-speed checks;
+    save settlement only reads that encounter-owned state and never mutates it.
+    """
+
+    if encounter is None or _long_ability_name(ability) != "dexterity":
+        return False
+    combatant = next(
+        (
+            item
+            for item in encounter.get("combatants", [])
+            if str(item.get("actor_id") or "") == str(actor_id_value)
+        ),
+        None,
+    )
+    if combatant is None:
+        return False
+    return dodge_benefit_active(combatant)
+
+
 def d20_exhaustion_adjustment(
     *,
     ruleset: str,
@@ -6356,6 +6383,7 @@ def resolve_actor_check(
     kind: str,
     ability: str,
     dc: int,
+    encounter: dict[str, Any] | None = None,
     proficient: bool = False,
     bonus: int = 0,
     advantage: bool = False,
@@ -6425,6 +6453,14 @@ def resolve_actor_check(
     if armor_stealth_disadvantage:
         disadvantage = True
     boundary_ids = []
+    dodge_advantage = kind == "save" and encounter_dodge_save_advantage(
+        encounter,
+        actor_id(actor),
+        ability=ability,
+    )
+    if dodge_advantage:
+        advantage = True
+        boundary_ids.append(DODGE_MECHANIC_ID)
     rule_facts = dict(rules.facts) if rules is not None else {}
     normalized_save_purpose = (
         str(
@@ -6686,6 +6722,7 @@ def resolve_save_damage_to_sheets(
     damage_type: str,
     half_on_success: bool,
     source: str,
+    encounter: dict[str, Any] | None = None,
     advantage: bool = False,
     disadvantage: bool = False,
     death_saves: bool = True,
@@ -6752,6 +6789,7 @@ def resolve_save_damage_to_sheets(
             kind="save",
             ability=ability,
             dc=save_dc,
+            encounter=encounter,
             bonus=int(normalized_save_bonuses.get(target_id, 0)),
             advantage=advantage,
             disadvantage=disadvantage,
@@ -7334,6 +7372,7 @@ def _condition_set(value: Any) -> set[str]:
 
 
 def _long_ability_name(value: str) -> str:
+    normalized = str(value).strip().casefold().replace(" ", "_")
     return {
         "str": "strength",
         "dex": "dexterity",
@@ -7341,7 +7380,7 @@ def _long_ability_name(value: str) -> str:
         "int": "intelligence",
         "wis": "wisdom",
         "cha": "charisma",
-    }.get(value.lower(), value)
+    }.get(normalized, normalized)
 
 
 def _critical_expression(expression: str) -> str:
