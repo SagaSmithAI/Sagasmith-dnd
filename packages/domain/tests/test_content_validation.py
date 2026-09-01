@@ -222,9 +222,7 @@ def test_background_materializer_requires_bounded_choice_semantics() -> None:
         "Investigation",
         "Religion",
     ]
-    assert background_materializer_errors(card) == [
-        "background skill_options cannot repeat fixed skills"
-    ]
+    assert background_materializer_errors(card) == []
 
 
 def test_background_materializer_accepts_only_reviewed_embedded_equipment() -> None:

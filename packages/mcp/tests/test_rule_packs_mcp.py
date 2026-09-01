@@ -472,8 +472,14 @@ def test_core_srd_content_catalog_is_structured_and_selectable(tmp_path: Path) -
         assert acolyte["selection_requirements"]["customization_fields"] == [
             "custom_name",
             "skills",
+            "skill_replacements",
+            "tools",
+            "tool_replacements",
             "languages",
-            "equipment_item_ids",
+            "language_authorization",
+            "custom_feature_artifact_id",
+            "equipment_mode",
+            "equipment_package",
         ]
         novice = await call(
             server,
@@ -514,13 +520,13 @@ def test_core_srd_content_catalog_is_structured_and_selectable(tmp_path: Path) -
             {
                 "character_id": novice["id"],
                 "artifact_id": acolyte["id"],
-                "selection": {"languages": ["Celestial", "Elvish"]},
+                "selection": {"languages": ["Goblin", "Elvish"]},
                 "expected_revision": novice["revision"],
                 "idempotency_key": "catalog-acolyte",
             },
         )
         assert background["sheet"]["skills"]["insight"]["proficiency"] == "proficient"
-        assert background["sheet"]["traits"]["languages"] == ["Celestial", "Elvish"]
+        assert background["sheet"]["traits"]["languages"] == ["Goblin", "Elvish"]
 
         custom_sheet = default_character_sheet()
         custom_sheet["inventory"]["items"] = [
@@ -552,8 +558,8 @@ def test_core_srd_content_catalog_is_structured_and_selectable(tmp_path: Path) -
                 "selection": {
                     "custom_name": "Temple Envoy",
                     "skills": ["persuasion", "history"],
-                    "languages": ["Celestial", "Elvish"],
-                    "equipment_item_ids": ["custom-vestments"],
+                    "languages": ["Goblin", "Elvish"],
+                    "equipment_mode": "starting_coin",
                 },
                 "expected_revision": envoy["revision"],
                 "idempotency_key": "catalog-custom-background",
@@ -564,9 +570,7 @@ def test_core_srd_content_catalog_is_structured_and_selectable(tmp_path: Path) -
         assert custom_sheet["progression"]["background_grants"]["feature"] == (
             "Shelter of the Faithful"
         )
-        assert custom_sheet["progression"]["background_grants"]["equipment_item_ids"] == [
-            "custom-vestments"
-        ]
+        assert custom_sheet["progression"]["background_grants"]["equipment_item_ids"] == []
         assert (
             custom_sheet["progression"]["background_grants"]["choices"]["base_background"]
             == "Acolyte"
@@ -1712,16 +1716,19 @@ def test_rulebook_import_source_bound_pack_and_noncombat_settlement(tmp_path: Pa
                 "idempotency_key": "other-campaign",
             },
         )
-        assert await call(
-            server,
-            "rule_search",
-            {
-                "campaign_id": other_campaign["id"],
-                "query": "Tools and Skills Together",
-                "filters": {"edition": "2014"},
-                "top_k": 1,
-            },
-        ) == []
+        assert (
+            await call(
+                server,
+                "rule_search",
+                {
+                    "campaign_id": other_campaign["id"],
+                    "query": "Tools and Skills Together",
+                    "filters": {"edition": "2014"},
+                    "top_k": 1,
+                },
+            )
+            == []
+        )
         with pytest.raises(Exception, match="outside the current campaign ruleset"):
             await call(
                 server,

@@ -118,6 +118,7 @@ from sagasmith_core.visibility import (
     PLAYER_OWNED_ACTOR_DISCLOSURE_SCOPES,
 )
 from sagasmith_dnd import source_cards
+from sagasmith_dnd.abilities import SKILL_ABILITIES
 from sagasmith_dnd.ability_generation import (
     apply_ability_generation,
     apply_pending_rolled_ability_generation,
@@ -2730,6 +2731,428 @@ def _source_contains_narrative_name(*, name: str, content: str) -> bool:
     return split_name.search(normalized_content) is not None
 
 
+PHB2014_STANDARD_LANGUAGES = (
+    "Common",
+    "Dwarvish",
+    "Elvish",
+    "Giant",
+    "Gnomish",
+    "Goblin",
+    "Halfling",
+    "Orc",
+)
+PHB2014_RESTRICTED_LANGUAGES = (
+    "Abyssal",
+    "Celestial",
+    "Deep Speech",
+    "Draconic",
+    "Druidic",
+    "Infernal",
+    "Primordial",
+    "Sylvan",
+    "Thieves' Cant",
+    "Undercommon",
+)
+PHB2014_TOOL_PROFICIENCIES = (
+    "Alchemist's Supplies",
+    "Brewer's Supplies",
+    "Calligrapher's Supplies",
+    "Carpenter's Tools",
+    "Cartographer's Tools",
+    "Cobbler's Tools",
+    "Cook's Utensils",
+    "Disguise Kit",
+    "Forgery Kit",
+    "Glassblower's Tools",
+    "Herbalism Kit",
+    "Jeweler's Tools",
+    "Leatherworker's Tools",
+    "Mason's Tools",
+    "Navigator's Tools",
+    "Painter's Supplies",
+    "Poisoner's Kit",
+    "Potter's Tools",
+    "Smith's Tools",
+    "Thieves' Tools",
+    "Tinker's Tools",
+    "Vehicles (Land)",
+    "Vehicles (Water)",
+    "Weaver's Tools",
+    "Woodcarver's Tools",
+)
+BACKGROUND_AUTHORITY_SELECTION_KEY = "_background_authority"
+
+
+def _load_or_create_content_authority_secret(path: Path) -> bytes:
+    """Load the durable server key used for actor-bound content receipts."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        value = path.read_bytes()
+        if len(value) != 32:
+            raise RuntimeError("content authority key is invalid")
+        return value
+    value = secrets.token_bytes(32)
+    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(value)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, path)
+            return value
+        except FileExistsError:
+            published = path.read_bytes()
+            if len(published) != 32:
+                raise RuntimeError("content authority key is invalid")
+            return published
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _background_selection_records(sheet: Mapping[str, Any]) -> list[dict[str, Any]]:
+    return [
+        dict(item)
+        for item in dict(sheet.get("content") or {}).get("selections", [])
+        if isinstance(item, Mapping) and str(item.get("kind") or "").casefold() == "background"
+    ]
+
+
+def _has_background_grants(sheet: Mapping[str, Any]) -> bool:
+    progression = dict(sheet.get("progression") or {})
+    grants = dict(progression.get("background_grants") or {})
+    return bool(
+        str(grants.get("feature") or "").strip()
+        or list(grants.get("equipment_item_ids") or [])
+        or list(grants.get("languages") or [])
+        or list(grants.get("spell_list_expansion") or [])
+        or list(grants.get("tools") or [])
+        or dict(grants.get("choices") or {})
+    )
+
+
+def _background_authority_payload(
+    sheet: Mapping[str, Any],
+    record: Mapping[str, Any],
+    *,
+    character_id: str,
+    authority_id: str,
+) -> dict[str, Any]:
+    selection = deepcopy(dict(record.get("selection") or {}))
+    selection.pop(BACKGROUND_AUTHORITY_SELECTION_KEY, None)
+    progression = dict(sheet.get("progression") or {})
+    return {
+        "schema_version": 1,
+        "purpose": "background_selection_authority",
+        "authority_id": authority_id,
+        "character_id": character_id,
+        "artifact_id": str(record.get("artifact_id") or ""),
+        "pack_id": str(record.get("pack_id") or ""),
+        "pack_version": str(record.get("pack_version") or ""),
+        "background": str(progression.get("background") or ""),
+        "background_grants_checksum": json_sha256(dict(progression.get("background_grants") or {})),
+        "selection_checksum": json_sha256(selection),
+    }
+
+
+def _require_authoritative_background_state(
+    candidate_sheet: Mapping[str, Any],
+    *,
+    character_id: str | None,
+    secret: bytes,
+    current_sheet: Mapping[str, Any] | None = None,
+) -> None:
+    """Reject forged, removed, or altered official background materialization."""
+
+    records = _background_selection_records(candidate_sheet)
+    meaningful = _has_background_grants(candidate_sheet)
+    current_protected = bool(
+        current_sheet
+        and (_has_background_grants(current_sheet) or _background_selection_records(current_sheet))
+    )
+    if current_protected and not (meaningful or records):
+        raise ValueError("authoritative background state cannot be removed by sheet ingress")
+    if not meaningful and not records:
+        return
+    if character_id is None:
+        raise ValueError(
+            "background grants can be created only by character_content_apply after actor creation"
+        )
+    if len(records) != 1:
+        raise ValueError("authoritative background state requires one background selection receipt")
+    record = records[0]
+    raw_authority = dict(record.get("selection") or {}).get(BACKGROUND_AUTHORITY_SELECTION_KEY)
+    if not isinstance(raw_authority, Mapping):
+        raise ValueError("background selection authority receipt is missing")
+    authority = dict(raw_authority)
+    authority_id = str(authority.get("authority_id") or "")
+    if not authority_id or not isinstance(authority.get("authorization"), Mapping):
+        raise ValueError("background selection authority receipt is invalid")
+    try:
+        payload = verify_receipt_signature(
+            authority["authorization"],
+            secret,
+            missing_error="background selection authority signature is missing",
+            invalid_error="background selection authority signature is invalid",
+        )
+    except ValueError as error:
+        raise ValueError("background selection authority receipt is invalid") from error
+    expected = _background_authority_payload(
+        candidate_sheet,
+        record,
+        character_id=character_id,
+        authority_id=authority_id,
+    )
+    if payload != expected:
+        raise ValueError("background selection authority receipt does not match the actor state")
+
+    progression = dict(candidate_sheet.get("progression") or {})
+    grants = dict(progression.get("background_grants") or {})
+    choices = dict(grants.get("choices") or {})
+    skills = dict(candidate_sheet.get("skills") or {})
+    for skill in choices.get("effective_skills", []):
+        skill_key = str(skill).casefold().replace(" ", "_")
+        if str(dict(skills.get(skill_key) or {}).get("proficiency") or "none") == "none":
+            raise ValueError("background selection receipt is missing a granted skill")
+    known_languages = {
+        str(item).casefold()
+        for item in dict(candidate_sheet.get("traits") or {}).get("languages", [])
+    }
+    if any(str(item).casefold() not in known_languages for item in grants.get("languages", [])):
+        raise ValueError("background selection receipt is missing a granted language")
+    known_tools = {
+        str(item).casefold()
+        for item in dict(dict(candidate_sheet.get("traits") or {}).get("proficiencies") or {}).get(
+            "tools", []
+        )
+    }
+    if any(str(item).casefold() not in known_tools for item in grants.get("tools", [])):
+        raise ValueError("background selection receipt is missing a granted tool")
+
+
+class _PendingProficiencyReplacementsError(ValueError):
+    def __init__(self, kind: str, duplicates: list[str]) -> None:
+        self.kind = kind
+        self.duplicates = duplicates
+        message = f"{kind} proficiency replacements are required for: {', '.join(duplicates)}"
+        super().__init__(message)
+
+
+def _resolve_duplicate_proficiencies(
+    source_values: Any,
+    *,
+    existing_values: set[str],
+    replacements: Any,
+    options: Mapping[str, str],
+    kind: str,
+) -> tuple[list[str], dict[str, str]]:
+    if not isinstance(source_values, list):
+        raise RulesetUnavailableError(f"background {kind} grants are not executable")
+    normalized_sources = [" ".join(str(item).split()) for item in source_values]
+    if any(not item for item in normalized_sources):
+        raise RulesetUnavailableError(f"background {kind} grants must be non-empty")
+    seen = set(existing_values)
+    collision_counts: dict[str, int] = {}
+    collisions: list[tuple[int, str, str]] = []
+    for index, item in enumerate(normalized_sources):
+        source_key = item.casefold()
+        if source_key in seen:
+            collision_counts[source_key] = collision_counts.get(source_key, 0) + 1
+            collision_number = collision_counts[source_key]
+            receipt_key = (
+                source_key if collision_number == 1 else f"{source_key}#{collision_number}"
+            )
+            collisions.append((index, item, receipt_key))
+        seen.add(source_key)
+    duplicate_sources = [item for _index, item, _receipt_key in collisions]
+    duplicate_prompts = [
+        item if receipt_key == item.casefold() else f"{item} ({receipt_key})"
+        for _index, item, receipt_key in collisions
+    ]
+    expected_replacement_keys = {receipt_key for _index, _item, receipt_key in collisions}
+    if replacements is None:
+        if duplicate_sources:
+            raise _PendingProficiencyReplacementsError(kind, duplicate_prompts)
+        normalized_replacements: dict[str, str] = {}
+    else:
+        if not isinstance(replacements, dict):
+            raise ValueError(f"background {kind}_replacements must be an object")
+        normalized_replacements = {}
+        for raw_source, raw_replacement in replacements.items():
+            source = " ".join(str(raw_source).split()).casefold()
+            replacement = " ".join(str(raw_replacement).split())
+            if not source or not replacement or source in normalized_replacements:
+                raise ValueError(
+                    f"background {kind}_replacements must contain distinct non-empty names"
+                )
+            replacement_key = replacement.casefold()
+            if replacement_key not in options:
+                raise ValueError(f"background {kind} replacement is not an allowed {kind}")
+            normalized_replacements[source] = options[replacement_key]
+        if set(normalized_replacements) != expected_replacement_keys:
+            raise ValueError(
+                f"background {kind}_replacements must answer exactly the duplicate grants"
+            )
+    replacements_by_index = {
+        index: normalized_replacements[receipt_key] for index, _item, receipt_key in collisions
+    }
+    effective = [
+        replacements_by_index.get(index, options.get(item.casefold(), item))
+        for index, item in enumerate(normalized_sources)
+    ]
+    effective_keys = [item.casefold() for item in effective]
+    if len(set(effective_keys)) != len(effective_keys):
+        raise ValueError(f"background effective {kind} proficiencies must be distinct")
+    if any(item in existing_values for item in effective_keys):
+        raise ValueError(f"background {kind} replacement is already proficient")
+    return effective, normalized_replacements
+
+
+def _reviewed_tool_options(
+    candidates: list[tuple[str, str, dict[str, Any]]],
+) -> dict[str, str]:
+    values = {
+        item.casefold(): item
+        for item in (
+            *PHB2014_TOOL_PROFICIENCIES,
+            "Dice Set",
+            "Dragonchess Set",
+            "Gaming Set",
+            "Playing Card Set",
+            "Three-Dragon Ante Set",
+            "Musical Instrument",
+        )
+    }
+    for _pack_id, _version, artifact in candidates:
+        card = dict(artifact.get("card") or {})
+        containers = [
+            dict(card.get("background_grants") or {}),
+            dict(card.get("class_definition") or {}),
+            dict(card.get("grants") or {}),
+            dict(card.get("mechanical_grants") or {}),
+        ]
+        for container in containers:
+            choices = dict(container.get("choices") or {})
+            for field in (
+                "tools",
+                "tool_proficiencies",
+                "tool_options",
+                "tool_choices",
+            ):
+                raw_items = [
+                    *list(container.get(field) or []),
+                    *list(choices.get(field) or []),
+                ]
+                for raw_item in raw_items:
+                    item = " ".join(str(raw_item).split())
+                    if item:
+                        values.setdefault(item.casefold(), item)
+    return values
+
+
+def _campaign_language_options(settings: Mapping[str, Any]) -> dict[str, str]:
+    raw_catalog = settings.get("language_catalog")
+    if raw_catalog is None:
+        raw_allowed: Any = list(PHB2014_STANDARD_LANGUAGES)
+    elif isinstance(raw_catalog, Mapping) and set(raw_catalog) == {"allowed_languages"}:
+        raw_allowed = raw_catalog.get("allowed_languages")
+    else:
+        raise RulesetUnavailableError(
+            "campaign language_catalog must contain exactly allowed_languages"
+        )
+    if not isinstance(raw_allowed, list) or len(raw_allowed) > 100:
+        raise RulesetUnavailableError("campaign allowed language catalog is invalid")
+    options: dict[str, str] = {}
+    for raw_item in raw_allowed:
+        item = " ".join(str(raw_item).split())
+        if not item or len(item) > 100 or item.casefold() in options:
+            raise RulesetUnavailableError(
+                "campaign allowed languages must be distinct non-empty names"
+            )
+        options[item.casefold()] = item
+    return options
+
+
+def _validated_background_languages(
+    raw_languages: Any,
+    *,
+    count: int,
+    fixed: Any,
+    existing: Any,
+    campaign_id: str,
+    campaign_revision: int,
+    campaign_settings: Mapping[str, Any],
+    authorization: Any,
+    principal_id: str,
+    principal_is_dm: bool,
+) -> tuple[list[str], list[str], dict[str, Any] | None]:
+    fixed_values = _validated_distinct_choices(
+        fixed,
+        count=len(fixed) if isinstance(fixed, list) else 0,
+        label="fixed background language",
+    )
+    selected = _validated_distinct_choices(
+        raw_languages,
+        count=count,
+        label="background language",
+    )
+    existing_map = {
+        str(item).casefold(): str(item)
+        for item in (existing if isinstance(existing, list) else [])
+        if str(item).strip()
+    }
+    fixed_keys = {item.casefold() for item in fixed_values}
+    selected_keys = {item.casefold() for item in selected}
+    if fixed_keys & selected_keys:
+        raise ValueError("background language cannot duplicate a fixed grant")
+    if (fixed_keys | selected_keys) & set(existing_map):
+        raise ValueError("background languages must be new to the character")
+    catalog = _campaign_language_options(campaign_settings)
+    restricted = {item.casefold() for item in PHB2014_RESTRICTED_LANGUAGES}
+    needs_authorization = [
+        item for item in selected if item.casefold() not in catalog or item.casefold() in restricted
+    ]
+    authorization_receipt: dict[str, Any] | None = None
+    if needs_authorization:
+        if not principal_is_dm:
+            raise PermissionError(
+                "campaign-external, exotic, and secret background languages require the DM"
+            )
+        if not isinstance(authorization, dict) or set(authorization) != {
+            "languages",
+            "reason",
+        }:
+            raise ValueError("language_authorization requires exactly languages and reason")
+        authorized = _validated_distinct_choices(
+            authorization.get("languages"),
+            count=len(needs_authorization),
+            label="authorized background language",
+        )
+        if {item.casefold() for item in authorized} != {
+            item.casefold() for item in needs_authorization
+        }:
+            raise ValueError("language_authorization must cover exactly the restricted selections")
+        reason = " ".join(str(authorization.get("reason") or "").split())
+        if not reason or len(reason) > 1000:
+            raise ValueError("language_authorization reason must contain 1 to 1000 characters")
+        authorization_receipt = {
+            "schema_version": 1,
+            "kind": "dm_language_authorization",
+            "campaign_id": campaign_id,
+            "campaign_revision": campaign_revision,
+            "principal_id": principal_id,
+            "languages": sorted(needs_authorization, key=str.casefold),
+            "reason": reason,
+            "catalog_checksum": json_sha256(catalog),
+        }
+    elif authorization is not None:
+        raise ValueError("language_authorization is accepted only for restricted language choices")
+    normalized_selected = [catalog.get(item.casefold(), item) for item in selected]
+    return normalized_selected, [*fixed_values, *normalized_selected], authorization_receipt
+
+
 def _validated_distinct_choices(value: Any, *, count: int, label: str) -> list[str]:
     if value is None:
         values: list[Any] = []
@@ -2753,6 +3176,7 @@ def _validated_additive_choices(
     fixed: Any,
     options: Any,
     allow_unlisted: bool = False,
+    allow_fixed_duplicates: bool = False,
 ) -> tuple[list[str], list[str]]:
     """Validate a choice grant without replacing or duplicating fixed grants."""
 
@@ -2763,7 +3187,7 @@ def _validated_additive_choices(
     )
     selected = _validated_distinct_choices(value, count=count, label=label)
     fixed_keys = {item.casefold() for item in fixed_values}
-    if fixed_keys.intersection(item.casefold() for item in selected):
+    if not allow_fixed_duplicates and fixed_keys.intersection(item.casefold() for item in selected):
         raise ValueError(f"{label} cannot duplicate a fixed grant")
 
     if not isinstance(options, list):
@@ -12851,6 +13275,12 @@ def _create_server(
                     sheet,
                     current_sheet=before.sheet,
                 )
+                _require_authoritative_background_state(
+                    sheet,
+                    character_id=before.id,
+                    secret=content_authority_secret,
+                    current_sheet=before.sheet,
+                )
             updated = characters.update(
                 before.id,
                 sheet=sheet,
@@ -12879,6 +13309,12 @@ def _create_server(
         if sheet is not None:
             require_engine_owned_short_rest_hit_die_state(
                 sheet,
+                current_sheet=before.sheet,
+            )
+            _require_authoritative_background_state(
+                sheet,
+                character_id=before.id,
+                secret=content_authority_secret,
                 current_sheet=before.sheet,
             )
         candidate_sheet = deepcopy(sheet if sheet is not None else before.sheet)
@@ -27265,6 +27701,11 @@ def _create_server(
         require_engine_owned_short_rest_hit_die_state(sheet_value)
         _reject_new_intrinsic_attack_provenance(sheet_value)
         _reject_new_tortle_natural_armor_provenance(sheet_value)
+        _require_authoritative_background_state(
+            sheet_value,
+            character_id=None,
+            secret=content_authority_secret,
+        )
         if campaign_id is not None:
             sheet_value["edition"] = campaign_rules_edition(campaign_id)
         sheet_value = finalize_actor_sheet_rulings(sheet_value, campaign_id)
@@ -27370,6 +27811,11 @@ def _create_server(
         require_engine_owned_short_rest_hit_die_state(sheet)
         _reject_new_intrinsic_attack_provenance(sheet)
         _reject_new_tortle_natural_armor_provenance(sheet)
+        _require_authoritative_background_state(
+            sheet,
+            character_id=None,
+            secret=content_authority_secret,
+        )
         sheet["edition"] = campaign_rules_edition(campaign_id)
         sheet = finalize_actor_sheet_rulings(sheet, campaign_id)
         instance_name = name if name is not None else template.name
@@ -27422,6 +27868,11 @@ def _create_server(
         require_engine_owned_short_rest_hit_die_state(sheet_value)
         _reject_new_intrinsic_attack_provenance(sheet_value)
         _reject_new_tortle_natural_armor_provenance(sheet_value)
+        _require_authoritative_background_state(
+            sheet_value,
+            character_id=None,
+            secret=content_authority_secret,
+        )
         sheet_value["edition"] = campaign_rules_edition(campaign_id)
         sheet_value = finalize_actor_sheet_rulings(sheet_value, campaign_id)
         normalized_sheet = validate_character_sheet(
@@ -39691,9 +40142,10 @@ def _create_server(
         if include_context and not lowered:
             raise ValueError("include_context requires an exact artifact id query")
         result = []
-        for pack_id, version, artifact in available_content_artifacts(
+        catalog_candidates = available_content_artifacts(
             campaign_id, kind=kind, branch_id=resolved_branch_id
-        ):
+        )
+        for pack_id, version, artifact in catalog_candidates:
             card = dict(artifact.get("card") or {})
             name = str(card.get("name") or artifact["id"])
             if include_context and lowered != str(artifact["id"]).casefold():
@@ -39739,6 +40191,14 @@ def _create_server(
                     "skill_options": list(definition.get("skill_options") or []),
                     "tool_choice_count": tool_count,
                     "tool_options": list(definition.get("tool_options") or []),
+                    "duplicate_replacement_fields": [
+                        "skill_replacements",
+                        "tool_replacements",
+                    ],
+                    "skill_replacement_options": sorted(SKILL_ABILITIES),
+                    "tool_replacement_options": sorted(
+                        _reviewed_tool_options(catalog_candidates).values(), key=str.casefold
+                    ),
                 }
             elif artifact_kind == "subclass":
                 selection_requirements = {
@@ -39766,6 +40226,11 @@ def _create_server(
                     fields.append("equipment_package")
                 if choices.get("origin_feat_name") == "Magic Initiate":
                     fields.append("origin_feat_selection")
+                campaign = campaigns.get(campaign_id)
+                language_catalog = _campaign_language_options(dict(campaign.settings or {}))
+                tool_replacement_options = sorted(
+                    _reviewed_tool_options(catalog_candidates).values(), key=str.casefold
+                )
                 selection_requirements = {
                     "fields": fields,
                     "language_count": int(choices.get("language_count", 0) or 0),
@@ -39792,13 +40257,35 @@ def _create_server(
                     "equipment_packages": equipment_packages,
                     "origin_feat_name": str(choices.get("origin_feat_name") or ""),
                     "origin_feat_preset": deepcopy(dict(choices.get("origin_feat_preset") or {})),
-                    "customizable": True,
+                    "duplicate_replacement_fields": [
+                        "skill_replacements",
+                        "tool_replacements",
+                    ],
+                    "skill_replacement_options": sorted(SKILL_ABILITIES),
+                    "tool_replacement_options": tool_replacement_options,
+                    "allowed_language_catalog": sorted(language_catalog.values(), key=str.casefold),
+                    "restricted_languages_requiring_dm_authorization": sorted(
+                        PHB2014_RESTRICTED_LANGUAGES, key=str.casefold
+                    ),
+                    "customizable": campaign_rules_edition(campaign_id) == "2014",
                     "customization_fields": [
                         "custom_name",
                         "skills",
+                        "skill_replacements",
+                        "tools",
+                        "tool_replacements",
                         "languages",
-                        "equipment_item_ids",
+                        "language_authorization",
+                        "custom_feature_artifact_id",
+                        "equipment_mode",
+                        "equipment_package",
                     ],
+                    "custom_contract": {
+                        "skill_count": 2,
+                        "combined_tool_or_language_count": 2,
+                        "equipment_modes": ["source", "starting_coin"],
+                        "equipment_modes_are_mutually_exclusive": True,
+                    },
                 }
             elif artifact_kind == "feat":
                 requirements = deepcopy(dict(card.get("selection_requirements") or {}))
@@ -40304,6 +40791,8 @@ def _create_server(
         selection = deepcopy(selection or {})
         if TORTLE_NATURAL_ARMOR_AUTHORITY_KEY in selection:
             raise ValueError("official expansion authority is server-managed")
+        if BACKGROUND_AUTHORITY_SELECTION_KEY in selection:
+            raise ValueError("background selection authority is server-managed")
         contract_required = artifact.get("selection_contract") is not None
         if contract_required:
             contract_errors = selection_input_errors(artifact, selection)
@@ -40444,6 +40933,11 @@ def _create_server(
         )
         if replay is not None:
             return replay
+        if current.revision != expected_revision:
+            raise ValueError(
+                "character revision conflict: "
+                f"expected {expected_revision}, found {current.revision}"
+            )
         provenance = {
             "id": artifact_id,
             "pack_id": pack_id,
@@ -41121,11 +41615,31 @@ def _create_server(
                     class_definition=class_definition,
                     skill_choices=raw_skills,
                     tool_choices=raw_tools,
+                    skill_replacements=selection.get("skill_replacements"),
+                    tool_replacements=selection.get("tool_replacements"),
+                    tool_replacement_options=list(_reviewed_tool_options(candidates).values()),
                     source=f"{pack_id}@{version}:{artifact_id}",
                 )
             except CombatEngineError as error:
+                if "proficiency replacements are required for:" in str(error):
+                    return {
+                        "status": "pending_choice",
+                        "reason": str(error),
+                    }
                 raise ValueError(str(error)) from error
             sheet = class_result.pop("sheet")
+            selection = {
+                "skills": list(class_result.get("skill_proficiency_choices") or []),
+                "tools": list(class_result.get("tool_proficiency_choices") or []),
+            }
+            if class_result.get("skill_proficiency_replacements"):
+                selection["skill_replacements"] = deepcopy(
+                    dict(class_result["skill_proficiency_replacements"])
+                )
+            if class_result.get("tool_proficiency_replacements"):
+                selection["tool_replacements"] = deepcopy(
+                    dict(class_result["tool_proficiency_replacements"])
+                )
             class_materialization = class_result
         elif kind == "spell":
             if any(item.get("id") == artifact_id for item in sheet["content"]["spells"]):
@@ -41360,6 +41874,8 @@ def _create_server(
             base_background = str(card.get("name") or artifact_id)
             custom_name = str(selection.get("custom_name") or "").strip()
             custom_skills_raw = selection.get("skills")
+            if custom_name and campaign_rules_edition(current.campaign_id) != "2014":
+                raise ValueError("the PHB custom-background contract is available only in 2014")
             grants = dict(card.get("background_grants") or {})
             fixed_equipment = deepcopy(dict(grants.pop("equipment", {}) or {}))
             grant_skills = [str(item).strip().casefold() for item in grants.pop("skills", [])]
@@ -41377,7 +41893,7 @@ def _create_server(
                 return {
                     "status": "pending_choice",
                     "reason": (
-                        "custom background requires both custom_name and exactly two skill choices"
+                        "custom background requires custom_name and exactly two skill choices"
                     ),
                 }
             if not custom_name and skill_choice_count and custom_skills_raw is None:
@@ -41393,31 +41909,64 @@ def _create_server(
             selected_background = custom_name or base_background
             if existing_background and existing_background != selected_background:
                 raise ValueError("character already has a different background")
-            language_count = int(requirements.get("language_count", 0) or 0)
-            raw_languages = selection.get("languages")
-            if raw_languages is None:
-                raw_languages = []
-            if (
-                not isinstance(raw_languages, list)
-                or len(raw_languages) != language_count
-                or any(not str(item).strip() for item in raw_languages)
-            ):
-                return {
-                    "status": "pending_choice",
-                    "reason": f"background requires exactly {language_count} language choices",
+            raw_languages = selection.get("languages", [])
+            raw_tools = selection.get("tools", [])
+            if custom_name:
+                if not isinstance(raw_languages, list) or not isinstance(raw_tools, list):
+                    raise ValueError("custom background languages and tools must be arrays")
+                if len(raw_languages) + len(raw_tools) != 2:
+                    return {
+                        "status": "pending_choice",
+                        "reason": (
+                            "custom background requires a total of exactly two tool "
+                            "proficiencies or languages"
+                        ),
+                    }
+                language_count = len(raw_languages)
+                fixed_languages: list[str] = []
+            else:
+                language_count = int(requirements.get("language_count", 0) or 0)
+                fixed_languages = list(grants.get("languages") or [])
+                if (
+                    not isinstance(raw_languages, list)
+                    or len(raw_languages) != language_count
+                    or any(not str(item).strip() for item in raw_languages)
+                ):
+                    return {
+                        "status": "pending_choice",
+                        "reason": f"background requires exactly {language_count} language choices",
+                    }
+                language_options = {
+                    str(item).casefold()
+                    for item in requirements.get("language_options", [])
+                    if str(item).strip()
                 }
-            selected_languages, all_languages = _validated_additive_choices(
-                raw_languages,
-                count=language_count,
-                label="background language",
-                fixed=grants.get("languages") or [],
-                options=requirements.get("language_options") or [],
-                allow_unlisted=requirements.get("allow_any_language") is True,
+                if (
+                    language_options
+                    and requirements.get("allow_any_language") is not True
+                    and any(str(item).casefold() not in language_options for item in raw_languages)
+                ):
+                    raise ValueError("background language is not one of the source options")
+            selected_languages, all_languages, language_authorization_receipt = (
+                _validated_background_languages(
+                    raw_languages,
+                    count=language_count,
+                    fixed=fixed_languages,
+                    existing=sheet["traits"]["languages"],
+                    campaign_id=current.campaign_id,
+                    campaign_revision=campaign.revision,
+                    campaign_settings=dict(campaign.settings or {}),
+                    authorization=selection.get("language_authorization"),
+                    principal_id=principal_id,
+                    principal_is_dm=is_dm(current.campaign_id, principal_id),
+                )
             )
             ability_options = [
                 str(item).casefold() for item in requirements.get("ability_score_options", [])
             ]
             selected_ability_increases: dict[str, int] = {}
+            if custom_name and ability_options:
+                raise ValueError("2014 custom backgrounds cannot replace ability score grants")
             if ability_options:
                 selected_ability_increases = apply_ability_score_increases(
                     {
@@ -41430,22 +41979,48 @@ def _create_server(
                     selection.get("ability_score_increases"),
                     source=f"{base_background} background",
                 )
-            tool_choice_count = int(requirements.get("tool_choice_count", 0) or 0)
-            selected_tools, all_tools = _validated_additive_choices(
-                selection.get("tools"),
-                count=tool_choice_count,
-                label="background tool",
-                fixed=grants.get("tools") or [],
-                options=requirements.get("tool_options") or [],
-            )
-            raw_tool_groups = requirements.get("tool_option_groups") or []
-            if raw_tool_groups:
-                _validate_group_limited_choices(
-                    selected_tools,
-                    groups=raw_tool_groups,
-                    label="background tool",
+            reviewed_tool_options = _reviewed_tool_options(candidates)
+            if custom_name:
+                selected_tools = _validated_distinct_choices(
+                    raw_tools,
+                    count=len(raw_tools),
+                    label="custom background tool",
                 )
-            selected_skill_choices: list[str] = []
+                if any(item.casefold() not in reviewed_tool_options for item in selected_tools):
+                    raise ValueError("custom background tool is not in the reviewed tool catalog")
+                source_tools = [reviewed_tool_options[item.casefold()] for item in selected_tools]
+            else:
+                tool_choice_count = int(requirements.get("tool_choice_count", 0) or 0)
+                selected_tools, source_tools = _validated_additive_choices(
+                    raw_tools,
+                    count=tool_choice_count,
+                    label="background tool",
+                    fixed=grants.get("tools") or [],
+                    options=requirements.get("tool_options") or [],
+                    allow_fixed_duplicates=True,
+                )
+                raw_tool_groups = requirements.get("tool_option_groups") or []
+                if raw_tool_groups:
+                    _validate_group_limited_choices(
+                        selected_tools,
+                        groups=raw_tool_groups,
+                        label="background tool",
+                    )
+            existing_tools = {
+                str(item).casefold() for item in sheet["traits"]["proficiencies"]["tools"]
+            }
+            try:
+                all_tools, normalized_tool_replacements = _resolve_duplicate_proficiencies(
+                    source_tools,
+                    existing_values=existing_tools,
+                    replacements=selection.get("tool_replacements"),
+                    options=reviewed_tool_options,
+                    kind="tool",
+                )
+            except _PendingProficiencyReplacementsError as error:
+                return {"status": "pending_choice", "reason": str(error)}
+            effective_selected_tools = all_tools[len(source_tools) - len(selected_tools) :]
+            selected_skill_choices: list[str]
             if custom_name:
                 if not isinstance(custom_skills_raw, list):
                     raise ValueError("custom background skills must be an array")
@@ -41464,19 +42039,6 @@ def _create_server(
                     raise ValueError(
                         "custom background references unknown skills: " + ", ".join(unknown_skills)
                     )
-                duplicate_skills = [
-                    skill
-                    for skill in selected_skills
-                    if sheet["skills"][skill]["proficiency"] != "none"
-                ]
-                if duplicate_skills:
-                    return {
-                        "status": "pending_choice",
-                        "reason": (
-                            "custom background skill choices must replace proficiencies "
-                            "already granted by another source: " + ", ".join(duplicate_skills)
-                        ),
-                    }
                 selected_skill_choices = list(selected_skills)
             else:
                 selected_skill_choices, selected_skills = _validated_additive_choices(
@@ -41485,6 +42047,7 @@ def _create_server(
                     label="background skill",
                     fixed=declared_skills,
                     options=requirements.get("skill_options") or [],
+                    allow_fixed_duplicates=True,
                 )
                 selected_skill_choices = [skill.casefold() for skill in selected_skill_choices]
                 selected_skills = [skill.casefold() for skill in selected_skills]
@@ -41495,7 +42058,81 @@ def _create_server(
                     raise ValueError(
                         "background references unknown skills: " + ", ".join(unknown_skills)
                     )
+            skill_options = {skill.casefold(): skill.casefold() for skill in sheet["skills"]}
+            existing_skills = {
+                skill.casefold()
+                for skill, state in sheet["skills"].items()
+                if str(state.get("proficiency") or "none") != "none"
+            }
+            try:
+                effective_skills, normalized_skill_replacements = _resolve_duplicate_proficiencies(
+                    selected_skills,
+                    existing_values=existing_skills,
+                    replacements=selection.get("skill_replacements"),
+                    options=skill_options,
+                    kind="skill",
+                )
+            except _PendingProficiencyReplacementsError as error:
+                return {"status": "pending_choice", "reason": str(error)}
+
+            feature_source_artifact_id = artifact_id
+            custom_feature_artifact_id = str(
+                selection.get("custom_feature_artifact_id") or ""
+            ).strip()
+            if custom_feature_artifact_id:
+                if not custom_name:
+                    raise ValueError("feature replacement requires a custom background")
+                feature_match = next(
+                    (
+                        item
+                        for item in candidates
+                        if item[2].get("kind") == "background"
+                        and str(item[2].get("id") or "") == custom_feature_artifact_id
+                    ),
+                    None,
+                )
+                if feature_match is None:
+                    raise ValueError("custom background feature artifact is unavailable")
+                feature_card = dict(feature_match[2].get("card") or {})
+                feature_grants = dict(feature_card.get("background_grants") or {})
+                replacement_feature = str(feature_grants.get("feature") or "").strip()
+                if not replacement_feature:
+                    raise RulesetUnavailableError(
+                        "custom background feature artifact has no reviewed feature"
+                    )
+                grants["feature"] = replacement_feature
+                feature_source_artifact_id = custom_feature_artifact_id
             equipment_packages = dict(requirements.get("equipment_packages") or {})
+            equipment_mode = str(selection.get("equipment_mode") or "").strip().casefold()
+            if custom_name:
+                if equipment_mode not in {"source", "starting_coin"}:
+                    return {
+                        "status": "pending_choice",
+                        "reason": (
+                            "custom background requires equipment_mode source or starting_coin"
+                        ),
+                    }
+                if equipment_mode == "starting_coin":
+                    if selection.get("equipment_package") or selection.get(
+                        "equipment_item_ids"
+                    ) not in (None, []):
+                        raise ValueError(
+                            "custom background starting_coin cannot stack source equipment"
+                        )
+                    fixed_equipment = {}
+                    equipment_packages = {}
+                elif not fixed_equipment and not equipment_packages:
+                    return {
+                        **_ruling_status(
+                            "pending_ruling",
+                            "missing_or_conflicting_source_review",
+                        ),
+                        "reason": "source background equipment is not structurally executable",
+                    }
+            elif equipment_mode:
+                raise ValueError("equipment_mode is accepted only for a custom background")
+            else:
+                equipment_mode = "source"
             selected_equipment_package = (
                 str(selection.get("equipment_package") or "").strip().upper()
             )
@@ -41558,7 +42195,7 @@ def _create_server(
                     if isinstance(embedded_template, dict):
                         inventory_template = deepcopy(embedded_template)
                     elif raw_item.get("selected_tool") is True:
-                        if len(selected_tools) != 1:
+                        if len(effective_selected_tools) != 1:
                             raise RulesetUnavailableError(
                                 "background equipment package requires its selected tool"
                             )
@@ -41570,7 +42207,7 @@ def _create_server(
                                 and str(
                                     dict(item[2].get("card") or {}).get("name") or ""
                                 ).casefold()
-                                == selected_tools[0].casefold()
+                                == effective_selected_tools[0].casefold()
                             ),
                             None,
                         )
@@ -41628,6 +42265,10 @@ def _create_server(
                     sheet = adjust_wallet(sheet, normalized_denomination, amount)
             else:
                 equipment_item_ids_raw = selection.get("equipment_item_ids", [])
+                if custom_name and equipment_item_ids_raw not in (None, []):
+                    raise ValueError(
+                        "custom background cannot use caller-supplied equipment item ids"
+                    )
                 if not isinstance(equipment_item_ids_raw, list):
                     raise ValueError("background equipment_item_ids must be an array")
                 equipment_item_ids = [str(item).strip() for item in equipment_item_ids_raw]
@@ -41670,8 +42311,16 @@ def _create_server(
                 "customized": bool(custom_name),
                 "selected_skills": selected_skills,
                 "selected_skill_choices": selected_skill_choices,
+                "effective_skills": effective_skills,
+                "skill_replacements": normalized_skill_replacements,
                 "ability_score_increases": selected_ability_increases,
                 "selected_tools": selected_tools,
+                "effective_tools": all_tools,
+                "tool_replacements": normalized_tool_replacements,
+                "selected_languages": selected_languages,
+                "language_authorization": language_authorization_receipt,
+                "feature_source_artifact_id": feature_source_artifact_id,
+                "equipment_mode": equipment_mode,
                 "selected_equipment_package": (
                     "" if selected_equipment_package == "__FIXED__" else selected_equipment_package
                 ),
@@ -41691,7 +42340,7 @@ def _create_server(
                     ]
                 )
             )
-            for skill_key in selected_skills:
+            for skill_key in effective_skills:
                 if skill_key not in sheet["skills"]:
                     raise ValueError(f"background references an unknown skill: {skill_key}")
                 sheet["skills"][skill_key]["proficiency"] = "proficient"
@@ -41738,6 +42387,23 @@ def _create_server(
                         {},
                         source=f"{base_background} background",
                     )
+            selection = {
+                "custom_name": custom_name,
+                "skills": list(selected_skill_choices),
+                "languages": list(selected_languages),
+                "tools": list(selected_tools),
+                "skill_replacements": deepcopy(normalized_skill_replacements),
+                "tool_replacements": deepcopy(normalized_tool_replacements),
+                "custom_feature_artifact_id": custom_feature_artifact_id,
+                "equipment_mode": equipment_mode,
+                "equipment_package": (
+                    "" if selected_equipment_package == "__FIXED__" else selected_equipment_package
+                ),
+                "equipment_item_ids": list(equipment_item_ids),
+                "ability_score_increases": deepcopy(selected_ability_increases),
+                "origin_feat_selection": deepcopy(selection.get("origin_feat_selection") or {}),
+                "language_authorization": deepcopy(language_authorization_receipt),
+            }
         elif kind == "species":
             selected_species = str(card.get("name") or artifact_id)
             constitution_score_before = int(sheet["abilities"]["constitution"]["score"])
@@ -43961,18 +44627,37 @@ def _create_server(
                 recorded_selection[TORTLE_NATURAL_ARMOR_AUTHORITY_KEY] = deepcopy(
                     tortle_natural_armor_authority
                 )
-            sheet["content"]["selections"].append(
-                {
-                    "artifact_id": artifact_id,
-                    "kind": kind,
-                    "name": str(card.get("name") or artifact_id),
-                    "pack_id": pack_id,
-                    "pack_version": version,
-                    "rule_refs": list(artifact.get("rule_refs") or []),
-                    "mechanic_refs": list(artifact.get("mechanic_refs") or []),
-                    "selection": recorded_selection,
+            selection_record = {
+                "artifact_id": artifact_id,
+                "kind": kind,
+                "name": str(card.get("name") or artifact_id),
+                "pack_id": pack_id,
+                "pack_version": version,
+                "rule_refs": list(artifact.get("rule_refs") or []),
+                "mechanic_refs": list(artifact.get("mechanic_refs") or []),
+                "selection": recorded_selection,
+            }
+            if kind == "background":
+                if BACKGROUND_AUTHORITY_SELECTION_KEY in selection_record["selection"]:
+                    raise ValueError("background selection authority is server-managed")
+                authority_id = uuid4().hex
+                authority_payload = _background_authority_payload(
+                    sheet,
+                    selection_record,
+                    character_id=current.id,
+                    authority_id=authority_id,
+                )
+                selection_record["selection"][BACKGROUND_AUTHORITY_SELECTION_KEY] = {
+                    "authority_id": authority_id,
+                    "authorization": sign_receipt(
+                        authority_payload,
+                        content_authority_secret,
+                    ),
                 }
-            )
+                selection = deepcopy(selection_record["selection"])
+            sheet["content"]["selections"].append(selection_record)
+            if content_receipt is not None:
+                content_receipt["selection"] = deepcopy(selection_record["selection"])
         resource_sync = synchronize_class_feature_resources(sheet)
         sheet = resource_sync["sheet"]
         if spellbook_copy is not None:
@@ -44025,11 +44710,9 @@ def _create_server(
             expected_revision=expected_revision,
             idempotency_key=idempotency_key,
             payload={
-                "artifact_id": artifact_id,
-                "pack_id": pack_id,
-                "version": version,
-                "selection": selection,
-                "grant": play_grant,
+                key: deepcopy(value)
+                for key, value in request_payload.items()
+                if key not in {"operation", "character_id"}
             },
             response_extra=response_extra,
             flatten_response_extra=True,
@@ -47444,6 +48127,11 @@ boundary.
         sheet = finalize_actor_sheet_rulings(sheet, campaign_id)
         require_engine_owned_short_rest_hit_die_state(sheet)
         _reject_new_intrinsic_attack_provenance(sheet)
+        _require_authoritative_background_state(
+            sheet,
+            character_id=None,
+            secret=content_authority_secret,
+        )
         if character_type not in NON_PLAYER_CHARACTER_TYPES:
             raise ValueError("addon actor templates create only npc or monster actors")
         requested_name = str(name or "").strip()
