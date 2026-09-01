@@ -847,6 +847,52 @@ def test_wallet_valuation_uses_the_shared_denomination_contract() -> None:
     )
 
 
+def test_2014_currency_weight_is_counted_by_default_and_can_be_opted_out() -> None:
+    sheet = validate_character_sheet({"inventory": {"wallet": {"gp": 10}}})
+
+    assert sheet["inventory"]["encumbrance"] == {
+        "mode": "standard",
+        "ignore_currency_weight": False,
+    }
+    assert derive_character_sheet(sheet)["inventory"]["total_weight_oz"] == pytest.approx(3.2)
+
+    house_rule_sheet = validate_character_sheet(
+        {
+            "inventory": {
+                "wallet": {"gp": 10},
+                "encumbrance": {"ignore_currency_weight": True},
+            }
+        }
+    )
+
+    assert derive_character_sheet(house_rule_sheet)["inventory"]["total_weight_oz"] == 0
+
+
+def test_default_currency_weight_can_cross_a_variant_encumbrance_threshold() -> None:
+    sheet = validate_character_sheet(
+        {
+            "abilities": {"strength": {"score": 10}},
+            "inventory": {
+                "wallet": {"cp": 1},
+                "items": [
+                    {
+                        "id": "threshold-load",
+                        "name": "Threshold load",
+                        "kind": "equipment",
+                        "weight_oz": 800,
+                    }
+                ],
+                "encumbrance": {"mode": "variant"},
+            },
+        }
+    )
+
+    derived = derive_character_sheet(sheet)
+    assert derived["inventory"]["total_weight_oz"] == pytest.approx(800.32)
+    assert derived["inventory"]["encumbrance"]["state"] == "encumbered"
+    assert derived["speed"]["walk"] == 20
+
+
 def test_removing_an_effect_cleans_only_conditions_no_longer_owned() -> None:
     sheet = default_character_sheet()
     sheet["conditions"] = ["prone"]

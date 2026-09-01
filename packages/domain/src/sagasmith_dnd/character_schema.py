@@ -384,7 +384,7 @@ def _default_inventory() -> dict[str, Any]:
         "wallet": {denomination: 0 for denomination in DENOMINATIONS},
         "items": [],
         "equipment_slots": {slot: None for slot in EQUIPMENT_SLOTS},
-        "encumbrance": {"mode": "standard", "ignore_currency_weight": True},
+        "encumbrance": {"mode": "standard", "ignore_currency_weight": False},
     }
 
 
@@ -1451,7 +1451,7 @@ def validate_inventory(value: Any) -> dict[str, Any]:
             "ignore_currency_weight": _boolean(
                 encumbrance.get("ignore_currency_weight"),
                 "inventory.encumbrance.ignore_currency_weight",
-                default=True,
+                default=False,
             ),
         },
     }
