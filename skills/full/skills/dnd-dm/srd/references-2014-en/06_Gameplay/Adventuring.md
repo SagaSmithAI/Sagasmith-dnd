@@ -47,8 +47,8 @@ Certain special mounts, such as a pegasus or griffon, or special vehicles, such 
 | Pace   | Minute   | Hour    | Day      | Effect                                           |
 |--------|----------|---------|----------|--------------------------------------------------|
 | Fast   | 400 feet | 4 miles | 30 miles | -5 penalty to passive Wisdom (Perception) scores |
-| Normal | 300 feet | 3 miles | 18 miles | -                                                |
-| Slow   | 200 feet | 2 miles | 24 miles | Able to use stealth                              |
+| Normal | 300 feet | 3 miles | 24 miles | -                                                |
+| Slow   | 200 feet | 2 miles | 18 miles | Able to use stealth                              |
 |        |          |         |          |                                                  |
 
 ### Difficult Terrain
