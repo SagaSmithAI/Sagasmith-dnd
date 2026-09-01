@@ -851,7 +851,13 @@ Use the three ledgers deliberately:
 - `campaign_event` records what happened. For a witnessed subset, set
   `audience_scope="actor"`, list `known_by_actor_ids`, and set
   `knowledge_disclosure_scope="owner"`; use `party` only when every party member
-  may know it.
+  may know it. A `dm` event cannot back player-visible ActorKnowledge
+  (`owner`, `party`, `player`, or `public`); use a player-visible event audience
+  (or `actor`) for that knowledge. The same source/disclosure rule applies to
+  `actor_knowledge_change` and `memory_change(action="commit")`, including
+  accepted NPC conversation deltas. On knowledge revise, omitted source and
+  disclosure fields retain the current revision and are validated together
+  before the atomic write.
 - `memory_change` records objective world facts worth retrieving later. Prefer
   `action="upsert"` with a deterministic `fact_key`; revising an existing key
   requires its current `expected_revision_id`. Use `supersede` or a revised status

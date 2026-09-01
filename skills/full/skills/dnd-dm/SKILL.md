@@ -66,6 +66,12 @@ load a whole large document by default.
 
 - Treat every PC, NPC, and monster as an independent Character with independent
   ActorKnowledge.
+- Keep provenance and disclosure aligned: a DM-only event may back only
+  DM-scoped ActorKnowledge. `owner`, `party`, `player`, and `public` knowledge
+  must cite a player-visible event (or an actor-targeted event). This applies to
+  `campaign_event` atomic knowledge, direct `actor_knowledge_change`, and
+  `memory_change(action="commit")`; omitted revise fields preserve and validate
+  their current source/disclosure values.
 - Carry current campaign/character revisions and stable idempotency keys.
 - Let `combat_start` and `combat_end` own Combat phase transitions.
 - Use server dice and the campaign random stream.
