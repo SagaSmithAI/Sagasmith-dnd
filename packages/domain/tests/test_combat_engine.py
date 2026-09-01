@@ -30,6 +30,7 @@ from sagasmith_dnd.combat_engine import (
     consume_weapon_mastery_attack_effects,
     current_combatant,
     damage_amount_after_reduction,
+    dodge_benefit_active,
     end_concentration_for_incapacitating_conditions,
     end_turn,
     force_move_directly_away,
@@ -41,6 +42,7 @@ from sagasmith_dnd.combat_engine import (
     preflight_attack,
     preflight_spell_attack,
     queue_combatant,
+    reconcile_dodge_lifecycle,
     reconcile_effect_dependencies,
     resolve_actor_check,
     resolve_actor_contest,
@@ -4437,6 +4439,84 @@ def test_dodge_lasts_until_start_of_next_turn_and_affects_attacks() -> None:
     encounter = end_turn(encounter, actor_id_value="attacker")
     dodger_state = next(item for item in encounter["combatants"] if item["actor_id"] == "dodger")
     assert not dict(dodger_state.get("turn_flags") or {}).get("dodging")
+
+
+@pytest.mark.parametrize(
+    ("condition", "speed_multiplier", "ended_reason"),
+    [
+        (None, 0.0, "speed_zero"),
+        ("grappled", 1.0, "speed_zero"),
+        ("restrained", 1.0, "speed_zero"),
+        ("incapacitated", 1.0, "incapacitated"),
+    ],
+)
+def test_dodge_lifecycle_does_not_reactivate_after_invalidating_state_ends(
+    condition: str | None,
+    speed_multiplier: float,
+    ended_reason: str,
+) -> None:
+    dodger = _actor("dodger")
+    dodger.update(initiative=20, position={"x": 0, "y": 0})
+    attacker = _actor("attacker")
+    attacker.update(initiative=10, position={"x": 1, "y": 0})
+    encounter = _grid_encounter([dodger, attacker])
+    encounter = resolve_common_action(encounter, actor_id_value="dodger", action="dodge")
+    encounter = end_turn(encounter, actor_id_value="dodger")
+    dodger_state = next(
+        item for item in encounter["combatants"] if item["actor_id"] == "dodger"
+    )
+    assert dodge_benefit_active(dodger_state) is True
+
+    dodger_state["speed_multiplier"] = speed_multiplier
+    if condition is not None:
+        dodger_state["conditions"].append(condition)
+    transition = reconcile_dodge_lifecycle(dodger_state)
+
+    assert transition == {
+        "active": False,
+        "mechanic_id": "dnd5e.core.action.dodge",
+        "ended_reason": ended_reason,
+    }
+    assert dict(dodger_state["turn_flags"])["dodge_ended"]["reason"] == ended_reason
+    assert "dodging" not in dodger_state["turn_flags"]
+
+    dodger_state["speed_multiplier"] = 1.0
+    if condition is not None:
+        dodger_state["conditions"].remove(condition)
+    assert dodge_benefit_active(dodger_state) is False
+    normal = preflight_attack(attacker, dodger, action={}, encounter=encounter)
+    opportunity = preflight_attack(
+        attacker,
+        dodger,
+        action={},
+        encounter=encounter,
+        allow_out_of_turn=True,
+        require_attack_action=False,
+    )
+    assert "target_dodging" not in normal["disadvantage_sources"]
+    assert "target_dodging" not in opportunity["disadvantage_sources"]
+
+
+@pytest.mark.parametrize("condition", ["grappled", "restrained"])
+def test_dodge_taken_at_zero_effective_speed_ends_immediately(condition: str) -> None:
+    dodger = _actor("dodger")
+    dodger["position"] = {"x": 0, "y": 0}
+    dodger["sheet"]["conditions"] = [condition]
+    dodger["derived"] = derive_character_sheet(dodger["sheet"])
+    encounter = _grid_encounter([dodger])
+
+    resolved = resolve_common_action(encounter, actor_id_value="dodger", action="dodge")
+
+    combatant = resolved["combatants"][0]
+    assert dodge_benefit_active(combatant) is False
+    assert "dodging" not in combatant["turn_flags"]
+    assert combatant["turn_flags"]["dodge_ended"]["reason"] == "speed_zero"
+    assert resolved["log"][-1] == {
+        "type": "dodge_ended",
+        "actor_id": "dodger",
+        "mechanic_id": "dnd5e.core.action.dodge",
+        "reason": "speed_zero",
+    }
 
 
 def test_paralyzed_target_is_automatic_critical_within_five_feet() -> None:

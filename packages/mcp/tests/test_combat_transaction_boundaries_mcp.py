@@ -714,6 +714,91 @@ def test_combat_stand_charges_half_current_effective_speed(tmp_path: Path) -> No
     asyncio.run(exercise())
 
 
+def test_zero_speed_dodge_ends_atomically_and_replays_without_writes(tmp_path: Path) -> None:
+    async def exercise() -> None:
+        config = _config(tmp_path)
+        server = create_server(config)
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {"name": "Dodge lifecycle", "edition": "2014", "idempotency_key": "campaign"},
+        )
+        sheet = default_character_sheet()
+        sheet["conditions"] = ["grappled"]
+        actor = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": "Grappled dodger",
+                    "sheet": sheet,
+                },
+                "principal_id": "system:local",
+                "idempotency_key": "actor",
+            },
+        )
+        campaign = await _call(
+            server,
+            "campaign_query",
+            {
+                "view": "get",
+                "payload": {"campaign_id": campaign["id"]},
+                "principal_id": "system:local",
+            },
+        )
+        started = await _call(
+            server,
+            "combat_start",
+            {
+                "positioning_mode": "agent",
+                "campaign_id": campaign["id"],
+                "participant_ids": [actor["id"]],
+                "participant_config": [{"actor_id": actor["id"], "initiative": 10}],
+                "expected_revision": campaign["revision"],
+                "idempotency_key": "start",
+            },
+        )
+        storage = server_module.SagaSmithStorage(config)
+        campaigns = server_module.CampaignService(storage.database)
+        before = campaigns.get(campaign["id"])
+        stale_request = {
+            "campaign_id": campaign["id"],
+            "actor_id": actor["id"],
+            "action": "dodge",
+            "expected_revision": started["campaign_revision"] - 1,
+            "idempotency_key": "stale-dodge",
+        }
+        with pytest.raises(Exception, match="campaign revision conflict"):
+            await _call(server, "combat_common_action", stale_request)
+        unchanged = campaigns.get(campaign["id"])
+        assert unchanged.revision == before.revision
+        assert unchanged.state == before.state
+
+        request = {
+            **stale_request,
+            "expected_revision": started["campaign_revision"],
+            "idempotency_key": "dodge",
+        }
+        dodged = await _call(server, "combat_common_action", request)
+        replayed = await _call(server, "combat_common_action", request)
+
+        assert replayed == dodged
+        assert dodged["campaign_revision"] == started["campaign_revision"] + 1
+        combatant = dodged["combat"]["combatants"][0]
+        assert "dodging" not in combatant["turn_flags"]
+        assert combatant["turn_flags"]["dodge_ended"] == {
+            "mechanic_id": "dnd5e.core.action.dodge",
+            "reason": "speed_zero",
+        }
+        assert dodged["combat"]["log"][-1]["type"] == "dodge_ended"
+        committed = campaigns.get(campaign["id"])
+        assert committed.revision == started["campaign_revision"] + 1
+
+    asyncio.run(exercise())
+
+
 def test_mid_turn_slow_caps_public_movement_without_failed_writes(tmp_path: Path) -> None:
     async def exercise() -> None:
         config = _config(tmp_path)
