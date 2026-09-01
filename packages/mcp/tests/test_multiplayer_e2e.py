@@ -101,6 +101,161 @@ def test_template_mode_retries_same_instance_and_remote_cannot_create_library_ac
     asyncio.run(exercise())
 
 
+def test_remote_dm_cannot_exfiltrate_library_template_private_notes(tmp_path: Path) -> None:
+    async def exercise() -> None:
+        server = create_server(config(tmp_path))
+        campaign = await call(
+            server,
+            "campaign_create",
+            {"name": "Remote DM table", "edition": "2014", "idempotency_key": "campaign"},
+        )
+        template = await call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "name": "Private library template",
+                    "character_type": "npc",
+                    "notes": {"profile": {"dm_notes": "secret-library-note"}},
+                },
+                "idempotency_key": "private-library-template",
+            },
+        )
+        await call(
+            server,
+            "access_grant",
+            {
+                "scope": "campaign",
+                "campaign_id": campaign["id"],
+                "principal_id": "user:remote-dm",
+                "payload": {"role": "dm"},
+                "by_principal_id": "system:local",
+            },
+        )
+
+        library = await call(
+            server,
+            "character_query",
+            {
+                "view": "library",
+                "principal_id": "user:remote-dm",
+            },
+        )
+        visible_template = next(item for item in library if item["id"] == template["id"])
+        assert visible_template["notes_redacted"] is True
+        assert "notes" not in visible_template
+        directly_read_template = await call(
+            server,
+            "character_query",
+            {
+                "view": "get",
+                "payload": {"character_id": template["id"]},
+                "principal_id": "user:remote-dm",
+            },
+        )
+        assert directly_read_template["notes_redacted"] is True
+        assert "notes" not in directly_read_template
+        local_template = await call(
+            server,
+            "character_query",
+            {
+                "view": "get",
+                "payload": {"character_id": template["id"]},
+            },
+        )
+        assert local_template["notes"]["profile"]["dm_notes"] == "secret-library-note"
+
+        instance = await call(
+            server,
+            "character_create_from",
+            {
+                "mode": "template",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "template_id": template["id"],
+                },
+                "principal_id": "user:remote-dm",
+                "idempotency_key": "remote-private-template",
+            },
+        )
+        visible_instance = await call(
+            server,
+            "character_query",
+            {
+                "view": "get",
+                "payload": {"character_id": instance["id"]},
+                "principal_id": "user:remote-dm",
+            },
+        )
+        assert visible_instance["notes"]["profile"]["dm_notes"] == ""
+        assert "secret-library-note" not in str(visible_instance)
+
+    asyncio.run(exercise())
+
+
+def test_character_list_requires_campaign_scope_and_cannot_enumerate_other_tables(
+    tmp_path: Path,
+) -> None:
+    async def exercise() -> None:
+        server = create_server(config(tmp_path))
+        campaign_a = await call(
+            server,
+            "campaign_create",
+            {"name": "Visible table", "idempotency_key": "campaign-a"},
+        )
+        campaign_b = await call(
+            server,
+            "campaign_create",
+            {"name": "Private table", "idempotency_key": "campaign-b"},
+        )
+
+        async def create_actor(campaign: dict, name: str) -> dict:
+            return await call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "direct",
+                    "payload": {"campaign_id": campaign["id"], "name": name},
+                    "idempotency_key": f"actor-{name}",
+                },
+            )
+
+        actor_a = await create_actor(campaign_a, "Visible Actor")
+        actor_b = await create_actor(campaign_b, "Private Actor")
+        await call(
+            server,
+            "access_grant",
+            {
+                "scope": "campaign",
+                "campaign_id": campaign_a["id"],
+                "principal_id": "user:table-a",
+                "payload": {"role": "player"},
+                "by_principal_id": "system:local",
+            },
+        )
+
+        with pytest.raises(Exception, match="campaign_id is required"):
+            await call(
+                server,
+                "character_query",
+                {"view": "list", "principal_id": "user:table-a"},
+            )
+        visible = await call(
+            server,
+            "character_query",
+            {
+                "view": "list",
+                "payload": {"campaign_id": campaign_a["id"]},
+                "principal_id": "user:table-a",
+            },
+        )
+        assert [item["id"] for item in visible] == [actor_a["id"]]
+        assert actor_b["id"] not in str(visible)
+
+    asyncio.run(exercise())
+
+
 def test_dm_two_players_restart_and_combat_projection(tmp_path: Path) -> None:
     async def exercise() -> None:
         runtime = config(tmp_path)

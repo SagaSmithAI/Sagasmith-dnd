@@ -22,7 +22,7 @@ from dataclasses import asdict, replace
 from datetime import datetime
 from functools import lru_cache, wraps
 from pathlib import Path
-from typing import Annotated, Any, Callable, Literal, Mapping, TypeVar
+from typing import Annotated, Any, Callable, Iterable, Literal, Mapping, TypeVar
 from uuid import NAMESPACE_URL, uuid4, uuid5
 from weakref import WeakValueDictionary
 
@@ -153,7 +153,6 @@ from sagasmith_dnd.character_schema import (
     consume_weapon_limited_use,
     default_character_notes,
     default_character_sheet,
-    derive_character_sheet,
     equip_inventory_item,
     receive_inventory_item,
     remove_effect,
@@ -166,6 +165,9 @@ from sagasmith_dnd.character_schema import (
     validate_character_sheet,
     validate_party_state,
     validate_world_effect,
+)
+from sagasmith_dnd.character_schema import (
+    derive_character_sheet as derive_domain_character_sheet,
 )
 from sagasmith_dnd.chase_engine import (
     CHASE_BOUNDARY_IDS,
@@ -461,6 +463,15 @@ from sagasmith_dnd.standard_content import (
 from sagasmith_dnd.standard_feature_ids import (
     CORE_ORC_AGGRESSIVE_MECHANIC_ID,
     CORE_RELENTLESS_ENDURANCE_MECHANIC_ID,
+    CORE_TORTLE_NATURAL_ARMOR_MECHANIC_ID,
+    TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
+    TORTLE_NATURAL_ARMOR_AUTHORITY_KEY,
+    TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_CHECKSUM,
+    TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
+    TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
+    TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID,
+    TORTLE_NATURAL_ARMOR_LEGACY_PACK_VERSIONS,
+    TORTLE_NATURAL_ARMOR_SOURCE_RULE_REF_PREFIX,
 )
 from sagasmith_dnd.standard_spell_ids import (
     CORE_BLADE_WARD_MECHANIC_ID,
@@ -681,6 +692,289 @@ def _require_preserved_intrinsic_attack_provenance(
         raise ValueError(
             "character mutation cannot add, remove, or alter authoritative "
             "intrinsic attack provenance"
+        )
+
+
+def _tortle_natural_armor_provenance(sheet: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Return caller-writable records that can authorize the Tortle AC exception."""
+
+    value = dict(sheet or {})
+    content = dict(value.get("content") or {})
+
+    def privileged_selection(item: Any) -> bool:
+        if not isinstance(item, dict):
+            return False
+        refs = item.get("rule_refs")
+        return (
+            item.get("artifact_id") == TORTLE_NATURAL_ARMOR_ARTIFACT_ID
+            or item.get("pack_id") == TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID
+            or (
+                isinstance(refs, list)
+                and any(
+                    isinstance(ref, str)
+                    and ref.startswith(TORTLE_NATURAL_ARMOR_SOURCE_RULE_REF_PREFIX)
+                    for ref in refs
+                )
+            )
+        )
+
+    def privileged_feature(item: Any) -> bool:
+        if not isinstance(item, dict):
+            return False
+        mechanic_refs = item.get("mechanic_refs")
+        trait = dict(dict(item.get("choices") or {}).get("source_trait") or {})
+        return (
+            (
+                isinstance(mechanic_refs, list)
+                and CORE_TORTLE_NATURAL_ARMOR_MECHANIC_ID in mechanic_refs
+            )
+            or trait.get("kind") == "tortle_natural_armor"
+            or (trait.get("effect_source") == TORTLE_NATURAL_ARMOR_ARTIFACT_ID)
+        )
+
+    def privileged_effect(item: Any) -> bool:
+        return isinstance(item, dict) and item.get("source") == TORTLE_NATURAL_ARMOR_ARTIFACT_ID
+
+    selections = [
+        deepcopy(item) for item in content.get("selections", []) if privileged_selection(item)
+    ]
+    features = [deepcopy(item) for item in content.get("features", []) if privileged_feature(item)]
+    effects = [deepcopy(item) for item in value.get("effects", []) if privileged_effect(item)]
+    if not selections and not features and not effects:
+        return {}
+    return {
+        "species": str(dict(value.get("progression") or {}).get("species") or ""),
+        "selections": selections,
+        "features": features,
+        "effects": effects,
+    }
+
+
+def _reserved_official_definition_owners() -> dict[str, str]:
+    owners = {
+        str(item["definition_id"]): str(item["package_id"])
+        for item in official_expansion_dependency_rebinds()
+    }
+    for support in official_expansion_support_catalog():
+        for definition in support.get("provided_rule_definitions", []):
+            if isinstance(definition, dict):
+                owners[str(definition.get("id") or "")] = str(support["id"])
+    return owners
+
+
+def _validate_unreserved_rule_definition_identity(pack_id: str) -> None:
+    owner = _reserved_official_definition_owners().get(str(pack_id))
+    if owner is not None:
+        raise ValueError(f"rule definition {pack_id} is reserved for official package {owner}")
+
+
+def _validate_reserved_official_artifact_identities(
+    *,
+    definition_id: str,
+    artifacts: Iterable[Mapping[str, Any]],
+    package_id: str | None = None,
+) -> None:
+    owners = {
+        TORTLE_NATURAL_ARMOR_ARTIFACT_ID: (
+            TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
+            TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID,
+        )
+    }
+    for artifact in artifacts:
+        nested = artifact.get("artifact")
+        artifact_ids = {
+            str(artifact.get("id") or ""),
+            str(nested.get("id") or "") if isinstance(nested, dict) else "",
+        }
+        for artifact_id in artifact_ids:
+            owner = owners.get(artifact_id)
+            if owner is None:
+                continue
+            owner_package_id, owner_definition_id = owner
+            if definition_id != owner_definition_id or (
+                package_id is not None and package_id != owner_package_id
+            ):
+                raise ValueError(
+                    f"content artifact {artifact_id} is reserved for official package "
+                    f"{owner_package_id} definition {owner_definition_id}"
+                )
+
+
+def _validate_reserved_official_package_identity(package: Mapping[str, Any]) -> None:
+    """Reject archives that occupy a locked official package or definition identity."""
+
+    package_id = str(package.get("id") or "")
+    package_version = str(package.get("version") or "")
+    package_checksum = str(package.get("checksum") or "")
+    locked_packages = {
+        str(item["id"]): dict(item)
+        for item in (*official_expansion_catalog(), *official_expansion_support_catalog())
+    }
+    definition_owners = _reserved_official_definition_owners()
+    locked = locked_packages.get(package_id)
+    if locked is not None and (
+        package_version != str(locked["version"]) or package_checksum != str(locked["checksum"])
+    ):
+        raise ValueError(
+            "content package occupies a reserved official identity without its locked checksum"
+        )
+    definitions = list(dict(package.get("content") or {}).get("rule_definitions") or [])
+    for definition in definitions:
+        if not isinstance(definition, dict):
+            continue
+        definition_id = str(definition.get("id") or "")
+        owner = definition_owners.get(definition_id)
+        if owner is not None and owner != package_id:
+            raise ValueError(
+                f"rule definition {definition_id} is reserved for official package {owner}"
+            )
+    artifacts = list(dict(package.get("content") or {}).get("artifacts") or [])
+    for definition in definitions:
+        if not isinstance(definition, dict):
+            continue
+        definition_id = str(definition.get("id") or "")
+        _validate_reserved_official_artifact_identities(
+            definition_id=definition_id,
+            package_id=package_id,
+            artifacts=(
+                artifact
+                for artifact in artifacts
+                if isinstance(artifact, dict)
+                and str(artifact.get("rule_definition_id") or "") == definition_id
+            ),
+        )
+
+
+def _verified_tortle_natural_armor_authority(
+    *,
+    pack_id: str,
+    pack_version: str,
+    artifact_id: str,
+    provenance: Mapping[str, Any],
+    archive_definition_verified: bool = False,
+) -> dict[str, str] | None:
+    """Bind the privileged armor exception to the immutable official outer archive."""
+
+    if artifact_id != TORTLE_NATURAL_ARMOR_ARTIFACT_ID:
+        return None
+    locked = next(
+        (
+            dict(item)
+            for item in official_expansion_catalog("2014")
+            if item["id"] == TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID
+        ),
+        None,
+    )
+    content_definition = dict(provenance.get("content_definition") or {})
+    authority = {
+        "package_id": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
+        "package_version": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
+        "package_checksum": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_CHECKSUM,
+    }
+    valid = (
+        locked is not None
+        and str(locked.get("version") or "") == authority["package_version"]
+        and str(locked.get("checksum") or "") == authority["package_checksum"]
+        and pack_id == TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID
+        and pack_version in TORTLE_NATURAL_ARMOR_LEGACY_PACK_VERSIONS
+        and str(content_definition.get("package_id") or "") == authority["package_id"]
+        and str(content_definition.get("package_version") or "") == authority["package_version"]
+        and str(content_definition.get("package_checksum") or "") == authority["package_checksum"]
+        and archive_definition_verified
+    )
+    if not valid:
+        raise RulesetUnavailableError(
+            "Tortle Natural Armor requires the immutable official expansion archive"
+        )
+    return authority
+
+
+def _load_or_create_content_authority_secret(path: Path) -> bytes:
+    """Load the durable server key used to authorize privileged content effects."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        value = path.read_bytes()
+        if len(value) != 32:
+            raise RuntimeError("content authority key is invalid")
+        return value
+    value = secrets.token_bytes(32)
+    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(value)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, path)
+            return value
+        except FileExistsError:
+            published = path.read_bytes()
+            if len(published) != 32:
+                raise RuntimeError("content authority key is invalid")
+            return published
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _verified_content_authority_ids(
+    sheet: Mapping[str, Any], *, character_id: str | None, secret: bytes
+) -> frozenset[str]:
+    """Verify actor-bound server capabilities embedded in official content records."""
+
+    if not character_id:
+        return frozenset()
+    verified: set[str] = set()
+    for item in dict(sheet.get("content") or {}).get("selections", []):
+        if not isinstance(item, dict) or item.get("artifact_id") != (
+            TORTLE_NATURAL_ARMOR_ARTIFACT_ID
+        ):
+            continue
+        raw_authority = dict(item.get("selection") or {}).get(TORTLE_NATURAL_ARMOR_AUTHORITY_KEY)
+        if not isinstance(raw_authority, Mapping):
+            continue
+        authority = dict(raw_authority)
+        if not isinstance(authority.get("authorization"), Mapping):
+            continue
+        authority_id = str(authority.get("authority_id") or "")
+        try:
+            payload = verify_receipt_signature(
+                authority.get("authorization"),
+                secret,
+                missing_error="content authority signature is missing",
+                invalid_error="content authority signature is invalid",
+            )
+        except ValueError:
+            continue
+        if payload == {
+            "schema_version": 1,
+            "purpose": "official_content_authority",
+            "character_id": character_id,
+            "artifact_id": TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
+            "package_id": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
+            "package_version": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
+            "package_checksum": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_CHECKSUM,
+            "authority_id": authority_id,
+        }:
+            verified.add(authority_id)
+    return frozenset(verified)
+
+
+def _reject_new_tortle_natural_armor_provenance(sheet: Mapping[str, Any] | None) -> None:
+    if _tortle_natural_armor_provenance(sheet):
+        raise ValueError(
+            "Tortle Natural Armor provenance can be created only by character_content_apply"
+        )
+
+
+def _require_preserved_tortle_natural_armor_provenance(
+    current: Mapping[str, Any], replacement: Mapping[str, Any]
+) -> None:
+    if _tortle_natural_armor_provenance(current) != _tortle_natural_armor_provenance(replacement):
+        raise ValueError(
+            "character sheet replacement cannot add, remove, or alter authoritative "
+            "Tortle Natural Armor provenance"
         )
 
 
@@ -4168,11 +4462,7 @@ class RequestScopedMCPServer(MCPServer):
             if auth_context is not None and legacy_session_key is None:
                 policy_campaign_id = self._argument_campaign_id(arguments) or None
                 policy = policy_for_tool(name)
-                if (
-                    policy_campaign_id is None
-                    and policy is not None
-                    and policy.requires_campaign
-                ):
+                if policy_campaign_id is None and policy is not None and policy.requires_campaign:
                     policy_campaign_id = auth_context.campaign_id
                 self._tool_policy_authorizer(
                     name,
@@ -4366,6 +4656,36 @@ def _create_server(
     )
     native_rule_providers = load_native_rule_providers()
     npc_conversations = ConversationStore(config.npc_conversations_dir)
+    content_authority_secret = _load_or_create_content_authority_secret(
+        config.home / "data" / ".content-authority-key"
+    )
+
+    def verified_content_authority_ids(
+        sheet: Mapping[str, Any], *, character_id: str | None
+    ) -> frozenset[str]:
+        """Verify server-issued content capabilities before privileged derivation."""
+
+        return _verified_content_authority_ids(
+            sheet,
+            character_id=character_id,
+            secret=content_authority_secret,
+        )
+
+    def derive_character_sheet(
+        sheet: dict[str, Any],
+        *,
+        rules: ResolutionContext | None = None,
+        character_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Derive a card only after validating server-issued privileged content."""
+
+        return derive_domain_character_sheet(
+            sheet,
+            rules=rules,
+            trusted_content_authority_ids=verified_content_authority_ids(
+                sheet, character_id=character_id
+            ),
+        )
 
     def require_no_active_npc_conversation(
         campaign_id: str,
@@ -4865,9 +5185,7 @@ def _create_server(
             ("front_progress", front_ids),
             ("thread_progress", thread_ids),
         ):
-            unknown = sorted(
-                item["id"] for item in manifest[field] if item["id"] not in known_ids
-            )
+            unknown = sorted(item["id"] for item in manifest[field] if item["id"] not in known_ids)
             if unknown:
                 raise ValueError(
                     f"{field} references unknown runtime_manifest ids: {', '.join(unknown)}"
@@ -4956,9 +5274,7 @@ def _create_server(
                     }
                 )
         missing = sorted(
-            f"{kind}:{ref_id}"
-            for kind, ref_id in requested
-            if ref_id not in available[kind]
+            f"{kind}:{ref_id}" for kind, ref_id in requested if ref_id not in available[kind]
         )
         if missing:
             raise ValueError(
@@ -5740,6 +6056,7 @@ def _create_server(
         for actor in validated_actors:
             require_engine_owned_short_rest_hit_die_state(actor["sheet"])
             _reject_new_intrinsic_attack_provenance(actor["sheet"])
+            _reject_new_tortle_natural_armor_provenance(actor.get("sheet"))
         mismatched = [
             actor["id"]
             for actor in validated_actors
@@ -5914,6 +6231,7 @@ def _create_server(
             "preset",
         }:
             raise ValueError("content package must be a dnd5e addon, core_rules, or preset")
+        _validate_reserved_official_package_identity(value)
         managed_archive = storage.write_content_archive(value, blobs)
         dependency_rebinds = official_expansion_dependency_rebinds()
         component_equivalence: list[dict[str, str]] = []
@@ -6009,14 +6327,10 @@ def _create_server(
                         definition_provenance = dict(
                             dependency_provenance.get("content_definition") or {}
                         )
-                        if (
-                            definition_provenance.get("source_definition_checksum")
-                            == runtime_checksum
-                            and definition_provenance.get("definition_checksum")
-                        ):
-                            runtime_checksum = str(
-                                definition_provenance["definition_checksum"]
-                            )
+                        if definition_provenance.get(
+                            "source_definition_checksum"
+                        ) == runtime_checksum and definition_provenance.get("definition_checksum"):
+                            runtime_checksum = str(definition_provenance["definition_checksum"])
                     matches[0]["checksum"] = runtime_checksum
                     applied_rebinds.append(
                         {**deepcopy(rebind), "resolved_runtime_checksum": runtime_checksum}
@@ -6112,9 +6426,7 @@ def _create_server(
                                 "package_version": value["version"],
                                 "package_checksum": value["checksum"],
                                 "definition_checksum": runtime_definition_checksum,
-                                "source_definition_checksum": definition[
-                                    "definition_checksum"
-                                ],
+                                "source_definition_checksum": definition["definition_checksum"],
                             },
                             "official_dependency_rebinds": applied_rebinds,
                             "content_package_kind": value["kind"],
@@ -6248,6 +6560,74 @@ def _create_server(
         }
         return response
 
+    def verified_reserved_official_rule_definition(
+        pack_id: str,
+        version: str,
+    ) -> dict[str, Any] | None:
+        """Prove an installed reserved definition came from its locked managed archive."""
+
+        owner = _reserved_official_definition_owners().get(str(pack_id))
+        if owner is None:
+            return None
+        try:
+            installed = rule_packs.get_version(pack_id, version)
+            if installed.status != "installed":
+                raise ValueError("reserved official rule definition is not installed")
+            provenance = rule_packs.provenance(pack_id, version)
+            content_definition = dict(provenance.get("content_definition") or {})
+            archive_artifact = str(provenance.get("content_archive_artifact") or "")
+            if not archive_artifact:
+                raise ValueError("reserved official rule definition has no managed archive")
+            archive, _blobs = storage.read_content_archive(artifact=archive_artifact)
+            archive = validate_dnd_content_package(archive)
+            _validate_reserved_official_package_identity(archive)
+            if str(archive["id"]) != owner:
+                raise ValueError("reserved official rule definition archive owner mismatch")
+            definition = next(
+                (
+                    dict(item)
+                    for item in archive["content"].get("rule_definitions") or []
+                    if str(item.get("id") or "") == pack_id
+                    and str(item.get("version") or "") == version
+                ),
+                None,
+            )
+            if definition is None:
+                raise ValueError("reserved official rule definition is absent from its archive")
+            installed_checksum = content_definition_checksum(
+                manifest=installed.manifest,
+                artifacts=installed.artifacts,
+                mechanics=installed.mechanics,
+            )
+            recorded_runtime_checksum = str(content_definition.get("definition_checksum") or "")
+            recorded_source_checksum = str(
+                content_definition.get("source_definition_checksum") or ""
+            )
+            valid = (
+                str(content_definition.get("package_id") or "") == str(archive["id"])
+                and str(content_definition.get("package_version") or "") == str(archive["version"])
+                and str(content_definition.get("package_checksum") or "")
+                == str(archive["checksum"])
+                and recorded_runtime_checksum == installed_checksum
+                and recorded_source_checksum == str(definition["definition_checksum"])
+            )
+            if not valid:
+                raise ValueError(
+                    "reserved official rule definition does not match its managed archive"
+                )
+            return {
+                "package": archive,
+                "definition": definition,
+                "provenance": provenance,
+                "runtime_definition_checksum": installed_checksum,
+            }
+        except RulesetUnavailableError:
+            raise
+        except Exception as error:
+            raise RulesetUnavailableError(
+                f"{pack_id}@{version} requires its immutable official content archive"
+            ) from error
+
     def import_content_rules_package(
         campaign_id: str,
         package: dict[str, Any],
@@ -6331,8 +6711,7 @@ def _create_server(
                 or package.get("checksum") != archive.checksum
             ):
                 raise ValueError(
-                    f"official expansion archive identity changed after verification: "
-                    f"{archive.id}"
+                    f"official expansion archive identity changed after verification: {archive.id}"
                 )
             with storage.database.transaction():
                 stored = store_content_rules_package(
@@ -6550,9 +6929,7 @@ def _create_server(
         if policy is None:
             return
         if policy.local_only and principal_id != LOCAL_SYSTEM_PRINCIPAL_ID:
-            raise ExposureError(
-                f"Tool {tool_id!r} is restricted to the local system principal."
-            )
+            raise ExposureError(f"Tool {tool_id!r} is restricted to the local system principal.")
         if policy.requires_campaign and campaign_id is None:
             raise ExposureError(f"Tool {tool_id!r} requires a campaign-bound request.")
         if campaign_id is None:
@@ -7300,8 +7677,7 @@ def _create_server(
         actor_state = [
             item
             for item in actor_state
-            if str(item.get("disclosure_scope") or "dm")
-            in knowledge_disclosure_scopes
+            if str(item.get("disclosure_scope") or "dm") in knowledge_disclosure_scopes
         ]
         actor_knowledge = knowledge.list(
             campaign_id,
@@ -7356,9 +7732,7 @@ def _create_server(
             *exact_events,
             *list(retrieved_events or []),
         ]:
-            event_id = str(
-                item.get("id") if isinstance(item, dict) else getattr(item, "id", "")
-            )
+            event_id = str(item.get("id") if isinstance(item, dict) else getattr(item, "id", ""))
             if event_id:
                 actor_events_by_id[event_id] = item
         return select_actor_memory_context(
@@ -7786,9 +8160,7 @@ def _create_server(
                 for item in actor_memory["motivational"]
                 if item["source"] == "actor_state_fact"
             ]
-            actor_knowledge = [
-                dict(item["record"]) for item in actor_memory["semantic"]
-            ]
+            actor_knowledge = [dict(item["record"]) for item in actor_memory["semantic"]]
             events_context = [dict(item["record"]) for item in actor_memory["episodic"]]
             target_refs = sorted(
                 {f"actor:{actor_id}", *(f"actor:{item}" for item in interlocutor_actor_ids)}
@@ -8080,9 +8452,13 @@ def _create_server(
                 resolved_rules = (
                     effective_rule_context(character.campaign_id) if character.campaign_id else None
                 )
-            value["derived"] = derive_character_sheet(value["sheet"], rules=resolved_rules)
+            value["derived"] = derive_character_sheet(
+                value["sheet"],
+                rules=resolved_rules,
+                character_id=character.id,
+            )
         except RulesetUnavailableError as error:
-            value["derived"] = derive_character_sheet(value["sheet"])
+            value["derived"] = derive_character_sheet(value["sheet"], character_id=character.id)
             value["derived"]["unresolved_rules"] = sorted(
                 {*value["derived"].get("unresolved_rules", []), "ruleset_unavailable"}
             )
@@ -12322,6 +12698,7 @@ def _create_server(
         response_extra: dict[str, Any] | None = None,
         flatten_response_extra: bool = False,
         rule_receipts: list[dict[str, Any]] | None = None,
+        expected_campaign_revision: int | None = None,
     ) -> dict[str, Any]:
         def response_for(character: dict[str, Any]) -> dict[str, Any]:
             if response_extra is None:
@@ -12433,6 +12810,7 @@ def _create_server(
         StateMutationService(storage.database).replace(
             before.campaign_id,
             character_updates=[character_update],
+            expected_campaign_revision=expected_campaign_revision,
             operation=operation,
             actor=principal_id,
             branch_id=branch_id,
@@ -18832,7 +19210,7 @@ def _create_server(
                 if spell_result.get("status") != "committed":
                     raise CombatEngineError("Shield has an unresolved rule choice")
                 target["sheet"] = spell_result["sheet"]
-                target["derived"] = derive_character_sheet(target["sheet"])
+                target["derived"] = derive_character_sheet(target["sheet"], character_id=actor_id)
                 record_combat_spell_cast(
                     next_encounter,
                     actor_id=actor_id,
@@ -18858,7 +19236,7 @@ def _create_server(
                 if activity_result.get("status") != "committed":
                     raise CombatEngineError("reviewed defensive activity could not be consumed")
                 target["sheet"] = activity_result["sheet"]
-                target["derived"] = derive_character_sheet(target["sheet"])
+                target["derived"] = derive_character_sheet(target["sheet"], character_id=actor_id)
             else:
                 raise CombatEngineError("defensive reaction kind is not executable")
             attack = apply_attack_ac_bonus(
@@ -20998,7 +21376,7 @@ def _create_server(
             return combat_response(campaign_id, principal_id, response)
         if hypnotic_pattern:
             assert hypnotic_pattern_target is not None
-            derived_caster = derive_character_sheet(applied["sheet"])
+            derived_caster = derive_character_sheet(applied["sheet"], character_id=actor_id)
             save_dc = dict(derived_caster.get("spellcasting") or {}).get("save_dc")
             if save_dc is None:
                 raise CombatEngineError(
@@ -21044,7 +21422,9 @@ def _create_server(
                 target_sheet = deepcopy(final_sheets.get(target_id, target_record.sheet))
                 target_actor = combat_actor_snapshot(target_id)
                 target_actor["sheet"] = target_sheet
-                target_actor["derived"] = derive_character_sheet(target_sheet)
+                target_actor["derived"] = derive_character_sheet(
+                    target_sheet, character_id=target_id
+                )
                 resolved_target = resolve_hypnotic_pattern_target(
                     target_actor,
                     caster_id=actor_id,
@@ -21241,7 +21621,7 @@ def _create_server(
                 healing = dict(structured_resolution.get("healing") or {})
                 ability_modifier = 0
                 if healing.get("add_spellcasting_modifier"):
-                    derived_caster = derive_character_sheet(applied["sheet"])
+                    derived_caster = derive_character_sheet(applied["sheet"], character_id=actor_id)
                     ability = str(
                         dict(derived_caster.get("spellcasting") or {}).get("ability") or ""
                     )
@@ -21322,7 +21702,7 @@ def _create_server(
                 actor_level=int(applied["sheet"].get("progression", {}).get("level", 1) or 1),
             )
             damage_roll = asdict(roll(damage_expression))
-            derived_caster = derive_character_sheet(applied["sheet"])
+            derived_caster = derive_character_sheet(applied["sheet"], character_id=actor_id)
             save_dc = save_spec.get("save_dc_override")
             if save_dc is None:
                 save_dc = dict(derived_caster.get("spellcasting") or {}).get("save_dc")
@@ -21343,7 +21723,9 @@ def _create_server(
                 target_sheet = deepcopy(final_sheets.get(target_id, target_record.sheet))
                 target_actor = combat_actor_snapshot(target_id)
                 target_actor["sheet"] = target_sheet
-                target_actor["derived"] = derive_character_sheet(target_sheet)
+                target_actor["derived"] = derive_character_sheet(
+                    target_sheet, character_id=target_id
+                )
                 cover_bonus = {
                     "half": 2,
                     "three_quarters": 5,
@@ -22316,7 +22698,7 @@ def _create_server(
                 "include_proficiency": True,
             }:
                 raise CombatEngineError("Dragonborn Breath Weapon has an invalid save DC formula")
-            source_derived = derive_character_sheet(current.sheet)
+            source_derived = derive_character_sheet(current.sheet, character_id=current.id)
             breath_save_dc = (
                 8
                 + int(source_derived["ability_modifiers"]["constitution"])
@@ -22695,7 +23077,9 @@ def _create_server(
             if legendary_kind == "skill_check":
                 source_actor = combat_actor_snapshot(actor_id)
                 source_actor["sheet"] = applied["sheet"]
-                source_actor["derived"] = derive_character_sheet(applied["sheet"])
+                source_actor["derived"] = derive_character_sheet(
+                    applied["sheet"], character_id=actor_id
+                )
                 core_effect = {
                     "kind": "legendary_action",
                     "effect_kind": "skill_check",
@@ -22801,7 +23185,9 @@ def _create_server(
         if turn_undead:
             source_actor = combat_actor_snapshot(actor_id)
             source_actor["sheet"] = applied["sheet"]
-            source_actor["derived"] = derive_character_sheet(applied["sheet"])
+            source_actor["derived"] = derive_character_sheet(
+                applied["sheet"], character_id=actor_id
+            )
             settled_turn = resolve_turn_undead_to_sheets(
                 source_actor,
                 turn_targets,
@@ -22869,7 +23255,9 @@ def _create_server(
             assert divine_spark_target is not None
             source_actor = combat_actor_snapshot(actor_id)
             source_actor["sheet"] = applied["sheet"]
-            source_actor["derived"] = derive_character_sheet(applied["sheet"])
+            source_actor["derived"] = derive_character_sheet(
+                applied["sheet"], character_id=actor_id
+            )
             settled_spark = resolve_divine_spark_to_sheet(
                 source_actor,
                 divine_spark_target,
@@ -24049,8 +24437,7 @@ def _create_server(
             if normalized_ability not in allowed_search_checks:
                 if search_ruleset == "2014":
                     raise CombatEngineError(
-                        "2014 Search requires Wisdom (Perception) or "
-                        "Intelligence (Investigation)"
+                        "2014 Search requires Wisdom (Perception) or Intelligence (Investigation)"
                     )
                 raise CombatEngineError(
                     "2024 Search requires a Wisdom check, optionally using Insight, "
@@ -24204,9 +24591,9 @@ def _create_server(
                 ruleset=ruleset,
             )
             if ruleset == "2014":
-                updated["sheet"].setdefault("combat", {})[
-                    "last_death_save_elapsed_tick"
-                ] = int(dict(next_state.get("game_time") or {}).get("elapsed_ticks", 0))
+                updated["sheet"].setdefault("combat", {})["last_death_save_elapsed_tick"] = int(
+                    dict(next_state.get("game_time") or {}).get("elapsed_ticks", 0)
+                )
                 updated["rule_receipts"] = [
                     *list(updated.get("rule_receipts") or []),
                     *core_receipts(
@@ -24713,7 +25100,7 @@ def _create_server(
             def actor(self, actor_id: str) -> dict[str, Any]:
                 actor = combat_actor_snapshot(actor_id)
                 actor["sheet"] = deepcopy(self.sheet(actor_id))
-                actor["derived"] = derive_character_sheet(actor["sheet"])
+                actor["derived"] = derive_character_sheet(actor["sheet"], character_id=actor_id)
                 return actor
 
             def set_sheet(self, actor_id: str, sheet: dict[str, Any]) -> None:
@@ -26706,6 +27093,7 @@ def _create_server(
         sheet_value = deepcopy(sheet or default_character_sheet())
         require_engine_owned_short_rest_hit_die_state(sheet_value)
         _reject_new_intrinsic_attack_provenance(sheet_value)
+        _reject_new_tortle_natural_armor_provenance(sheet_value)
         if campaign_id is not None:
             sheet_value["edition"] = campaign_rules_edition(campaign_id)
         sheet_value = finalize_actor_sheet_rulings(sheet_value, campaign_id)
@@ -26752,12 +27140,11 @@ def _create_server(
         )
 
     def character_list(
-        campaign_id: str | None = None,
+        campaign_id: str,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
     ) -> list[dict[str, Any]]:
         """List bounded actor identities; use get/batch for full authorized cards."""
-        if campaign_id is not None:
-            access.require_campaign(campaign_id, principal_id)
+        access.require_campaign(campaign_id, principal_id)
         result: list[dict[str, Any]] = []
         for item in characters.list(system_id=DND5E.id, campaign_id=campaign_id):
             visible = visible_character_view(item, principal_id)
@@ -26806,14 +27193,22 @@ def _create_server(
         if not idempotency_key:
             raise ValueError("idempotency_key is required for character instantiation")
         template = characters.get(template_id)
+        if template.campaign_id is not None:
+            raise ValueError("template_id must reference a global library actor")
         sheet = deepcopy(template.sheet)
         require_engine_owned_short_rest_hit_die_state(sheet)
         _reject_new_intrinsic_attack_provenance(sheet)
+        _reject_new_tortle_natural_armor_provenance(sheet)
         sheet["edition"] = campaign_rules_edition(campaign_id)
         sheet = finalize_actor_sheet_rulings(sheet, campaign_id)
         instance_name = name if name is not None else template.name
+        visible_template_notes = (
+            template.notes
+            if principal_id == LOCAL_SYSTEM_PRINCIPAL_ID
+            else default_character_notes()
+        )
         notes = canonical_character_notes(
-            template.notes,
+            visible_template_notes,
             character_type=template.character_type,
             name=instance_name,
             summary=template.summary,
@@ -26855,6 +27250,7 @@ def _create_server(
         sheet_value = deepcopy(sheet or default_character_sheet())
         require_engine_owned_short_rest_hit_die_state(sheet_value)
         _reject_new_intrinsic_attack_provenance(sheet_value)
+        _reject_new_tortle_natural_armor_provenance(sheet_value)
         sheet_value["edition"] = campaign_rules_edition(campaign_id)
         sheet_value = finalize_actor_sheet_rulings(sheet_value, campaign_id)
         normalized_sheet = validate_character_sheet(
@@ -26881,13 +27277,14 @@ def _create_server(
     ) -> dict[str, Any]:
         """Read one validated D&D character card."""
         current = characters.get(character_id)
-        if current.campaign_id is not None:
-            access.require_actor(
-                current.campaign_id,
-                current.id,
-                principal_id,
-                private=True,
-            )
+        if current.campaign_id is None:
+            return library_character_view(current, principal_id)
+        access.require_actor(
+            current.campaign_id,
+            current.id,
+            principal_id,
+            private=True,
+        )
         return character_view(current)
 
     @_agent_ruling_boundary
@@ -26903,6 +27300,7 @@ def _create_server(
         response_extra: dict[str, Any] | None = None,
         flatten_response_extra: bool = False,
         rule_receipts: list[dict[str, Any]] | None = None,
+        expected_campaign_revision: int | None = None,
     ) -> dict[str, Any]:
         """Persist a D&D schema mutation with derived values recalculated."""
         current = characters.get(character_id)
@@ -26928,6 +27326,7 @@ def _create_server(
             response_extra=response_extra,
             flatten_response_extra=flatten_response_extra,
             rule_receipts=rule_receipts,
+            expected_campaign_revision=expected_campaign_revision,
         )
 
     @public_tool()
@@ -26968,6 +27367,10 @@ def _create_server(
         normalized_sheet = validate_character_sheet(
             sheet_value,
             rules=(effective_rule_context(current.campaign_id) if current.campaign_id else None),
+        )
+        _require_preserved_tortle_natural_armor_provenance(
+            current.sheet,
+            normalized_sheet,
         )
         normalized_notes = validate_character_notes(notes if notes is not None else current.notes)
         return update_character(
@@ -29596,7 +29999,9 @@ def _create_server(
                 raise ValueError(str(exc)) from exc
             source_actor = combat_actor_snapshot(character_id)
             source_actor["sheet"] = applied["sheet"]
-            source_actor["derived"] = derive_character_sheet(applied["sheet"])
+            source_actor["derived"] = derive_character_sheet(
+                applied["sheet"], character_id=character_id
+            )
             target_actor = combat_actor_snapshot(target_id)
             settled_spark = resolve_divine_spark_to_sheet(
                 source_actor,
@@ -29914,9 +30319,7 @@ def _create_server(
         operation = "character.death_save.resolve"
         branch_id = require_current_branch(current.campaign_id, None)
         request_payload = {"operation": operation, "character_id": current.id}
-        scope = (
-            f"character-write:{current.campaign_id}:{branch_id}:{principal_id}:{current.id}"
-        )
+        scope = f"character-write:{current.campaign_id}:{branch_id}:{principal_id}:{current.id}"
         replay = replay_idempotent(scope, idempotency_key, request_payload)
         if replay is not None:
             return replay
@@ -29951,13 +30354,9 @@ def _create_server(
                         "the request"
                     )
             elapsed_tick = int(
-                dict(dict(campaign.state or {}).get("game_time") or {}).get(
-                    "elapsed_ticks", 0
-                )
+                dict(dict(campaign.state or {}).get("game_time") or {}).get("elapsed_ticks", 0)
             )
-            last_tick = dict(current.sheet.get("combat") or {}).get(
-                "last_death_save_elapsed_tick"
-            )
+            last_tick = dict(current.sheet.get("combat") or {}).get("last_death_save_elapsed_tick")
             require_death_save_eligibility(current.sheet)
             if last_tick is not None and int(last_tick) >= elapsed_tick:
                 raise CombatEngineError(
@@ -29971,9 +30370,7 @@ def _create_server(
         )
         rule_receipts: list[dict[str, Any]] = []
         if elapsed_tick is not None:
-            applied["sheet"].setdefault("combat", {})[
-                "last_death_save_elapsed_tick"
-            ] = elapsed_tick
+            applied["sheet"].setdefault("combat", {})["last_death_save_elapsed_tick"] = elapsed_tick
             rule_receipts = core_receipts(
                 effective_rule_context(current.campaign_id, branch_id=branch_id),
                 ["dnd5e.core.mcp.death_save_turn_cadence"],
@@ -31081,9 +31478,7 @@ def _create_server(
                 validate_actor_knowledge_source_audience(
                     campaign_id,
                     branch_id,
-                    source_event_id=(
-                        str(source_event_id) if source_event_id is not None else None
-                    ),
+                    source_event_id=(str(source_event_id) if source_event_id is not None else None),
                     event_audience_scope=(
                         None if source_event_id is not None else event_audience_scope
                     ),
@@ -31494,9 +31889,7 @@ def _create_server(
     ) -> list[dict[str, Any]]:
         """List audited reversible campaign and character mutations."""
         access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
-        return [
-            asdict(item) for item in revisions.history(campaign_id, limit=limit, offset=offset)
-        ]
+        return [asdict(item) for item in revisions.history(campaign_id, limit=limit, offset=offset)]
 
     def state_undo(
         campaign_id: str,
@@ -31916,9 +32309,7 @@ def _create_server(
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
     ) -> dict[str, Any]:
         """Retrieve current continuity plus pinned, source-exact DM module context."""
-        continuity_purposes = NPC_TURN_PURPOSES | BOUNDED_EVALUATION_PURPOSES | {
-            "actor_memory"
-        }
+        continuity_purposes = NPC_TURN_PURPOSES | BOUNDED_EVALUATION_PURPOSES | {"actor_memory"}
         if purpose not in continuity_purposes:
             raise ValueError(f"unsupported continuity context purpose: {purpose}")
         live_turn_purposes = {
@@ -31976,9 +32367,7 @@ def _create_server(
             candidate = str(item or "").strip()
             if candidate.startswith("event:"):
                 if re.fullmatch(r"event:[^\s:][^\s]{0,279}", candidate) is None:
-                    raise ValueError(
-                        "related_refs[] event refs must use event:<non-empty-id>"
-                    )
+                    raise ValueError("related_refs[] event refs must use event:<non-empty-id>")
                 resolved_related_refs.add(candidate)
             else:
                 resolved_related_refs.add(
@@ -32170,10 +32559,7 @@ def _create_server(
             )
             memory_refs = {
                 *resolved_related_refs,
-                *(
-                    f"event:{item}"
-                    for item in normalized_stimulus.get("source_event_ids") or []
-                ),
+                *(f"event:{item}" for item in normalized_stimulus.get("source_event_ids") or []),
             }
             actor_memory = actor_memory_projection(
                 campaign_id=campaign_id,
@@ -32406,9 +32792,7 @@ def _create_server(
                 "retrieval": {
                     **dict(result.get("retrieval") or {}),
                     "actor_state_count": len(actor_state),
-                    "actor_memory_selected_count": actor_memory["diagnostics"][
-                        "selected_count"
-                    ],
+                    "actor_memory_selected_count": actor_memory["diagnostics"]["selected_count"],
                     "conversation_event_count": len(conversation_events),
                 },
             }
@@ -34971,8 +35355,7 @@ def _create_server(
             values = [
                 asdict(hit)
                 for hit in hits
-                if hit.metadata.get("visibility", "restricted")
-                in PLAYER_MODULE_VISIBILITY_SCOPES
+                if hit.metadata.get("visibility", "restricted") in PLAYER_MODULE_VISIBILITY_SCOPES
             ]
         values, page = _bounded_page(
             values,
@@ -35188,10 +35571,7 @@ def _create_server(
             ]
         values, pagination = _bounded_page(
             values,
-            scope=(
-                f"rule_search:{campaign_id}:{principal_id}:{query}:"
-                f"{json_sha256(filter_data)}"
-            ),
+            scope=(f"rule_search:{campaign_id}:{principal_id}:{query}:{json_sha256(filter_data)}"),
             limit=top_k,
             cursor=cursor,
         )
@@ -37538,6 +37918,12 @@ def _create_server(
         provenance: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create or replace an inactive draft and validate its safe D&D mechanic IR."""
+        definition_id = str(manifest.get("id") or "")
+        _validate_unreserved_rule_definition_identity(definition_id)
+        _validate_reserved_official_artifact_identities(
+            definition_id=definition_id,
+            artifacts=(item for item in artifacts or [] if isinstance(item, dict)),
+        )
         return save_rule_pack_draft(
             manifest=manifest,
             artifacts=artifacts,
@@ -37553,6 +37939,12 @@ def _create_server(
         provenance: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Draft a pack whose citations are resolved from imported rule chunks."""
+        definition_id = str(manifest.get("id") or "")
+        _validate_unreserved_rule_definition_identity(definition_id)
+        _validate_reserved_official_artifact_identities(
+            definition_id=definition_id,
+            artifacts=(item for item in artifacts or [] if isinstance(item, dict)),
+        )
         source = rules.source(source_id)
         if source["system_id"] != DND5E.id:
             raise ValueError("rule source is not a D&D source")
@@ -37675,6 +38067,7 @@ def _create_server(
         pack_id = str(manifest.get("id") or "").strip()
         if not pack_id:
             raise ValueError("manifest.id is required")
+        _validate_unreserved_rule_definition_identity(pack_id)
         payload = {
             "job_id": job_id,
             "operation": "compile",
@@ -37722,6 +38115,7 @@ def _create_server(
 
     def rule_pack_install(pack_id: str, version: str) -> dict[str, Any]:
         """Install one validated immutable version without enabling it for a campaign."""
+        _validate_unreserved_rule_definition_identity(pack_id)
         return asdict(rule_packs.install(pack_id, version))
 
     def rule_pack_list(pack_id: str | None = None) -> list[dict[str, Any]]:
@@ -37957,6 +38351,8 @@ def _create_server(
             "options": options or {},
             "branch_id": resolved_branch_id,
         }
+        if enabled:
+            verified_reserved_official_rule_definition(pack_id, version)
         scope = f"campaign-rule-pack-set:{campaign_id}:{resolved_branch_id}:{principal_id}"
         replay = replay_idempotent(scope, idempotency_key, payload)
         if replay is not None:
@@ -39717,10 +40113,16 @@ def _create_server(
             raise ValueError(
                 "expected_revision and idempotency_key are required for content selection"
             )
+        campaign = campaigns.get(current.campaign_id)
         candidates = available_content_artifacts(current.campaign_id)
-        match = next((item for item in candidates if item[2].get("id") == artifact_id), None)
-        if match is None:
+        matches = [item for item in candidates if item[2].get("id") == artifact_id]
+        if not matches:
             raise LookupError("content artifact is not available for this campaign")
+        if len(matches) != 1:
+            raise RulesetUnavailableError(
+                "content artifact identity is ambiguous across active rule packs"
+            )
+        match = matches[0]
         pack_id, version, artifact = match
         application_state = str(artifact.get("application_state") or "selection_ready")
         if application_state != "selection_ready":
@@ -39737,6 +40139,8 @@ def _create_server(
         kind = str(artifact.get("kind") or "")
         card = deepcopy(dict(artifact.get("card") or {}))
         selection = deepcopy(selection or {})
+        if TORTLE_NATURAL_ARMOR_AUTHORITY_KEY in selection:
+            raise ValueError("official expansion authority is server-managed")
         contract_required = artifact.get("selection_contract") is not None
         if contract_required:
             contract_errors = selection_input_errors(artifact, selection)
@@ -39753,6 +40157,37 @@ def _create_server(
                     "errors": contract_errors,
                 }
         runtime_context = content_runtime_context(pack_id, version, artifact)
+        tortle_archive_verification = (
+            verified_reserved_official_rule_definition(pack_id, version)
+            if artifact_id == TORTLE_NATURAL_ARMOR_ARTIFACT_ID
+            else None
+        )
+        tortle_natural_armor_authority = _verified_tortle_natural_armor_authority(
+            pack_id=pack_id,
+            pack_version=version,
+            artifact_id=artifact_id,
+            provenance=rule_packs.provenance(pack_id, version),
+            archive_definition_verified=tortle_archive_verification is not None,
+        )
+        if tortle_natural_armor_authority is not None:
+            authority_id = uuid4().hex
+            tortle_natural_armor_authority = {
+                **tortle_natural_armor_authority,
+                "authority_id": authority_id,
+                "authorization": sign_receipt(
+                    {
+                        "schema_version": 1,
+                        "purpose": "official_content_authority",
+                        "character_id": current.id,
+                        "artifact_id": TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
+                        "package_id": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
+                        "package_version": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
+                        "package_checksum": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_CHECKSUM,
+                        "authority_id": authority_id,
+                    },
+                    content_authority_secret,
+                ),
+            }
         content_receipt: dict[str, Any] | None = None
         raw_selection_contract = artifact.get("selection_contract")
         if isinstance(raw_selection_contract, dict) and not selection_contract_errors(artifact):
@@ -39763,14 +40198,18 @@ def _create_server(
                     "mechanic_id": str(selection_contract["materializer"]),
                     "event": "character.content.apply",
                     "artifact_id": artifact_id,
+                    "character_id": current.id,
                     "pack_id": pack_id,
                     "pack_version": version,
                     "reviewed_content_hash": str(selection_contract["reviewed_content_hash"]),
                     "selection": deepcopy(selection),
                     "rule_refs": list(artifact.get("rule_refs") or []),
                 }
+                if tortle_natural_armor_authority is not None:
+                    content_receipt["content_authority_id"] = str(
+                        tortle_natural_armor_authority["authority_id"]
+                    )
         sheet = deepcopy(current.sheet)
-        campaign = campaigns.get(current.campaign_id)
         phase = authoritative_phase(current.campaign_id)
         spellbook_copy: dict[str, Any] | None = None
         subclass_spell_grants: list[dict[str, Any]] = []
@@ -43356,6 +43795,11 @@ def _create_server(
                 item.get("artifact_id") == artifact_id for item in sheet["content"]["selections"]
             ):
                 raise ValueError("content selection is already present")
+            recorded_selection = deepcopy(selection)
+            if tortle_natural_armor_authority is not None:
+                recorded_selection[TORTLE_NATURAL_ARMOR_AUTHORITY_KEY] = deepcopy(
+                    tortle_natural_armor_authority
+                )
             sheet["content"]["selections"].append(
                 {
                     "artifact_id": artifact_id,
@@ -43365,7 +43809,7 @@ def _create_server(
                     "pack_version": version,
                     "rule_refs": list(artifact.get("rule_refs") or []),
                     "mechanic_refs": list(artifact.get("mechanic_refs") or []),
-                    "selection": selection,
+                    "selection": recorded_selection,
                 }
             )
         resource_sync = synchronize_class_feature_resources(sheet)
@@ -43429,6 +43873,7 @@ def _create_server(
             response_extra=response_extra,
             flatten_response_extra=True,
             rule_receipts=([content_receipt] if content_receipt is not None else None),
+            expected_campaign_revision=campaign.revision,
         )
 
     def character_rule_artifact_add(
@@ -44312,17 +44757,10 @@ boundary.
 
         profile = rule_profiles.get(campaign_id)
         edition = str(profile.edition) if profile is not None else ""
-        all_official = {
-            str(item["id"]): dict(item) for item in official_expansion_catalog()
-        }
-        all_support = {
-            str(item["id"]): dict(item) for item in official_expansion_support_catalog()
-        }
+        all_official = {str(item["id"]): dict(item) for item in official_expansion_catalog()}
+        all_support = {str(item["id"]): dict(item) for item in official_expansion_support_catalog()}
         official = (
-            {
-                str(item["id"]): dict(item)
-                for item in official_expansion_catalog(edition)
-            }
+            {str(item["id"]): dict(item) for item in official_expansion_catalog(edition)}
             if edition
             else {}
         )
@@ -44372,19 +44810,15 @@ boundary.
                     dict(official.get(item.addon_id) or {}).get("publication_id") or ""
                 ),
                 "classification": str(
-                    dict(
-                        official.get(item.addon_id)
-                        or support.get(item.addon_id)
-                        or {}
-                    ).get("classification")
+                    dict(official.get(item.addon_id) or support.get(item.addon_id) or {}).get(
+                        "classification"
+                    )
                     or ""
                 ),
                 "editions": list(
-                    dict(
-                        official.get(item.addon_id)
-                        or support.get(item.addon_id)
-                        or {}
-                    ).get("editions")
+                    dict(official.get(item.addon_id) or support.get(item.addon_id) or {}).get(
+                        "editions"
+                    )
                     or []
                 ),
             }
@@ -44872,6 +45306,7 @@ boundary.
             raise ValueError("payload.manifest must be an object")
         for field in ("id", "version", "system_id"):
             required(manifest, field)
+        _validate_unreserved_rule_definition_identity(str(manifest["id"]))
         editions = manifest.get("editions")
         if not isinstance(editions, list) or not editions:
             raise ValueError("payload.manifest.editions must be a non-empty array")
@@ -44882,6 +45317,10 @@ boundary.
             if data.get(field) is not None and not isinstance(data[field], dict):
                 raise ValueError(f"payload.{field} must be an object")
         job = require_import_job(campaign_id, job_id, "rulebook")
+        _validate_reserved_official_artifact_identities(
+            definition_id=str(manifest["id"]),
+            artifacts=(import_candidate_view(item) for item in job.candidates),
+        )
         if dict(job.result or {}).get("finalized_package"):
             raise ValueError("a finalized rulebook draft is immutable")
         review_finalization = dict(dict(job.result or {}).get("review_finalization") or {})
@@ -45792,6 +46231,8 @@ boundary.
             "branch_id": branch_id,
             "expected_revision": expected_revision,
         }
+        if enabled:
+            _validate_reserved_official_package_identity(addons.get_package(addon_id, version))
         scope = f"addon-activation:{campaign_id}:{principal_id}"
         replay = replay_idempotent(scope, idempotency_key, request)
         if replay is not None:
@@ -46242,9 +46683,7 @@ boundary.
                 raise LookupError(module_id)
             if bool(module.get("active")):
                 raise ValueError("an active module Pack cannot be removed")
-            playthrough = dict(
-                campaigns.get(campaign_id).state.get("playthrough_manifest") or {}
-            )
+            playthrough = dict(campaigns.get(campaign_id).state.get("playthrough_manifest") or {})
             if module_id in {str(item) for item in playthrough.get("module_ids") or []}:
                 raise ValueError(
                     "a module Pack referenced by the playthrough manifest cannot be removed"
@@ -46524,7 +46963,7 @@ boundary.
                 },
             }
         else:
-            result = character_list(data.get("campaign_id"), principal_id)
+            result = character_list(str(required(data, "campaign_id")), principal_id)
             result = sorted(
                 result, key=lambda item: (str(item.get("name", "")), str(item.get("id", "")))
             )
@@ -46532,8 +46971,7 @@ boundary.
             result, page = _bounded_page(
                 result,
                 scope=(
-                    f"character_query:{view}:{principal_id}:"
-                    f"{str(data.get('campaign_id') or '')}"
+                    f"character_query:{view}:{principal_id}:{str(data.get('campaign_id') or '')}"
                 ),
                 query=query or str(data.get("query") or ""),
                 limit=data.get("limit", limit),
@@ -46632,7 +47070,7 @@ boundary.
         solution = dict(requirement.get("solution") or {})
         expected = set(solution.get("numeric_parameters") or [])
         owner_sheet = deepcopy(owner.sheet)
-        derived = derive_character_sheet(owner_sheet)
+        derived = derive_character_sheet(owner_sheet, character_id=owner.id)
         abilities = dict(derived.get("ability_modifiers") or {})
         spellcasting = dict(derived.get("spellcasting") or {})
         classes = [
@@ -46981,6 +47419,7 @@ boundary.
                 "combat": next_encounter,
                 "campaign_revision": campaign.revision + 1,
             }
+        _reject_new_tortle_natural_armor_provenance(actor_sheet)
         created = actor_lifecycle.create(
             campaign_id,
             system_id=DND5E.id,
@@ -47210,6 +47649,7 @@ boundary.
                 "actor_knowledge_imported": False,
             }
         elif mode == "direct":
+            _reject_new_tortle_natural_armor_provenance(data.get("sheet"))
             result = character_create(
                 required(data, "name"),
                 data.get("campaign_id"),
@@ -47402,6 +47842,7 @@ boundary.
                 },
             }
         elif mode == "build":
+            _reject_new_tortle_natural_armor_provenance(data.get("sheet"))
             result = character_build(
                 required(data, "campaign_id"),
                 required(data, "name"),
@@ -48960,7 +49401,7 @@ boundary.
             sheet = validate_character_sheet(actor.sheet)
             progression = dict(sheet["progression"])
             hp = dict(sheet["combat"]["hp"])
-            effective_hp = dict(derive_character_sheet(sheet)["hit_points"])
+            effective_hp = dict(derive_character_sheet(sheet, character_id=actor.id)["hit_points"])
             conditions = {str(item) for item in sheet.get("conditions") or []}
             narrative_status = str(member["status"])
             status = (
@@ -49196,7 +49637,8 @@ boundary.
             "configure_ending",
             "sync",
             "verify_ending",
-        ] | None = None,
+        ]
+        | None = None,
         payload: dict[str, Any] | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
         expected_revision: int | None = None,
@@ -49744,9 +50186,12 @@ boundary.
                 branch_id=resolved_branch_id,
                 expected_revision_id=expected_revision_id,
                 status=(
-                    "superseded" if action == "supersede"
-                    else "retracted" if action == "retract"
-                    else "forgotten" if action == "forget"
+                    "superseded"
+                    if action == "supersede"
+                    else "retracted"
+                    if action == "retract"
+                    else "forgotten"
+                    if action == "forget"
                     else data.get("status")
                 ),
                 valid_from=optional_datetime(data.get("valid_from"), "valid_from"),
@@ -49811,7 +50256,10 @@ boundary.
             )
         else:
             result = actor_knowledge_list(
-                campaign_id, actor_id, data.get("branch_id"), principal_id,
+                campaign_id,
+                actor_id,
+                data.get("branch_id"),
+                principal_id,
                 include_inactive,
             )
             result, page = _bounded_page(
@@ -50761,8 +51209,7 @@ boundary.
             page_items, page = _bounded_page(
                 matches,
                 scope=(
-                    f"exposure:search:{current.id}:{current.revision}:"
-                    f"{' '.join(sorted(terms))}"
+                    f"exposure:search:{current.id}:{current.revision}:{' '.join(sorted(terms))}"
                 ),
                 limit=limit,
                 cursor=cursor,

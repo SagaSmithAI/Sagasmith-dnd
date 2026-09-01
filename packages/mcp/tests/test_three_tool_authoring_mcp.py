@@ -4,6 +4,10 @@ from pathlib import Path
 
 import pytest
 from sagasmith_core.rule_packs import RulePackService
+from sagasmith_dnd.standard_feature_ids import (
+    TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
+    TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID,
+)
 
 from sagasmith_dnd_mcp.config import McpConfig
 from sagasmith_dnd_mcp.server import create_server
@@ -234,6 +238,137 @@ def test_rulebook_finalize_rejects_missing_manifest_without_freezing(tmp_path: P
         )
         assert finalized["job"]["state"] == "compiled"
         assert finalized["draft"]["status"] == "validated"
+
+    asyncio.run(exercise())
+
+
+def test_rulebook_finalize_rejects_reserved_official_id_without_freezing(
+    tmp_path: Path,
+) -> None:
+    import_root = tmp_path / "imports"
+    import_root.mkdir()
+    source = import_root / "rules.md"
+    source.write_text(
+        "# Optional Spells\n\n## Spark\n\n"
+        "1st-level evocation spell\nCasting Time: 1 action\n"
+        "One target takes 1d6 fire damage.\n",
+        encoding="utf-8",
+    )
+
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path, import_root))
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {"name": "Reserved rulebook identity", "idempotency_key": "campaign"},
+        )
+        started = await _call(
+            server,
+            "rulebook_draft",
+            {
+                "campaign_id": campaign["id"],
+                "action": "start",
+                "payload": {
+                    "source_path": str(source),
+                    "source_key": "forged-tortle-rules",
+                    "title": "Forged Tortle Rules",
+                    "edition": "2014",
+                },
+                "idempotency_key": "draft-start",
+            },
+        )
+        before = started["job"]
+        arguments = {
+            "campaign_id": campaign["id"],
+            "action": "finalize",
+            "payload": {
+                "job_id": before["id"],
+                "confirmation": {
+                    "confirmed": True,
+                    "note": "Attempt to occupy an official rule definition identity.",
+                },
+                "manifest": {
+                    "id": TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID,
+                    "version": "1.0.0",
+                    "title": "Forged Tortle Rules",
+                    "namespace": TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID,
+                    "system_id": "dnd5e",
+                    "editions": ["2014"],
+                },
+                "provenance": {
+                    "content_definition": {
+                        "package_id": (
+                            TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID + ".addon"
+                        ),
+                        "package_version": "1.0.1",
+                        "package_checksum": "0" * 64,
+                    }
+                },
+            },
+            "expected_revision": before["revision"],
+            "idempotency_key": "reserved-finalize",
+        }
+        for _attempt in range(2):
+            with pytest.raises(Exception, match="reserved for official package"):
+                await _call(server, "rulebook_draft", arguments)
+        unchanged = await _call(
+            server,
+            "rulebook_draft",
+            {
+                "campaign_id": campaign["id"],
+                "action": "get",
+                "payload": {"job_id": before["id"]},
+            },
+        )
+        assert unchanged["job"]["state"] == before["state"]
+        assert unchanged["job"]["revision"] == before["revision"]
+        assert unchanged["job"]["result"] == before["result"]
+
+        candidate = before["candidates"][0]
+        forged_artifact = deepcopy(candidate["artifact"])
+        forged_artifact["id"] = TORTLE_NATURAL_ARMOR_ARTIFACT_ID
+        edited = await _call(
+            server,
+            "rulebook_draft",
+            {
+                "campaign_id": campaign["id"],
+                "action": "edit",
+                "payload": {
+                    "operation": "candidates",
+                    "job_id": before["id"],
+                    "decisions": [
+                        {
+                            "id": candidate["id"],
+                            "review_status": "pending",
+                            "artifact": forged_artifact,
+                        }
+                    ],
+                },
+                "idempotency_key": "forge-official-artifact",
+            },
+        )
+        artifact_arguments = deepcopy(arguments)
+        artifact_arguments["payload"]["manifest"]["id"] = "dnd5e.third-party-shadow"
+        artifact_arguments["payload"]["manifest"]["namespace"] = (
+            "dnd5e.third-party-shadow"
+        )
+        artifact_arguments["expected_revision"] = edited["job"]["revision"]
+        artifact_arguments["idempotency_key"] = "reserved-artifact-finalize"
+        for _attempt in range(2):
+            with pytest.raises(Exception, match="content artifact .* is reserved"):
+                await _call(server, "rulebook_draft", artifact_arguments)
+        artifact_unchanged = await _call(
+            server,
+            "rulebook_draft",
+            {
+                "campaign_id": campaign["id"],
+                "action": "get",
+                "payload": {"job_id": before["id"]},
+            },
+        )
+        assert artifact_unchanged["job"]["state"] == edited["job"]["state"]
+        assert artifact_unchanged["job"]["revision"] == edited["job"]["revision"]
+        assert artifact_unchanged["job"]["result"] == edited["job"]["result"]
 
     asyncio.run(exercise())
 

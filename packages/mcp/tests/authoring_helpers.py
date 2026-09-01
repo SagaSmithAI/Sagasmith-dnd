@@ -22,21 +22,34 @@ async def import_and_activate_addon_fixture(
     mechanics: list[dict[str, Any]],
     expected_revision: int,
     request_key: str,
+    content_dependencies_override: list[dict[str, Any]] | None = None,
+    content_package_id_override: str | None = None,
+    content_package_version_override: str | None = None,
+    source_key_override: str | None = None,
+    source_chunks_override: list[str] | None = None,
+    before_import: Callable[[dict[str, Any]], None] | None = None,
+    before_activate: Callable[[dict[str, Any], dict[str, Any]], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
     """Import a finalized synthetic addon fixture through the new Pack boundary."""
 
-    package_id = str(manifest["id"])
-    version = str(manifest["version"])
-    dependencies = [
-        {
-            "kind": str(item.get("kind") or "addon"),
-            "id": str(item["id"]),
-            "version": str(item["version"]),
-            "checksum": str(item["checksum"]),
-            "optional": bool(item.get("optional", False)),
-        }
-        for item in list(manifest.get("dependencies") or [])
-    ]
+    definition_id = str(manifest["id"])
+    package_id = content_package_id_override or definition_id
+    definition_version = str(manifest["version"])
+    package_version = content_package_version_override or definition_version
+    dependencies = (
+        [
+            {
+                "kind": str(item.get("kind") or "addon"),
+                "id": str(item["id"]),
+                "version": str(item["version"]),
+                "checksum": str(item["checksum"]),
+                "optional": bool(item.get("optional", False)),
+            }
+            for item in list(manifest.get("dependencies") or [])
+        ]
+        if content_dependencies_override is None
+        else copy.deepcopy(content_dependencies_override)
+    )
     rule_dependencies = [
         {
             "kind": "rule_pack",
@@ -48,22 +61,31 @@ async def import_and_activate_addon_fixture(
         for item in list(manifest.get("dependencies") or [])
     ]
     package_manifest = {
-        key: copy.deepcopy(value)
-        for key, value in manifest.items()
-        if key != "dependencies"
+        key: copy.deepcopy(value) for key, value in manifest.items() if key != "dependencies"
     }
-    source_key = f"fixture.{request_key}"
+    source_key = source_key_override or f"fixture.{request_key}"
     names = [str(dict(item.get("card") or {}).get("name") or item["id"]) for item in artifacts]
-    source_text = "# Reviewed fixture\n\n" + "\n\n".join(
-        f"## {name}\n\nMechanics and choices for {name} were reviewed for this fixture."
-        for name in names
-    )
+    source_chunks = list(source_chunks_override or [])
+    if not source_chunks:
+        source_chunks = [
+            "# Reviewed fixture\n\n"
+            + "\n\n".join(
+                f"## {name}\n\nMechanics and choices for {name} were reviewed for this fixture."
+                for name in names
+            )
+        ]
+    if any(not isinstance(item, str) or not item for item in source_chunks):
+        raise ValueError("source_chunks_override must contain non-empty strings")
+    source_text = "\n\n".join(source_chunks)
     source_checksum = hashlib.sha256(source_text.encode()).hexdigest()
-    chunk_key = rule_chunk_key(source_key, 0, 0, source_text)
+    chunk_keys = [
+        rule_chunk_key(source_key, 0, index, chunk_text)
+        for index, chunk_text in enumerate(source_chunks)
+    ]
     citation = {
         "source": f"rule-source:{source_key}",
         "source_key": source_key,
-        "chunk_key": chunk_key,
+        "chunk_key": chunk_keys[0],
         "source_checksum": source_checksum,
         "page_start": 1,
         "page_end": 1,
@@ -80,8 +102,8 @@ async def import_and_activate_addon_fixture(
         mechanic["citations"] = [copy.deepcopy(citation)]
         bound_mechanics.append(mechanic)
     descriptor = {
-        "id": package_id,
-        "version": version,
+        "id": definition_id,
+        "version": definition_version,
         "system_id": "dnd5e",
         "manifest": {
             **package_manifest,
@@ -103,7 +125,7 @@ async def import_and_activate_addon_fixture(
                 "title": str(manifest.get("title") or package_id),
                 "edition": str(list(manifest.get("editions") or ["2014"])[0]),
                 "locale": "en",
-                "version": version,
+                "version": definition_version,
                 "publication_id": source_key,
                 "authority": "supplement",
                 "canonical_source_key": None,
@@ -123,18 +145,23 @@ async def import_and_activate_addon_fixture(
                         "chunks": [
                             {
                                 "key": chunk_key,
-                                "ordinal": 0,
+                                "ordinal": index,
                                 "heading_path": ["Reviewed fixture"],
-                                "content": source_text,
-                                "content_hash": source_checksum,
-                                "token_count": len(source_text.split()),
+                                "content": chunk_text,
+                                "content_hash": hashlib.sha256(
+                                    chunk_text.encode()
+                                ).hexdigest(),
+                                "token_count": len(chunk_text.split()),
                                 "metadata": {
-                                    "start_offset": 0,
-                                    "end_offset": len(source_text),
+                                    "start_offset": source_text.find(chunk_text),
+                                    "end_offset": source_text.find(chunk_text) + len(chunk_text),
                                     "page_start": 1,
                                     "page_end": 1,
                                 },
                             }
+                            for index, (chunk_key, chunk_text) in enumerate(
+                                zip(chunk_keys, source_chunks, strict=True)
+                            )
                         ],
                     }
                 ],
@@ -145,7 +172,7 @@ async def import_and_activate_addon_fixture(
     }
     package, blobs = build_rule_content_package(
         package_id=package_id,
-        version=version,
+        version=package_version,
         system_id="dnd5e",
         manifest={
             **package_manifest,
@@ -165,6 +192,8 @@ async def import_and_activate_addon_fixture(
         },
         dependencies=dependencies,
     )
+    if before_import is not None:
+        before_import(package)
     archive_dir = home / "artifacts" / "content-packages"
     archive_dir.mkdir(parents=True, exist_ok=True)
     archive_name = f"{request_key}.sagasmith-pack"
@@ -182,6 +211,8 @@ async def import_and_activate_addon_fixture(
             "idempotency_key": f"{request_key}:import",
         },
     )
+    if before_activate is not None:
+        await before_activate(package, imported)
     activated = await call(
         server,
         "content_pack",
@@ -191,7 +222,7 @@ async def import_and_activate_addon_fixture(
                 "campaign_id": campaign_id,
                 "kind": "addon",
                 "addon_id": package_id,
-                "version": version,
+                "version": package_version,
             },
             "expected_revision": expected_revision,
             "idempotency_key": f"{request_key}:activate",

@@ -591,6 +591,16 @@ BOUNDARIES = (
         "bundled:srd2014/01_Races/Races_Each/Dwarf.md#speed",
     ),
     CoreBoundary(
+        "dnd5e.core.ac.tortle_natural_armor",
+        ("2014",),
+        "character_schema._derive_armor_class",
+        (
+            "tests/test_character_schema.py::"
+            "test_2014_tortle_natural_armor_ignores_worn_armor_but_allows_shields",
+        ),
+        "rulebook:tortle-package/tortle#natural-armor",
+    ),
+    CoreBoundary(
         "dnd5e.core.damage.knockout",
         ("2014", "2024"),
         "combat_engine._apply_adjusted_damage",

@@ -44,9 +44,18 @@ from sagasmith_dnd.spell_resolution import (
 )
 from sagasmith_dnd.standard_feature_ids import (
     CORE_DWARF_HEAVY_ARMOR_SPEED_MECHANIC_ID,
+    CORE_TORTLE_NATURAL_ARMOR_MECHANIC_ID,
     SRD2014_DWARF_SPEED_LEGACY_ARTIFACT_IDS,
     SRD2014_DWARF_SPEED_LEGACY_PACK_VERSIONS,
     SRD2014_DWARF_SPEED_SOURCE_RULE_REF,
+    TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
+    TORTLE_NATURAL_ARMOR_AUTHORITY_KEY,
+    TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_CHECKSUM,
+    TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
+    TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
+    TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID,
+    TORTLE_NATURAL_ARMOR_LEGACY_PACK_VERSIONS,
+    TORTLE_NATURAL_ARMOR_SOURCE_RULE_REF_PREFIX,
 )
 from sagasmith_dnd.vocabulary import (
     ATTACK_MODES,
@@ -3693,9 +3702,10 @@ def validate_character_notes(
         }
         if not portrait_ref["asset_key"] or not portrait_ref["alt"]:
             raise ValueError("notes.profile.portrait_ref asset_key and alt must not be empty")
-        if not portrait_ref["source"]["package_id"] or not portrait_ref["source"][
-            "package_version"
-        ]:
+        if (
+            not portrait_ref["source"]["package_id"]
+            or not portrait_ref["source"]["package_version"]
+        ):
             raise ValueError(
                 "notes.profile.portrait_ref source package_id and package_version must not be empty"
             )
@@ -3950,8 +3960,60 @@ def armor_proficiency_state(sheet: dict[str, Any]) -> dict[str, Any]:
     return _armor_proficiency_state(validate_character_sheet(sheet))
 
 
+def _2014_tortle_natural_armor_sources(
+    sheet: dict[str, Any],
+    trusted_content_authority_ids: frozenset[str],
+) -> set[str]:
+    """Return source-bound effects allowed to ignore worn armor for 2014 Tortles."""
+
+    if (
+        sheet.get("edition") != "2014"
+        or str(dict(sheet.get("progression") or {}).get("species") or "").casefold() != "tortle"
+    ):
+        return set()
+    legacy_matches = []
+    for selection in dict(sheet.get("content") or {}).get("selections", []):
+        if not isinstance(selection, dict):
+            continue
+        rule_refs = selection.get("rule_refs")
+        raw_authority = dict(selection.get("selection") or {}).get(
+            TORTLE_NATURAL_ARMOR_AUTHORITY_KEY
+        )
+        if not isinstance(raw_authority, dict):
+            continue
+        authority = dict(raw_authority)
+        if (
+            selection.get("kind") == "species"
+            and selection.get("pack_id") == TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID
+            and isinstance(selection.get("pack_version"), str)
+            and selection.get("pack_version") in TORTLE_NATURAL_ARMOR_LEGACY_PACK_VERSIONS
+            and selection.get("artifact_id") == TORTLE_NATURAL_ARMOR_ARTIFACT_ID
+            and isinstance(rule_refs, list)
+            and len(rule_refs) == 2
+            and len(set(rule_refs)) == 2
+            and all(
+                isinstance(rule_ref, str)
+                and rule_ref.startswith(TORTLE_NATURAL_ARMOR_SOURCE_RULE_REF_PREFIX)
+                for rule_ref in rule_refs
+            )
+            and selection.get("mechanic_refs") == []
+            and authority.get("package_id") == TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID
+            and authority.get("package_version") == TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION
+            and authority.get("package_checksum") == TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_CHECKSUM
+            and isinstance(authority.get("authority_id"), str)
+            and authority["authority_id"] in trusted_content_authority_ids
+        ):
+            legacy_matches.append(selection)
+    if len(legacy_matches) > 1:
+        raise ValueError("actor card has more than one legacy Tortle species provenance record")
+    return {TORTLE_NATURAL_ARMOR_ARTIFACT_ID} if legacy_matches else set()
+
+
 def _derive_armor_class(
-    value: dict[str, Any], ability_modifiers: dict[str, int], active_effects: list[dict[str, Any]]
+    value: dict[str, Any],
+    ability_modifiers: dict[str, int],
+    active_effects: list[dict[str, Any]],
+    trusted_content_authority_ids: frozenset[str],
 ) -> tuple[int, dict[str, Any], set[str]]:
     inventory = value["inventory"]
     items = {item["id"]: item for item in inventory["items"]}
@@ -3967,6 +4029,9 @@ def _derive_armor_class(
     }
     unarmored_formulas: list[dict[str, Any]] = []
     valid_unarmored_changes: set[tuple[str, str]] = set()
+    armor_ignoring_sources = _2014_tortle_natural_armor_sources(
+        value, trusted_content_authority_ids
+    )
     for effect in active_effects:
         for change in effect["changes"]:
             if (
@@ -3977,10 +4042,10 @@ def _derive_armor_class(
             ):
                 unarmored_formulas.append(
                     {
-                            "base": int(change["value"]),
-                            "ability": None,
-                            "allows_shield": True,
-                            "includes_dexterity": True,
+                        "base": int(change["value"]),
+                        "ability": None,
+                        "allows_shield": True,
+                        "includes_dexterity": True,
                         "effect_id": effect["id"],
                         "effect_name": effect["name"],
                         "path": change["path"],
@@ -4003,8 +4068,7 @@ def _derive_armor_class(
                 allows_shield = formula.get("allows_shield")
                 includes_dexterity = formula.get("includes_dexterity")
                 if (
-                    set(formula)
-                    == {"base", "ability", "allows_shield", "includes_dexterity"}
+                    set(formula) == {"base", "ability", "allows_shield", "includes_dexterity"}
                     and not isinstance(base, bool)
                     and isinstance(base, int)
                     and base >= 0
@@ -4012,12 +4076,21 @@ def _derive_armor_class(
                     and isinstance(allows_shield, bool)
                     and isinstance(includes_dexterity, bool)
                 ):
+                    ignores_worn_armor = (
+                        effect.get("source") in armor_ignoring_sources
+                        and base == 17
+                        and ability is None
+                        and allows_shield is True
+                        and includes_dexterity is False
+                    )
                     unarmored_formulas.append(
                         {
                             "base": base,
                             "ability": ability,
                             "allows_shield": allows_shield,
                             "includes_dexterity": includes_dexterity,
+                            "ignores_worn_armor": ignores_worn_armor,
+                            "authorized_tortle_natural_armor": ignores_worn_armor,
                             "effect_id": effect["id"],
                             "effect_name": effect["name"],
                             "path": change["path"],
@@ -4081,29 +4154,28 @@ def _derive_armor_class(
     selected_unarmored_change: tuple[str, str] | None = None
     shield_id = inventory["equipment_slots"]["shield"]
     candidates = []
-    if not armor_id:
-        for formula in unarmored_formulas:
-            if shield_id and not formula["allows_shield"]:
-                continue
-            dexterity_bonus = (
-                ability_modifiers["dexterity"] if formula["includes_dexterity"] else 0
+    for formula in unarmored_formulas:
+        if armor_id and not formula.get("ignores_worn_armor", False):
+            continue
+        if shield_id and not formula["allows_shield"]:
+            continue
+        dexterity_bonus = ability_modifiers["dexterity"] if formula["includes_dexterity"] else 0
+        ability = formula["ability"]
+        ability_bonus = ability_modifiers[ability] if ability else 0
+        candidate_total = (
+            formula["base"]
+            + dexterity_bonus
+            + ability_bonus
+            + (shield_bonus if formula["allows_shield"] else 0)
+        )
+        candidates.append(
+            (
+                candidate_total,
+                formula,
+                dexterity_bonus,
+                ability_bonus,
             )
-            ability = formula["ability"]
-            ability_bonus = ability_modifiers[ability] if ability else 0
-            candidate_total = (
-                formula["base"]
-                + dexterity_bonus
-                + ability_bonus
-                + (shield_bonus if formula["allows_shield"] else 0)
-            )
-            candidates.append(
-                (
-                    candidate_total,
-                    formula,
-                    dexterity_bonus,
-                    ability_bonus,
-                )
-            )
+        )
     if candidates:
         unarmored_total, formula, dexterity_bonus, ability_bonus = max(
             candidates,
@@ -4118,6 +4190,11 @@ def _derive_armor_class(
                 else "unarmored_formula"
             )
             breakdown["base"] = formula["base"]
+            if formula.get("authorized_tortle_natural_armor", False):
+                breakdown["authorized_tortle_natural_armor"] = True
+            if armor_id and formula.get("ignores_worn_armor", False):
+                if breakdown["armor"] is not None:
+                    breakdown["armor"]["ignored_for_ac"] = True
             breakdown["dexterity_bonus"] = dexterity_bonus
             if formula["ability"]:
                 breakdown["ability_bonus"] = {
@@ -4597,7 +4674,10 @@ def _has_2014_dwarf_heavy_armor_speed_exception(sheet: dict[str, Any]) -> bool:
 
 
 def derive_character_sheet(
-    sheet: dict[str, Any], *, rules: ResolutionContext | None = None
+    sheet: dict[str, Any],
+    *,
+    rules: ResolutionContext | None = None,
+    trusted_content_authority_ids: frozenset[str] | set[str] | None = None,
 ) -> dict[str, Any]:
     value = validate_character_sheet(sheet)
     level = value["progression"]["level"]
@@ -4630,7 +4710,10 @@ def derive_character_sheet(
     spell_attack_bonus_override = value["spellcasting"]["attack_bonus_override"]
     spell_save_dc_override = value["spellcasting"]["save_dc_override"]
     armor_class, armor_class_breakdown, unresolved_effects = _derive_armor_class(
-        value, ability_modifiers, active_effects
+        value,
+        ability_modifiers,
+        active_effects,
+        frozenset(trusted_content_authority_ids or ()),
     )
     equipped_armor_id = inventory["equipment_slots"]["armor"]
     equipped_armor = next(
@@ -4871,6 +4954,8 @@ def derive_character_sheet(
         core_boundary_ids.append("dnd5e.core.armor.proficiency_and_strength")
     if ignores_armor_strength_speed_penalty:
         core_boundary_ids.append(CORE_DWARF_HEAVY_ARMOR_SPEED_MECHANIC_ID)
+    if derived["armor_class_breakdown"].get("authorized_tortle_natural_armor") is True:
+        core_boundary_ids.append(CORE_TORTLE_NATURAL_ARMOR_MECHANIC_ID)
     if value["edition"] == "2014" and encumbrance["mode"] == "variant":
         core_boundary_ids.append("dnd5e.core.encumbrance")
     derived["rule_receipts"] = [
