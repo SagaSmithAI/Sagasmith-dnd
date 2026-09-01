@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.72.0"
+CORE_RULE_PACK_VERSION = "1.73.0"
 
 
 @dataclass(frozen=True)
@@ -880,8 +880,20 @@ BOUNDARIES = (
     CoreBoundary(
         "dnd5e.core.rest.hit_dice",
         ("2014", "2024"),
-        "lifecycle.roll_rest_hit_dice|apply_rest",
-        ("tests/test_lifecycle.py",),
+        (
+            "lifecycle.roll_rest_hit_dice|apply_rest|"
+            "record_rest_completion|apply_short_rest_hit_die_choice"
+        ),
+        (
+            "tests/test_lifecycle.py::"
+            "test_2014_short_rest_requires_sequential_additional_hit_dice",
+            "packages/mcp/tests/test_rest_hit_dice_mcp.py::"
+            "test_2014_short_rest_hit_dice_are_chosen_sequentially_across_restart",
+            "packages/mcp/tests/test_rest_hit_dice_mcp.py::"
+            "test_2014_short_rest_hit_die_stops_at_full_hp_and_supports_decline",
+            "packages/mcp/tests/test_rest_hit_dice_mcp.py::"
+            "test_2014_short_rest_hit_die_roll_and_state_rollback_together",
+        ),
         "bundled:srd/resting",
     ),
     CoreBoundary(
@@ -894,8 +906,15 @@ BOUNDARIES = (
     CoreBoundary(
         "dnd5e.core.rest.song_of_rest",
         ("2014",),
-        "lifecycle.validate_song_of_rest_source|apply_rest",
-        ("tests/test_lifecycle.py::test_song_of_rest_applies_once_per_eligible_creature",),
+        (
+            "lifecycle.validate_song_of_rest_source|apply_rest|"
+            "apply_short_rest_hit_die_choice"
+        ),
+        (
+            "tests/test_lifecycle.py::test_song_of_rest_applies_once_per_eligible_creature",
+            "packages/mcp/tests/test_rest_hit_dice_mcp.py::"
+            "test_2014_sequential_hit_die_recovers_stable_zero_hp_and_delays_song_of_rest",
+        ),
         "bundled:srd2014/02_Classes/Bard.md",
     ),
     CoreBoundary(

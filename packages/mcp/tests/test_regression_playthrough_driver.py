@@ -3,9 +3,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sqlite3
 import sys
 from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from sagasmith_dnd.character_schema import default_character_sheet
@@ -15,7 +17,9 @@ from sagasmith_dnd.playthrough import (
 )
 
 import scripts.regression_playthrough as regression_playthrough
-from scripts.regression_modules import PRINCIPAL_ID
+from sagasmith_dnd_mcp.config import McpConfig
+from sagasmith_dnd_mcp.server import close_server, create_server
+from scripts.regression_modules import PRINCIPAL_ID, ExposureClient
 from scripts.regression_playthrough import (
     _acquire_source_loot,
     _advance_level,
@@ -43,6 +47,7 @@ from scripts.regression_playthrough import (
     _index_source,
     _initialize_clock,
     _initialize_source_state,
+    _is_exact_missing_idempotency_receipt,
     _level_spell_choice_counts,
     _long_rest,
     _manifest_recovery_inputs,
@@ -108,6 +113,70 @@ def _manifest_source_ref() -> dict:
         "chunk_id": "chunk-1",
         "excerpt": "The hostage is released.",
     }
+
+
+def test_missing_receipt_classifier_accepts_only_the_exact_current_key() -> None:
+    assert _is_exact_missing_idempotency_receipt(
+        RuntimeError("idempotency receipt not found: choice-key"),
+        idempotency_key="choice-key",
+    )
+    assert _is_exact_missing_idempotency_receipt(
+        RuntimeError("idempotency receipt not found: choice-key"),
+        idempotency_key="choice-key",
+        branch_id="branch-1",
+    )
+    assert _is_exact_missing_idempotency_receipt(
+        RuntimeError(
+            "idempotency receipt not found on branch branch-1: choice-key"
+        ),
+        idempotency_key="choice-key",
+        branch_id="branch-1",
+    )
+
+
+def test_missing_receipt_classifier_rejects_a_different_key() -> None:
+    assert not _is_exact_missing_idempotency_receipt(
+        RuntimeError("idempotency receipt not found: another-choice-key"),
+        idempotency_key="choice-key",
+        branch_id="branch-1",
+    )
+    assert not _is_exact_missing_idempotency_receipt(
+        RuntimeError(
+            "idempotency receipt not found on branch branch-2: choice-key"
+        ),
+        idempotency_key="choice-key",
+        branch_id="branch-1",
+    )
+    assert not _is_exact_missing_idempotency_receipt(
+        RuntimeError(
+            "idempotency receipt not found on branch branch-1: choice-key"
+        ),
+        idempotency_key="choice-key",
+    )
+
+
+def test_missing_receipt_classifier_rejects_mixed_exception_groups() -> None:
+    assert not _is_exact_missing_idempotency_receipt(
+        ExceptionGroup(
+            "parallel failures",
+            [
+                RuntimeError("idempotency receipt not found: choice-key"),
+                OSError("receipt store unavailable"),
+            ],
+        ),
+        idempotency_key="choice-key",
+        branch_id="branch-1",
+    )
+
+
+def test_missing_receipt_classifier_rejects_gateway_errors_containing_the_phrase() -> None:
+    assert not _is_exact_missing_idempotency_receipt(
+        RuntimeError(
+            "gateway failed while forwarding idempotency receipt not found: choice-key"
+        ),
+        idempotency_key="choice-key",
+        branch_id="branch-1",
+    )
 
 
 def test_scene_progress_writes_keep_current_scene_authoritative() -> None:
@@ -7775,6 +7844,12 @@ def test_short_rest_advances_clock_and_applies_only_explicit_resource_choices() 
         def __init__(self) -> None:
             self.revision = 5
             self.world_time: dict = {}
+            self.game_time = {
+                "schema_version": 1,
+                "tick_seconds": 6,
+                "elapsed_ticks": 0,
+            }
+            self.actor_revisions = {"fighter": 2, "wizard": 2}
             self.keys: dict[str, list[str]] = {}
 
         def remember(self, kind: str, key: str) -> None:
@@ -7786,7 +7861,11 @@ def test_short_rest_advances_clock_and_applies_only_explicit_resource_choices() 
                 "result": {
                     "id": "campaign-1",
                     "revision": self.revision,
-                    "state": {"game_phase": "play", "world_time": self.world_time},
+                    "state": {
+                        "game_phase": "play",
+                        "game_time": self.game_time,
+                        "world_time": self.world_time,
+                    },
                 }
             }
 
@@ -7807,7 +7886,8 @@ def test_short_rest_advances_clock_and_applies_only_explicit_resource_choices() 
                 return {
                     "id": actor_id,
                     "campaign_id": "campaign-1",
-                    "revision": 2,
+                    "revision": self.actor_revisions[actor_id],
+                    "sheet": {"edition": "2014"},
                 }
             if tool_id == "branch_query":
                 return [{"id": "branch-1", "is_current": True}]
@@ -7840,6 +7920,7 @@ def test_short_rest_advances_clock_and_applies_only_explicit_resource_choices() 
                             "character_id": "wizard",
                             "expected_revision": 2,
                             "arcane_recovery": {"1": 1},
+                            "song_of_rest_source_actor_id": "wizard",
                         },
                     ],
                 }
@@ -7849,15 +7930,99 @@ def test_short_rest_advances_clock_and_applies_only_explicit_resource_choices() 
                     "elapsed_minutes": 900,
                 }
                 self.revision += 1
+                self.actor_revisions = {"fighter": 3, "wizard": 3}
+                self.game_time = {
+                    "schema_version": 1,
+                    "tick_seconds": 6,
+                    "elapsed_ticks": 600,
+                }
                 return {
                     "status": "committed",
                     "rest_type": "short_rest",
                     "duration_minutes": 60,
                     "member_ids": ["fighter", "wizard"],
+                    "game_time": self.game_time,
                     "world_time": self.world_time,
                     "recovered": {
-                        "fighter": {"hit_dice_healing": 7},
-                        "wizard": {"recovered": {"spell_slot:1": 1}},
+                        "fighter": {
+                            "hit_dice_healing": 7,
+                            "short_rest_hit_dice": {"status": "open"},
+                        },
+                        "wizard": {
+                            "recovered": {"spell_slot:1": 1},
+                            "short_rest_hit_dice": {"status": "open"},
+                        },
+                    },
+                    "campaign_revision": self.revision,
+                    "revisions": [
+                        {
+                            "entity_type": "character",
+                            "entity_id": "fighter",
+                            "before_revision": 2,
+                            "after_revision": 3,
+                        },
+                        {
+                            "entity_type": "character",
+                            "entity_id": "wizard",
+                            "before_revision": 2,
+                            "after_revision": 3,
+                        },
+                    ],
+                }
+            if (
+                tool_id == "campaign_change"
+                and arguments["action"] == "short_rest_hit_die"
+            ):
+                actor_id = arguments["payload"]["character_id"]
+                self.remember("hit_die_choice", arguments["idempotency_key"])
+                assert arguments["payload"]["rest_completed_elapsed_ticks"] == 600
+                assert arguments["branch_id"] == "branch-1"
+                if actor_id == "fighter":
+                    assert arguments["expected_revision"] == 7
+                    assert arguments["payload"] == {
+                        "character_id": "fighter",
+                        "expected_character_revision": 3,
+                        "decision": "spend",
+                        "hit_die_key": "fighter:d10",
+                        "rest_completed_elapsed_ticks": 600,
+                    }
+                    self.revision += 1
+                    self.actor_revisions["fighter"] = 4
+                    return {
+                        "status": "closed",
+                        "result": {
+                            "decision": "spend",
+                            "hit_die_key": "fighter:d10",
+                            "hit_die_roll": {"roll": 6, "healing": 6},
+                        },
+                        "character": {
+                            "revision": 4,
+                            "sheet": {"edition": "2014", "combat": {}},
+                        },
+                        "campaign_revision": self.revision,
+                        "random_stream_receipt": {
+                            "idempotency_key": arguments["idempotency_key"],
+                            "draw_count": 1,
+                        },
+                    }
+                assert actor_id == "wizard"
+                assert arguments["expected_revision"] == 8
+                assert arguments["payload"] == {
+                    "character_id": "wizard",
+                    "expected_character_revision": 3,
+                    "decision": "stop",
+                    "rest_completed_elapsed_ticks": 600,
+                }
+                self.actor_revisions["wizard"] = 4
+                return {
+                    "status": "closed",
+                    "result": {
+                        "decision": "stop",
+                        "close_reason": "player_stopped",
+                    },
+                    "character": {
+                        "revision": 4,
+                        "sheet": {"edition": "2014", "combat": {}},
                     },
                     "campaign_revision": self.revision,
                 }
@@ -7884,11 +8049,15 @@ def test_short_rest_advances_clock_and_applies_only_explicit_resource_choices() 
             members=[
                 {
                     "actor_id": "fighter",
-                    "hit_dice_spends": [{"key": "fighter:d10", "count": 1}],
+                    "hit_dice_spends": [{"key": "fighter:d10", "count": 2}],
                     "song_of_rest_source_actor_id": "wizard",
                     "rest_activity_minutes": {"meditation": 30},
                 },
-                {"actor_id": "wizard", "arcane_recovery": {"1": 1}},
+                {
+                    "actor_id": "wizard",
+                    "arcane_recovery": {"1": 1},
+                    "song_of_rest_source_actor_id": "wizard",
+                },
             ],
             start_clock={"day": 1, "hour": 14, "label": "Hideout"},
             duration_minutes=60,
@@ -7899,10 +8068,22 @@ def test_short_rest_advances_clock_and_applies_only_explicit_resource_choices() 
     assert result["member_ids"] == ["fighter", "wizard"]
     assert result["clock_advanced"]["world_time"]["hour"] == 15
     assert len(result["rests"]) == 2
+    assert [item["result"]["decision"] for item in result["hit_die_choices"]] == [
+        "spend",
+        "stop",
+    ]
     assert result["rest_recovered"] is False
     identity = "hideout-short-rest-1"
     assert client.keys["clock_set"] == [_mutation_key("run-1", "short-rest-clock-set", identity)]
     assert client.keys["party_rest"] == [_mutation_key("run-1", "short-rest-party", identity)]
+    assert client.keys["hit_die_choice"] == [
+        _mutation_key(
+            "run-1",
+            "short-rest-hit-die",
+            f"{identity}:fighter:0:fighter:d10",
+        ),
+        _mutation_key("run-1", "short-rest-hit-die", f"{identity}:wizard:stop"),
+    ]
     assert client.keys["continuity"] == [_mutation_key("run-1", "short-rest-continuity", identity)]
     assert client.keys["sync"] == [_mutation_key("run-1", "sync", f"short-rest-sync:{identity}")]
 
@@ -7939,6 +8120,20 @@ def test_short_rest_recovers_the_atomic_random_receipt_without_rerolling() -> No
         },
         "preparations": {},
         "campaign_revision": 6,
+        "revisions": [
+            {
+                "entity_type": "campaign",
+                "entity_id": "campaign-1",
+                "before_revision": 5,
+                "after_revision": 6,
+            },
+            {
+                "entity_type": "character",
+                "entity_id": "fighter",
+                "before_revision": 2,
+                "after_revision": 3,
+            },
+        ],
         "random_stream_receipt": {
             "algorithm": "sha256-counter-v1",
             "position_before": 20,
@@ -7973,6 +8168,7 @@ def test_short_rest_recovers_the_atomic_random_receipt_without_rerolling() -> No
                 if arguments["view"] == "rest":
                     return {"ready": True}
                 sheet = default_character_sheet()
+                sheet["edition"] = "2014"
                 sheet["combat"]["rest_history"] = {
                     "last_rest_type": "short_rest",
                     "last_rest_started_elapsed_ticks": 0,
@@ -7997,9 +8193,14 @@ def test_short_rest_recovers_the_atomic_random_receipt_without_rerolling() -> No
                             "character_id": "fighter",
                             "expected_revision": 2,
                             "rest_activity_minutes": {},
+                            "derived_rest_timing": regression_playthrough.validate_rest_schedule(
+                                rest_type="short_rest",
+                                duration_minutes=60,
+                            ),
                             "hit_dice_spends": [{"key": "fighter:d10", "count": 1}],
                             "arcane_recovery": {},
                             "natural_recovery": {},
+                            "sorcerous_restoration_points": None,
                             "song_of_rest_source_actor_id": None,
                             "attune_item_id": None,
                             "attunement_prerequisite_confirmed": None,
@@ -8064,6 +8265,761 @@ def test_short_rest_recovers_the_atomic_random_receipt_without_rerolling() -> No
     assert client.party_rest_calls == 1
     assert result["rest_recovered"] is True
     assert result["party_rest"]["random_stream_receipt"]["position_after"] == 21
+    assert result["hit_die_choices"] == []
+
+
+@pytest.mark.parametrize("crash_after", ["spend", "stop"])
+def test_short_rest_restart_recovers_the_exact_sequential_receipt_chain(
+    crash_after: str,
+) -> None:
+    occurrence_id = f"crash-after-{crash_after}"
+    party_key = _mutation_key("run-1", "short-rest-party", occurrence_id)
+    spend_key = _mutation_key(
+        "run-1",
+        "short-rest-hit-die",
+        f"{occurrence_id}:fighter:0:fighter:d10",
+    )
+    stop_key = _mutation_key(
+        "run-1",
+        "short-rest-hit-die",
+        f"{occurrence_id}:fighter:stop",
+    )
+
+    class Store:
+        def __init__(self) -> None:
+            self.campaign_revision = 5
+            self.game_time = {
+                "schema_version": 1,
+                "tick_seconds": 6,
+                "elapsed_ticks": 0,
+            }
+            self.world_time = {
+                "schema_version": 1,
+                "day": 1,
+                "hour": 0,
+                "minute": 0,
+                "elapsed_minutes": 0,
+                "label": "Camp",
+            }
+            self.actor_revision = 2
+            self.sheet = default_character_sheet()
+            self.sheet["edition"] = "2014"
+            self.sheet["combat"]["hp"] = {"value": 1, "max": 12, "temp": 0}
+            self.sheet["combat"]["hit_dice"] = {
+                "fighter:d10": {
+                    "label": "Fighter d10",
+                    "value": 3,
+                    "max": 3,
+                    "recovers_on": "long_rest",
+                }
+            }
+            self.party_response: dict | None = None
+            self.choice_responses: dict[str, dict] = {}
+            self.choice_commits = {"spend": 0, "stop": 0}
+            self.random_draws = 0
+            self.crashed = False
+
+    class Client:
+        def __init__(self, store: Store) -> None:
+            self.store = store
+
+        async def core(self, tool_id: str, arguments: dict):
+            assert tool_id == "campaign_query"
+            return {
+                "result": {
+                    "id": "campaign-1",
+                    "revision": self.store.campaign_revision,
+                    "state": {
+                        "game_phase": "play",
+                        "game_time": deepcopy(self.store.game_time),
+                        "world_time": deepcopy(self.store.world_time),
+                    },
+                }
+            }
+
+        async def domain(self, tool_id: str, arguments: dict):
+            if tool_id == "character_query":
+                if arguments["view"] == "rest":
+                    assert arguments["payload"]["hit_dice_spends"] == [
+                        {"key": "fighter:d10", "count": 1}
+                    ]
+                    return {"ready": True}
+                return {
+                    "id": "fighter",
+                    "campaign_id": "campaign-1",
+                    "revision": self.store.actor_revision,
+                    "sheet": deepcopy(self.store.sheet),
+                }
+            if tool_id == "branch_query":
+                return [{"id": "branch-1", "is_current": True}]
+            if tool_id == "campaign_change" and arguments["action"] == "party_rest":
+                if self.store.party_response is not None:
+                    raise RuntimeError(
+                        f"idempotency key reused with a different request: {party_key}"
+                    )
+                assert arguments["payload"]["members"] == [
+                    {
+                        "character_id": "fighter",
+                        "expected_revision": 2,
+                        "hit_dice_spends": [{"key": "fighter:d10", "count": 1}],
+                    }
+                ]
+                self.store.campaign_revision = 6
+                self.store.actor_revision = 3
+                self.store.random_draws += 1
+                self.store.game_time = {
+                    "schema_version": 1,
+                    "tick_seconds": 6,
+                    "elapsed_ticks": 600,
+                }
+                self.store.world_time = {
+                    **self.store.world_time,
+                    "hour": 1,
+                    "elapsed_minutes": 60,
+                }
+                self.store.sheet["combat"]["hp"]["value"] = 3
+                self.store.sheet["combat"]["hit_dice"]["fighter:d10"]["value"] = 2
+                self.store.sheet["combat"]["rest_history"] = {
+                    "last_rest_type": "short_rest",
+                    "last_rest_started_elapsed_ticks": 0,
+                    "last_rest_completed_elapsed_ticks": 600,
+                    "last_long_rest_elapsed_ticks": None,
+                }
+                self.store.sheet["combat"]["short_rest_hit_dice"] = {
+                    "status": "open",
+                    "expected_character_revision": 3,
+                }
+                self.store.party_response = {
+                    "status": "committed",
+                    "rest_type": "short_rest",
+                    "duration_minutes": 60,
+                    "member_ids": ["fighter"],
+                    "game_time": deepcopy(self.store.game_time),
+                    "world_time": deepcopy(self.store.world_time),
+                    "recovered": {
+                        "fighter": {
+                            "hit_dice_rolls": [{"key": "fighter:d10", "roll": 2}],
+                            "short_rest_hit_dice": deepcopy(
+                                self.store.sheet["combat"]["short_rest_hit_dice"]
+                            ),
+                        }
+                    },
+                    "preparations": {},
+                    "campaign_revision": 6,
+                    "revisions": [
+                        {
+                            "entity_type": "campaign",
+                            "entity_id": "campaign-1",
+                            "before_revision": 5,
+                            "after_revision": 6,
+                        },
+                        {
+                            "entity_type": "character",
+                            "entity_id": "fighter",
+                            "before_revision": 2,
+                            "after_revision": 3,
+                        },
+                    ],
+                    "random_stream_receipt": {
+                        "idempotency_key": party_key,
+                        "position_before": 0,
+                        "position_after": 1,
+                        "draw_count": 1,
+                    },
+                }
+                return deepcopy(self.store.party_response)
+            if (
+                tool_id == "campaign_change"
+                and arguments["action"] == "short_rest_hit_die"
+            ):
+                key = arguments["idempotency_key"]
+                if key in self.store.choice_responses:
+                    return deepcopy(self.store.choice_responses[key])
+                decision = arguments["payload"]["decision"]
+                if decision == "spend":
+                    assert key == spend_key
+                    assert arguments["expected_revision"] == 6
+                    assert arguments["payload"]["expected_character_revision"] == 3
+                    self.store.campaign_revision = 7
+                    self.store.actor_revision = 4
+                    self.store.random_draws += 1
+                    self.store.choice_commits["spend"] += 1
+                    self.store.sheet["combat"]["hp"]["value"] = 6
+                    self.store.sheet["combat"]["hit_dice"]["fighter:d10"]["value"] = 1
+                    self.store.sheet["combat"]["short_rest_hit_dice"] = {
+                        "status": "open",
+                        "expected_character_revision": 4,
+                    }
+                    response = {
+                        "status": "open",
+                        "result": {
+                            "decision": "spend",
+                            "hit_die_key": "fighter:d10",
+                            "hit_die_roll": {"roll": 3, "healing": 3},
+                        },
+                        "character": {
+                            "revision": 4,
+                            "sheet": deepcopy(self.store.sheet),
+                        },
+                        "campaign_revision": 7,
+                        "random_stream_receipt": {
+                            "idempotency_key": spend_key,
+                            "position_before": 1,
+                            "position_after": 2,
+                            "draw_count": 1,
+                        },
+                    }
+                else:
+                    assert decision == "stop"
+                    assert key == stop_key
+                    assert arguments["expected_revision"] == 7
+                    assert arguments["payload"]["expected_character_revision"] == 4
+                    self.store.actor_revision = 5
+                    self.store.choice_commits["stop"] += 1
+                    self.store.sheet["combat"].pop("short_rest_hit_dice")
+                    response = {
+                        "status": "closed",
+                        "result": {
+                            "decision": "stop",
+                            "close_reason": "player_stopped",
+                        },
+                        "character": {
+                            "revision": 5,
+                            "sheet": deepcopy(self.store.sheet),
+                        },
+                        "campaign_revision": 7,
+                    }
+                self.store.choice_responses[key] = deepcopy(response)
+                if crash_after == decision and not self.store.crashed:
+                    self.store.crashed = True
+                    raise RuntimeError(f"simulated restart after {decision} commit")
+                return response
+            if tool_id == "state_revision":
+                assert arguments["action"] == "receipt"
+                assert arguments["payload"] == {"idempotency_key": party_key}
+                normalized_request = {
+                    "members": [
+                        {
+                            "character_id": "fighter",
+                            "expected_revision": 2,
+                            "rest_activity_minutes": {},
+                            "derived_rest_timing": regression_playthrough.validate_rest_schedule(
+                                rest_type="short_rest",
+                                duration_minutes=60,
+                            ),
+                            "hit_dice_spends": [{"key": "fighter:d10", "count": 1}],
+                            "arcane_recovery": {},
+                            "natural_recovery": {},
+                            "sorcerous_restoration_points": None,
+                            "song_of_rest_source_actor_id": None,
+                            "attune_item_id": None,
+                            "attunement_prerequisite_confirmed": None,
+                        }
+                    ],
+                    "duration_minutes": 60,
+                    "branch_id": "branch-1",
+                    "rest_type": "short_rest",
+                }
+                return {
+                    "key": party_key,
+                    "replayed": True,
+                    "request_hash": regression_playthrough._idempotency_request_hash(
+                        normalized_request
+                    ),
+                    "branch_id": "branch-1",
+                    "entity_revisions": deepcopy(
+                        self.store.party_response["revisions"]
+                    ),
+                    "response": deepcopy(self.store.party_response),
+                }
+            if tool_id == "memory_change":
+                assert arguments["expected_revision"] == 7
+                self.store.campaign_revision = 8
+                return {"event": {"id": "event-1"}, "snapshot": {"slot": 4}}
+            if tool_id == "playthrough_manifest":
+                return {
+                    "manifest": {"status": "in_progress"},
+                    "campaign_revision": self.store.campaign_revision,
+                }
+            raise AssertionError((tool_id, arguments))
+
+    store = Store()
+    with pytest.raises(RuntimeError, match=f"simulated restart after {crash_after} commit"):
+        asyncio.run(
+            _short_rest(
+                Client(store),
+                campaign_id="campaign-1",
+                run_id="run-1",
+                occurrence_id=occurrence_id,
+                members=[
+                    {
+                        "actor_id": "fighter",
+                        "hit_dice_spends": [{"key": "fighter:d10", "count": 2}],
+                    }
+                ],
+                start_clock=None,
+                duration_minutes=60,
+                reason="The fighter completed the interrupted short-rest transaction.",
+            )
+        )
+
+    draws_after_crash = store.random_draws
+    hit_dice_after_crash = store.sheet["combat"]["hit_dice"]["fighter:d10"]["value"]
+    result = asyncio.run(
+        _short_rest(
+            Client(store),
+            campaign_id="campaign-1",
+            run_id="run-1",
+            occurrence_id=occurrence_id,
+            members=[
+                {
+                    "actor_id": "fighter",
+                    "hit_dice_spends": [{"key": "fighter:d10", "count": 2}],
+                }
+            ],
+            start_clock=None,
+            duration_minutes=60,
+            reason="The fighter completed the interrupted short-rest transaction.",
+        )
+    )
+
+    assert result["rest_recovered"] is True
+    assert [item["result"]["decision"] for item in result["hit_die_choices"]] == [
+        "spend",
+        "stop",
+    ]
+    assert result["hit_die_choices"][0]["result"]["hit_die_roll"] == {
+        "roll": 3,
+        "healing": 3,
+    }
+    assert store.random_draws == draws_after_crash == 2
+    assert store.sheet["combat"]["hit_dice"]["fighter:d10"]["value"] == 1
+    assert hit_dice_after_crash == 1
+    assert store.choice_commits == {"spend": 1, "stop": 1}
+    assert store.actor_revision == 5
+    assert "short_rest_hit_dice" not in store.sheet["combat"]
+
+
+def test_real_server_driver_recovers_after_the_last_hit_die_commit(tmp_path: Path) -> None:
+    async def exercise() -> None:
+        config = McpConfig(
+            home=tmp_path / "home",
+            database_url=None,
+            chroma_url=None,
+            chroma_path_override=None,
+            dnd_skills_dir=tmp_path / "dnd",
+            modulegen_skills_dir=tmp_path / "modulegen",
+            auto_seed_rules=False,
+        )
+        server = create_server(config)
+
+        class DirectSession:
+            def __init__(self, *, crash_after_last_die: bool = False) -> None:
+                self.crash_after_last_die = crash_after_last_die
+                self.crashed = False
+
+            async def call_tool(self, tool_id: str, arguments: dict):
+                if tool_id == "playthrough_manifest":
+                    structured = {
+                        "status": "ok",
+                        "action": arguments["action"],
+                        "result": {
+                            "manifest": {"status": "in_progress"},
+                            "campaign_revision": arguments["expected_revision"],
+                        },
+                    }
+                else:
+                    _metadata, structured = await server.call_tool(tool_id, arguments)
+                if (
+                    self.crash_after_last_die
+                    and not self.crashed
+                    and tool_id == "campaign_change"
+                    and arguments.get("action") == "short_rest_hit_die"
+                    and dict(arguments.get("payload") or {}).get("decision") == "spend"
+                ):
+                    self.crashed = True
+                    raise RuntimeError("simulated transport loss after the last Hit Die commit")
+                return SimpleNamespace(
+                    content=[],
+                    structured_content=structured,
+                    is_error=False,
+                )
+
+        setup = ExposureClient(DirectSession())
+        campaign = await setup.domain(
+            "campaign_create",
+            {
+                "name": "Last Hit Die recovery",
+                "edition": "2014",
+                "idempotency_key": "last-die-campaign",
+            },
+        )
+        sheet = default_character_sheet()
+        sheet["edition"] = "2014"
+        sheet["combat"]["hp"] = {"value": 1, "max": 30, "temp": 0}
+        sheet["combat"]["hit_dice"] = {
+            "fighter:d10": {
+                "label": "Fighter d10",
+                "value": 2,
+                "max": 2,
+                "recovers_on": "long_rest",
+            }
+        }
+        actor = await setup.domain(
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": "Last Die Fighter",
+                    "sheet": sheet,
+                },
+                "idempotency_key": "last-die-actor",
+            },
+        )
+        campaign_before_clock = await setup.domain(
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        await setup.domain(
+            "campaign_change",
+            {
+                "campaign_id": campaign["id"],
+                "action": "clock_set",
+                "payload": {"day": 1, "hour": 0, "minute": 0, "label": "Camp"},
+                "expected_revision": campaign_before_clock["revision"],
+                "idempotency_key": "last-die-clock",
+            },
+        )
+        crash_client = ExposureClient(DirectSession(crash_after_last_die=True))
+        arguments = {
+            "campaign_id": campaign["id"],
+            "run_id": "run-1",
+            "occurrence_id": "last-die-rest",
+            "members": [
+                {
+                    "actor_id": actor["id"],
+                    "hit_dice_spends": [{"key": "fighter:d10", "count": 2}],
+                }
+            ],
+            "start_clock": None,
+            "duration_minutes": 60,
+            "reason": "The fighter completed the rest despite a lost response.",
+        }
+        with pytest.raises(
+            RuntimeError,
+            match="transport loss after the last Hit Die commit",
+        ):
+            await _short_rest(crash_client, **arguments)
+
+        branch = next(
+            item
+            for item in await setup.domain(
+                "branch_query",
+                {"campaign_id": campaign["id"], "view": "list"},
+            )
+            if item["is_current"]
+        )
+        choice_key = _mutation_key(
+            "run-1",
+            "short-rest-hit-die",
+            f"last-die-rest:{actor['id']}:0:fighter:d10",
+        )
+        choice_receipt_after_crash = await setup.domain(
+            "state_revision",
+            {
+                "campaign_id": campaign["id"],
+                "action": "receipt",
+                "payload": {
+                    "idempotency_key": choice_key,
+                    "branch_id": branch["id"],
+                },
+            },
+        )
+        with sqlite3.connect(config.database_path) as connection:
+            choice_receipt_count_after_crash = connection.execute(
+                "SELECT COUNT(*) FROM idempotency_records WHERE key = ?",
+                (choice_key,),
+            ).fetchone()[0]
+        after_crash = await setup.domain(
+            "character_query",
+            {"view": "get", "payload": {"character_id": actor["id"]}},
+        )
+        campaign_after_crash = await setup.domain(
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        assert after_crash["sheet"]["combat"]["hit_dice"]["fighter:d10"]["value"] == 0
+        assert "short_rest_hit_dice" not in after_crash["sheet"]["combat"]
+
+        close_server(server)
+        server = create_server(config)
+        restarted = ExposureClient(DirectSession())
+        recovered = await _short_rest(restarted, **arguments)
+        final_actor = await restarted.domain(
+            "character_query",
+            {"view": "get", "payload": {"character_id": actor["id"]}},
+        )
+        final_campaign = await restarted.domain(
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        choice_receipt_after_restart = await restarted.domain(
+            "state_revision",
+            {
+                "campaign_id": campaign["id"],
+                "action": "receipt",
+                "payload": {
+                    "idempotency_key": choice_key,
+                    "branch_id": branch["id"],
+                },
+            },
+        )
+        with sqlite3.connect(config.database_path) as connection:
+            choice_receipt_count_after_restart = connection.execute(
+                "SELECT COUNT(*) FROM idempotency_records WHERE key = ?",
+                (choice_key,),
+            ).fetchone()[0]
+        assert recovered["rest_recovered"] is True
+        assert len(recovered["hit_die_choices"]) == 1
+        assert recovered["hit_die_choices"][0] == {
+            "actor_id": actor["id"],
+            **choice_receipt_after_crash["response"],
+        }
+        assert choice_receipt_after_restart == choice_receipt_after_crash
+        assert choice_receipt_count_after_restart == choice_receipt_count_after_crash == 1
+        assert final_actor["sheet"]["combat"]["hit_dice"]["fighter:d10"]["value"] == 0
+        assert final_actor["sheet"]["combat"]["hp"] == after_crash["sheet"]["combat"]["hp"]
+        assert (
+            final_campaign["state"]["random_stream"]["position"]
+            == campaign_after_crash["state"]["random_stream"]["position"]
+        )
+        close_server(server)
+
+    asyncio.run(exercise())
+
+
+def test_real_server_driver_does_not_invent_a_choice_after_party_rest_response_loss(
+    tmp_path: Path,
+) -> None:
+    async def exercise() -> None:
+        config = McpConfig(
+            home=tmp_path / "home",
+            database_url=None,
+            chroma_url=None,
+            chroma_path_override=None,
+            dnd_skills_dir=tmp_path / "dnd",
+            modulegen_skills_dir=tmp_path / "modulegen",
+            auto_seed_rules=False,
+        )
+        server = create_server(config)
+        sequential_calls: list[dict] = []
+
+        class DirectSession:
+            def __init__(self, *, crash_after_party_rest: bool = False) -> None:
+                self.crash_after_party_rest = crash_after_party_rest
+                self.crashed = False
+
+            async def call_tool(self, tool_id: str, arguments: dict):
+                if tool_id == "playthrough_manifest":
+                    structured = {
+                        "status": "ok",
+                        "action": arguments["action"],
+                        "result": {
+                            "manifest": {"status": "in_progress"},
+                            "campaign_revision": arguments["expected_revision"],
+                        },
+                    }
+                else:
+                    if (
+                        tool_id == "campaign_change"
+                        and arguments.get("action") == "short_rest_hit_die"
+                    ):
+                        sequential_calls.append(deepcopy(arguments))
+                    _metadata, structured = await server.call_tool(tool_id, arguments)
+                if (
+                    self.crash_after_party_rest
+                    and not self.crashed
+                    and tool_id == "campaign_change"
+                    and arguments.get("action") == "party_rest"
+                ):
+                    self.crashed = True
+                    raise RuntimeError("simulated transport loss after the party rest commit")
+                return SimpleNamespace(
+                    content=[],
+                    structured_content=structured,
+                    is_error=False,
+                )
+
+        setup = ExposureClient(DirectSession())
+        campaign = await setup.domain(
+            "campaign_create",
+            {
+                "name": "Closed short-rest choice recovery",
+                "edition": "2014",
+                "idempotency_key": "closed-window-campaign",
+            },
+        )
+        sheet = default_character_sheet()
+        sheet["edition"] = "2014"
+        sheet["combat"]["hp"] = {"value": 1, "max": 2, "temp": 0}
+        sheet["combat"]["hit_dice"] = {
+            "fighter:d10": {
+                "label": "Fighter d10",
+                "value": 1,
+                "max": 1,
+                "recovers_on": "long_rest",
+            }
+        }
+        actor = await setup.domain(
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": "One Die Fighter",
+                    "sheet": sheet,
+                },
+                "idempotency_key": "closed-window-actor",
+            },
+        )
+        campaign_before_clock = await setup.domain(
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        await setup.domain(
+            "campaign_change",
+            {
+                "campaign_id": campaign["id"],
+                "action": "clock_set",
+                "payload": {"day": 1, "hour": 0, "minute": 0, "label": "Camp"},
+                "expected_revision": campaign_before_clock["revision"],
+                "idempotency_key": "closed-window-clock",
+            },
+        )
+        arguments = {
+            "campaign_id": campaign["id"],
+            "run_id": "run-1",
+            "occurrence_id": "closed-window-rest",
+            "members": [
+                {
+                    "actor_id": actor["id"],
+                    "hit_dice_spends": [{"key": "fighter:d10", "count": 2}],
+                }
+            ],
+            "start_clock": None,
+            "duration_minutes": 60,
+            "reason": "The only available Hit Die completed the rest.",
+        }
+        with pytest.raises(
+            RuntimeError,
+            match="transport loss after the party rest commit",
+        ):
+            await _short_rest(
+                ExposureClient(DirectSession(crash_after_party_rest=True)),
+                **arguments,
+            )
+
+        branch = next(
+            item
+            for item in await setup.domain(
+                "branch_query",
+                {"campaign_id": campaign["id"], "view": "list"},
+            )
+            if item["is_current"]
+        )
+        party_key = _mutation_key("run-1", "short-rest-party", "closed-window-rest")
+        choice_key = _mutation_key(
+            "run-1",
+            "short-rest-hit-die",
+            f"closed-window-rest:{actor['id']}:0:fighter:d10",
+        )
+        party_receipt_after_crash = await setup.domain(
+            "state_revision",
+            {
+                "campaign_id": campaign["id"],
+                "action": "receipt",
+                "payload": {
+                    "idempotency_key": party_key,
+                    "branch_id": branch["id"],
+                },
+            },
+        )
+        actor_after_crash = await setup.domain(
+            "character_query",
+            {"view": "get", "payload": {"character_id": actor["id"]}},
+        )
+        campaign_after_crash = await setup.domain(
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        with sqlite3.connect(config.database_path) as connection:
+            receipt_counts_after_crash = dict(
+                connection.execute(
+                    "SELECT key, COUNT(*) FROM idempotency_records "
+                    "WHERE key IN (?, ?) GROUP BY key",
+                    (party_key, choice_key),
+                ).fetchall()
+            )
+        assert actor_after_crash["sheet"]["combat"]["hp"]["value"] == 2
+        assert actor_after_crash["sheet"]["combat"]["hit_dice"]["fighter:d10"]["value"] == 0
+        assert "short_rest_hit_dice" not in actor_after_crash["sheet"]["combat"]
+        assert sequential_calls == []
+        assert receipt_counts_after_crash == {party_key: 1}
+
+        close_server(server)
+        server = create_server(config)
+        restarted = ExposureClient(DirectSession())
+        recovered = await _short_rest(restarted, **arguments)
+        final_actor = await restarted.domain(
+            "character_query",
+            {"view": "get", "payload": {"character_id": actor["id"]}},
+        )
+        final_campaign = await restarted.domain(
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        party_receipt_after_restart = await restarted.domain(
+            "state_revision",
+            {
+                "campaign_id": campaign["id"],
+                "action": "receipt",
+                "payload": {
+                    "idempotency_key": party_key,
+                    "branch_id": branch["id"],
+                },
+            },
+        )
+        with sqlite3.connect(config.database_path) as connection:
+            receipt_counts_after_restart = dict(
+                connection.execute(
+                    "SELECT key, COUNT(*) FROM idempotency_records "
+                    "WHERE key IN (?, ?) GROUP BY key",
+                    (party_key, choice_key),
+                ).fetchall()
+            )
+
+        assert recovered["rest_recovered"] is True
+        assert recovered["party_rest"] == party_receipt_after_crash["response"]
+        assert recovered["hit_die_choices"] == []
+        assert sequential_calls == []
+        assert party_receipt_after_restart == party_receipt_after_crash
+        assert receipt_counts_after_restart == receipt_counts_after_crash == {party_key: 1}
+        assert (
+            final_actor["sheet"]["combat"]["hp"]
+            == actor_after_crash["sheet"]["combat"]["hp"]
+        )
+        assert (
+            final_actor["sheet"]["combat"]["hit_dice"]
+            == actor_after_crash["sheet"]["combat"]["hit_dice"]
+        )
+        assert (
+            final_campaign["state"]["random_stream"]["position"]
+            == campaign_after_crash["state"]["random_stream"]["position"]
+        )
+        close_server(server)
+
+    asyncio.run(exercise())
 
 
 @pytest.mark.parametrize("defer_checkpoint", [False, True])

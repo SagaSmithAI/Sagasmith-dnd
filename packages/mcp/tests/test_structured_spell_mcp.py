@@ -1077,6 +1077,56 @@ def test_noncombat_fly_commits_willing_targets_and_reconciles_replacement(
                 "idempotency_key": "fly-target",
             },
         )
+        resting_sheet = default_character_sheet()
+        resting_sheet["edition"] = "2014"
+        resting_sheet["combat"]["hp"] = {"value": 1, "max": 12, "temp": 0}
+        resting_sheet["combat"]["hit_dice"] = {
+            "fighter:d10": {
+                "label": "Fighter d10",
+                "value": 1,
+                "max": 1,
+                "recovers_on": "long_rest",
+            }
+        }
+        resting = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": "Resting Fighter",
+                    "sheet": resting_sheet,
+                },
+                "principal_id": "system:local",
+                "idempotency_key": "fly-resting-fighter",
+            },
+        )
+        current_campaign = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        rested = await _call(
+            server,
+            "campaign_change",
+            {
+                "campaign_id": campaign["id"],
+                "action": "party_rest",
+                "payload": {
+                    "rest_type": "short_rest",
+                    "duration_minutes": 60,
+                    "members": [
+                        {
+                            "character_id": resting["id"],
+                            "expected_revision": resting["revision"],
+                        }
+                    ],
+                },
+                "expected_revision": current_campaign["revision"],
+                "idempotency_key": "fly-other-actor-rest",
+            },
+        )
         first_arguments = {
             "character_id": caster["id"],
             "action": "cast_spell",
@@ -1089,6 +1139,64 @@ def test_noncombat_fly_commits_willing_targets_and_reconciles_replacement(
             "expected_revision": caster["revision"],
             "idempotency_key": "fly-first",
         }
+        campaign_before_reject = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        caster_before_reject = await _call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": caster["id"]}},
+        )
+        target_before_reject = await _call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": target["id"]}},
+        )
+        resting_before_reject = await _call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": resting["id"]}},
+        )
+        with pytest.raises(Exception, match="pending short-rest Hit Die choices"):
+            await _call(server, "character_action", first_arguments)
+        assert await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        ) == campaign_before_reject
+        assert await _call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": caster["id"]}},
+        ) == caster_before_reject
+        assert await _call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": target["id"]}},
+        ) == target_before_reject
+        assert await _call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": resting["id"]}},
+        ) == resting_before_reject
+        await _call(
+            server,
+            "campaign_change",
+            {
+                "campaign_id": campaign["id"],
+                "action": "short_rest_hit_die",
+                "payload": {
+                    "character_id": resting["id"],
+                    "expected_character_revision": resting_before_reject["revision"],
+                    "decision": "stop",
+                    "rest_completed_elapsed_ticks": 600,
+                },
+                "expected_revision": rested["campaign_revision"],
+                "idempotency_key": "fly-rest-stop",
+            },
+        )
         first = await _call(
             server,
             "character_action",

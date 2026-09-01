@@ -3,8 +3,14 @@ from pathlib import Path
 
 import pytest
 import sagasmith_dnd.lifecycle as lifecycle_module
-from sagasmith_dnd.character_schema import default_character_sheet
+from sagasmith_core import CharacterService, Database
+from sagasmith_core.database import sqlite_database_url
+from sagasmith_dnd.character_schema import (
+    default_character_notes,
+    default_character_sheet,
+)
 
+import sagasmith_dnd_mcp.server as server_module
 from sagasmith_dnd_mcp.config import McpConfig
 from sagasmith_dnd_mcp.server import create_server
 
@@ -107,6 +113,140 @@ def _resting_sheet() -> dict:
         }
     }
     return sheet
+
+
+def _forged_short_rest_window_sheet() -> dict:
+    sheet = _resting_sheet()
+    sheet["edition"] = "2014"
+    sheet["combat"]["rest_history"] = {
+        "last_rest_type": "short_rest",
+        "last_rest_started_elapsed_ticks": 0,
+        "last_rest_completed_elapsed_ticks": 600,
+        "last_long_rest_elapsed_ticks": None,
+    }
+    sheet["combat"]["short_rest_hit_dice"] = {
+        "rest_completed_elapsed_ticks": 600,
+        "expected_character_revision": 1,
+        "remaining": {"fighter:d10": 2},
+        "spent_count": 0,
+        "song_of_rest_die_sides": None,
+        "song_of_rest_used": False,
+    }
+    return sheet
+
+
+def test_character_ingress_rejects_forged_short_rest_choice_capabilities(
+    tmp_path: Path,
+) -> None:
+    async def exercise() -> None:
+        config = _config(tmp_path)
+        server = create_server(config)
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {"name": "Engine-owned rest state", "edition": "2014", "idempotency_key": "c"},
+        )
+        forged = _forged_short_rest_window_sheet()
+        for mode, key in (("direct", "direct"), ("build", "build")):
+            with pytest.raises(Exception, match="short_rest_hit_dice is engine-owned"):
+                await _call(
+                    server,
+                    "character_create_from",
+                    {
+                        "mode": mode,
+                        "payload": {
+                            "campaign_id": campaign["id"],
+                            "name": f"Forged {mode}",
+                            "sheet": forged,
+                        },
+                        "idempotency_key": key,
+                    },
+                )
+
+        template = CharacterService(
+            Database(sqlite_database_url(config.database_path))
+        ).create(
+            system_id="dnd5e",
+            name="Legacy forged template",
+            sheet=forged,
+            notes=default_character_notes(),
+        )
+        with pytest.raises(Exception, match="short_rest_hit_dice"):
+            await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "template",
+                    "payload": {
+                        "campaign_id": campaign["id"],
+                        "template_id": template.id,
+                    },
+                    "idempotency_key": "template",
+                },
+            )
+
+        actor = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": "Legitimate Resting Hero",
+                    "sheet": _resting_sheet(),
+                },
+                "idempotency_key": "actor",
+            },
+        )
+        with pytest.raises(Exception, match="short_rest_hit_dice"):
+            await _call(
+                server,
+                "character_sheet_replace",
+                {
+                    "character_id": actor["id"],
+                    "sheet": forged,
+                    "expected_revision": actor["revision"],
+                    "idempotency_key": "replace-forged",
+                },
+            )
+        assert await _call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": actor["id"]}},
+        ) == actor
+
+        rested = await _party_short_rest(
+            server,
+            campaign["id"],
+            "real-rest",
+            [{"character_id": actor["id"], "expected_revision": actor["revision"]}],
+        )
+        current = rested["character"]
+        assert "short_rest_hit_dice" in current["sheet"]["combat"]
+        deleted = default_character_sheet()
+        deleted["edition"] = "2014"
+        deleted["combat"] = {
+            **current["sheet"]["combat"],
+        }
+        deleted["combat"].pop("short_rest_hit_dice")
+        with pytest.raises(Exception, match="short_rest_hit_dice is engine-owned"):
+            await _call(
+                server,
+                "character_sheet_replace",
+                {
+                    "character_id": actor["id"],
+                    "sheet": deleted,
+                    "expected_revision": current["revision"],
+                    "idempotency_key": "delete-window",
+                },
+            )
+        assert await _call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": actor["id"]}},
+        ) == current
+
+    asyncio.run(exercise())
 
 
 def _wizard_resting_sheet() -> dict:
@@ -664,6 +804,20 @@ def test_short_rest_query_preflights_choices_without_mutation(tmp_path: Path) ->
                     },
                 },
             )
+        with pytest.raises(Exception, match="one initial Hit Die"):
+            await _call(
+                server,
+                "character_query",
+                {
+                    "view": "rest",
+                    "payload": {
+                        "character_id": actor["id"],
+                        "rest_type": "short_rest",
+                        "duration_minutes": 60,
+                        "hit_dice_spends": [{"key": "fighter:d10", "count": 2}],
+                    },
+                },
+            )
         ready = await _call(
             server,
             "character_query",
@@ -889,5 +1043,623 @@ def test_rest_rejects_client_supplied_hit_die_results(tmp_path: Path) -> None:
                     }
                 ],
             )
+
+    asyncio.run(exercise())
+
+
+def test_2014_short_rest_hit_dice_are_chosen_sequentially_across_restart(
+    tmp_path: Path,
+) -> None:
+    async def exercise() -> None:
+        config = _config(tmp_path)
+        server = create_server(config)
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {"name": "Sequential rest", "edition": "2014", "idempotency_key": "campaign"},
+        )
+        sheet = default_character_sheet()
+        sheet["edition"] = "2014"
+        sheet["abilities"]["constitution"]["score"] = 14
+        sheet["combat"]["hp"] = {"value": 1, "max": 40, "temp": 0}
+        sheet["combat"]["hit_dice"] = {
+            "wizard:d6": {
+                "label": "Wizard d6",
+                "value": 1,
+                "max": 1,
+                "recovers_on": "long_rest",
+            },
+            "fighter:d10": {
+                "label": "Fighter d10",
+                "value": 1,
+                "max": 1,
+                "recovers_on": "long_rest",
+            },
+        }
+        actor = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": "Multiclass Resting Hero",
+                    "sheet": sheet,
+                },
+                "idempotency_key": "actor",
+            },
+        )
+        rested = await _party_short_rest(
+            server,
+            campaign["id"],
+            "rest",
+            [{"character_id": actor["id"], "expected_revision": actor["revision"]}],
+        )
+        window = rested["character"]["sheet"]["combat"]["short_rest_hit_dice"]
+        assert window["rest_completed_elapsed_ticks"] == 600
+        assert window["remaining"] == {"fighter:d10": 1, "wizard:d6": 1}
+
+        server = create_server(config)
+        first_arguments = {
+            "campaign_id": campaign["id"],
+            "action": "short_rest_hit_die",
+            "payload": {
+                "character_id": actor["id"],
+                "expected_character_revision": rested["character"]["revision"],
+                "decision": "spend",
+                "hit_die_key": "wizard:d6",
+                "rest_completed_elapsed_ticks": 600,
+            },
+            "expected_revision": rested["campaign_revision"],
+            "idempotency_key": "first-die",
+        }
+        first = await _call(server, "campaign_change", first_arguments)
+        assert first["result"]["rolled_healing"] == (
+            first["result"]["hit_die_roll"]["total"] + 2
+        )
+        assert first["result"]["status"] == "open"
+        assert first["result"]["remaining"] == {"fighter:d10": 1}
+        assert first["random_stream_receipt"]["draw_count"] == 1
+
+        server = create_server(config)
+        assert await _call(server, "campaign_change", first_arguments) == first
+        second = await _call(
+            server,
+            "campaign_change",
+            {
+                "campaign_id": campaign["id"],
+                "action": "short_rest_hit_die",
+                "payload": {
+                    "character_id": actor["id"],
+                    "expected_character_revision": first["character"]["revision"],
+                    "decision": "spend",
+                    "hit_die_key": "fighter:d10",
+                    "rest_completed_elapsed_ticks": 600,
+                },
+                "expected_revision": first["campaign_revision"],
+                "idempotency_key": "second-die",
+            },
+        )
+        assert second["result"]["status"] == "closed"
+        assert second["result"]["close_reason"] == "no_hit_dice"
+        remaining_dice = second["character"]["sheet"]["combat"]["hit_dice"]
+        assert remaining_dice["fighter:d10"]["value"] == 0
+        assert remaining_dice["wizard:d6"]["value"] == 0
+        assert "short_rest_hit_dice" not in second["character"]["sheet"]["combat"]
+
+    asyncio.run(exercise())
+
+
+def test_2014_short_rest_hit_die_stops_at_full_hp_and_supports_decline(
+    tmp_path: Path,
+) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {"name": "Bounded rest", "edition": "2014", "idempotency_key": "campaign"},
+        )
+        sheet = _resting_sheet()
+        sheet["edition"] = "2014"
+        sheet["combat"]["hp"] = {"value": 1, "max": 2, "temp": 0}
+        actor = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": "Nearly Healed Fighter",
+                    "sheet": sheet,
+                },
+                "idempotency_key": "actor",
+            },
+        )
+        declining_sheet = _resting_sheet()
+        declining_sheet["edition"] = "2014"
+        declining = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": "Declining Fighter",
+                    "sheet": declining_sheet,
+                },
+                "idempotency_key": "declining-actor",
+            },
+        )
+        damaged_sheet = _resting_sheet()
+        damaged_sheet["edition"] = "2014"
+        damaged_sheet["combat"]["hp"] = {"value": 10, "max": 20, "temp": 0}
+        damaged = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": "Later Damaged Fighter",
+                    "sheet": damaged_sheet,
+                },
+                "idempotency_key": "damaged-actor",
+            },
+        )
+        rested = await _party_short_rest(
+            server,
+            campaign["id"],
+            "rest",
+            [
+                {"character_id": actor["id"], "expected_revision": actor["revision"]},
+                {
+                    "character_id": declining["id"],
+                    "expected_revision": declining["revision"],
+                },
+                {
+                    "character_id": damaged["id"],
+                    "expected_revision": damaged["revision"],
+                },
+            ],
+        )
+        with pytest.raises(Exception, match="pending short-rest Hit Die choices"):
+            await _call(
+                server,
+                "campaign_change",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "clock_advance",
+                    "payload": {
+                        "period": "minute",
+                        "count": 1,
+                        "expected_elapsed_ticks": 610,
+                    },
+                    "expected_revision": rested["campaign_revision"],
+                    "idempotency_key": "advance-before-decisions",
+                },
+            )
+        with pytest.raises(Exception, match="pending short-rest Hit Die choices"):
+            await _call(
+                server,
+                "combat_start",
+                {
+                    "campaign_id": campaign["id"],
+                    "participant_ids": [actor["id"]],
+                    "positioning_mode": "agent",
+                    "expected_revision": rested["campaign_revision"],
+                    "idempotency_key": "combat-before-decisions",
+                },
+            )
+        damaged_after_rest = await _call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": damaged["id"]}},
+        )
+        later_damage = await _call(
+            server,
+            "character_state_change",
+            {
+                "character_id": damaged["id"],
+                "action": "damage",
+                "payload": {"parts": [{"amount": 1, "damage_type": "force"}]},
+                "expected_revision": damaged_after_rest["revision"],
+                "idempotency_key": "post-rest-damage",
+            },
+        )
+        with pytest.raises(Exception, match="invalidated by a later character change"):
+            await _call(
+                server,
+                "campaign_change",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "short_rest_hit_die",
+                    "payload": {
+                        "character_id": damaged["id"],
+                        "expected_character_revision": later_damage["character"]["revision"],
+                        "decision": "spend",
+                        "hit_die_key": "fighter:d10",
+                        "rest_completed_elapsed_ticks": 600,
+                    },
+                    "expected_revision": rested["campaign_revision"],
+                    "idempotency_key": "post-damage-die",
+                },
+            )
+        after_rejected_die = await _call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": damaged["id"]}},
+        )
+        assert after_rejected_die == later_damage["character"]
+        assert after_rejected_die["sheet"]["combat"]["hp"]["value"] == 9
+        assert after_rejected_die["sheet"]["combat"]["hit_dice"]["fighter:d10"][
+            "value"
+        ] == 2
+        spent = await _call(
+            server,
+            "campaign_change",
+            {
+                "campaign_id": campaign["id"],
+                "action": "short_rest_hit_die",
+                "payload": {
+                    "character_id": actor["id"],
+                    "expected_character_revision": rested["character"]["revision"],
+                    "decision": "spend",
+                    "hit_die_key": "fighter:d10",
+                    "rest_completed_elapsed_ticks": 600,
+                },
+                "expected_revision": rested["campaign_revision"],
+                "idempotency_key": "healing-die",
+            },
+        )
+        assert spent["result"]["close_reason"] == "full_hp"
+        assert spent["result"]["applied_healing"] == 1
+        assert spent["character"]["sheet"]["combat"]["hit_dice"]["fighter:d10"][
+            "value"
+        ] == 1
+        with pytest.raises(Exception, match="no sequential Hit Die choice"):
+            await _call(
+                server,
+                "campaign_change",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "short_rest_hit_die",
+                    "payload": {
+                        "character_id": actor["id"],
+                        "expected_character_revision": spent["character"]["revision"],
+                        "decision": "spend",
+                        "hit_die_key": "fighter:d10",
+                        "rest_completed_elapsed_ticks": 600,
+                    },
+                    "expected_revision": spent["campaign_revision"],
+                    "idempotency_key": "unrolled-die",
+                },
+            )
+
+        declining_after_rest = await _call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": declining["id"]}},
+        )
+        declined = await _call(
+            server,
+            "campaign_change",
+            {
+                "campaign_id": campaign["id"],
+                "action": "short_rest_hit_die",
+                "payload": {
+                    "character_id": declining["id"],
+                    "expected_character_revision": declining_after_rest["revision"],
+                    "decision": "stop",
+                    "rest_completed_elapsed_ticks": 600,
+                },
+                "expected_revision": spent["campaign_revision"],
+                "idempotency_key": "decline",
+            },
+        )
+        assert declined["result"]["close_reason"] == "player_stopped"
+        assert "random_stream_receipt" not in declined
+        assert declined["campaign_revision"] == spent["campaign_revision"]
+
+    asyncio.run(exercise())
+
+
+def test_2014_sequential_hit_die_recovers_stable_zero_hp_and_delays_song_of_rest(
+    tmp_path: Path,
+) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {"name": "Stable song rest", "edition": "2014", "idempotency_key": "campaign"},
+        )
+        target_sheet = _resting_sheet()
+        target_sheet["edition"] = "2014"
+        target_sheet["combat"]["hp"] = {"value": 0, "max": 30, "temp": 0}
+        target_sheet["conditions"] = ["stable", "unconscious", "prone"]
+        target = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": "Stable Fighter",
+                    "sheet": target_sheet,
+                },
+                "idempotency_key": "target",
+            },
+        )
+        bard = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": "Resting Bard",
+                    "sheet": _bard_resting_sheet(),
+                },
+                "idempotency_key": "bard",
+            },
+        )
+        rested = await _party_short_rest(
+            server,
+            campaign["id"],
+            "rest",
+            [
+                {
+                    "character_id": target["id"],
+                    "expected_revision": target["revision"],
+                    "song_of_rest_source_actor_id": bard["id"],
+                },
+                {"character_id": bard["id"], "expected_revision": bard["revision"]},
+            ],
+        )
+        window = rested["character"]["sheet"]["combat"]["short_rest_hit_dice"]
+        assert window["song_of_rest_die_sides"] == 6
+        assert window["song_of_rest_used"] is False
+        assert rested["result"]["song_of_rest"] is None
+
+        spent = await _call(
+            server,
+            "campaign_change",
+            {
+                "campaign_id": campaign["id"],
+                "action": "short_rest_hit_die",
+                "payload": {
+                    "character_id": target["id"],
+                    "expected_character_revision": rested["character"]["revision"],
+                    "decision": "spend",
+                    "hit_die_key": "fighter:d10",
+                    "rest_completed_elapsed_ticks": 600,
+                },
+                "expected_revision": rested["campaign_revision"],
+                "idempotency_key": "recover-and-song",
+            },
+        )
+        assert spent["result"]["applied_healing"] > 0
+        assert spent["result"]["song_of_rest"]["die"] == "1d6"
+        assert spent["random_stream_receipt"]["draw_count"] == 2
+        assert spent["character"]["sheet"]["conditions"] == ["prone"]
+        assert spent["character"]["sheet"]["combat"]["hp"]["value"] == (
+            spent["result"]["applied_healing"]
+            + spent["result"]["song_of_rest"]["applied_healing"]
+        )
+
+    asyncio.run(exercise())
+
+
+def test_2014_short_rest_hit_die_roll_and_state_rollback_together(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {"name": "Rollback rest", "edition": "2014", "idempotency_key": "campaign"},
+        )
+        actor = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": "Rollback Fighter",
+                    "sheet": _resting_sheet(),
+                },
+                "idempotency_key": "actor",
+            },
+        )
+        rested = await _party_short_rest(
+            server,
+            campaign["id"],
+            "rest",
+            [{"character_id": actor["id"], "expected_revision": actor["revision"]}],
+        )
+        arguments = {
+            "campaign_id": campaign["id"],
+            "action": "short_rest_hit_die",
+            "payload": {
+                "character_id": actor["id"],
+                "expected_character_revision": rested["character"]["revision"],
+                "decision": "spend",
+                "hit_die_key": "fighter:d10",
+                "rest_completed_elapsed_ticks": 600,
+            },
+            "expected_revision": rested["campaign_revision"],
+            "idempotency_key": "rollback-die",
+        }
+        original_roll = lifecycle_module.roll
+        totals: list[int] = []
+        active_streams: list[bool] = []
+
+        def observed_roll(expression, *, rng=None):
+            active_streams.append(server_module.active_random_stream() is not None)
+            result = original_roll(expression, rng=rng)
+            totals.append(result.total)
+            return result
+
+        monkeypatch.setattr(lifecycle_module, "roll", observed_roll)
+        original_replace = server_module.StateMutationService.replace
+        failed = False
+
+        def fail_once(service, *args, **kwargs):
+            nonlocal failed
+            if kwargs.get("operation") == "campaign.party.rest.short_rest.hit_die" and not failed:
+                failed = True
+                raise RuntimeError("simulated atomic rest commit failure")
+            return original_replace(service, *args, **kwargs)
+
+        monkeypatch.setattr(server_module.StateMutationService, "replace", fail_once)
+        with pytest.raises(Exception, match="simulated atomic rest commit failure"):
+            await _call(server, "campaign_change", arguments)
+        unchanged = await _call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": actor["id"]}},
+        )
+        assert unchanged == rested["character"]
+
+        committed = await _call(server, "campaign_change", arguments)
+        assert active_streams == [True, True]
+        assert totals == [totals[0], totals[0]]
+        assert committed["result"]["hit_die_roll"]["total"] == totals[0]
+        assert committed["random_stream_receipt"]["position_before"] == 0
+        assert committed["random_stream_receipt"]["position_after"] == 1
+
+    asyncio.run(exercise())
+
+
+def test_2014_short_rest_hit_die_rejects_a_stale_outer_random_snapshot(
+    tmp_path: Path,
+) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {"name": "Interleaved rest", "edition": "2014", "idempotency_key": "campaign"},
+        )
+        actors = []
+        for index in range(2):
+            actors.append(
+                await _call(
+                    server,
+                    "character_create_from",
+                    {
+                        "mode": "direct",
+                        "payload": {
+                            "campaign_id": campaign["id"],
+                            "name": f"Interleaved Fighter {index}",
+                            "sheet": _resting_sheet(),
+                        },
+                        "idempotency_key": f"actor-{index}",
+                    },
+                )
+            )
+        rested = await _party_short_rest(
+            server,
+            campaign["id"],
+            "rest",
+            [
+                {
+                    "character_id": actor["id"],
+                    "expected_revision": actor["revision"],
+                }
+                for actor in actors
+            ],
+        )
+        second_after_rest = await _call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": actors[1]["id"]}},
+        )
+        campaign_after_rest = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        stale_stream = server_module.CampaignRandomStream.from_campaign_state(
+            campaign["id"],
+            campaign_after_rest["state"],
+            operation="campaign_change",
+            idempotency_key="stale-target-die",
+            campaign_revision=campaign_after_rest["revision"],
+        )
+        other = await _call(
+            server,
+            "campaign_change",
+            {
+                "campaign_id": campaign["id"],
+                "action": "short_rest_hit_die",
+                "payload": {
+                    "character_id": actors[1]["id"],
+                    "expected_character_revision": second_after_rest["revision"],
+                    "decision": "spend",
+                    "hit_die_key": "fighter:d10",
+                    "rest_completed_elapsed_ticks": 600,
+                },
+                "expected_revision": rested["campaign_revision"],
+                "idempotency_key": "other-die",
+            },
+        )
+        after_other_campaign = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        target_before = await _call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": actors[0]["id"]}},
+        )
+        other_before = await _call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": actors[1]["id"]}},
+        )
+        arguments = {
+            "campaign_id": campaign["id"],
+            "action": "short_rest_hit_die",
+            "payload": {
+                "character_id": actors[0]["id"],
+                "expected_character_revision": target_before["revision"],
+                "decision": "spend",
+                "hit_die_key": "fighter:d10",
+                "rest_completed_elapsed_ticks": 600,
+            },
+            "expected_revision": other["campaign_revision"],
+            "idempotency_key": "stale-target-die",
+        }
+        with server_module.use_random_stream(stale_stream):
+            with pytest.raises(Exception, match="campaign random snapshot conflict"):
+                await _call(server, "campaign_change", arguments)
+        assert stale_stream.draw_count == 0
+        assert await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        ) == after_other_campaign
+        assert await _call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": actors[0]["id"]}},
+        ) == target_before
+        assert await _call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": actors[1]["id"]}},
+        ) == other_before
+
+        retried = await _call(server, "campaign_change", arguments)
+        prior_position = after_other_campaign["state"]["random_stream"]["position"]
+        assert retried["random_stream_receipt"]["position_before"] == prior_position
+        assert retried["random_stream_receipt"]["position_after"] == prior_position + 1
+        assert retried["random_stream_receipt"]["draw_count"] == 1
 
     asyncio.run(exercise())

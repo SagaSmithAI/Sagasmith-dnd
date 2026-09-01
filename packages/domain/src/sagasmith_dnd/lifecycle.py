@@ -294,12 +294,38 @@ def record_rest_completion(
     rest_type: str,
     started_elapsed_ticks: int | None = None,
     completed_elapsed_ticks: int | None = None,
+    hit_dice_spent_count: int = 0,
+    expected_character_revision: int = 0,
+    song_of_rest_die_sides: int | None = None,
+    song_of_rest_used: bool = False,
 ) -> dict[str, Any]:
     """Validate game-time rest timing and preserve canonical tick positions."""
     normalized = str(rest_type).strip().lower().replace("-", "_")
     minimum_rest_minutes(normalized)
     if started_elapsed_ticks is None or completed_elapsed_ticks is None:
         raise CombatEngineError("rest tick bounds must be supplied together")
+    if (
+        isinstance(hit_dice_spent_count, bool)
+        or not isinstance(hit_dice_spent_count, int)
+        or hit_dice_spent_count < 0
+    ):
+        raise CombatEngineError("hit_dice_spent_count must be a non-negative integer")
+    if (
+        isinstance(expected_character_revision, bool)
+        or not isinstance(expected_character_revision, int)
+        or expected_character_revision < 0
+    ):
+        raise CombatEngineError("expected_character_revision must be a non-negative integer")
+    if song_of_rest_die_sides is not None and (
+        isinstance(song_of_rest_die_sides, bool)
+        or not isinstance(song_of_rest_die_sides, int)
+        or song_of_rest_die_sides < 1
+    ):
+        raise CombatEngineError("song_of_rest_die_sides must be a positive integer")
+    if not isinstance(song_of_rest_used, bool):
+        raise CombatEngineError("song_of_rest_used must be a boolean")
+    if song_of_rest_used and song_of_rest_die_sides is None:
+        raise CombatEngineError("used Song of Rest must record its die size")
     started = int(started_elapsed_ticks)
     completed = int(completed_elapsed_ticks)
     if started < 0 or completed < started:
@@ -348,7 +374,199 @@ def record_rest_completion(
         next_history["last_long_rest_elapsed_ticks"] = completed
     else:
         next_history.setdefault("last_long_rest_elapsed_ticks", previous_long)
+    combat = value["combat"]
+    combat.pop("short_rest_hit_dice", None)
+    hp = int(dict(combat.get("hp") or {}).get("value", 0) or 0)
+    if (
+        normalized == "short_rest"
+        and _sheet_edition(value) == "2014"
+        and hp < effective_hit_point_maximum(value)
+    ):
+        remaining = {
+            str(key): int(resource.get("value", 0) or 0)
+            for key, resource in dict(combat.get("hit_dice") or {}).items()
+            if isinstance(resource, dict) and int(resource.get("value", 0) or 0) > 0
+        }
+        if remaining:
+            combat["short_rest_hit_dice"] = {
+                "rest_completed_elapsed_ticks": completed,
+                "expected_character_revision": expected_character_revision,
+                "remaining": remaining,
+                "spent_count": hit_dice_spent_count,
+                "song_of_rest_die_sides": song_of_rest_die_sides,
+                "song_of_rest_used": song_of_rest_used,
+            }
     return value
+
+
+def apply_short_rest_hit_die_choice(
+    sheet: dict[str, Any],
+    *,
+    decision: str,
+    hit_die_key: str | None = None,
+    rest_completed_elapsed_ticks: int,
+    rules: ResolutionContext | None = None,
+    rng: Any = None,
+) -> dict[str, Any]:
+    """Resolve one 2014 post-rest Hit Die decision from the persisted window."""
+
+    if _sheet_edition(sheet) != "2014":
+        raise CombatEngineError("sequential short-rest Hit Dice require the 2014 rules")
+    if isinstance(rest_completed_elapsed_ticks, bool) or not isinstance(
+        rest_completed_elapsed_ticks, int
+    ):
+        raise CombatEngineError("rest_completed_elapsed_ticks must be an integer")
+    normalized_decision = str(decision).strip().casefold().replace("-", "_")
+    if normalized_decision not in {"spend", "stop"}:
+        raise CombatEngineError("decision must be spend or stop")
+    normalized_key = str(hit_die_key or "").strip()
+    if normalized_decision == "stop" and normalized_key:
+        raise CombatEngineError("hit_die_key must be omitted when stopping")
+    value = deepcopy(sheet)
+    combat = value.setdefault("combat", {})
+    window = combat.get("short_rest_hit_dice")
+    if not isinstance(window, dict):
+        raise CombatEngineError("no sequential Hit Die choice is open")
+    window_ticks = int(window.get("rest_completed_elapsed_ticks", -1) or 0)
+    if window_ticks != rest_completed_elapsed_ticks:
+        raise CombatEngineError("the Hit Die choice belongs to a different short rest")
+    if normalized_decision == "stop":
+        combat.pop("short_rest_hit_dice", None)
+        return {
+            "sheet": value,
+            "status": "closed",
+            "decision": "stop",
+            "close_reason": "player_stopped",
+            "rest_completed_elapsed_ticks": window_ticks,
+            "hit_die_roll": None,
+            "rolled_healing": 0,
+            "applied_healing": 0,
+            "song_of_rest": None,
+            "rule_receipts": core_receipts(
+                rules,
+                ["dnd5e.core.rest.hit_dice"],
+                "rest.hit_die_choice.stop",
+            ),
+            "ruleset_fingerprint": rules.fingerprint if rules else "",
+        }
+
+    hp = int(dict(combat.get("hp") or {}).get("value", 0) or 0)
+    if hp >= effective_hit_point_maximum(value):
+        combat.pop("short_rest_hit_dice", None)
+        return {
+            "sheet": value,
+            "status": "closed",
+            "decision": "spend",
+            "close_reason": "full_hp",
+            "rest_completed_elapsed_ticks": window_ticks,
+            "hit_die_roll": None,
+            "rolled_healing": 0,
+            "applied_healing": 0,
+            "song_of_rest": None,
+            "rule_receipts": core_receipts(
+                rules,
+                ["dnd5e.core.rest.hit_dice"],
+                "rest.hit_die_choice.full_hp",
+            ),
+            "ruleset_fingerprint": rules.fingerprint if rules else "",
+        }
+    key = normalized_key
+    if not key:
+        raise CombatEngineError("hit_die_key is required when spending a Hit Die")
+    remaining = {
+        str(candidate): int(amount)
+        for candidate, amount in dict(window.get("remaining") or {}).items()
+        if int(amount) > 0
+    }
+    if remaining.get(key, 0) < 1:
+        raise CombatEngineError(f"Hit Die is not available in this short rest: {key}")
+    hit_dice = dict(combat.get("hit_dice") or {})
+    resource = hit_dice.get(key)
+    if not isinstance(resource, dict) or int(resource.get("value", 0) or 0) < 1:
+        raise CombatEngineError(f"not enough hit dice remain for {key}")
+
+    sides = _hit_die_sides(key, resource)
+    constitution_modifier = effective_ability_modifier(value, "constitution")
+    rolled = asdict(roll(f"1d{sides}", rng=rng))
+    mutate_bounded_resource(resource, amount=1, direction="spend")
+    remaining[key] -= 1
+    if remaining[key] == 0:
+        remaining.pop(key)
+    if remaining:
+        combat["short_rest_hit_dice"] = {
+            **window,
+            "remaining": dict(remaining),
+        }
+    else:
+        combat.pop("short_rest_hit_dice", None)
+    rolled_healing = max(
+        0,
+        int(rolled["total"]) + constitution_modifier,
+    )
+    applied_healing = 0
+    if rolled_healing:
+        healed = apply_basic_healing_to_sheet(value, amount=rolled_healing)
+        value = healed["sheet"]
+        combat = value["combat"]
+        applied_healing = int(healed["amount"])
+
+    song_result = None
+    song_die_sides = window.get("song_of_rest_die_sides")
+    song_used = bool(window.get("song_of_rest_used", False))
+    if applied_healing > 0 and song_die_sides is not None and not song_used:
+        song_roll = asdict(roll(f"1d{int(song_die_sides)}", rng=rng))
+        song_healing = apply_basic_healing_to_sheet(value, amount=int(song_roll["total"]))
+        value = song_healing["sheet"]
+        combat = value["combat"]
+        song_result = {
+            "die": f"1d{int(song_die_sides)}",
+            "roll": song_roll,
+            "rolled_healing": int(song_roll["total"]),
+            "applied_healing": int(song_healing["amount"]),
+        }
+        song_used = True
+
+    spent_count = int(window.get("spent_count", 0) or 0) + 1
+    close_reason = None
+    if int(dict(combat.get("hp") or {}).get("value", 0) or 0) >= effective_hit_point_maximum(value):
+        close_reason = "full_hp"
+    elif not remaining:
+        close_reason = "no_hit_dice"
+    if close_reason is not None:
+        combat.pop("short_rest_hit_dice", None)
+        status = "closed"
+    else:
+        combat["short_rest_hit_dice"] = {
+            "rest_completed_elapsed_ticks": window_ticks,
+            "remaining": remaining,
+            "spent_count": spent_count,
+            "song_of_rest_die_sides": song_die_sides,
+            "song_of_rest_used": song_used,
+        }
+        status = "open"
+    mechanic_ids = ["dnd5e.core.rest.hit_dice"]
+    if song_result is not None:
+        mechanic_ids.append("dnd5e.core.rest.song_of_rest")
+    return {
+        "sheet": value,
+        "status": status,
+        "decision": "spend",
+        "close_reason": close_reason,
+        "rest_completed_elapsed_ticks": window_ticks,
+        "hit_die_key": key,
+        "hit_die_roll": {"key": key, **rolled},
+        "rolled_healing": rolled_healing,
+        "applied_healing": applied_healing,
+        "song_of_rest": song_result,
+        "spent_count": spent_count,
+        "remaining": dict(remaining),
+        "rule_receipts": core_receipts(
+            rules,
+            mechanic_ids,
+            "rest.hit_die_choice.spend",
+        ),
+        "ruleset_fingerprint": rules.fingerprint if rules else "",
+    }
 
 
 def advance_effect_durations(
@@ -778,7 +996,7 @@ def apply_rest(
         else None
     )
     if rest_type == "short_rest":
-        validate_rest_hit_dice_requests(sheet, hit_dice_spends)
+        validate_initial_rest_hit_dice_requests(sheet, hit_dice_spends)
         validate_arcane_recovery_choice(
             sheet,
             arcane_recovery,
@@ -805,6 +1023,7 @@ def apply_rest(
         }
     chase_recovery = recover_chase_exhaustion(before_rules.sheet)
     value = chase_recovery["sheet"]
+    value.setdefault("combat", {}).pop("short_rest_hit_dice", None)
     validate_rest_eligibility(value, rest_type=rest_type)
     combat = value.setdefault("combat", {})
     hp = dict(combat.get("hp") or {})
@@ -1190,6 +1409,21 @@ def validate_rest_hit_dice_requests(
         if count > int(resource.get("value", 0) or 0):
             raise CombatEngineError(f"not enough hit dice remain for {key}")
     return [(key, requested[key]) for key in order]
+
+
+def validate_initial_rest_hit_dice_requests(
+    sheet: dict[str, Any],
+    spends: list[dict[str, Any]] | None,
+) -> list[tuple[str, int]]:
+    """Validate the choices visible before any short-rest Hit Die roll."""
+
+    requested = validate_rest_hit_dice_requests(sheet, spends)
+    if _sheet_edition(sheet) == "2014" and sum(count for _key, count in requested) > 1:
+        raise CombatEngineError(
+            "2014 short rests accept one initial Hit Die; decide on each additional die "
+            "after its preceding roll"
+        )
+    return requested
 
 
 def validate_arcane_recovery_choice(

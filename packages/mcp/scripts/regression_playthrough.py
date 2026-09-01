@@ -45,7 +45,11 @@ from sagasmith_dnd.game_time import (
     game_time_ticks,
     validate_calendar_minute_point,
 )
-from sagasmith_dnd.lifecycle import allows_trance_rest, minimum_rest_minutes
+from sagasmith_dnd.lifecycle import (
+    allows_trance_rest,
+    minimum_rest_minutes,
+    validate_rest_schedule,
+)
 from sagasmith_dnd.module_profile import DndModuleProfile
 from sagasmith_dnd.playthrough import (
     PARTY_MEMBER_SOURCES,
@@ -1392,6 +1396,35 @@ def _idempotency_request_hash(payload: dict[str, Any]) -> str:
     return request_hash(payload)
 
 
+def _is_exact_missing_idempotency_receipt(
+    error: BaseException,
+    *,
+    idempotency_key: str,
+    branch_id: str | None = None,
+) -> bool:
+    """Accept only the server's single-leaf, key-bound missing-receipt errors."""
+
+    messages = exception_leaf_messages(error)
+    if len(messages) != 1:
+        return False
+    missing = f"idempotency receipt not found: {idempotency_key}"
+    accepted = {
+        f"RuntimeError: {missing}",
+        f"ToolError: {missing}",
+    }
+    if branch_id is not None:
+        branch_missing = (
+            f"idempotency receipt not found on branch {branch_id}: {idempotency_key}"
+        )
+        accepted.update(
+            {
+                f"RuntimeError: {branch_missing}",
+                f"ToolError: {branch_missing}",
+            }
+        )
+    return messages[0] in accepted
+
+
 def _validate_recovered_continuity(
     receipt: dict[str, Any],
     *,
@@ -1662,8 +1695,16 @@ def _validate_recovered_short_rest(
         or response.get("member_ids") != actor_ids
     ):
         raise RuntimeError("short-rest recovery receipt does not match the requested rest")
-    if response.get("campaign_revision") != campaign.get("revision"):
-        raise RuntimeError("short-rest recovery receipt is not the current campaign mutation")
+    response_revision = response.get("campaign_revision")
+    current_revision = campaign.get("revision")
+    if (
+        isinstance(response_revision, bool)
+        or not isinstance(response_revision, int)
+        or isinstance(current_revision, bool)
+        or not isinstance(current_revision, int)
+        or response_revision > current_revision
+    ):
+        raise RuntimeError("short-rest recovery receipt has invalid campaign revision evidence")
     current_clock = dict(dict(campaign.get("state") or {}).get("world_time") or {})
     current_game_time = dict(dict(campaign.get("state") or {}).get("game_time") or {})
     if dict(response.get("world_time") or {}) != current_clock:
@@ -6326,11 +6367,6 @@ async def _short_rest(
     }
     if song_source_ids - set(actor_ids):
         raise ValueError("every Song of Rest source must participate in the same short rest")
-    if any(
-        item["song_of_rest_source_actor_id"] is not None and not item["hit_dice_spends"]
-        for item in normalized
-    ):
-        raise ValueError("Song of Rest applies only to members who spend one or more Hit Dice")
     preconditions = await _validate_narrative_preconditions(
         client,
         campaign_id=campaign_id,
@@ -6347,33 +6383,25 @@ async def _short_rest(
         if actor.get("campaign_id") != campaign_id:
             raise ValueError("every short-rest actor must belong to the campaign")
         actors.append(actor)
-    member_by_id = {item["actor_id"]: item for item in normalized}
-    for actor in actors:
-        member = member_by_id[str(actor["id"])]
-        preflight = await client.domain(
-            "character_query",
-            {
-                "view": "rest",
-                "payload": {
-                    "character_id": str(actor["id"]),
-                    "rest_type": "short_rest",
-                    "hit_dice_spends": member["hit_dice_spends"],
-                    "arcane_recovery": member["arcane_recovery"],
-                    "natural_recovery": member["natural_recovery"],
-                    "song_of_rest_source_actor_id": member["song_of_rest_source_actor_id"],
-                    "attune_item_id": member.get("attune_item_id"),
-                    "attunement_prerequisite_confirmed": member.get(
-                        "attunement_prerequisite_confirmed"
-                    ),
-                    "rest_activity_minutes": member["rest_activity_minutes"],
-                    "duration_minutes": duration_minutes,
-                },
-            },
-        )
-        if preflight.get("ready") is not True:
-            raise RuntimeError(
-                f"short rest preflight for {actor['id']} has unresolved rule choices"
+    actor_by_id = {str(actor["id"]): actor for actor in actors}
+    initial_hit_dice_spends: dict[str, list[dict[str, Any]]] = {}
+    sequential_hit_die_keys: dict[str, list[str]] = {}
+    for member in normalized:
+        actor_id = str(member["actor_id"])
+        actor = actor_by_id[actor_id]
+        requested_keys = [
+            str(spend["key"])
+            for spend in member["hit_dice_spends"]
+            for _index in range(int(spend["count"]))
+        ]
+        if str(dict(actor.get("sheet") or {}).get("edition") or "") == "2014":
+            initial_hit_dice_spends[actor_id] = (
+                [{"key": requested_keys[0], "count": 1}] if requested_keys else []
             )
+            sequential_hit_die_keys[actor_id] = requested_keys[1:]
+        else:
+            initial_hit_dice_spends[actor_id] = deepcopy(member["hit_dice_spends"])
+            sequential_hit_die_keys[actor_id] = []
     branches = await client.domain(
         "branch_query",
         {"campaign_id": campaign_id, "view": "list"},
@@ -6411,7 +6439,6 @@ async def _short_rest(
     elif start_clock is not None:
         raise ValueError("short-rest start clock must be omitted after the clock is set")
     campaign = await _campaign(client, campaign_id)
-    actor_by_id = {str(actor["id"]): actor for actor in actors}
     party_members: list[dict[str, Any]] = []
     for member in normalized:
         party_member: dict[str, Any] = {
@@ -6427,13 +6454,16 @@ async def _short_rest(
         if member.get("attune_item_id"):
             party_member["attune_item_id"] = member["attune_item_id"]
             party_member["attunement_prerequisite_confirmed"] = True
-        if member["hit_dice_spends"]:
-            party_member["hit_dice_spends"] = member["hit_dice_spends"]
+        member_initial_spends = initial_hit_dice_spends[member["actor_id"]]
+        if member_initial_spends:
+            party_member["hit_dice_spends"] = member_initial_spends
         if member["rest_activity_minutes"]:
             party_member["rest_activity_minutes"] = member["rest_activity_minutes"]
         party_members.append(party_member)
     party_rest_key = _mutation_key(run_id, "short-rest-party", rest_identity)
     rest_recovered = False
+    rest_actor_revisions: dict[str, int] = {}
+    rest_actor_windows: dict[str, dict[str, Any] | None] = {}
     try:
         rested = await client.domain(
             "campaign_change",
@@ -6482,27 +6512,29 @@ async def _short_rest(
         ):
             raise RuntimeError("short-rest recovery receipt has unexpected revision evidence")
         campaign_revision_row = revision_by_entity[("campaign", campaign_id)]
+        campaign_before_revision = campaign_revision_row.get("before_revision")
+        campaign_after_revision = campaign_revision_row.get("after_revision")
         if (
-            campaign_revision_row.get("after_revision") != campaign.get("revision")
-            or campaign_revision_row.get("before_revision") != campaign.get("revision") - 1
+            isinstance(campaign_before_revision, bool)
+            or not isinstance(campaign_before_revision, int)
+            or isinstance(campaign_after_revision, bool)
+            or not isinstance(campaign_after_revision, int)
+            or campaign_after_revision != campaign_before_revision + 1
+            or campaign_after_revision
+            != dict(receipt.get("response") or {}).get("campaign_revision")
         ):
             raise RuntimeError("short-rest recovery campaign revisions do not match")
-        for (entity_type, entity_id), revision_row in revision_by_entity.items():
+        for (entity_type, _entity_id), revision_row in revision_by_entity.items():
             if entity_type != "character":
                 continue
-            current_actor = actor_by_id.get(entity_id)
-            if current_actor is None:
-                current_actor = await client.domain(
-                    "character_query",
-                    {"view": "get", "payload": {"character_id": entity_id}},
-                )
-            current_revision = current_actor.get("revision")
+            before_revision = revision_row.get("before_revision")
+            after_revision = revision_row.get("after_revision")
             if (
-                current_actor.get("campaign_id") != campaign_id
-                or isinstance(current_revision, bool)
-                or not isinstance(current_revision, int)
-                or revision_row.get("after_revision") != current_revision
-                or revision_row.get("before_revision") != current_revision - 1
+                isinstance(before_revision, bool)
+                or not isinstance(before_revision, int)
+                or isinstance(after_revision, bool)
+                or not isinstance(after_revision, int)
+                or after_revision != before_revision + 1
             ):
                 raise RuntimeError("short-rest recovery actor revisions do not match")
         recovery_members = []
@@ -6513,9 +6545,14 @@ async def _short_rest(
                     "character_id": member["actor_id"],
                     "expected_revision": revision_row["before_revision"],
                     "rest_activity_minutes": member["rest_activity_minutes"],
-                    "hit_dice_spends": member["hit_dice_spends"],
+                    "derived_rest_timing": validate_rest_schedule(
+                        rest_type="short_rest",
+                        duration_minutes=duration_minutes,
+                    ),
+                    "hit_dice_spends": initial_hit_dice_spends[member["actor_id"]],
                     "arcane_recovery": member["arcane_recovery"],
                     "natural_recovery": member["natural_recovery"],
+                    "sorcerous_restoration_points": None,
                     "song_of_rest_source_actor_id": member["song_of_rest_source_actor_id"],
                     "attune_item_id": member.get("attune_item_id"),
                     "attunement_prerequisite_confirmed": (
@@ -6535,11 +6572,47 @@ async def _short_rest(
             receipt,
             campaign=campaign,
             actors=actors,
-            members=normalized,
+            members=[
+                {
+                    **member,
+                    "hit_dice_spends": initial_hit_dice_spends[member["actor_id"]],
+                }
+                for member in normalized
+            ],
             duration_minutes=duration_minutes,
             expected_request_hash=expected_request_hash,
         )
+        rest_actor_revisions = {
+            actor_id: int(revision_by_entity[("character", actor_id)]["after_revision"])
+            for actor_id in actor_ids
+        }
         rest_recovered = True
+    if not rest_recovered:
+        for actor_id in actor_ids:
+            rested_actor = await client.domain(
+                "character_query",
+                {"view": "get", "payload": {"character_id": actor_id}},
+            )
+            rested_revision = rested_actor.get("revision")
+            if (
+                rested_actor.get("campaign_id") != campaign_id
+                or isinstance(rested_revision, bool)
+                or not isinstance(rested_revision, int)
+            ):
+                raise RuntimeError(
+                    f"short rest did not expose the committed revision for actor {actor_id}"
+                )
+            rest_actor_revisions[actor_id] = rested_revision
+            candidate_window = dict(dict(rested_actor.get("sheet") or {}).get("combat") or {}).get(
+                "short_rest_hit_dice"
+            )
+            if not isinstance(candidate_window, dict):
+                candidate_window = dict(
+                    dict(rested.get("recovered") or {}).get(actor_id) or {}
+                ).get("short_rest_hit_dice")
+            rest_actor_windows[actor_id] = (
+                deepcopy(candidate_window) if isinstance(candidate_window, dict) else None
+            )
     if (
         rested.get("status") != "committed"
         or rested.get("rest_type") != "short_rest"
@@ -6547,7 +6620,202 @@ async def _short_rest(
         or rested.get("member_ids") != actor_ids
     ):
         raise RuntimeError("atomic short rest did not settle the requested party")
+    rest_game_time = dict(rested.get("game_time") or {})
+    completed_elapsed_ticks = rest_game_time.get("elapsed_ticks")
+    if isinstance(completed_elapsed_ticks, bool) or not isinstance(
+        completed_elapsed_ticks, int
+    ):
+        raise RuntimeError("short rest did not return its completed game-time tick")
+    actor_revisions = rest_actor_revisions
+    final_actor_revisions = dict(actor_revisions)
+    sequential_campaign_revision = rested.get("campaign_revision")
+    if isinstance(sequential_campaign_revision, bool) or not isinstance(
+        sequential_campaign_revision, int
+    ):
+        raise RuntimeError("short rest did not return its campaign revision")
+    hit_die_choices: list[dict[str, Any]] = []
+    for member in normalized:
+        actor_id = str(member["actor_id"])
+        actor = actor_by_id[actor_id]
+        if str(dict(actor.get("sheet") or {}).get("edition") or "") != "2014":
+            continue
+        actor_revision = actor_revisions.get(actor_id)
+        if isinstance(actor_revision, bool) or not isinstance(actor_revision, int):
+            raise RuntimeError(
+                f"short rest did not return the committed revision for actor {actor_id}"
+            )
+        recovery = dict(dict(rested.get("recovered") or {}).get(actor_id) or {})
+        window = (
+            recovery.get("short_rest_hit_dice")
+            if rest_recovered
+            else rest_actor_windows.get(actor_id)
+        )
+        if not isinstance(window, dict) and not rest_recovered:
+            continue
+        recovering_choice_chain = rest_recovered
+        for choice_index, hit_die_key in enumerate(sequential_hit_die_keys[actor_id]):
+            choice_key = _mutation_key(
+                run_id,
+                "short-rest-hit-die",
+                f"{rest_identity}:{actor_id}:{choice_index}:{hit_die_key}",
+            )
+            if not isinstance(window, dict):
+                if not recovering_choice_chain:
+                    break
+                try:
+                    choice_receipt = await client.domain(
+                        "state_revision",
+                        {
+                            "campaign_id": campaign_id,
+                            "action": "receipt",
+                            "payload": {
+                                "idempotency_key": choice_key,
+                                "branch_id": str(branch["id"]),
+                            },
+                        },
+                    )
+                except Exception as error:
+                    missing_receipt = _is_exact_missing_idempotency_receipt(
+                        error,
+                        idempotency_key=choice_key,
+                        branch_id=str(branch["id"]),
+                    )
+                    if not missing_receipt:
+                        raise
+                    break
+                expected_choice_hash = _idempotency_request_hash(
+                    {
+                        "character_id": actor_id,
+                        "decision": "spend",
+                        "rest_completed_elapsed_ticks": completed_elapsed_ticks,
+                        "hit_die_key": hit_die_key,
+                        "expected_character_revision": actor_revision,
+                        "branch_id": str(branch["id"]),
+                    }
+                )
+                receipt_response = dict(choice_receipt.get("response") or {})
+                receipt_result = dict(receipt_response.get("result") or {})
+                receipt_character = dict(receipt_response.get("character") or {})
+                if (
+                    choice_receipt.get("key") != choice_key
+                    or choice_receipt.get("replayed") is not True
+                    or choice_receipt.get("request_hash") != expected_choice_hash
+                    or str(choice_receipt.get("branch_id") or "") != str(branch["id"])
+                    or receipt_result.get("decision") != "spend"
+                    or receipt_result.get("hit_die_key") != hit_die_key
+                    or receipt_character.get("id") != actor_id
+                ):
+                    raise RuntimeError(
+                        f"short-rest Hit Die recovery receipt does not match actor {actor_id}"
+                    )
+            resolved = await client.domain(
+                "campaign_change",
+                {
+                    "campaign_id": campaign_id,
+                    "action": "short_rest_hit_die",
+                    "payload": {
+                        "character_id": actor_id,
+                        "expected_character_revision": actor_revision,
+                        "decision": "spend",
+                        "hit_die_key": hit_die_key,
+                        "rest_completed_elapsed_ticks": completed_elapsed_ticks,
+                    },
+                    "branch_id": str(branch["id"]),
+                    "expected_revision": sequential_campaign_revision,
+                    "idempotency_key": choice_key,
+                },
+            )
+            result = dict(resolved.get("result") or {})
+            resolved_character = dict(resolved.get("character") or {})
+            if (
+                resolved.get("status") not in {"open", "closed"}
+                or result.get("decision") != "spend"
+                or result.get("hit_die_key") != hit_die_key
+                or not isinstance(result.get("hit_die_roll"), dict)
+                or not isinstance(resolved_character.get("revision"), int)
+                or not isinstance(resolved.get("campaign_revision"), int)
+            ):
+                raise RuntimeError(
+                    f"short-rest Hit Die choice did not settle for actor {actor_id}"
+                )
+            random_receipt = dict(resolved.get("random_stream_receipt") or {})
+            if (
+                random_receipt.get("idempotency_key") != choice_key
+                or int(random_receipt.get("draw_count", 0) or 0) < 1
+            ):
+                raise RuntimeError(
+                    f"short-rest Hit Die choice has no exact random receipt for actor {actor_id}"
+                )
+            hit_die_choices.append({"actor_id": actor_id, **deepcopy(resolved)})
+            actor_revision = int(resolved_character["revision"])
+            final_actor_revisions[actor_id] = actor_revision
+            sequential_campaign_revision = int(resolved["campaign_revision"])
+            window = dict(resolved_character.get("sheet") or {}).get("combat")
+            window = (
+                dict(window).get("short_rest_hit_dice")
+                if isinstance(window, dict)
+                else None
+            )
+            recovering_choice_chain = False
+        if isinstance(window, dict):
+            stop_key = _mutation_key(
+                run_id,
+                "short-rest-hit-die",
+                f"{rest_identity}:{actor_id}:stop",
+            )
+            stopped = await client.domain(
+                "campaign_change",
+                {
+                    "campaign_id": campaign_id,
+                    "action": "short_rest_hit_die",
+                    "payload": {
+                        "character_id": actor_id,
+                        "expected_character_revision": actor_revision,
+                        "decision": "stop",
+                        "rest_completed_elapsed_ticks": completed_elapsed_ticks,
+                    },
+                    "branch_id": str(branch["id"]),
+                    "expected_revision": sequential_campaign_revision,
+                    "idempotency_key": stop_key,
+                },
+            )
+            stop_result = dict(stopped.get("result") or {})
+            if (
+                stopped.get("status") != "closed"
+                or stop_result.get("decision") != "stop"
+                or stop_result.get("close_reason") != "player_stopped"
+                or not isinstance(dict(stopped.get("character") or {}).get("revision"), int)
+                or stopped.get("campaign_revision") != sequential_campaign_revision
+                or stopped.get("random_stream_receipt") is not None
+            ):
+                raise RuntimeError(
+                    f"short-rest Hit Die stop did not settle for actor {actor_id}"
+                )
+            final_actor_revisions[actor_id] = int(
+                dict(stopped.get("character") or {})["revision"]
+            )
+            hit_die_choices.append({"actor_id": actor_id, **deepcopy(stopped)})
     campaign = await _campaign(client, campaign_id)
+    if campaign.get("revision") != sequential_campaign_revision:
+        raise RuntimeError("short-rest receipt chain is not the current campaign mutation")
+    if (
+        dict(dict(campaign.get("state") or {}).get("game_time") or {}).get("elapsed_ticks")
+        != completed_elapsed_ticks
+    ):
+        raise RuntimeError("short-rest receipt chain no longer owns the campaign timeline")
+    if rest_recovered:
+        for actor_id, expected_actor_revision in final_actor_revisions.items():
+            current_actor = await client.domain(
+                "character_query",
+                {"view": "get", "payload": {"character_id": actor_id}},
+            )
+            if (
+                current_actor.get("campaign_id") != campaign_id
+                or current_actor.get("revision") != expected_actor_revision
+            ):
+                raise RuntimeError(
+                    f"short-rest receipt chain is not current for actor {actor_id}"
+                )
     committed = await client.domain(
         "memory_change",
         {
@@ -6581,7 +6849,7 @@ async def _short_rest(
                 "snapshot": {"label": f"Full playthrough short rest: {reason.strip()}"},
                 "branch_id": str(branch["id"]),
             },
-            "expected_revision": campaign["revision"],
+            "expected_revision": sequential_campaign_revision,
             "idempotency_key": _mutation_key(run_id, "short-rest-continuity", rest_identity),
         },
     )
@@ -6606,6 +6874,7 @@ async def _short_rest(
             dict(dict(rested.get("recovered") or {}).get(actor_id) or {}) for actor_id in actor_ids
         ],
         "party_rest": rested,
+        "hit_die_choices": hit_die_choices,
         "continuity": committed,
         "sync": synced,
     }
@@ -9000,9 +9269,9 @@ async def _claim_party_item_for_character(
                 )
             )
         except Exception as error:
-            missing_receipt = any(
-                message.startswith("idempotency receipt not found:")
-                for message in exception_leaf_messages(error)
+            missing_receipt = _is_exact_missing_idempotency_receipt(
+                error,
+                idempotency_key=claim_key,
             )
             if not missing_receipt:
                 raise
