@@ -2372,6 +2372,7 @@ def validate_character_sheet(
             "hit_dice",
             "hp_progression",
             "death_saves",
+            "last_death_save_elapsed_tick",
             "exhaustion",
             "inspiration",
             "wounded",
@@ -2523,6 +2524,13 @@ def validate_character_sheet(
         hp_progression.append(normalized_gain)
     death_saves = _object(combat["death_saves"], "sheet.combat.death_saves")
     _reject_unknown(death_saves, "sheet.combat.death_saves", {"successes", "failures"})
+    last_death_save_elapsed_tick = combat.get("last_death_save_elapsed_tick")
+    if last_death_save_elapsed_tick is not None:
+        last_death_save_elapsed_tick = _integer(
+            last_death_save_elapsed_tick,
+            "sheet.combat.last_death_save_elapsed_tick",
+            minimum=0,
+        )
     rest_history = _object(combat["rest_history"], "sheet.combat.rest_history")
     _reject_unknown(
         rest_history,
@@ -3262,6 +3270,11 @@ def validate_character_sheet(
                     maximum=3,
                 ),
             },
+            **(
+                {"last_death_save_elapsed_tick": last_death_save_elapsed_tick}
+                if last_death_save_elapsed_tick is not None
+                else {}
+            ),
             "exhaustion": exhaustion,
             "inspiration": _boolean(combat["inspiration"], "sheet.combat.inspiration"),
             "wounded": _boolean(combat["wounded"], "sheet.combat.wounded"),

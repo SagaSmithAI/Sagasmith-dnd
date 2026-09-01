@@ -214,6 +214,7 @@ from sagasmith_dnd.combat_engine import (
     reconcile_readied_spells,
     reconcile_witch_bolt_concentration,
     reconcile_witch_bolt_range,
+    require_death_save_eligibility,
     resolve_actor_check,
     resolve_actor_contest,
     resolve_actor_group_check,
@@ -370,6 +371,7 @@ from sagasmith_dnd.random_stream import (
     active_random_stream,
     initial_random_stream,
     use_random_stream,
+    validate_random_stream_state,
 )
 from sagasmith_dnd.resolution_plan import (
     BoundResolutionPlan,
@@ -6562,6 +6564,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             campaign.state,
             operation=tool_id,
             idempotency_key=str(arguments.get("idempotency_key") or ""),
+            campaign_revision=campaign.revision,
         )
         return use_random_stream(stream)
 
@@ -23999,6 +24002,18 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 disadvantage=disadvantage,
                 ruleset=ruleset,
             )
+            if ruleset == "2014":
+                updated["sheet"].setdefault("combat", {})[
+                    "last_death_save_elapsed_tick"
+                ] = int(dict(next_state.get("game_time") or {}).get("elapsed_ticks", 0))
+                updated["rule_receipts"] = [
+                    *list(updated.get("rule_receipts") or []),
+                    *core_receipts(
+                        effective_rule_context(campaign_id, branch_id=resolved_branch_id),
+                        ["dnd5e.core.mcp.death_save_turn_cadence"],
+                        "death_save.turn_start",
+                    ),
+                ]
             result = {key: value for key, value in updated.items() if key != "sheet"}
             current = characters.get(actor_id)
             updates.append(
@@ -26722,9 +26737,23 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         current = characters.get(character_id)
         require_character_control(current, principal_id)
         require_outside_active_combat(current, "character sheet replacement")
+        request_payload = {
+            "sheet": deepcopy(sheet),
+            "notes": deepcopy(notes),
+        }
         sheet_value = deepcopy(sheet)
         if current.campaign_id is not None:
-            sheet_value["edition"] = campaign_rules_edition(current.campaign_id)
+            ruleset = campaign_rules_edition(current.campaign_id)
+            sheet_value["edition"] = ruleset
+            if ruleset == "2014":
+                existing_tick = dict(current.sheet.get("combat") or {}).get(
+                    "last_death_save_elapsed_tick"
+                )
+                replacement_combat = sheet_value.setdefault("combat", {})
+                if existing_tick is None:
+                    replacement_combat.pop("last_death_save_elapsed_tick", None)
+                else:
+                    replacement_combat["last_death_save_elapsed_tick"] = existing_tick
         sheet_value = finalize_actor_sheet_rulings(
             sheet_value,
             current.campaign_id,
@@ -26742,7 +26771,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             principal_id=principal_id,
             expected_revision=expected_revision,
             idempotency_key=idempotency_key,
-            payload={"sheet": normalized_sheet, "notes": normalized_notes},
+            payload=request_payload,
         )
 
     def character_wallet_adjust(
@@ -29443,20 +29472,140 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         if current.campaign_id is None:
             raise CombatEngineError("death saves require a campaign-bound actor")
         access.require_campaign(current.campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
+        require_write_contract(expected_revision, idempotency_key)
+        operation = "character.death_save.resolve"
+        branch_id = require_current_branch(current.campaign_id, None)
+        request_payload = {"operation": operation, "character_id": current.id}
+        scope = (
+            f"character-write:{current.campaign_id}:{branch_id}:{principal_id}:{current.id}"
+        )
+        replay = replay_idempotent(scope, idempotency_key, request_payload)
+        if replay is not None:
+            return replay
+        if current.revision != expected_revision:
+            raise ValueError(
+                "character revision conflict: "
+                f"expected {expected_revision}, found {current.revision}"
+            )
+        ruleset = campaign_rules_edition(current.campaign_id)
+        campaign = None
+        elapsed_tick: int | None = None
+        if ruleset == "2014":
+            campaign = campaigns.get(current.campaign_id)
+            stream = active_random_stream()
+            if stream is not None:
+                random_state = validate_random_stream_state(
+                    dict(campaign.state or {}).get("random_stream")
+                    or initial_random_stream(f"sagasmith-dnd:{current.campaign_id}")
+                )
+                if (
+                    stream.campaign_id != current.campaign_id
+                    or (
+                        stream.campaign_revision is not None
+                        and stream.campaign_revision != campaign.revision
+                    )
+                    or stream.seed != random_state["seed"]
+                    or stream.start_position != random_state["position"]
+                ):
+                    raise ValueError(
+                        "campaign random snapshot conflict: death save requires the "
+                        "same campaign revision and random-stream position that opened "
+                        "the request"
+                    )
+            elapsed_tick = int(
+                dict(dict(campaign.state or {}).get("game_time") or {}).get(
+                    "elapsed_ticks", 0
+                )
+            )
+            last_tick = dict(current.sheet.get("combat") or {}).get(
+                "last_death_save_elapsed_tick"
+            )
+            require_death_save_eligibility(current.sheet)
+            if last_tick is not None and int(last_tick) >= elapsed_tick:
+                raise CombatEngineError(
+                    "this actor already made a death save at the current game-time tick; "
+                    "advance one round with campaign_change(action='clock_advance', "
+                    "payload={'period': 'round', 'count': 1}) before the next save"
+                )
         applied = resolve_death_save_to_sheet(
             current.sheet,
-            ruleset=campaign_rules_edition(current.campaign_id),
+            ruleset=ruleset,
         )
+        rule_receipts: list[dict[str, Any]] = []
+        if elapsed_tick is not None:
+            applied["sheet"].setdefault("combat", {})[
+                "last_death_save_elapsed_tick"
+            ] = elapsed_tick
+            rule_receipts = core_receipts(
+                effective_rule_context(current.campaign_id, branch_id=branch_id),
+                ["dnd5e.core.mcp.death_save_turn_cadence"],
+                "death_save.turn_start",
+            )
+            applied["rule_receipts"] = rule_receipts
+            applied["cadence"] = {
+                "elapsed_tick": elapsed_tick,
+                "next_eligible_elapsed_tick": elapsed_tick + 1,
+                "advance_contract": {
+                    "tool": "campaign_change",
+                    "action": "clock_advance",
+                    "payload": {"period": "round", "count": 1},
+                },
+            }
         result = {key: value for key, value in applied.items() if key != "sheet"}
+        if campaign is not None:
+            normalized_sheet = validate_character_sheet(
+                finalize_actor_sheet_rulings(
+                    deepcopy(applied["sheet"]),
+                    current.campaign_id,
+                ),
+                rules=effective_rule_context(current.campaign_id),
+            )
+            normalized_notes = canonical_character_notes(
+                current.notes,
+                character_type=current.character_type,
+                name=current.name,
+                summary=current.summary,
+            )
+            character_update = CharacterStateUpdate(
+                character_id=current.id,
+                sheet=normalized_sheet,
+                notes=normalized_notes,
+                expected_revision=expected_revision,
+            )
+            return commit_campaign_state(
+                campaign,
+                deepcopy(dict(campaign.state or {})),
+                operation=operation,
+                principal_id=principal_id,
+                branch_id=branch_id,
+                idempotency_key=idempotency_key,
+                scope=scope,
+                payload=request_payload,
+                response_fields={
+                    "character": character_view(
+                        replace(
+                            current,
+                            sheet=normalized_sheet,
+                            notes=normalized_notes,
+                            revision=current.revision + 1,
+                        )
+                    ),
+                    "result": result,
+                },
+                character_updates=[character_update],
+                rule_receipts=rule_receipts,
+                expected_campaign_revision=campaign.revision,
+            )
         return update_sheet(
             character_id,
             applied["sheet"],
-            operation="character.death_save.resolve",
+            operation=operation,
             principal_id=principal_id,
             expected_revision=expected_revision,
             idempotency_key=idempotency_key,
             payload={},
             response_extra={"result": result},
+            rule_receipts=rule_receipts,
         )
 
     def character_stabilize(

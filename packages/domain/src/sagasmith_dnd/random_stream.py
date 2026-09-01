@@ -117,6 +117,7 @@ class CampaignRandomStream:
     position: int
     operation: str
     idempotency_key: str = ""
+    campaign_revision: int | None = None
 
     def __post_init__(self) -> None:
         normalized = validate_random_stream_state(
@@ -129,6 +130,12 @@ class CampaignRandomStream:
         )
         self.seed = normalized["seed"]
         self.position = normalized["position"]
+        if self.campaign_revision is not None and (
+            isinstance(self.campaign_revision, bool)
+            or not isinstance(self.campaign_revision, int)
+            or self.campaign_revision < 0
+        ):
+            raise ValueError("campaign random stream revision must be a non-negative integer")
         self.start_position = self.position
         self.persisted_position = self.position
 
@@ -140,6 +147,7 @@ class CampaignRandomStream:
         *,
         operation: str,
         idempotency_key: str = "",
+        campaign_revision: int | None = None,
     ) -> CampaignRandomStream:
         raw = state.get("random_stream")
         if raw is None:
@@ -151,6 +159,7 @@ class CampaignRandomStream:
             position=normalized["position"],
             operation=str(operation),
             idempotency_key=str(idempotency_key or ""),
+            campaign_revision=campaign_revision,
         )
 
     @property
