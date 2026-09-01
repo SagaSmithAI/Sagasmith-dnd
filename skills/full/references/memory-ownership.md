@@ -30,6 +30,10 @@ scene, or when two stores appear to contain the same information.
    or retract obsolete assertions; do not append near-duplicates or erase history.
 6. Cite source event ids and choose the narrowest disclosure scope. A fact's
    visibility never implies that any actor knows it.
+7. Never attach player-visible ActorKnowledge (`owner`, `party`, `player`, or
+   `public`) to a DM-only source event. This boundary is enforced for direct
+   writes, event-plus-knowledge commits, and NPC conversation close; when a
+   revision omits source or disclosure, evaluate the preserved current values.
 
 ## Scene boundary
 

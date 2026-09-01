@@ -319,7 +319,10 @@ def test_actor_knowledge_revise_preserves_omitted_fields_and_can_clear_source(
             {
                 "campaign_id": campaign["id"],
                 "action": "add",
-                "payload": {"summary": "The witness studies the sigil."},
+                "payload": {
+                    "summary": "The witness studies the sigil.",
+                    "audience_scope": "public",
+                },
                 "idempotency_key": "source-event",
             },
         )

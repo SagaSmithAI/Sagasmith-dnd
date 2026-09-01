@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from sagasmith_dnd_mcp.config import McpConfig
-from sagasmith_dnd_mcp.server import create_server
+from sagasmith_dnd_mcp.server import close_server, create_server
 
 
 async def _call(server, name: str, arguments: dict):
@@ -233,6 +233,267 @@ def test_actor_scoped_event_is_visible_only_to_witnesses(tmp_path: Path) -> None
                     "idempotency_key": "invalid-event",
                 },
             )
+
+    asyncio.run(exercise())
+
+
+def test_dm_event_cannot_back_player_visible_actor_knowledge_atomically(
+    tmp_path: Path,
+) -> None:
+    config = McpConfig(
+        home=tmp_path / "home",
+        database_url=None,
+        chroma_url=None,
+        chroma_path_override=None,
+        dnd_skills_dir=tmp_path / "dnd",
+        modulegen_skills_dir=tmp_path / "modulegen",
+        auto_seed_rules=False,
+    )
+
+    async def exercise() -> None:
+        server = create_server(config)
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {"name": "Knowledge audience boundary", "idempotency_key": "campaign"},
+        )
+        actor = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {"campaign_id": campaign["id"], "name": "Witness"},
+                "idempotency_key": "actor",
+            },
+        )
+        await _call(
+            server,
+            "access_grant",
+            {
+                "scope": "campaign",
+                "campaign_id": campaign["id"],
+                "principal_id": "player:witness",
+                "payload": {"role": "player"},
+            },
+        )
+        await _call(
+            server,
+            "access_grant",
+            {
+                "scope": "actor",
+                "campaign_id": campaign["id"],
+                "principal_id": "player:witness",
+                "payload": {"actor_id": actor["id"], "can_view_private": True},
+            },
+        )
+        private_event = await _call(
+            server,
+            "campaign_event",
+            {
+                "campaign_id": campaign["id"],
+                "action": "add",
+                "payload": {"summary": "The Keeper hides the key."},
+                "idempotency_key": "private-event",
+            },
+        )
+        before = await _call(
+            server,
+            "campaign_event",
+            {"campaign_id": campaign["id"], "action": "list"},
+        )
+        with pytest.raises(Exception, match="DM-only event"):
+            await _call(
+                server,
+                "campaign_event",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "add",
+                    "payload": {
+                        "summary": "Leaking event must roll back.",
+                        "known_by_actor_ids": [actor["id"]],
+                        "knowledge_key": "hidden-key",
+                        "knowledge_proposition": "The key is hidden.",
+                        "audience_scope": "dm",
+                        "knowledge_disclosure_scope": "owner",
+                    },
+                    "idempotency_key": "atomic-leak",
+                },
+            )
+        after = await _call(
+            server,
+            "campaign_event",
+            {"campaign_id": campaign["id"], "action": "list"},
+        )
+        assert [item["id"] for item in after] == [item["id"] for item in before]
+        with pytest.raises(Exception, match="DM-only event"):
+            await _call(
+                server,
+                "actor_knowledge_change",
+                {
+                    "action": "add",
+                    "payload": {
+                        "campaign_id": campaign["id"],
+                        "actor_id": actor["id"],
+                        "knowledge_key": "direct-hidden-key",
+                        "proposition": "The key is hidden.",
+                        "source_event_id": private_event["id"],
+                        "disclosure_scope": "public",
+                    },
+                    "idempotency_key": "direct-leak",
+                },
+            )
+        with pytest.raises(Exception, match="DM-only event"):
+            await _call(
+                server,
+                "memory_change",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "commit",
+                    "payload": {
+                        "event": {
+                            "summary": "Atomic continuity leak",
+                            "audience_scope": "dm",
+                        },
+                        "actor_knowledge": [
+                            {
+                                "actor_id": actor["id"],
+                                "knowledge_key": "continuity-hidden-key",
+                                "proposition": "The key is hidden.",
+                                "disclosure_scope": "owner",
+                            }
+                        ],
+                    },
+                    "idempotency_key": "continuity-leak",
+                },
+            )
+        public_event = await _call(
+            server,
+            "campaign_event",
+            {
+                "campaign_id": campaign["id"],
+                "action": "add",
+                "payload": {
+                    "summary": "The public record names the key.",
+                    "audience_scope": "public",
+                },
+                "idempotency_key": "public-event",
+            },
+        )
+        public_knowledge = await _call(
+            server,
+            "actor_knowledge_change",
+            {
+                "action": "add",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "actor_id": actor["id"],
+                    "knowledge_key": "public-memory",
+                    "proposition": "The public record names the key.",
+                    "source_event_id": public_event["id"],
+                    "disclosure_scope": "owner",
+                },
+                "idempotency_key": "public-memory",
+            },
+        )
+        with pytest.raises(Exception, match="DM-only event"):
+            await _call(
+                server,
+                "memory_change",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "commit",
+                    "payload": {
+                        "event": {
+                            "summary": "The Keeper privately revisits the record.",
+                            "audience_scope": "dm",
+                        },
+                        "actor_knowledge": [
+                            {
+                                "action": "revise",
+                                "knowledge_id": public_knowledge["id"],
+                                "proposition": "The public record still names the key.",
+                                "expected_revision_id": public_knowledge["revision_id"],
+                            }
+                        ],
+                    },
+                    "idempotency_key": "reject-private-public-revision",
+                },
+            )
+        unchanged_public = await _call(
+            server,
+            "actor_knowledge_query",
+            {
+                "campaign_id": campaign["id"],
+                "actor_id": actor["id"],
+                "view": "list",
+                "payload": {},
+            },
+        )
+        assert unchanged_public[0]["revision_id"] == public_knowledge["revision_id"]
+        assert unchanged_public[0]["source_event_id"] == public_event["id"]
+        dm_knowledge = await _call(
+            server,
+            "actor_knowledge_change",
+            {
+                "action": "add",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "actor_id": actor["id"],
+                    "knowledge_key": "dm-memory",
+                    "proposition": "The Keeper hides the key.",
+                    "source_event_id": private_event["id"],
+                    "disclosure_scope": "dm",
+                },
+                "idempotency_key": "dm-memory",
+            },
+        )
+        revised = await _call(
+            server,
+            "actor_knowledge_change",
+            {
+                "action": "revise",
+                "payload": {
+                    "knowledge_id": dm_knowledge["id"],
+                    "proposition": "The Keeper still hides the key.",
+                    "expected_revision_id": dm_knowledge["revision_id"],
+                },
+                "idempotency_key": "dm-memory-revise",
+            },
+        )
+        assert revised["source_event_id"] == private_event["id"]
+        assert revised["disclosure_scope"] == "dm"
+        with pytest.raises(Exception, match="DM-only event"):
+            await _call(
+                server,
+                "actor_knowledge_change",
+                {
+                    "action": "revise",
+                    "payload": {
+                        "knowledge_id": dm_knowledge["id"],
+                        "proposition": "The hidden key is important.",
+                        "disclosure_scope": "owner",
+                        "expected_revision_id": revised["revision_id"],
+                    },
+                    "idempotency_key": "dm-memory-leak-revise",
+                },
+            )
+
+        close_server(server)
+        server = create_server(config)
+        player_context = await _call(
+            server,
+            "continuity_context",
+            {
+                "campaign_id": campaign["id"],
+                "actor_id": actor["id"],
+                "audience": "player",
+                "principal_id": "player:witness",
+            },
+        )
+        assert [item["knowledge_key"] for item in player_context["actor_knowledge"]] == [
+            "public-memory"
+        ]
+        assert all(item["audience_scope"] != "dm" for item in player_context["events"])
 
     asyncio.run(exercise())
 

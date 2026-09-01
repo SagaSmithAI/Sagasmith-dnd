@@ -907,6 +907,8 @@ def test_conversation_facade_private_transport_and_commit(tmp_path: Path) -> Non
         assert committed["event"]["event_type"] == "npc_conversation"
         assert committed["conversation_revision"] == 6
         assert committed["event"]["payload"]["unresolved_resolution_requests"] == []
+        assert "authority_at_open" not in committed["event"]["payload"]
+        assert "accepted_commitments" not in committed["event"]["payload"]
         transcript = committed["event"]["payload"]["transcript"]
         assert all("audience_facts" in event for event in transcript)
         assert transcript[-1]["resolved_resolution_ids"] == [resolution_id]

@@ -97,6 +97,7 @@ from sagasmith_core.characters import CharacterInfo
 from sagasmith_core.context_anchors import normalize_context_entity_ref
 from sagasmith_core.idempotency import request_hash
 from sagasmith_core.integrity import canonical_json, json_sha256
+from sagasmith_core.models import CampaignEvent
 from sagasmith_core.modules import (
     EXACT_MODULE_SOURCE_FIELD_ORDER,
     EXACT_MODULE_SOURCE_FIELDS,
@@ -30379,6 +30380,71 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             )
         ]
 
+    def validate_actor_knowledge_source_audience(
+        campaign_id: str,
+        branch_id: str,
+        *,
+        source_event_id: str | None = None,
+        event_audience_scope: str | None = None,
+        disclosure_scope: str,
+    ) -> None:
+        """Reject player-visible knowledge grounded only in DM chronology.
+
+        The source event may be an existing event or the event created by an
+        enclosing atomic continuity write.  Keep this check at the MCP
+        boundary so all public write paths share the same disclosure rule.
+        """
+        if disclosure_scope not in PLAYER_OWNED_ACTOR_DISCLOSURE_SCOPES:
+            return
+        if event_audience_scope == "dm":
+            raise ValueError(
+                "player-visible ActorKnowledge cannot be backed by a DM-only event; "
+                "use a party, player, public, or actor-visible event"
+            )
+        if not source_event_id:
+            return
+        with storage.database.transaction() as session:
+            source_event = session.get(CampaignEvent, str(source_event_id))
+        if source_event is not None and source_event.campaign_id == campaign_id:
+            if source_event.audience_scope == "dm":
+                raise ValueError(
+                    "player-visible ActorKnowledge cannot be backed by a DM-only event; "
+                    "use a party, player, public, or actor-visible event"
+                )
+
+    def validate_continuity_knowledge_source_audiences(
+        campaign_id: str,
+        branch_id: str,
+        event_data: dict[str, Any],
+        knowledge_data: list[dict[str, Any]],
+    ) -> None:
+        """Validate every knowledge source in an event-plus-deltas commit."""
+        event_audience_scope = str(event_data.get("audience_scope") or "dm")
+        for index, item in enumerate(knowledge_data):
+            action = str(item.get("action", "add"))
+            disclosure_scope = item.get("disclosure_scope")
+            source_event_id = item.get("source_event_id")
+            if action == "revise" and item.get("knowledge_id"):
+                current = knowledge.get(str(item["knowledge_id"]), branch_id=branch_id)
+                if disclosure_scope is None:
+                    disclosure_scope = current.disclosure_scope
+            if disclosure_scope is None:
+                disclosure_scope = "dm"
+            try:
+                validate_actor_knowledge_source_audience(
+                    campaign_id,
+                    branch_id,
+                    source_event_id=(
+                        str(source_event_id) if source_event_id is not None else None
+                    ),
+                    event_audience_scope=(
+                        None if source_event_id is not None else event_audience_scope
+                    ),
+                    disclosure_scope=str(disclosure_scope),
+                )
+            except ValueError as exc:
+                raise ValueError(f"payload.actor_knowledge[{index}]: {exc}") from exc
+
     def event_add(
         campaign_id: str,
         summary: str,
@@ -30393,7 +30459,12 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Append a branch-local chronology event; an event is not actor knowledge."""
+        """Append a branch-local chronology event and optional actor knowledge.
+
+        A DM-only event cannot be the source of player-visible ActorKnowledge;
+        use a party/player/public (or actor-targeted) event for knowledge that
+        may be projected to players.
+        """
         access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
         if not idempotency_key:
             raise ValueError("idempotency_key is required for event writes")
@@ -30407,6 +30478,13 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 )
             for actor_id in known_by_actor_ids:
                 access.require_actor(campaign_id, actor_id, principal_id, private=True)
+            validate_actor_knowledge_source_audience(
+                campaign_id,
+                branch_id,
+                source_event_id=None,
+                event_audience_scope=audience_scope,
+                disclosure_scope=knowledge_disclosure_scope,
+            )
         validate_embedded_module_source_refs(
             campaign_id,
             payload or {},
@@ -30516,12 +30594,23 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         expected_revision: int | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Record what one live PC, NPC, or monster knows or believes."""
+        """Record what one live PC, NPC, or monster knows or believes.
+
+        Player-visible disclosure scopes (owner, party, player, public) may
+        cite only a player-visible source event; DM-only events are valid only
+        for DM-scoped knowledge.
+        """
         access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
         access.require_actor(campaign_id, actor_id, principal_id, private=True)
         if not idempotency_key:
             raise ValueError("idempotency_key is required for actor knowledge writes")
         branch_id = require_current_branch(campaign_id, branch_id)
+        validate_actor_knowledge_source_audience(
+            campaign_id,
+            branch_id,
+            source_event_id=source_event_id,
+            disclosure_scope=disclosure_scope,
+        )
         base_revision = (
             mutation_revision(campaign_id) if expected_revision is None else expected_revision
         )
@@ -30583,7 +30672,11 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         proposition_provided: bool = True,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Append a new subjective revision, e.g. a rumor or Modify Memory effect."""
+        """Append a new subjective revision, e.g. a rumor or Modify Memory effect.
+
+        Omitted source and disclosure fields retain the current revision's
+        effective values, which are validated together before mutation.
+        """
         current = knowledge.get(knowledge_id)
         access.require_campaign(current.campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
         if expected_revision_id is None or not idempotency_key:
@@ -30591,6 +30684,18 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 "expected_revision_id and idempotency_key are required for knowledge revisions"
             )
         branch_id = require_current_branch(current.campaign_id, branch_id)
+        effective_source_event_id = (
+            source_event_id if source_event_id_provided else current.source_event_id
+        )
+        effective_disclosure_scope = (
+            disclosure_scope if disclosure_scope is not None else current.disclosure_scope
+        )
+        validate_actor_knowledge_source_audience(
+            current.campaign_id,
+            branch_id,
+            source_event_id=effective_source_event_id,
+            disclosure_scope=effective_disclosure_scope,
+        )
         base_revision = (
             mutation_revision(current.campaign_id)
             if expected_revision is None
@@ -32294,7 +32399,6 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             raise ValueError(f"accepted_candidate_ids contains unavailable candidates: {unknown}")
         facts_data: list[dict[str, Any]] = []
         knowledge_data: list[dict[str, Any]] = []
-        accepted_commitments: list[dict[str, Any]] = []
         for candidate_id in candidate_ids:
             candidate = candidates[candidate_id]
             if candidate["status"] != "available":
@@ -32322,7 +32426,6 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                         "disclosure_scope": "dm",
                     }
                 )
-                accepted_commitments.append(deepcopy(commitment))
             else:
                 raise ValueError(f"unsupported memory candidate kind: {candidate['kind']}")
         participants = {str(item) for item in session["participant_ids"]}
@@ -32395,7 +32498,10 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     "event_type": "npc_conversation",
                     "summary": event_summary,
                     "retrieval_text": "\n".join(retrieval_lines),
-                    "audience_scope": "dm",
+                    # Only the exact public transcript enters this actor-visible
+                    # event. Private authority and DM-only commitment details
+                    # remain in their authoritative stores.
+                    "audience_scope": "actor",
                     "participants": [
                         {"actor_id": actor_id, "role": "witness"}
                         for actor_id in session["participant_ids"]
@@ -32406,7 +32512,6 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                         "scene_id": session["scene_id"],
                         "scope_id": session["scope_id"],
                         "transcript": transcript,
-                        "accepted_commitments": accepted_commitments,
                         "unresolved_resolution_requests": deepcopy(
                             [
                                 item
@@ -32414,7 +32519,6 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                                 if item.get("status") == "pending"
                             ]
                         ),
-                        "authority_at_open": deepcopy(session["authority"]),
                     },
                 },
                 "facts": facts_data,
@@ -33060,6 +33164,12 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     "payload.actor_knowledge"
                     f"[{index}].expected_revision_id is required for revisions"
                 )
+        validate_continuity_knowledge_source_audiences(
+            campaign_id,
+            branch_id,
+            event_data,
+            knowledge_data,
+        )
         campaign = campaigns.get(campaign_id)
         if expected_revision is not None and campaign.revision != expected_revision:
             raise ValueError(
@@ -48622,7 +48732,12 @@ boundary.
         limit: Annotated[int, Field(ge=1, le=100)] = 50,
         cursor: Annotated[str | None, Field(max_length=1024)] = None,
     ) -> dict[str, Any]:
-        """Append an auditable campaign event or retrieve its branch-visible event log."""
+        """Append an auditable campaign event or retrieve its branch-visible event log.
+
+        When actor knowledge is included, a DM-only event may only create
+        DM-scoped knowledge.  Owner, party, player, and public knowledge must
+        cite a party/player/public/actor-visible event.
+        """
         data = facade_payload(payload)
         if action == "add":
             result = event_add(
@@ -48766,6 +48881,9 @@ boundary.
 
         Writes preserve immutable history. ``expected_revision`` is the campaign
         revision guard; revision UUIDs belong in ``payload.expected_revision_id``.
+        Commit payloads use the same event/ActorKnowledge audience boundary as
+        ``campaign_event``: a DM-only event cannot back player-visible
+        owner/party/player/public knowledge, including NPC conversation closes.
         """
         access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
         if not idempotency_key:
