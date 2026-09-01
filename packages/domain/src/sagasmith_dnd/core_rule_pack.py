@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.71.0"
+CORE_RULE_PACK_VERSION = "1.72.0"
 
 
 @dataclass(frozen=True)
@@ -1031,6 +1031,13 @@ BOUNDARIES = (
             "packages/mcp/tests/test_spellbook_copy_mcp.py",
         ),
         "runtime:mcp/actor-and-world-duration-clock",
+    ),
+    CoreBoundary(
+        "dnd5e.core.mcp.death_save_turn_cadence",
+        ("2014",),
+        "sagasmith_dnd_mcp.server.character_make_death_save|combat_check",
+        ("packages/mcp/tests/test_noncombat_death_save_cadence_mcp.py",),
+        "bundled:srd2014/06_Gameplay/Order_of_Combat.md#death-saving-throws",
     ),
     CoreBoundary(
         "dnd5e.core.mcp.combat_spell_boundary",

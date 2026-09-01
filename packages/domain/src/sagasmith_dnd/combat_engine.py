@@ -4087,6 +4087,19 @@ def _adjust_damage_amount(
     return raw, adjusted, normalized, adjustment, active_sources
 
 
+def require_death_save_eligibility(sheet: dict[str, Any]) -> None:
+    """Reject settled creatures before a death-save roll can consume randomness."""
+    combat = dict(sheet.get("combat") or {})
+    hp = dict(combat.get("hp") or {})
+    if int(hp.get("value", 0) or 0) > 0:
+        raise CombatEngineError("death saves are only available at 0 hit points")
+    conditions = _condition_set(sheet.get("conditions"))
+    if "dead" in conditions:
+        raise CombatEngineError("dead actors cannot make death saves")
+    if "stable" in conditions:
+        raise CombatEngineError("stable actors do not make additional death saves")
+
+
 def resolve_death_save_to_sheet(
     sheet: dict[str, Any],
     *,
@@ -4100,13 +4113,7 @@ def resolve_death_save_to_sheet(
     value = deepcopy(sheet)
     combat = value.setdefault("combat", {})
     hp = dict(combat.setdefault("hp", {"value": 0, "max": 1, "temp": 0}))
-    if int(hp.get("value", 0) or 0) > 0:
-        raise CombatEngineError("death saves are only available at 0 hit points")
-    conditions = _condition_set(value.get("conditions"))
-    if "dead" in conditions:
-        raise CombatEngineError("dead actors cannot make death saves")
-    if "stable" in conditions:
-        raise CombatEngineError("stable actors do not make additional death saves")
+    require_death_save_eligibility(value)
     exhaustion_adjustment = d20_exhaustion_adjustment(
         ruleset=str(ruleset or value.get("edition") or DEFAULT_CHARACTER_EDITION),
         exhaustion=int(combat.get("exhaustion", 0) or 0),
