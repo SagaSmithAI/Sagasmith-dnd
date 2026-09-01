@@ -565,6 +565,11 @@ def test_species_materializer_accepts_decreases_defenses_and_shared_spell_resour
         "damage_formula must be one bounded dice formula" in error
         for error in species_materializer_errors(card)
     )
+    card["grants"]["natural_weapons"][0]["damage_formula"] = "101d6"
+    assert any(
+        "damage_formula must be one bounded dice formula" in error
+        for error in species_materializer_errors(card)
+    )
 
 
 def test_feat_materializer_accepts_fixed_and_selected_spell_grants() -> None:

@@ -69,6 +69,97 @@ def test_runtime_notes_reject_unbound_portrait_uri() -> None:
         validate_character_notes({"profile": {"portrait_uri": "https://example.com/goblin.png"}})
 
 
+def _tortle_claws_projection() -> dict:
+    return {
+        "id": "species-natural-weapon-tortle-claws",
+        "name": "Claws",
+        "attack_ability": "strength",
+        "damage_formula": "1d4",
+        "damage_type": "slashing",
+        "reach_ft": 5,
+        "source": {
+            "artifact_id": "test.species.tortle",
+            "pack_id": "test.tortle",
+            "pack_version": "1.0.0",
+            "rule_refs": ["test:tortle:p4"],
+        },
+    }
+
+
+def test_intrinsic_natural_weapon_is_not_inventory_and_remains_available_with_full_hands() -> None:
+    sheet = default_character_sheet()
+    sheet["abilities"]["strength"]["score"] = 16
+    sheet["traits"]["intrinsic_attacks"] = [_tortle_claws_projection()]
+    for item_id, slot in (("sword", "main_hand"), ("torch", "off_hand")):
+        sheet, _ = add_inventory_item(
+            sheet,
+            {
+                "id": item_id,
+                "name": item_id.title(),
+                "kind": "weapon" if item_id == "sword" else "equipment",
+                "mechanics": (
+                    {
+                        "attack_type": "melee",
+                        "attack_ability": "strength",
+                        "damage_formula": "1d8",
+                        "damage_type": "slashing",
+                    }
+                    if item_id == "sword"
+                    else {}
+                ),
+            },
+        )
+        sheet = equip_inventory_item(sheet, item_id, slot)
+
+    normalized = validate_character_sheet(sheet)
+    assert all(
+        item["id"] != "species-natural-weapon-tortle-claws"
+        for item in normalized["inventory"]["items"]
+    )
+    claws = next(
+        attack
+        for attack in derive_character_sheet(normalized)["inventory"]["weapon_attacks"]
+        if attack["item_id"] == "species-natural-weapon-tortle-claws"
+    )
+    assert claws["attack_bonus"] == 5
+    assert claws["damage_expression"] == "1d4 + 3"
+    assert claws["damage_type"] == "slashing"
+    assert claws["proficient"] is True
+    assert claws["intrinsic"] is True
+    assert claws["natural_weapon"] is True
+    assert claws["unarmed_strike"] is True
+    with pytest.raises(LookupError):
+        remove_inventory_item(normalized, claws["item_id"])
+
+
+def test_intrinsic_natural_weapon_requires_narrow_unique_source_bound_profile() -> None:
+    sheet = default_character_sheet()
+    sheet["traits"]["intrinsic_attacks"] = [_tortle_claws_projection()]
+    sheet["inventory"]["items"] = [
+        {
+            "id": "species-natural-weapon-tortle-claws",
+            "name": "Forgery",
+            "kind": "equipment",
+        }
+    ]
+    with pytest.raises(ValueError, match="must not collide"):
+        validate_character_sheet(sheet)
+
+    missing_source = default_character_sheet()
+    forged = _tortle_claws_projection()
+    forged["source"]["rule_refs"] = []
+    missing_source["traits"]["intrinsic_attacks"] = [forged]
+    with pytest.raises(ValueError, match="exact content provenance"):
+        validate_character_sheet(missing_source)
+
+    oversized_dice = default_character_sheet()
+    forged = _tortle_claws_projection()
+    forged["damage_formula"] = "101d6"
+    oversized_dice["traits"]["intrinsic_attacks"] = [forged]
+    with pytest.raises(ValueError, match="bounded dice formula"):
+        validate_character_sheet(oversized_dice)
+
+
 def test_weapon_attacks_derive_actor_proficiency_and_finesse_ability() -> None:
     sheet = default_character_sheet()
     sheet["abilities"]["strength"]["score"] = 10

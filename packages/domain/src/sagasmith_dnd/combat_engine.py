@@ -2530,7 +2530,10 @@ def preflight_attack(
         requested=bool(action.get("use_sneak_attack", False)),
     )
     core_boundary_ids: list[str] = []
-    if weapon.get("item_id") == "unarmed-strike":
+    is_unarmed_strike = bool(
+        weapon.get("item_id") == "unarmed-strike" or weapon.get("unarmed_strike") is True
+    )
+    if is_unarmed_strike:
         core_boundary_ids.append("dnd5e.core.attack.unarmed_strike")
     if attack_mode == "ranged" and range_result.get("enforced"):
         core_boundary_ids.append("dnd5e.core.attack.range")
@@ -2583,6 +2586,9 @@ def preflight_attack(
         "disadvantage_sources": list(context.get("disadvantage_sources") or []),
         "rulings": list(action.get("rulings") or []),
         "weapon_id": weapon.get("item_id"),
+        "unarmed_strike": is_unarmed_strike,
+        "natural_weapon": weapon.get("natural_weapon") is True,
+        "intrinsic_attack": weapon.get("intrinsic") is True,
         "weapon_recharge": deepcopy(weapon.get("recharge") or {}),
         "weapon_reach_ft": int(
             5 if weapon.get("reach_ft") is None else weapon["reach_ft"]
@@ -2966,6 +2972,9 @@ def resolve_attack_damage(
         target_id=actor_id(target),
         weapon_id=str(plan.get("weapon_id") or ""),
         attack_mode=str(plan.get("attack_mode") or ""),
+        unarmed_strike=bool(plan.get("unarmed_strike", False)),
+        natural_weapon=bool(plan.get("natural_weapon", False)),
+        intrinsic_attack=bool(plan.get("intrinsic_attack", False)),
         cover=deepcopy(plan.get("cover") or {}),
         context_ruling=deepcopy(plan.get("context_ruling")),
         damage=None,

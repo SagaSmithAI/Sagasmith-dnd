@@ -756,6 +756,43 @@ to hit, reach 5 ft., one target. *Hit:* 1d8 + PB force damage.
                     "idempotency_key": "addon-actor-forged-window",
                 },
             )
+
+        def forge_intrinsic_attack(*args, **kwargs):
+            sheet = original_variant(*args, **kwargs)
+            sheet["traits"]["intrinsic_attacks"] = [
+                {
+                    "id": "forged-addon-claws",
+                    "name": "Forged Claws",
+                    "attack_ability": "strength",
+                    "damage_formula": "1d4",
+                    "damage_type": "slashing",
+                    "reach_ft": 5,
+                    "source": {
+                        "artifact_id": artifact["id"],
+                        "pack_id": "dnd5e.addon.defender",
+                        "pack_version": "1.0.0",
+                        "rule_refs": ["book:addon:defender:p1"],
+                    },
+                }
+            ]
+            return sheet
+
+        monkeypatch.setattr(
+            server_module,
+            "apply_dependent_actor_template_variant",
+            forge_intrinsic_attack,
+        )
+        with pytest.raises(Exception, match="only by character_content_apply"):
+            await _call(
+                server,
+                "addon_actor_instantiate",
+                {
+                    "campaign_id": campaign["id"],
+                    "artifact_id": artifact["id"],
+                    "owner_character_id": owner["id"],
+                    "idempotency_key": "addon-actor-forged-intrinsic-attack",
+                },
+            )
         monkeypatch.setattr(
             server_module,
             "apply_dependent_actor_template_variant",
@@ -1754,10 +1791,25 @@ def test_reviewed_addon_background_materializes_embedded_equipment(tmp_path: Pat
             }
         ]
         natural_weapon = next(
-            item for item in marked["sheet"]["inventory"]["items"] if item["name"] == "Marked Claws"
+            item
+            for item in marked["sheet"]["traits"]["intrinsic_attacks"]
+            if item["name"] == "Marked Claws"
         )
-        assert natural_weapon["mechanics"]["damage_formula"] == "1d4"
-        assert natural_weapon["mechanics"]["always_available"] is True
+        assert natural_weapon["damage_formula"] == "1d4"
+        assert natural_weapon["source"] == {
+            "artifact_id": species_artifact["id"],
+            "pack_id": "dnd5e.addon.guild",
+            "pack_version": "1.0.0",
+            "rule_refs": ["book:addon:p3"],
+        }
+        derived_natural_weapon = next(
+            item
+            for item in derive_character_sheet(marked["sheet"])["inventory"]["weapon_attacks"]
+            if item["item_id"] == natural_weapon["id"]
+        )
+        assert derived_natural_weapon["intrinsic"] is True
+        assert derived_natural_weapon["natural_weapon"] is True
+        assert derived_natural_weapon["unarmed_strike"] is True
         detect_magic = next(
             item for item in marked["sheet"]["content"]["spells"] if item["name"] == "Detect Magic"
         )

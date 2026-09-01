@@ -655,6 +655,35 @@ def _render_immutable_pdf_page(
     )
 
 
+def _intrinsic_attack_provenance(sheet: Mapping[str, Any] | None) -> Any:
+    """Return authoritative anatomy attack projections from one actor card."""
+
+    value = dict(sheet or {})
+    traits = value.get("traits")
+    if not isinstance(traits, Mapping):
+        return None
+    projection = traits.get("intrinsic_attacks", [])
+    return [] if projection is None else deepcopy(projection)
+
+
+def _reject_new_intrinsic_attack_provenance(sheet: Mapping[str, Any] | None) -> None:
+    projection = _intrinsic_attack_provenance(sheet)
+    if projection not in (None, []):
+        raise ValueError(
+            "intrinsic attack provenance can be created only by character_content_apply"
+        )
+
+
+def _require_preserved_intrinsic_attack_provenance(
+    current: Mapping[str, Any], replacement: Mapping[str, Any]
+) -> None:
+    if _intrinsic_attack_provenance(current) != _intrinsic_attack_provenance(replacement):
+        raise ValueError(
+            "character mutation cannot add, remove, or alter authoritative "
+            "intrinsic attack provenance"
+        )
+
+
 def _character_spell_card(catalog_card: dict[str, Any]) -> dict[str, Any]:
     """Project a rule-catalog spell into the persistable character-card schema."""
     return {
@@ -5710,6 +5739,7 @@ def _create_server(
         validated_actors = [validate_dnd_content_actor(actor) for actor in normalized["actors"]]
         for actor in validated_actors:
             require_engine_owned_short_rest_hit_die_state(actor["sheet"])
+            _reject_new_intrinsic_attack_provenance(actor["sheet"])
         mismatched = [
             actor["id"]
             for actor in validated_actors
@@ -12300,6 +12330,8 @@ def _create_server(
                 return {**character, **response_extra}
             return {"character": character, **response_extra}
 
+        if sheet is not None and operation != "character.content.apply":
+            _require_preserved_intrinsic_attack_provenance(before.sheet, sheet)
         if before.campaign_id is None:
             if sheet is not None:
                 require_engine_owned_short_rest_hit_die_state(
@@ -26673,6 +26705,7 @@ def _create_server(
             raise ValueError("idempotency_key is required for character creation")
         sheet_value = deepcopy(sheet or default_character_sheet())
         require_engine_owned_short_rest_hit_die_state(sheet_value)
+        _reject_new_intrinsic_attack_provenance(sheet_value)
         if campaign_id is not None:
             sheet_value["edition"] = campaign_rules_edition(campaign_id)
         sheet_value = finalize_actor_sheet_rulings(sheet_value, campaign_id)
@@ -26775,6 +26808,7 @@ def _create_server(
         template = characters.get(template_id)
         sheet = deepcopy(template.sheet)
         require_engine_owned_short_rest_hit_die_state(sheet)
+        _reject_new_intrinsic_attack_provenance(sheet)
         sheet["edition"] = campaign_rules_edition(campaign_id)
         sheet = finalize_actor_sheet_rulings(sheet, campaign_id)
         instance_name = name if name is not None else template.name
@@ -26820,6 +26854,7 @@ def _create_server(
             raise ValueError("idempotency_key is required for character build")
         sheet_value = deepcopy(sheet or default_character_sheet())
         require_engine_owned_short_rest_hit_die_state(sheet_value)
+        _reject_new_intrinsic_attack_provenance(sheet_value)
         sheet_value["edition"] = campaign_rules_edition(campaign_id)
         sheet_value = finalize_actor_sheet_rulings(sheet_value, campaign_id)
         normalized_sheet = validate_character_sheet(
@@ -41444,26 +41479,26 @@ def _create_server(
                 weapon_identity = hashlib.sha256(
                     f"{artifact_id}\0{weapon_name.casefold()}".encode("utf-8")
                 ).hexdigest()[:16]
-                sheet, _ = add_inventory_item(
-                    sheet,
-                    {
-                        "id": f"species-natural-weapon-{weapon_identity}",
-                        "name": weapon_name,
-                        "kind": "weapon",
-                        "description": str(weapon.get("description") or ""),
-                        "mechanics": {
-                            "category": "other",
-                            "attack_type": "melee",
-                            "attack_ability": str(weapon["attack_ability"]).casefold(),
-                            "damage_formula": str(weapon["damage_formula"]).casefold(),
-                            "damage_type": str(weapon["damage_type"]).casefold(),
-                            "reach_ft": int(weapon.get("reach_ft", 5)),
-                            "proficient": True,
-                            "always_available": True,
-                        },
-                        "source_key": artifact_id,
+                intrinsic_attack = {
+                    "id": f"species-natural-weapon-{weapon_identity}",
+                    "name": weapon_name,
+                    "attack_ability": str(weapon["attack_ability"]).casefold(),
+                    "damage_formula": str(weapon["damage_formula"]).casefold(),
+                    "damage_type": str(weapon["damage_type"]).casefold(),
+                    "reach_ft": int(weapon.get("reach_ft", 5)),
+                    "source": {
+                        "artifact_id": artifact_id,
+                        "pack_id": pack_id,
+                        "pack_version": version,
+                        "rule_refs": list(artifact.get("rule_refs") or []),
                     },
-                )
+                }
+                if any(
+                    str(item.get("id") or "") == intrinsic_attack["id"]
+                    for item in sheet["traits"]["intrinsic_attacks"]
+                ):
+                    raise ValueError("species intrinsic attack is already present")
+                sheet["traits"]["intrinsic_attacks"].append(intrinsic_attack)
             sheet["traits"]["resistances"] = list(
                 dict.fromkeys(
                     [
@@ -46809,6 +46844,7 @@ boundary.
         )
         sheet = finalize_actor_sheet_rulings(sheet, campaign_id)
         require_engine_owned_short_rest_hit_die_state(sheet)
+        _reject_new_intrinsic_attack_provenance(sheet)
         if character_type not in NON_PLAYER_CHARACTER_TYPES:
             raise ValueError("addon actor templates create only npc or monster actors")
         requested_name = str(name or "").strip()

@@ -2256,6 +2256,86 @@ def test_unarmed_strike_remains_available_with_an_unusable_equipped_weapon() -> 
     assert plan["damage_expression"] == "1 + 3"
 
 
+def test_intrinsic_claws_settle_as_strength_unarmed_slashing_attack() -> None:
+    attacker = _actor("tortle")
+    attacker["sheet"]["traits"]["intrinsic_attacks"] = [
+        {
+            "id": "tortle-claws",
+            "name": "Claws",
+            "attack_ability": "strength",
+            "damage_formula": "1d4",
+            "damage_type": "slashing",
+            "reach_ft": 5,
+            "source": {
+                "artifact_id": "test.species.tortle",
+                "pack_id": "test.tortle",
+                "pack_version": "1.0.0",
+                "rule_refs": ["test:tortle:p4"],
+            },
+        }
+    ]
+    attacker["sheet"]["content"]["features"] = [
+        {
+            "id": "dnd5e.content.srd2014.feature.fighter-fighting-style",
+            "name": "Fighting Style",
+            "source_key": "Fighter",
+            "choices": {"option": "Dueling"},
+        }
+    ]
+    attacker["derived"] = derive_character_sheet(attacker["sheet"])
+    target = _actor("target", hp=20, ac=10)
+    rules = resolution_context(
+        {"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []}
+    )
+
+    ordinary_unarmed = preflight_attack(
+        attacker,
+        target,
+        action={"weapon_id": "unarmed-strike"},
+        rules=rules,
+    )
+    assert ordinary_unarmed["damage_expression"] == "1 + 3"
+    assert ordinary_unarmed["damage_type"] == "bludgeoning"
+    assert ordinary_unarmed["natural_weapon"] is False
+    assert ordinary_unarmed["intrinsic_attack"] is False
+
+    plan = preflight_attack(
+        attacker,
+        target,
+        action={"weapon_id": "tortle-claws"},
+        rules=rules,
+    )
+
+    assert plan["attack_bonus"] == 5
+    assert plan["damage_expression"] == "1d4 + 3"
+    assert plan["damage_modifiers"] == []
+    assert plan["damage_type"] == "slashing"
+    assert plan["unarmed_strike"] is True
+    assert plan["natural_weapon"] is True
+    assert plan["intrinsic_attack"] is True
+    assert "dnd5e.core.attack.unarmed_strike" in {
+        receipt["mechanic_id"] for receipt in plan["rule_receipts"]
+    }
+
+    _, damaged, result = resolve_attack_action(
+        attacker,
+        target,
+        plan=plan,
+        rules=rules,
+        rng=_SequenceRng(10, 4),
+    )
+    assert result["hit"] is True
+    assert result["unarmed_strike"] is True
+    assert result["natural_weapon"] is True
+    assert result["intrinsic_attack"] is True
+    assert result["damage"]["input_amount"] == 7
+    assert result["damage"]["roll_parts"][0]["expression"] == "1d4 + 3"
+    assert result["damage"]["roll_parts"][0]["rolls"] == [4]
+    assert result["damage"]["roll_parts"][0]["amount"] == 7
+    assert result["damage"]["roll_parts"][0]["damage_type"] == "slashing"
+    assert damaged["sheet"]["combat"]["hp"]["value"] == 13
+
+
 def test_positioned_ranged_attack_requires_recorded_range() -> None:
     attacker = _actor("archer")
     attacker["sheet"]["inventory"]["items"] = [

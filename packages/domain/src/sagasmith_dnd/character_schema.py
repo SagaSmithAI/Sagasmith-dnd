@@ -452,6 +452,7 @@ def default_character_sheet() -> dict[str, Any]:
             "size": "medium",
             "alignment": "",
             "languages": [],
+            "intrinsic_attacks": [],
             "proficiencies": {
                 "armor": [],
                 "weapons": [],
@@ -1352,6 +1353,106 @@ def _normalize_item(value: Any, field: str, *, generate_id: bool = True) -> dict
             source_card=result,
         )
     return result
+
+
+def _normalize_intrinsic_attack(value: Any, field: str) -> dict[str, Any]:
+    """Normalize one anatomy-bound natural weapon attack projection.
+
+    Intrinsic attacks deliberately are not inventory items. Their narrow
+    schema prevents carried-item mechanics (equipment slots, containers,
+    charges, attunement, and transfer state) from leaking into anatomy.
+    """
+
+    attack = _object(value, field)
+    _reject_unknown(
+        attack,
+        field,
+        {
+            "id",
+            "name",
+            "attack_ability",
+            "damage_formula",
+            "damage_type",
+            "reach_ft",
+            "source",
+        },
+    )
+    attack_ability = _text(
+        attack.get("attack_ability"),
+        f"{field}.attack_ability",
+    ).casefold()
+    if attack_ability not in ABILITY_NAMES:
+        raise ValueError(f"{field}.attack_ability is invalid")
+    damage_formula = _text(
+        attack.get("damage_formula"),
+        f"{field}.damage_formula",
+        maximum=100,
+    ).casefold()
+    damage_match = re.fullmatch(
+        r"([1-9]\d*)d([1-9]\d*)(?:\s*[+-]\s*(\d+))?",
+        damage_formula,
+    )
+    if (
+        damage_match is None
+        or int(damage_match.group(1)) > 100
+        or not 2 <= int(damage_match.group(2)) <= 1000
+        or int(damage_match.group(3) or 0) > 1000
+    ):
+        raise ValueError(f"{field}.damage_formula must be one bounded dice formula")
+    damage_type = _text(
+        attack.get("damage_type"),
+        f"{field}.damage_type",
+        maximum=100,
+    ).casefold()
+    if damage_type not in DAMAGE_TYPES:
+        raise ValueError(f"{field}.damage_type is invalid")
+    source = _object(attack.get("source"), f"{field}.source")
+    _reject_unknown(
+        source,
+        f"{field}.source",
+        {"artifact_id", "pack_id", "pack_version", "rule_refs"},
+    )
+    normalized_source = {
+        "artifact_id": _text(
+            source.get("artifact_id"),
+            f"{field}.source.artifact_id",
+            maximum=300,
+        ),
+        "pack_id": _text(
+            source.get("pack_id"),
+            f"{field}.source.pack_id",
+            maximum=300,
+        ),
+        "pack_version": _text(
+            source.get("pack_version"),
+            f"{field}.source.pack_version",
+            maximum=100,
+        ),
+        "rule_refs": _string_list(
+            source.get("rule_refs"),
+            f"{field}.source.rule_refs",
+        ),
+    }
+    if not all(
+        normalized_source[key]
+        for key in ("artifact_id", "pack_id", "pack_version", "rule_refs")
+    ):
+        raise ValueError(f"{field}.source requires exact content provenance")
+    return {
+        "id": _text(attack.get("id"), f"{field}.id", maximum=100),
+        "name": _text(attack.get("name"), f"{field}.name", maximum=300),
+        "attack_ability": attack_ability,
+        "damage_formula": damage_formula,
+        "damage_type": damage_type,
+        "reach_ft": _integer(
+            attack.get("reach_ft"),
+            f"{field}.reach_ft",
+            default=5,
+            minimum=1,
+            maximum=30,
+        ),
+        "source": normalized_source,
+    }
 
 
 def validate_inventory(value: Any) -> dict[str, Any]:
@@ -2671,6 +2772,7 @@ def validate_character_sheet(
             "size",
             "alignment",
             "languages",
+            "intrinsic_attacks",
             "proficiencies",
             "resistances",
             "immunities",
@@ -2687,6 +2789,15 @@ def validate_character_sheet(
     )
     senses = _object(traits["senses"], "sheet.traits.senses")
     _reject_unknown(senses, "sheet.traits.senses", {*SENSE_NAMES, "passive_perception_bonus"})
+    intrinsic_attacks = [
+        _normalize_intrinsic_attack(item, f"sheet.traits.intrinsic_attacks[{index}]")
+        for index, item in enumerate(
+            _array(traits["intrinsic_attacks"], "sheet.traits.intrinsic_attacks")
+        )
+    ]
+    intrinsic_attack_ids = [item["id"] for item in intrinsic_attacks]
+    if len(intrinsic_attack_ids) != len(set(intrinsic_attack_ids)):
+        raise ValueError("sheet.traits.intrinsic_attacks contains duplicate ids")
 
     resources = _object(value["resources"], "sheet.resources")
     normalized_resources = {
@@ -3173,6 +3284,9 @@ def validate_character_sheet(
         raise ValueError("sheet.content.selections contains duplicate artifact ids")
 
     inventory = validate_inventory(value["inventory"])
+    inventory_item_ids = {item["id"] for item in inventory["items"]}
+    if inventory_item_ids.intersection(intrinsic_attack_ids):
+        raise ValueError("intrinsic attack ids must not collide with inventory item ids")
     item_spell_ids = {
         str(dict(specification.get("card") or {}).get("id") or "")
         for item in inventory["items"]
@@ -3379,6 +3493,7 @@ def validate_character_sheet(
             "size": _text(traits["size"], "sheet.traits.size", maximum=100),
             "alignment": _text(traits["alignment"], "sheet.traits.alignment", maximum=100),
             "languages": _string_list(traits["languages"], "sheet.traits.languages"),
+            "intrinsic_attacks": intrinsic_attacks,
             "proficiencies": {
                 key: _string_list(proficiencies[key], f"sheet.traits.proficiencies.{key}")
                 for key in ("armor", "weapons", "tools", "tool_expertise")
@@ -4136,6 +4251,7 @@ def _inventory_weight_oz(inventory: dict[str, Any]) -> float:
 
 def _weapon_attacks(
     inventory: dict[str, Any],
+    intrinsic_attacks: list[dict[str, Any]],
     ability_modifiers: dict[str, int],
     proficiency: int,
     weapon_proficiencies: list[str],
@@ -4276,6 +4392,54 @@ def _weapon_attacks(
                 "uses": copy.deepcopy(item.get("uses") or {}),
                 "recharge": copy.deepcopy(mechanics.get("recharge") or {}),
                 "attack_ability_modifier": modifier,
+            }
+        )
+    for attack in intrinsic_attacks:
+        ability = str(attack["attack_ability"])
+        modifier = ability_modifiers.get(ability, 0)
+        damage_formula = _multiply_weapon_damage_dice(
+            str(attack["damage_formula"]),
+            weapon_dice_multiplier,
+        )
+        damage_expression = damage_formula
+        if modifier:
+            damage_expression = (
+                f"{damage_formula} {'+' if modifier > 0 else '-'} {abs(modifier)}"
+            )
+        attacks.append(
+            {
+                "item_id": attack["id"],
+                "name": attack["name"],
+                "equipped_slot": None,
+                "attack_type": "melee",
+                "reach_ft": int(attack["reach_ft"]) + melee_reach_bonus,
+                "attack_ability": ability,
+                "proficient": True,
+                "attack_bonus": modifier + proficiency,
+                "damage_formula": damage_formula,
+                "damage_bonus": modifier,
+                "damage_expression": damage_expression,
+                "damage_type": attack["damage_type"],
+                "additional_damage": [],
+                "versatile_additional_damage": [],
+                "on_hit_effect": "",
+                "resolution_plan": None,
+                "magic_bonus": 0,
+                "magic_suppressed_by_attunement": False,
+                "versatile_damage_formula": "",
+                "properties": [],
+                "materials": [],
+                "range_ft": {"normal": 0, "long": 0},
+                "thrown_range_ft": {"normal": 0, "long": 0},
+                "ammunition_item_id": None,
+                "mastery": "",
+                "uses": {},
+                "recharge": {},
+                "attack_ability_modifier": modifier,
+                "intrinsic": True,
+                "natural_weapon": True,
+                "unarmed_strike": True,
+                "source": copy.deepcopy(attack["source"]),
             }
         )
     return attacks
@@ -4649,6 +4813,7 @@ def derive_character_sheet(
             "encumbrance": encumbrance_summary,
             "weapon_attacks": _weapon_attacks(
                 inventory,
+                value["traits"]["intrinsic_attacks"],
                 ability_modifiers,
                 proficiency,
                 value["traits"]["proficiencies"]["weapons"],

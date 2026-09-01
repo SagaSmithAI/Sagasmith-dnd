@@ -697,7 +697,16 @@ def species_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
             if str(raw_weapon.get("attack_ability") or "").casefold() not in ability_names:
                 errors.append(f"{prefix}.attack_ability is invalid")
             damage_formula = str(raw_weapon.get("damage_formula") or "").strip().casefold()
-            if not re.fullmatch(r"\d+d\d+(?:\s*[+-]\s*\d+)?", damage_formula):
+            damage_match = re.fullmatch(
+                r"([1-9]\d*)d([1-9]\d*)(?:\s*[+-]\s*(\d+))?",
+                damage_formula,
+            )
+            if (
+                damage_match is None
+                or int(damage_match.group(1)) > 100
+                or not 2 <= int(damage_match.group(2)) <= 1000
+                or int(damage_match.group(3) or 0) > 1000
+            ):
                 errors.append(f"{prefix}.damage_formula must be one bounded dice formula")
             if str(raw_weapon.get("damage_type") or "").casefold() not in {
                 "acid",
