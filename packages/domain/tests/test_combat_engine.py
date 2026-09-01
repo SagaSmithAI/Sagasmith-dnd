@@ -31,6 +31,7 @@ from sagasmith_dnd.combat_engine import (
     current_combatant,
     damage_amount_after_reduction,
     dodge_benefit_active,
+    encounter_dodge_save_advantage,
     end_concentration_for_incapacitating_conditions,
     end_turn,
     force_move_directly_away,
@@ -4517,6 +4518,101 @@ def test_dodge_taken_at_zero_effective_speed_ends_immediately(condition: str) ->
         "mechanic_id": "dnd5e.core.action.dodge",
         "reason": "speed_zero",
     }
+
+
+def test_dodge_advantage_uses_authoritative_encounter_and_normalized_dexterity() -> None:
+    dodger = _actor("dodger")
+    encounter = {
+        "ruleset": "2014",
+        "combatants": [
+            {
+                "actor_id": "dodger",
+                "conditions": [],
+                "turn_flags": {"dodging": True},
+                "turn_budget": {"speed": 30},
+                "speed_multiplier": 1.0,
+            }
+        ],
+    }
+    rules = resolution_context({"edition": "2014", "fingerprint": "", "lock": []})
+
+    assert encounter_dodge_save_advantage(encounter, "dodger", ability=" DEX ") is True
+    saved = resolve_actor_check(
+        dodger,
+        kind="save",
+        ability=" DEX ",
+        dc=12,
+        encounter=encounter,
+        rules=rules,
+        rng=_SequenceRng(2, 17),
+    )
+    assert saved["natural"] == 17
+    assert saved["rolls"] == [2, 17]
+    assert [item["mechanic_id"] for item in saved["rule_receipts"]] == [
+        "dnd5e.core.action.dodge"
+    ]
+
+    cancelled = resolve_actor_check(
+        dodger,
+        kind="save",
+        ability="dexterity",
+        dc=12,
+        encounter=encounter,
+        disadvantage=True,
+        rules=rules,
+        rng=_SequenceRng(9),
+    )
+    assert cancelled["rolls"] == [9]
+    assert [item["mechanic_id"] for item in cancelled["rule_receipts"]] == [
+        "dnd5e.core.action.dodge"
+    ]
+
+
+def test_area_save_damage_applies_dodge_per_authoritative_target() -> None:
+    dodger = _actor("dodger", hp=20)
+    bystander = _actor("bystander", hp=20)
+    encounter = {
+        "ruleset": "2014",
+        "combatants": [
+            {
+                "actor_id": "dodger",
+                "conditions": [],
+                "turn_flags": {"dodging": True},
+                "turn_budget": {"speed": 30},
+                "speed_multiplier": 1.0,
+            },
+            {
+                "actor_id": "bystander",
+                "conditions": [],
+                "turn_flags": {},
+                "turn_budget": {"speed": 30},
+                "speed_multiplier": 1.0,
+            },
+        ],
+    }
+    rules = resolution_context({"edition": "2014", "fingerprint": "", "lock": []})
+
+    settled = resolve_save_damage_to_sheets(
+        [dodger, bystander],
+        save_ability=" DEX ",
+        save_dc=12,
+        damage_expression="1d6",
+        damage_type="fire",
+        half_on_success=True,
+        source="test-area",
+        encounter=encounter,
+        ruleset="2014",
+        rules=rules,
+        rng=_SequenceRng(6, 3, 18, 11),
+    )
+
+    by_id = {item["target_id"]: item for item in settled["result"]["targets"]}
+    assert by_id["dodger"]["save"]["rolls"] == [3, 18]
+    assert by_id["bystander"]["save"]["rolls"] == [11]
+    assert [
+        item["mechanic_id"] for item in by_id["dodger"]["save"]["rule_receipts"]
+    ] == ["dnd5e.core.action.dodge"]
+    assert by_id["bystander"]["save"]["rule_receipts"] == []
 
 
 def test_paralyzed_target_is_automatic_critical_within_five_feet() -> None:

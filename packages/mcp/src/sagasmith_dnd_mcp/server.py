@@ -197,7 +197,6 @@ from sagasmith_dnd.combat_engine import (
     consume_weapon_mastery_attack_effects,
     current_combatant,
     damage_amount_after_reduction,
-    dodge_benefit_active,
     end_concentration_for_incapacitating_conditions,
     end_hypnotic_pattern_effects,
     end_turn,
@@ -21160,6 +21159,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     kind="save",
                     ability=str(save_spec["ability"]),
                     dc=int(save_dc),
+                    encounter=next_encounter,
                     bonus=cover_bonus,
                     save_source_kind="spell",
                     save_effect_conditions=[],
@@ -22542,6 +22542,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     damage_type=str(breath_spec.get("damage_type") or ""),
                     half_on_success=True,
                     source=f"standard-activity:{activity_id}",
+                    encounter=next_encounter,
                     death_saves_by_actor_id={
                         target_id: combatant_zero_hp_buffered(combatants_by_id[target_id])
                         for target_id in breath_target_records
@@ -24073,22 +24074,12 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     )
                 )
         else:
-            combatant = next(
-                (
-                    item
-                    for item in encounter.get("combatants", [])
-                    if item.get("actor_id") == actor_id
-                ),
-                None,
-            )
-            if combatant is not None and kind == "save" and ability in {"dex", "dexterity"}:
-                if dodge_benefit_active(combatant):
-                    advantage = True
             result = resolve_actor_check(
                 actor,
                 kind=kind,
                 ability=normalized_ability,
                 dc=dc,
+                encounter=encounter,
                 proficient=proficient,
                 bonus=bonus,
                 advantage=advantage,
@@ -24678,6 +24669,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                             kind="save",
                             ability=ability,
                             dc=dc,
+                            encounter=self.encounter,
                             advantage=bool(arguments.get("advantage", False)),
                             disadvantage=bool(arguments.get("disadvantage", False)),
                             rules=effective_rule_context(
@@ -25570,6 +25562,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             advantage=save_advantage,
             disadvantage=save_disadvantage,
             source=f"agent-ruling:{normalized_ruling['application_id']}",
+            encounter=encounter,
             death_saves_by_actor_id={
                 target_id: combatant_zero_hp_buffered(combatant)
                 for target_id, combatant in target_combatants.items()
