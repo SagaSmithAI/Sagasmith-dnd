@@ -4237,10 +4237,77 @@ def close_server(server: MCPServer) -> None:
         close()
 
 
+class _ServerResourceStack:
+    """Own initialization resources until they transfer to a completed server."""
+
+    def __init__(self) -> None:
+        self._callbacks: list[tuple[str, Callable[[], Any]]] = []
+
+    def track(self, label: str, resource: Any) -> Any:
+        for method_name in ("close", "dispose"):
+            callback = getattr(resource, method_name, None)
+            if callable(callback):
+                self._callbacks.append((label, callback))
+                break
+        return resource
+
+    def close(self) -> None:
+        callbacks, self._callbacks = self._callbacks, []
+        errors: list[BaseException] = []
+        for label, callback in reversed(callbacks):
+            try:
+                callback()
+            except BaseException as error:
+                error.add_note(f"while closing SagaSmith server resource: {label}")
+                errors.append(error)
+        if errors:
+            raise BaseExceptionGroup("SagaSmith server resource cleanup failed", errors)
+
+    def close_after_failure(self, initialization_error: BaseException) -> None:
+        try:
+            self.close()
+        except BaseException as cleanup_error:
+            diagnostics: list[BaseException] = []
+            if initialization_error.__cause__ is not None:
+                diagnostics.append(initialization_error.__cause__)
+            if isinstance(cleanup_error, BaseExceptionGroup):
+                diagnostics.extend(cleanup_error.exceptions)
+            else:
+                diagnostics.append(cleanup_error)
+            initialization_error.__cause__ = BaseExceptionGroup(
+                "SagaSmith server initialization diagnostics",
+                diagnostics,
+            )
+            initialization_error.__suppress_context__ = True
+            initialization_error.add_note(
+                "One or more initialized server resources also failed to close; "
+                "cleanup diagnostics are chained as the cause."
+            )
+
+
 def create_server(config: McpConfig | None = None) -> MCPServer:
+    """Create one server and clean up every opened resource if initialization fails."""
+
+    resources = _ServerResourceStack()
+    try:
+        server = _create_server(config, resources=resources)
+        setattr(server, "_sagasmith_close", resources.close)
+        return server
+    except BaseException as error:
+        resources.close_after_failure(error)
+        raise
+
+
+def _create_server(
+    config: McpConfig | None = None,
+    *,
+    resources: _ServerResourceStack,
+) -> MCPServer:
     """Create one dual-era MCP server over either supported transport."""
     config = config or McpConfig.from_environment()
     storage = SagaSmithStorage(config)
+    resources.track("campaign database", storage.database)
+    resources.track("vector store", storage.vectors)
     storage.migrate()
     campaigns = CampaignService(storage.database)
     characters = CharacterService(storage.database)
@@ -6571,7 +6638,10 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         )
         return use_random_stream(stream)
 
-    task_store = DurableTaskStore(config.home / "mcp-tasks.sqlite3")
+    task_store = resources.track(
+        "durable MCP task store",
+        DurableTaskStore(config.home / "mcp-tasks.sqlite3"),
+    )
     task_create_nonces = AuthContextNonceGuard() if config.auth_context_secret else None
     task_followup_nonces = AuthContextNonceGuard() if config.auth_context_secret else None
 
@@ -50747,10 +50817,6 @@ boundary.
         if registered_tool.name == "campaign_query":
             registered_tool.meta["sagasmith_context_sync"] = True
 
-    # Direct-Python callers do not enter FastMCP's transport lifecycle. Give
-    # them an explicit, idempotent way to release SQLite handles and other
-    # database pool resources before removing a temporary home directory.
-    setattr(mcp, "_sagasmith_close", storage.database.dispose)
     return mcp
 
 

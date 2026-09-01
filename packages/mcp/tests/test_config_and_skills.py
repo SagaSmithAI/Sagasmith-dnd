@@ -1,11 +1,14 @@
 import asyncio
 import json
 import os
+import shutil
+import tempfile
 from pathlib import Path
 
 import pytest
 from sagasmith_dnd.module_profile import DndModuleProfile
 
+import sagasmith_dnd_mcp.server as server_module
 from sagasmith_dnd_mcp.config import McpConfig
 from sagasmith_dnd_mcp.server import close_server, create_server
 from sagasmith_dnd_mcp.skills import SkillCatalog
@@ -87,6 +90,122 @@ def test_direct_server_close_releases_its_local_database(tmp_path: Path) -> None
     config.database_path.unlink()
 
     assert not config.database_path.exists()
+
+
+@pytest.mark.fresh_database
+def test_create_server_mount_failure_releases_local_database(tmp_path: Path) -> None:
+    with tempfile.TemporaryDirectory(
+        prefix="sagasmith-server-init-", dir=tmp_path
+    ) as temporary:
+        root = Path(temporary)
+        library = root / "official-library"
+        library.mkdir()
+        (library / "index.json").write_text(
+            json.dumps({"schema": "unsupported", "packages": []}),
+            encoding="utf-8",
+        )
+
+        for attempt in range(2):
+            config = McpConfig(
+                home=root / f"failed-home-{attempt}",
+                database_url=None,
+                chroma_url=None,
+                chroma_path_override=None,
+                dnd_skills_dir=root / "dnd",
+                modulegen_skills_dir=root / "modulegen",
+                auto_seed_rules=False,
+                official_content_library=library,
+            )
+
+            with pytest.raises(ValueError, match="unsupported index schema"):
+                create_server(config)
+
+            released = root / f"released-home-{attempt}"
+            config.home.rename(released)
+            shutil.rmtree(released)
+
+        valid_config = McpConfig(
+            home=root / "valid-home",
+            database_url=None,
+            chroma_url=None,
+            chroma_path_override=None,
+            dnd_skills_dir=root / "dnd",
+            modulegen_skills_dir=root / "modulegen",
+            auto_seed_rules=False,
+        )
+        server = create_server(valid_config)
+        close_server(server)
+        released = root / "released-valid-home"
+        valid_config.home.rename(released)
+        shutil.rmtree(released)
+
+
+@pytest.mark.fresh_database
+def test_create_server_late_failure_closes_resources_in_reverse_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class CleanupError(OSError):
+        pass
+
+    class LateInitializationError(RuntimeError):
+        pass
+
+    class TrackedStorage(SagaSmithStorage):
+        def __init__(self, config: McpConfig) -> None:
+            super().__init__(config)
+            dispose_database = self.database.dispose
+            dispose_vectors = self.vectors.dispose
+
+            def database_dispose() -> None:
+                events.append("database")
+                dispose_database()
+
+            def vectors_dispose() -> None:
+                events.append("vectors")
+                dispose_vectors()
+
+            self.database.dispose = database_dispose
+            self.vectors.dispose = vectors_dispose
+
+    class TrackedTaskStore:
+        def __init__(self, _path: Path) -> None:
+            events.append("task-store-created")
+
+        def close(self) -> None:
+            events.append("task-store")
+            raise CleanupError("task store cleanup failed")
+
+    def fail_tasks_extension(**_kwargs: object) -> None:
+        raise LateInitializationError("tasks extension initialization failed")
+
+    monkeypatch.setattr(server_module, "SagaSmithStorage", TrackedStorage)
+    monkeypatch.setattr(server_module, "DurableTaskStore", TrackedTaskStore)
+    monkeypatch.setattr(server_module, "TasksExtension", fail_tasks_extension)
+    config = McpConfig(
+        home=tmp_path / "home",
+        database_url=None,
+        chroma_url=None,
+        chroma_path_override=None,
+        dnd_skills_dir=tmp_path / "dnd",
+        modulegen_skills_dir=tmp_path / "modulegen",
+        auto_seed_rules=False,
+    )
+
+    with pytest.raises(LateInitializationError) as caught:
+        create_server(config)
+
+    assert events[-3:] == ["task-store", "vectors", "database"]
+    assert isinstance(caught.value.__cause__, BaseExceptionGroup)
+    assert any(
+        isinstance(error, CleanupError)
+        for error in caught.value.__cause__.exceptions
+    )
+    released = tmp_path / "released-home"
+    config.home.rename(released)
+    shutil.rmtree(released)
 
 
 def test_config_can_share_only_content_addressed_document_cache(tmp_path: Path) -> None:
