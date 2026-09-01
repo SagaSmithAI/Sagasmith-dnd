@@ -199,9 +199,11 @@ from sagasmith_dnd.combat_engine import (
     consume_weapon_mastery_attack_effects,
     current_combatant,
     damage_amount_after_reduction,
+    emerge_tortle_shell_defense,
     end_concentration_for_incapacitating_conditions,
     end_hypnotic_pattern_effects,
     end_turn,
+    enter_tortle_shell_defense,
     force_move_directly_away,
     newly_ended_witch_bolt_tethers,
     pay_activity_activation,
@@ -214,6 +216,7 @@ from sagasmith_dnd.combat_engine import (
     reconcile_dodge_lifecycle,
     reconcile_effect_dependencies,
     reconcile_readied_spells,
+    reconcile_tortle_shell_defense_projection,
     reconcile_witch_bolt_concentration,
     reconcile_witch_bolt_range,
     require_death_save_eligibility,
@@ -472,6 +475,7 @@ from sagasmith_dnd.standard_feature_ids import (
     TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID,
     TORTLE_NATURAL_ARMOR_LEGACY_PACK_VERSIONS,
     TORTLE_NATURAL_ARMOR_SOURCE_RULE_REF_PREFIX,
+    CORE_TORTLE_SHELL_DEFENSE_MECHANIC_ID,
 )
 from sagasmith_dnd.standard_spell_ids import (
     CORE_BLADE_WARD_MECHANIC_ID,
@@ -11311,6 +11315,7 @@ def _create_server(
                 combatant["conditions"] = list(sheet.get("conditions") or [])
                 combatant["condition_sources"] = timed_condition_sources(sheet)
                 combatant["speed_multiplier"] = source_speed_multiplier(sheet)
+                reconcile_tortle_shell_defense_projection(combatant, sheet)
                 current_dodge_transition = reconcile_dodge_lifecycle(combatant)
                 dodge_transition = (
                     prior_dodge_transition
@@ -19693,6 +19698,7 @@ def _create_server(
             "dash",
             "disengage",
             "dodge",
+            "emerge_shell",
             "escape",
             "help",
             "hide",
@@ -19701,6 +19707,7 @@ def _create_server(
             "improvise",
             "ready",
             "search",
+            "shell_defense",
             "shake_hypnotic_pattern",
             "stabilize",
             "study",
@@ -19934,6 +19941,19 @@ def _create_server(
         source_condition = ""
         source_condition_ruling = None
         hypnotic_target_record = None
+        shell_defense_record = None
+        shell_defense_sheet = None
+        if normalized_action in {"shell_defense", "emerge_shell"}:
+            if target_id is not None or trigger is not None or payload:
+                raise CombatEngineError(
+                    f"{normalized_action} does not accept a target, trigger, or payload"
+                )
+            shell_defense_record = characters.get(actor_id)
+            shell_defense_sheet = (
+                enter_tortle_shell_defense(shell_defense_record.sheet)
+                if normalized_action == "shell_defense"
+                else emerge_tortle_shell_defense(shell_defense_record.sheet)
+            )
         if normalized_action == "shake_hypnotic_pattern":
             if target_id is None or target_id == actor_id:
                 raise CombatEngineError("shaking Hypnotic Pattern requires another target creature")
@@ -20114,6 +20134,24 @@ def _create_server(
             trigger=trigger,
             payload=engine_payload,
         )
+        if shell_defense_record is not None and shell_defense_sheet is not None:
+            sync_combatant_conditions(next_encounter, actor_id, shell_defense_sheet)
+            character_updates.append(
+                CharacterStateUpdate(
+                    character_id=actor_id,
+                    sheet=validate_character_sheet(shell_defense_sheet),
+                    notes=validate_character_notes(shell_defense_record.notes),
+                    expected_revision=shell_defense_record.revision,
+                )
+            )
+            withdrawn = normalized_action == "shell_defense"
+            condition_resolution = {
+                "kind": "tortle_shell_defense",
+                "withdrawn": withdrawn,
+                "armor_class": derive_character_sheet(shell_defense_sheet)["armor_class"],
+                "speed_multiplier": source_speed_multiplier(shell_defense_sheet),
+                "conditions": list(shell_defense_sheet.get("conditions") or []),
+            }
         if hypnotic_target_record is not None:
             ended_hypnotic = end_hypnotic_pattern_effects(
                 hypnotic_target_record.sheet,
@@ -20233,6 +20271,8 @@ def _create_server(
             boundary_ids.append("dnd5e.core.ready.action")
         if normalized_action == "shake_hypnotic_pattern":
             boundary_ids.append(CORE_HYPNOTIC_PATTERN_MECHANIC_ID)
+        if normalized_action in {"shell_defense", "emerge_shell"}:
+            boundary_ids.append(CORE_TORTLE_SHELL_DEFENSE_MECHANIC_ID)
         acting_combatant = next(
             item for item in encounter.get("combatants", []) if item.get("actor_id") == actor_id
         )

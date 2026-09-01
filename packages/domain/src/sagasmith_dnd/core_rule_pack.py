@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.74.0"
+CORE_RULE_PACK_VERSION = "1.75.0"
 
 
 @dataclass(frozen=True)
@@ -461,6 +461,21 @@ BOUNDARIES = (
             "tests/test_combat_engine.py::test_area_save_damage_applies_dodge_per_authoritative_target",
         ),
         "bundled:srd2014/06_Gameplay/Order_of_Combat.md#dodge",
+    ),
+    CoreBoundary(
+        "dnd5e.core.activity.tortle_shell_defense",
+        ("2014",),
+        (
+            "combat_engine.enter_tortle_shell_defense|"
+            "combat_engine.emerge_tortle_shell_defense|"
+            "combat_engine.reconcile_tortle_shell_defense_projection|"
+            "combat_engine.resolve_actor_check"
+        ),
+        (
+            "tests/test_combat_engine.py::test_2014_tortle_shell_defense_settles_exact_source_effects",
+            "tests/test_combat_engine.py::test_2014_tortle_shell_defense_rejects_spoofed_source",
+        ),
+        "rulebook:tortle-package/tortle#shell-defense",
     ),
     CoreBoundary(
         "dnd5e.core.action.multiattack_choice",
