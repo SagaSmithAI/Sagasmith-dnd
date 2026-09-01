@@ -10815,10 +10815,19 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
     ) -> None:
         for combatant in encounter.get("combatants", []):
             if combatant.get("actor_id") == actor_id:
+                # Upgrade old encounter snapshots before replacing their stale
+                # projection. Otherwise removing a zero-speed or grappling
+                # effect could make a persisted dodging=True flag active again.
+                prior_dodge_transition = reconcile_dodge_lifecycle(combatant)
                 combatant["conditions"] = list(sheet.get("conditions") or [])
                 combatant["condition_sources"] = timed_condition_sources(sheet)
                 combatant["speed_multiplier"] = source_speed_multiplier(sheet)
-                dodge_transition = reconcile_dodge_lifecycle(combatant)
+                current_dodge_transition = reconcile_dodge_lifecycle(combatant)
+                dodge_transition = (
+                    prior_dodge_transition
+                    if prior_dodge_transition["ended_reason"] is not None
+                    else current_dodge_transition
+                )
                 if dodge_transition["ended_reason"] is not None:
                     encounter["log"] = [
                         *list(encounter.get("log") or []),

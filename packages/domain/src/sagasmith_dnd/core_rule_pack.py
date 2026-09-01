@@ -447,7 +447,7 @@ BOUNDARIES = (
     ),
     CoreBoundary(
         "dnd5e.core.action.dodge",
-        ("2014", "2024"),
+        ("2014",),
         "combat_engine.dodge_benefit_active|combat_engine.reconcile_dodge_lifecycle",
         (
             "tests/test_combat_engine.py::test_dodge_lasts_until_start_of_next_turn_and_affects_attacks",

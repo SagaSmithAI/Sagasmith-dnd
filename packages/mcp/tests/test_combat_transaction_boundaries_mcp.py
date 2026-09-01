@@ -799,6 +799,102 @@ def test_zero_speed_dodge_ends_atomically_and_replays_without_writes(tmp_path: P
     asyncio.run(exercise())
 
 
+@pytest.mark.parametrize("legacy_zero_kind", ["speed_multiplier", "grappled"])
+def test_legacy_invalid_dodge_ends_before_projection_restores_speed(
+    tmp_path: Path,
+    legacy_zero_kind: str,
+) -> None:
+    async def exercise() -> None:
+        config = _config(tmp_path)
+        server = create_server(config)
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {"name": "Legacy Dodge upgrade", "edition": "2014", "idempotency_key": "campaign"},
+        )
+        sheet = default_character_sheet()
+        sheet["combat"]["hp"] = {"value": 1, "max": 5, "temp": 0}
+        actor = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": "Legacy dodger",
+                    "sheet": sheet,
+                },
+                "principal_id": "system:local",
+                "idempotency_key": "actor",
+            },
+        )
+        campaign = await _call(
+            server,
+            "campaign_query",
+            {
+                "view": "get",
+                "payload": {"campaign_id": campaign["id"]},
+                "principal_id": "system:local",
+            },
+        )
+        await _call(
+            server,
+            "combat_start",
+            {
+                "positioning_mode": "agent",
+                "campaign_id": campaign["id"],
+                "participant_ids": [actor["id"]],
+                "participant_config": [{"actor_id": actor["id"], "initiative": 10}],
+                "expected_revision": campaign["revision"],
+                "idempotency_key": "start",
+            },
+        )
+        storage = server_module.SagaSmithStorage(config)
+        campaigns = server_module.CampaignService(storage.database)
+        stored = campaigns.get(campaign["id"])
+        legacy_state = deepcopy(stored.state)
+        legacy_combatant = legacy_state["combat"]["combatants"][0]
+        legacy_combatant.setdefault("turn_flags", {})["dodging"] = True
+        if legacy_zero_kind == "speed_multiplier":
+            legacy_combatant["speed_multiplier"] = 0.0
+        else:
+            legacy_combatant["conditions"] = ["grappled"]
+        upgraded = campaigns.update(
+            campaign["id"],
+            state=legacy_state,
+            expected_revision=stored.revision,
+        )
+
+        request = {
+            "campaign_id": campaign["id"],
+            "target_id": actor["id"],
+            "action": "heal",
+            "payload": {"amount": 1},
+            "expected_revision": upgraded.revision,
+            "idempotency_key": f"upgrade-{legacy_zero_kind}",
+        }
+        healed = await _call_raw(server, "combat_hp_change", request)
+        replayed = await _call_raw(server, "combat_hp_change", request)
+
+        assert replayed == healed
+        combatant = healed["combat"]["combatants"][0]
+        assert combatant["speed_multiplier"] == 1.0
+        assert "grappled" not in combatant["conditions"]
+        assert "dodging" not in combatant["turn_flags"]
+        assert combatant["turn_flags"]["dodge_ended"]["reason"] == "speed_zero"
+        ended = [
+            item
+            for item in healed["combat"]["log"]
+            if item.get("type") == "dodge_ended" and item.get("actor_id") == actor["id"]
+        ]
+        assert len(ended) == 1
+        assert ended[0]["reason"] == "speed_zero"
+        committed = campaigns.get(campaign["id"])
+        assert committed.revision == upgraded.revision + 1
+
+    asyncio.run(exercise())
+
+
 def test_mid_turn_slow_caps_public_movement_without_failed_writes(tmp_path: Path) -> None:
     async def exercise() -> None:
         config = _config(tmp_path)
