@@ -23809,6 +23809,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         normalized_check_action = (
             str(action).strip().lower().replace("-", "_") if action is not None else None
         )
+        normalized_ability = str(ability).strip().casefold().replace(" ", "_")
         if normalized_check_action not in {
             None,
             "escape",
@@ -23821,6 +23822,35 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             "use_object",
         }:
             raise CombatEngineError("unsupported action-bound check")
+        actor: dict[str, Any] | None = None
+        if normalized_check_action == "search":
+            if kind not in ABILITY_CHECK_KINDS:
+                raise CombatEngineError("Search requires an ability check")
+            search_ruleset = campaign_rules_edition(campaign_id)
+            allowed_search_checks = (
+                {"perception", "investigation"}
+                if search_ruleset == "2014"
+                else {"wisdom", "wis", "insight", "medicine", "perception", "survival"}
+            )
+            if normalized_ability not in allowed_search_checks:
+                if search_ruleset == "2014":
+                    raise CombatEngineError(
+                        "2014 Search requires Wisdom (Perception) or "
+                        "Intelligence (Investigation)"
+                    )
+                raise CombatEngineError(
+                    "2024 Search requires a Wisdom check, optionally using Insight, "
+                    "Medicine, Perception, or Survival"
+                )
+            if proficient or bonus:
+                raise CombatEngineError(
+                    "Search derives its skill proficiency and modifier from the actor card"
+                )
+            actor = combat_actor_snapshot(actor_id)
+            if normalized_ability not in {"wisdom", "wis"} and normalized_ability not in dict(
+                actor["derived"].get("skills") or {}
+            ):
+                raise CombatEngineError("Search skill is missing from the actor card")
         if kind == "stabilize":
             if not target_id:
                 raise CombatEngineError("stabilize requires target_id")
@@ -23864,6 +23894,26 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         active_state = dict(campaign.state or {}).get("combat")
         if isinstance(active_state, dict) and active_state.get("active", False):
             require_encounter_combatant(active_state, actor_id, role="check actor")
+        prepaid_search_encounter: dict[str, Any] | None = None
+        if normalized_check_action == "search":
+            if not isinstance(active_state, dict) or not active_state.get("active", False):
+                raise CombatEngineError("an action-bound check requires active combat")
+            require_no_blocking_pending(active_state)
+            acting = current_combatant(active_state)
+            if acting is None or acting.get("actor_id") != actor_id:
+                raise CombatEngineError(
+                    "an action-bound check can be made only on this actor's turn"
+                )
+            prepaid_search_encounter = resolve_common_action(
+                active_state,
+                actor_id_value=actor_id,
+                action="search",
+                payload={
+                    "kind": kind,
+                    "ability": normalized_ability,
+                    "dc": dc,
+                },
+            )
         if kind == "death_save":
             _campaign, active = active_encounter(campaign_id)
             require_no_blocking_pending(active)
@@ -23916,8 +23966,8 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 raise CombatEngineError("stabilization requires the target to be within 5 feet")
             stabilize_target = combat_actor_snapshot(target_id)
             stabilize_sheet(stabilize_target["sheet"])
-        actor = combat_actor_snapshot(actor_id)
-        normalized_ability = str(ability).strip().casefold().replace(" ", "_")
+        if actor is None:
+            actor = combat_actor_snapshot(actor_id)
         derived_skill = normalized_ability in dict(actor["derived"].get("skills") or {})
         if kind in ABILITY_CHECK_KINDS and derived_skill and proficient:
             raise CombatEngineError(
@@ -23925,7 +23975,11 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 "reserved for external rule or source modifiers"
             )
         next_state = dict(campaign.state or {})
-        encounter = dict(next_state.get("combat") or {})
+        encounter = (
+            prepaid_search_encounter
+            if prepaid_search_encounter is not None
+            else dict(next_state.get("combat") or {})
+        )
         updates: list[CharacterStateUpdate] = []
         if kind == "death_save":
             ruleset = encounter_rules_edition(campaign_id, encounter)
@@ -24046,24 +24100,25 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             if derived_skill:
                 result = {**result, "skill": normalized_ability}
             if normalized_check_action is not None:
-                if not encounter:
-                    raise CombatEngineError("an action-bound check requires active combat")
-                require_no_blocking_pending(encounter)
-                acting = current_combatant(encounter)
-                if acting is None or acting.get("actor_id") != actor_id:
-                    raise CombatEngineError(
-                        "an action-bound check can be made only on this actor's turn"
+                if normalized_check_action != "search":
+                    if not encounter:
+                        raise CombatEngineError("an action-bound check requires active combat")
+                    require_no_blocking_pending(encounter)
+                    acting = current_combatant(encounter)
+                    if acting is None or acting.get("actor_id") != actor_id:
+                        raise CombatEngineError(
+                            "an action-bound check can be made only on this actor's turn"
+                        )
+                    encounter = resolve_common_action(
+                        encounter,
+                        actor_id_value=actor_id,
+                        action=normalized_check_action,
+                        payload={
+                            "kind": kind,
+                            "ability": normalized_ability,
+                            "dc": dc,
+                        },
                     )
-                encounter = resolve_common_action(
-                    encounter,
-                    actor_id_value=actor_id,
-                    action=normalized_check_action,
-                    payload={
-                        "kind": kind,
-                        "ability": normalized_ability,
-                        "dc": dc,
-                    },
-                )
                 result = {**result, "action": normalized_check_action}
         if encounter:
             for update in updates:
