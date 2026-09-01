@@ -81,6 +81,7 @@ SAVING_THROW_KINDS = frozenset({"save", "death_save"})
 ACTOR_CHECK_KINDS = ABILITY_CHECK_KINDS | SAVING_THROW_KINDS
 DAMAGE_REDUCTION_OUTCOMES = frozenset({"full", "half", "none"})
 WEAPON_MASTERY_IDS = frozenset({"cleave", "graze", "nick", "push", "sap", "slow", "topple", "vex"})
+DODGE_MECHANIC_ID = "dnd5e.core.action.dodge"
 
 
 def damage_amount_after_reduction(amount: int, outcome: str) -> int:
@@ -1268,6 +1269,62 @@ def _effective_speed_ft(combatant: dict[str, Any]) -> int:
     return max(0, int(int(budget.get("speed", 0) or 0) * speed_multiplier))
 
 
+def dodge_benefit_active(combatant: dict[str, Any]) -> bool:
+    """Return whether an encounter combatant still has its current Dodge benefit.
+
+    This reads encounter-owned conditions and effective speed rather than the
+    character card's base walking speed.  Callers that commit an authoritative
+    condition or speed change must also call :func:`reconcile_dodge_lifecycle`
+    so a lost benefit cannot reactivate when the temporary effect is removed.
+    """
+
+    flags = dict(combatant.get("turn_flags") or {})
+    if not flags.get("dodging"):
+        return False
+    if _condition_set(combatant.get("conditions")) & INCAPACITATING_STATE_IDS:
+        return False
+    return _effective_speed_ft(combatant) > 0
+
+
+def reconcile_dodge_lifecycle(combatant: dict[str, Any]) -> dict[str, Any]:
+    """Permanently end an invalid current Dodge benefit on one combatant.
+
+    The passed encounter combatant is updated in place so authoritative write
+    paths can include the transition in their existing atomic commit.
+    """
+
+    flags = dict(combatant.get("turn_flags") or {})
+    if not flags.get("dodging"):
+        return {
+            "active": False,
+            "mechanic_id": DODGE_MECHANIC_ID,
+            "ended_reason": None,
+        }
+    conditions = _condition_set(combatant.get("conditions"))
+    ended_reason = None
+    if conditions & INCAPACITATING_STATE_IDS:
+        ended_reason = "incapacitated"
+    elif _effective_speed_ft(combatant) <= 0:
+        ended_reason = "speed_zero"
+    if ended_reason is None:
+        return {
+            "active": True,
+            "mechanic_id": DODGE_MECHANIC_ID,
+            "ended_reason": None,
+        }
+    flags.pop("dodging", None)
+    flags["dodge_ended"] = {
+        "mechanic_id": DODGE_MECHANIC_ID,
+        "reason": ended_reason,
+    }
+    combatant["turn_flags"] = flags
+    return {
+        "active": False,
+        "mechanic_id": DODGE_MECHANIC_ID,
+        "ended_reason": ended_reason,
+    }
+
+
 def _movement_accounting(combatant: dict[str, Any]) -> tuple[int, int]:
     budget = dict(combatant.get("turn_budget") or {})
     if "movement_spent" in budget and "extra_movement_granted" in budget:
@@ -1798,6 +1855,8 @@ def preflight_attack(
                 target["death_saves"] = bool(combatant.get("death_saves", True))
                 target["zero_hp_recovery"] = bool(combatant.get("zero_hp_recovery", False))
                 target["visible_to_actor_ids"] = deepcopy(combatant.get("visible_to_actor_ids"))
+                target["turn_budget"] = deepcopy(combatant.get("turn_budget") or {})
+                target["speed_multiplier"] = combatant.get("speed_multiplier", 1.0)
     attacker_unresolved = actor_derived(attacker).get("unresolved_rules") or []
     if attacker_unresolved:
         raise NeedsRulingError("attacker has unresolved rules", missing=attacker_unresolved)
@@ -2334,21 +2393,8 @@ def preflight_attack(
         else:
             context["disadvantage"] = True
             context.setdefault("disadvantage_sources", []).append("target_prone_beyond_5_ft")
-    target_flags = dict(target.get("turn_flags") or {})
-    target_speed = int(actor_derived(target).get("speed", {}).get("walk", 0) or 0)
-    if target_conditions & {
-        "grappled",
-        "paralyzed",
-        "petrified",
-        "restrained",
-        "stunned",
-        "unconscious",
-    }:
-        target_speed = 0
     if (
-        target_flags.get("dodging")
-        and "incapacitated" not in target_conditions
-        and target_speed > 0
+        dodge_benefit_active(target)
         and target_can_see_attacker
     ):
         context["disadvantage"] = True
@@ -5081,6 +5127,7 @@ def resolve_common_action(
     elif action == "disengage":
         flags["disengaged"] = True
     elif action == "dodge":
+        flags.pop("dodge_ended", None)
         flags["dodging"] = True
     elif action == "help":
         if not target_id:
@@ -5137,6 +5184,11 @@ def resolve_common_action(
             },
         ]
     acting["turn_flags"] = flags
+    dodge_transition = (
+        reconcile_dodge_lifecycle(acting)
+        if action == "dodge"
+        else {"ended_reason": None, "mechanic_id": DODGE_MECHANIC_ID}
+    )
     value["log"] = [
         *list(value.get("log") or []),
         {
@@ -5149,6 +5201,16 @@ def resolve_common_action(
             "turn_index": int(value.get("turn_index", 0) or 0),
         },
     ][-100:]
+    if dodge_transition["ended_reason"] is not None:
+        value["log"] = [
+            *list(value.get("log") or []),
+            {
+                "type": "dodge_ended",
+                "actor_id": actor_id_value,
+                "mechanic_id": dodge_transition["mechanic_id"],
+                "reason": dodge_transition["ended_reason"],
+            },
+        ][-100:]
     return value
 
 
@@ -7025,6 +7087,7 @@ def end_turn(encounter: dict[str, Any], *, actor_id_value: str | None = None) ->
             next_actor["legendary_actions"] = legendary_actions
         next_flags = dict(next_actor.get("turn_flags") or {})
         next_flags.pop("dodging", None)
+        next_flags.pop("dodge_ended", None)
         next_flags.pop("helping", None)
         next_flags.pop("death_save_used", None)
         next_flags.pop("action_payments", None)

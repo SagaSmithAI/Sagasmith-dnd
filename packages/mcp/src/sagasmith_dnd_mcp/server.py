@@ -197,6 +197,7 @@ from sagasmith_dnd.combat_engine import (
     consume_weapon_mastery_attack_effects,
     current_combatant,
     damage_amount_after_reduction,
+    dodge_benefit_active,
     end_concentration_for_incapacitating_conditions,
     end_hypnotic_pattern_effects,
     end_turn,
@@ -209,6 +210,7 @@ from sagasmith_dnd.combat_engine import (
     preflight_attack,
     preflight_spell_attack,
     queue_combatant,
+    reconcile_dodge_lifecycle,
     reconcile_effect_dependencies,
     reconcile_readied_spells,
     reconcile_witch_bolt_concentration,
@@ -10813,9 +10815,29 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
     ) -> None:
         for combatant in encounter.get("combatants", []):
             if combatant.get("actor_id") == actor_id:
+                # Upgrade old encounter snapshots before replacing their stale
+                # projection. Otherwise removing a zero-speed or grappling
+                # effect could make a persisted dodging=True flag active again.
+                prior_dodge_transition = reconcile_dodge_lifecycle(combatant)
                 combatant["conditions"] = list(sheet.get("conditions") or [])
                 combatant["condition_sources"] = timed_condition_sources(sheet)
                 combatant["speed_multiplier"] = source_speed_multiplier(sheet)
+                current_dodge_transition = reconcile_dodge_lifecycle(combatant)
+                dodge_transition = (
+                    prior_dodge_transition
+                    if prior_dodge_transition["ended_reason"] is not None
+                    else current_dodge_transition
+                )
+                if dodge_transition["ended_reason"] is not None:
+                    encounter["log"] = [
+                        *list(encounter.get("log") or []),
+                        {
+                            "type": "dodge_ended",
+                            "actor_id": actor_id,
+                            "mechanic_id": dodge_transition["mechanic_id"],
+                            "reason": dodge_transition["ended_reason"],
+                        },
+                    ][-100:]
                 if "turned" not in {str(item).casefold() for item in combatant["conditions"]}:
                     combatant.pop("turned", None)
                 reconcile_actor_witch_bolt_concentration(
@@ -24060,17 +24082,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 None,
             )
             if combatant is not None and kind == "save" and ability in {"dex", "dexterity"}:
-                flags = dict(combatant.get("turn_flags") or {})
-                conditions = {str(item).casefold() for item in combatant.get("conditions", [])}
-                if flags.get("dodging") and not conditions & {
-                    "grappled",
-                    "incapacitated",
-                    "paralyzed",
-                    "petrified",
-                    "restrained",
-                    "stunned",
-                    "unconscious",
-                }:
+                if dodge_benefit_active(combatant):
                     advantage = True
             result = resolve_actor_check(
                 actor,

@@ -50,6 +50,7 @@ REQUIRED_BOUNDARIES = {
 
 EDITION_BOUNDARIES = {
     "2014": {
+        "dnd5e.core.action.dodge",
         "dnd5e.core.activity.orc_aggressive",
         "dnd5e.core.activity.recharge",
         "dnd5e.core.check.jack_of_all_trades",
@@ -108,6 +109,7 @@ def test_2024_core_pack_never_borrows_a_2014_rulebook_citation() -> None:
         "dnd5e.core.rest.arcane_recovery",
         "dnd5e.core.rest.sorcerous_restoration",
     } <= {item.id for item in pack.boundaries}
+    assert "dnd5e.core.action.dodge" not in {item.id for item in pack.boundaries}
 
 
 def test_dnd_runtime_never_emits_an_unregistered_core_boundary() -> None:
