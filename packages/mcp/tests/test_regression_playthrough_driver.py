@@ -7808,6 +7808,7 @@ def test_short_rest_advances_clock_and_applies_only_explicit_resource_choices() 
                     "id": actor_id,
                     "campaign_id": "campaign-1",
                     "revision": 2,
+                    "sheet": {"edition": "2014"},
                 }
             if tool_id == "branch_query":
                 return [{"id": "branch-1", "is_current": True}]
@@ -7840,6 +7841,7 @@ def test_short_rest_advances_clock_and_applies_only_explicit_resource_choices() 
                             "character_id": "wizard",
                             "expected_revision": 2,
                             "arcane_recovery": {"1": 1},
+                            "song_of_rest_source_actor_id": "wizard",
                         },
                     ],
                 }
@@ -7854,10 +7856,90 @@ def test_short_rest_advances_clock_and_applies_only_explicit_resource_choices() 
                     "rest_type": "short_rest",
                     "duration_minutes": 60,
                     "member_ids": ["fighter", "wizard"],
+                    "game_time": {
+                        "schema_version": 1,
+                        "tick_seconds": 6,
+                        "elapsed_ticks": 600,
+                    },
                     "world_time": self.world_time,
                     "recovered": {
-                        "fighter": {"hit_dice_healing": 7},
-                        "wizard": {"recovered": {"spell_slot:1": 1}},
+                        "fighter": {
+                            "hit_dice_healing": 7,
+                            "short_rest_hit_dice": {"status": "open"},
+                        },
+                        "wizard": {
+                            "recovered": {"spell_slot:1": 1},
+                            "short_rest_hit_dice": {"status": "open"},
+                        },
+                    },
+                    "campaign_revision": self.revision,
+                    "revisions": [
+                        {
+                            "entity_type": "character",
+                            "entity_id": "fighter",
+                            "before_revision": 2,
+                            "after_revision": 3,
+                        },
+                        {
+                            "entity_type": "character",
+                            "entity_id": "wizard",
+                            "before_revision": 2,
+                            "after_revision": 3,
+                        },
+                    ],
+                }
+            if (
+                tool_id == "campaign_change"
+                and arguments["action"] == "short_rest_hit_die"
+            ):
+                actor_id = arguments["payload"]["character_id"]
+                self.remember("hit_die_choice", arguments["idempotency_key"])
+                assert arguments["payload"]["rest_completed_elapsed_ticks"] == 600
+                assert arguments["branch_id"] == "branch-1"
+                if actor_id == "fighter":
+                    assert arguments["expected_revision"] == 7
+                    assert arguments["payload"] == {
+                        "character_id": "fighter",
+                        "expected_character_revision": 3,
+                        "decision": "spend",
+                        "hit_die_key": "fighter:d10",
+                        "rest_completed_elapsed_ticks": 600,
+                    }
+                    self.revision += 1
+                    return {
+                        "status": "closed",
+                        "result": {
+                            "decision": "spend",
+                            "hit_die_key": "fighter:d10",
+                            "hit_die_roll": {"roll": 6, "healing": 6},
+                        },
+                        "character": {
+                            "revision": 4,
+                            "sheet": {"edition": "2014", "combat": {}},
+                        },
+                        "campaign_revision": self.revision,
+                        "random_stream_receipt": {
+                            "idempotency_key": arguments["idempotency_key"],
+                            "draw_count": 1,
+                        },
+                    }
+                assert actor_id == "wizard"
+                assert arguments["expected_revision"] == 8
+                assert arguments["payload"] == {
+                    "character_id": "wizard",
+                    "expected_character_revision": 3,
+                    "decision": "stop",
+                    "rest_completed_elapsed_ticks": 600,
+                }
+                return {
+                    "status": "closed",
+                    "result": {
+                        "decision": "stop",
+                        "close_reason": "player_stopped",
+                    },
+                    "character": {
+                        "revision": 4,
+                        "sheet": {"edition": "2014", "combat": {}},
                     },
                     "campaign_revision": self.revision,
                 }
@@ -7884,11 +7966,15 @@ def test_short_rest_advances_clock_and_applies_only_explicit_resource_choices() 
             members=[
                 {
                     "actor_id": "fighter",
-                    "hit_dice_spends": [{"key": "fighter:d10", "count": 1}],
+                    "hit_dice_spends": [{"key": "fighter:d10", "count": 2}],
                     "song_of_rest_source_actor_id": "wizard",
                     "rest_activity_minutes": {"meditation": 30},
                 },
-                {"actor_id": "wizard", "arcane_recovery": {"1": 1}},
+                {
+                    "actor_id": "wizard",
+                    "arcane_recovery": {"1": 1},
+                    "song_of_rest_source_actor_id": "wizard",
+                },
             ],
             start_clock={"day": 1, "hour": 14, "label": "Hideout"},
             duration_minutes=60,
@@ -7899,10 +7985,22 @@ def test_short_rest_advances_clock_and_applies_only_explicit_resource_choices() 
     assert result["member_ids"] == ["fighter", "wizard"]
     assert result["clock_advanced"]["world_time"]["hour"] == 15
     assert len(result["rests"]) == 2
+    assert [item["result"]["decision"] for item in result["hit_die_choices"]] == [
+        "spend",
+        "stop",
+    ]
     assert result["rest_recovered"] is False
     identity = "hideout-short-rest-1"
     assert client.keys["clock_set"] == [_mutation_key("run-1", "short-rest-clock-set", identity)]
     assert client.keys["party_rest"] == [_mutation_key("run-1", "short-rest-party", identity)]
+    assert client.keys["hit_die_choice"] == [
+        _mutation_key(
+            "run-1",
+            "short-rest-hit-die",
+            f"{identity}:fighter:0:fighter:d10",
+        ),
+        _mutation_key("run-1", "short-rest-hit-die", f"{identity}:wizard:stop"),
+    ]
     assert client.keys["continuity"] == [_mutation_key("run-1", "short-rest-continuity", identity)]
     assert client.keys["sync"] == [_mutation_key("run-1", "sync", f"short-rest-sync:{identity}")]
 
@@ -7939,6 +8037,20 @@ def test_short_rest_recovers_the_atomic_random_receipt_without_rerolling() -> No
         },
         "preparations": {},
         "campaign_revision": 6,
+        "revisions": [
+            {
+                "entity_type": "campaign",
+                "entity_id": "campaign-1",
+                "before_revision": 5,
+                "after_revision": 6,
+            },
+            {
+                "entity_type": "character",
+                "entity_id": "fighter",
+                "before_revision": 2,
+                "after_revision": 3,
+            },
+        ],
         "random_stream_receipt": {
             "algorithm": "sha256-counter-v1",
             "position_before": 20,
@@ -7973,6 +8085,7 @@ def test_short_rest_recovers_the_atomic_random_receipt_without_rerolling() -> No
                 if arguments["view"] == "rest":
                     return {"ready": True}
                 sheet = default_character_sheet()
+                sheet["edition"] = "2014"
                 sheet["combat"]["rest_history"] = {
                     "last_rest_type": "short_rest",
                     "last_rest_started_elapsed_ticks": 0,
@@ -8064,6 +8177,7 @@ def test_short_rest_recovers_the_atomic_random_receipt_without_rerolling() -> No
     assert client.party_rest_calls == 1
     assert result["rest_recovered"] is True
     assert result["party_rest"]["random_stream_receipt"]["position_after"] == 21
+    assert result["hit_die_choices"] == []
 
 
 @pytest.mark.parametrize("defer_checkpoint", [False, True])

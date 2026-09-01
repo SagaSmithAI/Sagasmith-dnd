@@ -15705,6 +15705,11 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         world_advanced: list[str] = []
         world_expired: list[str] = []
         if round_changed:
+            require_resolved_short_rest_hit_dice(
+                campaign_id,
+                next_state,
+                operation="advancing a chase round",
+            )
             next_state, time_transition = advance_state_game_time(
                 next_state,
                 period="round",
@@ -17627,6 +17632,11 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         round_changed = int(next_state["combat"].get("round", 1)) > int(encounter.get("round", 1))
         time_transition: dict[str, Any] | None = None
         if round_changed:
+            require_resolved_short_rest_hit_dice(
+                campaign_id,
+                validate_party_state(deepcopy(next_state)),
+                operation="advancing a combat round",
+            )
             next_state, time_transition = advance_state_game_time(
                 next_state,
                 period="round",
@@ -28063,6 +28073,11 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             )
         campaign = campaigns.get(current.campaign_id)
         next_state = validate_party_state(deepcopy(campaign.state or {}))
+        require_resolved_short_rest_hit_dice(
+            current.campaign_id,
+            next_state,
+            operation="casting a spell that advances campaign time",
+        )
         spell_entry = (
             magic_item_spell_card(
                 current.sheet,
@@ -29042,11 +29057,31 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             },
         )
         inherited_stream = active_random_stream()
+        if inherited_stream is not None:
+            random_state = validate_random_stream_state(
+                dict(campaign.state or {}).get("random_stream")
+                or initial_random_stream(f"sagasmith-dnd:{campaign_id}")
+            )
+            if (
+                inherited_stream.campaign_id != campaign_id
+                or (
+                    inherited_stream.campaign_revision is not None
+                    and inherited_stream.campaign_revision != campaign.revision
+                )
+                or inherited_stream.seed != random_state["seed"]
+                or inherited_stream.start_position != random_state["position"]
+            ):
+                raise ValueError(
+                    "campaign random snapshot conflict: short-rest Hit Die resolution "
+                    "requires the same campaign revision and random-stream position that "
+                    "opened the request"
+                )
         stream = inherited_stream or CampaignRandomStream.from_campaign_state(
             campaign_id,
             campaign.state,
             operation="campaign_change",
             idempotency_key=str(idempotency_key),
+            campaign_revision=campaign.revision,
         )
         context_manager = (
             nullcontext(stream) if inherited_stream is not None else use_random_stream(stream)
@@ -39254,6 +39289,11 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             raise ValueError("cantrips cannot be copied from a spellbook")
         campaign = campaigns.get(campaign_id)
         next_state = validate_party_state(deepcopy(campaign.state or {}))
+        require_resolved_short_rest_hit_dice(
+            campaign_id,
+            next_state,
+            operation="copying a spell into a spellbook",
+        )
         if authoritative_phase(campaign_id) != PROFILE_PLAY:
             raise CombatEngineError("spellbook copying is available only during play")
         source_owner = str(selection.get("source_owner") or "party").strip().casefold()

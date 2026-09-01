@@ -127,6 +127,31 @@ def test_discovered_spellbook_copy_is_source_bound_paid_timed_and_atomic(
                 "idempotency_key": "savant",
             },
         )
+        resting_sheet = default_character_sheet()
+        resting_sheet["edition"] = "2014"
+        resting_sheet["combat"]["hp"] = {"value": 1, "max": 12, "temp": 0}
+        resting_sheet["combat"]["hit_dice"] = {
+            "fighter:d10": {
+                "label": "Fighter d10",
+                "value": 1,
+                "max": 1,
+                "recovers_on": "long_rest",
+            }
+        }
+        resting = await call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": created["id"],
+                    "name": "Resting Fighter",
+                    "sheet": resting_sheet,
+                },
+                "principal_id": "system:local",
+                "idempotency_key": "resting-fighter",
+            },
+        )
         current_campaign = await campaign(server, created["id"])
         book = await call(
             server,
@@ -167,7 +192,7 @@ def test_discovered_spellbook_copy_is_source_bound_paid_timed_and_atomic(
                         "id": "copy-room-light",
                         "name": "Light in the copying room",
                         "target": {"kind": "object", "id": "desk-lamp"},
-                        "duration": {"period": "hour", "remaining": 1},
+                        "duration": {"period": "hour", "remaining": 3},
                     }
                 },
                 "expected_revision": current_campaign["revision"],
@@ -214,6 +239,67 @@ def test_discovered_spellbook_copy_is_source_bound_paid_timed_and_atomic(
             "expected_revision": wizard["revision"],
             "idempotency_key": "copy",
         }
+        current_campaign = await campaign(server, created["id"])
+        rested = await call(
+            server,
+            "campaign_change",
+            {
+                "campaign_id": created["id"],
+                "action": "party_rest",
+                "payload": {
+                    "rest_type": "short_rest",
+                    "duration_minutes": 60,
+                    "members": [
+                        {
+                            "character_id": resting["id"],
+                            "expected_revision": resting["revision"],
+                        }
+                    ],
+                },
+                "expected_revision": current_campaign["revision"],
+                "idempotency_key": "other-actor-rest",
+            },
+        )
+        campaign_before_reject = await campaign(server, created["id"])
+        wizard_before_reject = await call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": wizard["id"]}},
+        )
+        resting_before_reject = await call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": resting["id"]}},
+        )
+        with pytest.raises(Exception, match="pending short-rest Hit Die choices"):
+            await call(server, "character_content_apply", arguments)
+        assert await campaign(server, created["id"]) == campaign_before_reject
+        assert await call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": wizard["id"]}},
+        ) == wizard_before_reject
+        assert await call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": resting["id"]}},
+        ) == resting_before_reject
+        await call(
+            server,
+            "campaign_change",
+            {
+                "campaign_id": created["id"],
+                "action": "short_rest_hit_die",
+                "payload": {
+                    "character_id": resting["id"],
+                    "expected_character_revision": resting_before_reject["revision"],
+                    "decision": "stop",
+                    "rest_completed_elapsed_ticks": 600,
+                },
+                "expected_revision": rested["campaign_revision"],
+                "idempotency_key": "other-actor-rest-stop",
+            },
+        )
         copied = await call(server, "character_content_apply", arguments)
         replay = await call(server, "character_content_apply", arguments)
 
@@ -223,7 +309,7 @@ def test_discovered_spellbook_copy_is_source_bound_paid_timed_and_atomic(
         assert copied["spellbook_copy"]["cost_cp"] == 5000
         assert copied["spellbook_copy"]["deciphered_during_copy"] is True
         assert copied["spellbook_copy"]["hours"] == 2
-        assert copied["spellbook_copy"]["game_time"]["elapsed_ticks"] == 1200
+        assert copied["spellbook_copy"]["game_time"]["elapsed_ticks"] == 1800
         assert copied["spellbook_copy"]["world_time"] is None
         assert copied["spellbook_copy"]["world_expired"] == ["copy-room-light"]
         receipt = await call(
@@ -238,7 +324,7 @@ def test_discovered_spellbook_copy_is_source_bound_paid_timed_and_atomic(
         assert receipt["response"] == copied
         after = await campaign(server, created["id"])
         assert after["state"]["party"]["inventory"]["items"][0]["id"] == ("d11-red-spellbook")
-        assert after["state"]["game_time"]["elapsed_ticks"] == 1200
+        assert after["state"]["game_time"]["elapsed_ticks"] == 1800
         assert "world_time" not in after["state"]
         clock = await call(
             server,

@@ -6326,11 +6326,6 @@ async def _short_rest(
     }
     if song_source_ids - set(actor_ids):
         raise ValueError("every Song of Rest source must participate in the same short rest")
-    if any(
-        item["song_of_rest_source_actor_id"] is not None and not item["hit_dice_spends"]
-        for item in normalized
-    ):
-        raise ValueError("Song of Rest applies only to members who spend one or more Hit Dice")
     preconditions = await _validate_narrative_preconditions(
         client,
         campaign_id=campaign_id,
@@ -6347,6 +6342,25 @@ async def _short_rest(
         if actor.get("campaign_id") != campaign_id:
             raise ValueError("every short-rest actor must belong to the campaign")
         actors.append(actor)
+    actor_by_id = {str(actor["id"]): actor for actor in actors}
+    initial_hit_dice_spends: dict[str, list[dict[str, Any]]] = {}
+    sequential_hit_die_keys: dict[str, list[str]] = {}
+    for member in normalized:
+        actor_id = str(member["actor_id"])
+        actor = actor_by_id[actor_id]
+        requested_keys = [
+            str(spend["key"])
+            for spend in member["hit_dice_spends"]
+            for _index in range(int(spend["count"]))
+        ]
+        if str(dict(actor.get("sheet") or {}).get("edition") or "") == "2014":
+            initial_hit_dice_spends[actor_id] = (
+                [{"key": requested_keys[0], "count": 1}] if requested_keys else []
+            )
+            sequential_hit_die_keys[actor_id] = requested_keys[1:]
+        else:
+            initial_hit_dice_spends[actor_id] = deepcopy(member["hit_dice_spends"])
+            sequential_hit_die_keys[actor_id] = []
     member_by_id = {item["actor_id"]: item for item in normalized}
     for actor in actors:
         member = member_by_id[str(actor["id"])]
@@ -6357,7 +6371,7 @@ async def _short_rest(
                 "payload": {
                     "character_id": str(actor["id"]),
                     "rest_type": "short_rest",
-                    "hit_dice_spends": member["hit_dice_spends"],
+                    "hit_dice_spends": initial_hit_dice_spends[str(actor["id"])],
                     "arcane_recovery": member["arcane_recovery"],
                     "natural_recovery": member["natural_recovery"],
                     "song_of_rest_source_actor_id": member["song_of_rest_source_actor_id"],
@@ -6411,7 +6425,6 @@ async def _short_rest(
     elif start_clock is not None:
         raise ValueError("short-rest start clock must be omitted after the clock is set")
     campaign = await _campaign(client, campaign_id)
-    actor_by_id = {str(actor["id"]): actor for actor in actors}
     party_members: list[dict[str, Any]] = []
     for member in normalized:
         party_member: dict[str, Any] = {
@@ -6427,8 +6440,9 @@ async def _short_rest(
         if member.get("attune_item_id"):
             party_member["attune_item_id"] = member["attune_item_id"]
             party_member["attunement_prerequisite_confirmed"] = True
-        if member["hit_dice_spends"]:
-            party_member["hit_dice_spends"] = member["hit_dice_spends"]
+        member_initial_spends = initial_hit_dice_spends[member["actor_id"]]
+        if member_initial_spends:
+            party_member["hit_dice_spends"] = member_initial_spends
         if member["rest_activity_minutes"]:
             party_member["rest_activity_minutes"] = member["rest_activity_minutes"]
         party_members.append(party_member)
@@ -6513,7 +6527,7 @@ async def _short_rest(
                     "character_id": member["actor_id"],
                     "expected_revision": revision_row["before_revision"],
                     "rest_activity_minutes": member["rest_activity_minutes"],
-                    "hit_dice_spends": member["hit_dice_spends"],
+                    "hit_dice_spends": initial_hit_dice_spends[member["actor_id"]],
                     "arcane_recovery": member["arcane_recovery"],
                     "natural_recovery": member["natural_recovery"],
                     "song_of_rest_source_actor_id": member["song_of_rest_source_actor_id"],
@@ -6535,7 +6549,13 @@ async def _short_rest(
             receipt,
             campaign=campaign,
             actors=actors,
-            members=normalized,
+            members=[
+                {
+                    **member,
+                    "hit_dice_spends": initial_hit_dice_spends[member["actor_id"]],
+                }
+                for member in normalized
+            ],
             duration_minutes=duration_minutes,
             expected_request_hash=expected_request_hash,
         )
@@ -6547,6 +6567,130 @@ async def _short_rest(
         or rested.get("member_ids") != actor_ids
     ):
         raise RuntimeError("atomic short rest did not settle the requested party")
+    rest_game_time = dict(rested.get("game_time") or {})
+    completed_elapsed_ticks = rest_game_time.get("elapsed_ticks")
+    if isinstance(completed_elapsed_ticks, bool) or not isinstance(
+        completed_elapsed_ticks, int
+    ):
+        raise RuntimeError("short rest did not return its completed game-time tick")
+    revision_rows = [
+        dict(item) for item in list(rested.get("revisions") or []) if isinstance(item, dict)
+    ]
+    actor_revisions = {
+        str(item.get("entity_id") or ""): item.get("after_revision")
+        for item in revision_rows
+        if item.get("entity_type") == "character"
+    }
+    sequential_campaign_revision = rested.get("campaign_revision")
+    if isinstance(sequential_campaign_revision, bool) or not isinstance(
+        sequential_campaign_revision, int
+    ):
+        raise RuntimeError("short rest did not return its campaign revision")
+    hit_die_choices: list[dict[str, Any]] = []
+    for member in normalized:
+        actor_id = str(member["actor_id"])
+        actor = actor_by_id[actor_id]
+        if str(dict(actor.get("sheet") or {}).get("edition") or "") != "2014":
+            continue
+        actor_revision = actor_revisions.get(actor_id)
+        if isinstance(actor_revision, bool) or not isinstance(actor_revision, int):
+            raise RuntimeError(
+                f"short rest did not return the committed revision for actor {actor_id}"
+            )
+        recovery = dict(dict(rested.get("recovered") or {}).get(actor_id) or {})
+        window = recovery.get("short_rest_hit_dice")
+        if not isinstance(window, dict):
+            continue
+        for choice_index, hit_die_key in enumerate(sequential_hit_die_keys[actor_id]):
+            if not isinstance(window, dict):
+                break
+            choice_key = _mutation_key(
+                run_id,
+                "short-rest-hit-die",
+                f"{rest_identity}:{actor_id}:{choice_index}:{hit_die_key}",
+            )
+            resolved = await client.domain(
+                "campaign_change",
+                {
+                    "campaign_id": campaign_id,
+                    "action": "short_rest_hit_die",
+                    "payload": {
+                        "character_id": actor_id,
+                        "expected_character_revision": actor_revision,
+                        "decision": "spend",
+                        "hit_die_key": hit_die_key,
+                        "rest_completed_elapsed_ticks": completed_elapsed_ticks,
+                    },
+                    "branch_id": str(branch["id"]),
+                    "expected_revision": sequential_campaign_revision,
+                    "idempotency_key": choice_key,
+                },
+            )
+            result = dict(resolved.get("result") or {})
+            resolved_character = dict(resolved.get("character") or {})
+            if (
+                resolved.get("status") not in {"open", "closed"}
+                or result.get("decision") != "spend"
+                or result.get("hit_die_key") != hit_die_key
+                or not isinstance(result.get("hit_die_roll"), dict)
+                or not isinstance(resolved_character.get("revision"), int)
+                or not isinstance(resolved.get("campaign_revision"), int)
+            ):
+                raise RuntimeError(
+                    f"short-rest Hit Die choice did not settle for actor {actor_id}"
+                )
+            random_receipt = dict(resolved.get("random_stream_receipt") or {})
+            if (
+                random_receipt.get("idempotency_key") != choice_key
+                or int(random_receipt.get("draw_count", 0) or 0) < 1
+            ):
+                raise RuntimeError(
+                    f"short-rest Hit Die choice has no exact random receipt for actor {actor_id}"
+                )
+            hit_die_choices.append({"actor_id": actor_id, **deepcopy(resolved)})
+            actor_revision = int(resolved_character["revision"])
+            sequential_campaign_revision = int(resolved["campaign_revision"])
+            window = dict(resolved_character.get("sheet") or {}).get("combat")
+            window = (
+                dict(window).get("short_rest_hit_dice")
+                if isinstance(window, dict)
+                else None
+            )
+        if isinstance(window, dict):
+            stop_key = _mutation_key(
+                run_id,
+                "short-rest-hit-die",
+                f"{rest_identity}:{actor_id}:stop",
+            )
+            stopped = await client.domain(
+                "campaign_change",
+                {
+                    "campaign_id": campaign_id,
+                    "action": "short_rest_hit_die",
+                    "payload": {
+                        "character_id": actor_id,
+                        "expected_character_revision": actor_revision,
+                        "decision": "stop",
+                        "rest_completed_elapsed_ticks": completed_elapsed_ticks,
+                    },
+                    "branch_id": str(branch["id"]),
+                    "expected_revision": sequential_campaign_revision,
+                    "idempotency_key": stop_key,
+                },
+            )
+            stop_result = dict(stopped.get("result") or {})
+            if (
+                stopped.get("status") != "closed"
+                or stop_result.get("decision") != "stop"
+                or stop_result.get("close_reason") != "player_stopped"
+                or not isinstance(dict(stopped.get("character") or {}).get("revision"), int)
+                or stopped.get("campaign_revision") != sequential_campaign_revision
+                or stopped.get("random_stream_receipt") is not None
+            ):
+                raise RuntimeError(
+                    f"short-rest Hit Die stop did not settle for actor {actor_id}"
+                )
+            hit_die_choices.append({"actor_id": actor_id, **deepcopy(stopped)})
     campaign = await _campaign(client, campaign_id)
     committed = await client.domain(
         "memory_change",
@@ -6606,6 +6750,7 @@ async def _short_rest(
             dict(dict(rested.get("recovered") or {}).get(actor_id) or {}) for actor_id in actor_ids
         ],
         "party_rest": rested,
+        "hit_die_choices": hit_die_choices,
         "continuity": committed,
         "sync": synced,
     }

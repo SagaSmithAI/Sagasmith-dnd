@@ -906,8 +906,15 @@ BOUNDARIES = (
     CoreBoundary(
         "dnd5e.core.rest.song_of_rest",
         ("2014",),
-        "lifecycle.validate_song_of_rest_source|apply_rest",
-        ("tests/test_lifecycle.py::test_song_of_rest_applies_once_per_eligible_creature",),
+        (
+            "lifecycle.validate_song_of_rest_source|apply_rest|"
+            "apply_short_rest_hit_die_choice"
+        ),
+        (
+            "tests/test_lifecycle.py::test_song_of_rest_applies_once_per_eligible_creature",
+            "packages/mcp/tests/test_rest_hit_dice_mcp.py::"
+            "test_2014_sequential_hit_die_recovers_stable_zero_hp_and_delays_song_of_rest",
+        ),
         "bundled:srd2014/02_Classes/Bard.md",
     ),
     CoreBoundary(

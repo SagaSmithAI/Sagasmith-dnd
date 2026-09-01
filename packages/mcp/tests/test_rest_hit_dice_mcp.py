@@ -1394,3 +1394,133 @@ def test_2014_short_rest_hit_die_roll_and_state_rollback_together(
         assert committed["random_stream_receipt"]["position_after"] == 1
 
     asyncio.run(exercise())
+
+
+def test_2014_short_rest_hit_die_rejects_a_stale_outer_random_snapshot(
+    tmp_path: Path,
+) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {"name": "Interleaved rest", "edition": "2014", "idempotency_key": "campaign"},
+        )
+        actors = []
+        for index in range(2):
+            actors.append(
+                await _call(
+                    server,
+                    "character_create_from",
+                    {
+                        "mode": "direct",
+                        "payload": {
+                            "campaign_id": campaign["id"],
+                            "name": f"Interleaved Fighter {index}",
+                            "sheet": _resting_sheet(),
+                        },
+                        "idempotency_key": f"actor-{index}",
+                    },
+                )
+            )
+        rested = await _party_short_rest(
+            server,
+            campaign["id"],
+            "rest",
+            [
+                {
+                    "character_id": actor["id"],
+                    "expected_revision": actor["revision"],
+                }
+                for actor in actors
+            ],
+        )
+        second_after_rest = await _call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": actors[1]["id"]}},
+        )
+        campaign_after_rest = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        stale_stream = server_module.CampaignRandomStream.from_campaign_state(
+            campaign["id"],
+            campaign_after_rest["state"],
+            operation="campaign_change",
+            idempotency_key="stale-target-die",
+            campaign_revision=campaign_after_rest["revision"],
+        )
+        other = await _call(
+            server,
+            "campaign_change",
+            {
+                "campaign_id": campaign["id"],
+                "action": "short_rest_hit_die",
+                "payload": {
+                    "character_id": actors[1]["id"],
+                    "expected_character_revision": second_after_rest["revision"],
+                    "decision": "spend",
+                    "hit_die_key": "fighter:d10",
+                    "rest_completed_elapsed_ticks": 600,
+                },
+                "expected_revision": rested["campaign_revision"],
+                "idempotency_key": "other-die",
+            },
+        )
+        after_other_campaign = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        target_before = await _call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": actors[0]["id"]}},
+        )
+        other_before = await _call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": actors[1]["id"]}},
+        )
+        arguments = {
+            "campaign_id": campaign["id"],
+            "action": "short_rest_hit_die",
+            "payload": {
+                "character_id": actors[0]["id"],
+                "expected_character_revision": target_before["revision"],
+                "decision": "spend",
+                "hit_die_key": "fighter:d10",
+                "rest_completed_elapsed_ticks": 600,
+            },
+            "expected_revision": other["campaign_revision"],
+            "idempotency_key": "stale-target-die",
+        }
+        with server_module.use_random_stream(stale_stream):
+            with pytest.raises(Exception, match="campaign random snapshot conflict"):
+                await _call(server, "campaign_change", arguments)
+        assert stale_stream.draw_count == 0
+        assert await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        ) == after_other_campaign
+        assert await _call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": actors[0]["id"]}},
+        ) == target_before
+        assert await _call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": actors[1]["id"]}},
+        ) == other_before
+
+        retried = await _call(server, "campaign_change", arguments)
+        prior_position = after_other_campaign["state"]["random_stream"]["position"]
+        assert retried["random_stream_receipt"]["position_before"] == prior_position
+        assert retried["random_stream_receipt"]["position_after"] == prior_position + 1
+        assert retried["random_stream_receipt"]["draw_count"] == 1
+
+    asyncio.run(exercise())
