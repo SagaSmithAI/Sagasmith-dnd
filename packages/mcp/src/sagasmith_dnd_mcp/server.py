@@ -45420,6 +45420,14 @@ boundary.
             choices = [name for name in ("artifact", "source_path") if data.get(name) is not None]
             if len(choices) != 1:
                 raise ValueError("provide exactly one of payload.artifact or payload.source_path")
+            request = {
+                "action": action,
+                "payload": deepcopy(data),
+            }
+            scope = f"content-pack-import:{campaign_id}:{principal_id}:{kind}"
+            replay = replay_idempotent(scope, idempotency_key, request)
+            if replay is not None:
+                return replay
             package, blobs = storage.read_content_archive(
                 artifact=(str(data["artifact"]) if choices[0] == "artifact" else None),
                 source_path=(data.get("source_path") if choices[0] == "source_path" else None),
@@ -45454,7 +45462,14 @@ boundary.
                         principal_id=principal_id,
                         idempotency_key=idempotency_key,
                     )
-            return facade_result(action, result)
+            response = facade_result(action, result)
+            return remember_idempotent(
+                scope,
+                idempotency_key,
+                request,
+                response,
+                campaign_id=campaign_id,
+            )
 
         if action == "export":
             if kind == "core_rules":

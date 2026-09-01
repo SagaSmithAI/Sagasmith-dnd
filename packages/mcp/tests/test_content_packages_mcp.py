@@ -417,6 +417,10 @@ def test_module_package_round_trip_recreates_cast_bindings(
             import_arguments,
         )
         replay = await _call(server, "content_pack", import_arguments)
+        conflicting_import = deepcopy(import_arguments)
+        conflicting_import["payload"]["artifact"] = "different-module.sagasmith-pack"
+        with pytest.raises(ToolError, match="idempotency key reused with a different request"):
+            await _call(server, "content_pack", conflicting_import)
         bindings = await _call(
             server,
             "module_query",
@@ -454,6 +458,7 @@ def test_module_package_round_trip_recreates_cast_bindings(
 
         assert exported["summary"]["actors"] == 1
         assert imported["activated"] is False
+        assert replay == imported
         assert replay["module_id"] == imported["module_id"]
         assert replay["actor_map"] == imported["actor_map"]
         assert len(bindings) == 1
