@@ -1,13 +1,13 @@
 {
   "schema": "sagasmith.dnd-official-expansions-lock.v1",
-  "generated_on": "2026-08-31",
+  "generated_on": "2026-09-01",
   "source_repository": "https://github.com/SagaSmithAI/SagaSmith-dnd-content-library",
-  "source_commit": "770e9912c9c55ba5ec942b984e6ced286ce10076",
+  "source_commit": "cc83f2339ea1e20651178bb55998ac3f26650d88",
   "builtin_rule_definitions": [
     {
       "id": "dnd5e.content.srd2014",
       "version": "1.26.0",
-      "checksum": "af8b48360f23277e4ec99d17a7fa95d3624fe88f0be760cddca6964efc1130e4"
+      "checksum": "4fc90829c634c1e800a11e4a162cd8f84ed324e0fd31af605c6d1c9051bf5a38"
     }
   ],
   "support_packages": [
@@ -37,7 +37,7 @@
       "dependency_version": "1.24.0",
       "runtime_version": "1.26.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "af8b48360f23277e4ec99d17a7fa95d3624fe88f0be760cddca6964efc1130e4",
+      "runtime_checksum": "4fc90829c634c1e800a11e4a162cd8f84ed324e0fd31af605c6d1c9051bf5a38",
       "basis": "The built-in 2014 catalog was republished as an immutable runtime version after its reviewed definition advanced."
     },
     {
@@ -47,7 +47,7 @@
       "dependency_version": "1.24.0",
       "runtime_version": "1.26.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "af8b48360f23277e4ec99d17a7fa95d3624fe88f0be760cddca6964efc1130e4",
+      "runtime_checksum": "4fc90829c634c1e800a11e4a162cd8f84ed324e0fd31af605c6d1c9051bf5a38",
       "basis": "The built-in 2014 catalog was republished as an immutable runtime version after its reviewed definition advanced."
     },
     {
@@ -57,7 +57,7 @@
       "dependency_version": "1.24.0",
       "runtime_version": "1.26.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "af8b48360f23277e4ec99d17a7fa95d3624fe88f0be760cddca6964efc1130e4",
+      "runtime_checksum": "4fc90829c634c1e800a11e4a162cd8f84ed324e0fd31af605c6d1c9051bf5a38",
       "basis": "The built-in 2014 catalog was republished as an immutable runtime version after its reviewed definition advanced."
     },
     {
@@ -67,7 +67,7 @@
       "dependency_version": "1.24.0",
       "runtime_version": "1.26.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "af8b48360f23277e4ec99d17a7fa95d3624fe88f0be760cddca6964efc1130e4",
+      "runtime_checksum": "4fc90829c634c1e800a11e4a162cd8f84ed324e0fd31af605c6d1c9051bf5a38",
       "basis": "The built-in 2014 catalog was republished as an immutable runtime version after its reviewed definition advanced."
     },
     {
@@ -77,7 +77,7 @@
       "dependency_version": "1.24.0",
       "runtime_version": "1.26.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "af8b48360f23277e4ec99d17a7fa95d3624fe88f0be760cddca6964efc1130e4",
+      "runtime_checksum": "4fc90829c634c1e800a11e4a162cd8f84ed324e0fd31af605c6d1c9051bf5a38",
       "basis": "The built-in 2014 catalog was republished as an immutable runtime version after its reviewed definition advanced."
     },
     {
@@ -87,7 +87,7 @@
       "dependency_version": "1.24.0",
       "runtime_version": "1.26.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "af8b48360f23277e4ec99d17a7fa95d3624fe88f0be760cddca6964efc1130e4",
+      "runtime_checksum": "4fc90829c634c1e800a11e4a162cd8f84ed324e0fd31af605c6d1c9051bf5a38",
       "basis": "The built-in 2014 catalog was republished as an immutable runtime version after its reviewed definition advanced."
     },
     {
@@ -97,7 +97,7 @@
       "dependency_version": "1.24.0",
       "runtime_version": "1.26.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "af8b48360f23277e4ec99d17a7fa95d3624fe88f0be760cddca6964efc1130e4",
+      "runtime_checksum": "4fc90829c634c1e800a11e4a162cd8f84ed324e0fd31af605c6d1c9051bf5a38",
       "basis": "The built-in 2014 catalog was republished as an immutable runtime version after its reviewed definition advanced."
     },
     {
@@ -107,7 +107,7 @@
       "dependency_version": "1.24.0",
       "runtime_version": "1.26.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "af8b48360f23277e4ec99d17a7fa95d3624fe88f0be760cddca6964efc1130e4",
+      "runtime_checksum": "4fc90829c634c1e800a11e4a162cd8f84ed324e0fd31af605c6d1c9051bf5a38",
       "basis": "The built-in 2014 catalog was republished as an immutable runtime version after its reviewed definition advanced."
     },
     {
@@ -117,7 +117,7 @@
       "dependency_version": "1.24.0",
       "runtime_version": "1.26.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "af8b48360f23277e4ec99d17a7fa95d3624fe88f0be760cddca6964efc1130e4",
+      "runtime_checksum": "4fc90829c634c1e800a11e4a162cd8f84ed324e0fd31af605c6d1c9051bf5a38",
       "basis": "The built-in 2014 catalog was republished as an immutable runtime version after its reviewed definition advanced."
     },
     {
@@ -127,7 +127,7 @@
       "dependency_version": "1.24.0",
       "runtime_version": "1.26.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "af8b48360f23277e4ec99d17a7fa95d3624fe88f0be760cddca6964efc1130e4",
+      "runtime_checksum": "4fc90829c634c1e800a11e4a162cd8f84ed324e0fd31af605c6d1c9051bf5a38",
       "basis": "The built-in 2014 catalog was republished as an immutable runtime version after its reviewed definition advanced."
     },
     {
@@ -137,7 +137,7 @@
       "dependency_version": "1.24.0",
       "runtime_version": "1.26.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "af8b48360f23277e4ec99d17a7fa95d3624fe88f0be760cddca6964efc1130e4",
+      "runtime_checksum": "4fc90829c634c1e800a11e4a162cd8f84ed324e0fd31af605c6d1c9051bf5a38",
       "basis": "The built-in 2014 catalog was republished as an immutable runtime version after its reviewed definition advanced."
     },
     {
@@ -206,9 +206,9 @@
     },
     {
       "id": "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a.addon",
-      "version": "1.0.1",
-      "checksum": "efbba0006ef837961a3d87203c60a49b1ed57428cdb10999aa8b6378964a5bb9",
-      "archive_sha256": "d7e755e914f94871b0bf59966109e84f0ae2302776be9127bb558971d8d125d3",
+      "version": "1.0.3",
+      "checksum": "ff8bbff7268d3e9afab5fce2d2ae320422e9d64523c6d2c1c327689dae59a9d9",
+      "archive_sha256": "1bb977b1a54f9aeb6f31413d7e8918294f2f38a353c48597287ed6ef3d111d2a",
       "publication_id": "scag2014",
       "title": "D&D 5E - Sword Coast Adventurer's Guide",
       "classification": "official_supplement",

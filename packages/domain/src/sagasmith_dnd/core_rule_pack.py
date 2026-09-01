@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.73.0"
+CORE_RULE_PACK_VERSION = "1.74.0"
 
 
 @dataclass(frozen=True)
