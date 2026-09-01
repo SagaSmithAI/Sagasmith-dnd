@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -17,11 +18,23 @@ from sagasmith_dnd.content_packages import (
 )
 from sagasmith_dnd.core_content import PACK_ID as CORE_CONTENT_PACK_ID
 from sagasmith_dnd.core_content import PACK_VERSION as CORE_CONTENT_PACK_VERSION
-from sagasmith_dnd.official_expansions import load_official_expansion_lock
+from sagasmith_dnd.official_expansions import (
+    load_official_expansion_lock,
+    verify_official_expansion_library,
+)
 
 import sagasmith_dnd_mcp.server as server_module
 from sagasmith_dnd_mcp.config import McpConfig
-from sagasmith_dnd_mcp.server import create_server
+from sagasmith_dnd_mcp.server import close_server, create_server
+
+_SCAG_ADDON_ID = (
+    "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a.addon"
+)
+_SCAG_RULE_ID = _SCAG_ADDON_ID.removesuffix(".addon")
+_CITY_WATCH_ID = f"{_SCAG_RULE_ID}.background.city-watch"
+_TORTLE_ADDON_ID = "dnd5e.addon.rulebook.d-d-5e-the-tortle-package.e3234de670da.addon"
+_TORTLE_RULE_ID = _TORTLE_ADDON_ID.removesuffix(".addon")
+_TORTLE_ID = f"{_TORTLE_RULE_ID}.species.tortle"
 
 
 async def _call(server: Any, name: str, arguments: dict[str, Any]) -> Any:
@@ -44,6 +57,56 @@ def _config(
         auto_seed_rules=False,
         rule_import_roots=rule_import_roots,
     )
+
+
+def _locked_official_library() -> Path:
+    raw = os.environ.get("SAGASMITH_DND_TEST_OFFICIAL_CONTENT_LIBRARY")
+    if not raw:
+        pytest.skip(
+            "set SAGASMITH_DND_TEST_OFFICIAL_CONTENT_LIBRARY to the checkout at "
+            "the official lock source commit"
+        )
+    library = Path(raw).expanduser().resolve()
+    report = verify_official_expansion_library(library)
+    assert report["verified"] is True
+    return library
+
+
+async def _selection_for(
+    server: Any,
+    campaign_id: str,
+    artifact_id: str,
+) -> dict[str, Any]:
+    entries = await _call(
+        server,
+        "character_query",
+        {
+            "view": "catalog",
+            "payload": {"campaign_id": campaign_id, "query": artifact_id},
+        },
+    )
+    entry = next(item for item in entries if item.get("id") == artifact_id)
+    requirements = dict(entry.get("selection_requirements") or {})
+    selection: dict[str, Any] = {}
+    for key, count_key, options_key in (
+        ("skills", "skill_choice_count", "skill_options"),
+        ("tools", "tool_choice_count", "tool_options"),
+        ("languages", "language_count", "language_options"),
+    ):
+        count = int(requirements.get(count_key, 0) or 0)
+        if count:
+            options = list(requirements.get(options_key) or [])
+            if key == "languages" and len(options) < count:
+                options.extend(
+                    value
+                    for value in ("Draconic", "Dwarvish", "Elvish")
+                    if value not in options
+                )
+            selection[key] = options[:count]
+    equipment = list(requirements.get("equipment_package_options") or [])
+    if equipment:
+        selection["equipment_package"] = equipment[0]
+    return selection
 
 
 def _official_2014_addon_archive(tmp_path: Path) -> tuple[dict[str, Any], Path, str]:
@@ -386,3 +449,145 @@ def test_official_expansion_lock_matches_seeded_core_content(tmp_path: Path) -> 
         if rebind["dependency_id"] == CORE_CONTENT_PACK_ID
         and rebind["runtime_version"] == CORE_CONTENT_PACK_VERSION
     } == {installed_checksum}
+
+
+@pytest.mark.fresh_database
+def test_locked_scag_and_tortle_activate_exact_dependency_closure_apply_and_restart(
+    tmp_path: Path,
+) -> None:
+    library = _locked_official_library()
+    repository_root = Path(__file__).resolve().parents[3]
+    config = McpConfig(
+        home=tmp_path / "home",
+        database_url=None,
+        chroma_url=None,
+        chroma_path_override=None,
+        dnd_skills_dir=repository_root / "skills",
+        modulegen_skills_dir=tmp_path / "modulegen-skills",
+        auto_seed_rules=True,
+        official_content_library=library,
+    )
+    locked = {item["id"]: item for item in load_official_expansion_lock()["packages"]}
+
+    async def exercise() -> None:
+        server = create_server(config)
+        try:
+            campaign = await _call(
+                server,
+                "campaign_create",
+                {
+                    "name": "Official dependency closure",
+                    "edition": "2014",
+                    "idempotency_key": "official-closure-campaign",
+                },
+            )
+            profile = await _call(
+                server,
+                "campaign_rules",
+                {"campaign_id": campaign["id"], "action": "get_profile"},
+            )
+            scag = await _call(
+                server,
+                "content_pack",
+                {
+                    "action": "activate",
+                    "payload": {
+                        "campaign_id": campaign["id"],
+                        "kind": "addon",
+                        "addon_id": _SCAG_ADDON_ID,
+                        "version": locked[_SCAG_ADDON_ID]["version"],
+                    },
+                    "expected_revision": profile["campaign_revision"],
+                    "idempotency_key": "activate-locked-scag",
+                },
+            )
+            assert {
+                item["pack_id"] for item in scag["effective_ruleset"]["lock"]
+            } == {CORE_CONTENT_PACK_ID, _SCAG_RULE_ID}
+
+            current_campaign = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            tortle = await _call(
+                server,
+                "content_pack",
+                {
+                    "action": "activate",
+                    "payload": {
+                        "campaign_id": campaign["id"],
+                        "kind": "addon",
+                        "addon_id": _TORTLE_ADDON_ID,
+                        "version": locked[_TORTLE_ADDON_ID]["version"],
+                    },
+                    "expected_revision": current_campaign["revision"],
+                    "idempotency_key": "activate-locked-tortle",
+                },
+            )
+            expected_lock = {CORE_CONTENT_PACK_ID, _SCAG_RULE_ID, _TORTLE_RULE_ID}
+            assert {
+                item["pack_id"] for item in tortle["effective_ruleset"]["lock"]
+            } == expected_lock
+
+            sheet = default_character_sheet()
+            sheet["edition"] = "2014"
+            character = await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "direct",
+                    "payload": {
+                        "campaign_id": campaign["id"],
+                        "name": "Locked expansion character",
+                        "sheet": sheet,
+                    },
+                    "idempotency_key": "official-closure-character",
+                },
+            )
+            for index, artifact_id in enumerate((_CITY_WATCH_ID, _TORTLE_ID)):
+                applied = await _call(
+                    server,
+                    "character_content_apply",
+                    {
+                        "character_id": character["id"],
+                        "artifact_id": artifact_id,
+                        "selection": await _selection_for(
+                            server,
+                            campaign["id"],
+                            artifact_id,
+                        ),
+                        "expected_revision": character["revision"],
+                        "idempotency_key": f"apply-locked-official-{index}",
+                    },
+                )
+                character = applied
+            assert character["sheet"]["progression"]["background"] == "City Watch"
+            assert character["sheet"]["progression"]["species"] == "Tortle"
+            character_id = character["id"]
+            campaign_id = campaign["id"]
+        finally:
+            close_server(server)
+
+        restarted = create_server(config)
+        try:
+            profile = await _call(
+                restarted,
+                "campaign_rules",
+                {"campaign_id": campaign_id, "action": "get_profile"},
+            )
+            assert {item["pack_id"] for item in profile["effective"]["lock"]} == expected_lock
+            restored = await _call(
+                restarted,
+                "character_query",
+                {"view": "get", "payload": {"character_id": character_id}},
+            )
+            assert restored["sheet"]["progression"]["background"] == "City Watch"
+            assert restored["sheet"]["progression"]["species"] == "Tortle"
+            assert {
+                item["artifact_id"] for item in restored["sheet"]["content"]["selections"]
+            } >= {_CITY_WATCH_ID, _TORTLE_ID}
+        finally:
+            close_server(restarted)
+
+    asyncio.run(exercise())
