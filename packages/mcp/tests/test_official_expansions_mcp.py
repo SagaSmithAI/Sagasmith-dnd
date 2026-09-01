@@ -183,6 +183,113 @@ def _official_2014_addon_archive(tmp_path: Path) -> tuple[dict[str, Any], Path, 
     return package, archive_path, hashlib.sha256(archive).hexdigest()
 
 
+@pytest.mark.parametrize(
+    ("initial_rank", "expected_rank"),
+    [
+        ("none", "proficient"),
+        ("half", "proficient"),
+        ("proficient", "proficient"),
+        ("expertise", "expertise"),
+    ],
+)
+def test_fixed_species_skill_proficiency_uses_rank_max(
+    initial_rank: str,
+    expected_rank: str,
+) -> None:
+    sheet = default_character_sheet()
+    sheet["skills"]["survival"]["proficiency"] = initial_rank
+
+    server_module._apply_fixed_skill_proficiency(sheet, "survival", source="species")
+
+    assert sheet["skills"]["survival"]["proficiency"] == expected_rank
+
+
+def test_fixed_species_skill_proficiency_survives_restart_and_actual_check(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+
+    async def exercise() -> None:
+        server = create_server(config)
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {
+                "name": "Fixed species skill proficiency",
+                "edition": "2014",
+                "idempotency_key": "campaign",
+            },
+        )
+        sheet = default_character_sheet()
+        server_module._apply_fixed_skill_proficiency(sheet, "survival", source="species")
+        assert sheet["skills"]["survival"]["proficiency"] == "proficient"
+        sheet["skills"]["survival"]["proficiency"] = "expertise"
+        server_module._apply_fixed_skill_proficiency(sheet, "survival", source="species")
+        assert sheet["skills"]["survival"]["proficiency"] == "expertise"
+        character = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": "Expert survivalist",
+                    "sheet": sheet,
+                },
+                "idempotency_key": "character",
+            },
+        )
+        close_server(server)
+
+        restarted = create_server(config)
+        restored = await _call(
+            restarted,
+            "character_query",
+            {"view": "get", "payload": {"character_id": character["id"]}},
+        )
+        assert restored["sheet"]["skills"]["survival"]["proficiency"] == "expertise"
+        assert restored["derived"]["skills"]["survival"] == 4
+        campaign_state = await _call(
+            restarted,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        phase = await _call(
+            restarted,
+            "game_phase",
+            {
+                "campaign_id": campaign["id"],
+                "action": "set",
+                "tool_profile": "play",
+                "expected_revision": campaign_state["revision"],
+                "idempotency_key": "enter-play",
+            },
+        )
+        checked = await _call(
+            restarted,
+            "character_check",
+            {
+                "campaign_id": campaign["id"],
+                "action": "check",
+                "payload": {
+                    "actor_id": character["id"],
+                    "kind": "check",
+                    "ability": "survival",
+                    "dc": 10,
+                },
+                "expected_revision": phase["campaign_revision"],
+                "idempotency_key": "survival-check",
+            },
+        )
+        assert checked["ability_modifier"] == 0
+        assert checked["proficiency_bonus"] == 2
+        assert checked["bonus"] == 2
+        assert checked["total"] - checked["natural"] == 4
+        close_server(restarted)
+
+    asyncio.run(exercise())
+
+
 def test_official_expansion_registry_is_core_visible_but_unmounted_by_default(
     tmp_path: Path,
 ) -> None:
@@ -483,6 +590,8 @@ def test_finalized_tortle_archive_settles_natural_armor_end_to_end(
             },
         )
         assert activated["activation"]["enabled"] is True
+        tortle_sheet = default_character_sheet()
+        tortle_sheet["skills"]["survival"]["proficiency"] = "expertise"
         character = await _call(
             server,
             "character_create_from",
@@ -491,7 +600,7 @@ def test_finalized_tortle_archive_settles_natural_armor_end_to_end(
                 "payload": {
                     "campaign_id": campaign["id"],
                     "name": "Tortle",
-                    "sheet": default_character_sheet(),
+                    "sheet": tortle_sheet,
                 },
                 "idempotency_key": "character",
             },
@@ -601,6 +710,8 @@ def test_finalized_tortle_archive_settles_natural_armor_end_to_end(
                 "idempotency_key": "apply-tortle",
             },
         )
+        assert applied["sheet"]["skills"]["survival"]["proficiency"] == "expertise"
+        assert applied["derived"]["skills"]["survival"] == 4
         authority_secret = (config.home / "data" / ".content-authority-key").read_bytes()
         trusted_authorities = _verified_content_authority_ids(
             applied["sheet"],
@@ -764,6 +875,8 @@ def test_finalized_tortle_archive_settles_natural_armor_end_to_end(
             {"view": "get", "payload": {"character_id": character["id"]}},
         )
         assert restored["derived"]["armor_class"] == 19
+        assert restored["sheet"]["skills"]["survival"]["proficiency"] == "expertise"
+        assert restored["derived"]["skills"]["survival"] == 4
         campaign_state = await _call(
             restarted,
             "campaign_query",
@@ -779,6 +892,31 @@ def test_finalized_tortle_archive_settles_natural_armor_end_to_end(
                 "expected_revision": campaign_state["revision"],
                 "idempotency_key": "enter-play",
             },
+        )
+        checked = await _call(
+            restarted,
+            "character_check",
+            {
+                "campaign_id": campaign["id"],
+                "action": "check",
+                "payload": {
+                    "actor_id": character["id"],
+                    "kind": "check",
+                    "ability": "survival",
+                    "dc": 10,
+                },
+                "expected_revision": phase["campaign_revision"],
+                "idempotency_key": "survival-check",
+            },
+        )
+        assert checked["ability_modifier"] == 0
+        assert checked["proficiency_bonus"] == 2
+        assert checked["bonus"] == 2
+        assert checked["total"] - checked["natural"] == 4
+        campaign_after_check = await _call(
+            restarted,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
         )
         started = await _call(
             restarted,
@@ -802,7 +940,7 @@ def test_finalized_tortle_archive_settles_natural_armor_end_to_end(
                         "disposition": "friendly",
                     },
                 ],
-                "expected_revision": phase["campaign_revision"],
+                "expected_revision": campaign_after_check["revision"],
                 "idempotency_key": "combat-start",
             },
         )

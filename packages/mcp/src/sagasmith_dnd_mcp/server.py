@@ -2832,6 +2832,14 @@ def _apply_skill_proficiency_or_expertise(sheet: dict[str, Any], proficiencies: 
         skill["proficiency"] = "proficient" if skill.get("proficiency") == "none" else "expertise"
 
 
+def _apply_fixed_skill_proficiency(sheet: dict[str, Any], skill_name: str, *, source: str) -> None:
+    skill = sheet["skills"].get(skill_name)
+    if skill is None:
+        raise ValueError(f"{source} references an unknown skill: {skill_name}")
+    if skill.get("proficiency") in {"none", "half"}:
+        skill["proficiency"] = "proficient"
+
+
 def _materialize_feature_proficiency_groups(
     sheet: dict[str, Any], *, value: Any, groups: Any
 ) -> dict[str, list[str]]:
@@ -41893,9 +41901,7 @@ def _create_server(
                 )
             )
             for skill in all_skills:
-                if skill not in sheet["skills"]:
-                    raise ValueError(f"species references an unknown skill: {skill}")
-                sheet["skills"][skill]["proficiency"] = "proficient"
+                _apply_fixed_skill_proficiency(sheet, skill, source="species")
             proficiencies = sheet["traits"]["proficiencies"]
             proficiencies["armor"] = list(dict.fromkeys([*proficiencies["armor"], *all_armor]))
             proficiencies["weapons"] = list(
