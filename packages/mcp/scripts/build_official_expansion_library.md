@@ -16,7 +16,8 @@ python packages/mcp/scripts/build_official_expansion_library.py \
 
 The supplied canonical library must contain the exact eleven locally supplied
 inputs (ten expansions and the PHB dependency). The builder applies subclass
-grants, Artificer ASI and context repairs in the pinned order; six unaffected
+grants, Artificer ASI, context, and the exact-hash-bound Steel Defender
+citation repair in the pinned order; six unaffected
 packages retain their original bytes. Output archive hashes, package identities,
 inner definition checksums and catalog counts must match the shipped lock.
 The builder performs default-lock library verification before writing

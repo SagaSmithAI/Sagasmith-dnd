@@ -15,6 +15,7 @@ from pathlib import Path
 
 import repair_artificer_asi
 import repair_artificer_context
+import repair_steel_defender_citation
 import repair_subclass_grants
 from sagasmith_core.content_pack import loads_content_archive
 from sagasmith_dnd.official_expansions import (
@@ -27,6 +28,7 @@ _STEPS = {
     "subclass_grants": repair_subclass_grants.repair_archive,
     "artificer_asi": repair_artificer_asi.repair_archive,
     "artificer_context": repair_artificer_context.repair_archive,
+    "steel_defender_citation": repair_steel_defender_citation.repair_archive,
 }
 
 

@@ -5476,6 +5476,41 @@ def test_direct_import_resolution_persists_source_bound_agent_clause() -> None:
     assert validate_selection_ready_artifacts(artifacts) == []
 
 
+def test_direct_import_resolution_prefers_statblock_evidence_over_leading_context() -> None:
+    candidate = {
+        "id": "candidate:steel-defender",
+        "kind": "statblock",
+        "name": "Steel Defender",
+        "source_chunk_ids": ["chunk:artificer-table", "chunk:steel-defender"],
+        "mechanical_scope": "mechanical",
+        "artifact": {
+            "kind": "statblock",
+            "application_state": "catalog_only",
+            "mechanical_scope": "mechanical",
+            "card": {"name": "Steel Defender"},
+        },
+    }
+    resolved = artifact_with_direct_resolution(
+        candidate,
+        citation_source="rule-source:example-eberron",
+        source_chunks_by_id={
+            "chunk:artificer-table": (
+                "Artificer Level Spell Steel Defender appears in the class table."
+            ),
+            "chunk:steel-defender": (
+                "STEEL DEFENDER\n\n**Armor Class** 15 (natural armor)\n\n"
+                "**Hit Points** equal the steel defender's Constitution modifier + "
+                "your Intelligence modifier + five times your level in this class\n\n"
+                "***Might of the Master.*** The defender's bonuses increase with PB."
+            ),
+        },
+    )
+    citation = resolved["rule_clauses"][0]["source_citations"][0]
+    assert citation["source_ref"] == {"chunk_id": "chunk:steel-defender"}
+    assert "Armor Class" in citation["source_excerpt"]
+    assert "Might of the Master" in citation["source_excerpt"]
+
+
 def test_direct_import_resolution_repairs_reviewed_exact_source_excerpt() -> None:
     candidate = {
         "id": "candidate:reviewed-transcription",

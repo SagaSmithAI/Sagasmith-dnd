@@ -79,6 +79,26 @@ def test_shipped_recipes_are_executable_and_explicitly_local():
         assert all(step in builder._STEPS for step in recipe["steps"])
 
 
+def test_steel_defender_repair_is_last_and_exact_hash_bound():
+    lock = load_official_expansion_lock()
+    target = next(
+        package
+        for package in lock["packages"]
+        if package["publication_id"] == "erlw2014"
+    )
+    assert target["local_repair"]["steps"][-1] == "steel_defender_citation"
+    recipe = next(iter(builder.repair_steel_defender_citation._RECIPES.values()))
+    assert recipe["version"] == target["version"]
+    assert recipe["definition_version"] == "1.0.2-local.steel-defender-citation.1"
+    assert [
+        evidence["chunk_key"].split("/section-", 1)[1].split("/", 1)[0]
+        for evidence in recipe["evidence"]
+    ] == ["393", "398", "399", "400"]
+    assert all(len(evidence["chunk_sha256"]) == 64 for evidence in recipe["evidence"])
+    with pytest.raises(ValueError, match="exact reviewed"):
+        builder.repair_steel_defender_citation.repair_archive(b"wrong archive")
+
+
 @pytest.mark.parametrize("relative", ["../outside.pack", "missing.pack"])
 def test_source_archive_must_exist_inside_library(tmp_path, relative):
     source = tmp_path / "library"

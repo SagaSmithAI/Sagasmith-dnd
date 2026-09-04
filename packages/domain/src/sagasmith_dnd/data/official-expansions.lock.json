@@ -155,10 +155,10 @@
   "packages": [
     {
       "id": "dnd5e.addon.rulebook.d-d-5e-eberron-rising-from-the-last-war.31293633134f.addon",
-      "version": "1.0.3-local.artificer-context.1",
-      "checksum": "6bfa9168a6ca1cfac95d2e4c29e6b38b75eb2a9ee1ae4e673b10132f5b4b45c7",
-      "archive_sha256": "17d673579776c31f58ac412753676d8a9c811f950d763ed4230cebfc36ca25b3",
-      "local_repair": {"source_archive_sha256": "19ae3b071dfd25f0133c6159190e62fe4ae480299611e8ee8893106053c5038b", "steps": ["subclass_grants", "artificer_asi", "artificer_context"]},
+      "version": "1.0.4-local.steel-defender-citation.1",
+      "checksum": "0c51e3fb27dfd205df70a63244b969c3bcf8299d92d1ed22f8c2bbb9656fb64d",
+      "archive_sha256": "6c045a44eba3e231d4e65897c1617f6543df7f85f5ceaa16e008c69dd01d2f09",
+      "local_repair": {"source_archive_sha256": "19ae3b071dfd25f0133c6159190e62fe4ae480299611e8ee8893106053c5038b", "steps": ["subclass_grants", "artificer_asi", "artificer_context", "steel_defender_citation"]},
       "publication_id": "erlw2014",
       "title": "D&D 5E - Eberron - Rising from the Last War",
       "classification": "official_supplement",
