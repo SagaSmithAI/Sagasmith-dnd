@@ -258,3 +258,39 @@ def test_background_owner_roundtrip_restores_original_item_id_after_collision() 
         "equipment_item_ids"
     ] == [item_id]
     assert returned["sheets"]["owner"]["inventory"]["external_items"] == []
+
+
+def test_owner_pickup_preserves_three_item_attunement_capacity() -> None:
+    owner = validate_character_sheet({})
+    owner, item_id = add_inventory_item(owner, _weapon("bonded", attunement="attuned"))
+    owner = equip_inventory_item(owner, item_id, "main_hand")
+    owner["inventory"]["external_items"] = [
+        {
+            "id": f"external-{index}",
+            "name": f"External {index}",
+            "attunement": "attuned",
+            "location": {"kind": "actor", "actor_id": "other", "item_id": f"external-{index}"},
+        }
+        for index in (1, 2)
+    ]
+    owner = validate_character_sheet(owner)
+    dropped = drop_held_items(
+        {"owner": owner},
+        [],
+        "owner",
+        record_ids={item_id: "ground-capacity"},
+        scene_id=None,
+        encounter_id=None,
+        campaign_revision=1,
+        location=_location(),
+    )
+    restored = pickup_ground_item(
+        {"owner": dropped["sheets"]["owner"]},
+        dropped["ground_items"],
+        "owner",
+        "ground-capacity",
+    )
+
+    carried = restored["sheets"]["owner"]["inventory"]
+    assert sum(item["attunement"] == "attuned" for item in carried["items"]) == 1
+    assert sum(item["attunement"] == "attuned" for item in carried["external_items"]) == 2
