@@ -31,6 +31,7 @@ from sagasmith_dnd.standard_spell_ids import (
     CORE_FLY_MECHANIC_ID,
     CORE_HYPNOTIC_PATTERN_MECHANIC_ID,
     CORE_INVISIBILITY_MECHANIC_ID,
+    CORE_SLEEP_MECHANIC_ID,
 )
 
 PACK_ID = "dnd5e.content.srd2014"
@@ -176,6 +177,8 @@ def _spells(folder: Path, spell_classes: dict[str, list[str]]) -> list[dict[str,
             mechanic_refs.append("dnd5e.core.spell.raise_dead")
         elif _name_key(name) == "hypnotic-pattern":
             mechanic_refs.append(CORE_HYPNOTIC_PATTERN_MECHANIC_ID)
+        elif _name_key(name) == "sleep":
+            mechanic_refs.append(CORE_SLEEP_MECHANIC_ID)
         if mechanic_refs:
             card["mechanic_refs"] = mechanic_refs
         if resolution is None and not mechanic_refs:

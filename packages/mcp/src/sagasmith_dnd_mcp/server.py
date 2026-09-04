@@ -418,6 +418,7 @@ from sagasmith_dnd.rule_engine import (
     validate_source_bound_mechanics,
 )
 from sagasmith_dnd.rule_providers import load_native_rule_providers
+from sagasmith_dnd.sleep import resolve_sleep_targets
 from sagasmith_dnd.spatial import (
     BattleMapError,
     compile_battle_map,
@@ -470,6 +471,10 @@ from sagasmith_dnd.standard_content import (
     build_standard2014_content,
 )
 from sagasmith_dnd.standard_feature_ids import (
+    CORE_DWARVEN_RESILIENCE_MECHANIC_ID,
+    CORE_FEY_ANCESTRY_MECHANIC_ID,
+    CORE_GNOME_CUNNING_MECHANIC_ID,
+    CORE_HALFLING_BRAVE_MECHANIC_ID,
     CORE_ORC_AGGRESSIVE_MECHANIC_ID,
     CORE_RELENTLESS_ENDURANCE_MECHANIC_ID,
     CORE_TORTLE_NATURAL_ARMOR_MECHANIC_ID,
@@ -492,6 +497,8 @@ from sagasmith_dnd.standard_spell_ids import (
     CORE_HYPNOTIC_PATTERN_SPELL_IDS,
     CORE_INVISIBILITY_MECHANIC_ID,
     CORE_INVISIBILITY_SPELL_IDS,
+    CORE_SLEEP_MECHANIC_ID,
+    CORE_SLEEP_SPELL_ID,
     CORE_WITCH_BOLT_MECHANIC_ID,
     STANDARD_2014_CONTENT_PACK_ID,
     STANDARD_2014_CONTENT_PACK_VERSION,
@@ -1065,6 +1072,10 @@ ENGINE_SETTLED_CARD_MECHANIC_IDS = frozenset(
         "dnd5e.core.item.healing_potion",
         CORE_RELENTLESS_ENDURANCE_MECHANIC_ID,
         CORE_WATCHERS_EYE_MECHANIC_ID,
+        CORE_DWARVEN_RESILIENCE_MECHANIC_ID,
+        CORE_FEY_ANCESTRY_MECHANIC_ID,
+        CORE_GNOME_CUNNING_MECHANIC_ID,
+        CORE_HALFLING_BRAVE_MECHANIC_ID,
         "dnd5e.core.magic_ammunition.slaying",
         CORE_BLADE_WARD_MECHANIC_ID,
         CORE_FLY_MECHANIC_ID,
@@ -1073,6 +1084,7 @@ ENGINE_SETTLED_CARD_MECHANIC_IDS = frozenset(
         "dnd5e.core.spell.raise_dead",
         "dnd5e.core.spell.shield",
         "dnd5e.core.spell.structured_resolution",
+        CORE_SLEEP_MECHANIC_ID,
         CORE_WITCH_BOLT_MECHANIC_ID,
     }
 )
@@ -21431,6 +21443,10 @@ def _create_server(
         fly = is_core_fly_spell(spell_entry)
         invisibility = is_core_invisibility_spell(spell_entry)
         hypnotic_pattern = is_core_hypnotic_pattern_spell(spell_entry)
+        sleep = (
+            spell_entry.get("id") == CORE_SLEEP_SPELL_ID
+            and CORE_SLEEP_MECHANIC_ID in spell_entry.get("mechanic_refs", [])
+        )
         structured_resolution = (
             (
                 deepcopy(dict(spell_entry["resolution"]))
@@ -21467,6 +21483,7 @@ def _create_server(
                 or fly
                 or invisibility
                 or hypnotic_pattern
+                or sleep
             ):
                 raise CombatEngineError(
                     "a spell card cannot combine a semantic plan with another "
@@ -21489,6 +21506,8 @@ def _create_server(
                 "Hypnotic Pattern cannot combine its Core mechanic with "
                 "structured damage resolution"
             )
+        if sleep and structured_resolution is not None:
+            raise CombatEngineError("Sleep cannot combine its Core mechanic with damage resolution")
         semantic_plan_commitment: dict[str, Any] | None = None
         if compiled_spell_plan is not None:
             if "agent_resolution_commitment" not in dict(declaration or {}):
@@ -21526,6 +21545,7 @@ def _create_server(
             and structured_resolution is None
             and compiled_spell_plan is None
             and not hypnotic_pattern
+            and not sleep
             and str(
                 spell_entry.get("effect")
                 or dict(spell_entry.get("definition") or {}).get("effect")
@@ -21639,6 +21659,7 @@ def _create_server(
         fly_target: dict[str, Any] | None = None
         invisibility_target: dict[str, Any] | None = None
         hypnotic_pattern_target: dict[str, Any] | None = None
+        sleep_target: dict[str, Any] | None = None
         if fly:
             if source_item_id is not None or spell_id not in CORE_FLY_SPELL_IDS:
                 raise CombatEngineError("the Core Fly path requires its exact actor spell card")
@@ -21776,6 +21797,22 @@ def _create_server(
                 encounter,
                 caster_id=actor_id,
                 spell=spell_entry,
+                declaration=declaration,
+            )
+        if sleep:
+            if str(encounter.get("ruleset") or "") != "2014":
+                raise CombatEngineError("the source-bound Sleep mechanic is a 2014 rule")
+            if str(encounter.get("positioning_mode") or "grid") == "agent":
+                raise NeedsRulingError(
+                    "Sleep requires a reviewed 20-foot area and 90-foot origin-range decision",
+                    missing=("sleep.spatial_facts",),
+                    ruling_kind="agent_dm_adjudication",
+                )
+            sleep_target = normalize_area_declaration(
+                encounter,
+                source_id=actor_id,
+                area={"shape": "sphere", "radius_ft": 20},
+                origin_range_ft=90,
                 declaration=declaration,
             )
         if structured_resolution is not None:
@@ -22220,6 +22257,83 @@ def _create_server(
                         "combat.spell.invisibility",
                     ),
                 ],
+            )
+            return combat_response(campaign_id, principal_id, response)
+        if sleep:
+            assert sleep_target is not None
+            if not 1 <= resolved_cast_level <= 9:
+                raise CombatEngineError("Sleep cast level must be between 1 and 9")
+            pool_roll = asdict(roll(f"{5 + 2 * (resolved_cast_level - 1)}d8"))
+            final_sheets: dict[str, dict[str, Any]] = {actor_id: deepcopy(applied["sheet"])}
+            targets: list[dict[str, Any]] = []
+            for target_context in sleep_target["targets"]:
+                target_id = str(target_context["target_id"])
+                target_actor = combat_actor_snapshot(target_id)
+                if target_id == actor_id:
+                    target_actor["sheet"] = deepcopy(applied["sheet"])
+                targets.append(target_actor)
+            settled_sleep = resolve_sleep_targets(
+                targets,
+                pool=int(pool_roll["total"]),
+                source_actor_id=actor_id,
+                source_spell_id=spell_id,
+                source_rule_refs=spell_entry.get("rule_refs", []),
+                ruleset="2014",
+            )
+            final_sheets.update(settled_sleep["sheets"])
+            for target_id, target_sheet in final_sheets.items():
+                sync_combatant_conditions(next_encounter, target_id, target_sheet)
+                reconcile_readied_spells(next_encounter, target_id, target_sheet)
+                reconcile_actor_witch_bolt_concentration(next_encounter, target_id, target_sheet)
+            resolution_receipts = [
+                *list(applied.get("rule_receipts") or []),
+                *core_receipts(
+                    rules,
+                    [CORE_SLEEP_MECHANIC_ID, "dnd5e.core.mcp.combat_spell_boundary"],
+                    "combat.spell.sleep",
+                ),
+            ]
+            for target_result in settled_sleep["targets"]:
+                if target_result["skip_reason"] == "immune_to_magical_sleep":
+                    target_result["rule_receipts"] = core_receipts(
+                        rules, [CORE_FEY_ANCESTRY_MECHANIC_ID], "combat.spell.sleep.immunity"
+                    )
+                    resolution_receipts.extend(target_result["rule_receipts"])
+            result = {
+                "kind": "sleep",
+                "spell_id": spell_id,
+                "cast_level": resolved_cast_level,
+                "pool_roll": pool_roll,
+                "pool_remaining": settled_sleep["pool_remaining"],
+                "area": sleep_target,
+                "targets": settled_sleep["targets"],
+                "payment": deepcopy(applied.get("payment") or {}),
+            }
+            next_encounter["log"] = [
+                *list(next_encounter.get("log") or []),
+                {"type": "sleep", "actor_id": actor_id, "result": deepcopy(result)},
+            ][-100:]
+            response = commit_campaign_state(
+                campaign,
+                {**dict(campaign.state or {}), "combat": next_encounter},
+                operation="combat.spell.sleep",
+                principal_id=principal_id,
+                branch_id=resolved_branch_id,
+                idempotency_key=idempotency_key,
+                scope=scope,
+                payload=payload,
+                response_fields={"status": "committed", "result": result, "combat": next_encounter},
+                character_updates=[
+                    CharacterStateUpdate(
+                        character_id=target_id,
+                        sheet=validate_character_sheet(target_sheet),
+                        notes=validate_character_notes(characters.get(target_id).notes),
+                        expected_revision=characters.get(target_id).revision,
+                    )
+                    for target_id, target_sheet in final_sheets.items()
+                    if target_sheet != characters.get(target_id).sheet
+                ],
+                rule_receipts=resolution_receipts,
             )
             return combat_response(campaign_id, principal_id, response)
         if hypnotic_pattern:
