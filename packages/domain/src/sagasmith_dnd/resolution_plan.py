@@ -563,7 +563,7 @@ def compile_resolution_plan(value: dict[str, Any]) -> CompiledResolutionPlan:
         if step["op"] != "check.save":
             continue
         try:
-            save_context = validated_save_source_facts(
+            validated_save_source_facts(
                 step["args"].get("source"),
                 citations=citations,
                 source_card_kind=source_card_kind,
@@ -572,8 +572,6 @@ def compile_resolution_plan(value: dict[str, Any]) -> CompiledResolutionPlan:
             raise ResolutionPlanCompilationError(
                 f"plan step {step['id']} source: {error}"
             ) from error
-        if save_context:
-            step["save_context"] = save_context
     canonical = {
         "schema_version": schema_version,
         "id": plan_id,

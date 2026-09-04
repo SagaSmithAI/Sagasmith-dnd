@@ -37,11 +37,10 @@ _EXPECTED_KEYS = frozenset(
 
 
 def _contains_reference(value: Any) -> bool:
-    if isinstance(value, str):
-        return "$" in value
     if isinstance(value, dict):
         return any(
-            _contains_reference(key) or _contains_reference(item) for key, item in value.items()
+            (isinstance(key, str) and key.startswith("$")) or _contains_reference(item)
+            for key, item in value.items()
         )
     if isinstance(value, list):
         return any(_contains_reference(item) for item in value)
