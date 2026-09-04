@@ -150,7 +150,7 @@ def test_narrative_ticks_settle_the_same_breathing_round_clock() -> None:
 def test_tortle_provenance_gets_the_fixed_one_hour_hold(pack_version: str) -> None:
     sheet = default_character_sheet()
     sheet["edition"] = "2014"
-    source_ref = "rule-source:user.rulebook.d-d-5e-the-tortle-package.e3234de670da#chunk:9"
+    source_ref = "rule-source:user.rulebook.d-d-5e-the-tortle-package.e3234de670#chunk:9"
     sheet["content"]["selections"] = [
         {
             "artifact_id": TORTLE_HOLD_BREATH_ARTIFACT_ID,
@@ -177,6 +177,16 @@ def test_tortle_provenance_gets_the_fixed_one_hour_hold(pack_version: str) -> No
     assert tortle_hold_breath_available(sheet)
     timer = begin_holding_breath(sheet)["effect"]
     assert timer["metadata"]["hold_remaining_rounds"] == 600
+    # Archive identity, rule-definition identity, and indexed-source identity
+    # are distinct. Neither of the previously confused identities is valid.
+    for item in (sheet["content"]["selections"][0], sheet["content"]["features"][0]):
+        original_pack_id = item["pack_id"]
+        item["pack_id"] = f"{original_pack_id}.addon"
+        assert not tortle_hold_breath_available(sheet)
+        item["pack_id"] = original_pack_id
+        item["rule_refs"] = [source_ref.replace("e3234de670#", "e3234de670da#")]
+        assert not tortle_hold_breath_available(sheet)
+        item["rule_refs"] = [source_ref]
     sheet["content"]["features"][0]["pack_version"] = (
         "1.0.1" if pack_version == "1.0.0" else "1.0.0"
     )

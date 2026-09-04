@@ -53,16 +53,14 @@ CORE_ORC_AGGRESSIVE_MECHANIC_ID = "dnd5e.core.activity.orc_aggressive"
 ORC_AGGRESSIVE_ACTIVITY_ID = "aggressive-bonus_action"
 CORE_RELENTLESS_ENDURANCE_MECHANIC_ID = "dnd5e.core.damage.relentless_endurance"
 CORE_SUFFOCATION_MECHANIC_ID = "dnd5e.core.environment.suffocation"
-TORTLE_HOLD_BREATH_LEGACY_PACK_ID = (
-    "dnd5e.addon.rulebook.d-d-5e-the-tortle-package.e3234de670da.addon"
-)
+TORTLE_HOLD_BREATH_LEGACY_PACK_ID = TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID
 # Addon archive 1.0.1 contains the immutable rule definition at version 1.0.0.
 TORTLE_HOLD_BREATH_LEGACY_PACK_VERSIONS = frozenset({"1.0.0", "1.0.1"})
 TORTLE_HOLD_BREATH_ARTIFACT_ID = (
     "dnd5e.addon.rulebook.d-d-5e-the-tortle-package.e3234de670da.species.tortle"
 )
 TORTLE_HOLD_BREATH_FEATURE_ID = f"{TORTLE_HOLD_BREATH_ARTIFACT_ID}.feature.hold-breath"
-TORTLE_HOLD_BREATH_SOURCE_KEY = "user.rulebook.d-d-5e-the-tortle-package.e3234de670da"
+TORTLE_HOLD_BREATH_SOURCE_KEY = TORTLE_NATURAL_ARMOR_SOURCE_KEY
 TORTLE_HOLD_BREATH_SOURCE_RULE_REF_PREFIX = f"rule-source:{TORTLE_HOLD_BREATH_SOURCE_KEY}#chunk:"
 CORE_WATCHERS_EYE_MECHANIC_ID = "dnd5e.core.narrative.watchers_eye"
 
