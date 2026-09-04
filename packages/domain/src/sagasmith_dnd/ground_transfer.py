@@ -7,6 +7,7 @@ must establish those facts before invoking these deterministic transformations.
 from __future__ import annotations
 
 from copy import deepcopy
+from hashlib import sha256
 from typing import Any
 
 from .character_schema import validate_character_sheet
@@ -47,9 +48,6 @@ def _clear_dangling_ammunition(items: list[dict[str, Any]], removed_ids: set[str
         mechanics = item["mechanics"]
         if mechanics.get("ammunition_item_id") in removed_ids:
             mechanics["ammunition_item_id"] = None
-            mechanics["properties"] = [
-                prop for prop in mechanics["properties"] if str(prop).casefold() != "ammunition"
-            ]
 
 
 def _clear_missing_ammunition(items: list[dict[str, Any]]) -> None:
@@ -60,16 +58,10 @@ def _clear_missing_ammunition(items: list[dict[str, Any]]) -> None:
         mechanics = item["mechanics"]
         if mechanics.get("ammunition_item_id") not in available:
             mechanics["ammunition_item_id"] = None
-            mechanics["properties"] = [
-                prop for prop in mechanics["properties"] if str(prop).casefold() != "ammunition"
-            ]
 
 
-def _external_items(sheet: dict[str, Any]) -> list[dict[str, Any]] | None:
-    inventory = sheet.get("inventory")
-    if not isinstance(inventory, dict) or "external_items" not in inventory:
-        return None
-    refs = inventory["external_items"]
+def _external_items(sheet: dict[str, Any]) -> list[dict[str, Any]]:
+    refs = sheet["inventory"]["external_items"]
     if not isinstance(refs, list):
         raise ValueError("inventory.external_items must be a list")
     return refs
@@ -79,21 +71,18 @@ def _update_external_locations(
     sheets: dict[str, dict[str, Any]],
     *,
     source_actor_id: str,
-    item_ids: set[str],
-    location: dict[str, Any],
+    locations: dict[str, dict[str, Any]],
 ) -> None:
     for sheet in sheets.values():
         refs = _external_items(sheet)
-        if refs is None:
-            continue
         for ref in refs:
             old = dict(ref.get("location") or {})
             if (
                 old.get("kind") == "actor"
                 and old.get("actor_id") == source_actor_id
-                and old.get("item_id") in item_ids
+                and old.get("item_id") in locations
             ):
-                ref["location"] = deepcopy(location)
+                ref["location"] = deepcopy(locations[old["item_id"]])
 
 
 def _external_ref(item: dict[str, Any], location: dict[str, Any]) -> dict[str, Any]:
@@ -103,6 +92,17 @@ def _external_ref(item: dict[str, Any], location: dict[str, Any]) -> dict[str, A
         "attunement": item["attunement"],
         "location": deepcopy(location),
     }
+
+
+def _upsert_external_ref(
+    refs: list[dict[str, Any]], item: dict[str, Any], location: dict[str, Any]
+) -> None:
+    replacement = _external_ref(item, location)
+    for index, ref in enumerate(refs):
+        if ref["id"] == item["id"]:
+            refs[index] = replacement
+            return
+    refs.append(replacement)
 
 
 def drop_held_items(
@@ -178,19 +178,25 @@ def drop_held_items(
             effect["source"] = f"actor:{actor_id}"
     for record in dropped:
         refs = _external_items(next_sheets[actor_id])
-        if refs is not None:
-            refs.extend(
-                _external_ref(
-                    item,
-                    {"kind": "ground", "ground_id": record["id"], "item_id": item["id"]},
-                )
-                for item in record["items"]
+        for item in record["items"]:
+            _upsert_external_ref(
+                refs,
+                item,
+                {"kind": "ground", "ground_id": record["id"], "item_id": item["id"]},
             )
+    item_locations = {
+        item["id"]: {
+            "kind": "ground",
+            "ground_id": record["id"],
+            "item_id": item["id"],
+        }
+        for record in dropped
+        for item in record["items"]
+    }
     _update_external_locations(
         next_sheets,
         source_actor_id=actor_id,
-        item_ids=all_removed,
-        location={"kind": "ground", "ground_id": record_ids[roots[0]], "item_id": roots[0]},
+        locations=item_locations,
     )
     result_sheets = {key: validate_character_sheet(value) for key, value in next_sheets.items()}
     result_ground = validate_ground_items(next_records)
@@ -221,26 +227,39 @@ def pickup_ground_item(
     target_items = next_sheets[actor_id]["inventory"]["items"]
     existing = {item["id"] for item in target_items}
     remap: dict[str, str] = {}
+    preferred_ids: dict[str, str] = {}
+    for owner_id, sheet in values.items():
+        for ref in _external_items(sheet):
+            location = dict(ref.get("location") or {})
+            if (
+                owner_id == actor_id
+                and location.get("kind") == "ground"
+                and location.get("ground_id") == ground_id
+            ):
+                preferred_ids[str(location.get("item_id"))] = ref["id"]
     for item in record["items"]:
-        candidate = item["id"]
+        candidate = preferred_ids.get(item["id"], item["id"])
         suffix = 2
         while candidate in existing or candidate in remap.values():
-            candidate = f"{item['id']}~{actor_id}-{suffix}"
+            digest = sha256(f"{actor_id}:{candidate}:{suffix}".encode()).hexdigest()[:12]
+            candidate = f"{candidate[:86]}~{digest}"
             suffix += 1
         remap[item["id"]] = candidate
     moved = deepcopy(record["items"])
     original_ids = [item["id"] for item in moved]
-    attuned_owners: dict[str, str] = {}
+    attuned_owners: dict[str, tuple[str, str]] = {}
+    ground_ref_owners: dict[str, list[tuple[str, dict[str, Any]]]] = {}
     for owner_id, sheet in values.items():
-        refs = _external_items(sheet) or []
+        refs = _external_items(sheet)
         for ref in refs:
             location = dict(ref.get("location") or {})
-            if (
-                ref.get("attunement") == "attuned"
-                and location.get("kind") == "ground"
-                and location.get("ground_id") == ground_id
-            ):
-                attuned_owners[ref["id"]] = owner_id
+            if location.get("kind") == "ground" and location.get("ground_id") == ground_id:
+                item_ref_id = str(location.get("item_id") or "")
+                if item_ref_id:
+                    ground_ref_owners.setdefault(item_ref_id, []).append((owner_id, deepcopy(ref)))
+                    previous = attuned_owners.get(item_ref_id)
+                    if previous is None or ref["attunement"] == "attuned":
+                        attuned_owners[item_ref_id] = (owner_id, ref["attunement"])
     for item in moved:
         old_id = item["id"]
         item["id"] = remap[old_id]
@@ -250,17 +269,16 @@ def pickup_ground_item(
             ammo = item["mechanics"].get("ammunition_item_id")
             if ammo is not None:
                 item["mechanics"]["ammunition_item_id"] = remap.get(ammo, ammo)
-        attuned_owner = attuned_owners.get(old_id, source_actor_id)
-        if item["attunement"] == "attuned" and actor_id != attuned_owner:
-            item["attunement"] = "required"
+        attuned_owner, owner_state = attuned_owners.get(old_id, (source_actor_id, "attuned"))
+        if item["attunement"] == "attuned":
+            item["attunement"] = (
+                "attuned" if actor_id == attuned_owner and owner_state == "attuned" else "required"
+            )
         target_items.append(item)
     _clear_missing_ammunition(target_items)
-    next_sheets[actor_id] = validate_character_sheet(next_sheets[actor_id])
     next_records = [item for item in records if item["id"] != ground_id]
     for owner_id, sheet in next_sheets.items():
         refs = _external_items(sheet)
-        if refs is None:
-            continue
         refs[:] = [
             ref
             for ref in refs
@@ -270,23 +288,31 @@ def pickup_ground_item(
             )
         ]
         for old_id in original_ids:
-            original_item = next(item for item in record["items"] if item["id"] == old_id)
-            if (
-                original_item["attunement"] != "attuned"
-                or attuned_owners.get(old_id, source_actor_id) != owner_id
-            ):
-                continue
-            refs.append(
-                _external_ref(
-                    original_item,
-                    {"kind": "actor", "actor_id": actor_id, "item_id": remap[old_id]},
-                )
-            )
+            for historical_owner, historical_ref in ground_ref_owners.get(old_id, []):
+                if historical_owner != owner_id or historical_owner == actor_id:
+                    continue
+                replacement = deepcopy(historical_ref)
+                replacement["location"] = {
+                    "kind": "actor",
+                    "actor_id": actor_id,
+                    "item_id": remap[old_id],
+                }
+                _upsert_external_ref(refs, replacement, replacement["location"])
+    next_sheets[actor_id] = validate_character_sheet(next_sheets[actor_id])
     result_sheets = {key: validate_character_sheet(value) for key, value in next_sheets.items()}
     result_ground = validate_ground_items(next_records)
     if sheets != original_sheets or ground_items != original_ground:
         raise AssertionError("ground transfer mutated its inputs")
-    return {"sheets": result_sheets, "ground_items": result_ground, "picked_up": moved}
+    remapped_root = remap[record["root_item_id"]]
+    return {
+        "sheets": result_sheets,
+        "ground_items": result_ground,
+        "picked_up": {
+            "root_item_id": remapped_root,
+            "items": moved,
+            "id_map": remap,
+        },
+    }
 
 
 __all__ = ["drop_held_items", "pickup_ground_item"]

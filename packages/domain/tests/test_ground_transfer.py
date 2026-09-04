@@ -12,10 +12,16 @@ from sagasmith_dnd.character_schema import (
 from sagasmith_dnd.ground_transfer import drop_held_items, pickup_ground_item
 
 
-def _weapon(item_id: str, *, attunement: str = "none", ammo_id: str | None = None) -> dict:
+def _weapon(
+    item_id: str,
+    *,
+    name: str | None = None,
+    attunement: str = "none",
+    ammo_id: str | None = None,
+) -> dict:
     return {
         "id": item_id,
-        "name": item_id.title(),
+        "name": name or item_id.title(),
         "kind": "weapon",
         "attunement": attunement,
         "mechanics": {
@@ -111,7 +117,7 @@ def test_pickup_preserves_attunement_for_owner_and_requires_it_for_other_actor()
         "other",
         "ground-bonded",
     )
-    assert other_result["picked_up"][0]["attunement"] == "required"
+    assert other_result["picked_up"]["items"][0]["attunement"] == "required"
 
     owner_result = pickup_ground_item(
         {"owner": dropped["sheets"]["owner"]},
@@ -119,7 +125,7 @@ def test_pickup_preserves_attunement_for_owner_and_requires_it_for_other_actor()
         "owner",
         "ground-bonded",
     )
-    assert owner_result["picked_up"][0]["attunement"] == "attuned"
+    assert owner_result["picked_up"]["items"][0]["attunement"] == "attuned"
 
 
 def test_failed_transfer_does_not_mutate_inputs() -> None:
@@ -142,3 +148,113 @@ def test_failed_transfer_does_not_mutate_inputs() -> None:
         )
     assert sheets == before_sheets
     assert ground == before_ground
+
+
+def test_drop_preserves_background_grant_through_external_ground_reference() -> None:
+    sheet = validate_character_sheet({})
+    sheet, item_id = add_inventory_item(sheet, _weapon("background-sword"))
+    sheet["progression"]["background_grants"]["equipment_item_ids"] = [item_id]
+    sheet = validate_character_sheet(equip_inventory_item(sheet, item_id, "main_hand"))
+
+    result = drop_held_items(
+        {"actor": sheet},
+        [],
+        "actor",
+        record_ids={item_id: "ground-background"},
+        scene_id="scene",
+        encounter_id=None,
+        campaign_revision=1,
+        location=_location(),
+    )
+
+    refs = result["sheets"]["actor"]["inventory"]["external_items"]
+    assert refs == [
+        {
+            "id": item_id,
+            "name": "Background-Sword",
+            "attunement": "none",
+            "location": {"kind": "ground", "ground_id": "ground-background", "item_id": item_id},
+        }
+    ]
+    assert result["sheets"]["actor"]["progression"]["background_grants"]["equipment_item_ids"] == [
+        item_id
+    ]
+
+
+def test_pickup_remaps_id_collision_deterministically() -> None:
+    source = validate_character_sheet({})
+    source, item_id = add_inventory_item(source, _weapon("shared"))
+    source = equip_inventory_item(source, item_id, "main_hand")
+    dropped = drop_held_items(
+        {"source": source},
+        [],
+        "source",
+        record_ids={item_id: "ground-shared"},
+        scene_id=None,
+        encounter_id=None,
+        campaign_revision=1,
+        location={"mode": "agent", "anchor_actor_id": "source"},
+    )
+    target = validate_character_sheet({})
+    target, _ = add_inventory_item(target, _weapon("shared", name="Existing"))
+
+    result = pickup_ground_item(
+        {"source": dropped["sheets"]["source"], "target": target},
+        dropped["ground_items"],
+        "target",
+        "ground-shared",
+    )
+
+    remapped = result["picked_up"]["id_map"]["shared"]
+    assert remapped == result["picked_up"]["items"][0]["id"]
+    assert remapped != "shared"
+    assert len(remapped) <= 100
+
+
+def test_background_owner_roundtrip_restores_original_item_id_after_collision() -> None:
+    owner = validate_character_sheet({})
+    owner, item_id = add_inventory_item(owner, _weapon("sword"))
+    owner["progression"]["background_grants"]["equipment_item_ids"] = [item_id]
+    owner = validate_character_sheet(equip_inventory_item(owner, item_id, "main_hand"))
+    first = drop_held_items(
+        {"owner": owner},
+        [],
+        "owner",
+        record_ids={item_id: "ground-first"},
+        scene_id=None,
+        encounter_id=None,
+        campaign_revision=1,
+        location=_location(),
+    )
+    other = validate_character_sheet({})
+    other, _ = add_inventory_item(other, _weapon("sword", name="Other Sword"))
+    picked = pickup_ground_item(
+        {"owner": first["sheets"]["owner"], "other": other},
+        first["ground_items"],
+        "other",
+        "ground-first",
+    )
+    incoming_id = picked["picked_up"]["root_item_id"]
+    other_after = equip_inventory_item(picked["sheets"]["other"], incoming_id, "main_hand")
+    second = drop_held_items(
+        {"owner": picked["sheets"]["owner"], "other": other_after},
+        picked["ground_items"],
+        "other",
+        record_ids={incoming_id: "ground-return"},
+        scene_id=None,
+        encounter_id=None,
+        campaign_revision=2,
+        location=_location(),
+    )
+    returned = pickup_ground_item(
+        {"owner": second["sheets"]["owner"]},
+        second["ground_items"],
+        "owner",
+        "ground-return",
+    )
+
+    assert returned["picked_up"]["root_item_id"] == item_id
+    assert returned["sheets"]["owner"]["progression"]["background_grants"][
+        "equipment_item_ids"
+    ] == [item_id]
+    assert returned["sheets"]["owner"]["inventory"]["external_items"] == []
