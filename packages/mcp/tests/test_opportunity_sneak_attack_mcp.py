@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 from sagasmith_dnd.character_schema import default_character_sheet
+from sagasmith_dnd.spells import CORE_SHIELD_MECHANIC_ID, CORE_SHIELD_SPELL_ID
 
 import sagasmith_dnd_mcp.server as server_module
 from sagasmith_dnd_mcp.config import McpConfig
@@ -108,12 +109,42 @@ def test_opportunity_sneak_attack_uses_trigger_snapshot_and_reaction_only(
                     "idempotency_key": "ally",
                 },
             )
+            mover_sheet = default_character_sheet()
+            mover_sheet["combat"]["hp"] = {"value": 20, "max": 20, "temp": 0}
+            mover_sheet["spellcasting"]["spell_slots"] = {
+                "1": {
+                    "label": "1st",
+                    "value": 1,
+                    "max": 1,
+                    "recovers_on": "long_rest",
+                    "source_key": "wizard",
+                }
+            }
+            mover_sheet["content"]["spells"] = [
+                {
+                    "id": CORE_SHIELD_SPELL_ID,
+                    "name": "Shield",
+                    "level": 1,
+                    "grant": {"source_type": "class", "source_key": "wizard", "method": "known"},
+                    "access": {"known": True, "prepared": True},
+                    "definition": {
+                        "casting_time": "1 reaction, which you take when hit by an attack",
+                        "duration": {"kind": "timed", "value": 1, "unit": "round", "concentration": False},
+                        "components": {"verbal": True, "somatic": True},
+                    },
+                    "mechanic_refs": [CORE_SHIELD_MECHANIC_ID],
+                }
+            ]
             mover = await _call(
                 server,
                 "character_create_from",
                 {
                     "mode": "direct",
-                    "payload": {"campaign_id": campaign["id"], "name": "Target"},
+                    "payload": {
+                        "campaign_id": campaign["id"],
+                        "name": "Target",
+                        "sheet": mover_sheet,
+                    },
                     "idempotency_key": "target",
                 },
             )
@@ -198,10 +229,49 @@ def test_opportunity_sneak_attack_uses_trigger_snapshot_and_reaction_only(
                 {"campaign_id": campaign["id"], "action": "receipts", "payload": {}},
             )
             resolved = await _raw(server, "combat_reaction_attack", request)
+            assert resolved["status"] == "pending_reaction"
+            assert resolved["result"]["damage"] is None
+            defense_choice = (
+                await _call(
+                    server,
+                    "combat_query",
+                    {
+                        "campaign_id": campaign["id"],
+                        "view": "reactions",
+                        "actor_id": mover["id"],
+                    },
+                )
+            )[0]
+            assert defense_choice["trigger"] == "attack_hit_defense"
+            defense_request = {
+                "campaign_id": campaign["id"],
+                "actor_id": mover["id"],
+                "action": "resolve_defense",
+                "payload": {
+                    "choice_id": defense_choice["id"],
+                    "selection": {"id": "decline"},
+                },
+                "expected_revision": resolved["campaign_revision"],
+                "idempotency_key": "oa-defense-decline",
+            }
+            settled = await _call(server, "combat_choice", defense_request)
+            assert settled["result"]["damage"] is not None
+            assert settled["result"]["sneak_attack"]["used"] is True
+            resolved = settled
             assert resolved["result"]["sneak_attack"]["used"] is True
             assert resolved["result"]["sneak_attack"]["turn_token"]
             assert resolved["result"]["disadvantage_applied"] is False
-            replay = await _raw(server, "combat_reaction_attack", request)
+            target_after = await _call(
+                server,
+                "character_query",
+                {
+                    "view": "get",
+                    "payload": {"character_id": mover["id"]},
+                    "principal_id": "system:local",
+                },
+            )
+            assert target_after["sheet"]["combat"]["hp"]["value"] < 20
+            replay = await _call(server, "combat_choice", defense_request)
             assert replay == resolved
             status = await _call(
                 server,
@@ -234,7 +304,7 @@ def test_opportunity_sneak_attack_uses_trigger_snapshot_and_reaction_only(
                     {
                         **request,
                         "choice_id": reactions[0]["id"],
-                        "expected_revision": request["expected_revision"] + 1,
+                        "expected_revision": request["expected_revision"] + 2,
                         "idempotency_key": "oa-sneak-second",
                     },
                 )
