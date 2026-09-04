@@ -15,6 +15,7 @@ from typing import Any, Iterable
 from uuid import uuid4
 
 from sagasmith_dnd.activity_identity import is_multiattack_activity
+from sagasmith_dnd.breathing import breathing_blocks_recovery
 from sagasmith_dnd.character_schema import (
     SKILL_ABILITIES,
     active_effect_roll_bonus,
@@ -500,7 +501,11 @@ def tortle_shell_defense_available(sheet: dict[str, Any]) -> bool:
     ]
     if len(selections) > 1 or len(features) > 1:
         raise CombatEngineError("actor card has duplicate Tortle Shell Defense provenance")
-    return len(selections) == 1 and len(features) == 1
+    return (
+        len(selections) == 1
+        and len(features) == 1
+        and selections[0]["pack_version"] == features[0]["pack_version"]
+    )
 
 
 def _tortle_shell_defense_effect_changes(*, adds_prone: bool) -> list[dict[str, Any]]:
@@ -4400,6 +4405,7 @@ def resolve_death_save_to_sheet(
         disadvantage=disadvantage,
     )
     death = dict(combat.setdefault("death_saves", {"successes": 0, "failures": 0}))
+    breathing_locked = breathing_blocks_recovery(value)
     result = resolve_death_save(
         successes=int(death.get("successes", 0)),
         failures=int(death.get("failures", 0)),
@@ -4408,7 +4414,11 @@ def resolve_death_save_to_sheet(
         bonus=int(exhaustion_adjustment["bonus"]),
         reroll_ones=_has_halfling_lucky(value),
         rng=rng,
+        recovery_allowed=not breathing_locked,
     )
+    # Suffocation prevents recovery/stabilization after reaching 0 HP, but it
+    # does not prevent death-save rolls.  Suppress only the two recovery
+    # outcomes while the actor remains unable to breathe.
     if result["outcome"] == "revived":
         hp["value"] = max(1, int(hp.get("value", 0)))
         combat["hp"] = hp
@@ -4442,6 +4452,8 @@ def stabilize_sheet(sheet: dict[str, Any]) -> dict[str, Any]:
         raise CombatEngineError("a dead creature cannot be stabilized")
     if "stable" in conditions:
         raise CombatEngineError("the creature is already stable")
+    if breathing_blocks_recovery(value):
+        raise CombatEngineError("a suffocating actor cannot become stable until it can breathe")
     before = dict(combat.setdefault("death_saves", {"successes": 0, "failures": 0}))
     combat["death_saves"] = {"successes": 0, "failures": 0}
     reconcile_condition_projection(value, conditions | {"stable", "unconscious"})

@@ -52,6 +52,18 @@ TORTLE_NATURAL_ARMOR_AUTHORITY_KEY = "sagasmith.official_expansion_authority"
 CORE_ORC_AGGRESSIVE_MECHANIC_ID = "dnd5e.core.activity.orc_aggressive"
 ORC_AGGRESSIVE_ACTIVITY_ID = "aggressive-bonus_action"
 CORE_RELENTLESS_ENDURANCE_MECHANIC_ID = "dnd5e.core.damage.relentless_endurance"
+CORE_SUFFOCATION_MECHANIC_ID = "dnd5e.core.environment.suffocation"
+TORTLE_HOLD_BREATH_LEGACY_PACK_ID = (
+    "dnd5e.addon.rulebook.d-d-5e-the-tortle-package.e3234de670da.addon"
+)
+# Addon archive 1.0.1 contains the immutable rule definition at version 1.0.0.
+TORTLE_HOLD_BREATH_LEGACY_PACK_VERSIONS = frozenset({"1.0.0", "1.0.1"})
+TORTLE_HOLD_BREATH_ARTIFACT_ID = (
+    "dnd5e.addon.rulebook.d-d-5e-the-tortle-package.e3234de670da.species.tortle"
+)
+TORTLE_HOLD_BREATH_FEATURE_ID = f"{TORTLE_HOLD_BREATH_ARTIFACT_ID}.feature.hold-breath"
+TORTLE_HOLD_BREATH_SOURCE_KEY = "user.rulebook.d-d-5e-the-tortle-package.e3234de670da"
+TORTLE_HOLD_BREATH_SOURCE_RULE_REF_PREFIX = f"rule-source:{TORTLE_HOLD_BREATH_SOURCE_KEY}#chunk:"
 
 __all__ = [
     "CORE_TORTLE_SHELL_DEFENSE_MECHANIC_ID",
@@ -59,6 +71,7 @@ __all__ = [
     "CORE_ORC_AGGRESSIVE_MECHANIC_ID",
     "CORE_RELENTLESS_ENDURANCE_MECHANIC_ID",
     "CORE_TORTLE_NATURAL_ARMOR_MECHANIC_ID",
+    "CORE_SUFFOCATION_MECHANIC_ID",
     "ORC_AGGRESSIVE_ACTIVITY_ID",
     "SRD2014_DWARF_SPEED_LEGACY_ARTIFACT_IDS",
     "SRD2014_DWARF_SPEED_LEGACY_PACK_VERSIONS",
@@ -80,4 +93,9 @@ __all__ = [
     "TORTLE_SHELL_DEFENSE_LEGACY_PACK_VERSIONS",
     "TORTLE_SHELL_DEFENSE_SOURCE_KEY",
     "TORTLE_SHELL_DEFENSE_SOURCE_RULE_REF_PREFIX",
+    "TORTLE_HOLD_BREATH_ARTIFACT_ID",
+    "TORTLE_HOLD_BREATH_FEATURE_ID",
+    "TORTLE_HOLD_BREATH_LEGACY_PACK_ID",
+    "TORTLE_HOLD_BREATH_LEGACY_PACK_VERSIONS",
+    "TORTLE_HOLD_BREATH_SOURCE_RULE_REF_PREFIX",
 ]

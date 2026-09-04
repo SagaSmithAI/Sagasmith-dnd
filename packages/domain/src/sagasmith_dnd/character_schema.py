@@ -2149,6 +2149,7 @@ def _normalize_effect(value: Any, field: str) -> dict[str, Any]:
         "duration",
         "changes",
         "description",
+        "metadata",
         "ended_reason",
     }
     _reject_unknown(effect, field, allowed)
@@ -2241,6 +2242,7 @@ def _normalize_effect(value: Any, field: str) -> dict[str, Any]:
         "duration": normalized_duration,
         "changes": changes,
         "description": _text(effect.get("description"), f"{field}.description", maximum=1200),
+        "metadata": _object(effect.get("metadata") or {}, f"{field}.metadata"),
     }
     dependency = _text(
         effect.get("dependency"),

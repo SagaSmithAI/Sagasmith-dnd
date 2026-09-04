@@ -169,6 +169,14 @@ _2024_BOUNDARY_CITATIONS = {
 
 BOUNDARIES = (
     CoreBoundary(
+        "dnd5e.core.environment.suffocation",
+        ("2014",),
+        "breathing.begin_holding_breath|lifecycle.advance_effect_durations|"
+        "lifecycle.advance_elapsed_effect_durations",
+        ("tests/test_breathing.py", "../mcp/tests/test_breathing_mcp.py"),
+        "bundled:srd2014/06_Gameplay/Adventuring.md#suffocating",
+    ),
+    CoreBoundary(
         "dnd5e.core.heroic_inspiration",
         ("2024",),
         (

@@ -135,6 +135,11 @@ from sagasmith_dnd.actor_types import (
     NON_PLAYER_CHARACTER_TYPES,
     require_agent_decidable_character_type,
 )
+from sagasmith_dnd.breathing import (
+    advance_breathing_rounds,
+    begin_holding_breath,
+    restore_breathing,
+)
 from sagasmith_dnd.bundled_rules import (
     build_bundled_rule_sources,
     bundled_rule_corpus_inventory,
@@ -13404,7 +13409,42 @@ def _create_server(
         list[CharacterStateUpdate],
         dict[str, Any],
     ]:
-        """Apply active encounter effect dependencies before one atomic commit."""
+        """Reconcile card and encounter dependencies before one atomic commit."""
+
+        updates = list(character_updates or [])
+        if updates:
+            # Narrative spell effects carry durable source links on actor cards,
+            # without an encounter registry. They must end on the same commit as
+            # their source concentration, including time-driven incapacitation.
+            campaign_actors = {
+                actor.id: actor for actor in characters.list(campaign_id=campaign.id)
+            }
+            by_actor_id = {item.character_id: item for item in updates}
+            candidate_sheets = {
+                actor_id_value: (
+                    by_actor_id[actor_id_value].sheet
+                    if actor_id_value in by_actor_id
+                    else actor.sheet
+                )
+                for actor_id_value, actor in campaign_actors.items()
+            }
+            card_dependencies = reconcile_source_effect_dependencies(candidate_sheets)
+            for actor_id_value in card_dependencies["changed_actor_ids"]:
+                sheet = validate_character_sheet(card_dependencies["sheets"][actor_id_value])
+                existing = by_actor_id.get(actor_id_value)
+                if existing is not None:
+                    updates[updates.index(existing)] = replace(existing, sheet=sheet)
+                else:
+                    actor = campaign_actors[actor_id_value]
+                    updates.append(
+                        CharacterStateUpdate(
+                            character_id=actor_id_value,
+                            sheet=sheet,
+                            notes=validate_character_notes(actor.notes),
+                            expected_revision=actor.revision,
+                        )
+                    )
+            character_updates = updates
 
         source_state = (
             deepcopy(campaign_state)
@@ -16831,6 +16871,7 @@ def _create_server(
                 elapsed_duration = advance_elapsed_effect_durations(
                     sheet,
                     elapsed_ticks=elapsed_ticks,
+                    advance_breathing=False,
                 )
                 sheet = elapsed_duration["sheet"]
                 actor_advanced.extend(elapsed_duration["advanced"])
@@ -16875,6 +16916,9 @@ def _create_server(
                 list(CHASE_BOUNDARY_IDS),
                 "chase.turn",
             )
+        )
+        next_state, character_updates, _ = reconcile_actor_effect_dependencies(
+            campaign, next_state, character_updates, {}
         )
         updated_actor = current_actor
         for character_update in character_updates:
@@ -18764,6 +18808,14 @@ def _create_server(
         ]
         source_duration_expired: list[str] = []
         for target_id, sheet in list(source_sheets.items()):
+            if elapsed_ticks:
+                # Consume the one real clock interval before resolving the new
+                # turn. Turn starts themselves never spend grace rounds.
+                sheet = advance_breathing_rounds(
+                    sheet,
+                    rounds=elapsed_ticks,
+                    defer_drop_until_turn_start=True,
+                )["sheet"]
             for source_actor_id in source_turn_actor_ids:
                 source_duration = advance_source_turn_effect_durations(
                     sheet,
@@ -18830,13 +18882,19 @@ def _create_server(
             if target_id in started_effects_by_actor:
                 expired.extend(started_effects_by_actor[target_id]["expired"])
             if round_changed:
-                rounded = advance_effect_durations(sheet, period="round")
+                rounded = advance_effect_durations(
+                    sheet,
+                    period="round",
+                    advance_breathing=False,
+                )
                 sheet = rounded["sheet"]
                 expired.extend(rounded["expired"])
             if elapsed_ticks:
                 minutes = advance_elapsed_effect_durations(
                     sheet,
                     elapsed_ticks=elapsed_ticks,
+                    # Breathing consumed this interval before the turn-start pass.
+                    advance_breathing=False,
                 )
                 sheet = minutes["sheet"]
                 expired.extend(minutes["expired"])
@@ -18920,6 +18978,10 @@ def _create_server(
                     "actor_id": actor_id,
                     "round": int(next_state["combat"].get("round", 1) or 1),
                 }
+
+        next_state, combat_updates, _ = reconcile_actor_effect_dependencies(
+            campaign, next_state, combat_updates, {}
+        )
 
         def turn_end_response(revisions: list[Any]) -> dict[str, Any]:
             response = {
@@ -19253,6 +19315,7 @@ def _create_server(
                     sheet,
                     period=effect_period,
                     amount=amount,
+                    advance_breathing=not bool(elapsed_ticks and effect_period == "round"),
                 )
                 extension = apply_rule_event(
                     result["sheet"],
@@ -19280,6 +19343,9 @@ def _create_server(
             )
             advanced[character.id] = list(dict.fromkeys(character_advanced))
             expired[character.id] = list(dict.fromkeys(character_expired))
+        next_state, updates, _ = reconcile_actor_effect_dependencies(
+            campaign, next_state, updates, {}
+        )
         mutation_required = bool(updates or time_transition is not None or world_state_changed)
 
         def clock_advance_response(revisions: list[Any]) -> dict[str, Any]:
@@ -28684,6 +28750,7 @@ def _create_server(
                 duration_result["sheet"],
                 period="round",
                 amount=int(time_transition["elapsed_ticks"]),
+                advance_breathing=False,
             )
             extension = apply_rule_event(
                 round_result["sheet"],
@@ -28802,6 +28869,9 @@ def _create_server(
                 advanced[current.id] = list(dict.fromkeys(character_advanced))
             if character_expired:
                 expired[current.id] = list(dict.fromkeys(character_expired))
+        next_state, updates, _ = reconcile_actor_effect_dependencies(
+            campaign, next_state, updates, {}
+        )
         update_by_id = {item.character_id: item for item in updates}
         stream = active_random_stream()
         response = {
@@ -29418,6 +29488,7 @@ def _create_server(
             elapsed_duration = advance_elapsed_effect_durations(
                 sheet,
                 elapsed_ticks=elapsed_ticks,
+                advance_breathing=False,
             )
             sheet = elapsed_duration["sheet"]
             actor_advanced.extend(elapsed_duration["advanced"])
@@ -29965,6 +30036,7 @@ def _create_server(
                 duration["sheet"],
                 period="round",
                 amount=int(time_transition["elapsed_ticks"]),
+                advance_breathing=False,
             )
             extension = apply_rule_event(
                 round_duration["sheet"],
@@ -30114,6 +30186,9 @@ def _create_server(
             if actor_expired:
                 expired[current.id] = list(dict.fromkeys(actor_expired))
         stream = active_random_stream()
+        next_state, updates, _ = reconcile_actor_effect_dependencies(
+            campaign, next_state, updates, {}
+        )
         base_response = {
             "status": "committed",
             "rest_type": normalized_rest_type,
@@ -31095,6 +31170,88 @@ def _create_server(
             idempotency_key=idempotency_key,
             payload={"source_actor_id": source.id, "reason": normalized_reason},
             response_extra={"result": result},
+        )
+
+    def character_breathing_transition(
+        character_id: str,
+        *,
+        can_breathe: bool,
+        choking: bool = False,
+        principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
+        expected_revision: int | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Record an explicit environmental breathing transition outside combat."""
+
+        current = characters.get(character_id)
+        require_character_control(current, principal_id)
+        require_outside_active_combat(current, "breathing transition")
+        if current.campaign_id is None:
+            raise CombatEngineError("breathing transitions require a campaign-bound actor")
+        access.require_campaign(current.campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
+        if not isinstance(can_breathe, bool):
+            raise ValueError("can_breathe must be a boolean")
+        if not isinstance(choking, bool):
+            raise ValueError("choking must be a boolean")
+        if can_breathe and choking:
+            raise ValueError("choking cannot be combined with can_breathe")
+        branch_id = require_current_branch(current.campaign_id, None)
+        request_payload = {
+            "operation": "character.breathing.transition",
+            "character_id": current.id,
+            "can_breathe": can_breathe,
+            "choking": choking,
+        }
+        scope = f"character-write:{current.campaign_id}:{branch_id}:{principal_id}:{current.id}"
+        replay = replay_idempotent(scope, idempotency_key, request_payload)
+        if replay is not None:
+            return replay
+        try:
+            applied = (
+                restore_breathing(current.sheet)
+                if can_breathe
+                else begin_holding_breath(current.sheet, choking=choking)
+            )
+        except ValueError as error:
+            raise CombatEngineError(str(error)) from error
+        result = {key: value for key, value in applied.items() if key != "sheet"}
+        normalized_sheet = finalize_actor_sheet_rulings(
+            applied["sheet"], current.campaign_id
+        )
+        normalized_sheet = validate_character_sheet(
+            normalized_sheet,
+            rules=effective_rule_context(current.campaign_id),
+        )
+        if expected_revision is None or not idempotency_key:
+            raise ValueError(
+                "expected_revision and idempotency_key are required for character writes"
+            )
+        branch_id = require_current_branch(current.campaign_id, None)
+        update = CharacterStateUpdate(
+            character_id=current.id,
+            sheet=normalized_sheet,
+            notes=validate_character_notes(current.notes),
+            expected_revision=expected_revision,
+        )
+        response_fields = {
+            "character": character_view(
+                replace(current, sheet=normalized_sheet, revision=current.revision + 1)
+            ),
+            "result": result,
+        }
+        campaign = campaigns.get(current.campaign_id)
+        return commit_campaign_state(
+            campaign,
+            None,
+            operation="character.breathing.transition",
+            principal_id=principal_id,
+            branch_id=branch_id,
+            idempotency_key=idempotency_key,
+            scope=scope,
+            payload=request_payload,
+            response_fields=response_fields,
+            character_updates=[update],
+            expected_campaign_revision=campaign.revision,
         )
 
     def character_apply_raise_dead(
@@ -40652,6 +40809,7 @@ def _create_server(
                 duration["sheet"],
                 period="round",
                 amount=int(time_transition["elapsed_ticks"]),
+                advance_breathing=False,
             )
             extension = apply_rule_event(
                 round_duration["sheet"],
@@ -40693,6 +40851,9 @@ def _create_server(
         )
         if content_receipt is not None:
             receipts.append(deepcopy(content_receipt))
+        next_state, updates, _ = reconcile_actor_effect_dependencies(
+            campaign, next_state, updates, {}
+        )
         current_update = next(item for item in updates if item.character_id == current.id)
         response = character_view(
             replace(
@@ -49627,6 +49788,7 @@ boundary.
             "source_state",
             "stand",
             "knock_prone",
+            "breathing_transition",
         ],
         payload: dict[str, Any] | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
@@ -49702,6 +49864,21 @@ boundary.
                 character_id,
                 source_actor_id=required(data, "source_actor_id"),
                 reason=required(data, "reason"),
+                principal_id=principal_id,
+                expected_revision=expected_revision,
+                idempotency_key=idempotency_key,
+            )
+        elif action == "breathing_transition":
+            unexpected = set(data) - {"can_breathe", "choking"}
+            if unexpected:
+                raise ValueError(
+                    "breathing_transition payload accepts only can_breathe; "
+                    f"unexpected fields: {sorted(unexpected)}"
+                )
+            result = character_breathing_transition(
+                character_id,
+                can_breathe=required(data, "can_breathe"),
+                choking=data.get("choking", False),
                 principal_id=principal_id,
                 expected_revision=expected_revision,
                 idempotency_key=idempotency_key,
