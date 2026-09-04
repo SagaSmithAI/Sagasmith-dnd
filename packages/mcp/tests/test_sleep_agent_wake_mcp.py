@@ -83,6 +83,7 @@ def test_agent_sleep_wake_requires_contact_facts_and_one_helper_action(tmp_path:
             helper = await create("Helper")
             target_sheet = default_character_sheet()
             target_sheet["combat"]["hp"] = {"value": 1, "max": 1, "temp": 0}
+            target_sheet["conditions"] = ["prone"]
             sleeper_one = await create("Sleeper One", target_sheet)
             sleeper_two = await create("Sleeper Two", target_sheet)
 
@@ -132,8 +133,13 @@ def test_agent_sleep_wake_requires_contact_facts_and_one_helper_action(tmp_path:
                 "declaration": {
                     "spatial_facts": {
                         "decision_id": "sleep-area",
-                        "reason": "Reviewed area includes both sleepers and excludes the two out-of-area allies.",
-                        "origin_description": "The caster's reviewed origin is within ninety feet of the area.",
+                        "reason": (
+                            "Reviewed area includes both sleepers and excludes the two "
+                            "out-of-area allies."
+                        ),
+                        "origin_description": (
+                            "The caster's reviewed origin is within ninety feet of the area."
+                        ),
                         "campaign_revision": started["campaign_revision"],
                         "origin_in_range": True,
                         "line_of_effect_clear": True,
@@ -176,19 +182,27 @@ def test_agent_sleep_wake_requires_contact_facts_and_one_helper_action(tmp_path:
                 }
 
             before_missing = await snapshot()
-            with pytest.raises(ToolError, match="contact-range decision"):
-                await server.call_tool(
-                    "combat_common_action",
-                    {
-                        "campaign_id": campaign["id"],
-                        "actor_id": helper["id"],
-                        "action": "shake_sleep",
-                        "target_id": sleeper_one["id"],
-                        "expected_revision": ended["campaign_revision"],
-                        "idempotency_key": "wake-missing",
-                    },
-                )
+            missing = await _call(
+                server,
+                "combat_common_action",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": helper["id"],
+                    "action": "shake_sleep",
+                    "target_id": sleeper_one["id"],
+                    "expected_revision": ended["campaign_revision"],
+                    "idempotency_key": "wake-missing",
+                },
+            )
+            assert missing["status"] == "pending_ruling"
+            assert missing["missing"] == ["shake_sleep.spatial_facts"]
             assert await snapshot() == before_missing
+            helper_before = next(
+                item
+                for item in before_missing["campaign"]["state"]["combat"]["combatants"]
+                if item["actor_id"] == helper["id"]
+            )
+            assert helper_before["turn_budget"]["main_action"] == 1
 
             wake_args = {
                 "campaign_id": campaign["id"],
@@ -232,12 +246,15 @@ def test_agent_sleep_wake_requires_contact_facts_and_one_helper_action(tmp_path:
                 {"view": "get", "payload": {"character_id": sleeper_one["id"]}},
             )
             assert "unconscious" not in awakened["sheet"]["conditions"]
+            assert "prone" in awakened["sheet"]["conditions"]
             assert all(
                 not effect["active"]
                 for effect in awakened["sheet"]["effects"]
                 if effect.get("source_spell_id") == CORE_SLEEP_SPELL_ID
             )
+            after_wake = await snapshot()
             assert await server.call_tool("combat_common_action", wake_args) == raw_wake
+            assert await snapshot() == after_wake
             no_action_args = {
                 **wake_args,
                 "target_id": sleeper_two["id"],
@@ -250,12 +267,26 @@ def test_agent_sleep_wake_requires_contact_facts_and_one_helper_action(tmp_path:
                 },
                 "idempotency_key": "wake-two",
             }
+            before_no_action = await snapshot()
             with pytest.raises(ToolError, match="legal action payment"):
                 await server.call_tool(
                     "combat_common_action",
                     no_action_args,
                 )
-            after_reject = await snapshot()
+            assert await snapshot() == before_no_action
+            helper_state = next(
+                item
+                for item in before_no_action["campaign"]["state"]["combat"]["combatants"]
+                if item["actor_id"] == helper["id"]
+            )
+            assert helper_state["turn_budget"]["main_action"] == 0
+            sleeper_two_state = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": sleeper_two["id"]}},
+            )
+            assert "unconscious" in sleeper_two_state["sheet"]["conditions"]
+            after_reject = before_no_action
             close_server(server)
             server = create_server(config)
             assert await server.call_tool("combat_common_action", wake_args) == raw_wake
