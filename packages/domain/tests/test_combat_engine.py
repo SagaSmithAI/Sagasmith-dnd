@@ -3987,6 +3987,36 @@ def test_sneak_attack_enforces_once_per_turn_weapon_and_disadvantage_boundaries(
         )
 
 
+def test_sneak_attack_opportunity_uses_trigger_snapshot_and_target_dodge() -> None:
+    rogue = _rogue()
+    ally = _actor("ally")
+    target = _actor("target", ac=1)
+    rogue.update(initiative=20, tie_breaker=0, position={"x": 0, "y": 0}, disposition="friendly")
+    ally.update(initiative=15, tie_breaker=0, position={"x": 1, "y": 1}, disposition="friendly")
+    target.update(initiative=10, tie_breaker=0, position={"x": 1, "y": 0}, disposition="hostile")
+    encounter = _grid_encounter([rogue, ally, target])
+    encounter["turn_index"] = 1
+    next(item for item in encounter["combatants"] if item["actor_id"] == target["id"])[
+        "turn_flags"
+    ] = {"dodging": True}
+
+    plan = preflight_attack(
+        rogue,
+        target,
+        action={
+            "weapon_id": "dagger",
+            "use_sneak_attack": True,
+            "context": {"attacker_can_see_target": True, "advantage": True},
+        },
+        encounter=encounter,
+        allow_out_of_turn=True,
+    )
+
+    assert plan["sneak_attack"]["eligibility"] == "adjacent_enemy"
+    assert plan["sneak_attack"]["turn_token"]
+    assert "target_dodging" in plan["disadvantage_sources"]
+
+
 def test_multi_damage_preserves_types_and_massive_damage() -> None:
     actor = _actor("target", hp=10)
     result = apply_damage_parts_to_sheet(

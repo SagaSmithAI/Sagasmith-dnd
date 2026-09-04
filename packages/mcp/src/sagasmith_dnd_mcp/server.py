@@ -19602,6 +19602,14 @@ def _create_server(
                 **dict(action_payload.get("context") or {}),
                 "attacker_can_see_target": True,
             }
+        trigger_encounter = deepcopy(encounter)
+        if isinstance(window.get("target_position"), dict):
+            trigger_target = next(
+                item
+                for item in trigger_encounter["combatants"]
+                if item.get("actor_id") == target_id
+            )
+            trigger_target["position"] = dict(window["target_position"])
         rule_context = effective_rule_context(
             campaign_id,
             facts={"actor_id": actor_id, "target_id": target_id, "kind": "attack"},
@@ -19610,7 +19618,7 @@ def _create_server(
             attacker,
             target,
             action=action_payload,
-            encounter=None,
+            encounter=trigger_encounter,
             allow_out_of_turn=True,
             rules=rule_context,
         )
@@ -19793,6 +19801,16 @@ def _create_server(
                 damage_result.get("concentration"),
                 next_revision=campaign.revision + 1,
             )
+        sneak_attack = dict(result.get("sneak_attack") or {})
+        if sneak_attack.get("used"):
+            attacker_combatant = next(
+                item
+                for item in next_encounter["combatants"]
+                if item.get("actor_id") == actor_id
+            )
+            flags = dict(attacker_combatant.get("turn_flags") or {})
+            flags["sneak_attack_turn_token"] = sneak_attack["turn_token"]
+            attacker_combatant["turn_flags"] = flags
         if isinstance(result.get("damage"), dict):
             result["damage"] = {
                 key: value for key, value in result["damage"].items() if key != "sheet"
