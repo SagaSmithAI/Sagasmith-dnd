@@ -115,10 +115,10 @@ async def _catalog_selection(
     if language_count:
         language_options = list(requirements.get("language_options") or [])
         if len(language_options) < language_count and requirements.get("allow_any_language"):
+            # This build exercises ordinary choices, not DM authorization of
+            # exotic languages such as Draconic.
             language_options.extend(
-                item
-                for item in ("Draconic", "Dwarvish", "Elvish")
-                if item not in language_options
+                item for item in ("Dwarvish", "Elvish", "Giant") if item not in language_options
             )
         selection["languages"] = language_options[:language_count]
     equipment_options = list(requirements.get("equipment_package_options") or [])

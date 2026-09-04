@@ -1,6 +1,9 @@
 from collections import Counter
 from pathlib import Path
 
+import pytest
+
+from sagasmith_dnd.character_schema import default_character_sheet
 from sagasmith_dnd.content_import import audit_release_semantic_validation
 from sagasmith_dnd.core_content import (
     PACK_VERSION,
@@ -10,6 +13,7 @@ from sagasmith_dnd.core_content import (
     build_srd2014_content,
 )
 from sagasmith_dnd.core_rule_pack import get_core_rule_pack
+from sagasmith_dnd.progression import initialize_base_class
 from sagasmith_dnd.standard_feature_ids import (
     CORE_DWARF_HEAVY_ARMOR_SPEED_MECHANIC_ID,
     CORE_DWARVEN_RESILIENCE_MECHANIC_ID,
@@ -22,6 +26,76 @@ def test_markdown_file_order_is_platform_independent(tmp_path: Path) -> None:
         (tmp_path / name).touch()
 
     assert [path.name for path in _markdown_files(tmp_path)] == ["Zeta.md", "alpha.md"]
+
+
+@pytest.mark.parametrize(
+    ("class_name", "count", "options"),
+    [
+        ("Barbarian", 2, "animal_handling athletics intimidation nature perception survival"),
+        (
+            "Bard",
+            3,
+            "acrobatics animal_handling arcana athletics deception history insight intimidation "
+            "investigation medicine nature perception performance persuasion religion "
+            "sleight_of_hand stealth survival",
+        ),
+        ("Cleric", 2, "history insight medicine persuasion religion"),
+        ("Druid", 2, "arcana animal_handling insight medicine nature perception religion survival"),
+        (
+            "Fighter",
+            2,
+            "acrobatics animal_handling athletics history insight intimidation perception survival",
+        ),
+        ("Monk", 2, "acrobatics athletics history insight religion stealth"),
+        ("Paladin", 2, "athletics insight intimidation medicine persuasion religion"),
+        (
+            "Ranger",
+            3,
+            "animal_handling athletics insight investigation nature perception stealth survival",
+        ),
+        (
+            "Rogue",
+            4,
+            "acrobatics athletics deception insight intimidation investigation perception "
+            "performance persuasion sleight_of_hand stealth",
+        ),
+        ("Sorcerer", 2, "arcana deception insight intimidation persuasion religion"),
+        ("Warlock", 2, "arcana deception history intimidation investigation nature religion"),
+        ("Wizard", 2, "arcana history insight investigation medicine religion"),
+    ],
+)
+def test_srd2014_class_skill_options_match_source_and_can_be_selected(
+    class_name: str,
+    count: int,
+    options: str,
+) -> None:
+    # Reviewed against the 2014 source, not a snapshot of the generated catalog:
+    # https://www.dndbeyond.com/sources/dnd/basic-rules-2014/classes
+    workspace = Path(__file__).resolve().parents[3]
+    _, artifacts = build_srd2014_content(workspace / "skills")
+    card = next(
+        item["card"]
+        for item in artifacts
+        if item["kind"] == "class" and item["card"]["name"] == class_name
+    )
+    definition = card["class_definition"]
+    expected = options.split()
+    assert definition["skill_choice_count"] == count
+    assert set(definition["skill_options"]) == set(expected)
+    assert len(definition["skill_options"]) == len(expected)
+    # Exercise every legal option, including the list tail, through materialization.
+    for skill in expected:
+        choices = [skill, *[other for other in expected if other != skill][: count - 1]]
+        result = initialize_base_class(
+            default_character_sheet(),
+            class_name=class_name,
+            class_definition=definition,
+            skill_choices=choices,
+            source=f"bundled:srd2014/02_Classes/{class_name}.md",
+        )
+        assert all(
+            result["sheet"]["skills"][choice]["proficiency"] == "proficient" for choice in choices
+        )
 
 
 def test_non_numeric_feat_prerequisite_defaults_to_agent_review() -> None:
@@ -103,11 +177,13 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
         "skill_choice_count": 2,
         "skill_options": [
             "acrobatics",
+            "animal_handling",
             "athletics",
             "history",
             "insight",
             "intimidation",
             "perception",
+            "survival",
         ],
     }
     assert all(

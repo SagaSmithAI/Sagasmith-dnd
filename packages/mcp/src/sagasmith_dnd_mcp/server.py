@@ -25108,7 +25108,7 @@ def _create_server(
         require_write_contract(expected_revision, idempotency_key)
         resolved_branch_id = require_current_branch(campaign_id, branch_id)
         feature, binding = executable_watchers_eye_feature(
-            actor,
+            actor.sheet,
             feature_id,
             campaign_id=campaign_id,
             branch_id=resolved_branch_id,
@@ -41019,7 +41019,7 @@ def _create_server(
         }
 
     def executable_watchers_eye_feature(
-        actor: CharacterInfo,
+        sheet: Mapping[str, Any],
         feature_id: str,
         *,
         campaign_id: str,
@@ -41030,7 +41030,7 @@ def _create_server(
         normalized_feature_id = str(feature_id or "").strip()
         features = [
             dict(item)
-            for item in dict(actor.sheet.get("content") or {}).get("features", [])
+            for item in dict(sheet.get("content") or {}).get("features", [])
             if str(dict(item).get("id") or "") == normalized_feature_id
         ]
         if len(features) != 1:
@@ -41040,7 +41040,7 @@ def _create_server(
         feature = features[0]
         selections = [
             dict(item)
-            for item in dict(actor.sheet.get("content") or {}).get("selections", [])
+            for item in dict(sheet.get("content") or {}).get("selections", [])
             if str(dict(item).get("artifact_id") or "") in SCAG_WATCHERS_EYE_BACKGROUND_IDS
             and str(dict(item).get("kind") or "") == "background"
         ]
@@ -41775,6 +41775,24 @@ def _create_server(
                 (item for item in pack.artifacts if str(item.get("id") or "") == artifact_id),
                 None,
             )
+            if artifact is None and artifact_id in {
+                f"{background_id}.feature.watchers-eye"
+                for background_id in SCAG_WATCHERS_EYE_BACKGROUND_IDS
+            }:
+                # This native narrative feature is derived from its background,
+                # not stored as a top-level artifact. Reuse execution's exact
+                # archive/selection checks and never trust sheet HP grants.
+                _, binding = executable_watchers_eye_feature(
+                    sheet,
+                    artifact_id,
+                    campaign_id=campaign_id,
+                    branch_id=branch_id,
+                )
+                artifact = {
+                    "id": artifact_id,
+                    "kind": "feature",
+                    "card": watchers_eye_feature_card(binding),
+                }
             if artifact is None:
                 for parent in pack.artifacts:
                     parent_id = str(parent.get("id") or "").strip()

@@ -4739,6 +4739,7 @@ def class_selection_definition_from_source(description: str) -> dict[str, Any] |
     for label, body in re.findall(
         r"(?is)\b(Armor|Weapons|Tools|Saving\s+Throws|Skills)\s*:\s*(.+?)"
         r"(?=\s+(?:Armor|Weapons|Tools|Saving\s+Throws|Skills)\s*:|"
+        r"\s+#{1,6}\s+|\s+Equipment\b|"
         r"\s+You\s+start\s+with\b|\s+The\s+\w+\s+Proficiency\b|$)",
         description,
     ):

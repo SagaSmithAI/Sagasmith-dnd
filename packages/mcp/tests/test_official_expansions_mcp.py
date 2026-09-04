@@ -1374,6 +1374,53 @@ def test_locked_scag_and_tortle_activate_exact_dependency_closure_apply_and_rest
                 character = applied
             assert character["sheet"]["progression"]["background"] == "City Watch"
             assert character["sheet"]["progression"]["species"] == "Tortle"
+            character = await _call(
+                server,
+                "character_content_apply",
+                {
+                    "character_id": character["id"],
+                    "artifact_id": f"{CORE_CONTENT_PACK_ID}.class.fighter",
+                    "selection": {
+                        "skills": ["animal_handling", "survival"],
+                        # Tortle already grants Survival; resolve the duplicate explicitly.
+                        "skill_replacements": {"survival": "perception"},
+                    },
+                    "expected_revision": character["revision"],
+                    "idempotency_key": "official-closure-class",
+                },
+            )
+            prior_max_hp = character["sheet"]["combat"]["hp"]["max"]
+            assert all(
+                character["sheet"]["skills"][skill]["proficiency"] == "proficient"
+                for skill in ("animal_handling", "survival", "perception")
+            )
+            watchers_eye = next(
+                feature
+                for feature in character["sheet"]["content"]["features"]
+                if feature["id"] == f"{_CITY_WATCH_ID}.feature.watchers-eye"
+            )
+            advance_args = {
+                "character_id": character["id"],
+                "action": "level_advance",
+                "payload": {
+                    "class_name": "Fighter",
+                    "hp_method": "fixed",
+                    "reason": "Official background must preserve ordinary level advancement",
+                    "source_ref": (
+                        "bundled:srd2014/03_Characterization/Beyond_1st_Level.md"
+                    ),
+                },
+                "expected_revision": character["revision"],
+                "idempotency_key": "official-closure-level",
+            }
+            _, advance_raw = await server.call_tool("character_state_change", advance_args)
+            _, replay_raw = await server.call_tool("character_state_change", advance_args)
+            assert replay_raw == advance_raw
+            advanced = advance_raw.get("result", advance_raw)
+            character = advanced["character"]
+            assert character["sheet"]["progression"]["level"] == 2
+            assert character["sheet"]["combat"]["hp"]["max"] == prior_max_hp + 6
+            assert watchers_eye in character["sheet"]["content"]["features"]
             character_id = character["id"]
             campaign_id = campaign["id"]
         finally:
@@ -1394,6 +1441,11 @@ def test_locked_scag_and_tortle_activate_exact_dependency_closure_apply_and_rest
             )
             assert restored["sheet"]["progression"]["background"] == "City Watch"
             assert restored["sheet"]["progression"]["species"] == "Tortle"
+            assert restored["sheet"]["progression"]["level"] == 2
+            assert restored["sheet"]["combat"]["hp"]["max"] == prior_max_hp + 6
+            assert watchers_eye in restored["sheet"]["content"]["features"]
+            _, restarted_replay = await restarted.call_tool("character_state_change", advance_args)
+            assert restarted_replay == advance_raw
             assert {item["artifact_id"] for item in restored["sheet"]["content"]["selections"]} >= {
                 _CITY_WATCH_ID,
                 _TORTLE_ID,

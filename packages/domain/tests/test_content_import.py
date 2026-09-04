@@ -15,6 +15,7 @@ from sagasmith_dnd.content_import import (
     audit_release_semantic_validation,
     author_selection_card_from_candidate,
     candidate_draft_issues,
+    class_selection_definition_from_source,
     compiled_artifacts_from_candidates,
     extract_content_candidates,
     extract_content_inventory,
@@ -29,6 +30,20 @@ from sagasmith_dnd.statblocks import (
     parse_2014_statblock,
     split_2014_statblock_action_variants,
 )
+
+
+@pytest.mark.parametrize("heading", ["", "Equipment", "#### Equipment", "## Equipment"])
+def test_class_skill_list_stops_before_equipment_section(heading: str) -> None:
+    definition = class_selection_definition_from_source(
+        "Hit Dice: 1d10 per level\n"
+        "Armor: All armor, shields\nWeapons: Simple weapons, martial weapons\n"
+        "Tools: None\nSaving Throws: Strength, Constitution\n"
+        "Skills: Choose two from Animal Handling, Perception, and Survival\n\n"
+        f"{heading}\n\nYou start with the following equipment: Arcana, Deception."
+    )
+    assert definition is not None
+    assert definition["skill_options"] == ["animal_handling", "perception", "survival"]
+    assert definition["skill_choice_count"] == 2
 
 
 def test_extracts_review_required_catalog_candidates() -> None:
