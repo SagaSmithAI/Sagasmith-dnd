@@ -1,7 +1,10 @@
+from pathlib import Path
+
 import pytest
 
 from sagasmith_dnd.character_schema import default_character_sheet, derive_character_sheet
 from sagasmith_dnd.combat_engine import CombatEngineError, NeedsRulingError, resolve_actor_check
+from sagasmith_dnd.core_content import build_srd2014_content
 from sagasmith_dnd.rule_engine import resolution_context
 
 
@@ -245,3 +248,140 @@ def test_auto_failed_strength_save_does_not_require_trait_classification_or_roll
     )
     assert result["automatic_failure"] is True
     assert result["rolls"] == []
+
+
+def test_duplicate_and_combined_traits_roll_once_with_stable_receipts() -> None:
+    traits = [
+        ("dwarven_resilience", "dnd5e.core.save.dwarven_resilience"),
+        ("fey_ancestry", "dnd5e.core.save.fey_ancestry"),
+        ("gnome_cunning", "dnd5e.core.save.gnome_cunning"),
+        ("halfling_brave", "dnd5e.core.save.halfling_brave"),
+    ]
+    rules = resolution_context(
+        {"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []},
+        facts={"save_against_poison": True},
+    )
+
+    def resolve(features: list[tuple[str, str]]) -> dict:
+        actor = _actor(*features[0])
+        actor["sheet"]["content"]["features"] = [
+            _actor(kind, mechanic)["sheet"]["content"]["features"][0]
+            for kind, mechanic in features
+        ]
+        actor["derived"] = derive_character_sheet(actor["sheet"])
+        return resolve_actor_check(
+            actor,
+            kind="save",
+            ability="wisdom",
+            dc=10,
+            save_source_kind="spell",
+            save_effect_conditions=["charmed", "frightened"],
+            ruleset="2014",
+            rules=rules,
+            rng=_SequenceRng(2, 18),
+        )
+
+    combined = resolve(traits + [traits[0]])
+    reversed_features = resolve(list(reversed(traits)))
+    assert len(combined["rolls"]) == 2
+    assert len(reversed_features["rolls"]) == 2
+    combined_ids = [item["mechanic_id"] for item in combined["rule_receipts"]]
+    reversed_ids = [item["mechanic_id"] for item in reversed_features["rule_receipts"]]
+    assert combined_ids == reversed_ids == [item[1] for item in traits]
+
+
+def test_conditional_traits_do_not_apply_to_non_save_or_concentration() -> None:
+    actor = _actor("dwarven_resilience", "dnd5e.core.save.dwarven_resilience")
+    result = resolve_actor_check(
+        actor,
+        kind="ability",
+        ability="constitution",
+        dc=10,
+        ruleset="2014",
+        rng=_SequenceRng(12),
+    )
+    assert result["roll_mode"] == "normal"
+    assert len(result["rolls"]) == 1
+
+    concentration = resolve_actor_check(
+        actor,
+        kind="save",
+        ability="constitution",
+        dc=10,
+        save_purpose="concentration",
+        ruleset="2014",
+        rng=_SequenceRng(12),
+    )
+    assert concentration["roll_mode"] == "normal"
+    assert len(concentration["rolls"]) == 1
+
+
+def test_real_built_hill_dwarf_and_elf_traits_apply_with_core_receipts() -> None:
+    _, artifacts = build_srd2014_content(Path(__file__).resolve().parents[3] / "skills")
+    cards = {str(item["card"].get("name")): item["card"] for item in artifacts}
+
+    def actor_from_card(name: str) -> dict:
+        card = cards[name]
+        sheet = default_character_sheet()
+        sheet["edition"] = "2014"
+        sheet["content"]["features"] = list(card["grants"]["features"])
+        return {"id": name, "sheet": sheet, "derived": derive_character_sheet(sheet)}
+
+    rules = resolution_context(
+        {"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []},
+        facts={"save_against_poison": True},
+    )
+    dwarf = resolve_actor_check(
+        actor_from_card("Hill Dwarf"),
+        kind="save",
+        ability="constitution",
+        dc=10,
+        ruleset="2014",
+        rules=rules,
+        rng=_SequenceRng(2, 18),
+    )
+    elf = resolve_actor_check(
+        actor_from_card("High Elf"),
+        kind="save",
+        ability="wisdom",
+        dc=10,
+        save_source_kind="spell",
+        save_effect_conditions=["charmed"],
+        ruleset="2014",
+        rules=rules,
+        rng=_SequenceRng(2, 18),
+    )
+    assert len(dwarf["rolls"]) == 2
+    assert len(elf["rolls"]) == 2
+
+
+@pytest.mark.parametrize("source", [None, "", "unknown"])
+def test_gnome_unknown_source_kind_is_rejected_before_rng(source: str | None) -> None:
+    actor = _actor("gnome_cunning", "dnd5e.core.save.gnome_cunning")
+    with pytest.raises(NeedsRulingError):
+        resolve_actor_check(
+            actor,
+            kind="save",
+            ability="intelligence",
+            dc=10,
+            save_source_kind=source,
+            save_effect_conditions=[],
+            ruleset="2014",
+            rng=_SequenceRng(20),
+        )
+
+
+@pytest.mark.parametrize("conditions", ["charmed", True, 1])
+def test_condition_classification_rejects_non_list_types_before_rng(conditions: object) -> None:
+    actor = _actor("fey_ancestry", "dnd5e.core.save.fey_ancestry")
+    with pytest.raises((CombatEngineError, TypeError)):
+        resolve_actor_check(
+            actor,
+            kind="save",
+            ability="wisdom",
+            dc=10,
+            save_source_kind="spell",
+            save_effect_conditions=conditions,  # type: ignore[arg-type]
+            ruleset="2014",
+            rng=_SequenceRng(20),
+        )
