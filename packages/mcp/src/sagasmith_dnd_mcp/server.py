@@ -6250,6 +6250,49 @@ def _create_server(
 
         return refresh_references(refresh(value))
 
+    def canonicalize_portable_evidence(
+        item: Any,
+        *,
+        field: str = "",
+        parent: str = "",
+    ) -> Any:
+        """Sort only evidence collections whose order has no semantics."""
+
+        if isinstance(item, list):
+            normalized = [
+                canonicalize_portable_evidence(
+                    child,
+                    field=field,
+                    parent=parent,
+                )
+                for child in item
+            ]
+            if field in {"rule_refs", "source_chunk_ids"} or (
+                field == "references" and parent == "selection_contract"
+            ):
+                return sorted(dict.fromkeys(str(child) for child in normalized))
+            if field == "source_citations":
+                return sorted(
+                    normalized,
+                    key=lambda child: json.dumps(
+                        child,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                )
+            return normalized
+        if not isinstance(item, dict):
+            return deepcopy(item)
+        return {
+            key: canonicalize_portable_evidence(
+                child,
+                field=key,
+                parent=field,
+            )
+            for key, child in item.items()
+        }
+
     def rule_content_descriptor(
         pack_id: str,
         version: str,
@@ -6378,49 +6421,6 @@ def _create_server(
                     raise ValueError(f"rule pack chunk_id is not portable: {chunk_id}")
                 result["chunk_key"] = chunk_key
             return result
-
-        def canonicalize_portable_evidence(
-            item: Any,
-            *,
-            field: str = "",
-            parent: str = "",
-        ) -> Any:
-            """Sort only evidence collections whose order has no semantics."""
-
-            if isinstance(item, list):
-                normalized = [
-                    canonicalize_portable_evidence(
-                        child,
-                        field=field,
-                        parent=parent,
-                    )
-                    for child in item
-                ]
-                if field in {"rule_refs", "source_chunk_ids"} or (
-                    field == "references" and parent == "selection_contract"
-                ):
-                    return sorted(dict.fromkeys(str(child) for child in normalized))
-                if field == "source_citations":
-                    return sorted(
-                        normalized,
-                        key=lambda child: json.dumps(
-                            child,
-                            ensure_ascii=False,
-                            sort_keys=True,
-                            separators=(",", ":"),
-                        ),
-                    )
-                return normalized
-            if not isinstance(item, dict):
-                return deepcopy(item)
-            return {
-                key: canonicalize_portable_evidence(
-                    child,
-                    field=key,
-                    parent=field,
-                )
-                for key, child in item.items()
-            }
 
         portable_definition = refresh_portable_resolution_plans(
             canonicalize_portable_evidence(make_portable(definition))
@@ -7237,6 +7237,11 @@ def _create_server(
                         artifacts=dependency_descriptor["artifacts"],
                         mechanics=dependency_descriptor["mechanics"],
                     )
+            # Export sorts order-insensitive evidence, including multi-citation
+            # variant backgrounds. Rebuild the identical canonical ordering
+            # without dropping or trusting any installed source evidence.
+            expected_artifacts = canonicalize_portable_evidence(expected_artifacts)
+            expected_mechanics = canonicalize_portable_evidence(expected_mechanics)
             expected_artifacts = _strip_artifact_authoring_state(expected_artifacts)
             expected_artifacts = refresh_portable_resolution_plans(expected_artifacts)
             expected_mechanics = refresh_portable_resolution_plans(expected_mechanics)
@@ -39732,7 +39737,7 @@ def _create_server(
             return None
         # Installed IDs and recorded provenance alone cannot attest an archive
         # after its persisted payload changes; verify the independent source.
-        verified_reserved_official_rule_definition(pack_id, version)
+        verified_definition = verified_reserved_official_rule_definition(pack_id, version)
         catalog_matches = [
             dict(item)
             for item in official_expansion_catalog("2014")
@@ -39774,12 +39779,17 @@ def _create_server(
             return None
         pack_provenance = dict(rule_packs.provenance(pack_id, version) or {})
         definition_provenance = dict(pack_provenance.get("content_definition") or {})
+        # Activation locks preserve the archive's source identity. The canonical
+        # verifier above separately proves the dependency-rebound runtime, whose
+        # definition checksum need not equal that immutable source checksum.
+        component_checksum = str(definition_provenance.get("definition_checksum") or "")
+        if verified_definition is not None:
+            component_checksum = str(verified_definition["definition"]["definition_checksum"])
         if (
             str(definition_provenance.get("package_id") or "") != activation.addon_id
             or str(definition_provenance.get("package_version") or "") != activation.version
             or str(definition_provenance.get("package_checksum") or "") != activation.checksum
-            or str(definition_provenance.get("definition_checksum") or "")
-            != str(component_matches[0].get("checksum") or "")
+            or component_checksum != str(component_matches[0].get("checksum") or "")
         ):
             return None
         installed_matches = [
