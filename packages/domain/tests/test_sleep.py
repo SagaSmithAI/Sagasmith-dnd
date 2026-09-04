@@ -7,7 +7,12 @@ from sagasmith_dnd.character_schema import default_character_sheet, derive_chara
 from sagasmith_dnd.conditions import apply_effect_conditions
 from sagasmith_dnd.core_content import build_srd2014_content
 from sagasmith_dnd.lifecycle import advance_elapsed_effect_durations, expire_combat_bound_effects
-from sagasmith_dnd.sleep import SLEEP_SPELL_ID, resolve_sleep_targets, wake_sleep_effects
+from sagasmith_dnd.sleep import (
+    SLEEP_SPELL_ID,
+    _is_undead,
+    resolve_sleep_targets,
+    wake_sleep_effects,
+)
 
 
 def _actor(name: str, hp: int, *, elf: bool = False, conditions: list[str] | None = None) -> dict:
@@ -36,6 +41,31 @@ def _actor(name: str, hp: int, *, elf: bool = False, conditions: list[str] | Non
             }
         ]
     return {"id": name, "sheet": sheet, "derived": derive_character_sheet(sheet)}
+
+
+@pytest.mark.parametrize(
+    ("species", "is_undead"),
+    [
+        ("Undead", True),
+        ("undead (shapechanger)", True),
+        ("Undeadish", False),
+        ("Undead Hunter", False),
+        ("Hunter of Undead", False),
+        ("Humanoid (undead hunter)", False),
+    ],
+)
+def test_sleep_requires_a_complete_undead_creature_type(species: str, is_undead: bool) -> None:
+    target = _actor(species, 1)
+    target["sheet"]["progression"]["species"] = species
+    settled = resolve_sleep_targets(
+        [target], pool=1, source_actor_id="caster", source_spell_id=SLEEP_SPELL_ID
+    )
+    assert settled["targets"][0]["skip_reason"] == ("undead" if is_undead else "")
+    assert settled["targets"][0]["affected"] is not is_undead
+
+    if species == "Humanoid (undead hunter)":
+        target["sheet"]["creature_type"] = "undead"
+        assert _is_undead(target["sheet"]) is False
 
 
 def test_sleep_orders_current_hp_skips_immunity_and_does_not_mutate_inputs() -> None:
