@@ -5,6 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from mcp.server.mcpserver.exceptions import ToolError
 from sagasmith_dnd.character_schema import default_character_sheet
 from sagasmith_dnd.standard_spell_ids import CORE_SLEEP_SPELL_ID
 from test_official_expansions_mcp import _call, _config
@@ -220,15 +221,31 @@ def test_sleep_noncombat_agent_self_target_replay_and_incapacitated_guard(
             assert result["status"] == "committed", result
             settled = result["result"]["result"]
             assert settled["pool_roll"]["expression"] == expression
-            assert result.get("random_stream_receipt") or settled.get("random_stream_receipt")
+            assert result["result"].get("random_stream_receipt"), result
+            assert result["result"]["game_time"]["elapsed_ticks"] == 1
+            caster_after = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": caster["id"]}},
+            )
+            target_after = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": target["id"]}},
+            )
+            assert (
+                caster_after["sheet"]["spellcasting"]["spell_slots"][str(cast_level)]["value"] == 1
+            )
+            assert "unconscious" in caster_after["sheet"]["conditions"]
+            assert "unconscious" in target_after["sheet"]["conditions"]
             assert await server.call_tool("character_action", arguments) == raw
-            with pytest.raises(Exception, match="incapacitated"):
+            with pytest.raises(ToolError, match="incapacitated"):
                 await server.call_tool(
                     "character_action",
                     {
                         **arguments,
                         "idempotency_key": f"new-{cast_level}",
-                        "expected_revision": result["result"]["character_revision"],
+                        "expected_revision": caster_after["revision"],
                     },
                 )
         finally:
