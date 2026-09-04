@@ -6888,7 +6888,10 @@ def resolve_actor_check(
                 source_trait.get("source_excerpt"), str
             ) or not source_trait["source_excerpt"].strip():
                 raise CombatEngineError("conditional species save trait metadata is malformed")
-            if trait_kind == "fey_ancestry" and source_trait.get("magical_sleep_immunity") is not True:
+            if (
+                trait_kind == "fey_ancestry"
+                and source_trait.get("magical_sleep_immunity") is not True
+            ):
                 raise CombatEngineError("Fey Ancestry metadata must declare magical sleep immunity")
             if trait_kind not in conditional_traits:
                 conditional_traits.append(trait_kind)
@@ -6920,11 +6923,15 @@ def resolve_actor_check(
                 if save_source_kind is not None
                 else rule_facts.get("save_source_kind")
             )
-            if not isinstance(authoritative_source, str) or authoritative_source.strip().casefold() not in {
+            valid_source_kinds = {
                 "spell",
                 "magical_effect",
                 "nonmagical_effect",
-            }:
+            }
+            if (
+                not isinstance(authoritative_source, str)
+                or authoritative_source.strip().casefold() not in valid_source_kinds
+            ):
                 raise NeedsRulingError(
                     "Gnome Cunning requires an authoritative save source kind",
                     missing=("save_source_kind",),
