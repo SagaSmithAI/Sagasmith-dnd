@@ -222,6 +222,11 @@ def test_opportunity_sneak_attack_uses_trigger_snapshot_and_reaction_only(
                 {"campaign_id": campaign["id"], "view": "reactions", "actor_id": rogue["id"]},
             )
             assert reactions and reactions[0]["target_id"] == mover["id"]
+            assert reactions[0]["target_position"] != {"x": 3, "y": 0}
+            moved_target = next(
+                item for item in moved["combat"]["combatants"] if item["actor_id"] == mover["id"]
+            )
+            assert moved_target["position"] == {"x": 3, "y": 0}
             request = {
                 "campaign_id": campaign["id"],
                 "actor_id": rogue["id"],
@@ -235,6 +240,39 @@ def test_opportunity_sneak_attack_uses_trigger_snapshot_and_reaction_only(
                 "expected_revision": moved["campaign_revision"],
                 "idempotency_key": "oa-sneak",
             }
+
+            async def snapshot():
+                return {
+                    "campaign": await _call(
+                        server,
+                        "campaign_query",
+                        {
+                            "view": "get",
+                            "payload": {"campaign_id": campaign["id"]},
+                        },
+                    ),
+                    "actors": [
+                        await _call(
+                            server,
+                            "character_query",
+                            {
+                                "view": "get",
+                                "payload": {"character_id": actor["id"]},
+                            },
+                        )
+                        for actor in (rogue, ally, mover)
+                    ],
+                    "receipts": await _call(
+                        server,
+                        "campaign_rules",
+                        {
+                            "campaign_id": campaign["id"],
+                            "action": "receipts",
+                            "payload": {},
+                        },
+                    ),
+                }
+
             receipts_before = await _call(
                 server,
                 "campaign_rules",
@@ -281,6 +319,22 @@ def test_opportunity_sneak_attack_uses_trigger_snapshot_and_reaction_only(
                 "expected_revision": resolved["campaign_revision"],
                 "idempotency_key": "oa-defense-decline",
             }
+            pending_snapshot = await snapshot()
+            close_server(server)
+            server = create_server(config)
+            assert await _raw(server, "combat_reaction_attack", request) == initial_roll_response
+            assert await snapshot() == pending_snapshot
+            with pytest.raises(ToolError, match="revision conflict"):
+                await _call(
+                    server,
+                    "combat_choice",
+                    {
+                        **defense_request,
+                        "expected_revision": 0,
+                        "idempotency_key": "stale-defense",
+                    },
+                )
+            assert await snapshot() == pending_snapshot
             settled = await _call(server, "combat_choice", defense_request)
             if defense_mode == "shield":
                 assert settled["result"]["hit"] is False
@@ -345,38 +399,6 @@ def test_opportunity_sneak_attack_uses_trigger_snapshot_and_reaction_only(
                 {"campaign_id": campaign["id"], "action": "receipts", "payload": {}},
             )
             assert len(receipts_after) > len(receipts_before)
-
-            async def snapshot():
-                return {
-                    "campaign": await _call(
-                        server,
-                        "campaign_query",
-                        {
-                            "view": "get",
-                            "payload": {"campaign_id": campaign["id"]},
-                        },
-                    ),
-                    "actors": [
-                        await _call(
-                            server,
-                            "character_query",
-                            {
-                                "view": "get",
-                                "payload": {"character_id": actor["id"]},
-                            },
-                        )
-                        for actor in (rogue, ally, mover)
-                    ],
-                    "receipts": await _call(
-                        server,
-                        "campaign_rules",
-                        {
-                            "campaign_id": campaign["id"],
-                            "action": "receipts",
-                            "payload": {},
-                        },
-                    ),
-                }
 
             before_replays = await snapshot()
             assert await _raw(server, "combat_reaction_attack", request) == initial_roll_response

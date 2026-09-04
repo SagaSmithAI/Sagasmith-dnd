@@ -5,6 +5,7 @@ import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 from sagasmith_dnd.character_schema import default_character_sheet
 from test_opportunity_sneak_attack_mcp import _call
+from test_structured_spell_mcp import _slot, _spell
 
 import sagasmith_dnd_mcp.server as server_module
 from sagasmith_dnd_mcp.config import McpConfig
@@ -29,8 +30,9 @@ class _FixedD20:
 
 
 @pytest.mark.parametrize("miss", [False, True])
+@pytest.mark.parametrize("advantage_source", ["help", "guiding_bolt"])
 def test_opportunity_help_is_consumed_on_hit_or_miss_and_sneak_attack_resets_each_turn(
-    tmp_path: Path, monkeypatch, miss: bool
+    tmp_path: Path, monkeypatch, miss: bool, advantage_source: str
 ) -> None:
     config = McpConfig(
         home=tmp_path / "home",
@@ -45,8 +47,13 @@ def test_opportunity_help_is_consumed_on_hit_or_miss_and_sneak_attack_resets_eac
     real_roll = server_module.roll_attack_action
 
     def attack_roll(*, plan):
-        plans.append(plan)
-        value = 1 if miss and len(plans) == 1 else 12 - plan["attack_bonus"]
+        if plan.get("weapon_id") == "dagger":
+            plans.append(plan)
+        value = (
+            1
+            if miss and plan.get("weapon_id") == "dagger" and len(plans) == 1
+            else 12 - plan["attack_bonus"]
+        )
         return real_roll(plan=plan, rng=_FixedD20(value))
 
     monkeypatch.setattr(server_module, "roll_attack_action", attack_roll)
@@ -94,9 +101,15 @@ def test_opportunity_help_is_consumed_on_hit_or_miss_and_sneak_attack_resets_eac
             target_sheet = default_character_sheet()
             target_sheet["combat"]["hp"] = {"value": 100, "max": 100, "temp": 0}
             actors = []
+            helper_sheet = default_character_sheet()
+            guiding_bolt = _spell("Guiding Bolt", 1, casting_time="1 action", range_ft=120)
+            if advantage_source == "guiding_bolt":
+                helper_sheet["abilities"]["wisdom"]["score"] = 18
+                helper_sheet["spellcasting"].update(ability="wisdom", spell_slots=_slot(1))
+                helper_sheet["content"]["spells"] = [guiding_bolt]
             for name, sheet in [
                 ("rogue", rogue_sheet),
-                ("helper", default_character_sheet()),
+                ("helper", helper_sheet),
                 ("mover", target_sheet),
             ]:
                 actors.append(
@@ -176,18 +189,47 @@ def test_opportunity_help_is_consumed_on_hit_or_miss_and_sneak_attack_resets_eac
                     "idempotency_key": "start",
                 },
             )
-            helped = await _raw(
-                server,
-                "combat_common_action",
-                {
-                    "campaign_id": campaign["id"],
-                    "actor_id": helper["id"],
-                    "target_id": rogue["id"],
-                    "action": "help",
-                    "expected_revision": started["campaign_revision"],
-                    "idempotency_key": "help",
-                },
-            )
+            if advantage_source == "guiding_bolt":
+                cast = await _raw(
+                    server,
+                    "combat_cast_spell",
+                    {
+                        "campaign_id": campaign["id"],
+                        "actor_id": helper["id"],
+                        "spell_id": guiding_bolt["id"],
+                        "cast_level": 1,
+                        "expected_revision": started["campaign_revision"],
+                        "idempotency_key": "guiding-bolt",
+                    },
+                )
+                helped = await _raw(
+                    server,
+                    "combat_resolve_attack",
+                    {
+                        "campaign_id": campaign["id"],
+                        "actor_id": helper["id"],
+                        "target_id": mover["id"],
+                        "action": {"spell_resolution_id": cast["result"]["resolution_id"]},
+                        "expected_revision": cast["campaign_revision"],
+                        "idempotency_key": "guiding-hit",
+                    },
+                )
+                effect = helped["result"]["standard_on_hit_effects"][0]
+                assert effect["kind"] == "next_attack_advantage"
+                effect_id = effect["id"]
+            else:
+                helped = await _raw(
+                    server,
+                    "combat_common_action",
+                    {
+                        "campaign_id": campaign["id"],
+                        "actor_id": helper["id"],
+                        "target_id": rogue["id"],
+                        "action": "help",
+                        "expected_revision": started["campaign_revision"],
+                        "idempotency_key": "help",
+                    },
+                )
             ended = await _raw(
                 server,
                 "combat_end_turn",
@@ -224,6 +266,10 @@ def test_opportunity_help_is_consumed_on_hit_or_miss_and_sneak_attack_resets_eac
                 "expected_revision": moved["campaign_revision"],
                 "idempotency_key": "oa",
             }
+            assert choices[0]["target_position"] != {"x": 3, "y": 0}
+            assert next(
+                item for item in moved["combat"]["combatants"] if item["actor_id"] == mover["id"]
+            )["position"] == {"x": 3, "y": 0}
             before = await snapshot()
             with pytest.raises(ToolError, match="revision conflict"):
                 await _raw(
@@ -234,9 +280,18 @@ def test_opportunity_help_is_consumed_on_hit_or_miss_and_sneak_attack_resets_eac
             assert await snapshot() == before
             result = await _raw(server, "combat_reaction_attack", request)
             assert result["result"]["hit"] is not miss
-            assert plans[0]["helped_by"] == helper["id"]
+            if advantage_source == "help":
+                assert plans[0]["helped_by"] == helper["id"]
+            else:
+                assert plans[0]["next_attack_advantage_effect_id"] == effect_id
+                assert result["result"]["consumed_next_attack_advantage_effect_id"] == effect_id
             assert plans[0]["sneak_attack"]["eligibility"] == "advantage"
             combat = await status()
+            if advantage_source == "guiding_bolt":
+                consumed = next(
+                    item for item in combat["ongoing_effects"] if item["id"] == effect_id
+                )
+                assert consumed["active"] is False
             states = {item["actor_id"]: item for item in combat["combatants"]}
             assert not states[helper["id"]].get("turn_flags", {}).get("helping")
             assert states[rogue["id"]]["turn_budget"]["reaction"] == 0
@@ -247,9 +302,10 @@ def test_opportunity_help_is_consumed_on_hit_or_miss_and_sneak_attack_resets_eac
                 assert token == result["result"]["sneak_attack"]["turn_token"]
             after = await snapshot()
             hp = after["actors"][2]["sheet"]["combat"]["hp"]["value"]
-            assert (hp == 100) is miss
+            before_hp = before["actors"][2]["sheet"]["combat"]["hp"]["value"]
+            assert (hp == before_hp) is miss
             if not miss:
-                assert hp == 100 - result["result"]["damage"]["applied_amount"]
+                assert hp == before_hp - result["result"]["damage"]["applied_amount"]
             assert await _raw(server, "combat_reaction_attack", request) == result
             assert await snapshot() == after
             close_server(server)
@@ -316,6 +372,7 @@ def test_opportunity_help_is_consumed_on_hit_or_miss_and_sneak_attack_resets_eac
             assert own_token != old_token
             assert own_token.split(":")[0] == old_token.split(":")[0]
             assert not plans[-1]["helped_by"]
+            assert not plans[-1]["next_attack_advantage_effect_id"]
             own_state = next(
                 item for item in (await status())["combatants"] if item["actor_id"] == rogue["id"]
             )
