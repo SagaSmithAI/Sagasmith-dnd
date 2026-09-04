@@ -6890,7 +6890,9 @@ def resolve_actor_check(
                     ruling_kind="source_or_scene_fact",
                 )
         authoritative_source_kind = str(
-            save_source_kind if save_source_kind is not None else rule_facts.get("save_source_kind") or ""
+            save_source_kind
+            if save_source_kind is not None
+            else rule_facts.get("save_source_kind") or ""
         ).strip().casefold()
         authoritative_conditions = {
             str(item).strip().casefold()
