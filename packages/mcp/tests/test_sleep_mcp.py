@@ -5,6 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from mcp.server.mcpserver.exceptions import ToolError
 from sagasmith_dnd.character_schema import default_character_sheet
 from sagasmith_dnd.standard_spell_ids import CORE_SLEEP_SPELL_ID
 from test_conditional_species_saves_mcp import _selection
@@ -213,12 +214,12 @@ def test_real_2014_sleep_area_pool_and_replay(tmp_path: Path, cast_level: int) -
                                 [
                                     (0, 0),
                                     (10, 0),
+                                    (10, 1),
                                     (11, 0),
-                                    (10, 0),
                                     (13, 0),
                                     (14, 0),
-                                    (10, 1),
                                     (11, 1),
+                                    (12, 1),
                                 ],
                                 strict=True,
                             )
@@ -266,9 +267,31 @@ def test_real_2014_sleep_area_pool_and_replay(tmp_path: Path, cast_level: int) -
                 assert (
                     result["result"]["pool_remaining"] == result["result"]["pool_roll"]["total"] - 3
                 )
+
+                async def snapshot():
+                    return {
+                        "campaign": await _call(
+                            server,
+                            "campaign_query",
+                            {"view": "get", "payload": {"campaign_id": campaign_id}},
+                        ),
+                        "actors": [
+                            await _call(
+                                server,
+                                "character_query",
+                                {"view": "get", "payload": {"character_id": actor["id"]}},
+                            )
+                            for actor in actors
+                        ],
+                    }
+
+                after_cast = await snapshot()
+                assert await server.call_tool("combat_cast_spell", arguments) == raw
+                assert await snapshot() == after_cast
                 close_server(server)
                 server = create_server(config)
                 assert await server.call_tool("combat_cast_spell", arguments) == raw
+                assert await snapshot() == after_cast
                 cast_revision = result["campaign_revision"]
                 ended = await _call(
                     server,
@@ -281,7 +304,8 @@ def test_real_2014_sleep_area_pool_and_replay(tmp_path: Path, cast_level: int) -
                     },
                 )
                 cast_revision = ended["campaign_revision"]
-                with pytest.raises(Exception, match="another target"):
+                before_rejected = await snapshot()
+                with pytest.raises(ToolError, match="another target"):
                     await server.call_tool(
                         "combat_common_action",
                         {
@@ -293,7 +317,8 @@ def test_real_2014_sleep_area_pool_and_replay(tmp_path: Path, cast_level: int) -
                             "idempotency_key": "shake-self",
                         },
                     )
-                with pytest.raises(Exception, match="revision"):
+                assert await snapshot() == before_rejected
+                with pytest.raises(ToolError, match="revision"):
                     await server.call_tool(
                         "combat_common_action",
                         {
@@ -305,6 +330,7 @@ def test_real_2014_sleep_area_pool_and_replay(tmp_path: Path, cast_level: int) -
                             "idempotency_key": "shake-stale",
                         },
                     )
+                assert await snapshot() == before_rejected
                 shaken = await server.call_tool(
                     "combat_common_action",
                     {
@@ -323,6 +349,11 @@ def test_real_2014_sleep_area_pool_and_replay(tmp_path: Path, cast_level: int) -
                     {"view": "get", "payload": {"character_id": actors[1]["id"]}},
                 )
                 assert "unconscious" not in awakened["sheet"]["conditions"]
+                assert all(
+                    not effect["active"]
+                    for effect in awakened["sheet"]["effects"]
+                    if effect.get("source_spell_id") == CORE_SLEEP_SPELL_ID
+                )
                 zero = await server.call_tool(
                     "combat_hp_change",
                     {
@@ -349,7 +380,7 @@ def test_real_2014_sleep_area_pool_and_replay(tmp_path: Path, cast_level: int) -
                     ),
                     "target": still_sleeping,
                 }
-                with pytest.raises(Exception, match="legal action payment"):
+                with pytest.raises(ToolError, match="legal action payment"):
                     await server.call_tool(
                         "combat_common_action",
                         {
@@ -392,6 +423,8 @@ def test_real_2014_sleep_area_pool_and_replay(tmp_path: Path, cast_level: int) -
                     {"view": "get", "payload": {"character_id": actors[2]["id"]}},
                 )
                 assert "unconscious" not in damaged["sheet"]["conditions"]
+                assert damaged["sheet"]["combat"]["hp"]["value"] == 1
+                after_damage = await snapshot()
                 assert (
                     await server.call_tool(
                         "combat_hp_change",
@@ -412,6 +445,7 @@ def test_real_2014_sleep_area_pool_and_replay(tmp_path: Path, cast_level: int) -
                     )
                     == damage
                 )
+                assert await snapshot() == after_damage
             finally:
                 close_server(server)
         finally:
