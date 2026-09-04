@@ -92,6 +92,22 @@ def test_sleep_orders_current_hp_skips_immunity_and_does_not_mutate_inputs() -> 
     assert effect["duration"] == {"period": "minute", "remaining": 1}
     assert low["conditions"] == ["unconscious"]
 
+    valid_multi_ref_elf = _actor("multi-ref-elf", 1, elf=True)
+    valid_multi_ref_elf["sheet"]["content"]["features"][0]["mechanic_refs"].append(
+        "dnd5e.core.save.elf_traits"
+    )
+    multi_ref = resolve_sleep_targets(
+        [valid_multi_ref_elf], pool=1, source_actor_id="caster", source_spell_id=SLEEP_SPELL_ID
+    )
+    assert multi_ref["targets"][0]["skip_reason"] == "immune_to_magical_sleep"
+
+    not_undead = _actor("not-undead", 1)
+    not_undead["sheet"]["progression"]["species"] = "Undeadish"
+    not_undead_result = resolve_sleep_targets(
+        [not_undead], pool=1, source_actor_id="caster", source_spell_id=SLEEP_SPELL_ID
+    )
+    assert not_undead_result["targets"][0]["affected"] is True
+
     malformed = _actor("malformed-elf", 1, elf=True)
     malformed["sheet"]["content"]["features"][0]["mechanic_refs"] = []
     malformed_before = deepcopy(malformed)
