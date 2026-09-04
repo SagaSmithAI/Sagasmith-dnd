@@ -18564,16 +18564,6 @@ def _create_server(
                 damage_result.get("concentration"),
                 next_revision=campaign.revision + 1,
             )
-        sneak_attack = dict(result.get("sneak_attack") or {})
-        if sneak_attack.get("used"):
-            attacker_combatant = next(
-                item
-                for item in next_encounter["combatants"]
-                if item.get("actor_id") == actor_id
-            )
-            flags = dict(attacker_combatant.get("turn_flags") or {})
-            flags["sneak_attack_turn_token"] = sneak_attack["turn_token"]
-            attacker_combatant["turn_flags"] = flags
         if isinstance(result.get("damage"), dict):
             result["damage"] = {
                 key: value for key, value in result["damage"].items() if key != "sheet"
@@ -19811,6 +19801,16 @@ def _create_server(
                 damage_result.get("concentration"),
                 next_revision=campaign.revision + 1,
             )
+        sneak_attack = dict(result.get("sneak_attack") or {})
+        if sneak_attack.get("used"):
+            attacker_combatant = next(
+                item
+                for item in next_encounter["combatants"]
+                if item.get("actor_id") == actor_id
+            )
+            flags = dict(attacker_combatant.get("turn_flags") or {})
+            flags["sneak_attack_turn_token"] = sneak_attack["turn_token"]
+            attacker_combatant["turn_flags"] = flags
         if isinstance(result.get("damage"), dict):
             result["damage"] = {
                 key: value for key, value in result["damage"].items() if key != "sheet"

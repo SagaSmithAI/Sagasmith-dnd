@@ -215,6 +215,10 @@ def test_opportunity_sneak_attack_uses_trigger_snapshot_and_reaction_only(
             rogue_state = next(
                 item for item in status["combatants"] if item["actor_id"] == rogue["id"]
             )
+            assert (
+                rogue_state["turn_flags"]["sneak_attack_turn_token"]
+                == resolved["result"]["sneak_attack"]["turn_token"]
+            )
             assert rogue_state["turn_budget"]["reaction"] == 0
             assert rogue_state["turn_budget"]["main_action"] == 1
             receipts_after = await _call(
