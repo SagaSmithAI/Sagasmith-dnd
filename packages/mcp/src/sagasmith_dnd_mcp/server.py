@@ -6662,6 +6662,46 @@ def _create_server(
                         matches[0]["checksum"] = str(
                             dependency_provenance["definition_checksum"]
                         )
+            # Import provenance records this pre-save portable representation:
+            # rebinds have been applied, but export dependency normalization,
+            # authoring stripping, and runtime metadata have not yet happened.
+            recorded_expected_checksum = content_definition_checksum(
+                manifest=expected_manifest,
+                artifacts=expected_artifacts,
+                mechanics=expected_mechanics,
+            )
+            # The portable export pins each installed dependency to its runtime
+            # definition checksum (the same canonical value used by
+            # rule_content_descriptor), rather than the archive rebind's source
+            # proof checksum.
+            for dependency in expected_manifest.get("dependencies") or []:
+                if not isinstance(dependency, dict):
+                    continue
+                try:
+                    dependency_pack = rule_packs.get_version(
+                        str(dependency["id"]), str(dependency["version"])
+                    )
+                except (KeyError, LookupError):
+                    continue
+                dependency_content = dict(
+                    rule_packs.provenance(
+                        dependency_pack.pack_id,
+                        dependency_pack.version,
+                    ).get("content_definition")
+                    or {}
+                )
+                if dependency_content.get("definition_checksum"):
+                    dependency["checksum"] = str(dependency_content["definition_checksum"])
+                else:
+                    dependency_descriptor = rule_content_descriptor(
+                        dependency_pack.pack_id,
+                        dependency_pack.version,
+                    )
+                    dependency["checksum"] = content_definition_checksum(
+                        manifest=dependency_descriptor["manifest"],
+                        artifacts=dependency_descriptor["artifacts"],
+                        mechanics=dependency_descriptor["mechanics"],
+                    )
             expected_artifacts = _strip_artifact_authoring_state(expected_artifacts)
             expected_artifacts = refresh_portable_resolution_plans(expected_artifacts)
             expected_mechanics = refresh_portable_resolution_plans(expected_mechanics)
@@ -6699,13 +6739,16 @@ def _create_server(
                 and str(content_definition.get("package_version") or "") == str(archive["version"])
                 and str(content_definition.get("package_checksum") or "")
                 == str(archive["checksum"])
-                and recorded_runtime_checksum == expected_checksum
+                and recorded_runtime_checksum == recorded_expected_checksum
                 and installed_checksum == expected_checksum
                 and recorded_source_checksum == str(definition["definition_checksum"])
             )
             if not valid:
                 raise ValueError(
-                    "reserved official rule definition does not match its managed archive"
+                    "reserved official rule definition does not match its managed archive "
+                    f"(recorded={recorded_runtime_checksum}, "
+                    f"expected_recorded={recorded_expected_checksum}, "
+                    f"installed={installed_checksum}, expected={expected_checksum})"
                 )
             return {
                 "package": archive,
