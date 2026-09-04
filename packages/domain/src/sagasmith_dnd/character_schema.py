@@ -392,6 +392,7 @@ def _default_inventory() -> dict[str, Any]:
     return {
         "wallet": {denomination: 0 for denomination in DENOMINATIONS},
         "items": [],
+        "external_items": [],
         "equipment_slots": {slot: None for slot in EQUIPMENT_SLOTS},
         "encumbrance": {"mode": "standard", "ignore_currency_weight": False},
     }
@@ -1466,7 +1467,11 @@ def _normalize_intrinsic_attack(value: Any, field: str) -> dict[str, Any]:
 
 def validate_inventory(value: Any) -> dict[str, Any]:
     inventory = _merge_defaults(_default_inventory(), _object(value or {}, "inventory"))
-    _reject_unknown(inventory, "inventory", {"wallet", "items", "equipment_slots", "encumbrance"})
+    _reject_unknown(
+        inventory,
+        "inventory",
+        {"wallet", "items", "external_items", "equipment_slots", "encumbrance"},
+    )
     wallet = _object(inventory["wallet"], "inventory.wallet")
     _reject_unknown(wallet, "inventory.wallet", set(DENOMINATIONS))
     normalized_wallet = {
@@ -1482,7 +1487,57 @@ def validate_inventory(value: Any) -> dict[str, Any]:
     item_ids = {item["id"] for item in items}
     if len(item_ids) != len(items):
         raise ValueError("inventory.items contains duplicate ids")
-    attuned_items = [item for item in items if item["attunement"] == "attuned"]
+    external_items = []
+    for index, raw in enumerate(_array(inventory["external_items"], "inventory.external_items")):
+        field = f"inventory.external_items[{index}]"
+        entry = _object(raw, field)
+        _reject_unknown(entry, field, {"id", "name", "attunement", "location"})
+        external_id = _text(entry.get("id"), f"{field}.id", maximum=100)
+        if not external_id:
+            raise ValueError(f"{field}.id must be a non-empty string")
+        name = _text(entry.get("name"), f"{field}.name", maximum=300)
+        attunement = _text(entry.get("attunement"), f"{field}.attunement")
+        if attunement not in {"none", "required", "attuned"}:
+            raise ValueError(f"{field}.attunement is invalid")
+        location = _object(entry.get("location"), f"{field}.location")
+        kind = _text(location.get("kind"), f"{field}.location.kind")
+        if kind == "ground":
+            _reject_unknown(location, f"{field}.location", {"kind", "ground_id", "item_id"})
+            normalized_location = {
+                "kind": kind,
+                "ground_id": _text(
+                    location.get("ground_id"), f"{field}.location.ground_id", maximum=100
+                ),
+                "item_id": _text(location.get("item_id"), f"{field}.location.item_id", maximum=100),
+            }
+        elif kind == "actor":
+            _reject_unknown(location, f"{field}.location", {"kind", "actor_id", "item_id"})
+            normalized_location = {
+                "kind": kind,
+                "actor_id": _text(
+                    location.get("actor_id"), f"{field}.location.actor_id", maximum=100
+                ),
+                "item_id": _text(location.get("item_id"), f"{field}.location.item_id", maximum=100),
+            }
+        else:
+            raise ValueError(f"{field}.location.kind is invalid")
+        for location_id in normalized_location.values():
+            if isinstance(location_id, str) and not location_id:
+                raise ValueError(f"{field}.location ids must be non-empty strings")
+        external_items.append(
+            {
+                "id": external_id,
+                "name": name,
+                "attunement": attunement,
+                "location": normalized_location,
+            }
+        )
+    external_ids = {item["id"] for item in external_items}
+    if len(external_ids) != len(external_items):
+        raise ValueError("inventory.external_items contains duplicate ids")
+    if item_ids & external_ids:
+        raise ValueError("inventory.external_items ids must not collide with inventory item ids")
+    attuned_items = [item for item in items + external_items if item["attunement"] == "attuned"]
     if len(attuned_items) > 3:
         raise ValueError("a character cannot be attuned to more than three magic items")
     # source_key records provenance and can legitimately differ between two
@@ -1555,6 +1610,7 @@ def validate_inventory(value: Any) -> dict[str, Any]:
     return {
         "wallet": normalized_wallet,
         "items": items,
+        "external_items": external_items,
         "equipment_slots": normalized_slots,
         "encumbrance": {
             "mode": mode,
@@ -3312,7 +3368,7 @@ def validate_character_sheet(
     if exhaustion >= 6 and "dead" not in conditions:
         conditions.append("dead")
     if "dead" in conditions:
-        for item in inventory["items"]:
+        for item in inventory["items"] + inventory["external_items"]:
             if item["attunement"] == "attuned":
                 item["attunement"] = "required"
     effects = [
@@ -3380,7 +3436,9 @@ def validate_character_sheet(
         "sheet.progression.subclass_grants.spell_list_expansion",
     )
     inventory_item_ids = {item["id"] for item in inventory["items"]}
-    if not set(background_item_ids).issubset(inventory_item_ids):
+    if not set(background_item_ids).issubset(
+        inventory_item_ids | {item["id"] for item in inventory["external_items"]}
+    ):
         raise ValueError("background equipment references an unknown inventory item")
 
     normalized = {
@@ -4999,12 +5057,21 @@ def attune_inventory_item(sheet: dict[str, Any], item_id: str) -> dict[str, Any]
         None,
     )
     if item is None:
+        item = next(
+            (entry for entry in value["inventory"]["external_items"] if entry["id"] == item_id),
+            None,
+        )
+    if item is None:
         raise LookupError(item_id)
     if item["attunement"] == "none":
         raise ValueError("item does not require attunement")
     if item["attunement"] == "attuned":
         raise ValueError("item is already attuned")
-    attuned = [entry for entry in value["inventory"]["items"] if entry["attunement"] == "attuned"]
+    attuned = [
+        entry
+        for entry in value["inventory"]["items"] + value["inventory"]["external_items"]
+        if entry["attunement"] == "attuned"
+    ]
     if len(attuned) >= 3:
         raise ValueError("a character cannot be attuned to more than three magic items")
     identity = str(item.get("name") or item.get("source_key") or "").strip().casefold()
