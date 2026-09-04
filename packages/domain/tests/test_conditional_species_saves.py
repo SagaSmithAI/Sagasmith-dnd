@@ -136,7 +136,10 @@ def test_species_save_advantage_cancels_disadvantage_and_is_2014_only(
     assert modern["roll_mode"] == "normal"
 
 
-@pytest.mark.parametrize("ability", ["strength", "dexterity", "constitution", "intelligence", "wisdom", "charisma"])
+@pytest.mark.parametrize(
+    "ability",
+    ["strength", "dexterity", "constitution", "intelligence", "wisdom", "charisma"],
+)
 @pytest.mark.parametrize("source", ["spell", "magical_effect", "nonmagical_effect"])
 def test_gnome_cunning_only_applies_to_mental_magical_saves(ability: str, source: str) -> None:
     actor = _actor("gnome_cunning", "dnd5e.core.save.gnome_cunning")
