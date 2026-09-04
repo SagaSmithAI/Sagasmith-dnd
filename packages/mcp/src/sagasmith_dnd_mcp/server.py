@@ -1285,9 +1285,6 @@ WATCHERS_EYE_CAPABILITIES = frozenset(
         "local_law",
         "local_criminal_activity",
         "watch_outpost",
-        "law_enforcement_contact",
-        "watch_information",
-        "recognition",
     }
 )
 WATCHERS_EYE_FACT_METADATA_KEY = "dnd5e_watchers_eye"
