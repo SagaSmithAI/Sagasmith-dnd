@@ -11,7 +11,11 @@ from typing import Any
 
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
+from sagasmith_core import Database
 from sagasmith_core.content_pack import dumps_content_archive
+from sagasmith_core.database import sqlite_database_url
+from sagasmith_core.models import RulePackPayload, RulePackVersion
+from sagasmith_core.state_document_storage import decode_state_document, encode_state_document
 from sagasmith_dnd.character_schema import (
     add_inventory_item,
     default_character_notes,
@@ -36,6 +40,7 @@ from sagasmith_dnd.standard_feature_ids import (
     TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
     TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
     TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
+    TORTLE_NATURAL_ARMOR_LEGACY_PACK_VERSIONS,
 )
 
 import sagasmith_dnd_mcp.server as server_module
@@ -46,9 +51,7 @@ from sagasmith_dnd_mcp.server import (
     create_server,
 )
 
-_SCAG_ADDON_ID = (
-    "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a.addon"
-)
+_SCAG_ADDON_ID = "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a.addon"
 _SCAG_RULE_ID = _SCAG_ADDON_ID.removesuffix(".addon")
 _CITY_WATCH_ID = f"{_SCAG_RULE_ID}.background.city-watch"
 _TORTLE_ADDON_ID = "dnd5e.addon.rulebook.d-d-5e-the-tortle-package.e3234de670da.addon"
@@ -117,9 +120,7 @@ async def _selection_for(
             options = list(requirements.get(options_key) or [])
             if key == "languages" and len(options) < count:
                 options.extend(
-                    value
-                    for value in ("Draconic", "Dwarvish", "Elvish")
-                    if value not in options
+                    value for value in ("Draconic", "Dwarvish", "Elvish") if value not in options
                 )
             selection[key] = options[:count]
     equipment = list(requirements.get("equipment_package_options") or [])
@@ -554,6 +555,7 @@ def test_finalized_tortle_archive_settles_natural_armor_end_to_end(
     )
 
     def deterministic_attack(*, plan: dict[str, Any]) -> Any:
+        # Fixed legal roll hits AC 19 but is blocked by the Shield reaction's AC 24.
         return engine_roll_attack_action(plan=plan, rng=random.Random(0))
 
     monkeypatch.setattr(server_module, "roll_attack_action", deterministic_attack)
@@ -592,6 +594,36 @@ def test_finalized_tortle_archive_settles_natural_armor_end_to_end(
         assert activated["activation"]["enabled"] is True
         tortle_sheet = default_character_sheet()
         tortle_sheet["skills"]["survival"]["proficiency"] = "expertise"
+        tortle_sheet["traits"]["proficiencies"]["armor"] = ["heavy armor", "shields"]
+        tortle_sheet["spellcasting"]["spell_slots"] = {
+            "1": {
+                "label": "1st",
+                "value": 1,
+                "max": 1,
+                "recovers_on": "long_rest",
+                "source_key": "wizard",
+            }
+        }
+        tortle_sheet["content"]["spells"] = [
+            {
+                "id": CORE_SHIELD_SPELL_ID,
+                "name": "Shield",
+                "level": 1,
+                "grant": {"source_type": "class", "source_key": "wizard", "method": "known"},
+                "access": {"known": True, "prepared": True},
+                "definition": {
+                    "casting_time": "1 reaction, which you take when hit by an attack",
+                    "duration": {
+                        "kind": "timed",
+                        "value": 1,
+                        "unit": "round",
+                        "concentration": False,
+                    },
+                    "components": {"verbal": True, "somatic": True},
+                },
+                "mechanic_refs": [CORE_SHIELD_MECHANIC_ID],
+            }
+        ]
         character = await _call(
             server,
             "character_create_from",
@@ -653,7 +685,7 @@ def test_finalized_tortle_archive_settles_natural_armor_end_to_end(
             "campaign_query",
             {"view": "get", "payload": {"campaign_id": campaign["id"]}},
         )
-        disabled = await _call(
+        await _call(
             server,
             "content_pack",
             {
@@ -683,6 +715,15 @@ def test_finalized_tortle_archive_settles_natural_armor_end_to_end(
         )
         assert race_after["revision"] == race_character["revision"]
         assert race_after["sheet"]["content"]["selections"] == []
+        # Addon activation responses expose the activation/effective ruleset,
+        # while the authoritative campaign revision is returned by the
+        # campaign facade.  Read it after deactivation for the next guarded
+        # mutation instead of assuming a deprecated top-level field.
+        campaign_after_disable = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
         reactivated = await _call(
             server,
             "content_pack",
@@ -694,7 +735,7 @@ def test_finalized_tortle_archive_settles_natural_armor_end_to_end(
                     "addon_id": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
                     "version": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
                 },
-                "expected_revision": disabled["campaign_revision"],
+                "expected_revision": campaign_after_disable["revision"],
                 "idempotency_key": "reactivate-after-race",
             },
         )
@@ -790,39 +831,6 @@ def test_finalized_tortle_archive_settles_natural_armor_end_to_end(
         sheet = equip_inventory_item(sheet, armor_id, "armor")
         sheet = equip_inventory_item(sheet, shield_id, "shield")
         sheet["combat"]["hp"] = {"value": 20, "max": 20, "temp": 0}
-        sheet["spellcasting"]["spell_slots"] = {
-            "1": {
-                "label": "1st",
-                "value": 1,
-                "max": 1,
-                "recovers_on": "long_rest",
-                "source_key": "wizard",
-            }
-        }
-        sheet["content"]["spells"].append(
-            {
-                "id": CORE_SHIELD_SPELL_ID,
-                "name": "Shield",
-                "level": 1,
-                "grant": {
-                    "source_type": "class",
-                    "source_key": "wizard",
-                    "method": "known",
-                },
-                "access": {"known": True, "prepared": True},
-                "definition": {
-                    "casting_time": "1 reaction, which you take when hit by an attack",
-                    "duration": {
-                        "kind": "timed",
-                        "value": 1,
-                        "unit": "round",
-                        "concentration": False,
-                    },
-                    "components": {"verbal": True, "somatic": True},
-                },
-                "mechanic_refs": [CORE_SHIELD_MECHANIC_ID],
-            }
-        )
         assert derive_character_sheet(sheet)["armor_class"] == 23
         persisted = await _call(
             server,
@@ -1005,6 +1013,151 @@ def test_finalized_tortle_archive_settles_natural_armor_end_to_end(
     asyncio.run(exercise())
 
 
+@pytest.mark.parametrize("tamper", ("artifact_game", "resolution_policy", "semantic_validation"))
+def test_reserved_tortle_archive_rejects_installed_payload_tampering(
+    tmp_path: Path, tamper: str
+) -> None:
+    repository_root = Path(__file__).resolve().parents[3]
+    official_library = repository_root.parent / "SagaSmith-dnd-content-library" / "content-library"
+    if not (official_library / "index.json").is_file():
+        pytest.skip("requires the sibling finalized SagaSmith D&D content library")
+    config = McpConfig(
+        home=tmp_path / "home",
+        database_url=None,
+        chroma_url=None,
+        chroma_path_override=None,
+        dnd_skills_dir=repository_root / "skills",
+        modulegen_skills_dir=tmp_path / "modulegen-skills",
+        auto_seed_rules=True,
+        official_content_library=official_library,
+    )
+
+    async def exercise() -> None:
+        server = create_server(config)
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {"name": "Tortle payload tamper", "edition": "2014", "idempotency_key": "campaign"},
+        )
+        profile = await _call(
+            server, "campaign_rules", {"campaign_id": campaign["id"], "action": "get_profile"}
+        )
+        await _call(
+            server,
+            "content_pack",
+            {
+                "action": "activate",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "kind": "addon",
+                    "addon_id": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
+                    "version": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
+                },
+                "expected_revision": profile["campaign_revision"],
+                "idempotency_key": "activate",
+            },
+        )
+        character = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": "Tortle",
+                    "sheet": default_character_sheet(),
+                },
+                "idempotency_key": "character",
+            },
+        )
+        applied = await _call(
+            server,
+            "character_content_apply",
+            {
+                "character_id": character["id"],
+                "artifact_id": TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
+                "selection": {},
+                "expected_revision": character["revision"],
+                "idempotency_key": "apply",
+            },
+        )
+        before_campaign = await _call(
+            server, "campaign_query", {"view": "get", "payload": {"campaign_id": campaign["id"]}}
+        )
+        before_character = await _call(
+            server, "character_query", {"view": "get", "payload": {"character_id": character["id"]}}
+        )
+        database = Database(sqlite_database_url(config.database_path))
+        try:
+            with database.transaction() as session:
+                row = session.get(
+                    RulePackVersion,
+                    {
+                        "pack_id": _TORTLE_RULE_ID,
+                        "version": next(iter(TORTLE_NATURAL_ARMOR_LEGACY_PACK_VERSIONS)),
+                    },
+                )
+                assert row is not None
+                payload = decode_state_document(
+                    document_id=row.payload_document.id,
+                    payload_codec=row.payload_document.payload_codec,
+                    uncompressed_size=row.payload_document.uncompressed_size,
+                    compressed_payload=bytes(row.payload_document.compressed_payload),
+                )
+                if tamper == "artifact_game":
+                    artifact = next(
+                        item
+                        for item in payload["artifacts"]
+                        if item.get("id") == TORTLE_NATURAL_ARMOR_ARTIFACT_ID
+                    )
+                    artifact.setdefault("game", {})["armor_class"] = 99
+                elif tamper == "resolution_policy":
+                    payload["manifest"]["resolution_policy"] = "tampered"
+                else:
+                    payload["manifest"]["semantic_validation"] = {
+                        "complete": False,
+                        "unresolved": [],
+                    }
+                encoded = encode_state_document(payload)
+                document = RulePackPayload(
+                    id=encoded.document_id,
+                    payload_codec=encoded.payload_codec,
+                    uncompressed_size=encoded.uncompressed_size,
+                    compressed_payload=encoded.compressed_payload,
+                )
+                session.add(document)
+                row.payload_document_id = document.id
+        finally:
+            database.dispose()
+        with pytest.raises(ToolError, match="immutable official content archive"):
+            await _call(
+                server,
+                "character_content_apply",
+                {
+                    "character_id": character["id"],
+                    "artifact_id": TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
+                    "selection": {},
+                    "expected_revision": applied["revision"],
+                    "idempotency_key": f"tamper-{tamper}",
+                },
+            )
+        after_campaign = await _call(
+            server, "campaign_query", {"view": "get", "payload": {"campaign_id": campaign["id"]}}
+        )
+        after_character = await _call(
+            server, "character_query", {"view": "get", "payload": {"character_id": character["id"]}}
+        )
+        assert after_campaign["revision"] == before_campaign["revision"]
+        assert after_character["revision"] == before_character["revision"]
+        assert (
+            after_character["sheet"]["content"]["selections"]
+            == before_character["sheet"]["content"]["selections"]
+        )
+        close_server(server)
+
+    asyncio.run(exercise())
+
+
 def test_official_expansion_lock_matches_seeded_core_content(tmp_path: Path) -> None:
     repository_root = Path(__file__).resolve().parents[3]
     config = McpConfig(
@@ -1092,9 +1245,10 @@ def test_locked_scag_and_tortle_activate_exact_dependency_closure_apply_and_rest
                     "idempotency_key": "activate-locked-scag",
                 },
             )
-            assert {
-                item["pack_id"] for item in scag["effective_ruleset"]["lock"]
-            } == {CORE_CONTENT_PACK_ID, _SCAG_RULE_ID}
+            assert {item["pack_id"] for item in scag["effective_ruleset"]["lock"]} == {
+                CORE_CONTENT_PACK_ID,
+                _SCAG_RULE_ID,
+            }
 
             current_campaign = await _call(
                 server,
@@ -1175,9 +1329,10 @@ def test_locked_scag_and_tortle_activate_exact_dependency_closure_apply_and_rest
             )
             assert restored["sheet"]["progression"]["background"] == "City Watch"
             assert restored["sheet"]["progression"]["species"] == "Tortle"
-            assert {
-                item["artifact_id"] for item in restored["sheet"]["content"]["selections"]
-            } >= {_CITY_WATCH_ID, _TORTLE_ID}
+            assert {item["artifact_id"] for item in restored["sheet"]["content"]["selections"]} >= {
+                _CITY_WATCH_ID,
+                _TORTLE_ID,
+            }
         finally:
             close_server(restarted)
 

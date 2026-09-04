@@ -1748,6 +1748,14 @@ def test_2014_tortle_natural_armor_ignores_worn_armor_but_allows_shields() -> No
             "stealth_disadvantage": True,
         },
         {
+            "base_ac": 16,
+            "category": "heavy",
+            "dexterity_mode": "none",
+            "magic_bonus": 0,
+            "strength_requirement": 13,
+            "stealth_disadvantage": True,
+        },
+        {
             "base_ac": 18,
             "category": "heavy",
             "dexterity_mode": "none",
@@ -1758,7 +1766,19 @@ def test_2014_tortle_natural_armor_ignores_worn_armor_but_allows_shields() -> No
     ):
         armored = deepcopy(sheet)
         armored["inventory"]["items"][0]["mechanics"] = mechanics
-        assert derive_tortle(armored)["armor_class"] == 19
+        armored_derived = derive_tortle(armored)
+        assert armored_derived["armor_class"] == 19
+        assert armored_derived["stealth_disadvantage"] == mechanics["stealth_disadvantage"]
+        assert armored_derived["equipment_penalties"]["spellcasting_blocked"] is True
+        assert armored_derived["speed"]["walk"] == (
+            20 if mechanics.get("strength_requirement", 0) > 10 else 30
+        )
+        armored["inventory"]["equipment_slots"]["shield"] = None
+        for item in armored["inventory"]["items"]:
+            if item["id"] == shield_id:
+                item["equipped"] = False
+                item["equipped_slot"] = None
+        assert derive_tortle(armored)["armor_class"] == 17
 
     without_shield = deepcopy(sheet)
     without_shield["inventory"]["equipment_slots"]["shield"] = None

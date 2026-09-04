@@ -386,31 +386,29 @@ def test_scag_watchers_eye_is_source_bound_bounded_and_persistent(
                 "idempotency_key": "replacement-city-watch",
             },
         )
-        replacement = await _call(
+        # Whole-sheet ingress cannot erase an authorized background. An explicit
+        # background replacement workflow is a separate, still-open requirement.
+        with pytest.raises(Exception, match="authoritative background state cannot be removed"):
+            await _call(
+                server,
+                "character_sheet_replace",
+                {
+                    "character_id": replacement["id"],
+                    "sheet": default_character_sheet(),
+                    "expected_revision": replacement["revision"],
+                    "idempotency_key": "rebuild-background-selection",
+                },
+            )
+        unchanged = await _call(
             server,
-            "character_sheet_replace",
+            "character_query",
             {
-                "character_id": replacement["id"],
-                "sheet": default_character_sheet(),
-                "expected_revision": replacement["revision"],
-                "idempotency_key": "rebuild-background-selection",
+                "view": "get",
+                "payload": {"character_id": replacement["id"]},
             },
         )
-        assert replacement["sheet"]["content"]["features"] == []
-        replacement = await _call(
-            server,
-            "character_content_apply",
-            {
-                "character_id": replacement["id"],
-                "artifact_id": investigator_id,
-                "selection": {},
-                "expected_revision": replacement["revision"],
-                "idempotency_key": "replacement-investigator",
-            },
-        )
-        replacement_features = replacement["sheet"]["content"]["features"]
-        assert [item["id"] for item in replacement_features] == [investigator_feature["id"]]
-        assert replacement["sheet"]["content"]["selections"][0]["artifact_id"] == investigator_id
+        assert unchanged["revision"] == replacement["revision"]
+        assert unchanged["sheet"] == replacement["sheet"]
 
         city = await _call(
             server,
