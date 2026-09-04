@@ -2383,6 +2383,44 @@ def test_intrinsic_claws_settle_as_strength_unarmed_slashing_attack() -> None:
     assert damaged["sheet"]["combat"]["hp"]["value"] == 13
 
 
+@pytest.mark.parametrize("natural,damage_rolls,expected_damage", [(10, [4], 9), (20, [4, 3], 12)])
+def test_ranged_finesse_settles_strength_attack_and_damage(
+    natural, damage_rolls, expected_damage
+) -> None:
+    attacker = _actor("dart-user")
+    attacker["sheet"]["abilities"]["strength"]["score"] = 18
+    attacker["sheet"]["abilities"]["dexterity"]["score"] = 12
+    attacker["sheet"]["traits"]["proficiencies"]["weapons"] = ["simple weapons"]
+    sheet, weapon_id = add_inventory_item(
+        attacker["sheet"],
+        {
+            "id": "dart",
+            "name": "Dart +1",
+            "kind": "weapon",
+            "mechanics": {
+                "category": "simple", "attack_type": "ranged", "attack_ability": "dexterity",
+                "damage_formula": "1d4", "damage_type": "piercing", "magic_bonus": 1,
+                "properties": ["finesse", "thrown"], "normal_range_ft": 20, "long_range_ft": 60,
+            },
+        },
+    )
+    attacker["sheet"] = equip_inventory_item(sheet, weapon_id, "main_hand")
+    attacker["derived"] = derive_character_sheet(attacker["sheet"])
+    target = _actor("target", hp=20, ac=10)
+    before = deepcopy((attacker, target))
+    rules = resolution_context({"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []})
+    plan = preflight_attack(attacker, target, action={"weapon_id": weapon_id}, rules=rules)
+    assert plan["attack_bonus"] == 7
+    assert plan["damage_expression"] == "1d4 + 5"
+    _, damaged, result = resolve_attack_action(
+        attacker, target, plan=plan, rules=rules, rng=_SequenceRng(natural, *damage_rolls)
+    )
+    assert result["hit"] is True
+    assert result["damage"]["input_amount"] == expected_damage
+    assert damaged["sheet"]["combat"]["hp"]["value"] == 20 - expected_damage
+    assert (attacker, target) == before
+
+
 def test_positioned_ranged_attack_requires_recorded_range() -> None:
     attacker = _actor("archer")
     attacker["sheet"]["inventory"]["items"] = [

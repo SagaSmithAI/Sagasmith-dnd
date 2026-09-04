@@ -4424,11 +4424,7 @@ def _weapon_attacks(
         magic_bonus = mechanics["magic_bonus"] if magic_properties_active else 0
         ability = mechanics["attack_ability"]
         property_keys = {str(value).strip().casefold() for value in mechanics["properties"]}
-        if (
-            mechanics["attack_type"] == "melee"
-            and "finesse" in property_keys
-            and ability in {"strength", "dexterity"}
-        ):
+        if "finesse" in property_keys and ability in {"strength", "dexterity"}:
             ability = max(
                 ("strength", "dexterity"),
                 key=lambda candidate: ability_modifiers[candidate],
