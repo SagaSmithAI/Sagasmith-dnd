@@ -21,6 +21,10 @@ from sagasmith_dnd.spell_resolution import (
 )
 from sagasmith_dnd.standard_feature_ids import (
     CORE_DWARF_HEAVY_ARMOR_SPEED_MECHANIC_ID,
+    CORE_DWARVEN_RESILIENCE_MECHANIC_ID,
+    CORE_FEY_ANCESTRY_MECHANIC_ID,
+    CORE_GNOME_CUNNING_MECHANIC_ID,
+    CORE_HALFLING_BRAVE_MECHANIC_ID,
     CORE_RELENTLESS_ENDURANCE_MECHANIC_ID,
 )
 from sagasmith_dnd.standard_spell_ids import (
@@ -31,6 +35,13 @@ from sagasmith_dnd.standard_spell_ids import (
 
 PACK_ID = "dnd5e.content.srd2014"
 PACK_VERSION = "1.28.0"
+
+_CONDITIONAL_SPECIES_SAVE_TRAITS = {
+    "dwarven resilience": ("dwarven_resilience", CORE_DWARVEN_RESILIENCE_MECHANIC_ID),
+    "fey ancestry": ("fey_ancestry", CORE_FEY_ANCESTRY_MECHANIC_ID),
+    "gnome cunning": ("gnome_cunning", CORE_GNOME_CUNNING_MECHANIC_ID),
+    "brave": ("halfling_brave", CORE_HALFLING_BRAVE_MECHANIC_ID),
+}
 
 _SUBCLASS_LEVELS = {
     "barbarian": 3,
@@ -562,6 +573,19 @@ def _species_grants(name: str, traits: list[tuple[str, str]]) -> dict[str, Any]:
                 "activation": {"type": "passive"},
                 "mechanic_refs": [],
             }
+            if key in _CONDITIONAL_SPECIES_SAVE_TRAITS:
+                trait_kind, mechanic_id = _CONDITIONAL_SPECIES_SAVE_TRAITS[key]
+                trait = {
+                    "kind": trait_kind,
+                    "automatic": True,
+                    "source_excerpt": body[:2000],
+                }
+                if trait_kind == "fey_ancestry":
+                    trait["magical_sleep_immunity"] = True
+                feature.update(
+                    choices={"source_trait": trait},
+                    mechanic_refs=[mechanic_id],
+                )
             if name == "Half-Orc" and key == "relentless endurance":
                 feature.update(
                     uses={
