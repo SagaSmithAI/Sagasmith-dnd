@@ -755,6 +755,24 @@ other semantics that the generic plan vocabulary cannot express remain an
 explicit Agent/DM ruling plus ordinary public continuity and state operations;
 the engine must not infer them from a monster name or prose fragment.
 
+For a semantic `check.save`, record conditional-save classification in that
+step's existing `args.source` object when authoring its plan. Include the exact
+`source`, `source_ref`, and `source_excerpt` of one plan citation, plus
+`save_source_kind` (`spell`, `magical_effect`, or `nonmagical_effect`),
+`save_effect_conditions` (the conditions this save prevents), and strict boolean
+`save_against_poison`. A spell card must use `spell`. The excerpt must occur in
+that exact card's recorded effect text; another relevant citation elsewhere in
+the plan is insufficient. Keep these values constant, with no slot/result
+references. Runtime bindings select only the plan's declared variable inputs.
+Interpret each save clause separately: damage type, the target's existing
+conditions, or conditions applied by another step do not classify this save.
+The engine uses the validated per-step facts for 2014 Dwarven Resilience, Fey
+Ancestry, Gnome Cunning, and Brave, retaining the plan fingerprint and citations
+in settlement. Legacy text-only sources carry no classification; a conditional
+save requiring missing facts remains unresolved, not silently an ordinary roll.
+Do not pass these engine-owned classification fields through generic
+`rule_facts`, or bypass the source's action/resource payment with a generic check.
+
 When an attack returns `status: pending_reaction`, no damage has been rolled or
 applied. The target actor reads its owned window with
 `combat_query(view="reactions")`, chooses a listed defense or `decline`, and calls

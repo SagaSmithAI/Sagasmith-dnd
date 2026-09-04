@@ -418,6 +418,7 @@ from sagasmith_dnd.rule_engine import (
     validate_source_bound_mechanics,
 )
 from sagasmith_dnd.rule_providers import load_native_rule_providers
+from sagasmith_dnd.save_context import validated_save_source_facts
 from sagasmith_dnd.sleep import resolve_sleep_targets, wake_sleep_effects
 from sagasmith_dnd.spatial import (
     BattleMapError,
@@ -1088,6 +1089,41 @@ ENGINE_SETTLED_CARD_MECHANIC_IDS = frozenset(
         CORE_WITCH_BOLT_MECHANIC_ID,
     }
 )
+
+
+def _semantic_plan_save_facts(
+    source_card: dict[str, Any], compiled_plan: Any
+) -> dict[str, dict[str, Any]]:
+    """Bind each save's static classification to that card's own effect text.
+
+    Plan-wide citation relevance is insufficient: an unrelated citation must
+    not classify another clause's save. Interpretation remains authored Pack
+    evidence; this boundary checks identity and does not infer rules from prose.
+    """
+    if str(source_card.get("id") or "") != compiled_plan.source_card_id:
+        raise CombatEngineError("save source plan does not match its recorded card")
+    evidence_texts = source_cards.source_card_evidence_texts(source_card)
+    result: dict[str, dict[str, Any]] = {}
+    for step in compiled_plan.steps:
+        if step["op"] != "check.save":
+            continue
+        source = step["args"].get("source")
+        try:
+            facts = validated_save_source_facts(
+                source,
+                citations=compiled_plan.citations,
+                source_card_kind=compiled_plan.source_card_kind,
+            )
+        except ValueError as error:
+            raise CombatEngineError(f"save step {step['id']} source: {error}") from error
+        if facts:
+            excerpt = _normalize_source_evidence_text(source["source_excerpt"])
+            if not any(excerpt in evidence for evidence in evidence_texts):
+                raise CombatEngineError(
+                    f"save step {step['id']} must cite its recorded card effect"
+                )
+        result[step["id"]] = facts
+    return result
 
 
 def _structured_spell_save_facts(
@@ -11055,9 +11091,13 @@ def _create_server(
         """Resolve one executable plan from the exact recorded character card."""
 
         try:
-            return source_cards.character_resolution_plan(sheet, source_card_id, source_card_kind)
+            card, compiled = source_cards.character_resolution_plan(
+                sheet, source_card_id, source_card_kind
+            )
         except source_cards.CharacterSourceCardError as error:
             raise CombatEngineError(str(error)) from error
+        _semantic_plan_save_facts(card, compiled)
+        return card, compiled
 
     def character_activity_source_card(
         sheet: dict[str, Any],
@@ -11278,6 +11318,7 @@ def _create_server(
             raise CombatEngineError(
                 "authored resolution plan must cite the exact recorded card effect"
             )
+        _semantic_plan_save_facts(source_card, compiled)
         return compiled
 
     def sheet_with_content_solution(
@@ -18242,6 +18283,7 @@ def _create_server(
                         raise CombatEngineError(
                             "recorded weapon plan must be an item attack.after_hit contract"
                         )
+                    _semantic_plan_save_facts(item_card, compiled_item_plan)
         except NeedsRulingError:
             if access.require_campaign(campaign_id, principal_id).role not in CAMPAIGN_DM_ROLES:
                 raise CombatEngineError("attack requires Agent-as-DM adjudication") from None
@@ -23538,6 +23580,7 @@ def _create_server(
                 or compiled_activity_plan.source_card_kind != activity_source_card_kind
             ):
                 raise CombatEngineError("recorded activity resolution plan does not match its card")
+            _semantic_plan_save_facts(activity_card, compiled_activity_plan)
             if compiled_activity_plan.trigger != "action":
                 raise CombatEngineError(
                     "a combat-used activity resolution plan must use the action trigger"
@@ -26205,6 +26248,7 @@ def _create_server(
             source_card_id,
             source_card_kind,
         )
+        save_facts_by_step = _semantic_plan_save_facts(_source_card, compiled_plan)
         normalized_commitment, bound_plan = validate_agent_resolution_commitment(
             campaign_id,
             commitment,
@@ -26451,6 +26495,7 @@ def _create_server(
                                     "ability": ability,
                                     "dc": dc,
                                     "semantic_plan_id": compiled_plan.id,
+                                    **save_facts_by_step[step_id],
                                 },
                                 branch_id=resolved_branch_id,
                             ),
