@@ -29967,6 +29967,46 @@ def _create_server(
         all_characters = characters.list(campaign_id=current.campaign_id)
         if sleep:
             access.require_campaign(current.campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
+            stream = active_random_stream()
+            if stream is None:
+                stream = CampaignRandomStream.from_campaign_state(
+                    current.campaign_id,
+                    campaign.state,
+                    operation="character_action",
+                    idempotency_key=idempotency_key,
+                    campaign_revision=campaign.revision,
+                )
+                with use_random_stream(stream):
+                    return character_cast_spell(
+                        character_id=character_id,
+                        spell_id=spell_id,
+                        cast_level=cast_level,
+                        ritual=ritual,
+                        signature_free_cast=signature_free_cast,
+                        feature_cast_source=feature_cast_source,
+                        component_ruling=component_ruling,
+                        source_item_id=source_item_id,
+                        target_character_ids=target_character_ids,
+                        willing_target_ids=willing_target_ids,
+                        declaration=declaration,
+                        principal_id=principal_id,
+                        expected_revision=expected_revision,
+                        idempotency_key=idempotency_key,
+                    )
+            random_state = validate_random_stream_state(
+                dict(campaign.state or {}).get("random_stream")
+                or initial_random_stream(f"sagasmith-dnd:{current.campaign_id}")
+            )
+            if (
+                stream.campaign_id != current.campaign_id
+                or (
+                    stream.campaign_revision is not None
+                    and stream.campaign_revision != campaign.revision
+                )
+                or stream.seed != random_state["seed"]
+                or stream.start_position != random_state["position"]
+            ):
+                raise CombatEngineError("Sleep requires the current campaign random snapshot")
             if current.sheet.get("edition") != "2014":
                 raise CombatEngineError("the source-bound Sleep mechanic is a 2014 rule")
             if spell_entry.get("resolution_plan") or spell_entry.get("resolution"):
@@ -30374,7 +30414,7 @@ def _create_server(
             }
 
         def cast_response(revisions: list[Any]) -> dict[str, Any]:
-            return {
+            response = {
                 **_ruling_status(
                     "committed" if applied.get("automatic_effect") else "pending_ruling",
                     "generic_spell_effect",
@@ -30392,6 +30432,10 @@ def _create_server(
                 "campaign_revision": campaign.revision + 1,
                 "revisions": [asdict(item) for item in revisions],
             }
+            stream = active_random_stream()
+            if stream is not None and stream.draw_count > 0:
+                response["random_stream_receipt"] = stream.receipt()
+            return response
 
         revisions_result = StateMutationService(storage.database).replace(
             current.campaign_id,
