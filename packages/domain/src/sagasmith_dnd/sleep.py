@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from sagasmith_dnd.character_schema import validate_character_sheet
 from sagasmith_dnd.conditions import (
+    apply_condition_change,
     apply_effect_conditions,
     reconcile_ended_effect_conditions,
 )
@@ -140,6 +141,9 @@ def resolve_sleep_targets(
             value = deepcopy(original)
             value.setdefault("effects", []).append(effect)
             apply_effect_conditions(value, effect)
+            # Unconscious creatures fall prone, but prone is not owned by Sleep
+            # and therefore remains after the Sleep effect is ended.
+            apply_condition_change(value, condition_id="prone", add=True)
             # Import locally to avoid a module import cycle with combat_engine.
             from sagasmith_dnd.combat_engine import end_concentration_for_incapacitating_conditions
 
