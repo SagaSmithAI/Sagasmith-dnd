@@ -25,9 +25,11 @@ async def _raw(server: Any, name: str, arguments: dict[str, Any]) -> Any:
     return response["result"] if isinstance(response, dict) and "action" in response else response
 
 
+@pytest.mark.parametrize("defense_mode", ["decline", "shield"])
 def test_opportunity_sneak_attack_uses_trigger_snapshot_and_reaction_only(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    defense_mode: str,
 ) -> None:
     config = McpConfig(
         home=tmp_path / "home",
@@ -41,7 +43,7 @@ def test_opportunity_sneak_attack_uses_trigger_snapshot_and_reaction_only(
     real_roll = server_module.roll_attack_action
 
     def deterministic_roll(*args: Any, **kwargs: Any) -> Any:
-        kwargs["rng"] = random.Random(5)
+        kwargs["rng"] = random.Random(16)
         return real_roll(*args, **kwargs)
 
     monkeypatch.setattr(server_module, "roll_attack_action", deterministic_roll)
@@ -56,7 +58,7 @@ def test_opportunity_sneak_attack_uses_trigger_snapshot_and_reaction_only(
             )
 
             rogue_sheet = default_character_sheet()
-            rogue_sheet["abilities"]["dexterity"]["score"] = 16
+            rogue_sheet["abilities"]["dexterity"]["score"] = 10
             rogue_sheet["progression"] = {
                 "level": 1,
                 "classes": [{"name": "Rogue", "level": 1, "hit_die": 8}],
@@ -111,6 +113,7 @@ def test_opportunity_sneak_attack_uses_trigger_snapshot_and_reaction_only(
             )
             mover_sheet = default_character_sheet()
             mover_sheet["combat"]["hp"] = {"value": 20, "max": 20, "temp": 0}
+            mover_sheet["combat"]["ac"]["override"] = 10
             mover_sheet["spellcasting"]["spell_slots"] = {
                 "1": {
                     "label": "1st",
@@ -129,7 +132,12 @@ def test_opportunity_sneak_attack_uses_trigger_snapshot_and_reaction_only(
                     "access": {"known": True, "prepared": True},
                     "definition": {
                         "casting_time": "1 reaction, which you take when hit by an attack",
-                        "duration": {"kind": "timed", "value": 1, "unit": "round", "concentration": False},
+                        "duration": {
+                            "kind": "timed",
+                            "value": 1,
+                            "unit": "round",
+                            "concentration": False,
+                        },
                         "components": {"verbal": True, "somatic": True},
                     },
                     "mechanic_refs": [CORE_SHIELD_MECHANIC_ID],
@@ -249,17 +257,28 @@ def test_opportunity_sneak_attack_uses_trigger_snapshot_and_reaction_only(
                 "action": "resolve_defense",
                 "payload": {
                     "choice_id": defense_choice["id"],
-                    "selection": {"id": "decline"},
+                    "selection": (
+                        {"id": CORE_SHIELD_SPELL_ID, "cast_level": 1}
+                        if defense_mode == "shield"
+                        else {"id": "decline"}
+                    ),
                 },
                 "expected_revision": resolved["campaign_revision"],
                 "idempotency_key": "oa-defense-decline",
             }
             settled = await _call(server, "combat_choice", defense_request)
-            assert settled["result"]["damage"] is not None
-            assert settled["result"]["sneak_attack"]["used"] is True
+            if defense_mode == "shield":
+                assert settled["result"]["hit"] is False
+                assert settled["result"]["damage"] is None
+                assert settled["result"]["sneak_attack"]["used"] is False
+                assert settled["result"]["reaction_defense"]["source_type"] == "spell"
+            else:
+                assert settled["result"]["damage"] is not None
+                assert settled["result"]["sneak_attack"]["used"] is True
             resolved = settled
-            assert resolved["result"]["sneak_attack"]["used"] is True
-            assert resolved["result"]["sneak_attack"]["turn_token"]
+            if defense_mode == "decline":
+                assert resolved["result"]["sneak_attack"]["used"] is True
+                assert resolved["result"]["sneak_attack"]["turn_token"]
             assert resolved["result"]["disadvantage_applied"] is False
             target_after = await _call(
                 server,
@@ -270,7 +289,11 @@ def test_opportunity_sneak_attack_uses_trigger_snapshot_and_reaction_only(
                     "principal_id": "system:local",
                 },
             )
-            assert target_after["sheet"]["combat"]["hp"]["value"] < 20
+            if defense_mode == "shield":
+                assert target_after["sheet"]["combat"]["hp"]["value"] == 20
+                assert target_after["sheet"]["spellcasting"]["spell_slots"]["1"]["value"] == 0
+            else:
+                assert target_after["sheet"]["combat"]["hp"]["value"] < 20
             replay = await _call(server, "combat_choice", defense_request)
             assert replay == resolved
             status = await _call(
@@ -285,12 +308,19 @@ def test_opportunity_sneak_attack_uses_trigger_snapshot_and_reaction_only(
             rogue_state = next(
                 item for item in status["combatants"] if item["actor_id"] == rogue["id"]
             )
-            assert (
-                rogue_state["turn_flags"]["sneak_attack_turn_token"]
-                == resolved["result"]["sneak_attack"]["turn_token"]
-            )
+            if defense_mode == "decline":
+                assert (
+                    rogue_state["turn_flags"]["sneak_attack_turn_token"]
+                    == resolved["result"]["sneak_attack"]["turn_token"]
+                )
+            else:
+                assert "sneak_attack_turn_token" not in rogue_state.get("turn_flags", {})
             assert rogue_state["turn_budget"]["reaction"] == 0
             assert rogue_state["turn_budget"]["main_action"] == 1
+            mover_state = next(
+                item for item in status["combatants"] if item["actor_id"] == mover["id"]
+            )
+            assert mover_state["turn_budget"]["reaction"] == (0 if defense_mode == "shield" else 1)
             receipts_after = await _call(
                 server,
                 "campaign_rules",
