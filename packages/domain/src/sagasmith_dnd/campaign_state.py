@@ -14,6 +14,7 @@ SYSTEM_OWNED_CAMPAIGN_STATE_FIELDS = frozenset(
         "combat",
         "consumable_uses",
         "currency_spends",
+        "dependent_actor_relations",
         "game_phase",
         "game_time",
         "ground_items",

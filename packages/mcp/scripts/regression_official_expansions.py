@@ -249,6 +249,7 @@ async def _apply(
         "character_id": character["id"],
         "pack_id": str(entry.get("pack_id") or ""),
         "pack_version": str(entry.get("pack_version") or ""),
+        "artifact_content_hash": str(contract.get("reviewed_content_hash") or ""),
         "reviewed_content_hash": str(contract.get("reviewed_content_hash") or ""),
         "selection": receipt_selection,
         "rule_refs": list(entry.get("rule_refs") or []),
@@ -263,7 +264,14 @@ async def _apply(
             raise RuntimeError("official Tortle receipt lacks its server-issued authority id")
         expected_receipt["content_authority_id"] = authority_id
     if receipt != expected_receipt:
-        raise RuntimeError(f"official artifact content receipt mismatch: {artifact_id}")
+        mismatches = {
+            key: {"expected": expected_receipt.get(key), "actual": receipt.get(key)}
+            for key in sorted(set(expected_receipt) | set(receipt))
+            if expected_receipt.get(key) != receipt.get(key)
+        }
+        raise RuntimeError(
+            f"official artifact content receipt mismatch: {artifact_id}: {mismatches}"
+        )
     return result, receipt
 
 

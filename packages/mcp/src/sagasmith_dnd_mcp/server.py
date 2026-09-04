@@ -315,6 +315,11 @@ from sagasmith_dnd.core_content_2024 import (
 )
 from sagasmith_dnd.core_content_2024 import build_srd2024_content
 from sagasmith_dnd.core_rule_pack import get_core_rule_pack
+from sagasmith_dnd.dependent_actor_refresh import (
+    materialize_dependent_actor_owner_scaling,
+    refresh_dependent_actor_sheet,
+)
+from sagasmith_dnd.dependent_actor_relations import validate_dependent_actor_relations
 from sagasmith_dnd.document_layout import DND5E_DOCUMENT_LAYOUT_PROFILE
 from sagasmith_dnd.editions import DEFAULT_CAMPAIGN_EDITION, normalize_dnd_edition
 from sagasmith_dnd.engine import resolve_check, roll
@@ -521,6 +526,7 @@ from sagasmith_dnd.statblocks import (
     apply_dependent_actor_template_variant,
     apply_reviewed_statblock_fill,
     apply_statblock_variant,
+    dependent_actor_owner_binding,
     dependent_actor_template_solution_errors,
     discover_2014_statblock_names_from_layout,
     discover_2014_statblock_slots_from_layout,
@@ -7433,9 +7439,7 @@ def _create_server(
                     if dependency_provenance.get("source_definition_checksum") == rebind[
                         "runtime_checksum"
                     ] and dependency_provenance.get("definition_checksum"):
-                        matches[0]["checksum"] = str(
-                            dependency_provenance["definition_checksum"]
-                        )
+                        matches[0]["checksum"] = str(dependency_provenance["definition_checksum"])
             # Import provenance records this pre-save portable representation:
             # rebinds have been applied, but export dependency normalization,
             # authoring stripping, and runtime metadata have not yet happened.
@@ -7444,9 +7448,7 @@ def _create_server(
                 artifacts=expected_artifacts,
                 mechanics=expected_mechanics,
             )
-            persisted_expected_dependencies = deepcopy(
-                expected_manifest.get("dependencies") or []
-            )
+            persisted_expected_dependencies = deepcopy(expected_manifest.get("dependencies") or [])
             # The portable export pins each installed dependency to its runtime
             # definition checksum (the same canonical value used by
             # rule_content_descriptor), rather than the archive rebind's source
@@ -7582,9 +7584,7 @@ def _create_server(
                 "official selection review identity is ambiguous or absent"
             )
         runtime_matches = [
-            item
-            for item in verified["runtime_artifacts"]
-            if item.get("id") == artifact.get("id")
+            item for item in verified["runtime_artifacts"] if item.get("id") == artifact.get("id")
         ]
         if len(runtime_matches) != 1 or content_fingerprint(
             runtime_matches[0]
@@ -11902,8 +11902,10 @@ def _create_server(
             )
             assert expanded is not None
             managed_module_source_excerpt(
-                expanded, card_excerpt,
-                field="save damage mechanic_source_excerpt", minimum_length=10,
+                expanded,
+                card_excerpt,
+                field="save damage mechanic_source_excerpt",
+                minimum_length=10,
             )
         except (LookupError, ValueError) as error:
             raise CombatEngineError(str(error)) from error
@@ -11917,13 +11919,12 @@ def _create_server(
         }.get(commitment["save_ability"], "")
         printed_half_damage = re.search(
             r"(?i)\bhalf\s+(?:as\s+much|the)\s+damage\b.*"
-            r"\b(?:successful|success)\b", card_excerpt,
+            r"\b(?:successful|success)\b",
+            card_excerpt,
         )
         printed_expressions = {
             "".join(expression.split()).casefold()
-            for expression in re.findall(
-                r"(?i)\b\d+\s*d\s*\d+(?:\s*[+-]\s*\d+)?\b", card_excerpt
-            )
+            for expression in re.findall(r"(?i)\b\d+\s*d\s*\d+(?:\s*[+-]\s*\d+)?\b", card_excerpt)
         }
         save_dc = commitment["save_dc"]
         if (
@@ -11938,11 +11939,14 @@ def _create_server(
             or re.search(
                 rf"(?i)\bDC\s*{save_dc}\s+(?:{ability_pattern})\s+saving throw\b",
                 card_excerpt,
-            ) is None
+            )
+            is None
             or commitment["damage_expression"] not in printed_expressions
             or re.search(
-                rf"(?i)\b{re.escape(commitment['damage_type'])}\b", card_excerpt,
-            ) is None
+                rf"(?i)\b{re.escape(commitment['damage_type'])}\b",
+                card_excerpt,
+            )
+            is None
             or bool(printed_half_damage) != commitment["half_on_success"]
         ):
             raise CombatEngineError(
@@ -12352,9 +12356,10 @@ def _create_server(
                 prior_dodge_transition = reconcile_dodge_lifecycle(combatant)
                 combatant["conditions"] = list(sheet.get("conditions") or [])
                 combatant["hit_points"] = int(sheet["combat"]["hp"]["value"])
-                if combatant["hit_points"] > 0 or condition_ids(
-                    sheet.get("conditions")
-                ) & DEATH_SAVE_SETTLED_CONDITIONS:
+                if (
+                    combatant["hit_points"] > 0
+                    or condition_ids(sheet.get("conditions")) & DEATH_SAVE_SETTLED_CONDITIONS
+                ):
                     flags = combatant.get("turn_flags")
                     if isinstance(flags, dict) and "death_save_due" in flags:
                         flags["death_save_due"] = False
@@ -13746,6 +13751,262 @@ def _create_server(
             "recommended_operation": "continuity_context:npc_turn",
         }
 
+    def _dependent_actor_materialization(
+        campaign_id: str,
+        artifact: dict[str, Any],
+        requirement: dict[str, Any],
+        numeric_parameters: Mapping[str, int],
+        *,
+        template_variant: str | None,
+    ) -> dict[str, Any]:
+        """Rebuild one dependent card using the same two-pass path as creation."""
+        source_text, source_refs = dependent_actor_source_text(artifact)
+        preview_text, _ = materialize_parameterized_statblock_source(
+            source_text,
+            requirement,
+            numeric_parameters=numeric_parameters,
+            self_ability_modifiers={},
+            template_variant=template_variant,
+            allow_self_modifier_placeholders=True,
+        )
+        edition = campaign_rules_edition(campaign_id)
+        source_key = (
+            f"rule-pack:{artifact['_pack_id']}@{artifact['_pack_version']}"
+            f"#artifact:{artifact['id']}"
+        )
+        preview = parse_edition_statblock(
+            preview_text,
+            edition=edition,
+            source_key=source_key,
+            rule_refs=source_refs,
+        )
+        self_modifiers = dict(derive_character_sheet(preview.sheet).get("ability_modifiers") or {})
+        rendered_text, _ = materialize_parameterized_statblock_source(
+            source_text,
+            requirement,
+            numeric_parameters=numeric_parameters,
+            self_ability_modifiers=self_modifiers,
+            template_variant=template_variant,
+        )
+        parsed = parse_edition_statblock(
+            rendered_text,
+            edition=edition,
+            source_key=source_key,
+            rule_refs=source_refs,
+        )
+        hydrated_sheet, spell_warnings = hydrate_statblock_spellcasting(
+            campaign_id,
+            parsed,
+            source_key=source_key,
+            rule_refs=source_refs,
+        )
+        require_standard_statblock_engine_support(
+            hydrated_sheet,
+            None,
+            statblock_warnings=(),
+            spell_warnings=spell_warnings,
+        )
+        sheet = apply_dependent_actor_template_variant(
+            hydrated_sheet,
+            requirement,
+            template_variant=template_variant,
+        )
+        sheet = validate_character_sheet(finalize_actor_sheet_rulings(sheet, campaign_id))
+        return materialize_dependent_actor_owner_scaling(
+            sheet,
+            numeric_parameters,
+            relation_key=str(
+                dict(requirement.get("owner_binding") or {}).get("relation_key") or ""
+            ),
+            reviewed_expression_hash=str(
+                dict(requirement.get("solution") or {}).get("reviewed_expression_hash") or ""
+            ),
+        )
+
+    def _dependent_actor_refresh_receipt(
+        relation: Mapping[str, Any],
+        artifact: Mapping[str, Any],
+        requirement: Mapping[str, Any],
+        campaign_id: str,
+    ) -> dict[str, Any]:
+        binding = dict(relation["template_binding"])
+        receipt = verify_receipt_signature(
+            binding["authorization"],
+            content_authority_secret,
+            missing_error="dependent actor template authorization is missing",
+            invalid_error="dependent actor template authorization signature is invalid",
+        )
+        expected_hash = str(dict(requirement["solution"])["reviewed_expression_hash"])
+        if binding["reviewed_expression_hash"] != expected_hash:
+            raise ValueError("dependent actor template relation hash is stale")
+        expected = {
+            "schema_version": 1,
+            "purpose": "dependent_actor_template",
+            "campaign_id": campaign_id,
+            "source_artifact_id": str(artifact["id"]),
+            "source_pack_id": str(artifact["_pack_id"]),
+            "source_pack_version": str(artifact["_pack_version"]),
+            "owner_character_id": relation["owner_character_id"],
+            "dependent_actor_id": relation["dependent_actor_id"],
+            "relation_key": relation["relation_key"],
+            "owner_class_name": binding["owner_class_name"],
+            "casting_slot_level": binding["casting_slot_level"],
+            "template_variant": binding["template_variant"],
+            "numeric_parameters": binding["numeric_parameters"],
+            "reviewed_expression_hash": expected_hash,
+        }
+        # The relation's authorization is a server-signed canonical envelope.
+        # Compare the verified payload exactly: accepting omitted or extra keys
+        # would make the editable relation state an authorization oracle.
+        if receipt != expected:
+            raise ValueError("dependent actor template receipt does not match its relation binding")
+        return receipt
+
+    def _refresh_owner_dependents(
+        before: Any,
+        candidate_owner_sheet: dict[str, Any],
+        campaign: Any,
+        branch_id: str,
+        updates: list[CharacterStateUpdate],
+        campaign_state: dict[str, Any] | None,
+    ) -> tuple[list[CharacterStateUpdate], dict[str, Any] | None]:
+        """Append deterministic dependent refreshes to one owner mutation."""
+        if before.campaign_id is None:
+            return updates, campaign_state
+        state = deepcopy(campaign_state if campaign_state is not None else campaign.state or {})
+        relations = validate_dependent_actor_relations(state.get("dependent_actor_relations", []))
+        active = [
+            relation
+            for relation in relations
+            if relation["owner_character_id"] == before.id and relation["status"] == "active"
+        ]
+        if not active:
+            return updates, campaign_state
+        if authoritative_phase(before.campaign_id) == PROFILE_COMBAT:
+            raise CombatEngineError("dependent actor refresh is not allowed during active combat")
+        if any(item.character_id == before.id for item in updates) is False:
+            return updates, campaign_state
+        update_ids = {item.character_id for item in updates}
+        next_relations = list(relations)
+        changed = False
+        for relation in active:
+            dependent_id = relation["dependent_actor_id"]
+            if dependent_id in update_ids:
+                raise ValueError("dependent actor refresh conflicts with an existing actor update")
+            dependent = characters.get(dependent_id)
+            if dependent.campaign_id != before.campaign_id:
+                raise ValueError("dependent actor relation endpoint belongs to another campaign")
+            artifact_matches = [
+                (pack_id, version, artifact)
+                for pack_id, version, artifact in available_content_artifacts(
+                    before.campaign_id,
+                    branch_id=branch_id,
+                )
+                if str(artifact.get("id") or "") == relation["source_artifact_id"]
+                and pack_id == relation["source_pack_id"]
+                and version == relation["source_pack_version"]
+            ]
+            if len(artifact_matches) != 1:
+                raise ValueError("dependent actor template source is not uniquely available")
+            pack_id, version, source_artifact = artifact_matches[0]
+            artifact = {
+                **dict(source_artifact),
+                "_pack_id": pack_id,
+                "_pack_version": version,
+            }
+            requirement = deepcopy(
+                dict(dict(source_artifact.get("card") or {}).get("dependent_actor_template") or {})
+            )
+            binding = dict(relation["template_binding"])
+            requirement_hash = str(
+                dict(requirement.get("solution") or {}).get("reviewed_expression_hash") or ""
+            )
+            if requirement_hash != str(binding["reviewed_expression_hash"]):
+                raise ValueError("dependent actor template relation hash is stale")
+            _dependent_actor_refresh_receipt(
+                relation,
+                artifact,
+                requirement,
+                before.campaign_id,
+            )
+            old_parameters = dict(binding["numeric_parameters"])
+            owner_candidate = replace(before, sheet=deepcopy(candidate_owner_sheet))
+            new_parameters, _ = dependent_actor_numeric_parameters(
+                owner=owner_candidate,
+                requirement=requirement,
+                owner_class_name=str(binding["owner_class_name"] or ""),
+                casting_slot_level=binding["casting_slot_level"],
+            )
+            if new_parameters == old_parameters:
+                continue
+            old_sheet = _dependent_actor_materialization(
+                before.campaign_id,
+                artifact,
+                requirement,
+                old_parameters,
+                template_variant=binding["template_variant"],
+            )
+            new_sheet = _dependent_actor_materialization(
+                before.campaign_id,
+                artifact,
+                requirement,
+                new_parameters,
+                template_variant=binding["template_variant"],
+            )
+            refreshed = refresh_dependent_actor_sheet(
+                dependent.sheet,
+                old_sheet,
+                new_sheet,
+                old_parameters,
+                new_parameters,
+                relation_key=relation["relation_key"],
+            )
+            updates.append(
+                CharacterStateUpdate(
+                    character_id=dependent.id,
+                    sheet=refreshed["sheet"],
+                    notes=validate_character_notes(dependent.notes),
+                    expected_revision=dependent.revision,
+                )
+            )
+            for index, candidate in enumerate(next_relations):
+                if candidate["dependent_actor_id"] == dependent.id:
+                    refreshed_binding = {
+                        **binding,
+                        "numeric_parameters": deepcopy(new_parameters),
+                    }
+                    refreshed_binding["authorization"] = sign_receipt(
+                        {
+                            "schema_version": 1,
+                            "purpose": "dependent_actor_template",
+                            "campaign_id": before.campaign_id,
+                            "owner_character_id": relation["owner_character_id"],
+                            "dependent_actor_id": relation["dependent_actor_id"],
+                            "relation_key": relation["relation_key"],
+                            "source_artifact_id": relation["source_artifact_id"],
+                            "source_pack_id": relation["source_pack_id"],
+                            "source_pack_version": relation["source_pack_version"],
+                            "owner_class_name": refreshed_binding["owner_class_name"],
+                            "casting_slot_level": refreshed_binding["casting_slot_level"],
+                            "template_variant": refreshed_binding["template_variant"],
+                            "numeric_parameters": deepcopy(refreshed_binding["numeric_parameters"]),
+                            "reviewed_expression_hash": refreshed_binding[
+                                "reviewed_expression_hash"
+                            ],
+                        },
+                        content_authority_secret,
+                    )
+                    next_relations[index] = {
+                        **candidate,
+                        "template_binding": refreshed_binding,
+                    }
+                    break
+            changed = True
+        if not changed:
+            return updates, campaign_state
+        state["dependent_actor_relations"] = next_relations
+        return updates, validate_party_state(state)
+
     def update_character(
         before: Any,
         *,
@@ -13884,6 +14145,19 @@ def _create_server(
         ground_state, mutation_updates, response = reconcile_unconscious_inventory(
             campaign, effect_state, mutation_updates, response
         )
+        owner_update = next(
+            (item for item in mutation_updates if item.character_id == before.id),
+            None,
+        )
+        if owner_update is not None:
+            mutation_updates, ground_state = _refresh_owner_dependents(
+                before,
+                owner_update.sheet,
+                campaign,
+                branch_id,
+                mutation_updates,
+                ground_state,
+            )
         validate_inventory_custody_update(campaign, ground_state, mutation_updates)
         followup = narrative_followup_for_mutation(
             campaign,
@@ -14566,9 +14840,7 @@ def _create_server(
             for item in current_external:
                 if item.get("attunement") == "attuned":
                     item["attunement"] = "required"
-        candidate_external = dict(candidate_sheet.get("inventory") or {}).get(
-            "external_items", []
-        )
+        candidate_external = dict(candidate_sheet.get("inventory") or {}).get("external_items", [])
         if candidate_external != current_external:
             raise ValueError(
                 "inventory.external_items is engine-owned and may only be changed "
@@ -20416,9 +20688,7 @@ def _create_server(
         sneak_attack = dict(result.get("sneak_attack") or {})
         if sneak_attack.get("used"):
             attacker_combatant = next(
-                item
-                for item in next_encounter["combatants"]
-                if item.get("actor_id") == actor_id
+                item for item in next_encounter["combatants"] if item.get("actor_id") == actor_id
             )
             flags = dict(attacker_combatant.get("turn_flags") or {})
             flags["sneak_attack_turn_token"] = sneak_attack["turn_token"]
@@ -21564,9 +21834,9 @@ def _create_server(
             condition_resolution = {
                 "kind": "tortle_shell_defense",
                 "withdrawn": withdrawn,
-                "armor_class": derive_character_sheet(
-                    shell_defense_sheet, character_id=actor_id
-                )["armor_class"],
+                "armor_class": derive_character_sheet(shell_defense_sheet, character_id=actor_id)[
+                    "armor_class"
+                ],
                 "speed_multiplier": source_speed_multiplier(shell_defense_sheet),
                 "conditions": list(shell_defense_sheet.get("conditions") or []),
             }
@@ -22060,10 +22330,9 @@ def _create_server(
         fly = is_core_fly_spell(spell_entry)
         invisibility = is_core_invisibility_spell(spell_entry)
         hypnotic_pattern = is_core_hypnotic_pattern_spell(spell_entry)
-        sleep = (
-            spell_entry.get("id") == CORE_SLEEP_SPELL_ID
-            and CORE_SLEEP_MECHANIC_ID in spell_entry.get("mechanic_refs", [])
-        )
+        sleep = spell_entry.get(
+            "id"
+        ) == CORE_SLEEP_SPELL_ID and CORE_SLEEP_MECHANIC_ID in spell_entry.get("mechanic_refs", [])
         structured_resolution = (
             (
                 deepcopy(dict(spell_entry["resolution"]))
@@ -22426,9 +22695,8 @@ def _create_server(
                     actor_ids={
                         str(item["actor_id"])
                         for item in encounter.get("combatants", [])
-                        if "dead" not in {
-                            str(value).casefold() for value in item.get("conditions", [])
-                        }
+                        if "dead"
+                        not in {str(value).casefold() for value in item.get("conditions", [])}
                     },
                     campaign_revision=campaign.revision,
                 )
@@ -30762,10 +31030,9 @@ def _create_server(
         )
         fly = is_core_fly_spell(spell_entry)
         invisibility = is_core_invisibility_spell(spell_entry)
-        sleep = (
-            spell_entry.get("id") == CORE_SLEEP_SPELL_ID
-            and CORE_SLEEP_MECHANIC_ID in spell_entry.get("mechanic_refs", [])
-        )
+        sleep = spell_entry.get(
+            "id"
+        ) == CORE_SLEEP_SPELL_ID and CORE_SLEEP_MECHANIC_ID in spell_entry.get("mechanic_refs", [])
         sleep_target = None
         all_characters = characters.list(campaign_id=current.campaign_id)
         if sleep:
@@ -30821,7 +31088,8 @@ def _create_server(
                 actor_ids={
                     character.id
                     for character in all_characters
-                    if "dead" not in {
+                    if "dead"
+                    not in {
                         str(value).casefold() for value in character.sheet.get("conditions", [])
                     }
                 },
@@ -31168,11 +31436,13 @@ def _create_server(
                 targets=settled["targets"],
             )
             applied["ruling_required"] = [
-                item for item in applied.get("ruling_required") or []
+                item
+                for item in applied.get("ruling_required") or []
                 if item != "targets_and_effect"
             ]
             applied["ruling_requirements"] = [
-                item for item in applied.get("ruling_requirements") or []
+                item
+                for item in applied.get("ruling_requirements") or []
                 if item.get("kind") != "targets_and_effect"
             ]
             rule_receipts.extend(core_receipts(rules, [CORE_SLEEP_MECHANIC_ID], "spell.sleep"))
@@ -32767,9 +33037,7 @@ def _create_server(
         except ValueError as error:
             raise CombatEngineError(str(error)) from error
         result = {key: value for key, value in applied.items() if key != "sheet"}
-        normalized_sheet = finalize_actor_sheet_rulings(
-            applied["sheet"], current.campaign_id
-        )
+        normalized_sheet = finalize_actor_sheet_rulings(applied["sheet"], current.campaign_id)
         normalized_sheet = validate_character_sheet(
             normalized_sheet,
             rules=effective_rule_context(current.campaign_id),
@@ -42889,27 +43157,30 @@ def _create_server(
                     content_authority_secret,
                 ),
             }
-        content_receipt: dict[str, Any] | None = None
+        content_receipt: dict[str, Any] = {
+            "ruleset_fingerprint": effective_rule_context(current.campaign_id).fingerprint,
+            "mechanic_id": "dnd5e.character.content.apply.v1",
+            "event": "character.content.apply",
+            "artifact_id": artifact_id,
+            "character_id": current.id,
+            "pack_id": pack_id,
+            "pack_version": version,
+            "artifact_content_hash": content_fingerprint(artifact),
+            "selection": deepcopy(selection),
+            "rule_refs": list(artifact.get("rule_refs") or []),
+        }
         raw_selection_contract = artifact.get("selection_contract")
         if isinstance(raw_selection_contract, dict) and not selection_contract_errors(artifact):
             selection_contract = dict(raw_selection_contract)
             if selection_contract.get("status") == "ready":
-                content_receipt = {
-                    "ruleset_fingerprint": effective_rule_context(current.campaign_id).fingerprint,
-                    "mechanic_id": str(selection_contract["materializer"]),
-                    "event": "character.content.apply",
-                    "artifact_id": artifact_id,
-                    "character_id": current.id,
-                    "pack_id": pack_id,
-                    "pack_version": version,
-                    "reviewed_content_hash": str(selection_contract["reviewed_content_hash"]),
-                    "selection": deepcopy(selection),
-                    "rule_refs": list(artifact.get("rule_refs") or []),
-                }
-                if tortle_natural_armor_authority is not None:
-                    content_receipt["content_authority_id"] = str(
-                        tortle_natural_armor_authority["authority_id"]
-                    )
+                content_receipt["mechanic_id"] = str(selection_contract["materializer"])
+                content_receipt["reviewed_content_hash"] = str(
+                    selection_contract["reviewed_content_hash"]
+                )
+        if tortle_natural_armor_authority is not None:
+            content_receipt["content_authority_id"] = str(
+                tortle_natural_armor_authority["authority_id"]
+            )
         sheet = deepcopy(current.sheet)
         phase = authoritative_phase(current.campaign_id)
         spellbook_copy: dict[str, Any] | None = None
@@ -50182,6 +50453,7 @@ boundary.
         casting_slot_level: int | None = None,
         template_variant: str | None = None,
         participant_config: dict[str, Any] | None = None,
+        replace_existing: bool = False,
         expected_revision: int | None = None,
         branch_id: str | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
@@ -50191,6 +50463,8 @@ boundary.
         access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
         if not idempotency_key:
             raise ValueError("idempotency_key is required for addon actor instantiation")
+        if not isinstance(replace_existing, bool):
+            raise ValueError("replace_existing must be a boolean")
         addon_request = {
             "artifact_id": artifact_id,
             "owner_character_id": owner_character_id,
@@ -50203,27 +50477,22 @@ boundary.
             "casting_slot_level": casting_slot_level,
             "template_variant": template_variant,
             "participant_config": deepcopy(participant_config),
+            "replace_existing": replace_existing,
             "expected_revision": expected_revision,
             "branch_id": branch_id,
         }
-        lifecycle_scope = f"actor-lifecycle:{campaign_id}:{principal_id}"
-        replay = idempotency.lookup(lifecycle_scope, idempotency_key, addon_request)
-        if replay is not None and replay.response is not None:
-            response = dict(replay.response)
-            return {
-                "character": character_view(CharacterInfo(**dict(response["character"]))),
-                "content_receipt": deepcopy(response["content_receipt"]),
-                "actor_knowledge_imported": False,
-                "combat": deepcopy(response.get("combat")),
-                "mutation_group_id": str(response["mutation_group_id"]),
-                "next": None,
-            }
+        resolved_branch_id = require_current_branch(campaign_id, branch_id)
+        # Bind the implicit current branch into the retry digest.  A request
+        # with branch_id=None means "the branch checked out now", not a
+        # branch-independent operation.
+        addon_request["branch_id"] = resolved_branch_id
         owner = characters.get(owner_character_id)
         if owner.campaign_id != campaign_id:
             raise ValueError("dependent actor owner belongs to another campaign")
+        available_artifacts = available_content_artifacts(campaign_id, branch_id=resolved_branch_id)
         matches = [
             (pack_id, version, artifact)
-            for pack_id, version, artifact in available_content_artifacts(campaign_id)
+            for pack_id, version, artifact in available_artifacts
             if str(artifact.get("id") or "") == artifact_id
         ]
         if len(matches) != 1:
@@ -50238,12 +50507,97 @@ boundary.
             raise ValueError(
                 "dependent actor template is not runtime-ready: " + "; ".join(solution_errors)
             )
+        owner_binding = dependent_actor_owner_binding(requirement)
+        dependent_actor_authorization: dict[str, Any] | None = None
+        if owner_binding is not None:
+            feature_matches = [
+                feature_artifact
+                for feature_pack_id, feature_version, feature_artifact in available_artifacts
+                if feature_pack_id == pack_id
+                and feature_version == version
+                and str(feature_artifact.get("id") or "") == owner_binding["feature_artifact_id"]
+                and str(feature_artifact.get("kind") or "") == "feature"
+            ]
+            if len(feature_matches) != 1:
+                raise RulesetUnavailableError(
+                    "dependent actor bound feature is not uniquely available in its source pack"
+                )
+            feature_artifact = reviewed_official_runtime_artifact(
+                pack_id, version, feature_matches[0]
+            )
+            feature_contract = dict(feature_artifact.get("selection_contract") or {})
+            reviewed_content_hash = str(feature_contract.get("reviewed_content_hash") or "")
+            receipt_fields = {
+                "event": "character.content.apply",
+                "artifact_id": owner_binding["feature_artifact_id"],
+                "character_id": owner.id,
+                "pack_id": pack_id,
+                "pack_version": version,
+                "artifact_content_hash": content_fingerprint(feature_artifact),
+            }
+            if reviewed_content_hash:
+                receipt_fields["reviewed_content_hash"] = reviewed_content_hash
+            sheet_features = [
+                feature
+                for feature in dict(owner.sheet.get("content") or {}).get("features", [])
+                if isinstance(feature, Mapping)
+                and str(feature.get("id") or "") == owner_binding["feature_artifact_id"]
+                and str(feature.get("pack_id") or "") == pack_id
+                and str(feature.get("pack_version") or "") == version
+            ]
+            if (
+                len(sheet_features) != 1
+                or (reviewed_content_hash and len(reviewed_content_hash) != 64)
+                or not rule_receipts.has_applied_receipt(
+                    campaign_id,
+                    event="character.content.apply",
+                    receipt_fields=receipt_fields,
+                    branch_id=resolved_branch_id,
+                )
+            ):
+                raise ValueError(
+                    "dependent actor owner lacks the exact applied feature entitlement"
+                )
+            dependent_actor_authorization = {
+                "owner_character_id": owner.id,
+                "owner_character_revision": owner.revision,
+                "feature_artifact_id": owner_binding["feature_artifact_id"],
+                "source_pack_id": pack_id,
+                "source_pack_version": version,
+                "receipt_event": "character.content.apply",
+                "receipt_fields": receipt_fields,
+                "branch_id": resolved_branch_id,
+            }
+        # Core stores actor lifecycle idempotency at campaign/principal scope.
+        # The resolved branch is part of ``addon_request``, so another branch
+        # conflicts instead of replaying this response.
+        lifecycle_scope = f"actor-lifecycle:{campaign_id}:{principal_id}"
+        # Replay only after the current branch and (when source-bound) the
+        # current applied entitlement have been verified.  This prevents a
+        # successful response from surviving a receipt undo.
+        replay = idempotency.lookup(lifecycle_scope, idempotency_key, addon_request)
+        if replay is not None and replay.response is not None:
+            response = dict(replay.response)
+            return {
+                "character": character_view(CharacterInfo(**dict(response["character"]))),
+                "content_receipt": deepcopy(response["content_receipt"]),
+                "actor_knowledge_imported": False,
+                "combat": deepcopy(response.get("combat")),
+                "replaced_actor_id": response.get("replaced_actor_id"),
+                "mutation_group_id": str(response["mutation_group_id"]),
+                "next": None,
+            }
         source_text, source_refs = dependent_actor_source_text(artifact)
         numeric_parameters, selected_class_name = dependent_actor_numeric_parameters(
             owner=owner,
             requirement=requirement,
             owner_class_name=str(owner_class_name or ""),
             casting_slot_level=casting_slot_level,
+        )
+        normalized_template_variant = (
+            str(template_variant).strip().casefold().replace(" ", "_")
+            if template_variant is not None
+            else None
         )
         preview_text, _ = materialize_parameterized_statblock_source(
             source_text,
@@ -50295,6 +50649,15 @@ boundary.
             template_variant=template_variant,
         )
         sheet = finalize_actor_sheet_rulings(sheet, campaign_id)
+        if owner_binding is not None:
+            sheet = materialize_dependent_actor_owner_scaling(
+                sheet,
+                numeric_parameters,
+                relation_key=owner_binding["relation_key"],
+                reviewed_expression_hash=str(
+                    dict(requirement.get("solution") or {}).get("reviewed_expression_hash") or ""
+                ),
+            )
         require_engine_owned_character_state(sheet)
         _reject_new_intrinsic_attack_provenance(sheet)
         _require_authoritative_background_state(
@@ -50304,8 +50667,18 @@ boundary.
         )
         if character_type not in NON_PLAYER_CHARACTER_TYPES:
             raise ValueError("addon actor templates create only npc or monster actors")
+        actor_id = str(
+            uuid5(
+                NAMESPACE_URL,
+                f"sagasmith-dnd:addon-actor:{campaign_id}:{principal_id}:{idempotency_key}",
+            )
+        )
         requested_name = str(name or "").strip()
-        actor_name = requested_name or f"{parsed.name} ({owner.name})"
+        actor_name = requested_name or (
+            f"{parsed.name} ({owner.name}; {actor_id[:8]})"
+            if replace_existing
+            else f"{parsed.name} ({owner.name})"
+        )
         notes_value = deepcopy(notes or default_character_notes())
         profile = notes_value.setdefault("profile", {})
         receipt = {
@@ -50330,23 +50703,171 @@ boundary.
             ),
             "source_refs": source_refs,
         }
+        relation_campaign = campaigns.get(campaign_id)
+        existing_relations = validate_dependent_actor_relations(
+            dict(relation_campaign.state or {}).get("dependent_actor_relations", [])
+        )
+        active_relations = (
+            []
+            if owner_binding is None
+            else [
+                relation
+                for relation in existing_relations
+                if relation["owner_character_id"] == owner.id
+                and relation["relation_key"] == owner_binding["relation_key"]
+                and relation["status"] == "active"
+            ]
+        )
+        if replace_existing and owner_binding is None:
+            raise ValueError("replace_existing requires a source-bound dependent actor")
+        if len(active_relations) > 1:
+            raise ValueError("dependent actor owner has ambiguous active bound actors")
+        if not replace_existing and active_relations:
+            raise ValueError("dependent actor owner already has an active bound actor")
+        if replace_existing and len(active_relations) != 1:
+            raise ValueError("dependent actor replacement requires exactly one active bound actor")
+        replacement_actor = None
+        replacement_rest_tick: int | None = None
+        if replace_existing:
+            if authoritative_phase(campaign_id) == PROFILE_COMBAT:
+                raise CombatEngineError(
+                    "dependent actor replacement must occur at the end of a long rest"
+                )
+            if expected_revision is None or expected_revision != relation_campaign.revision:
+                raise ValueError(
+                    "dependent actor replacement requires the current campaign expected_revision"
+                )
+            rest_history = dict(dict(owner.sheet.get("combat") or {}).get("rest_history") or {})
+            replacement_rest_tick = rest_history.get("last_long_rest_elapsed_ticks")
+            if (
+                isinstance(replacement_rest_tick, bool)
+                or not isinstance(replacement_rest_tick, int)
+                or replacement_rest_tick < 0
+                or rest_history.get("last_rest_type") != "long_rest"
+                or rest_history.get("last_rest_completed_elapsed_ticks") != replacement_rest_tick
+                or int(
+                    dict(relation_campaign.state or {})
+                    .get("game_time", {})
+                    .get("elapsed_ticks", -1)
+                )
+                != replacement_rest_tick
+            ):
+                raise ValueError(
+                    "dependent actor replacement must use the owner's just-completed long rest"
+                )
+            inventory_items = list(dict(owner.sheet.get("inventory") or {}).get("items") or [])
+            has_smiths_tools = any(
+                isinstance(item, Mapping)
+                and int(item.get("quantity", 0) or 0) > 0
+                and str(item.get("name") or "")
+                .replace("’", "'")
+                .replace("‘", "'")
+                .strip()
+                .casefold()
+                in {"smith's tools", "smiths tools"}
+                for item in inventory_items
+            )
+            if not has_smiths_tools:
+                raise ValueError(
+                    "dependent actor replacement requires smith's tools with the owner"
+                )
+            if active_relations[0].get("created_long_rest_elapsed_ticks") == replacement_rest_tick:
+                raise ValueError("this long rest has already created the active dependent actor")
+            replacement_actor = characters.get(active_relations[0]["dependent_actor_id"])
+            if replacement_actor.campaign_id != campaign_id:
+                raise ValueError("dependent actor replacement target belongs to another campaign")
+            if (
+                active_relations[0]["source_artifact_id"] != artifact_id
+                or active_relations[0]["source_pack_id"] != pack_id
+                or active_relations[0]["source_pack_version"] != version
+            ):
+                raise ValueError(
+                    "dependent actor replacement must use the same source-bound template"
+                )
+            _dependent_actor_refresh_receipt(
+                active_relations[0],
+                {
+                    **dict(artifact),
+                    "_pack_id": pack_id,
+                    "_pack_version": version,
+                },
+                requirement,
+                campaign_id,
+            )
+            existing_binding = dict(active_relations[0]["template_binding"])
+            expected_existing_binding = {
+                "owner_class_name": selected_class_name,
+                "casting_slot_level": casting_slot_level,
+                "template_variant": normalized_template_variant,
+                "numeric_parameters": deepcopy(numeric_parameters),
+                "reviewed_expression_hash": str(
+                    dict(requirement["solution"])["reviewed_expression_hash"]
+                ),
+            }
+            if {
+                key: existing_binding[key] for key in expected_existing_binding
+            } != expected_existing_binding:
+                raise ValueError(
+                    "dependent actor replacement binding is stale or conflicts with the owner"
+                )
+        if (
+            owner_binding is not None
+            and any(
+                relation["owner_character_id"] == owner.id
+                and relation["relation_key"] == owner_binding["relation_key"]
+                and relation["status"] == "active"
+                for relation in existing_relations
+            )
+            and not replace_existing
+        ):
+            raise ValueError("dependent actor owner already has an active bound actor")
+        receipt.update(
+            {
+                "replace_existing": replace_existing,
+                "replaced_actor_id": (
+                    replacement_actor.id if replacement_actor is not None else None
+                ),
+                "created_long_rest_elapsed_ticks": replacement_rest_tick,
+            }
+        )
+        template_binding = {
+            "owner_class_name": selected_class_name,
+            "casting_slot_level": casting_slot_level,
+            "template_variant": normalized_template_variant,
+            "numeric_parameters": deepcopy(numeric_parameters),
+            "reviewed_expression_hash": str(
+                dict(requirement["solution"])["reviewed_expression_hash"]
+            ),
+        }
+        template_binding["authorization"] = sign_receipt(
+            {
+                "schema_version": 1,
+                "purpose": "dependent_actor_template",
+                "campaign_id": campaign_id,
+                "owner_character_id": owner.id,
+                "dependent_actor_id": actor_id,
+                "relation_key": (
+                    owner_binding["relation_key"] if owner_binding is not None else ""
+                ),
+                "source_artifact_id": artifact_id,
+                "source_pack_id": pack_id,
+                "source_pack_version": version,
+                **deepcopy(template_binding),
+            },
+            content_authority_secret,
+        )
         provenance = "sagasmith:addon-actor-template:" + canonical_json(receipt)
         existing_dm_notes = str(profile.get("dm_notes") or "").strip()
         profile["dm_notes"] = "\n".join(value for value in (existing_dm_notes, provenance) if value)
-        actor_id = str(
-            uuid5(
-                NAMESPACE_URL,
-                f"sagasmith-dnd:addon-actor:{campaign_id}:{principal_id}:{idempotency_key}",
-            )
-        )
-        resolved_branch_id = require_current_branch(campaign_id, branch_id)
         campaign_state: dict[str, Any] | None = None
         combat_result: dict[str, Any] | None = None
         actor_sheet = sheet
+        relation_base_revision = relation_campaign.revision
         if authoritative_phase(campaign_id) == PROFILE_COMBAT:
             if expected_revision is None:
                 raise ValueError("expected_revision is required during Combat")
             campaign, encounter = active_encounter(campaign_id)
+            relation_base_revision = campaign.revision
             require_no_blocking_pending(encounter)
             if campaign.revision != expected_revision:
                 raise ValueError(
@@ -50438,6 +50959,68 @@ boundary.
                 "combat": next_encounter,
                 "campaign_revision": campaign.revision + 1,
             }
+        lifecycle_expected_revision = expected_revision
+        if owner_binding is not None:
+            relation_state = deepcopy(
+                campaign_state
+                if campaign_state is not None
+                else dict(relation_campaign.state or {})
+            )
+            # Re-read from the exact state being submitted. During Combat that
+            # snapshot may be newer than the earlier fast-path relation check;
+            # never overwrite a concurrently committed relation with the old
+            # list merely because the caller supplied the newer revision.
+            submitted_relations = validate_dependent_actor_relations(
+                relation_state.get("dependent_actor_relations", [])
+            )
+            submitted_active = [
+                relation
+                for relation in submitted_relations
+                if relation["owner_character_id"] == owner.id
+                and relation["relation_key"] == owner_binding["relation_key"]
+                and relation["status"] == "active"
+            ]
+            if len(submitted_active) > 1:
+                raise ValueError("dependent actor owner has ambiguous active bound actors")
+            if submitted_active and not replace_existing:
+                raise ValueError("dependent actor owner already has an active bound actor")
+            if replace_existing and (
+                len(submitted_active) != 1
+                or submitted_active[0]["dependent_actor_id"] != replacement_actor.id
+            ):
+                raise ValueError("dependent actor replacement target changed before commit")
+            if replace_existing:
+                submitted_relations = [
+                    {**relation, "status": "replaced"}
+                    if relation["dependent_actor_id"] == replacement_actor.id
+                    else relation
+                    for relation in submitted_relations
+                ]
+            if any(
+                relation["owner_character_id"] == owner.id
+                and relation["relation_key"] == owner_binding["relation_key"]
+                and relation["status"] == "active"
+                for relation in submitted_relations
+            ):
+                raise ValueError("dependent actor owner already has an active bound actor")
+            relation_state["dependent_actor_relations"] = [
+                *submitted_relations,
+                {
+                    "owner_character_id": owner.id,
+                    "dependent_actor_id": actor_id,
+                    "relation_key": owner_binding["relation_key"],
+                    "source_artifact_id": artifact_id,
+                    "source_pack_id": pack_id,
+                    "source_pack_version": version,
+                    "status": "active",
+                    "created_campaign_revision": relation_base_revision + 1,
+                    "created_long_rest_elapsed_ticks": replacement_rest_tick,
+                    "template_binding": deepcopy(template_binding),
+                },
+            ]
+            campaign_state = validate_party_state(relation_state)
+            if lifecycle_expected_revision is None:
+                lifecycle_expected_revision = relation_campaign.revision
         _reject_new_tortle_natural_armor_provenance(actor_sheet)
         created = actor_lifecycle.create(
             campaign_id,
@@ -50452,16 +51035,28 @@ boundary.
             idempotency_key=idempotency_key,
             initial_grants=(InitialActorGrant(principal_id),),
             campaign_state=campaign_state,
-            expected_campaign_revision=expected_revision,
+            expected_campaign_revision=lifecycle_expected_revision,
             operation="addon.actor.instantiate",
             actor=principal_id,
             branch_id=resolved_branch_id,
             actor_id=actor_id,
             idempotency_payload=addon_request,
+            dependent_actor_authorization=dependent_actor_authorization,
+            dependent_actor_replacement=(
+                {
+                    "character_id": replacement_actor.id,
+                    "expected_revision": replacement_actor.revision,
+                }
+                if replacement_actor is not None
+                else None
+            ),
             response_extra={
                 "content_receipt": receipt,
                 "actor_knowledge_imported": False,
                 "combat": combat_result,
+                "replaced_actor_id": (
+                    replacement_actor.id if replacement_actor is not None else None
+                ),
                 "next": None,
             },
         )
@@ -50471,6 +51066,7 @@ boundary.
             "content_receipt": receipt,
             "actor_knowledge_imported": False,
             "combat": combat_result,
+            "replaced_actor_id": (replacement_actor.id if replacement_actor is not None else None),
             "mutation_group_id": created.mutation_group_id,
             "next": None,
         }

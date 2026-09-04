@@ -1444,8 +1444,7 @@ def _normalize_intrinsic_attack(value: Any, field: str) -> dict[str, Any]:
         ),
     }
     if not all(
-        normalized_source[key]
-        for key in ("artifact_id", "pack_id", "pack_version", "rule_refs")
+        normalized_source[key] for key in ("artifact_id", "pack_id", "pack_version", "rule_refs")
     ):
         raise ValueError(f"{field}.source requires exact content provenance")
     return {
@@ -2789,9 +2788,7 @@ def validate_character_sheet(
                     f"sheet.combat.short_rest_hit_dice references an unknown hit die: {key}"
                 )
             if amount > int(resource.get("value", 0) or 0):
-                raise ValueError(
-                    "sheet.combat.short_rest_hit_dice cannot exceed current hit dice"
-                )
+                raise ValueError("sheet.combat.short_rest_hit_dice cannot exceed current hit dice")
         song_die = short_rest_hit_dice.get("song_of_rest_die_sides")
         if song_die is not None:
             song_die = _integer(
@@ -3806,6 +3803,7 @@ def validate_character_notes(
 
 
 def validate_party_state(state: dict[str, Any]) -> dict[str, Any]:
+    from sagasmith_dnd.dependent_actor_relations import validate_dependent_actor_relations
     from sagasmith_dnd.game_time import (
         game_time_from_ticks,
         validate_game_time,
@@ -3852,6 +3850,10 @@ def validate_party_state(state: dict[str, Any]) -> dict[str, Any]:
         value["random_stream"] = validate_random_stream_state(value["random_stream"])
     if "playthrough_manifest" in value:
         value["playthrough_manifest"] = validate_playthrough_manifest(value["playthrough_manifest"])
+    if "dependent_actor_relations" in value:
+        value["dependent_actor_relations"] = validate_dependent_actor_relations(
+            value["dependent_actor_relations"]
+        )
     return value
 
 
@@ -4544,9 +4546,7 @@ def _weapon_attacks(
         )
         damage_expression = damage_formula
         if modifier:
-            damage_expression = (
-                f"{damage_formula} {'+' if modifier > 0 else '-'} {abs(modifier)}"
-            )
+            damage_expression = f"{damage_formula} {'+' if modifier > 0 else '-'} {abs(modifier)}"
         attacks.append(
             {
                 "item_id": attack["id"],
