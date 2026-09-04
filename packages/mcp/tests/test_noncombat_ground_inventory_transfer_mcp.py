@@ -93,10 +93,39 @@ def test_noncombat_agent_ground_transfer_requires_current_dm_reach_facts(tmp_pat
             ground = after_drop["state"]["ground_items"]
             assert len(ground) == 1
             ground_id = ground[0]["id"]
+            assert ground[0]["location"] == {"mode": "agent", "anchor_actor_id": actor["id"]}
+            ground_item = next(item for item in ground[0]["items"] if item["id"] == sword_id)
+            assert ground_item["name"] == "Noncombat Sword"
+            assert ground_item["mechanics"]["damage_formula"] == "1d8"
             actor_after_drop = await _call(
                 server,
                 "character_query",
                 {"view": "get", "payload": {"character_id": actor["id"]}},
+            )
+            await _call(
+                server,
+                "access_grant",
+                {
+                    "scope": "campaign",
+                    "campaign_id": campaign["id"],
+                    "principal_id": "player:carrier",
+                    "payload": {"role": "player"},
+                },
+            )
+            await _call(
+                server,
+                "access_grant",
+                {
+                    "scope": "actor",
+                    "campaign_id": campaign["id"],
+                    "principal_id": "player:carrier",
+                    "payload": {"actor_id": actor["id"], "can_control": True},
+                },
+            )
+            after_drop = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
             )
             assert actor_after_drop["sheet"]["inventory"]["equipment_slots"]["main_hand"] is None
             before_rejections = {
@@ -155,6 +184,14 @@ def test_noncombat_agent_ground_transfer_requires_current_dm_reach_facts(tmp_pat
                     },
                     "exact",
                 ),
+                (
+                    {"expected_campaign_revision": after_drop["revision"] - 1},
+                    "revision",
+                ),
+                (
+                    {"expected_character_revision": actor_after_drop["revision"] - 1},
+                    "revision",
+                ),
             ]
             for index, (extra, message) in enumerate(invalid):
                 request = {
@@ -184,6 +221,54 @@ def test_noncombat_agent_ground_transfer_requires_current_dm_reach_facts(tmp_pat
                     )
                     == before_rejections["actor"]
                 )
+                assert (
+                    await _call(
+                        server,
+                        "character_query",
+                        {"view": "list", "payload": {"campaign_id": campaign["id"]}},
+                    )
+                    == before_rejections["list"]
+                )
+            player_facts = {
+                **base,
+                "payload": {
+                    **base["payload"],
+                    "spatial_facts": {
+                        "decision_id": "player-reach",
+                        "reason": "The player claims the actor can reach this item.",
+                        "campaign_revision": after_drop["revision"],
+                        "can_reach_ground_item": True,
+                    },
+                },
+                "principal_id": "player:carrier",
+                "idempotency_key": "player-forged-facts",
+            }
+            with pytest.raises(ToolError, match="DM|role|restricted|access|principal"):
+                await _call(server, "inventory_transfer", player_facts)
+            assert (
+                await _call(
+                    server,
+                    "campaign_query",
+                    {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+                )
+                == before_rejections["campaign"]
+            )
+            assert (
+                await _call(
+                    server,
+                    "character_query",
+                    {"view": "get", "payload": {"character_id": actor["id"]}},
+                )
+                == before_rejections["actor"]
+            )
+            assert (
+                await _call(
+                    server,
+                    "character_query",
+                    {"view": "list", "payload": {"campaign_id": campaign["id"]}},
+                )
+                == before_rejections["list"]
+            )
             valid = {
                 **base,
                 "payload": {
