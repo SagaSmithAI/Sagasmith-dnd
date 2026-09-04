@@ -20936,9 +20936,11 @@ def _create_server(
             )
             if normalized_action == "shake_sleep" and encounter.get("positioning_mode") == "agent":
                 access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
-                sleep_wake_spatial_facts = _normalize_sleep_wake_spatial_facts(
-                    payload, campaign_revision=campaign.revision
-                )
+                sleep_wake_spatial_facts = _agent_ruling_boundary(
+                    _normalize_sleep_wake_spatial_facts
+                )(payload, campaign_revision=campaign.revision)
+                if sleep_wake_spatial_facts.get("status") == "pending_ruling":
+                    return sleep_wake_spatial_facts
                 engine_payload = {"spatial_facts": sleep_wake_spatial_facts}
             else:
                 if payload:
