@@ -81,10 +81,12 @@ def test_turn_undead_prevalidates_before_2024_sear_roll() -> None:
     cleric = _actor("cleric", species="Human", cleric=True, edition="2024")
     valid = _actor("valid", species="Undead", edition="2024")
     invalid = _actor("invalid", species="Humanoid (undead hunter)", edition="2024")
+    before = deepcopy({"valid": valid, "invalid": invalid})
     rng = random.Random(7)
     rng_before = rng.getstate()
     with pytest.raises(CombatEngineError, match="not Undead"):
         resolve_turn_undead_to_sheets(
             cleric, {"valid": valid, "invalid": invalid}, sear_undead=True, rng=rng
         )
+    assert {"valid": valid, "invalid": invalid} == before
     assert rng.getstate() == rng_before
