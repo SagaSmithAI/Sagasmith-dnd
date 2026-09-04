@@ -1126,6 +1126,81 @@ def _semantic_plan_save_facts(
     return result
 
 
+def _normalize_sleep_spatial_facts(
+    declaration: dict[str, Any] | None,
+    *,
+    actor_ids: set[str],
+    campaign_revision: int,
+) -> dict[str, Any]:
+    """Validate the DM's coordinate-free decision for the exact 2014 Sleep area."""
+    if declaration is None or declaration == {}:
+        raise NeedsRulingError(
+            "Sleep requires a reviewed 20-foot area and 90-foot origin-range decision",
+            missing=("sleep.spatial_facts",),
+            ruling_kind="agent_dm_adjudication",
+        )
+    if not isinstance(declaration, dict) or set(declaration) != {"spatial_facts"}:
+        raise CombatEngineError(
+            "Agent Sleep declaration requires only spatial_facts, not coordinates"
+        )
+    facts = declaration["spatial_facts"]
+    fields = {
+        "decision_id",
+        "reason",
+        "origin_description",
+        "campaign_revision",
+        "origin_in_range",
+        "line_of_effect_clear",
+        "affected_target_ids",
+        "excluded_actor_ids",
+    }
+    if not isinstance(facts, dict) or set(facts) != fields:
+        raise CombatEngineError(
+            "Sleep spatial_facts requires the complete source-bound area decision"
+        )
+    normalized = deepcopy(facts)
+    for field, minimum, maximum in (
+        ("decision_id", 1, 100),
+        ("reason", 10, 1000),
+        ("origin_description", 10, 500),
+    ):
+        value = facts[field]
+        if not isinstance(value, str) or not minimum <= len(" ".join(value.split())) <= maximum:
+            raise CombatEngineError(f"Sleep spatial fact {field} must be bounded non-empty text")
+        normalized[field] = " ".join(value.split())
+    if (
+        type(facts["campaign_revision"]) is not int
+        or facts["campaign_revision"] != campaign_revision
+    ):
+        raise CombatEngineError("Sleep spatial facts do not match the current campaign revision")
+    for field in ("origin_in_range", "line_of_effect_clear"):
+        if facts[field] is not True:
+            raise CombatEngineError(f"Sleep requires an affirmative boolean {field} decision")
+    for field in ("affected_target_ids", "excluded_actor_ids"):
+        values = facts[field]
+        if (
+            not isinstance(values, list)
+            or any(not isinstance(item, str) or not item for item in values)
+            or len(set(values)) != len(values)
+            or set(values) - actor_ids
+        ):
+            raise CombatEngineError(f"Sleep {field} must contain unique current living actor IDs")
+    affected = set(facts["affected_target_ids"])
+    excluded = set(facts["excluded_actor_ids"])
+    if affected & excluded or affected | excluded != actor_ids:
+        raise CombatEngineError(
+            "Sleep area decision must account for every living actor exactly once"
+        )
+    return {
+        "shape": "sphere",
+        "radius_ft": 20,
+        "origin_range_ft": 90,
+        "positioning_mode": "agent",
+        "spatial_facts": normalized,
+        "targets": [{"target_id": target_id} for target_id in facts["affected_target_ids"]],
+    }
+
+
 def _structured_spell_save_facts(
     spell: dict[str, Any], resolution: dict[str, Any]
 ) -> dict[str, Any]:
@@ -21865,18 +21940,26 @@ def _create_server(
             if str(encounter.get("ruleset") or "") != "2014":
                 raise CombatEngineError("the source-bound Sleep mechanic is a 2014 rule")
             if str(encounter.get("positioning_mode") or "grid") == "agent":
-                raise NeedsRulingError(
-                    "Sleep requires a reviewed 20-foot area and 90-foot origin-range decision",
-                    missing=("sleep.spatial_facts",),
-                    ruling_kind="agent_dm_adjudication",
+                access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
+                sleep_target = _normalize_sleep_spatial_facts(
+                    declaration,
+                    actor_ids={
+                        str(item["actor_id"])
+                        for item in encounter.get("combatants", [])
+                        if "dead" not in {
+                            str(value).casefold() for value in item.get("conditions", [])
+                        }
+                    },
+                    campaign_revision=campaign.revision,
                 )
-            sleep_target = normalize_area_declaration(
-                encounter,
-                source_id=actor_id,
-                area={"shape": "sphere", "radius_ft": 20},
-                origin_range_ft=90,
-                declaration=declaration,
-            )
+            else:
+                sleep_target = normalize_area_declaration(
+                    encounter,
+                    source_id=actor_id,
+                    area={"shape": "sphere", "radius_ft": 20},
+                    origin_range_ft=90,
+                    declaration=declaration,
+                )
         if structured_resolution is not None:
             kind = str(structured_resolution.get("kind") or "")
             if kind == "spell_attack":
@@ -29814,6 +29897,7 @@ def _create_server(
         source_item_id: str | None = None,
         target_character_ids: list[str] | None = None,
         willing_target_ids: list[str] | None = None,
+        declaration: dict[str, Any] | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
         expected_revision: int | None = None,
         idempotency_key: str | None = None,
@@ -29838,6 +29922,7 @@ def _create_server(
             "source_item_id": source_item_id,
             "target_character_ids": target_character_ids,
             "willing_target_ids": willing_target_ids,
+            **({"declaration": declaration} if declaration is not None else {}),
         }
         scope = f"character-cast:{current.campaign_id}:{branch_id}:{principal_id}"
         replay = replay_idempotent(scope, idempotency_key, payload)
@@ -29874,14 +29959,34 @@ def _create_server(
         )
         fly = is_core_fly_spell(spell_entry)
         invisibility = is_core_invisibility_spell(spell_entry)
-        if spell_id == CORE_SLEEP_SPELL_ID:
-            # A scalar out-of-combat resource payment must not masquerade as
-            # complete area settlement. The source-bound area path validates
-            # the complete target snapshot before committing the slot.
-            raise NeedsRulingError(
-                "Sleep needs its source-bound area settlement before resources are paid",
-                missing=("sleep.area_targets",),
-                ruling_kind="agent_dm_adjudication",
+        sleep = (
+            spell_entry.get("id") == CORE_SLEEP_SPELL_ID
+            and CORE_SLEEP_MECHANIC_ID in spell_entry.get("mechanic_refs", [])
+        )
+        sleep_target = None
+        all_characters = characters.list(campaign_id=current.campaign_id)
+        if sleep:
+            access.require_campaign(current.campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
+            if current.sheet.get("edition") != "2014":
+                raise CombatEngineError("the source-bound Sleep mechanic is a 2014 rule")
+            if spell_entry.get("resolution_plan") or spell_entry.get("resolution"):
+                raise CombatEngineError("Sleep cannot combine native and other settlement paths")
+            if target_character_ids is not None or willing_target_ids is not None:
+                raise CombatEngineError("Sleep selects its complete area through declaration")
+            sleep_target = _normalize_sleep_spatial_facts(
+                declaration,
+                actor_ids={
+                    character.id
+                    for character in all_characters
+                    if "dead" not in {
+                        str(value).casefold() for value in character.sheet.get("conditions", [])
+                    }
+                },
+                campaign_revision=campaign.revision,
+            )
+        elif declaration is not None:
+            raise CombatEngineError(
+                "noncombat spell declaration is supported only for native Sleep"
             )
         normalized_fly_targets: list[str] = []
         normalized_willing_targets: list[str] = []
@@ -30024,7 +30129,6 @@ def _create_server(
         advanced: dict[str, list[str]] = {}
         expired: dict[str, list[str]] = {}
         rule_receipts: list[dict[str, Any]] = []
-        all_characters = characters.list(campaign_id=current.campaign_id)
         for character in all_characters:
             round_duration = advance_effect_durations(
                 character.sheet,
@@ -30195,6 +30299,46 @@ def _create_server(
                     "spell.invisibility",
                 )
             )
+        if sleep:
+            assert sleep_target is not None
+            resolved_level = int(applied.get("cast_level", cast_level or 1))
+            if not 1 <= resolved_level <= 9:
+                raise CombatEngineError("Sleep cast level must be between 1 and 9")
+            pool_roll = asdict(roll(f"{5 + 2 * (resolved_level - 1)}d8"))
+            settled = resolve_sleep_targets(
+                [
+                    {"id": target["target_id"], "sheet": timed_sheets[target["target_id"]]}
+                    for target in sleep_target["targets"]
+                ],
+                pool=int(pool_roll["total"]),
+                source_actor_id=current.id,
+                source_spell_id=spell_id,
+                source_rule_refs=spell_entry.get("rule_refs", []),
+                ruleset="2014",
+            )
+            timed_sheets.update(settled["sheets"])
+            applied.update(
+                automatic_effect="sleep",
+                area=sleep_target,
+                pool_roll=pool_roll,
+                pool_remaining=settled["pool_remaining"],
+                targets=settled["targets"],
+            )
+            applied["ruling_required"] = [
+                item for item in applied.get("ruling_required") or []
+                if item != "targets_and_effect"
+            ]
+            applied["ruling_requirements"] = [
+                item for item in applied.get("ruling_requirements") or []
+                if item.get("kind") != "targets_and_effect"
+            ]
+            rule_receipts.extend(core_receipts(rules, [CORE_SLEEP_MECHANIC_ID], "spell.sleep"))
+            for target_result in settled["targets"]:
+                if target_result["skip_reason"] == "immune_to_magical_sleep":
+                    target_result["rule_receipts"] = core_receipts(
+                        rules, [CORE_FEY_ANCESTRY_MECHANIC_ID], "spell.sleep.immunity"
+                    )
+                    rule_receipts.extend(target_result["rule_receipts"])
         reconciled_dependencies = reconcile_source_effect_dependencies(timed_sheets)
         timed_sheets = reconciled_dependencies["sheets"]
         applied["sheet"] = timed_sheets[current.id]
@@ -50798,6 +50942,7 @@ boundary.
                 source_item_id=data.get("source_item_id"),
                 target_character_ids=data.get("target_character_ids"),
                 willing_target_ids=data.get("willing_target_ids"),
+                declaration=data.get("declaration"),
                 principal_id=principal_id,
                 expected_revision=expected_revision,
                 idempotency_key=idempotency_key,
