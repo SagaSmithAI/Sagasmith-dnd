@@ -179,19 +179,63 @@ def test_attuned_ground_item_preserves_custody_across_actor_transfer(tmp_path: P
                 "character_query",
                 {"view": "get", "payload": {"character_id": actors[2]["id"]}},
             )
+            transfer_payload = {
+                "source_character_id": actors[1]["id"],
+                "target_character_id": actors[2]["id"],
+                "item_id": sword_id,
+                "expected_campaign_revision": after_pickup_campaign["revision"],
+                "expected_source_revision": b["revision"],
+                "expected_target_revision": c["revision"],
+            }
+            before_transfer = {
+                "campaign": await _call(
+                    server,
+                    "campaign_query",
+                    {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+                ),
+                "actors": [
+                    await _call(
+                        server,
+                        "character_query",
+                        {"view": "get", "payload": {"character_id": item["id"]}},
+                    )
+                    for item in actors
+                ],
+            }
+            for field in ("expected_source_revision", "expected_target_revision"):
+                stale = dict(transfer_payload)
+                stale[field] -= 1
+                with pytest.raises(ToolError, match="revision"):
+                    await _call(
+                        server,
+                        "inventory_transfer",
+                        {
+                            "mode": "character_to_character",
+                            "payload": stale,
+                            "idempotency_key": f"stale-{field}",
+                        },
+                    )
+                assert {
+                    "campaign": await _call(
+                        server,
+                        "campaign_query",
+                        {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+                    ),
+                    "actors": [
+                        await _call(
+                            server,
+                            "character_query",
+                            {"view": "get", "payload": {"character_id": item["id"]}},
+                        )
+                        for item in actors
+                    ],
+                } == before_transfer
             transfer = await _raw(
                 server,
                 "inventory_transfer",
                 {
                     "mode": "character_to_character",
-                    "payload": {
-                        "source_character_id": actors[1]["id"],
-                        "target_character_id": actors[2]["id"],
-                        "item_id": sword_id,
-                        "expected_campaign_revision": after_pickup_campaign["revision"],
-                        "expected_source_revision": b["revision"],
-                        "expected_target_revision": c["revision"],
-                    },
+                    "payload": transfer_payload,
                     "idempotency_key": "b-to-c",
                 },
             )
