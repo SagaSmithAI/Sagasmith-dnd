@@ -7099,6 +7099,9 @@ def _create_server(
                 artifacts=expected_artifacts,
                 mechanics=expected_mechanics,
             )
+            persisted_expected_dependencies = deepcopy(
+                expected_manifest.get("dependencies") or []
+            )
             # The portable export pins each installed dependency to its runtime
             # definition checksum (the same canonical value used by
             # rule_content_descriptor), rather than the archive rebind's source
@@ -7159,6 +7162,12 @@ def _create_server(
                 artifacts=installed_descriptor["artifacts"],
                 mechanics=installed_descriptor["mechanics"],
             )
+            local_expected_semantic_validation = audit_release_semantic_validation(
+                list(installed.artifacts),
+                settled_mechanic_ids=_rule_payload_settled_mechanic_ids(
+                    {"manifest": installed.manifest, "mechanics": installed.mechanics}
+                ),
+            )
             recorded_runtime_checksum = str(content_definition.get("definition_checksum") or "")
             recorded_source_checksum = str(
                 content_definition.get("source_definition_checksum") or ""
@@ -7171,6 +7180,16 @@ def _create_server(
                 and recorded_runtime_checksum == recorded_expected_checksum
                 and installed_checksum == expected_checksum
                 and recorded_source_checksum == str(definition["definition_checksum"])
+                # Compare persisted, security-relevant manifest fields before
+                # descriptor export, which normalizes resolution metadata and
+                # could otherwise hide tampering.
+                and all(
+                    installed.manifest.get(key) == expected_manifest.get(key)
+                    for key in ("resolution_policy",)
+                )
+                and installed.manifest.get("dependencies") == persisted_expected_dependencies
+                and installed.manifest.get("semantic_validation")
+                == local_expected_semantic_validation
             )
             if not valid:
                 raise ValueError(
