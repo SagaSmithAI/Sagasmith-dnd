@@ -78,6 +78,7 @@ def test_sleep_drops_held_items_to_ground_without_automatic_pickup(tmp_path: Pat
                     "1": {"label": "Level 1", "value": 1, "max": 1, "recovers_on": "long_rest"}
                 },
             )
+            caster_sheet["combat"]["hp"] = {"value": 100, "max": 100, "temp": 0}
             caster = await _call(
                 server,
                 "character_create_from",
@@ -190,7 +191,7 @@ def test_sleep_drops_held_items_to_ground_without_automatic_pickup(tmp_path: Pat
                 {"view": "get", "payload": {"character_id": target["id"]}},
             )
             assert "unconscious" in target_after["sheet"]["conditions"]
-            assert target_after["sheet"]["inventory"]["equipment_slots"]["main_hand"] == sword_id
+            assert target_after["sheet"]["inventory"]["equipment_slots"]["main_hand"] is None
             assert target_after["sheet"]["inventory"]["equipment_slots"]["shield"] == shield_id
             campaign_after = await _call(
                 server,
@@ -200,19 +201,96 @@ def test_sleep_drops_held_items_to_ground_without_automatic_pickup(tmp_path: Pat
             assert campaign_after["state"].get("ground_items")
             ground = campaign_after["state"]["ground_items"][0]
             assert ground["root_item_id"] == sword_id
+            assert all(
+                item["id"] != sword_id for item in target_after["sheet"]["inventory"]["items"]
+            )
+            external = target_after["sheet"]["inventory"].get("external_items") or []
+            binding = next(item for item in external if item.get("item_id") == sword_id)
+            assert binding["ground_id"] == ground["id"]
             with pytest.raises(ToolError):
                 await _call(
                     server,
                     "combat_common_action",
                     {
                         "campaign_id": campaign["id"],
-                        "actor_id": caster["id"],
+                        "actor_id": target["id"],
                         "action": "pickup_ground",
                         "payload": {"ground_id": ground["id"], "slot": "main_hand"},
                         "expected_revision": cast["campaign_revision"],
                         "idempotency_key": "pickup",
                     },
                 )
+            ended_caster = await _call(
+                server,
+                "combat_end_turn",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": caster["id"],
+                    "expected_revision": cast["campaign_revision"],
+                    "idempotency_key": "end-caster",
+                },
+            )
+            ended_target = await _call(
+                server,
+                "combat_end_turn",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": target["id"],
+                    "expected_revision": ended_caster["campaign_revision"],
+                    "idempotency_key": "end-target",
+                },
+            )
+            shaken = await _call(
+                server,
+                "combat_common_action",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": caster["id"],
+                    "action": "shake_sleep",
+                    "target_id": target["id"],
+                    "expected_revision": ended_target["campaign_revision"],
+                    "idempotency_key": "shake",
+                },
+            )
+            assert shaken["status"] == "committed"
+            shaken_end = await _call(
+                server,
+                "combat_end_turn",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": caster["id"],
+                    "expected_revision": shaken["campaign_revision"],
+                    "idempotency_key": "end-caster-after-shake",
+                },
+            )
+            pickup = await _call(
+                server,
+                "combat_common_action",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": target["id"],
+                    "action": "pickup_ground",
+                    "payload": {"ground_id": ground["id"], "slot": "main_hand"},
+                    "expected_revision": shaken_end["campaign_revision"],
+                    "idempotency_key": "pickup-after-wake",
+                },
+            )
+            assert pickup["status"] == "committed"
+            picked = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": target["id"]}},
+            )
+            assert picked["sheet"]["inventory"]["equipment_slots"]["main_hand"] == sword_id
+            ground_after = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            assert all(
+                record["id"] != ground["id"]
+                for record in ground_after["state"].get("ground_items", [])
+            )
         finally:
             close_server(server)
 
