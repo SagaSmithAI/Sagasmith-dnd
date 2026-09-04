@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.75.0"
+CORE_RULE_PACK_VERSION = "1.76.0"
 
 
 @dataclass(frozen=True)
@@ -905,6 +905,9 @@ BOUNDARIES = (
         "combat_engine.standard_save_damage_reduction",
         (
             "tests/test_combat_engine.py::test_evasion_rewrites_dexterity_save_for_half_damage",
+            "tests/test_evasion_editions.py::"
+            "test_real_evasion_artifacts_preserve_edition_specific_incapacitation",
+            "tests/test_evasion_editions.py::test_real_evasion_does_not_rewrite_unrelated_saves",
             "tests/test_core_content.py::"
             "test_srd2014_content_uses_leaf_records_and_structured_eligibility",
         ),
