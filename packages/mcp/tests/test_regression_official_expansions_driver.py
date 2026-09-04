@@ -1,4 +1,6 @@
 import asyncio
+from copy import deepcopy
+from typing import Any
 
 import pytest
 
@@ -20,11 +22,21 @@ def test_official_regression_fallback_uses_ordinary_language_choices(
         assert name == "character_query"
         assert arguments == {
             "view": "catalog",
-            "payload": {"campaign_id": "campaign", "query": "background"},
+            "payload": {"campaign_id": "campaign", "query": "background", "include_context": True},
         }
         return [
             {
                 "id": "background",
+                "kind": "background",
+                "pack_id": "official",
+                "application_state": "selection_ready",
+                "runtime_context": {
+                    "selection_contract": {
+                        "status": "ready",
+                        "materializer": "dnd5e.character.background.v1",
+                        "reviewed_content_hash": "a" * 64,
+                    }
+                },
                 "selection_requirements": {
                     "language_count": count,
                     "language_options": options,
@@ -34,5 +46,362 @@ def test_official_regression_fallback_uses_ordinary_language_choices(
         ]
 
     monkeypatch.setattr(driver, "_call", catalog)
-    selection = asyncio.run(driver._catalog_selection(None, "campaign", "background"))
+    _, selection = asyncio.run(
+        driver._catalog_selection(
+            None,
+            "campaign",
+            "background",
+            expected_kind="background",
+            official_pack_ids={"official"},
+        )
+    )
     assert selection == {"languages": expected}
+
+
+class _FakeServer:
+    def __init__(self, responses: dict[str, list[Any]]) -> None:
+        self.responses = {name: list(values) for name, values in responses.items()}
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+    ) -> tuple[None, dict[str, Any]]:
+        self.calls.append((name, arguments))
+        return None, {"result": self.responses[name].pop(0)}
+
+
+def _entry() -> dict[str, Any]:
+    return {
+        "id": "dnd5e.addon.fixture.feat.verified",
+        "kind": "feat",
+        "pack_id": "dnd5e.addon.fixture",
+        "pack_version": "1.0.0",
+        "rule_refs": ["fixture:p1"],
+        "runtime_context": {
+            "selection_contract": {
+                "status": "ready",
+                "materializer": "dnd5e.character.feat.v1",
+                "reviewed_content_hash": "a" * 64,
+            }
+        },
+    }
+
+
+def _receipt() -> dict[str, Any]:
+    entry = _entry()
+    return {
+        "ruleset_fingerprint": "ruleset-fingerprint",
+        "mechanic_id": "dnd5e.character.feat.v1",
+        "event": "character.content.apply",
+        "artifact_id": entry["id"],
+        "character_id": "character-1",
+        "pack_id": entry["pack_id"],
+        "pack_version": entry["pack_version"],
+        "reviewed_content_hash": "a" * 64,
+        "selection": {"ability": "constitution"},
+        "rule_refs": entry["rule_refs"],
+    }
+
+
+def test_official_expansion_driver_requires_an_exact_content_receipt() -> None:
+    receipt = _receipt()
+    applied = {"revision": 2, "sheet": {"name": "Synthetic"}, "rule_receipts": [receipt]}
+    server = _FakeServer({"character_content_apply": [applied]})
+
+    result, observed = asyncio.run(
+        driver._apply(
+            server,
+            {"id": "character-1", "revision": 1},
+            _entry(),
+            "apply-fixture",
+            ruleset_fingerprint="ruleset-fingerprint",
+            selection={"ability": "constitution"},
+        )
+    )
+
+    assert result == applied
+    assert observed == receipt
+    assert server.calls == [
+        (
+            "character_content_apply",
+            {
+                "character_id": "character-1",
+                "artifact_id": _entry()["id"],
+                "selection": {"ability": "constitution"},
+                "expected_revision": 1,
+                "idempotency_key": "apply-fixture",
+            },
+        )
+    ]
+
+    mismatched = deepcopy(applied)
+    mismatched["rule_receipts"][0]["reviewed_content_hash"] = "b" * 64
+    with pytest.raises(RuntimeError, match="content receipt mismatch"):
+        asyncio.run(
+            driver._apply(
+                _FakeServer({"character_content_apply": [mismatched]}),
+                {"id": "character-1", "revision": 1},
+                _entry(),
+                "apply-mismatch",
+                ruleset_fingerprint="ruleset-fingerprint",
+                selection={"ability": "constitution"},
+            )
+        )
+
+
+def test_official_expansion_driver_reconciles_restart_state_and_receipts() -> None:
+    receipt = _receipt()
+    checkpoint = {
+        "campaign_id": "campaign-1",
+        "campaign_revision": 11,
+        "character_id": "character-1",
+        "character_revision": 7,
+        "character_sheet": {"name": "Synthetic", "constitution": 12},
+        "resolution_id": "resolution-1",
+        "resolution_total": 17,
+        "content_receipts": {receipt["artifact_id"]: receipt},
+        "official_addons": {("dnd5e.addon.fixture", "1.0.0")},
+    }
+    server = _FakeServer(
+        {
+            "campaign_query": [
+                {
+                    "revision": 11,
+                    "state": {"resolution_log": [{"id": "resolution-1", "result": {"total": 17}}]},
+                }
+            ],
+            "character_query": [{"revision": 7, "sheet": checkpoint["character_sheet"]}],
+            "content_pack": [
+                [
+                    {
+                        "addon_id": "dnd5e.addon.fixture",
+                        "version": "1.0.0",
+                        "built_in_official_expansion": True,
+                        "activation": {"enabled": True},
+                    }
+                ]
+            ],
+            "campaign_rules": [
+                [
+                    {
+                        "operation": "character.content.apply",
+                        "event": "character.content.apply",
+                        "mechanic_id": receipt["mechanic_id"],
+                        "ruleset_fingerprint": receipt["ruleset_fingerprint"],
+                        "mutation_group_id": "mutation-1",
+                        "applied": True,
+                        "receipt": receipt,
+                    }
+                ]
+            ],
+        }
+    )
+
+    assert asyncio.run(driver._verify_restart(server, checkpoint)) == 1
+    assert [name for name, _ in server.calls] == [
+        "campaign_query",
+        "character_query",
+        "content_pack",
+        "campaign_rules",
+    ]
+
+
+def _complete_build_fixture():
+    def spell(identifier, name, level, source_type, source_key, **access):
+        return {
+            "id": identifier,
+            "name": name,
+            "level": level,
+            "grant": {"source_type": source_type, "source_key": source_key},
+            "access": access,
+        }
+
+    return {
+        "content": {
+            "features": [{"id": item} for item in driver._REQUIRED_ARTIFICER_FEATURES],
+            "spells": [
+                spell("cantrip-1", "First", 0, "class", "Artificer", known=True),
+                spell("cantrip-2", "Second", 0, "class", "Artificer", known=True),
+                spell("prepared", "Prepared", 1, "class", "Artificer", prepared=True),
+                spell(
+                    "heroism",
+                    "Heroism",
+                    1,
+                    "subclass",
+                    "Battle Smith",
+                    prepared=True,
+                    always_prepared=True,
+                ),
+                spell(
+                    "shield",
+                    "Shield",
+                    1,
+                    "subclass",
+                    "Battle Smith",
+                    prepared=True,
+                    always_prepared=True,
+                ),
+            ],
+        },
+        "spellcasting": {"preparation": {"max_prepared": 1, "selected_spell_ids": ["prepared"]}},
+    }
+
+
+def test_complete_build_gate_accepts_explicit_required_state():
+    assert driver._build_failures(_complete_build_fixture(), []) == []
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing_feature",
+        "feat_cantrip",
+        "duplicate_cantrip",
+        "unprepared",
+        "absent_prepared",
+        "ordinary_subclass_spell",
+        "subclass_consumes_preparation",
+        "unknown_follow_up",
+        "unapplied_follow_up",
+    ],
+)
+def test_persisted_incomplete_build_cannot_pass(mutation):
+    sheet = _complete_build_fixture()
+    follow_ups = []
+    spells = sheet["content"]["spells"]
+    if mutation == "missing_feature":
+        sheet["content"]["features"].pop()
+    elif mutation == "feat_cantrip":
+        spells[0]["grant"]["source_type"] = "feat"
+    elif mutation == "duplicate_cantrip":
+        spells[0]["id"] = spells[1]["id"]
+    elif mutation == "unprepared":
+        spells[2]["access"]["prepared"] = False
+    elif mutation == "absent_prepared":
+        sheet["spellcasting"]["preparation"]["selected_spell_ids"] = []
+    elif mutation == "ordinary_subclass_spell":
+        spells[3]["access"]["always_prepared"] = False
+    elif mutation == "subclass_consumes_preparation":
+        sheet["spellcasting"]["preparation"]["selected_spell_ids"] = ["heroism"]
+    elif mutation == "unknown_follow_up":
+        follow_ups = [{"spell_choices": {"unknown_choice": 1}}]
+    elif mutation == "unapplied_follow_up":
+        follow_ups = [{"feature_artifacts": [{"artifact_id": "missing"}]}]
+    assert driver._build_failures(sheet, follow_ups)
+
+
+@pytest.mark.parametrize("field", ["character_id", "pack_version", "reviewed_content_hash"])
+def test_content_receipt_identity_mismatch_is_rejected(field):
+    receipt = _receipt()
+    receipt[field] = "wrong"
+    result = {"revision": 2, "sheet": {}, "rule_receipts": [receipt]}
+    with pytest.raises(RuntimeError, match="content receipt mismatch"):
+        asyncio.run(
+            driver._apply(
+                _FakeServer({"character_content_apply": [result]}),
+                {"id": "character-1", "revision": 1},
+                _entry(),
+                "identity-mismatch",
+                ruleset_fingerprint="ruleset-fingerprint",
+                selection={"ability": "constitution"},
+            )
+        )
+
+
+def test_catalog_membership_without_selection_contract_is_not_executable(monkeypatch):
+    entry = _entry()
+    entry["application_state"] = "selection_ready"
+    entry["runtime_context"] = {}
+
+    async def catalog(*_args):
+        return [entry]
+
+    monkeypatch.setattr(driver, "_call", catalog)
+    with pytest.raises(RuntimeError, match="no ready selection contract"):
+        asyncio.run(
+            driver._catalog_selection(
+                None,
+                "campaign-1",
+                entry["id"],
+                expected_kind="feat",
+                official_pack_ids={entry["pack_id"]},
+            )
+        )
+
+
+@pytest.mark.parametrize("failures,expected", [([], True), (["missing_required_features"], False)])
+def test_execute_never_marks_persisted_incomplete_build_passed(
+    monkeypatch, tmp_path, failures, expected
+):
+    servers = [object(), object()]
+    created = []
+    closed = []
+    report = {"build": {"failures": failures}, "receipts": {}, "persistence": {}}
+
+    def create(library, home):
+        assert library == tmp_path / "library" and home == tmp_path / "home"
+        created.append(servers[len(created)])
+        return created[-1]
+
+    async def run(server):
+        assert server is servers[0]
+        return report, {"fixture": "checkpoint"}
+
+    async def restart(server, checkpoint):
+        assert server is servers[1] and checkpoint == {"fixture": "checkpoint"}
+        return 8
+
+    monkeypatch.setattr(driver, "_create_regression_server", create)
+    monkeypatch.setattr(driver, "_run", run)
+    monkeypatch.setattr(driver, "_verify_restart", restart)
+    monkeypatch.setattr(driver, "close_server", closed.append)
+    result = driver._execute(tmp_path / "library", tmp_path / "home")
+    assert result["passed"] is expected
+    assert result["receipts"]["restart_persisted"] == 8
+    assert result["persistence"]["restart_verified"] is True
+    assert closed == servers
+
+
+@pytest.mark.parametrize("changed_choice", [False, True])
+def test_normalized_selection_receipt_matches_record_and_requested_choices(changed_choice):
+    entry = _entry()
+    entry["kind"] = "class"
+    receipt = _receipt()
+    requested = {"skills": ["Arcana"], "tools": []}
+    recorded = {"skills": ["history" if changed_choice else "arcana"], "tools": []}
+    receipt["selection"] = recorded
+    result = {
+        "revision": 2,
+        "sheet": {
+            "content": {
+                "selections": [
+                    {
+                        "artifact_id": entry["id"],
+                        "kind": "class",
+                        "pack_id": entry["pack_id"],
+                        "pack_version": entry["pack_version"],
+                        "selection": recorded,
+                    }
+                ]
+            }
+        },
+        "rule_receipts": [receipt],
+    }
+
+    async def apply():
+        return await driver._apply(
+            _FakeServer({"character_content_apply": [result]}),
+            {"id": "character-1", "revision": 1},
+            entry,
+            "normalized",
+            ruleset_fingerprint="ruleset-fingerprint",
+            selection=requested,
+        )
+
+    if changed_choice:
+        with pytest.raises(RuntimeError, match="changed requested skills"):
+            asyncio.run(apply())
+    else:
+        assert asyncio.run(apply()) == (result, receipt)
