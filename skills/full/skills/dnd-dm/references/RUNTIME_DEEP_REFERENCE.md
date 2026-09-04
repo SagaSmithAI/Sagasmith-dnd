@@ -889,7 +889,9 @@ malformed, false, or unauthorized facts do not move inventory or spend actions.
 Character cards, ground records and payment share a revision-checked atomic
 commit; replaying a successful request after restart must not repeat payment.
 Common character/campaign settlements reject missing physical-item references
-and conflicting attuned owners. Consequently, legacy removal/transfer paths
+and conflicting attuned owners. The state adapter repeats this check inside the
+owning transaction after candidate writes, so failure rolls back state, audit
+records and retry receipts together. Consequently, legacy removal/transfer paths
 that cannot migrate the references are rejected, not silently repaired. These
 guards do not yet establish complete cross-owner attunement lifecycle or
 compatibility with every legacy inventory removal/transfer path; do not use
