@@ -821,6 +821,7 @@ def resolve_hypnotic_pattern_target(
             rules,
             save_source_kind="spell",
             save_effect_conditions=["charmed", "incapacitated"],
+            save_against_poison=False,
         ),
         rng=rng,
     )
@@ -3418,6 +3419,7 @@ def resolve_attack_damage(
                     rules,
                     save_source_kind="nonmagical_effect",
                     save_effect_conditions=["prone"],
+                    save_against_poison=False,
                     subject="target",
                 ),
                 rng=rng,
@@ -6533,6 +6535,7 @@ def resolve_divine_spark_to_sheet(
             rules,
             save_source_kind="magical_effect",
             save_effect_conditions=[],
+            save_against_poison=False,
         ),
         rng=rng,
     )
@@ -6642,6 +6645,7 @@ def resolve_turn_undead_to_sheets(
                 rules,
                 save_source_kind="magical_effect",
                 save_effect_conditions=effect_conditions,
+                save_against_poison=False,
             ),
             rng=rng,
         )
@@ -6851,6 +6855,137 @@ def resolve_actor_check(
         "concentration",
     }:
         raise CombatEngineError("save_purpose must be effect or concentration")
+    long_save_ability = _long_ability_name(ability)
+    automatic_physical_failure = (
+        kind == "save"
+        and long_save_ability in {"strength", "dexterity"}
+        and bool(conditions & {"paralyzed", "petrified", "stunned", "unconscious"})
+    )
+    conditional_trait_mechanics = {
+        "dwarven_resilience": "dnd5e.core.save.dwarven_resilience",
+        "fey_ancestry": "dnd5e.core.save.fey_ancestry",
+        "gnome_cunning": "dnd5e.core.save.gnome_cunning",
+        "halfling_brave": "dnd5e.core.save.halfling_brave",
+    }
+    conditional_traits: list[str] = []
+    if (
+        kind == "save"
+        and normalized_ruleset == "2014"
+        and normalized_save_purpose == "effect"
+        and not automatic_physical_failure
+    ):
+        for feature in sheet.get("content", {}).get("features", []):
+            if not isinstance(feature, dict):
+                continue
+            mechanic_refs = {str(item) for item in feature.get("mechanic_refs") or []}
+            source_trait = dict(dict(feature.get("choices") or {}).get("source_trait") or {})
+            trait_kind = str(source_trait.get("kind") or "").strip().casefold()
+            if trait_kind not in conditional_trait_mechanics:
+                continue
+            if conditional_trait_mechanics[trait_kind] not in mechanic_refs:
+                continue
+            if source_trait.get("automatic") is not True or not isinstance(
+                source_trait.get("source_excerpt"), str
+            ) or not source_trait["source_excerpt"].strip():
+                raise CombatEngineError("conditional species save trait metadata is malformed")
+            if (
+                trait_kind == "fey_ancestry"
+                and source_trait.get("magical_sleep_immunity") is not True
+            ):
+                raise CombatEngineError("Fey Ancestry metadata must declare magical sleep immunity")
+            if trait_kind not in conditional_traits:
+                conditional_traits.append(trait_kind)
+        conditional_traits = [
+            trait
+            for trait in conditional_trait_mechanics
+            if trait in conditional_traits
+        ]
+        needs_conditions = any(
+            trait in conditional_traits for trait in ("fey_ancestry", "halfling_brave")
+        )
+        if (
+            needs_conditions
+            and save_effect_conditions is None
+            and "save_effect_conditions" not in rule_facts
+        ):
+            raise NeedsRulingError(
+                "conditional save requires authoritative effect conditions",
+                missing=("save_effect_conditions",),
+                ruling_kind="source_or_scene_fact",
+            )
+        if (
+            not automatic_physical_failure
+            and "gnome_cunning" in conditional_traits
+            and long_save_ability in {"intelligence", "wisdom", "charisma"}
+        ):
+            authoritative_source = (
+                save_source_kind
+                if save_source_kind is not None
+                else rule_facts.get("save_source_kind")
+            )
+            valid_source_kinds = {
+                "spell",
+                "magical_effect",
+                "nonmagical_effect",
+            }
+            if (
+                not isinstance(authoritative_source, str)
+                or authoritative_source.strip().casefold() not in valid_source_kinds
+            ):
+                raise NeedsRulingError(
+                    "Gnome Cunning requires an authoritative save source kind",
+                    missing=("save_source_kind",),
+                    ruling_kind="source_or_scene_fact",
+                )
+        authoritative_source_kind = str(
+            save_source_kind
+            if save_source_kind is not None
+            else rule_facts.get("save_source_kind") or ""
+        ).strip().casefold()
+        raw_conditions = (
+            save_effect_conditions
+            if save_effect_conditions is not None
+            else rule_facts.get("save_effect_conditions") or []
+        )
+        if not isinstance(raw_conditions, list) or any(
+            not isinstance(item, str) for item in raw_conditions
+        ):
+            raise CombatEngineError("save_effect_conditions must be a list of strings")
+        authoritative_conditions = {item.strip().casefold() for item in raw_conditions}
+        save_against_poison = rule_facts.get("save_against_poison")
+        if "dwarven_resilience" in conditional_traits and save_against_poison is not None:
+            if not isinstance(save_against_poison, bool):
+                raise CombatEngineError("save_against_poison must be a boolean")
+        if "dwarven_resilience" in conditional_traits and save_against_poison is None:
+            raise NeedsRulingError(
+                "Dwarven Resilience requires authoritative poison classification",
+                missing=("save_against_poison",),
+                ruling_kind="source_or_scene_fact",
+            )
+        trait_matches = (
+            ("dwarven_resilience" in conditional_traits and save_against_poison is True)
+            or ("fey_ancestry" in conditional_traits and "charmed" in authoritative_conditions)
+            or (
+                "gnome_cunning" in conditional_traits
+                and long_save_ability in {"intelligence", "wisdom", "charisma"}
+                and authoritative_source_kind in {"spell", "magical_effect"}
+            )
+            or ("halfling_brave" in conditional_traits and "frightened" in authoritative_conditions)
+        )
+        if trait_matches:
+            advantage = True
+            for trait_kind in conditional_traits:
+                if (
+                    (trait_kind == "dwarven_resilience" and save_against_poison is True)
+                    or (trait_kind == "fey_ancestry" and "charmed" in authoritative_conditions)
+                    or (
+                        trait_kind == "gnome_cunning"
+                        and long_save_ability in {"intelligence", "wisdom", "charisma"}
+                        and authoritative_source_kind in {"spell", "magical_effect"}
+                    )
+                    or (trait_kind == "halfling_brave" and "frightened" in authoritative_conditions)
+                ):
+                    boundary_ids.append(conditional_trait_mechanics[trait_kind])
     if kind == "save" and _long_ability_name(ability) == "dexterity" and "restrained" in conditions:
         boundary_ids.append("dnd5e.core.save.restrained_dexterity")
     if armor_stealth_disadvantage:

@@ -1077,6 +1077,24 @@ ENGINE_SETTLED_CARD_MECHANIC_IDS = frozenset(
     }
 )
 
+
+def _structured_spell_save_facts(
+    spell: dict[str, Any], resolution: dict[str, Any]
+) -> dict[str, Any]:
+    """Classify the exact native spell clause, never its display name or damage type."""
+    facts: dict[str, Any] = {"save_source_kind": "spell", "save_effect_conditions": []}
+    spell_id = str(spell.get("id") or "")
+    nonpoison_spell_ids = {
+        f"dnd5e.content.srd2014.spell.{slug}"
+        for slug in ("sacred-flame", "fireball", "lightning-bolt")
+    }
+    if spell_id in nonpoison_spell_ids and resolution == effective_spell_resolution(
+        {"id": spell_id}
+    ):
+        facts["save_against_poison"] = False
+    return facts
+
+
 SCAG_OFFICIAL_ADDON_ID = (
     "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a.addon"
 )
@@ -7439,7 +7457,19 @@ def _create_server(
 
     def checked_rule_facts(value: dict[str, Any] | None) -> dict[str, Any]:
         facts = dict(value or {})
-        reserved = {"actor_id", "kind", "ability", "dc"} & facts.keys()
+        # Save classification is derived by the native source executor. In
+        # particular, a caller must not suppress species traits by labelling
+        # an effect save as concentration or declaring an empty condition set.
+        reserved = {
+            "actor_id",
+            "kind",
+            "ability",
+            "dc",
+            "save_against_poison",
+            "save_source_kind",
+            "save_effect_conditions",
+            "save_purpose",
+        } & facts.keys()
         if reserved:
             raise ValueError("rule_facts cannot override: " + ", ".join(sorted(reserved)))
         if len(facts) > 32 or len(repr(facts)) > 8192:
@@ -22555,7 +22585,7 @@ def _create_server(
                         "caster_id": actor_id,
                         "spell_id": spell_id,
                         "kind": "spell_save",
-                        "save_source_kind": "spell",
+                        **_structured_spell_save_facts(spell_entry, structured_resolution),
                     },
                 )
                 saved = resolve_actor_check(
@@ -23955,7 +23985,13 @@ def _create_server(
                     },
                     save_bonuses_by_actor_id=save_bonuses,
                     ruleset=encounter_rules_edition(campaign_id, next_encounter),
-                    rules=rule_context,
+                    rules=context_with_facts(
+                        rule_context,
+                        save_source_kind="nonmagical_effect",
+                        # This is the validated Dragonborn ancestry breath
+                        # table, not a generic poison-damage heuristic.
+                        save_against_poison=breath_spec["damage_type"] == "poison",
+                    ),
                 )
                 breath_results = list(settled_breath["result"]["targets"])
                 damage_roll = deepcopy(settled_breath["result"]["damage_roll"])
