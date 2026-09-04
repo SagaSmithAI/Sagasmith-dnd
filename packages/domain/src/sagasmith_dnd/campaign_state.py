@@ -16,6 +16,7 @@ SYSTEM_OWNED_CAMPAIGN_STATE_FIELDS = frozenset(
         "currency_spends",
         "game_phase",
         "game_time",
+        "ground_items",
         "item_spends",
         "loot_acquisitions",
         "playthrough_manifest",
