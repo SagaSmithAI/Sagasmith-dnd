@@ -12,6 +12,7 @@ from sagasmith_dnd.standard_feature_ids import (
     TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
     TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
     TORTLE_SHELL_DEFENSE_ARTIFACT_ID,
+    TORTLE_SHELL_DEFENSE_LEGACY_PACK_ID,
 )
 
 from sagasmith_dnd_mcp import server as server_module
@@ -125,6 +126,19 @@ def test_tortle_shell_defense_materializes_and_settles_atomically_across_restart
                 "idempotency_key": "apply-tortle",
             },
         )
+        applied_selection = applied["sheet"]["content"]["selections"][0]
+        assert applied_selection["artifact_id"] == TORTLE_SHELL_DEFENSE_ARTIFACT_ID
+        assert applied_selection["pack_id"] == TORTLE_SHELL_DEFENSE_LEGACY_PACK_ID
+        assert applied_selection["pack_version"] == "1.0.0"
+        applied_feature = next(
+            item
+            for item in applied["sheet"]["content"]["features"]
+            if item["name"] == "Shell Defense"
+        )
+        assert applied_feature["id"] == f"{TORTLE_SHELL_DEFENSE_ARTIFACT_ID}.feature.shell-defense"
+        assert applied_feature["pack_id"] == TORTLE_SHELL_DEFENSE_LEGACY_PACK_ID
+        assert applied_feature["pack_version"] == "1.0.0"
+        assert applied_feature["source_key"] == "Tortle"
         observer = await _call(
             server,
             "character_create_from",
@@ -235,11 +249,20 @@ def test_tortle_shell_defense_materializes_and_settles_atomically_across_restart
                 },
             )
         save_revision = withdrawn["campaign_revision"]
-        for ability, roll_mode in (
-            ("strength", "advantage"),
-            ("constitution", "advantage"),
-            ("dexterity", "disadvantage"),
-        ):
+        expected_save_modes = (
+            {
+                "strength": "normal",
+                "constitution": "advantage",
+                "dexterity": "disadvantage",
+            }
+            if official_armored
+            else {
+                "strength": "advantage",
+                "constitution": "advantage",
+                "dexterity": "disadvantage",
+            }
+        )
+        for ability, roll_mode in expected_save_modes.items():
             saved = await _raw_call(
                 server,
                 "combat_check",
@@ -254,7 +277,7 @@ def test_tortle_shell_defense_materializes_and_settles_atomically_across_restart
                 },
             )
             assert saved["result"]["roll_mode"] == roll_mode
-            assert len(saved["result"]["rolls"]) == 2
+            assert len(saved["result"]["rolls"]) == (1 if roll_mode == "normal" else 2)
             assert any(
                 item["mechanic_id"] == "dnd5e.core.activity.tortle_shell_defense"
                 for item in saved["result"]["rule_receipts"]

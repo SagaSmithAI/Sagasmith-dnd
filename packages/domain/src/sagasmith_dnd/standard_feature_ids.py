@@ -11,7 +11,8 @@ SRD2014_DWARF_SPEED_LEGACY_ARTIFACT_IDS = frozenset(
 
 CORE_TORTLE_SHELL_DEFENSE_MECHANIC_ID = "dnd5e.core.activity.tortle_shell_defense"
 TORTLE_SHELL_DEFENSE_LEGACY_PACK_ID = "dnd5e.addon.rulebook.d-d-5e-the-tortle-package.e3234de670da"
-TORTLE_SHELL_DEFENSE_LEGACY_PACK_VERSIONS = frozenset({"1.0.1"})
+# The 1.0.1 archive carries a distinct 1.0.0 runtime rule definition.
+TORTLE_SHELL_DEFENSE_LEGACY_PACK_VERSIONS = frozenset({"1.0.0", "1.0.1"})
 TORTLE_SHELL_DEFENSE_ARTIFACT_ID = (
     "dnd5e.addon.rulebook.d-d-5e-the-tortle-package.e3234de670da.species.tortle"
 )
