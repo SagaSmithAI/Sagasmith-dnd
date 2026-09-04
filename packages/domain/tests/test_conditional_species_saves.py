@@ -418,11 +418,16 @@ def test_condition_classification_rejects_invalid_rule_fact_values_before_rng(
 
 
 @pytest.mark.parametrize(
-    ("name", "expected_rolls"),
-    [("Hill Dwarf", 1), ("High Elf", 2), ("Rock Gnome", 2), ("Halfling", 1)],
+    ("name", "expected_rolls", "expected_mechanics"),
+    [
+        ("Hill Dwarf", 1, ["dnd5e.core.save.dwarven_resilience"]),
+        ("High Elf", 2, ["dnd5e.core.save.fey_ancestry"]),
+        ("Rock Gnome", 2, ["dnd5e.core.save.gnome_cunning"]),
+        ("Halfling", 1, ["dnd5e.core.save.halfling_brave"]),
+    ],
 )
 def test_native_hypnotic_pattern_uses_real_species_projection(
-    name: str, expected_rolls: int
+    name: str, expected_rolls: int, expected_mechanics: list[str]
 ) -> None:
     _, artifacts = build_srd2014_content(Path(__file__).resolve().parents[3] / "skills")
     card = next(item["card"] for item in artifacts if item["card"].get("name") == name)
@@ -442,5 +447,7 @@ def test_native_hypnotic_pattern_uses_real_species_projection(
         rules=rules,
         rng=_SequenceRng(2, 18),
     )
-    assert len(result["result"]["save"]["rolls"]) == expected_rolls
-    assert result["result"]["save"]["ruleset_fingerprint"] == rules.fingerprint
+    save = result["result"]["save"]
+    assert save["rolls"] == ([2] if expected_rolls == 1 else [2, 18])
+    assert [item["mechanic_id"] for item in save["rule_receipts"]] == expected_mechanics
+    assert save["ruleset_fingerprint"] == rules.fingerprint
