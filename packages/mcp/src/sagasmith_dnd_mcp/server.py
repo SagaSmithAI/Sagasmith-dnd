@@ -6606,10 +6606,89 @@ def _create_server(
             )
             if definition is None:
                 raise ValueError("reserved official rule definition is absent from its archive")
+            # The stored Pack is a localized runtime representation: source/chunk
+            # IDs are local, authoring attestations are stripped, and the save
+            # boundary adds runtime resolution metadata.  Rebuild that expected
+            # representation from the locked archive before comparing it.  A
+            # checksum over ``installed`` alone would reject every valid import;
+            # trusting the recorded provenance alone would permit tampering.
+            expected_manifest = deepcopy(dict(definition["manifest"]))
+            expected_artifacts = [
+                deepcopy(item)
+                for item in archive["content"].get("artifacts") or []
+                if str(item.get("rule_definition_id") or "") == pack_id
+            ]
+            expected_mechanics = [
+                deepcopy(item)
+                for item in archive["content"].get("mechanics") or []
+                if str(item.get("rule_definition_id") or "") == pack_id
+            ]
+            for rebind in matching_official_expansion_dependency_rebinds(
+                official_expansion_dependency_rebinds(),
+                package_id=str(archive["id"]),
+                definition_id=pack_id,
+            ):
+                matches = [
+                    item
+                    for item in expected_manifest.get("dependencies") or []
+                    if isinstance(item, dict)
+                    and str(item.get("id") or "") == rebind["dependency_id"]
+                    and str(item.get("version") or "") == rebind["dependency_version"]
+                    and str(item.get("checksum") or "") == rebind["source_checksum"]
+                ]
+                if len(matches) != 1:
+                    raise ValueError(
+                        "official dependency rebind no longer matches reserved definition"
+                    )
+                matches[0]["version"] = str(rebind["runtime_version"])
+                matches[0]["checksum"] = str(rebind["runtime_checksum"])
+                try:
+                    runtime_dependency = rule_packs.get_version(
+                        str(rebind["dependency_id"]), str(rebind["runtime_version"])
+                    )
+                except LookupError:
+                    runtime_dependency = None
+                if runtime_dependency is not None:
+                    dependency_provenance = dict(
+                        rule_packs.provenance(
+                            runtime_dependency.pack_id,
+                            runtime_dependency.version,
+                        ).get("content_definition")
+                        or {}
+                    )
+                    if dependency_provenance.get("source_definition_checksum") == rebind[
+                        "runtime_checksum"
+                    ] and dependency_provenance.get("definition_checksum"):
+                        matches[0]["checksum"] = str(
+                            dependency_provenance["definition_checksum"]
+                        )
+            expected_artifacts = _strip_artifact_authoring_state(expected_artifacts)
+            expected_artifacts = refresh_portable_resolution_plans(expected_artifacts)
+            expected_mechanics = refresh_portable_resolution_plans(expected_mechanics)
+            expected_manifest, native_errors = bind_native_mechanic_contract(
+                expected_manifest,
+                expected_artifacts,
+                expected_mechanics,
+            )
+            if native_errors:
+                raise ValueError("reserved definition failed native contract binding")
+            expected_manifest["resolution_policy"] = "compiled_or_agent"
+            expected_manifest["semantic_validation"] = audit_release_semantic_validation(
+                expected_artifacts,
+                settled_mechanic_ids=_rule_payload_settled_mechanic_ids(
+                    {"manifest": expected_manifest, "mechanics": expected_mechanics}
+                ),
+            )
+            installed_descriptor = rule_content_descriptor(pack_id, version)
+            expected_checksum = content_definition_checksum(
+                manifest=expected_manifest,
+                artifacts=expected_artifacts,
+                mechanics=expected_mechanics,
+            )
             installed_checksum = content_definition_checksum(
-                manifest=installed.manifest,
-                artifacts=installed.artifacts,
-                mechanics=installed.mechanics,
+                manifest=installed_descriptor["manifest"],
+                artifacts=installed_descriptor["artifacts"],
+                mechanics=installed_descriptor["mechanics"],
             )
             recorded_runtime_checksum = str(content_definition.get("definition_checksum") or "")
             recorded_source_checksum = str(
@@ -6620,7 +6699,8 @@ def _create_server(
                 and str(content_definition.get("package_version") or "") == str(archive["version"])
                 and str(content_definition.get("package_checksum") or "")
                 == str(archive["checksum"])
-                and recorded_runtime_checksum == installed_checksum
+                and recorded_runtime_checksum == expected_checksum
+                and installed_checksum == expected_checksum
                 and recorded_source_checksum == str(definition["definition_checksum"])
             )
             if not valid:
