@@ -48,10 +48,21 @@ _ARMOR_OF_GLEAMING = (
 _BOOMING_BLADE = (
     "dnd5e.addon.rulebook.d-d-5e-tasha-s-cauldron-of-everything.89a729b37a4b.spell.booming-blade"
 )
+_GREEN_FLAME_BLADE = (
+    "dnd5e.addon.rulebook.d-d-5e-tasha-s-cauldron-of-everything."
+    "89a729b37a4b.spell.green-flame-blade"
+)
+_CURE_WOUNDS = "dnd5e.content.srd2014.spell.cure-wounds"
+_ARTIFICER_INFUSIONS = (
+    "Enhanced Arcane Focus",
+    "Enhanced Defense",
+    "Enhanced Weapon",
+    "Repeating Shot",
+)
 _LIGHT = "dnd5e.content.srd2014.spell.light"
 _BURNING_HANDS = "dnd5e.content.srd2014.spell.burning-hands"
 _ARTIFICER_PREFIX = _ARTIFICER.rsplit(".class.", 1)[0]
-_REQUIRED_ARTIFICER_FEATURES = {
+_ARTIFICER_FEATURE_ORDER = tuple(
     f"{_ARTIFICER_PREFIX}.feature.{slug}"
     for slug in (
         "magical-tinkering",
@@ -64,6 +75,9 @@ _REQUIRED_ARTIFICER_FEATURES = {
         "battle-ready",
         "steel-defender",
     )
+)
+_REQUIRED_ARTIFICER_FEATURES = set(_ARTIFICER_FEATURE_ORDER) | {
+    f"{_ARTIFICER_PREFIX}.feature.{name.lower().replace(' ', '-')}" for name in _ARTIFICER_INFUSIONS
 }
 
 
@@ -322,6 +336,69 @@ async def _catalog_selection(
         selection["target_class_name"] = target_class_name
     selection.update(selection_overrides or {})
     return entry, selection
+
+
+async def _finish_artificer_build(
+    server: Any,
+    campaign_id: str,
+    character: dict[str, Any],
+    *,
+    official_pack_ids: set[str],
+    ruleset_fingerprint: str,
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """Consume explicit feature/preparation work; do not synthesize sheet grants."""
+    receipts = {}
+    for artifact_id in _ARTIFICER_FEATURE_ORDER:
+        if any(
+            item.get("id") == artifact_id
+            for item in character["sheet"].get("content", {}).get("features", [])
+        ):
+            continue
+        entry, selection = await _catalog_selection(
+            server,
+            campaign_id,
+            artifact_id,
+            expected_kind="feature",
+            official_pack_ids=official_pack_ids,
+            selection_overrides=(
+                {"infusions": list(_ARTIFICER_INFUSIONS)}
+                if artifact_id == f"{_ARTIFICER_PREFIX}.feature.infuse-item"
+                else {}
+            ),
+        )
+        result, receipt = await _apply(
+            server,
+            character,
+            entry,
+            f"apply-official-feature-{artifact_id.rsplit('.', 1)[-1]}",
+            ruleset_fingerprint=ruleset_fingerprint,
+            selection=selection,
+        )
+        character = {
+            "id": character["id"],
+            "revision": result["revision"],
+            "sheet": result["sheet"],
+        }
+        receipts[artifact_id] = receipt
+    prepared = await _call(
+        server,
+        "character_spell_prepare",
+        {
+            "character_id": character["id"],
+            "mode": "replace_all",
+            "payload": {"spell_ids": [_CURE_WOUNDS], "event": "setup"},
+            "expected_revision": character["revision"],
+            "idempotency_key": "official-expansion-prepare-spells",
+        },
+    )
+    updated = dict(prepared.get("character") or {})
+    if (
+        updated.get("id") != character["id"]
+        or updated.get("revision") != character["revision"] + 1
+        or not isinstance(updated.get("sheet"), dict)
+    ):
+        raise RuntimeError("ordinary Artificer spell preparation did not settle")
+    return updated, receipts
 
 
 async def _all_catalog_entries(
@@ -584,6 +661,7 @@ async def _run(server: Any) -> tuple[dict[str, Any], dict[str, Any]]:
         ),
         ("item", _ARMOR_OF_GLEAMING, {}),
         ("spell", _BOOMING_BLADE, {"source_class": "Artificer", "method": "known"}),
+        ("spell", _GREEN_FLAME_BLADE, {"source_class": "Artificer", "method": "known"}),
     )
     content_receipts: dict[str, dict[str, Any]] = {}
     applied_ids: list[str] = []
@@ -671,29 +749,16 @@ async def _run(server: Any) -> tuple[dict[str, Any], dict[str, Any]]:
     content_receipts[_BATTLE_SMITH] = subclass_receipt
     materializers.add(str(subclass_receipt["mechanic_id"]))
 
-    feature_entry, feature_selection = await _catalog_selection(
+    character, feature_receipts = await _finish_artificer_build(
         server,
         campaign["id"],
-        _BATTLE_READY,
-        expected_kind="feature",
-        official_pack_ids=official_pack_ids,
-    )
-    feature, feature_receipt = await _apply(
-        server,
         character,
-        feature_entry,
-        "apply-official-feature",
+        official_pack_ids=official_pack_ids,
         ruleset_fingerprint=ruleset_fingerprint,
-        selection=feature_selection,
     )
-    character = {
-        "id": character["id"],
-        "revision": feature["revision"],
-        "sheet": feature["sheet"],
-    }
-    applied_ids.append(_BATTLE_READY)
-    content_receipts[_BATTLE_READY] = feature_receipt
-    materializers.add(str(feature_receipt["mechanic_id"]))
+    applied_ids.extend(feature_receipts)
+    content_receipts.update(feature_receipts)
+    materializers.update(str(receipt["mechanic_id"]) for receipt in feature_receipts.values())
     if materializers != set(_EXPECTED_MATERIALIZERS.values()):
         raise RuntimeError("the regression did not exercise every selection materializer kind")
     classes = character["sheet"]["progression"]["classes"]

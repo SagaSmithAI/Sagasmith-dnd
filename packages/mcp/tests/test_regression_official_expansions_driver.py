@@ -72,6 +72,120 @@ class _FakeServer:
         return None, {"result": self.responses[name].pop(0)}
 
 
+@pytest.mark.parametrize("already_applied", [False, True])
+def test_finish_artificer_build_consumes_features_and_preparation(monkeypatch, already_applied):
+    original = {
+        "id": "character-1",
+        "revision": 4,
+        "sheet": {"content": {"features": []}},
+    }
+    if already_applied:
+        original["sheet"]["content"]["features"] = [{"id": driver._BATTLE_READY}]
+    before = deepcopy(original)
+    expected = [
+        artifact_id
+        for artifact_id in driver._ARTIFICER_FEATURE_ORDER
+        if not already_applied or artifact_id != driver._BATTLE_READY
+    ]
+    assert len(driver._ARTIFICER_FEATURE_ORDER) == 9
+    selected = []
+    applied = []
+
+    async def catalog(_server, campaign, artifact_id, **kwargs):
+        assert campaign == "campaign-1"
+        choices = (
+            {"infusions": list(driver._ARTIFICER_INFUSIONS)}
+            if artifact_id.endswith(".feature.infuse-item")
+            else {}
+        )
+        assert kwargs == {
+            "expected_kind": "feature",
+            "official_pack_ids": {"official"},
+            "selection_overrides": choices,
+        }
+        selected.append(artifact_id)
+        return {"id": artifact_id}, choices
+
+    async def apply(_server, character, entry, key, **kwargs):
+        assert character["revision"] == 4 + len(applied)
+        choices = (
+            {"infusions": list(driver._ARTIFICER_INFUSIONS)}
+            if entry["id"].endswith(".feature.infuse-item")
+            else {}
+        )
+        assert kwargs == {"ruleset_fingerprint": "fingerprint", "selection": choices}
+        assert key == f"apply-official-feature-{entry['id'].rsplit('.', 1)[-1]}"
+        applied.append(entry["id"])
+        result = deepcopy(character)
+        result["revision"] += 1
+        result["sheet"]["content"]["features"].append({"id": entry["id"]})
+        return result, {"artifact_id": entry["id"]}
+
+    async def prepare(_server, name, arguments):
+        assert name == "character_spell_prepare"
+        assert arguments == {
+            "character_id": "character-1",
+            "mode": "replace_all",
+            "payload": {"spell_ids": [driver._CURE_WOUNDS], "event": "setup"},
+            "expected_revision": 4 + len(expected),
+            "idempotency_key": "official-expansion-prepare-spells",
+        }
+        # The real facade nests the updated sheet under character, not at root.
+        return {"character": {"id": "character-1", "revision": 5 + len(expected), "sheet": {}}}
+
+    monkeypatch.setattr(driver, "_catalog_selection", catalog)
+    monkeypatch.setattr(driver, "_apply", apply)
+    monkeypatch.setattr(driver, "_call", prepare)
+    character, receipts = asyncio.run(
+        driver._finish_artificer_build(
+            None,
+            "campaign-1",
+            original,
+            official_pack_ids={"official"},
+            ruleset_fingerprint="fingerprint",
+        )
+    )
+    assert selected == applied == expected
+    assert list(receipts) == expected
+    assert character["revision"] == 5 + len(expected)
+    assert original == before
+
+
+@pytest.mark.parametrize("failure", ["pending", "wrong_character", "stale_revision", "flat_sheet"])
+def test_finish_artificer_build_rejects_unsettled_preparation(monkeypatch, failure):
+    character = {
+        "id": "character-1",
+        "revision": 12,
+        "sheet": {
+            "content": {
+                "features": [{"id": artifact_id} for artifact_id in driver._ARTIFICER_FEATURE_ORDER]
+            }
+        },
+    }
+
+    async def prepare(*_args):
+        updated = {"id": "character-1", "revision": 13, "sheet": {}}
+        if failure == "pending":
+            return {"status": "pending_choice"}
+        if failure == "wrong_character":
+            updated["id"] = "other-character"
+        if failure == "stale_revision":
+            updated["revision"] = 12
+        return updated if failure == "flat_sheet" else {"character": updated}
+
+    monkeypatch.setattr(driver, "_call", prepare)
+    with pytest.raises(RuntimeError, match="preparation did not settle"):
+        asyncio.run(
+            driver._finish_artificer_build(
+                None,
+                "campaign-1",
+                character,
+                official_pack_ids={"official"},
+                ruleset_fingerprint="fingerprint",
+            )
+        )
+
+
 def _entry() -> dict[str, Any]:
     return {
         "id": "dnd5e.addon.fixture.feat.verified",
@@ -257,6 +371,7 @@ def test_complete_build_gate_accepts_explicit_required_state():
     "mutation",
     [
         "missing_feature",
+        "missing_infusion_choices",
         "feat_cantrip",
         "duplicate_cantrip",
         "unprepared",
@@ -273,6 +388,10 @@ def test_persisted_incomplete_build_cannot_pass(mutation):
     spells = sheet["content"]["spells"]
     if mutation == "missing_feature":
         sheet["content"]["features"].pop()
+    elif mutation == "missing_infusion_choices":
+        sheet["content"]["features"] = [
+            {"id": artifact_id} for artifact_id in driver._ARTIFICER_FEATURE_ORDER
+        ]
     elif mutation == "feat_cantrip":
         spells[0]["grant"]["source_type"] = "feat"
     elif mutation == "duplicate_cantrip":
