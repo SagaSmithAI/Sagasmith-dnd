@@ -192,6 +192,11 @@ def test_finalized_tortle_archive_claws_are_intrinsic_and_unarmed(
                 "character_query",
                 {"view": "get", "payload": {"character_id": occupied["id"]}},
             )
+            receipts_before = await _call(
+                server,
+                "campaign_rules",
+                {"campaign_id": campaign["id"], "action": "receipts", "payload": {}},
+            )
             for actor in (empty_after, occupied_after):
                 claws_id = actor["sheet"]["traits"]["intrinsic_attacks"][0]["id"]
                 before = actor
@@ -222,6 +227,12 @@ def test_finalized_tortle_archive_claws_are_intrinsic_and_unarmed(
                 )
                 assert after["revision"] == before["revision"]
                 assert after["sheet"] == before["sheet"]
+            receipts_after = await _call(
+                server,
+                "campaign_rules",
+                {"campaign_id": campaign["id"], "action": "receipts", "payload": {}},
+            )
+            assert receipts_after == receipts_before
 
             current_campaign = await _call(
                 server,
