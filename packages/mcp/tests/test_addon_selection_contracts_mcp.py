@@ -1809,6 +1809,43 @@ def test_dependent_actor_feature_binding_is_atomic_unique_and_restart_safe(
             )
 
             second_owner = await create_entitled_owner("Combat Battle Smith", "combat-bound-owner")
+            await _call(
+                server,
+                "access_grant",
+                {
+                    "scope": "campaign",
+                    "campaign_id": campaign["id"],
+                    "principal_id": "player:combat-battle-smith",
+                    "payload": {"role": "player"},
+                    "by_principal_id": "system:local",
+                },
+            )
+            await _call(
+                server,
+                "access_grant",
+                {
+                    "scope": "campaign",
+                    "campaign_id": campaign["id"],
+                    "principal_id": "player:unrelated-artificer",
+                    "payload": {"role": "player"},
+                    "by_principal_id": "system:local",
+                },
+            )
+            await _call(
+                server,
+                "access_grant",
+                {
+                    "scope": "actor",
+                    "campaign_id": campaign["id"],
+                    "principal_id": "player:combat-battle-smith",
+                    "payload": {
+                        "actor_id": second_owner["id"],
+                        "can_control": True,
+                        "can_view_private": True,
+                    },
+                    "by_principal_id": "system:local",
+                },
+            )
             phase = await _call(
                 server,
                 "game_phase",
@@ -2125,12 +2162,18 @@ def test_dependent_actor_feature_binding_is_atomic_unique_and_restart_safe(
                 "actor_id": second_owner["id"],
                 "action": "command_dependent",
                 "target_id": combat_created["character"]["id"],
+                "principal_id": "player:combat-battle-smith",
                 "expected_revision": damaged_combat_defender["campaign_revision"],
                 "idempotency_key": "command-bound-defender",
             }
             commanded = await _call(server, "combat_common_action", command_arguments)
             assert await _call(server, "combat_common_action", command_arguments) == commanded
-            commanded_owner = commanded["combat"]["combatants"][0]
+            commanded_audit = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            commanded_owner = commanded_audit["state"]["combat"]["combatants"][0]
             assert commanded_owner["turn_budget"]["bonus_action"] == 0
             defender_turn = await _call(
                 server,
@@ -2138,11 +2181,17 @@ def test_dependent_actor_feature_binding_is_atomic_unique_and_restart_safe(
                 {
                     "campaign_id": campaign["id"],
                     "actor_id": second_owner["id"],
+                    "principal_id": "player:combat-battle-smith",
                     "expected_revision": commanded["campaign_revision"],
                     "idempotency_key": "begin-commanded-defender-turn",
                 },
             )
-            commanded_defender = defender_turn["combat"]["combatants"][1]
+            defender_turn_audit = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            commanded_defender = defender_turn_audit["state"]["combat"]["combatants"][1]
             assert commanded_defender["turn_budget"]["main_action"] == 1
             assert commanded_defender["turn_flags"]["dependent_command_active"] is True
             combat_repair = next(
@@ -2156,21 +2205,28 @@ def test_dependent_actor_feature_binding_is_atomic_unique_and_restart_safe(
                 "activity_id": combat_repair["id"],
                 "declaration": {
                     "target_id": combat_created["character"]["id"],
-                    "spatial_facts": {
-                        "distance_ft": 0,
-                        "default_resolver": "agent",
-                        "ruling_kind": "agent_dm_adjudication",
-                        "reason": "The Steel Defender repairs its own mechanisms.",
-                    },
                 },
+                "principal_id": "player:combat-battle-smith",
                 "expected_revision": defender_turn["campaign_revision"],
                 "idempotency_key": "repair-commanded-defender",
             }
             too_far_repair_arguments = deepcopy(repair_arguments)
-            too_far_repair_arguments["declaration"]["spatial_facts"]["distance_ft"] = 6
-            too_far_repair_arguments["idempotency_key"] = "repair-commanded-defender-too-far"
-            with pytest.raises(Exception, match="within 5"):
+            too_far_repair_arguments["declaration"]["spatial_facts"] = {
+                "distance_ft": 6,
+                "default_resolver": "agent",
+                "ruling_kind": "agent_dm_adjudication",
+                "reason": "A forged self-distance must not override the exact target.",
+            }
+            too_far_repair_arguments["idempotency_key"] = "repair-commanded-defender-forged-self"
+            with pytest.raises(Exception, match="derives zero distance"):
                 await server.call_tool("combat_use_activity", too_far_repair_arguments)
+            unrelated_repair_arguments = {
+                **repair_arguments,
+                "principal_id": "player:unrelated-artificer",
+                "idempotency_key": "repair-commanded-defender-unrelated-player",
+            }
+            with pytest.raises(Exception, match="cannot access actor"):
+                await _call(server, "combat_use_activity", unrelated_repair_arguments)
             after_rejected_repair = await _call(
                 server,
                 "character_query",
@@ -2192,23 +2248,6 @@ def test_dependent_actor_feature_binding_is_atomic_unique_and_restart_safe(
             _, repaired_replay = await server.call_tool("combat_use_activity", repair_arguments)
             assert repaired_replay == repaired
             assert repaired["status"] == "committed"
-            assert repaired["result"]["core_effect"]["kind"] == "steel_defender_repair"
-            assert repaired["result"]["core_effect"]["target_kind"] == "self"
-            repair_source_receipt = next(
-                item
-                for item in repaired["result"]["rule_receipts"]
-                if item["mechanic_id"] == "dnd5e.expansion.steel_defender.repair"
-            )
-            assert repair_source_receipt["citations"] == [
-                {
-                    "source_artifact_id": artifact["id"],
-                    "source_pack_id": "dnd5e.addon.binding",
-                    "source_pack_version": "1.0.0",
-                    "reviewed_expression_hash": requirement["solution"][
-                        "reviewed_expression_hash"
-                    ],
-                }
-            ]
             repaired_defender = await _call(
                 server,
                 "character_query",

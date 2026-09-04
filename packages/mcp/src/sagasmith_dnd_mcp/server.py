@@ -13979,6 +13979,60 @@ def _create_server(
             )
         return contracts
 
+    def require_combat_actor_or_steel_defender_owner_control(
+        campaign_id: str,
+        actor_id_value: str,
+        principal_id: str,
+        *,
+        branch_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Authorize direct control or the signed owner of an active Steel Defender."""
+
+        try:
+            access.require_actor(
+                campaign_id,
+                actor_id_value,
+                principal_id,
+                control=True,
+            )
+            return None
+        except PermissionError as direct_error:
+            campaign, encounter = active_encounter(campaign_id)
+            if actor_id_value not in {
+                str(item.get("actor_id") or "")
+                for item in encounter.get("combatants", [])
+            }:
+                raise direct_error
+            matches = [
+                relation
+                for relation in validate_dependent_actor_relations(
+                    dict(campaign.state or {}).get("dependent_actor_relations", [])
+                )
+                if relation["dependent_actor_id"] == actor_id_value
+                and relation["relation_key"] == STEEL_DEFENDER_RELATION_KEY
+                and relation["status"] == "active"
+            ]
+            if len(matches) != 1:
+                raise direct_error
+            resolved_branch_id = branch_id or require_current_branch(campaign_id, None)
+            contract = _verified_steel_defender_relation(
+                campaign_id,
+                resolved_branch_id,
+                matches[0],
+                require_current_parameters=True,
+            )
+            access.require_actor(
+                campaign_id,
+                matches[0]["owner_character_id"],
+                principal_id,
+                control=True,
+            )
+            return {
+                **contract,
+                "owner_character_id": matches[0]["owner_character_id"],
+                "dependent_actor_id": actor_id_value,
+            }
+
     def _verified_steel_defender_repair_activity(
         campaign_id: str,
         branch_id: str,
@@ -19196,7 +19250,9 @@ def _create_server(
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
     ) -> dict[str, Any]:
         """List legal action categories without consuming a turn resource."""
-        access.require_actor(campaign_id, actor_id, principal_id, private=True)
+        require_combat_actor_or_steel_defender_owner_control(
+            campaign_id, actor_id, principal_id
+        )
         campaign = campaigns.get(campaign_id)
         campaign, encounter = active_encounter(campaign_id)
         combatant = next(
@@ -19232,7 +19288,9 @@ def _create_server(
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
     ) -> dict[str, Any]:
         """Validate an attack and return a non-mutating resolution plan."""
-        access.require_actor(campaign_id, actor_id, principal_id, control=True)
+        require_combat_actor_or_steel_defender_owner_control(
+            campaign_id, actor_id, principal_id
+        )
         campaign, encounter = active_encounter(campaign_id)
         require_campaign_actor(campaign_id, target_id)
         action = sanitize_attack_action(campaign_id, principal_id, dict(action or {}))
@@ -19320,7 +19378,9 @@ def _create_server(
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Resolve an attack and atomically update the attacker, target and encounter."""
-        access.require_actor(campaign_id, actor_id, principal_id, control=True)
+        require_combat_actor_or_steel_defender_owner_control(
+            campaign_id, actor_id, principal_id, branch_id=branch_id
+        )
         require_write_contract(expected_revision, idempotency_key)
         resolved_branch_id = require_current_branch(campaign_id, branch_id)
         if actor_id == target_id:
@@ -20089,7 +20149,9 @@ def _create_server(
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Advance a structured encounter turn with optimistic concurrency."""
-        access.require_actor(campaign_id, actor_id, principal_id, control=True)
+        require_combat_actor_or_steel_defender_owner_control(
+            campaign_id, actor_id, principal_id, branch_id=branch_id
+        )
         require_write_contract(expected_revision, idempotency_key)
         resolved_branch_id = require_current_branch(campaign_id, branch_id)
         campaign = campaigns.get(campaign_id)
@@ -20802,7 +20864,9 @@ def _create_server(
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Resolve an owned opportunity-attack window atomically with its attack."""
-        access.require_actor(campaign_id, actor_id, principal_id, control=True)
+        require_combat_actor_or_steel_defender_owner_control(
+            campaign_id, actor_id, principal_id, branch_id=branch_id
+        )
         require_write_contract(expected_revision, idempotency_key)
         resolved_branch_id = require_current_branch(campaign_id, branch_id)
         if actor_id == target_id:
@@ -21154,7 +21218,9 @@ def _create_server(
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Resolve a post-hit defensive reaction before any damage is rolled."""
-        access.require_actor(campaign_id, actor_id, principal_id, control=True)
+        require_combat_actor_or_steel_defender_owner_control(
+            campaign_id, actor_id, principal_id, branch_id=branch_id
+        )
         require_write_contract(expected_revision, idempotency_key)
         resolved_branch_id = require_current_branch(campaign_id, branch_id)
         payload = {
@@ -21525,7 +21591,9 @@ def _create_server(
         opportunity-reaction windows.  Effect-driven forced movement and
         teleportation may move a combatant off-turn without consuming speed.
         """
-        access.require_actor(campaign_id, actor_id, principal_id, control=True)
+        require_combat_actor_or_steel_defender_owner_control(
+            campaign_id, actor_id, principal_id, branch_id=branch_id
+        )
         require_write_contract(expected_revision, idempotency_key)
         resolved_branch_id = require_current_branch(campaign_id, branch_id)
         payload = {
@@ -21674,7 +21742,9 @@ def _create_server(
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Stand from Prone by spending half the actor's speed, without using an action."""
-        access.require_actor(campaign_id, actor_id, principal_id, control=True)
+        require_combat_actor_or_steel_defender_owner_control(
+            campaign_id, actor_id, principal_id, branch_id=branch_id
+        )
         require_write_contract(expected_revision, idempotency_key)
         resolved_branch_id = require_current_branch(campaign_id, branch_id)
         payload = {"actor_id": actor_id, "branch_id": resolved_branch_id}
@@ -21778,7 +21848,9 @@ def _create_server(
                 idempotency_key=idempotency_key,
                 in_combat=True,
             )
-        access.require_actor(campaign_id, actor_id, principal_id, control=True)
+        require_combat_actor_or_steel_defender_owner_control(
+            campaign_id, actor_id, principal_id, branch_id=branch_id
+        )
         require_write_contract(expected_revision, idempotency_key)
         resolved_branch_id = require_current_branch(campaign_id, branch_id)
         payload_value = {
@@ -22812,7 +22884,9 @@ def _create_server(
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
     ) -> list[dict[str, Any]]:
         """Read reaction windows an actor may resolve outside its own turn."""
-        access.require_actor(campaign_id, actor_id, principal_id, control=True)
+        require_combat_actor_or_steel_defender_owner_control(
+            campaign_id, actor_id, principal_id
+        )
         _campaign, encounter = active_encounter(campaign_id)
         windows = available_reactions(encounter, actor_id)
         if is_dm(campaign_id, principal_id):
@@ -24946,7 +25020,9 @@ def _create_server(
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Pay an activity and settle supported Core outcomes; return rulings for the rest."""
-        access.require_actor(campaign_id, actor_id, principal_id, control=True)
+        require_combat_actor_or_steel_defender_owner_control(
+            campaign_id, actor_id, principal_id, branch_id=branch_id
+        )
         require_write_contract(expected_revision, idempotency_key)
         resolved_branch_id = require_current_branch(campaign_id, branch_id)
         payload = {
@@ -25031,7 +25107,6 @@ def _create_server(
                     "Steel Defender Repair source and target must be current combatants"
                 )
             repair_target_record = require_campaign_actor(campaign_id, repair_target_id)
-            access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
             repair_target_kind = "self" if repair_target_id == actor_id else (
                 "construct"
                 if "construct"
@@ -25049,7 +25124,18 @@ def _create_server(
                 ).casefold()
                 else "invalid"
             )
-            if str(encounter.get("positioning_mode") or "agent") == "grid":
+            if repair_target_id == actor_id:
+                if declared_repair.get("spatial_facts") is not None:
+                    raise CombatEngineError(
+                        "self-targeted Steel Defender Repair derives zero distance"
+                    )
+                repair_distance_ft = 0.0
+                repair_spatial_facts = {
+                    "distance_ft": 0.0,
+                    "source": "self_target",
+                    "committed": True,
+                }
+            elif str(encounter.get("positioning_mode") or "agent") == "grid":
                 if declared_repair.get("spatial_facts") is not None:
                     raise CombatEngineError(
                         "grid Steel Defender Repair derives distance from token positions"
