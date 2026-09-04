@@ -83,6 +83,9 @@ def _service_fixture(tmp_path: Path):
                 "status": "active",
                 "created_campaign_revision": 1,
                 "created_long_rest_elapsed_ticks": None,
+                "death_elapsed_ticks": None,
+                "revival_started_elapsed_ticks": None,
+                "revival_completes_elapsed_ticks": None,
                 "template_binding": {
                     "owner_class_name": "artificer",
                     "casting_slot_level": None,
@@ -114,7 +117,10 @@ def _replacement_state(
     current_state: dict, campaign_id: str, owner_id: str, old_id: str, new_id: str
 ) -> dict:
     state = deepcopy(current_state)
-    state["dependent_actor_relations"][0]["status"] = "replaced"
+    state["dependent_actor_relations"][0].update(
+        status="replaced",
+        death_elapsed_ticks=4800,
+    )
     state["dependent_actor_relations"].append(
         {
             "owner_character_id": owner_id,
@@ -126,6 +132,9 @@ def _replacement_state(
             "status": "active",
             "created_campaign_revision": 3,
             "created_long_rest_elapsed_ticks": 4800,
+            "death_elapsed_ticks": None,
+            "revival_started_elapsed_ticks": None,
+            "revival_completes_elapsed_ticks": None,
             "template_binding": {
                 "owner_class_name": "artificer",
                 "casting_slot_level": None,

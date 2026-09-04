@@ -1507,6 +1507,15 @@ one target. *Hit:* 22 (5d8) damage of the type selected for this creature.
             "*Hit:* 22 (5d8) damage of the type selected for this creature."
         ),
     }
+    assert orb["uses"] == {
+        "label": "Elemental Orb (2/Day)",
+        "value": 2,
+        "max": 2,
+        "unlimited": False,
+        "recovers_on": "long_rest",
+        "source_key": "module-review:variant-cultist",
+        "slot_level": 0,
+    }
     assert (
         "Elemental Orb (2/Day): descriptive action is not automatically settled" in parsed.warnings
     )

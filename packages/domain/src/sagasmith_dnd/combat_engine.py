@@ -1946,7 +1946,7 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
         if _normalize_ruleset(encounter.get("ruleset")) == "2024":
             actions.extend(["influence", "study", "utilize"])
         else:
-            actions.extend(["improvise", "use_object"])
+            actions.extend(["improvise", "revive_steel_defender", "use_object"])
             actions.append("shake_sleep")
         if conditions & {"grappled", "restrained"}:
             actions.append("escape")
@@ -5566,6 +5566,7 @@ def resolve_common_action(
         "hide",
         "interact_object",
         "ready",
+        "revive_steel_defender",
         "search",
         "shell_defense",
         "shake_hypnotic_pattern",

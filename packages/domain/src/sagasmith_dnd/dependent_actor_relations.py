@@ -17,6 +17,9 @@ _FIELDS = frozenset(
         "status",
         "created_campaign_revision",
         "created_long_rest_elapsed_ticks",
+        "death_elapsed_ticks",
+        "revival_started_elapsed_ticks",
+        "revival_completes_elapsed_ticks",
         "template_binding",
     }
 )
@@ -188,6 +191,42 @@ def validate_dependent_actor_relations(value: Any) -> list[dict[str, Any]]:
                 f"dependent_actor_relations[{index}].created_long_rest_elapsed_ticks must be "
                 "null or a non-negative integer"
             )
+        death_tick = relation["death_elapsed_ticks"]
+        if death_tick is not None and (
+            isinstance(death_tick, bool) or not isinstance(death_tick, int) or death_tick < 0
+        ):
+            raise ValueError(
+                f"dependent_actor_relations[{index}].death_elapsed_ticks must be "
+                "null or a non-negative integer"
+            )
+        revival_start = relation["revival_started_elapsed_ticks"]
+        revival_complete = relation["revival_completes_elapsed_ticks"]
+        for field_name, tick in (
+            ("revival_started_elapsed_ticks", revival_start),
+            ("revival_completes_elapsed_ticks", revival_complete),
+        ):
+            if tick is not None and (
+                isinstance(tick, bool) or not isinstance(tick, int) or tick < 0
+            ):
+                raise ValueError(
+                    f"dependent_actor_relations[{index}].{field_name} must be "
+                    "null or a non-negative integer"
+                )
+        if status == "active" and (
+            death_tick is not None or revival_start is not None or revival_complete is not None
+        ):
+            raise ValueError("an active dependent actor cannot retain death or revival timing")
+        if status in {"dead", "replaced"} and death_tick is None:
+            raise ValueError("a dead or replaced dependent actor requires its death time")
+        if status != "dead" and (revival_start is not None or revival_complete is not None):
+            raise ValueError("only a dead dependent actor can have a pending revival")
+        if (revival_start is None) != (revival_complete is None):
+            raise ValueError("dependent actor revival timing must contain both boundaries")
+        if revival_start is not None and (
+            revival_start < int(death_tick)
+            or revival_complete != revival_start + 10
+        ):
+            raise ValueError("dependent actor revival must complete exactly 10 ticks after start")
         dependent_id = relation["dependent_actor_id"]
         if dependent_id in dependent_ids:
             raise ValueError("dependent_actor_relations contains a duplicate dependent actor")

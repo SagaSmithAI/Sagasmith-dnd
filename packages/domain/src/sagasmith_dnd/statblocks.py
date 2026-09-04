@@ -41,7 +41,7 @@ class StatblockImportError(ValueError):
     """Raised when required statblock facts cannot be recovered from the source text."""
 
 
-OCR_STATBLOCK_RECOVERY_VERSION = 20
+OCR_STATBLOCK_RECOVERY_VERSION = 21
 
 
 @dataclass(frozen=True)
@@ -1398,6 +1398,22 @@ def _recharge_contract(entry_name: str) -> dict[str, Any] | None:
     }
 
 
+def _daily_uses_contract(entry_name: str) -> dict[str, Any] | None:
+    """Recover the standard ``X/Day`` limited-use marker from an entry name."""
+
+    match = re.search(r"(?i)\(\s*([1-9]\d*)\s*/\s*Day(?:\s+Each)?\s*\)", entry_name)
+    if match is None:
+        return None
+    maximum = int(match.group(1))
+    return {
+        "label": entry_name,
+        "value": maximum,
+        "max": maximum,
+        "unlimited": False,
+        "recovers_on": "long_rest",
+    }
+
+
 def legendary_action_spec(
     sheet: dict[str, Any],
     activity_id: str,
@@ -1796,6 +1812,7 @@ def _parse_srd_statblock(
             descriptive.append(("actions", entry_name, description))
     for section, entry_name, description in descriptive:
         recharge = _recharge_contract(entry_name)
+        daily_uses = _daily_uses_contract(entry_name)
         normalized_description = " ".join(description.split())
         orc_aggressive = (
             edition == "2014"
@@ -1900,6 +1917,8 @@ def _parse_srd_statblock(
                         "dnd5e.core.activity.recharge",
                     }
                 )
+            elif daily_uses is not None:
+                entry["uses"] = {**daily_uses, "source_key": source_key}
         sheet["content"]["activities" if activation != "passive" else "features"].append(entry)
         if legendary_action is None and not orc_aggressive:
             warnings.append(

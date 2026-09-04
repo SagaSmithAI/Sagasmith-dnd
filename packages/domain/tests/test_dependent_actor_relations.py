@@ -19,6 +19,9 @@ def relation(**overrides):
         "status": "active",
         "created_campaign_revision": 3,
         "created_long_rest_elapsed_ticks": None,
+        "death_elapsed_ticks": None,
+        "revival_started_elapsed_ticks": None,
+        "revival_completes_elapsed_ticks": None,
         "template_binding": {
             "owner_class_name": "artificer",
             "casting_slot_level": None,
@@ -51,6 +54,8 @@ def relation(**overrides):
         },
     }
     value.update(overrides)
+    if value["status"] in {"dead", "replaced"} and "death_elapsed_ticks" not in overrides:
+        value["death_elapsed_ticks"] = 10
     return value
 
 

@@ -893,6 +893,13 @@ BOUNDARIES = (
         "bundled:srd2014/07_Spells/Spells_Each/Sleep.md",
     ),
     CoreBoundary(
+        "dnd5e.core.spell.mending",
+        ("2014",),
+        "steel_defender.mending_steel_defender",
+        ("tests/test_steel_defender.py", "tests/test_mending_core_content.py"),
+        "bundled:srd2014/07_Spells/Spells_Each/Mending.md",
+    ),
+    CoreBoundary(
         "dnd5e.core.ready.action",
         ("2014", "2024"),
         "combat_engine.trigger_readied_action|resolve_readied_action_window",

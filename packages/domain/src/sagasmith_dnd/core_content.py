@@ -31,11 +31,12 @@ from sagasmith_dnd.standard_spell_ids import (
     CORE_FLY_MECHANIC_ID,
     CORE_HYPNOTIC_PATTERN_MECHANIC_ID,
     CORE_INVISIBILITY_MECHANIC_ID,
+    CORE_MENDING_MECHANIC_ID,
     CORE_SLEEP_MECHANIC_ID,
 )
 
 PACK_ID = "dnd5e.content.srd2014"
-PACK_VERSION = "1.29.0"
+PACK_VERSION = "1.30.0"
 
 _CONDITIONAL_SPECIES_SAVE_TRAITS = {
     "dwarven resilience": ("dwarven_resilience", CORE_DWARVEN_RESILIENCE_MECHANIC_ID),
@@ -173,6 +174,8 @@ def _spells(folder: Path, spell_classes: dict[str, list[str]]) -> list[dict[str,
             mechanic_refs.append(CORE_FLY_MECHANIC_ID)
         elif _name_key(name) == "invisibility":
             mechanic_refs.append(CORE_INVISIBILITY_MECHANIC_ID)
+        elif _name_key(name) == "mending":
+            mechanic_refs.append(CORE_MENDING_MECHANIC_ID)
         elif _name_key(name) == "raise-dead":
             mechanic_refs.append("dnd5e.core.spell.raise_dead")
         elif _name_key(name) == "hypnotic-pattern":
