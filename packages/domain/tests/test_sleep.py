@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from sagasmith_dnd.character_schema import default_character_sheet, derive_character_sheet
+from sagasmith_dnd.combat_engine import apply_damage_to_sheet
 from sagasmith_dnd.conditions import apply_effect_conditions
 from sagasmith_dnd.core_content import build_srd2014_content
 from sagasmith_dnd.lifecycle import advance_elapsed_effect_durations, expire_combat_bound_effects
@@ -338,3 +339,25 @@ def test_sleep_respects_prone_immunity_without_owning_prone() -> None:
     assert next(effect for effect in sheet["effects"] if effect["active"])["changes"] == [
         {"path": "conditions", "mode": "add", "value": "unconscious"}
     ]
+
+
+@pytest.mark.parametrize("ending", ["shaken_awake", "damage", "elapsed_time"])
+def test_awakened_sleep_target_must_still_stand_up(ending: str) -> None:
+    settled = resolve_sleep_targets(
+        [_actor("target", 3)], pool=3, source_actor_id="caster", source_spell_id=SLEEP_SPELL_ID
+    )
+    asleep = settled["sheets"]["target"]
+    before = deepcopy(asleep)
+    assert asleep["conditions"] == ["prone", "unconscious"]
+    if ending == "shaken_awake":
+        awake = wake_sleep_effects(asleep, reason=ending)["sheet"]
+    elif ending == "damage":
+        awake = apply_damage_to_sheet(
+            asleep, amount=1, damage_type="bludgeoning", ruleset="2014"
+        )["sheet"]
+        assert awake["combat"]["hp"]["value"] == 2
+    else:
+        awake = advance_elapsed_effect_durations(asleep, elapsed_ticks=10)["sheet"]
+    assert awake["conditions"] == ["prone"]
+    assert all(not effect["active"] for effect in awake["effects"])
+    assert asleep == before

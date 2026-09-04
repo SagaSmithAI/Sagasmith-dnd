@@ -835,6 +835,9 @@ count). Undead, Charmed-immune, already unconscious and source-bound magical
 sleep-immune targets do not consume the pool. Sleep is not concentration and
 lasts one minute on the persistent clock, including after combat ends. Positive
 damage wakes the target even if temporary HP absorb it; zero damage does not.
+Falling unconscious also applies Prone (unless immune). Waking ends Sleep, not
+Prone: the creature must still stand up normally. Automatic held-item dropping
+is not yet implemented; do not claim the inventory projection models it.
 Another adjacent creature can use
 `combat_common_action(action="shake_sleep", target_id=...)` to spend an action
 ending that target's Sleep effect, without removing unrelated unconsciousness.
