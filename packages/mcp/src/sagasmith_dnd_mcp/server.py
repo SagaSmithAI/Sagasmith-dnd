@@ -29933,6 +29933,8 @@ def _create_server(
                 f"character revision conflict: expected {expected_revision}, "
                 f"found {current.revision}"
             )
+        if condition_ids(current.sheet.get("conditions")) & INCAPACITATING_STATE_IDS:
+            raise CombatEngineError("an incapacitated character cannot cast a spell")
         if source_item_id and (signature_free_cast or feature_cast_source):
             raise CombatEngineError(
                 "a magic item spell cannot use a character feature casting source"
