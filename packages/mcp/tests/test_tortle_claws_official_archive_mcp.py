@@ -12,6 +12,7 @@ from sagasmith_dnd.combat_engine import roll_attack_action as engine_roll_attack
 from sagasmith_dnd.standard_feature_ids import (
     TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
     TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
+    TORTLE_NATURAL_ARMOR_LEGACY_PACK_VERSIONS,
 )
 
 import sagasmith_dnd_mcp.server as server_module
@@ -148,6 +149,7 @@ def test_finalized_tortle_archive_claws_are_intrinsic_and_unarmed(
                 },
             )
             applied: dict[str, Any] = {}
+            applied_by_id: dict[str, dict[str, Any]] = {}
             for actor, key in ((empty, "empty-apply"), (occupied, "occupied-apply")):
                 applied = await _call(
                     server,
@@ -165,6 +167,17 @@ def test_finalized_tortle_archive_claws_are_intrinsic_and_unarmed(
                 assert claws[0]["name"] == "Claws"
                 assert claws[0]["damage_formula"] == "1d4"
                 assert claws[0]["damage_type"] == "slashing"
+                assert claws[0]["source"] == {
+                    "artifact_id": _TORTLE_ID,
+                    "pack_id": _TORTLE_ID.removesuffix(".species.tortle"),
+                    "pack_version": next(iter(TORTLE_NATURAL_ARMOR_LEGACY_PACK_VERSIONS)),
+                    "rule_refs": claws[0]["source"]["rule_refs"],
+                }
+                assert claws[0]["source"]["rule_refs"]
+                assert all(
+                    ref.startswith("rule-source:") for ref in claws[0]["source"]["rule_refs"]
+                )
+                applied_by_id[actor["id"]] = applied
                 assert (
                     applied["sheet"]["inventory"]["items"] == actor["sheet"]["inventory"]["items"]
                 )
@@ -197,6 +210,29 @@ def test_finalized_tortle_archive_claws_are_intrinsic_and_unarmed(
                 "campaign_rules",
                 {"campaign_id": campaign["id"], "action": "receipts", "payload": {}},
             )
+            current_campaign = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            with pytest.raises(ToolError):
+                await _call(
+                    server,
+                    "inventory_transfer",
+                    {
+                        "mode": "character_to_character",
+                        "payload": {
+                            "source_character_id": empty["id"],
+                            "target_character_id": target["id"],
+                            "item_id": empty_after["sheet"]["traits"]["intrinsic_attacks"][0]["id"],
+                            "quantity": 1,
+                            "expected_campaign_revision": current_campaign["revision"],
+                            "expected_source_revision": empty_after["revision"],
+                            "expected_target_revision": target["revision"],
+                        },
+                        "idempotency_key": "reject-transfer",
+                    },
+                )
             for actor in (empty_after, occupied_after):
                 claws_id = actor["sheet"]["traits"]["intrinsic_attacks"][0]["id"]
                 before = actor
@@ -260,34 +296,63 @@ def test_finalized_tortle_archive_claws_are_intrinsic_and_unarmed(
                     "idempotency_key": "combat",
                 },
             )
+            last_attack_request: dict[str, Any] | None = None
+            last_attack_response: dict[str, Any] | None = None
+            receipts_after_last_attack: Any = None
             for actor, key in ((empty, "empty-attack"), (occupied, "occupied-attack")):
+                attack_request = {
+                    "campaign_id": campaign["id"],
+                    "actor_id": actor["id"],
+                    "target_id": target["id"],
+                    "action": {
+                        "weapon_id": applied_by_id[actor["id"]]["sheet"]["traits"][
+                            "intrinsic_attacks"
+                        ][0]["id"]
+                    },
+                    "expected_revision": started["campaign_revision"],
+                    "idempotency_key": key,
+                }
+                receipts_before_attack = await _call(
+                    server,
+                    "campaign_rules",
+                    {"campaign_id": campaign["id"], "action": "receipts", "payload": {}},
+                )
                 attacked = await _raw(
                     server,
                     "combat_resolve_attack",
-                    {
-                        "campaign_id": campaign["id"],
-                        "actor_id": actor["id"],
-                        "target_id": target["id"],
-                        "action": {
-                            "weapon_id": next(
-                                item["id"]
-                                for item in (empty_after if actor is empty else occupied_after)[
-                                    "sheet"
-                                ]["traits"]["intrinsic_attacks"]
-                            )
-                        },
-                        "expected_revision": started["campaign_revision"],
-                        "idempotency_key": key,
-                    },
+                    attack_request,
                 )
                 assert attacked["status"] == "committed"
-                assert attacked["result"]["damage"]["expression"].startswith("1d4 + ")
+                assert attacked["result"]["damage"]["expression"] == (
+                    "1d4 + 4"
+                    if applied_by_id[actor["id"]]["sheet"]["abilities"]["strength"]["score"] == 18
+                    else "1d4 + 3"
+                )
                 assert attacked["result"]["damage"]["damage_type"] == "slashing"
                 assert attacked["result"]["unarmed_strike"] is True
                 assert any(
                     receipt["mechanic_id"] == "dnd5e.core.attack.unarmed_strike"
                     for receipt in attacked["result"]["rule_receipts"]
                 )
+                receipts_after_attack = await _call(
+                    server,
+                    "campaign_rules",
+                    {"campaign_id": campaign["id"], "action": "receipts", "payload": {}},
+                )
+                assert receipts_after_attack != receipts_before_attack
+                replay_attack = await _raw(server, "combat_resolve_attack", attack_request)
+                assert replay_attack == attacked
+                assert (
+                    await _call(
+                        server,
+                        "campaign_rules",
+                        {"campaign_id": campaign["id"], "action": "receipts", "payload": {}},
+                    )
+                    == receipts_after_attack
+                )
+                last_attack_request = attack_request
+                last_attack_response = attacked
+                receipts_after_last_attack = receipts_after_attack
                 started = attacked
                 if actor is empty:
                     started = await _raw(
@@ -311,13 +376,33 @@ def test_finalized_tortle_archive_claws_are_intrinsic_and_unarmed(
                 },
             )
             close_server(server)
-            restarted = create_server(config)
+            server = create_server(config)
             durable = await _call(
-                restarted,
+                server,
                 "character_query",
                 {"view": "get", "payload": {"character_id": empty["id"]}},
             )
-            assert len(durable["sheet"]["traits"]["intrinsic_attacks"]) == 1
+            durable_occupied = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": occupied["id"]}},
+            )
+            assert durable["sheet"] == empty_after["sheet"]
+            assert durable_occupied["sheet"] == occupied_after["sheet"]
+            assert last_attack_request is not None
+            assert last_attack_response is not None
+            assert (
+                await _raw(server, "combat_resolve_attack", last_attack_request)
+                == last_attack_response
+            )
+            assert (
+                await _call(
+                    server,
+                    "campaign_rules",
+                    {"campaign_id": campaign["id"], "action": "receipts", "payload": {}},
+                )
+                == receipts_after_last_attack
+            )
         finally:
             close_server(server)
 
