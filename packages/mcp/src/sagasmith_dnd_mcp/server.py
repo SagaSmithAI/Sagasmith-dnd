@@ -301,6 +301,7 @@ from sagasmith_dnd.content_solution import (
 from sagasmith_dnd.content_validation import (
     build_catalog_review,
     build_selection_contract,
+    catalog_review_errors,
     content_fingerprint,
     selection_contract_errors,
     selection_input_errors,
@@ -3858,6 +3859,59 @@ def _strip_artifact_authoring_state(
         artifact.pop("selection_contract", None)
         portable.append(artifact)
     return portable
+
+
+def _rebind_verified_official_review(
+    artifact: Mapping[str, Any],
+    reviewed_artifact: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Project archive review onto an ALREADY archive-verified runtime artifact.
+
+    The caller must prove the entire installed definition against its locked
+    archive first. This helper does not establish archive identity or equivalence.
+    No installed payload, package version, or historical receipt is rewritten.
+    """
+    value = _strip_artifact_authoring_state([dict(artifact)])[0]
+    if artifact.get("id") != reviewed_artifact.get("id") or artifact.get(
+        "kind"
+    ) != reviewed_artifact.get("kind"):
+        raise RulesetUnavailableError("official review artifact identity mismatch")
+    source_contract = reviewed_artifact.get("selection_contract")
+    source_review = reviewed_artifact.get("catalog_review")
+    if source_contract is None and source_review is None:
+        if str(value.get("application_state") or "selection_ready") == "selection_ready":
+            raise RulesetUnavailableError(
+                "official selection-ready artifact requires an archive review"
+            )
+        return value
+    errors = [
+        *selection_contract_errors(reviewed_artifact),
+        *catalog_review_errors(reviewed_artifact),
+    ]
+    if errors or dict(source_review or {}).get("status") != "approved":
+        raise RulesetUnavailableError("official archive has no valid approved selection review")
+    contract = dict(source_contract)
+    rebound = build_selection_contract(
+        value,
+        status=str(contract["status"]),
+        materializer=contract["materializer"],
+        schema=None if contract["status"] == "ready" else contract["schema"],
+        references=contract["references"],
+        blockers=contract["blockers"],
+    )
+    if contract["status"] == "ready" and (
+        rebound["schema"]["selection_fields"] != contract["schema"]["selection_fields"]
+    ):
+        raise RulesetUnavailableError(
+            "official runtime selection fields differ from archive review"
+        )
+    value["selection_contract"] = rebound
+    value["catalog_review"] = build_catalog_review(
+        value,
+        decisions=source_review["decisions"],
+        status=source_review["status"],
+    )
+    return value
 
 
 def _auth_receipt_revision(value: Any) -> int | str | None:
@@ -7502,6 +7556,7 @@ def _create_server(
                 "definition": definition,
                 "provenance": provenance,
                 "runtime_definition_checksum": installed_checksum,
+                "runtime_artifacts": deepcopy(installed.artifacts),
             }
         except RulesetUnavailableError:
             raise
@@ -7509,6 +7564,36 @@ def _create_server(
             raise RulesetUnavailableError(
                 f"{pack_id}@{version} requires its immutable official content archive"
             ) from error
+
+    def reviewed_official_runtime_artifact(
+        pack_id: str,
+        version: str,
+        artifact: dict[str, Any],
+    ) -> dict[str, Any]:
+        if pack_id not in _reserved_official_definition_owners():
+            return artifact
+        verified = verified_reserved_official_rule_definition(pack_id, version)
+        if verified is None:
+            raise RulesetUnavailableError("official selection requires its verified archive")
+        matches = [
+            item
+            for item in verified["package"]["content"].get("artifacts", [])
+            if item.get("rule_definition_id") == pack_id and item.get("id") == artifact.get("id")
+        ]
+        if len(matches) != 1:
+            raise RulesetUnavailableError(
+                "official selection review identity is ambiguous or absent"
+            )
+        runtime_matches = [
+            item
+            for item in verified["runtime_artifacts"]
+            if item.get("id") == artifact.get("id")
+        ]
+        if len(runtime_matches) != 1 or content_fingerprint(
+            runtime_matches[0]
+        ) != content_fingerprint(artifact):
+            raise RulesetUnavailableError("official selection changed during archive verification")
+        return _rebind_verified_official_review(runtime_matches[0], matches[0])
 
     def import_content_rules_package(
         campaign_id: str,
@@ -42297,7 +42382,7 @@ def _create_server(
                 entry["runtime_context"] = content_runtime_context(
                     pack_id,
                     version,
-                    artifact,
+                    reviewed_official_runtime_artifact(pack_id, version, artifact),
                 )
             result.append(entry)
         if include_context and len(result) != 1:
@@ -42631,6 +42716,8 @@ def _create_server(
             )
         match = matches[0]
         pack_id, version, artifact = match
+        artifact = reviewed_official_runtime_artifact(pack_id, version, artifact)
+        match = (pack_id, version, artifact)
         application_state = str(artifact.get("application_state") or "selection_ready")
         if application_state != "selection_ready":
             return {

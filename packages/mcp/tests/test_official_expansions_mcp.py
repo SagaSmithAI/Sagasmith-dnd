@@ -1356,6 +1356,25 @@ def test_locked_scag_and_tortle_activate_exact_dependency_closure_apply_and_rest
                 },
             )
             for index, artifact_id in enumerate((_CITY_WATCH_ID, _TORTLE_ID)):
+                with sqlite3.connect(config.database_path) as connection:
+                    installed_before = connection.execute(
+                        "SELECT pack_id, version, checksum, payload_document_id "
+                        "FROM rule_pack_versions ORDER BY pack_id, version"
+                    ).fetchall()
+                catalog = await _call(
+                    server,
+                    "character_query",
+                    {
+                        "view": "catalog",
+                        "payload": {
+                            "campaign_id": campaign["id"],
+                            "query": artifact_id,
+                            "include_context": True,
+                        },
+                    },
+                )
+                reviewed = catalog[0]["runtime_context"]["selection_contract"]
+                assert reviewed["status"] == "ready"
                 applied = await _call(
                     server,
                     "character_content_apply",
@@ -1371,6 +1390,16 @@ def test_locked_scag_and_tortle_activate_exact_dependency_closure_apply_and_rest
                         "idempotency_key": f"apply-locked-official-{index}",
                     },
                 )
+                assert len(applied["rule_receipts"]) == 1
+                receipt = applied["rule_receipts"][0]
+                assert receipt["artifact_id"] == artifact_id
+                assert receipt["character_id"] == character["id"]
+                assert receipt["reviewed_content_hash"] == reviewed["reviewed_content_hash"]
+                with sqlite3.connect(config.database_path) as connection:
+                    assert connection.execute(
+                        "SELECT pack_id, version, checksum, payload_document_id "
+                        "FROM rule_pack_versions ORDER BY pack_id, version"
+                    ).fetchall() == installed_before
                 character = applied
             assert character["sheet"]["progression"]["background"] == "City Watch"
             assert character["sheet"]["progression"]["species"] == "Tortle"
