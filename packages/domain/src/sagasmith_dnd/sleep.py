@@ -7,6 +7,7 @@ targets and returns new sheets.
 
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from typing import Any, Iterable
 from uuid import uuid4
@@ -41,8 +42,7 @@ def _condition_immunities(sheet: dict[str, Any]) -> set[str]:
 
 def _is_undead(sheet: dict[str, Any]) -> bool:
     species = str(dict(sheet.get("progression") or {}).get("species") or "")
-    creature_type = str(sheet.get("creature_type") or "")
-    return "undead" in f"{species} {creature_type}".casefold()
+    return re.fullmatch(r"undead(?:\s+\([^()]+\))?", species.strip(), re.IGNORECASE) is not None
 
 
 def _has_magical_sleep_immunity(sheet: dict[str, Any]) -> bool:
