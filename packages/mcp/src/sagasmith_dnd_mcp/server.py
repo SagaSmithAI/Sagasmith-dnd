@@ -1201,6 +1201,39 @@ def _normalize_sleep_spatial_facts(
     }
 
 
+def _normalize_sleep_wake_spatial_facts(
+    payload: dict[str, Any] | None, *, campaign_revision: int
+) -> dict[str, Any]:
+    """Bind the DM's touch/reach judgment to this shake action's state snapshot."""
+    if payload is None or payload == {}:
+        raise NeedsRulingError(
+            "shaking a sleeper awake requires a reviewed contact-range decision",
+            missing=("shake_sleep.spatial_facts",),
+            ruling_kind="agent_dm_adjudication",
+        )
+    if not isinstance(payload, dict) or set(payload) != {"spatial_facts"}:
+        raise CombatEngineError("Agent shake_sleep accepts only spatial_facts, not coordinates")
+    facts = payload["spatial_facts"]
+    if not isinstance(facts, dict) or set(facts) != {
+        "decision_id", "reason", "campaign_revision", "can_touch_target"
+    }:
+        raise CombatEngineError("shake_sleep requires a complete contact-range decision")
+    normalized = deepcopy(facts)
+    for field, minimum, maximum in (("decision_id", 1, 100), ("reason", 10, 1000)):
+        value = facts[field]
+        if not isinstance(value, str) or not minimum <= len(" ".join(value.split())) <= maximum:
+            raise CombatEngineError(f"shake_sleep {field} must be bounded non-empty text")
+        normalized[field] = " ".join(value.split())
+    if (
+        type(facts["campaign_revision"]) is not int
+        or facts["campaign_revision"] != campaign_revision
+    ):
+        raise CombatEngineError("shake_sleep spatial facts must match the current campaign revision")
+    if facts["can_touch_target"] is not True:
+        raise CombatEngineError("shake_sleep requires an affirmative boolean can_touch_target")
+    return normalized
+
+
 def _structured_spell_save_facts(
     spell: dict[str, Any], resolution: dict[str, Any]
 ) -> dict[str, Any]:
@@ -20869,6 +20902,7 @@ def _create_server(
         source_condition = ""
         source_condition_ruling = None
         hypnotic_target_record = None
+        sleep_wake_spatial_facts = None
         shell_defense_record = None
         shell_defense_sheet = None
         if normalized_action in {"shell_defense", "emerge_shell"}:
@@ -20885,8 +20919,6 @@ def _create_server(
         if normalized_action in {"shake_hypnotic_pattern", "shake_sleep"}:
             if target_id is None or target_id == actor_id:
                 raise CombatEngineError("shaking awake requires another target creature")
-            if payload:
-                raise CombatEngineError(f"{normalized_action} does not accept a payload")
             acting_combatant = require_encounter_combatant(
                 encounter,
                 actor_id,
@@ -20895,17 +20927,26 @@ def _create_server(
             target_combatant = require_encounter_combatant(
                 encounter,
                 target_id,
-                role="Hypnotic Pattern target",
+                role="sleeping target",
             )
-            battle_map = dict(encounter.get("battle_map") or {})
-            cell_ft = int(dict(battle_map.get("grid") or {}).get("cell_ft", 5) or 5)
-            distance = combat_distance(
-                acting_combatant.get("position"),
-                target_combatant.get("position"),
-                cell_ft=cell_ft,
-            )
-            if distance is None or distance > 5:
-                raise CombatEngineError("shaking awake requires an adjacent target")
+            if normalized_action == "shake_sleep" and encounter.get("positioning_mode") == "agent":
+                access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
+                sleep_wake_spatial_facts = _normalize_sleep_wake_spatial_facts(
+                    payload, campaign_revision=campaign.revision
+                )
+                engine_payload = {"spatial_facts": sleep_wake_spatial_facts}
+            else:
+                if payload:
+                    raise CombatEngineError(f"{normalized_action} does not accept a payload")
+                battle_map = dict(encounter.get("battle_map") or {})
+                cell_ft = int(dict(battle_map.get("grid") or {}).get("cell_ft", 5) or 5)
+                distance = combat_distance(
+                    acting_combatant.get("position"),
+                    target_combatant.get("position"),
+                    cell_ft=cell_ft,
+                )
+                if distance is None or distance > 5:
+                    raise CombatEngineError("shaking awake requires an adjacent target")
             hypnotic_target_record = characters.get(target_id)
             active_shaken_effect_ids = (
                 active_hypnotic_pattern_effect_ids(hypnotic_target_record.sheet)
@@ -21122,6 +21163,7 @@ def _create_server(
                 "target_id": str(target_id),
                 "ended_effect_ids": ended_hypnotic["ended_effect_ids"],
                 "ended_reason": "shaken_awake",
+                **({"spatial_facts": sleep_wake_spatial_facts} if sleep_wake_spatial_facts else {}),
             }
             next_encounter["log"] = [
                 *list(next_encounter.get("log") or []),
