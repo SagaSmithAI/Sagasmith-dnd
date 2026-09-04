@@ -28,10 +28,15 @@ def _text(value: Any, field: str, *, nullable: bool = False) -> str | None:
 
 
 def _location(value: Any, *, source_actor_id: str) -> dict[str, Any]:
-    if not isinstance(value, dict) or set(value) != {"mode", "position"} and set(value) != {
-        "mode",
-        "anchor_actor_id",
-    }:
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"mode", "position"}
+        and set(value)
+        != {
+            "mode",
+            "anchor_actor_id",
+        }
+    ):
         raise ValueError("ground item location has unsupported fields")
     mode = value.get("mode")
     if mode == "grid":
@@ -62,7 +67,7 @@ def _normalized_items(raw_items: Any, root_item_id: str) -> list[dict[str, Any]]
             not isinstance(item, dict)
             or not isinstance(item.get("id"), str)
             or not item["id"].strip()
-            or len(item["id"] ) > 100
+            or len(item["id"]) > 100
         ):
             raise ValueError(f"ground_items.items[{index}].id must be an explicit string id")
     inventory = deepcopy(default_character_sheet()["inventory"])

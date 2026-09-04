@@ -306,11 +306,14 @@ def test_scene_save_commitment_is_source_bound_before_improvise_payment(tmp_path
         assert sum(damage_roll["rolls"]) == damage_roll["total"]
         receipt = settled["result"]["random_stream_receipt"]
         assert receipt["draw_count"] == 17
-        assert receipt["cursor_after"] - receipt["cursor_before"] == 17
+        assert receipt["position_after"] - receipt["position_before"] == 17
         settled_campaign_snapshot = after_settle
         before_random = dict(before_settle.get("state", {}).get("random_stream") or {})
         after_random = dict(after_settle.get("state", {}).get("random_stream") or {})
         assert after_random["position"] - before_random["position"] == 17
+        assert receipt["position_before"] == before_random["position"]
+        assert receipt["position_after"] == after_random["position"]
+        assert after_random["last_receipt"] == receipt
         settled_actor_snapshots = [
             await _call(
                 server,
@@ -374,6 +377,26 @@ def test_scene_save_commitment_is_source_bound_before_improvise_payment(tmp_path
             )
             == settled
         )
+        assert (
+            await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            == settled_campaign_snapshot
+        )
+        assert [
+            await _call(
+                server,
+                "character_query",
+                {
+                    "view": "get",
+                    "payload": {"character_id": actor["id"]},
+                    "principal_id": "system:local",
+                },
+            )
+            for actor in actors
+        ] == settled_actor_snapshots
 
     server_box = [None]
     try:
