@@ -1,4 +1,5 @@
 import asyncio
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ from sagasmith_dnd.standard_feature_ids import (
     TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
 )
 
+import sagasmith_dnd_mcp.server as server_module
 from sagasmith_dnd_mcp.config import McpConfig
 from sagasmith_dnd_mcp.server import close_server, create_server
 
@@ -43,6 +45,7 @@ def _config(tmp_path: Path) -> McpConfig:
 @pytest.mark.fresh_database
 def test_finalized_tortle_hold_breath_is_one_hour_and_recovers_after_restart(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = _config(tmp_path)
     if not (config.official_content_library / "index.json").is_file():
@@ -146,6 +149,17 @@ def test_finalized_tortle_hold_breath_is_one_hour_and_recovers_after_restart(
                 )
                 == underwater
             )
+            active_snapshot = await _call(
+                server,
+                "snapshot_create",
+                {
+                    "campaign_id": campaign["id"],
+                    "label": "Tortle active hold",
+                    "expected_revision": underwater["campaign_revision"],
+                    "expected_head_snapshot_id": "",
+                    "idempotency_key": "active-snapshot",
+                },
+            )
             clock = await _call(
                 server,
                 "campaign_query",
@@ -179,8 +193,128 @@ def test_finalized_tortle_hold_breath_is_one_hour_and_recovers_after_restart(
             assert effect["metadata"]["phase"] == "holding_breath"
             assert near_boundary["sheet"]["combat"]["hp"]["value"] == 10
 
+            await _call(
+                server,
+                "snapshot_create",
+                {
+                    "campaign_id": campaign["id"],
+                    "label": "Tortle near expiry",
+                    "expected_revision": before_boundary["campaign_revision"],
+                    "expected_head_snapshot_id": active_snapshot["id"],
+                    "idempotency_key": "near-snapshot",
+                },
+            )
+            branches = await _call(
+                server,
+                "branch_query",
+                {"campaign_id": campaign["id"], "view": "list", "payload": {}},
+            )
+            main_branch = next(item for item in branches if item["is_current"])
+            branch_campaign = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            await _call(
+                server,
+                "branch_change",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "create",
+                    "payload": {
+                        "name": "tortle-active-hold",
+                        "from_snapshot_id": active_snapshot["id"],
+                        "checkout": True,
+                    },
+                    "expected_revision": branch_campaign["revision"],
+                    "expected_branch_id": main_branch["id"],
+                    "idempotency_key": "active-fork",
+                },
+            )
+            forked = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": actor["id"]}},
+            )
+            forked_effect = next(
+                item for item in forked["sheet"]["effects"] if item["id"] == BREATHING_EFFECT_ID
+            )
+            assert forked_effect["metadata"]["hold_remaining_rounds"] == 600
+            assert forked["sheet"]["content"] == applied["sheet"]["content"]
+
             close_server(server)
             server = create_server(config)
+            restarted_fork = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": actor["id"]}},
+            )
+            restarted_effect = next(
+                item
+                for item in restarted_fork["sheet"]["effects"]
+                if item["id"] == BREATHING_EFFECT_ID
+            )
+            assert restarted_effect["metadata"]["hold_remaining_rounds"] == 600
+            stale_revision = restarted_fork["revision"]
+            replacement = deepcopy(restarted_fork["sheet"])
+            mutated = await _call(
+                server,
+                "character_sheet_replace",
+                {
+                    "character_id": actor["id"],
+                    "sheet": replacement,
+                    "expected_revision": stale_revision,
+                    "idempotency_key": "tortle-cas-mutation",
+                },
+            )
+            before_stale = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": actor["id"]}},
+            )
+            with pytest.raises(ToolError, match="revision"):
+                await _call(
+                    server,
+                    "character_state_change",
+                    {
+                        "character_id": actor["id"],
+                        "action": "breathing_transition",
+                        "payload": {"can_breathe": True},
+                        "expected_revision": stale_revision,
+                        "idempotency_key": "tortle-stale-air",
+                    },
+                )
+            after_stale = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": actor["id"]}},
+            )
+            assert mutated["revision"] == before_stale["revision"]
+            assert after_stale == before_stale
+            assert (
+                next(
+                    item
+                    for item in after_stale["sheet"]["effects"]
+                    if item["id"] == BREATHING_EFFECT_ID
+                )["metadata"]["hold_remaining_rounds"]
+                == 600
+            )
+            current_after_fork = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            replay_to_near = await _call(
+                server,
+                "campaign_change",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "clock_advance",
+                    "payload": {"period": "round", "count": 599},
+                    "expected_revision": current_after_fork["revision"],
+                    "idempotency_key": "fork-near-hour",
+                },
+            )
             await _call(
                 server,
                 "campaign_change",
@@ -188,7 +322,7 @@ def test_finalized_tortle_hold_breath_is_one_hour_and_recovers_after_restart(
                     "campaign_id": campaign["id"],
                     "action": "clock_advance",
                     "payload": {"period": "round", "count": 1},
-                    "expected_revision": before_boundary["campaign_revision"],
+                    "expected_revision": replay_to_near["campaign_revision"],
                     "idempotency_key": "one-hour-boundary",
                 },
             )
@@ -369,6 +503,35 @@ def test_finalized_tortle_hold_breath_is_one_hour_and_recovers_after_restart(
                 )
                 == restored
             )
+            original_death_save = server_module.resolve_death_save_to_sheet
+
+            class _NaturalTwenty:
+                def randint(self, _lower: int, _upper: int) -> int:
+                    return 20
+
+            def deterministic_death_save(sheet, **kwargs):
+                kwargs["rng"] = _NaturalTwenty()
+                return original_death_save(sheet, **kwargs)
+
+            monkeypatch.setattr(
+                server_module,
+                "resolve_death_save_to_sheet",
+                deterministic_death_save,
+            )
+            after_air = await _call(
+                server,
+                "character_state_change",
+                {
+                    "character_id": actor["id"],
+                    "action": "death_save",
+                    "payload": {},
+                    "expected_revision": restored["character"]["revision"],
+                    "idempotency_key": "death-save-after-air",
+                },
+            )
+            assert after_air["result"]["natural"] == 20
+            assert after_air["result"]["outcome"] == "revived"
+            assert after_air["character"]["sheet"]["combat"]["hp"]["value"] == 1
         finally:
             close_server(server)
 
