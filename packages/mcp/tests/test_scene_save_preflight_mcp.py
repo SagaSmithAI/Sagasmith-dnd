@@ -9,7 +9,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from sagasmith_dnd.character_schema import default_character_sheet
 
 from sagasmith_dnd_mcp.config import McpConfig
-from sagasmith_dnd_mcp.server import create_server
+from sagasmith_dnd_mcp.server import close_server, create_server
 from tests.authoring_helpers import finalize_and_activate_module
 
 
@@ -48,6 +48,7 @@ def test_scene_save_commitment_is_source_bound_before_improvise_payment(tmp_path
 
     async def exercise() -> None:
         server = create_server(config)
+        server_box[0] = server
         campaign = await _call(
             server,
             "campaign_create",
@@ -260,7 +261,12 @@ def test_scene_save_commitment_is_source_bound_before_improvise_payment(tmp_path
                 "friendly_fire_included": False,
             },
         }
-        settled = await _call(
+        before_settle = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        settled = await _raw(
             server,
             "combat_hp_change",
             {
@@ -273,7 +279,45 @@ def test_scene_save_commitment_is_source_bound_before_improvise_payment(tmp_path
             },
         )
         assert settled["status"] == "committed"
-        replay = await _call(
+        settled_result = settled["result"]["result"]
+        assert settled_result["damage_roll"]["total"] > 0
+        settled_target = settled_result["targets"][0]
+        assert settled_target["damage_amount"] > 0
+        target_after = await _call(
+            server,
+            "character_query",
+            {
+                "view": "get",
+                "payload": {"character_id": actors[1]["id"]},
+                "principal_id": "system:local",
+            },
+        )
+        assert target_after["sheet"]["combat"]["hp"]["value"] == max(
+            0, 10 - settled_target["damage_amount"]
+        )
+        after_settle = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        assert after_settle["revision"] > before_settle["revision"]
+        damage_roll = settled_result["damage_roll"]
+        assert len(damage_roll["rolls"]) == 16
+        assert sum(damage_roll["rolls"]) == damage_roll["total"]
+        settled_campaign_snapshot = after_settle
+        settled_actor_snapshots = [
+            await _call(
+                server,
+                "character_query",
+                {
+                    "view": "get",
+                    "payload": {"character_id": actor["id"]},
+                    "principal_id": "system:local",
+                },
+            )
+            for actor in actors
+        ]
+        replay = await _raw(
             server,
             "combat_hp_change",
             {
@@ -286,5 +330,48 @@ def test_scene_save_commitment_is_source_bound_before_improvise_payment(tmp_path
             },
         )
         assert replay == settled
+        assert (
+            await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            == settled_campaign_snapshot
+        )
+        assert [
+            await _call(
+                server,
+                "character_query",
+                {
+                    "view": "get",
+                    "payload": {"character_id": actor["id"]},
+                    "principal_id": "system:local",
+                },
+            )
+            for actor in actors
+        ] == settled_actor_snapshots
+        close_server(server)
+        server = create_server(config)
+        server_box[0] = server
+        assert (
+            await _raw(
+                server,
+                "combat_hp_change",
+                {
+                    "campaign_id": campaign["id"],
+                    "target_id": actors[1]["id"],
+                    "action": "save_damage",
+                    "payload": settled_payload,
+                    "expected_revision": paid["campaign_revision"],
+                    "idempotency_key": "preflight-settle",
+                },
+            )
+            == settled
+        )
 
-    asyncio.run(exercise())
+    server_box = [None]
+    try:
+        asyncio.run(exercise())
+    finally:
+        if server_box[0] is not None:
+            close_server(server_box[0])
