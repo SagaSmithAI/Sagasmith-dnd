@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
+from sagasmith_core import CharacterService, Database
+from sagasmith_core.database import sqlite_database_url
 from sagasmith_dnd.character_schema import (
     add_inventory_item,
     default_character_sheet,
@@ -157,8 +159,14 @@ def test_unconscious_prone_is_independent_of_held_items(
 
 @pytest.mark.fresh_database
 @pytest.mark.parametrize("entry", ["start", "join"])
+@pytest.mark.parametrize("condition_origin", ["source", "legacy", "legacy_prone"])
+@pytest.mark.parametrize("positioning_mode", ["agent", "grid"])
 def test_source_unconscious_combat_entry_settles_posture_and_inventory(
-    tmp_path: Path, entry: str, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    entry: str,
+    condition_origin: str,
+    positioning_mode: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def exercise() -> None:
         source_root = tmp_path / "modules"
@@ -249,6 +257,27 @@ def test_source_unconscious_combat_entry_settles_posture_and_inventory(
             assert cast["result"]["automatic_effect"] == "invisibility"
             _, cast_actors = await _snapshot(server, campaign["id"], [hero["id"], guard["id"]])
             assert "invisible" in cast_actors[0]["sheet"]["conditions"]
+            if condition_origin != "source":
+                # Simulate a pre-upgrade persisted card, not a current public ingress.
+                legacy_sheet = deepcopy(cast_actors[1]["sheet"])
+                legacy_sheet["conditions"] = ["unconscious"]
+                if condition_origin == "legacy_prone":
+                    # The sheet normalization itself is already a no-op: only
+                    # held-item custody and dependent targets still need repair.
+                    legacy_sheet["conditions"] = ["prone", "unconscious"]
+                    for effect in legacy_sheet["effects"]:
+                        if effect["concentration"]:
+                            effect["active"] = False
+                            effect["ended_reason"] = "incapacitated"
+                database = Database(sqlite_database_url(config.database_path))
+                try:
+                    CharacterService(database).update(
+                        guard["id"],
+                        sheet=legacy_sheet,
+                        expected_revision=cast_actors[1]["revision"],
+                    )
+                finally:
+                    database.dispose()
             current, _ = await _snapshot(server, campaign["id"], [])
             play = await _call(
                 server,
@@ -264,16 +293,33 @@ def test_source_unconscious_combat_entry_settles_posture_and_inventory(
             guard_config = {
                 "actor_id": guard["id"],
                 "initiative": 5,
-                "source_conditions": [source_condition],
+                **(
+                    {"source_conditions": [source_condition]}
+                    if condition_origin == "source"
+                    else {}
+                ),
+                **({"position": {"x": 3, "y": 2}} if positioning_mode == "grid" else {}),
             }
             arguments = {
                 "campaign_id": campaign["id"],
-                "positioning_mode": "agent",
+                "positioning_mode": positioning_mode,
+                **(
+                    {
+                        "battle_map": {"width_cells": 10, "height_cells": 10},
+                        "battle_map_override_reason": "The DM establishes this open test room.",
+                    }
+                    if positioning_mode == "grid"
+                    else {}
+                ),
                 "participant_ids": [actor["id"] for actor in actors]
                 if entry == "start"
                 else [hero["id"]],
                 "participant_config": [
-                    {"actor_id": hero["id"], "initiative": 20},
+                    {
+                        "actor_id": hero["id"],
+                        "initiative": 20,
+                        **({"position": {"x": 0, "y": 0}} if positioning_mode == "grid" else {}),
+                    },
                     *([guard_config] if entry == "start" else []),
                 ],
                 "scene_id": expanded["scene"]["id"],
@@ -283,7 +329,16 @@ def test_source_unconscious_combat_entry_settles_posture_and_inventory(
             }
             tool = "combat_start"
             if entry == "join":
+                _, before_start_actors = await _snapshot(
+                    server, campaign["id"], [hero["id"], guard["id"]]
+                )
                 started = await server.call_tool(tool, arguments)
+                _, after_start_actors = await _snapshot(
+                    server, campaign["id"], [hero["id"], guard["id"]]
+                )
+                assert after_start_actors[1] == before_start_actors[1]
+                if condition_origin != "legacy_prone":
+                    assert after_start_actors[0] == before_start_actors[0]
                 tool = "combat_join"
                 arguments = {
                     "campaign_id": campaign["id"],
@@ -322,7 +377,11 @@ def test_source_unconscious_combat_entry_settles_posture_and_inventory(
             assert after[1][0]["sheet"]["inventory"]["equipment_slots"]["main_hand"] is None
             ground = after[0]["state"]["ground_items"]
             assert len(ground) == 1 and ground[0]["root_item_id"] == sword_id
-            assert ground[0]["location"] == {"mode": "agent", "anchor_actor_id": guard["id"]}
+            assert ground[0]["location"] == (
+                {"mode": "agent", "anchor_actor_id": guard["id"]}
+                if positioning_mode == "agent"
+                else {"mode": "grid", "position": {"x": 3, "y": 2}}
+            )
             roster = "combatants" if entry == "start" else "reinforcements"
             combatant = next(
                 item
@@ -365,7 +424,9 @@ def test_source_unconscious_combat_entry_settles_posture_and_inventory(
             }
             ended = await server.call_tool("combat_end", end_arguments)
             awake = await _snapshot(server, campaign["id"], [hero["id"], guard["id"]])
-            assert awake[1][1]["sheet"]["conditions"] == ["prone"]
+            assert set(awake[1][1]["sheet"]["conditions"]) == (
+                {"prone"} if condition_origin == "source" else {"prone", "unconscious"}
+            )
             assert awake[0]["state"]["ground_items"] == ground
             assert "invisible" not in awake[1][0]["sheet"]["conditions"]
             assert await server.call_tool("combat_end", end_arguments) == ended

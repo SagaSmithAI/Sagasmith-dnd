@@ -867,6 +867,11 @@ records. Source-declared Unconscious conditions at combat start or reinforcement
 join use the same posture, held-item and effect-dependency settlement; the actor
 card, combat or queued projection, and replay response remain consistent. Ending
 an encounter-duration Unconscious condition does not itself stand the actor up.
+Combat start and reinforcement join also reconcile pre-existing Unconscious
+cards from older saves, even without new source conditions or when Prone is
+already present. A pre-existing condition is not assigned an encounter duration.
+Grid reinforcement drops retain the declared reinforcement position; Agent
+mode retains its coordinate-free actor anchor.
 Another adjacent creature can use
 `combat_common_action(action="shake_sleep", target_id=...)` to spend an action
 ending that target's Sleep effect, without removing unrelated unconsciousness.

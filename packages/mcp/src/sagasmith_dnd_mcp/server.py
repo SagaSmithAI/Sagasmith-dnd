@@ -12313,7 +12313,7 @@ def _create_server(
         character: Any,
         config_entry: dict[str, Any],
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any] | None]:
-        """Normalize scene-authored conditions for initial and joining combatants."""
+        """Normalize scene conditions and legacy state for entering combatants."""
 
         actor_id_value = str(character.id)
         condition_records: list[dict[str, Any]] = []
@@ -12375,10 +12375,16 @@ def _create_server(
                     "active": True,
                 }
             )
+        needs_held_drop = False
+        if sheet.get("edition") == "2014":
+            end_concentration_for_incapacitating_conditions(sheet)
+            if "unconscious" in condition_ids(sheet.get("conditions")):
+                apply_condition_change(sheet, condition_id="prone", add=True)
+                needs_held_drop = bool(held_item_roots(sheet))
         return (
             [],
             condition_records,
-            sheet if sheet != character.sheet else None,
+            sheet if sheet != character.sheet or needs_held_drop else None,
         )
 
     def add_attack_on_hit_window(
@@ -14029,7 +14035,14 @@ def _create_server(
     def ground_drop_context(campaign: Any, state: dict[str, Any], actor_id: str) -> dict[str, Any]:
         encounter = dict(state.get("combat") or {})
         combatant = next(
-            (item for item in encounter.get("combatants", []) if item.get("actor_id") == actor_id),
+            (
+                item
+                for item in [
+                    *encounter.get("combatants", []),
+                    *encounter.get("reinforcements", []),
+                ]
+                if item.get("actor_id") == actor_id
+            ),
             None,
         )
         scene = npc_turn_scene_projection(modules.current_scene(campaign.id, scope_id="party"))
@@ -18123,8 +18136,9 @@ def _create_server(
         source_condition_records: list[dict[str, Any]] = []
         source_condition_sheets: dict[str, dict[str, Any]] = {}
         source_condition_characters = {character.id: character for character in participants}
-        for actor_id_value, config_entry in config_by_actor.items():
-            actor = source_condition_characters[actor_id_value]
+        for actor in participants:
+            actor_id_value = actor.id
+            config_entry = config_by_actor.get(actor_id_value, {})
             _, conditions, sheet = source_participant_rules(
                 campaign_id,
                 resolved_scene_id,
@@ -18209,6 +18223,7 @@ def _create_server(
             )
             for actor_id_value, sheet in initial_sheets.items()
             if sheet != source_condition_characters[actor_id_value].sheet
+            or actor_id_value in source_condition_sheets
         ]
         updated_state, source_start_updates, _ = reconcile_actor_effect_dependencies(
             campaign, updated_state, source_start_updates, {}
