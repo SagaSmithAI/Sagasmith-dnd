@@ -888,7 +888,10 @@ location. Never synthesize coordinates. Missing facts request a ruling; stale,
 malformed, false, or unauthorized facts do not move inventory or spend actions.
 Character cards, ground records and payment share a revision-checked atomic
 commit; replaying a successful request after restart must not repeat payment.
-These paths do not yet establish complete cross-owner attunement lifecycle or
+Common character/campaign settlements reject missing physical-item references
+and conflicting attuned owners. Consequently, legacy removal/transfer paths
+that cannot migrate the references are rejected, not silently repaired. These
+guards do not yet establish complete cross-owner attunement lifecycle or
 compatibility with every legacy inventory removal/transfer path; do not use
 generic card replacement to repair or manufacture `inventory.external_items`.
 

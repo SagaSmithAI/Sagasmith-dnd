@@ -95,8 +95,13 @@ def test_noncombat_agent_ground_transfer_requires_current_dm_reach_facts(tmp_pat
             ground_id = ground[0]["id"]
             assert ground[0]["location"] == {"mode": "agent", "anchor_actor_id": actor["id"]}
             ground_item = next(item for item in ground[0]["items"] if item["id"] == sword_id)
-            assert ground_item["name"] == "Noncombat Sword"
-            assert ground_item["mechanics"]["damage_formula"] == "1d8"
+            expected_item = deepcopy(
+                next(
+                    item for item in actor["sheet"]["inventory"]["items"] if item["id"] == sword_id
+                )
+            )
+            expected_item.update(equipped=False, equipped_slot=None)
+            assert ground_item == expected_item
             actor_after_drop = await _call(
                 server,
                 "character_query",
@@ -128,6 +133,11 @@ def test_noncombat_agent_ground_transfer_requires_current_dm_reach_facts(tmp_pat
                 {"view": "get", "payload": {"campaign_id": campaign["id"]}},
             )
             assert actor_after_drop["sheet"]["inventory"]["equipment_slots"]["main_hand"] is None
+            assert actor_after_drop["sheet"]["inventory"]["external_items"][0]["location"] == {
+                "kind": "ground",
+                "ground_id": ground_id,
+                "item_id": sword_id,
+            }
             before_rejections = {
                 "campaign": deepcopy(after_drop),
                 "actor": deepcopy(actor_after_drop),
@@ -192,6 +202,8 @@ def test_noncombat_agent_ground_transfer_requires_current_dm_reach_facts(tmp_pat
                     {"expected_character_revision": actor_after_drop["revision"] - 1},
                     "revision",
                 ),
+                ({"expected_character_revision": None}, "integer"),
+                ({"expected_character_revision": True}, "integer"),
             ]
             for index, (extra, message) in enumerate(invalid):
                 request = {
@@ -301,6 +313,11 @@ def test_noncombat_agent_ground_transfer_requires_current_dm_reach_facts(tmp_pat
                 == sword_id
             )
             assert picked_snapshot["campaign"]["state"].get("ground_items", []) == []
+            assert picked_snapshot["actor"]["sheet"]["inventory"]["external_items"] == []
+            assert (
+                picked_snapshot["actor"]["sheet"]["inventory"]["items"]
+                == actor["sheet"]["inventory"]["items"]
+            )
             assert await _raw(server, "inventory_transfer", valid) == picked
             close_server(server)
             server = create_server(config)

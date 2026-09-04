@@ -56,13 +56,14 @@ def test_real_ground_pickup_custody_is_valid() -> None:
 
 def test_stale_actor_reference_after_transfer_or_removal_is_rejected() -> None:
     sheets, ground = _dropped()
-    sheets["owner"]["inventory"]["external_items"][0]["location"] = {
-        "kind": "actor",
-        "actor_id": "missing-actor",
-        "item_id": "sword",
-    }
+    sheets["other"] = validate_character_sheet({})
+    picked = pickup_ground_item(sheets, ground, "other", "ground-sword")
+    validate_external_inventory_custody(picked["sheets"], picked["ground_items"])
+    removed = picked["sheets"]["other"]["inventory"]["items"].pop()
+    picked["sheets"]["third"] = validate_character_sheet({})
+    picked["sheets"]["third"]["inventory"]["items"].append(removed)
     with pytest.raises(ValueError, match="missing physical item"):
-        validate_external_inventory_custody(sheets, ground)
+        validate_external_inventory_custody(picked["sheets"], picked["ground_items"])
 
 
 def test_two_attuned_actor_views_of_one_physical_item_are_rejected() -> None:
@@ -93,4 +94,31 @@ def test_return_to_original_attuned_owner_is_valid_after_intermediate_drop() -> 
         location={"mode": "agent", "anchor_actor_id": "other"},
     )
 
-    validate_external_inventory_custody(second["sheets"], second["ground_items"])
+    returned = pickup_ground_item(
+        second["sheets"], second["ground_items"], "owner", "ground-return"
+    )
+    before = deepcopy(returned)
+    validate_external_inventory_custody(returned["sheets"], returned["ground_items"])
+    assert returned == before
+
+
+def test_new_carrier_attunement_cannot_leave_original_bond_active() -> None:
+    sheets, ground = _dropped(attunement="attuned")
+    sheets["other"] = validate_character_sheet({})
+    picked = pickup_ground_item(sheets, ground, "other", "ground-sword")
+    picked["sheets"]["other"]["inventory"]["items"][0]["attunement"] = "attuned"
+    with pytest.raises(ValueError, match="multiple attuned owners"):
+        validate_external_inventory_custody(picked["sheets"], picked["ground_items"])
+
+
+def test_dead_owner_may_leave_historical_attuned_ground_snapshot() -> None:
+    sheets, ground = _dropped(attunement="attuned")
+    sheets["owner"]["conditions"] = ["dead"]
+    validate_external_inventory_custody(sheets, ground)
+
+
+def test_non_attunable_item_rejects_attuned_reference() -> None:
+    sheets, ground = _dropped()
+    sheets["owner"]["inventory"]["external_items"][0]["attunement"] = "attuned"
+    with pytest.raises(ValueError, match="non-attunable"):
+        validate_external_inventory_custody(sheets, ground)

@@ -315,6 +315,7 @@ from sagasmith_dnd.core_rule_pack import get_core_rule_pack
 from sagasmith_dnd.document_layout import DND5E_DOCUMENT_LAYOUT_PROFILE
 from sagasmith_dnd.editions import DEFAULT_CAMPAIGN_EDITION, normalize_dnd_edition
 from sagasmith_dnd.engine import resolve_check, roll
+from sagasmith_dnd.external_custody import validate_external_inventory_custody
 from sagasmith_dnd.game_time import (
     FIXED_GAME_TIME_PERIODS,
     NARRATIVE_GAME_TIME_PERIODS,
@@ -13765,6 +13766,7 @@ def _create_server(
         ground_state, mutation_updates, response = reconcile_unconscious_inventory(
             campaign, None, [character_update], response
         )
+        validate_inventory_custody_update(campaign, ground_state, mutation_updates)
         followup = narrative_followup_for_mutation(
             campaign,
             branch_id=branch_id,
@@ -13944,6 +13946,20 @@ def _create_server(
             next_response_fields["result"] = result
         return source_state, updates, next_response_fields
 
+    def validate_inventory_custody_update(
+        campaign: Any,
+        state: dict[str, Any] | None,
+        updates: list[CharacterStateUpdate] | None,
+    ) -> None:
+        """Reject legacy item writes that would strand a recorded owner reference."""
+        sheets = {actor.id: actor.sheet for actor in characters.list(campaign_id=campaign.id)}
+        sheets.update({update.character_id: update.sheet for update in updates or []})
+        if sheets:
+            validate_external_inventory_custody(
+                sheets,
+                (state if state is not None else campaign.state or {}).get("ground_items", []),
+            )
+
     def ground_drop_context(campaign: Any, state: dict[str, Any], actor_id: str) -> dict[str, Any]:
         encounter = dict(state.get("combat") or {})
         combatant = next(
@@ -14075,6 +14091,7 @@ def _create_server(
         campaign_state, character_updates, response_fields = reconcile_unconscious_inventory(
             campaign, campaign_state, character_updates, response_fields
         )
+        validate_inventory_custody_update(campaign, campaign_state, character_updates)
         if "narrative_followup" not in response_fields:
             followup = narrative_followup_for_mutation(
                 campaign,
@@ -29201,6 +29218,12 @@ def _create_server(
         """Commit ground custody, character cards and pickup payment atomically."""
         access.require_actor(campaign_id, actor_id, principal_id, control=True)
         require_write_contract(expected_revision, idempotency_key)
+        if type(expected_revision) is not int or expected_revision < 0:
+            raise ValueError("expected campaign revision must be a non-negative integer")
+        if not in_combat and (
+            type(expected_character_revision) is not int or expected_character_revision < 0
+        ):
+            raise ValueError("expected character revision must be a non-negative integer")
         resolved_branch = require_current_branch(campaign_id, branch_id)
         allowed = {"ground_id", "slot", "spatial_facts"} if action == "pickup_ground" else set()
         if action not in {"drop_held", "pickup_ground"} or set(payload) - allowed:
