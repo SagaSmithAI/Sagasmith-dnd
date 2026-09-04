@@ -7,7 +7,7 @@
     {
       "id": "dnd5e.content.srd2014",
       "version": "1.27.0",
-      "checksum": "136dcf75328043a300172c700a52b2b832ff43d8d1f7b785e765d67865a99437"
+      "checksum": "f64fbd9b997f74380c172483cef8a4aafb67a9ab73e522bfab49914ef320a93a"
     }
   ],
   "support_packages": [
@@ -37,7 +37,7 @@
       "dependency_version": "1.24.0",
       "runtime_version": "1.27.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "136dcf75328043a300172c700a52b2b832ff43d8d1f7b785e765d67865a99437",
+      "runtime_checksum": "f64fbd9b997f74380c172483cef8a4aafb67a9ab73e522bfab49914ef320a93a",
       "basis": "The built-in 2014 catalog was republished as an immutable runtime version after its reviewed definition advanced."
     },
     {
@@ -47,7 +47,7 @@
       "dependency_version": "1.24.0",
       "runtime_version": "1.27.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "136dcf75328043a300172c700a52b2b832ff43d8d1f7b785e765d67865a99437",
+      "runtime_checksum": "f64fbd9b997f74380c172483cef8a4aafb67a9ab73e522bfab49914ef320a93a",
       "basis": "The built-in 2014 catalog was republished as an immutable runtime version after its reviewed definition advanced."
     },
     {
@@ -57,7 +57,7 @@
       "dependency_version": "1.24.0",
       "runtime_version": "1.27.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "136dcf75328043a300172c700a52b2b832ff43d8d1f7b785e765d67865a99437",
+      "runtime_checksum": "f64fbd9b997f74380c172483cef8a4aafb67a9ab73e522bfab49914ef320a93a",
       "basis": "The built-in 2014 catalog was republished as an immutable runtime version after its reviewed definition advanced."
     },
     {
@@ -67,7 +67,7 @@
       "dependency_version": "1.24.0",
       "runtime_version": "1.27.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "136dcf75328043a300172c700a52b2b832ff43d8d1f7b785e765d67865a99437",
+      "runtime_checksum": "f64fbd9b997f74380c172483cef8a4aafb67a9ab73e522bfab49914ef320a93a",
       "basis": "The built-in 2014 catalog was republished as an immutable runtime version after its reviewed definition advanced."
     },
     {
@@ -77,7 +77,7 @@
       "dependency_version": "1.24.0",
       "runtime_version": "1.27.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "136dcf75328043a300172c700a52b2b832ff43d8d1f7b785e765d67865a99437",
+      "runtime_checksum": "f64fbd9b997f74380c172483cef8a4aafb67a9ab73e522bfab49914ef320a93a",
       "basis": "The built-in 2014 catalog was republished as an immutable runtime version after its reviewed definition advanced."
     },
     {
@@ -87,7 +87,7 @@
       "dependency_version": "1.24.0",
       "runtime_version": "1.27.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "136dcf75328043a300172c700a52b2b832ff43d8d1f7b785e765d67865a99437",
+      "runtime_checksum": "f64fbd9b997f74380c172483cef8a4aafb67a9ab73e522bfab49914ef320a93a",
       "basis": "The built-in 2014 catalog was republished as an immutable runtime version after its reviewed definition advanced."
     },
     {
@@ -97,7 +97,7 @@
       "dependency_version": "1.24.0",
       "runtime_version": "1.27.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "136dcf75328043a300172c700a52b2b832ff43d8d1f7b785e765d67865a99437",
+      "runtime_checksum": "f64fbd9b997f74380c172483cef8a4aafb67a9ab73e522bfab49914ef320a93a",
       "basis": "The built-in 2014 catalog was republished as an immutable runtime version after its reviewed definition advanced."
     },
     {
@@ -107,7 +107,7 @@
       "dependency_version": "1.24.0",
       "runtime_version": "1.27.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "136dcf75328043a300172c700a52b2b832ff43d8d1f7b785e765d67865a99437",
+      "runtime_checksum": "f64fbd9b997f74380c172483cef8a4aafb67a9ab73e522bfab49914ef320a93a",
       "basis": "The built-in 2014 catalog was republished as an immutable runtime version after its reviewed definition advanced."
     },
     {
@@ -117,7 +117,7 @@
       "dependency_version": "1.24.0",
       "runtime_version": "1.27.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "136dcf75328043a300172c700a52b2b832ff43d8d1f7b785e765d67865a99437",
+      "runtime_checksum": "f64fbd9b997f74380c172483cef8a4aafb67a9ab73e522bfab49914ef320a93a",
       "basis": "The built-in 2014 catalog was republished as an immutable runtime version after its reviewed definition advanced."
     },
     {
@@ -127,7 +127,7 @@
       "dependency_version": "1.24.0",
       "runtime_version": "1.27.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "136dcf75328043a300172c700a52b2b832ff43d8d1f7b785e765d67865a99437",
+      "runtime_checksum": "f64fbd9b997f74380c172483cef8a4aafb67a9ab73e522bfab49914ef320a93a",
       "basis": "The built-in 2014 catalog was republished as an immutable runtime version after its reviewed definition advanced."
     },
     {
@@ -137,7 +137,7 @@
       "dependency_version": "1.24.0",
       "runtime_version": "1.27.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "136dcf75328043a300172c700a52b2b832ff43d8d1f7b785e765d67865a99437",
+      "runtime_checksum": "f64fbd9b997f74380c172483cef8a4aafb67a9ab73e522bfab49914ef320a93a",
       "basis": "The built-in 2014 catalog was republished as an immutable runtime version after its reviewed definition advanced."
     },
     {
