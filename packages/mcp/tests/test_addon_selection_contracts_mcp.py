@@ -1815,8 +1815,6 @@ def test_dependent_actor_feature_binding_is_atomic_unique_and_restart_safe(
                 "artifact_id": artifact["id"],
                 "owner_character_id": second_owner["id"],
                 "participant_config": {
-                    "initiative": 12,
-                    "tie_breaker": 1,
                     "disposition": "friendly",
                 },
                 "expected_revision": started["campaign_revision"],
@@ -1838,6 +1836,96 @@ def test_dependent_actor_feature_binding_is_atomic_unique_and_restart_safe(
             assert combat_created["character"]["id"] in {
                 item["actor_id"] for item in combat_created["combat"]["combat"]["reinforcements"]
             }
+            owner_combatant = next(
+                item
+                for item in combat_created["combat"]["combat"]["combatants"]
+                if item["actor_id"] == second_owner["id"]
+            )
+            queued_defender = next(
+                item
+                for item in combat_created["combat"]["combat"]["reinforcements"]
+                if item["actor_id"] == combat_created["character"]["id"]
+            )
+            assert queued_defender["initiative"] == owner_combatant["initiative"]
+            assert queued_defender["tie_breaker"] == owner_combatant["tie_breaker"]
+            assert queued_defender["dependent_turn"] == {
+                "kind": "steel_defender_2014",
+                "owner_actor_id": second_owner["id"],
+                "source_artifact_id": artifact["id"],
+                "source_pack_id": "dnd5e.addon.binding",
+                "source_pack_version": "1.0.0",
+                "reviewed_expression_hash": binding["reviewed_expression_hash"],
+            }
+
+            joined = await _call(
+                server,
+                "combat_end_turn",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": second_owner["id"],
+                    "expected_revision": committed["revision"],
+                    "idempotency_key": "join-bound-defender-next-round",
+                },
+            )
+            assert joined["combat"]["round"] == 2
+            assert [item["actor_id"] for item in joined["combat"]["combatants"]] == [
+                second_owner["id"],
+                combat_created["character"]["id"],
+            ]
+            command_arguments = {
+                "campaign_id": campaign["id"],
+                "actor_id": second_owner["id"],
+                "action": "command_dependent",
+                "target_id": combat_created["character"]["id"],
+                "expected_revision": joined["campaign_revision"],
+                "idempotency_key": "command-bound-defender",
+            }
+            commanded = await _call(server, "combat_common_action", command_arguments)
+            assert await _call(server, "combat_common_action", command_arguments) == commanded
+            commanded_owner = commanded["combat"]["combatants"][0]
+            assert commanded_owner["turn_budget"]["bonus_action"] == 0
+            defender_turn = await _call(
+                server,
+                "combat_end_turn",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": second_owner["id"],
+                    "expected_revision": commanded["campaign_revision"],
+                    "idempotency_key": "begin-commanded-defender-turn",
+                },
+            )
+            commanded_defender = defender_turn["combat"]["combatants"][1]
+            assert commanded_defender["turn_budget"]["main_action"] == 1
+            assert commanded_defender["turn_flags"]["dependent_command_active"] is True
+            owner_round_three = await _call(
+                server,
+                "combat_end_turn",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": combat_created["character"]["id"],
+                    "expected_revision": defender_turn["campaign_revision"],
+                    "idempotency_key": "finish-commanded-defender-turn",
+                },
+            )
+            default_turn = await _call(
+                server,
+                "combat_end_turn",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": second_owner["id"],
+                    "expected_revision": owner_round_three["campaign_revision"],
+                    "idempotency_key": "begin-default-defender-turn",
+                },
+            )
+            default_defender = default_turn["combat"]["combatants"][1]
+            assert default_defender["turn_budget"]["main_action"] == 0
+            assert default_defender["turn_budget"]["reaction"] == 1
+            assert default_defender["turn_flags"]["dodging"] is True
+            committed = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
 
             snapshot = await _call(
                 server,

@@ -187,6 +187,7 @@ from sagasmith_dnd.chase_engine import (
 from sagasmith_dnd.combat_engine import (
     ABILITY_CHECK_KINDS,
     ACTOR_CHECK_KINDS,
+    STEEL_DEFENDER_TURN_KIND,
     CombatEngineError,
     NeedsRulingError,
     active_hypnotic_pattern_effect_ids,
@@ -316,6 +317,8 @@ from sagasmith_dnd.core_content_2024 import (
 from sagasmith_dnd.core_content_2024 import build_srd2024_content
 from sagasmith_dnd.core_rule_pack import get_core_rule_pack
 from sagasmith_dnd.dependent_actor_refresh import (
+    STEEL_DEFENDER_RELATION_KEY,
+    STEEL_DEFENDER_REVIEWED_EXPRESSION_HASH,
     materialize_dependent_actor_owner_scaling,
     refresh_dependent_actor_sheet,
 )
@@ -13862,6 +13865,81 @@ def _create_server(
             raise ValueError("dependent actor template receipt does not match its relation binding")
         return receipt
 
+    def _steel_defender_turn_contracts(
+        campaign_id: str,
+        branch_id: str,
+        participant_ids: set[str],
+    ) -> dict[str, dict[str, str]]:
+        """Project verified active Steel Defender relations into encounter-only state."""
+
+        state = dict(campaigns.get(campaign_id).state or {})
+        relations = validate_dependent_actor_relations(state.get("dependent_actor_relations", []))
+        contracts: dict[str, dict[str, str]] = {}
+        for relation in relations:
+            dependent_id = relation["dependent_actor_id"]
+            if relation["status"] != "active" or dependent_id not in participant_ids:
+                continue
+            binding = dict(relation["template_binding"])
+            if relation["relation_key"] != STEEL_DEFENDER_RELATION_KEY:
+                continue
+            if (
+                binding["reviewed_expression_hash"]
+                != STEEL_DEFENDER_REVIEWED_EXPRESSION_HASH
+            ):
+                raise ValueError("Steel Defender combat relation has a stale reviewed hash")
+            owner_id = relation["owner_character_id"]
+            if owner_id not in participant_ids:
+                raise CombatEngineError(
+                    "an active Steel Defender can enter combat only with its owner"
+                )
+            owner = require_campaign_actor(campaign_id, owner_id)
+            dependent = require_campaign_actor(campaign_id, dependent_id)
+            artifact_matches = [
+                (pack_id, version, artifact)
+                for pack_id, version, artifact in available_content_artifacts(
+                    campaign_id,
+                    branch_id=branch_id,
+                )
+                if str(artifact.get("id") or "") == relation["source_artifact_id"]
+                and pack_id == relation["source_pack_id"]
+                and version == relation["source_pack_version"]
+            ]
+            if len(artifact_matches) != 1:
+                raise ValueError("Steel Defender combat source is not uniquely available")
+            pack_id, version, source_artifact = artifact_matches[0]
+            requirement = deepcopy(
+                dict(dict(source_artifact.get("card") or {}).get("dependent_actor_template") or {})
+            )
+            _dependent_actor_refresh_receipt(
+                relation,
+                {
+                    **dict(source_artifact),
+                    "_pack_id": pack_id,
+                    "_pack_version": version,
+                },
+                requirement,
+                campaign_id,
+            )
+            current_parameters, _ = dependent_actor_numeric_parameters(
+                owner=owner,
+                requirement=requirement,
+                owner_class_name=str(binding["owner_class_name"] or ""),
+                casting_slot_level=binding["casting_slot_level"],
+            )
+            if current_parameters != binding["numeric_parameters"]:
+                raise ValueError("Steel Defender combat relation is stale for its owner")
+            if dependent.campaign_id != owner.campaign_id:
+                raise ValueError("Steel Defender combat relation crosses campaign boundaries")
+            contracts[dependent_id] = {
+                "kind": STEEL_DEFENDER_TURN_KIND,
+                "owner_actor_id": owner_id,
+                "source_artifact_id": relation["source_artifact_id"],
+                "source_pack_id": relation["source_pack_id"],
+                "source_pack_version": relation["source_pack_version"],
+                "reviewed_expression_hash": binding["reviewed_expression_hash"],
+            }
+        return contracts
+
     def _refresh_owner_dependents(
         before: Any,
         candidate_owner_sheet: dict[str, Any],
@@ -18502,6 +18580,11 @@ def _create_server(
             source_condition_records.extend(conditions)
             if sheet is not None:
                 source_condition_sheets[actor_id_value] = sheet
+        dependent_turn_contracts = _steel_defender_turn_contracts(
+            campaign_id,
+            resolved_branch_id,
+            set(participant_ids),
+        )
         actors = []
         for character_id in participant_ids:
             actor = combat_actor_snapshot(character_id)
@@ -18509,6 +18592,10 @@ def _create_server(
             actor_config.pop("source_conditions", None)
             actor_config.pop("deployment_zone_id", None)
             actor.update(actor_config)
+            if character_id in dependent_turn_contracts:
+                actor["dependent_turn"] = deepcopy(
+                    dependent_turn_contracts[character_id]
+                )
             if character_id in source_condition_sheets:
                 actor["sheet"] = validate_character_sheet(
                     source_condition_sheets[character_id],
@@ -18683,6 +18770,8 @@ def _create_server(
         visible_to = config_value.get("visible_to_actor_ids")
         encounter_actor_ids = {
             str(item.get("actor_id") or "") for item in encounter.get("combatants", [])
+        } | {
+            str(item.get("actor_id") or "") for item in encounter.get("reinforcements", [])
         } | {actor_id}
         if visible_to is not None and (
             not isinstance(visible_to, list)
@@ -18713,6 +18802,13 @@ def _create_server(
         config_value.pop("source_conditions", None)
         actor = combat_actor_snapshot(actor_id)
         actor.update(config_value)
+        turn_contract = _steel_defender_turn_contracts(
+            campaign_id,
+            resolved_branch_id,
+            encounter_actor_ids,
+        ).get(actor_id)
+        if turn_contract is not None:
+            actor["dependent_turn"] = deepcopy(turn_contract)
         if joining_sheet is not None:
             actor["sheet"] = validate_character_sheet(
                 joining_sheet,
@@ -21345,6 +21441,7 @@ def _create_server(
         campaign_id: str,
         actor_id: str,
         action: Literal[
+            "command_dependent",
             "dash",
             "disengage",
             "dodge",
@@ -50941,6 +51038,22 @@ boundary.
                 provisional = replace(provisional, sheet=deepcopy(actor_sheet))
             actor_snapshot = character_view(provisional)
             actor_snapshot.update(config_value)
+            if (
+                owner_binding is not None
+                and owner_binding["relation_key"] == STEEL_DEFENDER_RELATION_KEY
+                and template_binding["reviewed_expression_hash"]
+                == STEEL_DEFENDER_REVIEWED_EXPRESSION_HASH
+            ):
+                actor_snapshot["dependent_turn"] = {
+                    "kind": STEEL_DEFENDER_TURN_KIND,
+                    "owner_actor_id": owner.id,
+                    "source_artifact_id": artifact_id,
+                    "source_pack_id": pack_id,
+                    "source_pack_version": version,
+                    "reviewed_expression_hash": template_binding[
+                        "reviewed_expression_hash"
+                    ],
+                }
             next_encounter = queue_combatant(
                 encounter,
                 actor_snapshot,

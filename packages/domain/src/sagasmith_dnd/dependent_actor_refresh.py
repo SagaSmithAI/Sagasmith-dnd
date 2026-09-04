@@ -21,8 +21,8 @@ _RUNTIME_PATHS = {
     ("combat", "hp", "temp"),
     ("combat", "death_saves"),
 }
-_STEEL_DEFENDER_RELATION_KEY = "steel_defender"
-_STEEL_DEFENDER_REVIEWED_EXPRESSION_HASH = (
+STEEL_DEFENDER_RELATION_KEY = "steel_defender"
+STEEL_DEFENDER_REVIEWED_EXPRESSION_HASH = (
     "539cc387391b58fce93a7f0268910b66615db8a42006ab1913378222f1216e8c"
 )
 _STEEL_DEFENDER_BASE_PROFICIENCY_BONUS = 2
@@ -60,9 +60,9 @@ def materialize_dependent_actor_owner_scaling(
     """
 
     result = validate_character_sheet(deepcopy(dict(sheet)))
-    if _normalized_name(relation_key) != _STEEL_DEFENDER_RELATION_KEY:
+    if _normalized_name(relation_key) != STEEL_DEFENDER_RELATION_KEY:
         return result
-    if reviewed_expression_hash != _STEEL_DEFENDER_REVIEWED_EXPRESSION_HASH:
+    if reviewed_expression_hash != STEEL_DEFENDER_REVIEWED_EXPRESSION_HASH:
         return result
     raw_pb = numeric_parameters.get("owner_proficiency_bonus")
     if isinstance(raw_pb, bool) or not isinstance(raw_pb, int):
@@ -281,7 +281,7 @@ def refresh_dependent_actor_sheet(
     old_numeric_parameters: Mapping[str, int],
     new_numeric_parameters: Mapping[str, int],
     *,
-    relation_key: str = _STEEL_DEFENDER_RELATION_KEY,
+    relation_key: str = STEEL_DEFENDER_RELATION_KEY,
 ) -> dict[str, Any]:
     """Apply one source-bound owner refresh without touching runtime state.
 
@@ -292,7 +292,7 @@ def refresh_dependent_actor_sheet(
     overwritten.
     """
 
-    if _normalized_name(relation_key) != _STEEL_DEFENDER_RELATION_KEY:
+    if _normalized_name(relation_key) != STEEL_DEFENDER_RELATION_KEY:
         raise ValueError("dependent actor refresh supports only the Steel Defender relation")
 
     current = validate_character_sheet(deepcopy(dict(current_sheet)))
@@ -357,4 +357,9 @@ def refresh_dependent_actor_sheet(
     }
 
 
-__all__ = ["materialize_dependent_actor_owner_scaling", "refresh_dependent_actor_sheet"]
+__all__ = [
+    "STEEL_DEFENDER_RELATION_KEY",
+    "STEEL_DEFENDER_REVIEWED_EXPRESSION_HASH",
+    "materialize_dependent_actor_owner_scaling",
+    "refresh_dependent_actor_sheet",
+]

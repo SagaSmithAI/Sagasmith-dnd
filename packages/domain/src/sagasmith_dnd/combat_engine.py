@@ -93,6 +93,17 @@ ACTOR_CHECK_KINDS = ABILITY_CHECK_KINDS | SAVING_THROW_KINDS
 DAMAGE_REDUCTION_OUTCOMES = frozenset({"full", "half", "none"})
 WEAPON_MASTERY_IDS = frozenset({"cleave", "graze", "nick", "push", "sap", "slow", "topple", "vex"})
 DODGE_MECHANIC_ID = "dnd5e.core.action.dodge"
+STEEL_DEFENDER_TURN_KIND = "steel_defender_2014"
+_DEPENDENT_TURN_FIELDS = frozenset(
+    {
+        "kind",
+        "owner_actor_id",
+        "source_artifact_id",
+        "source_pack_id",
+        "source_pack_version",
+        "reviewed_expression_hash",
+    }
+)
 _TORTLE_SHELL_DEFENSE_FLAG = "tortle_shell_defense"
 _TORTLE_SHELL_DEFENSE_DESCRIPTION = (
     "Withdrawn into the shell: AC +4; Strength and Constitution save advantage; "
@@ -974,6 +985,132 @@ def _jack_of_all_trades_bonus(sheet: dict[str, Any]) -> int:
     return proficiency_bonus(level) // 2
 
 
+def _dependent_turn_contract(
+    actor: dict[str, Any],
+    *,
+    participant_ids: set[str],
+    ruleset: str,
+) -> dict[str, Any] | None:
+    raw = actor.get("dependent_turn")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict) or set(raw) != _DEPENDENT_TURN_FIELDS:
+        raise CombatEngineError("dependent turn authority has invalid fields")
+    contract = {key: str(raw.get(key) or "").strip() for key in _DEPENDENT_TURN_FIELDS}
+    if any(not value for value in contract.values()):
+        raise CombatEngineError("dependent turn authority contains an empty field")
+    if contract["kind"] != STEEL_DEFENDER_TURN_KIND or ruleset != "2014":
+        raise CombatEngineError("dependent turn authority is incompatible with this ruleset")
+    owner_id = contract["owner_actor_id"]
+    dependent_id = actor_id(actor)
+    if owner_id == dependent_id or owner_id not in participant_ids:
+        raise CombatEngineError("a Steel Defender requires its owner in the encounter")
+    if re.fullmatch(r"[0-9a-f]{64}", contract["reviewed_expression_hash"]) is None:
+        raise CombatEngineError("dependent turn authority has an invalid reviewed hash")
+    return contract
+
+
+def _initiative_root_id(combatant: dict[str, Any]) -> str:
+    contract = combatant.get("dependent_turn")
+    if isinstance(contract, dict):
+        return str(contract.get("owner_actor_id") or "")
+    return str(combatant.get("actor_id") or "")
+
+
+def _sort_combatants(combatants: list[dict[str, Any]]) -> None:
+    by_id = {str(item.get("actor_id") or ""): item for item in combatants}
+
+    def key(item: dict[str, Any]) -> tuple[int, int, str, int, str]:
+        root_id = _initiative_root_id(item)
+        root = by_id.get(root_id, item)
+        return (
+            -int(root.get("initiative", 0) or 0),
+            int(root.get("tie_breaker", 0) or 0),
+            root_id,
+            1 if root_id != str(item.get("actor_id") or "") else 0,
+            str(item.get("actor_id") or ""),
+        )
+
+    combatants.sort(key=key)
+
+
+def _controlled_dependent(
+    encounter: dict[str, Any],
+    owner_actor_id: str,
+    dependent_actor_id: str,
+) -> dict[str, Any]:
+    dependent = next(
+        (
+            item
+            for item in encounter.get("combatants", [])
+            if str(item.get("actor_id") or "") == dependent_actor_id
+        ),
+        None,
+    )
+    contract = dict((dependent or {}).get("dependent_turn") or {})
+    if (
+        dependent is None
+        or contract.get("kind") != STEEL_DEFENDER_TURN_KIND
+        or contract.get("owner_actor_id") != owner_actor_id
+    ):
+        raise CombatEngineError("target is not this actor's active Steel Defender")
+    if "dead" in _condition_set(dependent.get("conditions")):
+        raise CombatEngineError("a dead Steel Defender cannot be commanded")
+    return dependent
+
+
+def _begin_dependent_turn(encounter: dict[str, Any], dependent: dict[str, Any]) -> None:
+    contract = dict(dependent.get("dependent_turn") or {})
+    if contract.get("kind") != STEEL_DEFENDER_TURN_KIND:
+        return
+    owner_id = str(contract.get("owner_actor_id") or "")
+    owner = next(
+        (
+            item
+            for item in encounter.get("combatants", [])
+            if str(item.get("actor_id") or "") == owner_id
+        ),
+        None,
+    )
+    if owner is None:
+        raise CombatEngineError("Steel Defender combat authority lost its owner")
+    flags = dict(dependent.get("turn_flags") or {})
+    pending = dict(flags.pop("owner_command_pending", None) or {})
+    owner_incapacitated = bool(
+        _condition_set(owner.get("conditions")) & INCAPACITATING_STATE_IDS
+    )
+    commanded = (
+        not owner_incapacitated
+        and pending.get("owner_actor_id") == owner_id
+        and int(pending.get("owner_turns_completed", -1))
+        == int(owner.get("turns_completed", 0) or 0)
+    )
+    if owner_incapacitated:
+        flags["dependent_owner_incapacitated"] = True
+        event = "steel_defender_owner_incapacitated"
+    elif commanded:
+        flags["dependent_command_active"] = True
+        event = "steel_defender_command_activated"
+    else:
+        budget = dict(dependent.get("turn_budget") or {})
+        if int(budget.get("main_action", 0) or 0) > 0:
+            budget["main_action"] = int(budget["main_action"]) - 1
+            dependent["turn_budget"] = budget
+        flags["dodging"] = True
+        flags["dependent_default_dodge"] = True
+        event = "steel_defender_default_dodge"
+    dependent["turn_flags"] = flags
+    encounter["log"] = [
+        *list(encounter.get("log") or []),
+        {
+            "type": event,
+            "actor_id": str(dependent.get("actor_id") or ""),
+            "owner_actor_id": owner_id,
+            "round": int(encounter.get("round", 1) or 1),
+        },
+    ][-100:]
+
+
 def start_encounter(
     participants: list[dict[str, Any]],
     *,
@@ -1010,6 +1147,29 @@ def start_encounter(
     elif battle_map is not None:
         raise CombatEngineError("agent-positioned combat does not accept a battle map")
     normalized_ruleset = _normalize_ruleset(ruleset)
+    participant_ids = {actor_id(actor) for actor in participants}
+    dependent_contracts: dict[str, dict[str, Any]] = {}
+    dependent_owner_ids: set[str] = set()
+    for actor in participants:
+        identifier = actor_id(actor)
+        contract = _dependent_turn_contract(
+            actor,
+            participant_ids=participant_ids,
+            ruleset=normalized_ruleset,
+        )
+        if contract is None:
+            continue
+        owner_id = contract["owner_actor_id"]
+        if owner_id in dependent_owner_ids:
+            raise CombatEngineError("an owner cannot have multiple Steel Defenders in combat")
+        if "initiative" in actor or "tie_breaker" in actor:
+            raise CombatEngineError(
+                "a Steel Defender's initiative and turn position come from its owner"
+            )
+        dependent_owner_ids.add(owner_id)
+        dependent_contracts[identifier] = contract
+    if set(dependent_contracts) & dependent_owner_ids:
+        raise CombatEngineError("a Steel Defender cannot own another dependent turn")
     validated_participants: list[
         tuple[int, dict[str, Any], str, dict[str, Any], dict[str, Any], set[str], int]
     ] = []
@@ -1119,6 +1279,11 @@ def start_encounter(
                 "zero_hp_recovery": bool(actor.get("zero_hp_recovery", False)),
                 "exhaustion": exhaustion,
                 "rule_boundary_ids": participant_boundary_ids,
+                **(
+                    {"dependent_turn": deepcopy(dependent_contracts[identifier])}
+                    if identifier in dependent_contracts
+                    else {}
+                ),
             }
         )
         reconcile_tortle_shell_defense_projection(combatants[-1], sheet)
@@ -1131,20 +1296,26 @@ def start_encounter(
                 object_interaction=0,
                 movement_spent=current_movement,
             )
+    combatants_by_id = {str(item["actor_id"]): item for item in combatants}
+    for dependent_id, contract in dependent_contracts.items():
+        dependent = combatants_by_id[dependent_id]
+        owner = combatants_by_id[contract["owner_actor_id"]]
+        dependent["initiative"] = int(owner["initiative"])
+        dependent["initiative_roll"] = None
+        dependent["initiative_bonus"] = int(owner["initiative_bonus"])
+        dependent["tie_breaker"] = int(owner["tie_breaker"])
+
     ties: dict[int, list[dict[str, Any]]] = {}
     for combatant in combatants:
         ties.setdefault(int(combatant["initiative"]), []).append(combatant)
-    unresolved_ties = [
-        items
-        for items in ties.values()
-        if (
-            len(items) > 1
-            and (
-                not all(item["_tie_breaker_supplied"] for item in items)
-                or len({int(item["tie_breaker"]) for item in items}) != len(items)
-            )
-        )
-    ]
+    unresolved_ties = []
+    for items in ties.values():
+        roots = [item for item in items if "dependent_turn" not in item]
+        if len(roots) > 1 and (
+            not all(item["_tie_breaker_supplied"] for item in roots)
+            or len({int(item["tie_breaker"]) for item in roots}) != len(roots)
+        ):
+            unresolved_ties.append(roots)
     if unresolved_ties:
         player_owned_ties = [
             items
@@ -1166,9 +1337,7 @@ def start_encounter(
     for combatant in combatants:
         combatant.pop("_tie_breaker_supplied", None)
         combatant.pop("_initiative_supplied", None)
-    combatants.sort(
-        key=lambda value: (-value["initiative"], value["tie_breaker"], value["actor_id"])
-    )
+    _sort_combatants(combatants)
     if combatants:
         record_death_save_turn_start(combatants[0])
     return {
@@ -1217,8 +1386,23 @@ def queue_combatant(
     if due_round <= current_round:
         raise CombatEngineError("a queued combatant must join in a future round")
 
+    existing = [
+        *list(value.get("combatants") or []),
+        *list(value.get("reinforcements") or []),
+    ]
+    contract = _dependent_turn_contract(
+        actor,
+        participant_ids={str(item.get("actor_id") or "") for item in existing} | {identifier},
+        ruleset=str(value.get("ruleset") or DEFAULT_CHARACTER_EDITION),
+    )
+    if contract is not None and ("initiative" in actor or "tie_breaker" in actor):
+        raise CombatEngineError(
+            "a Steel Defender's initiative and turn position come from its owner"
+        )
+    generated_actor = deepcopy(actor)
+    generated_actor.pop("dependent_turn", None)
     generated_encounter = start_encounter(
-        [actor],
+        [generated_actor],
         ruleset=value.get("ruleset"),
         battle_map=(
             value.get("battle_map") if value.get("positioning_mode") == "grid" else None
@@ -1227,6 +1411,17 @@ def queue_combatant(
         rng=rng,
     )
     generated = generated_encounter["combatants"][0]
+    if contract is not None:
+        owner = next(
+            item
+            for item in existing
+            if str(item.get("actor_id") or "") == contract["owner_actor_id"]
+        )
+        generated["dependent_turn"] = deepcopy(contract)
+        generated["initiative"] = int(owner.get("initiative", 0) or 0)
+        generated["initiative_roll"] = None
+        generated["initiative_bonus"] = int(owner.get("initiative_bonus", 0) or 0)
+        generated["tie_breaker"] = int(owner.get("tie_breaker", 0) or 0)
     value["rule_boundary_ids"] = sorted(
         {
             *list(value.get("rule_boundary_ids") or []),
@@ -1245,7 +1440,7 @@ def queue_combatant(
         int(item.get("tie_breaker", 0) or 0) == int(generated["tie_breaker"])
         for item in same_initiative
     )
-    if same_initiative and (
+    if contract is None and same_initiative and (
         "tie_breaker" not in actor or supplied_tie_breaker_conflicts
     ):
         ruling_kind = (
@@ -1259,7 +1454,7 @@ def queue_combatant(
             missing=("tie_breaker",),
             ruling_kind=ruling_kind,
         )
-    if "tie_breaker" not in actor:
+    if contract is None and "tie_breaker" not in actor:
         generated["tie_breaker"] = (
             max(
                 (int(item.get("tie_breaker", 0) or 0) for item in value["combatants"]),
@@ -1766,6 +1961,14 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
             actions = [item for item in actions if item != "cast"]
     if budget.get("bonus_action", 0) > 0:
         actions.append("bonus_action")
+        if any(
+            dict(item.get("dependent_turn") or {}).get("owner_actor_id") == actor_id_value
+            and dict(item.get("dependent_turn") or {}).get("kind")
+            == STEEL_DEFENDER_TURN_KIND
+            and "dead" not in _condition_set(item.get("conditions"))
+            for item in encounter.get("combatants", [])
+        ):
+            actions.append("command_dependent")
     if budget.get("object_interaction", 0) > 0:
         actions.append("interact_object")
     if budget.get("attack_budget", 0) > 0:
@@ -5353,6 +5556,7 @@ def resolve_common_action(
     action = str(action).strip().lower().replace("-", "_")
     supported = {
         "cast",
+        "command_dependent",
         "dash",
         "disengage",
         "dodge",
@@ -5386,6 +5590,11 @@ def resolve_common_action(
         raise CombatEngineError("actor is not a combatant")
     if action != "emerge_shell":
         _require_tortle_shell_emergence_only(combatant)
+    commanded_dependent = None
+    if action == "command_dependent":
+        if not target_id:
+            raise CombatEngineError("command_dependent requires a Steel Defender target")
+        commanded_dependent = _controlled_dependent(value, actor_id_value, target_id)
     out_of_turn_reaction = action == "cast" and payment == "reaction"
     if not out_of_turn_reaction and (current is None or current.get("actor_id") != actor_id_value):
         raise CombatEngineError("it is not this actor's turn")
@@ -5420,7 +5629,7 @@ def resolve_common_action(
         "object_interaction"
         if action == "interact_object"
         else "bonus_action"
-        if action == "emerge_shell"
+        if action in {"emerge_shell", "command_dependent"}
         else "extra_action"
         if budget.get("extra_action", 0) > 0
         else "main_action"
@@ -5478,6 +5687,23 @@ def resolve_common_action(
     elif action == "dodge":
         flags.pop("dodge_ended", None)
         flags["dodging"] = True
+    elif action == "command_dependent":
+        assert commanded_dependent is not None
+        dependent_flags = dict(commanded_dependent.get("turn_flags") or {})
+        dependent_flags["owner_command_pending"] = {
+            "owner_actor_id": actor_id_value,
+            "owner_turns_completed": int(acting.get("turns_completed", 0) or 0) + 1,
+        }
+        commanded_dependent["turn_flags"] = dependent_flags
+        value["log"] = [
+            *list(value.get("log") or []),
+            {
+                "type": "steel_defender_commanded",
+                "actor_id": target_id,
+                "owner_actor_id": actor_id_value,
+                "round": int(value.get("round", 1) or 1),
+            },
+        ][-100:]
     elif action == "shell_defense":
         if CORE_TORTLE_SHELL_DEFENSE_MECHANIC_ID not in {
             str(item) for item in acting.get("source_capabilities", [])
@@ -7612,13 +7838,7 @@ def end_turn(
             for item in joining:
                 item.pop("join_round", None)
             combatants.extend(joining)
-            combatants.sort(
-                key=lambda item: (
-                    -int(item.get("initiative", 0) or 0),
-                    int(item.get("tie_breaker", 0) or 0),
-                    str(item.get("actor_id") or ""),
-                )
-            )
+            _sort_combatants(combatants)
             value["combatants"] = combatants
             joined_ids = {str(item.get("actor_id") or "") for item in joining}
             value["reinforcements"] = [
@@ -7757,6 +7977,7 @@ def end_turn(
                 movement_spent=int(effective_turn_speed * speed_multiplier),
             )
         next_actor["turn_budget"] = budget
+        _begin_dependent_turn(value, next_actor)
     value["turn_spell_casts"] = {}
     return value
 

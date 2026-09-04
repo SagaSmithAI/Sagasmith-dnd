@@ -356,6 +356,120 @@ def _actor(identifier: str, *, hp: int = 12, ac: int = 10) -> dict:
     }
 
 
+def _steel_defender(identifier: str, owner_id: str) -> dict:
+    actor = _actor(identifier)
+    actor["dependent_turn"] = {
+        "kind": "steel_defender_2014",
+        "owner_actor_id": owner_id,
+        "source_artifact_id": "dnd5e.addon.feature.steel-defender",
+        "source_pack_id": "dnd5e.addon.rulebook.tashas-cauldron-of-everything",
+        "source_pack_version": "1.0.5",
+        "reviewed_expression_hash": "a" * 64,
+    }
+    return actor
+
+
+def test_steel_defender_shares_owner_initiative_and_immediately_follows_owner() -> None:
+    owner = _actor("owner")
+    rival = _actor("rival")
+    defender = _steel_defender("defender", "owner")
+    owner.update(initiative=17, tie_breaker=5)
+    rival.update(initiative=17, tie_breaker=2)
+
+    encounter = start_encounter([defender, owner, rival], ruleset="2014")
+
+    assert [item["actor_id"] for item in encounter["combatants"]] == [
+        "rival",
+        "owner",
+        "defender",
+    ]
+    defender_state = encounter["combatants"][2]
+    assert defender_state["initiative"] == 17
+    assert defender_state["tie_breaker"] == 5
+    assert defender_state["initiative_roll"] is None
+
+
+def test_steel_defender_defaults_to_dodge_but_keeps_movement_and_reaction() -> None:
+    owner = _actor("owner")
+    owner["initiative"] = 20
+    defender = _steel_defender("defender", "owner")
+    encounter = start_encounter([owner, defender], ruleset="2014")
+
+    defender_turn = end_turn(encounter, actor_id_value="owner")
+    current = current_combatant(defender_turn)
+
+    assert current["actor_id"] == "defender"
+    assert current["turn_budget"]["main_action"] == 0
+    assert current["turn_budget"]["reaction"] == 1
+    assert current["turn_budget"]["movement"] == current["turn_budget"]["speed"]
+    assert current["turn_flags"]["dodging"] is True
+    assert current["turn_flags"]["dependent_default_dodge"] is True
+    assert "attack" not in available_actions(defender_turn, "defender")
+    assert "move" in available_actions(defender_turn, "defender")
+
+
+def test_owner_bonus_action_command_unlocks_one_steel_defender_turn() -> None:
+    owner = _actor("owner")
+    owner["initiative"] = 20
+    defender = _steel_defender("defender", "owner")
+    encounter = start_encounter([owner, defender], ruleset="2014")
+
+    commanded = resolve_common_action(
+        encounter,
+        actor_id_value="owner",
+        action="command_dependent",
+        target_id="defender",
+    )
+    owner_state = current_combatant(commanded)
+    assert owner_state["turn_budget"]["bonus_action"] == 0
+    assert "command_dependent" not in available_actions(commanded, "owner")
+
+    defender_turn = end_turn(commanded, actor_id_value="owner")
+    defender_state = current_combatant(defender_turn)
+    assert defender_state["actor_id"] == "defender"
+    assert defender_state["turn_budget"]["main_action"] == 1
+    assert defender_state["turn_flags"]["dependent_command_active"] is True
+    assert "attack" in available_actions(defender_turn, "defender")
+
+    next_round = end_turn(defender_turn, actor_id_value="defender")
+    assert current_combatant(next_round)["actor_id"] == "owner"
+    defaulted_again = end_turn(next_round, actor_id_value="owner")
+    assert current_combatant(defaulted_again)["turn_budget"]["main_action"] == 0
+
+
+def test_incapacitated_owner_releases_steel_defender_action_restriction() -> None:
+    owner = _actor("owner")
+    owner["initiative"] = 20
+    defender = _steel_defender("defender", "owner")
+    encounter = start_encounter([owner, defender], ruleset="2014")
+    encounter["combatants"][0]["conditions"] = ["incapacitated"]
+
+    defender_turn = end_turn(encounter, actor_id_value="owner")
+    defender_state = current_combatant(defender_turn)
+
+    assert defender_state["turn_budget"]["main_action"] == 1
+    assert defender_state["turn_flags"]["dependent_owner_incapacitated"] is True
+    assert "attack" in available_actions(defender_turn, "defender")
+
+
+def test_queued_steel_defender_joins_immediately_after_owner_next_round() -> None:
+    owner = _actor("owner")
+    rival = _actor("rival")
+    owner["initiative"] = 20
+    rival["initiative"] = 10
+    encounter = start_encounter([owner, rival], ruleset="2014")
+
+    queued = queue_combatant(encounter, _steel_defender("defender", "owner"))
+    rival_turn = end_turn(queued, actor_id_value="owner")
+    next_round = end_turn(rival_turn, actor_id_value="rival")
+
+    assert [item["actor_id"] for item in next_round["combatants"]] == [
+        "owner",
+        "defender",
+        "rival",
+    ]
+
+
 def _tortle_actor(identifier: str) -> dict:
     actor = _actor(identifier, ac=17)
     source_ref = (
