@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
-from sagasmith_core import Database
+from sagasmith_core import Database, RulePackService
 from sagasmith_core.content_pack import dumps_content_archive
 from sagasmith_core.database import sqlite_database_url
 from sagasmith_core.models import RulePackPayload, RulePackVersion
@@ -1172,7 +1172,38 @@ def test_official_expansion_lock_matches_seeded_core_content(tmp_path: Path) -> 
         auto_seed_rules=True,
     )
 
-    create_server(config)
+    server = create_server(config)
+    database = Database(sqlite_database_url(config.database_path))
+    try:
+        packs = RulePackService(database)
+        for pack_id, version, edition in (
+            (CORE_CONTENT_PACK_ID, CORE_CONTENT_PACK_VERSION, "2014"),
+            (
+                server_module.STANDARD_2014_CONTENT_PACK_ID,
+                server_module.STANDARD_2014_CONTENT_PACK_VERSION,
+                "2014",
+            ),
+            (
+                server_module.CORE_2024_CONTENT_PACK_ID,
+                server_module.CORE_2024_CONTENT_PACK_VERSION,
+                "2024",
+            ),
+        ):
+            installed = packs.get_version(pack_id, version)
+            core = server_module.get_core_rule_pack(edition)
+            assert installed.status == "installed"
+            assert installed.manifest["native_provider_locks"] == [
+                {
+                    "id": core.id,
+                    "version": core.version,
+                    "edition": edition,
+                    "fingerprint": core.fingerprint,
+                    "mechanic_refs": installed.manifest["native_mechanic_refs"],
+                }
+            ]
+    finally:
+        database.dispose()
+        close_server(server)
 
     with sqlite3.connect(config.home / "data" / "ttrpgbase.db") as connection:
         row = connection.execute(
