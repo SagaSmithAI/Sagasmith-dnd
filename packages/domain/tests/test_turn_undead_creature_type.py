@@ -79,7 +79,27 @@ def test_turn_undead_prevalidates_mixed_targets_before_any_save_roll() -> None:
 
 def test_turn_undead_prevalidates_before_2024_sear_roll() -> None:
     cleric = _actor("cleric", species="Human", cleric=True, edition="2024")
+    cleric["sheet"]["progression"]["level"] = 5
+    cleric["sheet"]["progression"]["classes"] = [
+        {"name": "Cleric", "level": 5, "hit_die": 8}
+    ]
+    cleric["sheet"]["content"]["features"].append(
+        {
+            "id": "dnd5e.content.srd2024.feature.cleric-sear-undead",
+            "name": "Sear Undead",
+            "source_key": "Cleric",
+            "rule_refs": ["bundled:srd2024/02_Classes/Cleric.md"],
+            "mechanic_refs": ["dnd5e.core.activity.sear_undead"],
+        }
+    )
+    cleric["derived"] = derive_character_sheet(cleric["sheet"])
     valid = _actor("valid", species="Undead", edition="2024")
+    valid["sheet"]["combat"]["hp"] = {"value": 100, "max": 100, "temp": 0}
+    valid["derived"] = derive_character_sheet(valid["sheet"])
+    sear_success = resolve_turn_undead_to_sheets(
+        cleric, {"valid": valid}, sear_undead=True, rng=random.Random(7)
+    )
+    assert sear_success["sear_undead"]["total"] > 0
     invalid = _actor("invalid", species="Humanoid (undead hunter)", edition="2024")
     before = deepcopy({"valid": valid, "invalid": invalid})
     rng = random.Random(7)
