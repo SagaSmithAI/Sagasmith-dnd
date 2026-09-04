@@ -420,10 +420,10 @@ def test_condition_classification_rejects_invalid_rule_fact_values_before_rng(
 @pytest.mark.parametrize(
     ("name", "expected_rolls", "expected_mechanics"),
     [
-        ("Hill Dwarf", 1, ["dnd5e.core.save.dwarven_resilience"]),
+        ("Hill Dwarf", 1, []),
         ("High Elf", 2, ["dnd5e.core.save.fey_ancestry"]),
         ("Rock Gnome", 2, ["dnd5e.core.save.gnome_cunning"]),
-        ("Halfling", 1, ["dnd5e.core.save.halfling_brave"]),
+        ("Halfling", 1, []),
     ],
 )
 def test_native_hypnotic_pattern_uses_real_species_projection(
