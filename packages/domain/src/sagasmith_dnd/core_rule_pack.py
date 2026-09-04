@@ -914,6 +914,46 @@ BOUNDARIES = (
         "bundled:srd2014/02_Classes/Rogue.md#evasion",
     ),
     CoreBoundary(
+        "dnd5e.core.save.dwarven_resilience",
+        ("2014",),
+        "combat_engine.resolve_actor_check",
+        (
+            "tests/test_conditional_species_content.py",
+            "tests/test_conditional_species_saves.py",
+        ),
+        "bundled:srd2014/01_Races/Races_Each/Dwarf.md#dwarven-resilience",
+    ),
+    CoreBoundary(
+        "dnd5e.core.save.fey_ancestry",
+        ("2014",),
+        "combat_engine.resolve_actor_check",
+        (
+            "tests/test_conditional_species_content.py",
+            "tests/test_conditional_species_saves.py",
+        ),
+        "bundled:srd2014/01_Races/Races_Each/Elf.md#fey-ancestry",
+    ),
+    CoreBoundary(
+        "dnd5e.core.save.gnome_cunning",
+        ("2014",),
+        "combat_engine.resolve_actor_check",
+        (
+            "tests/test_conditional_species_content.py",
+            "tests/test_conditional_species_saves.py",
+        ),
+        "bundled:srd2014/01_Races/Races_Each/Gnome.md#gnome-cunning",
+    ),
+    CoreBoundary(
+        "dnd5e.core.save.halfling_brave",
+        ("2014",),
+        "combat_engine.resolve_actor_check",
+        (
+            "tests/test_conditional_species_content.py",
+            "tests/test_conditional_species_saves.py",
+        ),
+        "bundled:srd2014/01_Races/Races_Each/Halfling.md#brave",
+    ),
+    CoreBoundary(
         "dnd5e.core.rest.hit_dice",
         ("2014", "2024"),
         (
