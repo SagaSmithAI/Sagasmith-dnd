@@ -6,8 +6,8 @@
   "builtin_rule_definitions": [
     {
       "id": "dnd5e.content.srd2014",
-      "version": "1.27.0",
-      "checksum": "f64fbd9b997f74380c172483cef8a4aafb67a9ab73e522bfab49914ef320a93a"
+      "version": "1.28.0",
+      "checksum": "fae342e388996b2ea2b2225643da254fa153f31fba4a12e560a77d4298cf7c8f"
     }
   ],
   "support_packages": [
@@ -35,9 +35,9 @@
       "definition_id": "dnd5e.addon.rulebook.d-d-5e-eberron-rising-from-the-last-war.31293633134f",
       "dependency_id": "dnd5e.content.srd2014",
       "dependency_version": "1.24.0",
-      "runtime_version": "1.27.0",
+      "runtime_version": "1.28.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "f64fbd9b997f74380c172483cef8a4aafb67a9ab73e522bfab49914ef320a93a",
+      "runtime_checksum": "fae342e388996b2ea2b2225643da254fa153f31fba4a12e560a77d4298cf7c8f",
       "basis": "The built-in 2014 catalog was republished as an immutable runtime version after its reviewed definition advanced."
     },
     {
@@ -45,9 +45,9 @@
       "definition_id": "dnd5e.addon.rulebook.d-d-5e-elemental-evil-player-s-companion.490f88d2c84c",
       "dependency_id": "dnd5e.content.srd2014",
       "dependency_version": "1.24.0",
-      "runtime_version": "1.27.0",
+      "runtime_version": "1.28.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "f64fbd9b997f74380c172483cef8a4aafb67a9ab73e522bfab49914ef320a93a",
+      "runtime_checksum": "fae342e388996b2ea2b2225643da254fa153f31fba4a12e560a77d4298cf7c8f",
       "basis": "The built-in 2014 catalog was republished as an immutable runtime version after its reviewed definition advanced."
     },
     {
@@ -55,9 +55,9 @@
       "definition_id": "dnd5e.addon.rulebook.d-d-5e-guildmasters-guide-to-ravnica.59317c5cf3da",
       "dependency_id": "dnd5e.content.srd2014",
       "dependency_version": "1.24.0",
-      "runtime_version": "1.27.0",
+      "runtime_version": "1.28.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "f64fbd9b997f74380c172483cef8a4aafb67a9ab73e522bfab49914ef320a93a",
+      "runtime_checksum": "fae342e388996b2ea2b2225643da254fa153f31fba4a12e560a77d4298cf7c8f",
       "basis": "The built-in 2014 catalog was republished as an immutable runtime version after its reviewed definition advanced."
     },
     {
@@ -65,9 +65,9 @@
       "definition_id": "dnd5e.addon.rulebook.d-d-5e-mordenkainen-s-tome-of-foes.2768304ef1af",
       "dependency_id": "dnd5e.content.srd2014",
       "dependency_version": "1.24.0",
-      "runtime_version": "1.27.0",
+      "runtime_version": "1.28.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "f64fbd9b997f74380c172483cef8a4aafb67a9ab73e522bfab49914ef320a93a",
+      "runtime_checksum": "fae342e388996b2ea2b2225643da254fa153f31fba4a12e560a77d4298cf7c8f",
       "basis": "The built-in 2014 catalog was republished as an immutable runtime version after its reviewed definition advanced."
     },
     {
@@ -75,9 +75,9 @@
       "definition_id": "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a",
       "dependency_id": "dnd5e.content.srd2014",
       "dependency_version": "1.24.0",
-      "runtime_version": "1.27.0",
+      "runtime_version": "1.28.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "f64fbd9b997f74380c172483cef8a4aafb67a9ab73e522bfab49914ef320a93a",
+      "runtime_checksum": "fae342e388996b2ea2b2225643da254fa153f31fba4a12e560a77d4298cf7c8f",
       "basis": "The built-in 2014 catalog was republished as an immutable runtime version after its reviewed definition advanced."
     },
     {
@@ -85,9 +85,9 @@
       "definition_id": "dnd5e.addon.rulebook.d-d-5e-tasha-s-cauldron-of-everything.89a729b37a4b",
       "dependency_id": "dnd5e.content.srd2014",
       "dependency_version": "1.24.0",
-      "runtime_version": "1.27.0",
+      "runtime_version": "1.28.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "f64fbd9b997f74380c172483cef8a4aafb67a9ab73e522bfab49914ef320a93a",
+      "runtime_checksum": "fae342e388996b2ea2b2225643da254fa153f31fba4a12e560a77d4298cf7c8f",
       "basis": "The built-in 2014 catalog was republished as an immutable runtime version after its reviewed definition advanced."
     },
     {
@@ -95,9 +95,9 @@
       "definition_id": "dnd5e.addon.rulebook.d-d-5e-the-tortle-package.e3234de670da",
       "dependency_id": "dnd5e.content.srd2014",
       "dependency_version": "1.24.0",
-      "runtime_version": "1.27.0",
+      "runtime_version": "1.28.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "f64fbd9b997f74380c172483cef8a4aafb67a9ab73e522bfab49914ef320a93a",
+      "runtime_checksum": "fae342e388996b2ea2b2225643da254fa153f31fba4a12e560a77d4298cf7c8f",
       "basis": "The built-in 2014 catalog was republished as an immutable runtime version after its reviewed definition advanced."
     },
     {
@@ -105,9 +105,9 @@
       "definition_id": "dnd5e.addon.rulebook.d-d-5e-volo-s-guide-to-monsters.962933255634",
       "dependency_id": "dnd5e.content.srd2014",
       "dependency_version": "1.24.0",
-      "runtime_version": "1.27.0",
+      "runtime_version": "1.28.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "f64fbd9b997f74380c172483cef8a4aafb67a9ab73e522bfab49914ef320a93a",
+      "runtime_checksum": "fae342e388996b2ea2b2225643da254fa153f31fba4a12e560a77d4298cf7c8f",
       "basis": "The built-in 2014 catalog was republished as an immutable runtime version after its reviewed definition advanced."
     },
     {
@@ -115,9 +115,9 @@
       "definition_id": "dnd5e.addon.rulebook.d-d-5e-wayfinders-guide-to-eberron.38e71ffb60c7",
       "dependency_id": "dnd5e.content.srd2014",
       "dependency_version": "1.24.0",
-      "runtime_version": "1.27.0",
+      "runtime_version": "1.28.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "f64fbd9b997f74380c172483cef8a4aafb67a9ab73e522bfab49914ef320a93a",
+      "runtime_checksum": "fae342e388996b2ea2b2225643da254fa153f31fba4a12e560a77d4298cf7c8f",
       "basis": "The built-in 2014 catalog was republished as an immutable runtime version after its reviewed definition advanced."
     },
     {
@@ -125,9 +125,9 @@
       "definition_id": "dnd5e.addon.rulebook.d-d-5e-xanathar-s-guide-to-everything.72d56f4f8dae",
       "dependency_id": "dnd5e.content.srd2014",
       "dependency_version": "1.24.0",
-      "runtime_version": "1.27.0",
+      "runtime_version": "1.28.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "f64fbd9b997f74380c172483cef8a4aafb67a9ab73e522bfab49914ef320a93a",
+      "runtime_checksum": "fae342e388996b2ea2b2225643da254fa153f31fba4a12e560a77d4298cf7c8f",
       "basis": "The built-in 2014 catalog was republished as an immutable runtime version after its reviewed definition advanced."
     },
     {
@@ -135,9 +135,9 @@
       "definition_id": "dnd5e.addon.rulebook.d-d-5e-player-s-handbook.7ad6d3e9c93c",
       "dependency_id": "dnd5e.content.srd2014",
       "dependency_version": "1.24.0",
-      "runtime_version": "1.27.0",
+      "runtime_version": "1.28.0",
       "source_checksum": "3f7508a4177c3dd4a9678d55d55d67a48c282a17f03a0943e092de486f850670",
-      "runtime_checksum": "f64fbd9b997f74380c172483cef8a4aafb67a9ab73e522bfab49914ef320a93a",
+      "runtime_checksum": "fae342e388996b2ea2b2225643da254fa153f31fba4a12e560a77d4298cf7c8f",
       "basis": "The built-in 2014 catalog was republished as an immutable runtime version after its reviewed definition advanced."
     },
     {

@@ -30,7 +30,7 @@ from sagasmith_dnd.standard_spell_ids import (
 )
 
 PACK_ID = "dnd5e.content.srd2014"
-PACK_VERSION = "1.27.0"
+PACK_VERSION = "1.28.0"
 
 _SUBCLASS_LEVELS = {
     "barbarian": 3,
@@ -822,7 +822,7 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
         return {"mechanic_refs": ["dnd5e.core.check.jack_of_all_trades"]}
     if key == ("rogue", "sneak attack"):
         return {"mechanic_refs": ["dnd5e.core.attack.sneak_attack"]}
-    if key == ("rogue", "evasion"):
+    if key in {("rogue", "evasion"), ("monk", "evasion")}:
         return {
             "choices": {
                 "source_trait": {
@@ -832,7 +832,7 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
                     "ordinary_successful_save": "half",
                     "successful_save": "none",
                     "failed_save": "half",
-                    "unavailable_conditions": ["incapacitated"],
+                    "unavailable_conditions": [],
                     "automatic": True,
                     "source_excerpt": body[:4000],
                 }
