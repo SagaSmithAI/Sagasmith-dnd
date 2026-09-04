@@ -6645,8 +6645,8 @@ def resolve_turn_undead_to_sheets(
     results: list[dict[str, Any]] = []
     for target_id, target_actor in target_actors.items():
         target_sheet = actor_sheet(target_actor)
-        creature_type = str(target_sheet.get("progression", {}).get("species") or "").casefold()
-        if "undead" not in creature_type:
+        creature_type = str(target_sheet.get("progression", {}).get("species") or "").strip()
+        if re.fullmatch(r"undead(?:\s+\([^()]+\))?", creature_type, re.IGNORECASE) is None:
             raise CombatEngineError(f"Turn Undead target is not Undead: {target_id}")
         effect_conditions = ["frightened", "incapacitated"] if edition == "2024" else ["turned"]
         save = resolve_actor_check(
