@@ -5,6 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from mcp.server.mcpserver.exceptions import ToolError
 from sagasmith_dnd.character_schema import default_character_sheet
 from test_official_expansions_mcp import _call, _config
 
@@ -25,6 +26,28 @@ def test_scag_103_official_archive_activates_and_applies_watchers_eye(tmp_path: 
         with zipfile.ZipFile(archives[0]) as archive:
             package = json.loads(archive.read("package.sagasmith.json"))
         definition_id = package["content"]["rule_definitions"][0]["id"]
+        for slug in ("city-watch", "investigator"):
+            artifact = next(
+                item
+                for item in package["content"]["artifacts"]
+                if item["id"] == f"{definition_id}.background.{slug}"
+            )
+            source = next(
+                item
+                for item in artifact["source_refs"]
+                if item["note"].endswith("Watcher's Eye feature evidence")
+            )
+            assert source["page"] == 146
+            assert "/section-613/" in source["chunk_key"]
+            assert any(
+                ref.endswith(f"#chunk:{source['chunk_key']}") for ref in artifact["rule_refs"]
+            )
+            excerpt = " ".join(
+                str(item.get("source_excerpt", ""))
+                for item in artifact["card"]["ruling_requirements"]
+            )
+            assert "find the local outpost" in excerpt
+            assert "dens of criminal activity" in excerpt
         config = replace(
             _config(tmp_path),
             official_content_library=archive_root,
@@ -202,6 +225,179 @@ def test_scag_103_official_archive_activates_and_applies_watchers_eye(tmp_path: 
             assert result["outcome"] == "granted"
             assert await _call(server, "character_check", args) == result
             calls.append((args, result))
+
+        # Exercise each source-defined knowledge category, including a missing
+        # fact and an explicitly unavailable campaign fact, through the real pack.
+        for capability in ("local_law", "local_criminal_activity", "watch_outpost"):
+            for outcome in ("pending_gm_ruling", "granted", "unavailable"):
+                fact_key = f"location:waterdeep:{capability}:{outcome}"
+                current = await _call(
+                    server,
+                    "campaign_query",
+                    {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+                )
+                if outcome != "pending_gm_ruling":
+                    await _call(
+                        server,
+                        "memory_change",
+                        {
+                            "campaign_id": campaign["id"],
+                            "action": "upsert",
+                            "payload": {
+                                **fact,
+                                "fact_key": fact_key,
+                                "predicate": f"dnd5e.watchers_eye.{capability}",
+                                "content": f"Campaign-authored {capability}: {outcome}.",
+                                "metadata": {
+                                    "dnd5e_watchers_eye": {
+                                        "schema_version": 1,
+                                        "capability": capability,
+                                        "outcome": outcome,
+                                    }
+                                },
+                            },
+                            "expected_revision": current["revision"],
+                            "idempotency_key": f"fact:{capability}:{outcome}",
+                        },
+                    )
+                for actor, feature in actors:
+                    current = await _call(
+                        server,
+                        "campaign_query",
+                        {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+                    )
+                    args = {
+                        "campaign_id": campaign["id"],
+                        "action": "source_feature",
+                        "payload": {
+                            "actor_id": actor["id"],
+                            "feature_id": feature["id"],
+                            "capability": capability,
+                            "settlement_ref": "location:waterdeep",
+                            "fact_key": fact_key,
+                        },
+                        "expected_revision": current["revision"],
+                        "idempotency_key": f"settle:{actor['id']}:{capability}:{outcome}",
+                    }
+                    _, response = await server.call_tool("character_check", args)
+                    result = response["result"]
+                    assert result["outcome"] == outcome
+                    assert bool(result["fact_revision_id"]) == (outcome != "pending_gm_ruling")
+                    receipt = response["rule_receipts"][0]
+                    assert (
+                        receipt["artifact_id"]
+                        == feature["choices"]["narrative_capability"]["source_binding"][
+                            "artifact_id"
+                        ]
+                    )
+                    assert receipt["capability"] == capability
+                    assert receipt["outcome"] == outcome
+                    assert receipt["addon_checksum"] == package["checksum"]
+                    assert "bonus" not in result
+                    assert "dc" not in result
+                    assert await _call(server, "character_check", args) == result
+                    calls.append((args, result))
+
+        async def assert_rejected_without_mutation(args: dict, message: str) -> None:
+            before_campaign = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            before_actor = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": actors[0][0]["id"]}},
+            )
+            before_receipts = await _call(
+                server, "campaign_rules", {"campaign_id": campaign["id"], "action": "receipts"}
+            )
+            with pytest.raises(ToolError, match=message):
+                await _call(server, "character_check", args)
+            assert (
+                await _call(
+                    server,
+                    "campaign_query",
+                    {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+                )
+                == before_campaign
+            )
+            assert (
+                await _call(
+                    server,
+                    "character_query",
+                    {"view": "get", "payload": {"character_id": actors[0][0]["id"]}},
+                )
+                == before_actor
+            )
+            assert (
+                await _call(
+                    server, "campaign_rules", {"campaign_id": campaign["id"], "action": "receipts"}
+                )
+                == before_receipts
+            )
+
+        # JSON boolean/float equality with integer 1 must not satisfy a versioned
+        # source-fact contract or create a capability receipt.
+        for index, invalid_version in enumerate((True, 1.0)):
+            current = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            malformed_fact = {
+                **fact,
+                "fact_key": f"location:waterdeep:malformed:{index}",
+                "metadata": {
+                    "dnd5e_watchers_eye": {
+                        "schema_version": invalid_version,
+                        "capability": "watch_outpost",
+                        "outcome": "granted",
+                    }
+                },
+            }
+            await _call(
+                server,
+                "memory_change",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "upsert",
+                    "payload": malformed_fact,
+                    "expected_revision": current["revision"],
+                    "idempotency_key": f"malformed-fact:{index}",
+                },
+            )
+            current = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            args = {
+                "campaign_id": campaign["id"],
+                "action": "source_feature",
+                "payload": {
+                    "actor_id": actors[0][0]["id"],
+                    "feature_id": actors[0][1]["id"],
+                    "capability": "watch_outpost",
+                    "settlement_ref": "location:waterdeep",
+                    "fact_key": malformed_fact["fact_key"],
+                },
+                "expected_revision": current["revision"],
+                "idempotency_key": f"reject-malformed:{index}",
+            }
+            await assert_rejected_without_mutation(args, "source-fact contract")
+        await assert_rejected_without_mutation(
+            {**args, "expected_revision": current["revision"] - 1, "idempotency_key": "stale-cas"},
+            "revision conflict",
+        )
+        await assert_rejected_without_mutation(
+            {
+                **args,
+                "payload": {**args["payload"], "capability": "numeric_bonus"},
+                "idempotency_key": "reject-numeric-bonus",
+            },
+            "capability must be one of",
+        )
         persisted_actors = [
             await _call(
                 server,

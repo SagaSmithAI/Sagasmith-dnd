@@ -24445,6 +24445,7 @@ def _create_server(
                 or fact.predicate != expected_predicate
                 or not isinstance(metadata_contract, dict)
                 or set(metadata_contract) != {"schema_version", "capability", "outcome"}
+                or type(metadata_contract.get("schema_version")) is not int
                 or metadata_contract.get("schema_version") != WATCHERS_EYE_FACT_SCHEMA_VERSION
                 or metadata_contract.get("capability") != normalized_capability
                 or metadata_contract.get("outcome") not in {"granted", "unavailable"}
