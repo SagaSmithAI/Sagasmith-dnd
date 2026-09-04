@@ -42076,23 +42076,52 @@ def _create_server(
                 return {"status": "pending_choice", "reason": str(error)}
 
             feature_source_artifact_id = artifact_id
+            feature_source_identity = {
+                "artifact_id": artifact_id,
+                "pack_id": pack_id,
+                "pack_version": version,
+                "content_hash": content_fingerprint(artifact),
+            }
             custom_feature_artifact_id = str(
                 selection.get("custom_feature_artifact_id") or ""
             ).strip()
             if custom_feature_artifact_id:
                 if not custom_name:
                     raise ValueError("feature replacement requires a custom background")
-                feature_match = next(
-                    (
-                        item
-                        for item in candidates
-                        if item[2].get("kind") == "background"
-                        and str(item[2].get("id") or "") == custom_feature_artifact_id
-                    ),
-                    None,
+                feature_candidates = [
+                    item
+                    for item in candidates
+                    if item[2].get("kind") == "background"
+                    and str(item[2].get("id") or "") == custom_feature_artifact_id
+                ]
+                if len(feature_candidates) != 1:
+                    raise RulesetUnavailableError(
+                        "custom background feature artifact is unavailable or ambiguous"
+                    )
+                feature_matches = source_scoped_content_matches(
+                    feature_candidates,
+                    source_pack_id=pack_id,
+                    source_pack_version=version,
                 )
-                if feature_match is None:
-                    raise ValueError("custom background feature artifact is unavailable")
+                if len(feature_matches) != 1:
+                    raise RulesetUnavailableError(
+                        "custom background feature artifact is unavailable or ambiguous"
+                    )
+                feature_match = feature_matches[0]
+                feature_application_state = str(
+                    feature_match[2].get("application_state") or "selection_ready"
+                )
+                if feature_application_state != "selection_ready":
+                    raise RulesetUnavailableError(
+                        "custom background feature artifact is not selection-ready"
+                    )
+                feature_contract = feature_match[2].get("selection_contract")
+                if isinstance(feature_contract, dict) and selection_contract_errors(
+                    feature_match[2]
+                ):
+                    raise RulesetUnavailableError(
+                        "custom background feature artifact has an invalid reviewed contract"
+                    )
                 feature_card = dict(feature_match[2].get("card") or {})
                 feature_grants = dict(feature_card.get("background_grants") or {})
                 replacement_feature = str(feature_grants.get("feature") or "").strip()
@@ -42102,6 +42131,12 @@ def _create_server(
                     )
                 grants["feature"] = replacement_feature
                 feature_source_artifact_id = custom_feature_artifact_id
+                feature_source_identity = {
+                    "artifact_id": custom_feature_artifact_id,
+                    "pack_id": feature_match[0],
+                    "pack_version": feature_match[1],
+                    "content_hash": content_fingerprint(feature_match[2]),
+                }
             equipment_packages = dict(requirements.get("equipment_packages") or {})
             equipment_mode = str(selection.get("equipment_mode") or "").strip().casefold()
             if custom_name:
@@ -42320,6 +42355,7 @@ def _create_server(
                 "selected_languages": selected_languages,
                 "language_authorization": language_authorization_receipt,
                 "feature_source_artifact_id": feature_source_artifact_id,
+                "feature_source": deepcopy(feature_source_identity),
                 "equipment_mode": equipment_mode,
                 "selected_equipment_package": (
                     "" if selected_equipment_package == "__FIXED__" else selected_equipment_package

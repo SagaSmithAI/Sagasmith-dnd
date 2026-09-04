@@ -101,6 +101,15 @@ def _background_artifacts() -> list[dict]:
             },
         },
     )
+    unready_feature = _artifact(
+        "dnd5e.addon.background-contract.background.unready-feature",
+        "background",
+        {
+            "name": "Unready Feature",
+            "background_grants": {"feature": "Unreviewed Feature"},
+        },
+    )
+    unready_feature["application_state"] = "review_required"
     criminal = _artifact(
         "dnd5e.addon.background-contract.background.criminal",
         "background",
@@ -163,7 +172,14 @@ def _background_artifacts() -> list[dict]:
             },
         },
     )
-    return [city_watch, hermit, criminal, self_duplicate, fighter]
+    return [
+        city_watch,
+        hermit,
+        unready_feature,
+        criminal,
+        self_duplicate,
+        fighter,
+    ]
 
 
 def _config(tmp_path: Path) -> McpConfig:
@@ -244,7 +260,14 @@ def test_2014_background_duplicates_languages_customization_and_order(tmp_path: 
     async def exercise() -> None:
         server = create_server(config)
         campaign, artifacts = await _setup(server, config)
-        city_watch, hermit, criminal, self_duplicate, fighter = artifacts
+        (
+            city_watch,
+            hermit,
+            unready_feature,
+            criminal,
+            self_duplicate,
+            fighter,
+        ) = artifacts
 
         catalog = await _call(
             server,
@@ -692,9 +715,45 @@ def test_2014_background_duplicates_languages_customization_and_order(tmp_path: 
         assert custom["sheet"]["progression"]["background"] == "Watch Physician"
         assert custom_grants["feature"] == "Discovery"
         assert custom_grants["choices"]["feature_source_artifact_id"] == hermit["id"]
+        feature_source = custom_grants["choices"]["feature_source"]
+        assert feature_source["artifact_id"] == hermit["id"]
+        assert feature_source["pack_id"] == "dnd5e.addon.background-contract"
+        assert feature_source["pack_version"] == "1.0.0"
+        assert len(feature_source["content_hash"]) == 64
         assert custom_grants["choices"]["equipment_mode"] == "source"
         assert len(custom_grants["equipment_item_ids"]) == 1
         assert custom["sheet"]["inventory"]["wallet"]["gp"] == 10
+
+        unready_actor = await _create(server, campaign["id"], "custom-unready")
+        with pytest.raises(Exception, match="not selection-ready"):
+            await _call(
+                server,
+                "character_content_apply",
+                {
+                    "character_id": unready_actor["id"],
+                    "artifact_id": city_watch["id"],
+                    "selection": {
+                        "custom_name": "Unready Route",
+                        "custom_feature_artifact_id": unready_feature["id"],
+                        "skills": ["medicine", "religion"],
+                        "languages": ["Elvish"],
+                        "tools": ["Herbalism Kit"],
+                        "equipment_mode": "source",
+                    },
+                    "expected_revision": unready_actor["revision"],
+                    "idempotency_key": "custom:unready",
+                },
+            )
+        unchanged = await _call(
+            server,
+            "character_query",
+            {
+                "view": "get",
+                "payload": {"character_id": unready_actor["id"]},
+            },
+        )
+        assert unchanged["revision"] == unready_actor["revision"]
+        assert not unchanged["sheet"]["progression"]["background_grants"]["feature"]
 
         coin_actor = await _create(server, campaign["id"], "custom-coin")
         coin = await _call(
