@@ -45,7 +45,6 @@ from sagasmith_core import (
     AccessService,
     ActorKnowledgeService,
     ActorKnowledgeTransfer,
-    ActorLifecycleService,
     AddonService,
     BranchService,
     CampaignService,
@@ -548,6 +547,7 @@ from sagasmith_dnd.vocabulary import (
 )
 from sqlalchemy.exc import NoResultFound
 
+from sagasmith_dnd_mcp.actor_inventory_lifecycle import InventoryActorLifecycleService
 from sagasmith_dnd_mcp.actor_memory import select_actor_memory_context
 from sagasmith_dnd_mcp.bounded_evaluations import (
     BOUNDED_EVALUATION_PURPOSES,
@@ -5360,7 +5360,12 @@ def _create_server(
     storage.migrate()
     campaigns = CampaignService(storage.database)
     characters = CharacterService(storage.database)
-    actor_lifecycle = ActorLifecycleService(storage.database)
+    actor_lifecycle = InventoryActorLifecycleService(
+        storage.database,
+        ground_context=lambda campaign, state, actor_id: ground_drop_context(
+            campaign, state, actor_id
+        ),
+    )
     branches = BranchService(storage.database)
     continuity = ContinuityService(storage.database)
     continuity_commits = ContinuityCommitService(storage.database)
@@ -28896,18 +28901,62 @@ def _create_server(
             rules=effective_rule_context(campaign_id),
         )
         normalized_notes = validate_character_notes(notes or default_character_notes())
-        template, instance = characters.create_with_instance(
-            system_id=DND5E.id,
-            campaign_id=campaign_id,
-            name=name,
-            character_type="pc",
-            player_name=player_name,
-            summary=summary,
-            sheet=normalized_sheet,
-            notes=normalized_notes,
-            principal_id=principal_id,
-            idempotency_key=idempotency_key,
-        )
+        # Keep the existing build request/response identity, while creating the
+        # live instance through the same lifecycle/custody transaction as all
+        # other campaign actors. The independent library template is unchanged.
+        build_payload = {
+            "system_id": DND5E.id,
+            "campaign_id": campaign_id,
+            "name": name,
+            "character_type": "pc",
+            "player_name": player_name,
+            "summary": summary,
+            "sheet": normalized_sheet,
+            "notes": normalized_notes,
+        }
+        scope = f"character-build:{campaign_id}:{principal_id}"
+        with storage.database.transaction() as session:
+            replay = idempotency.lookup_in_session(session, scope, idempotency_key, build_payload)
+            if replay is not None and replay.response is not None:
+                return {
+                    key: character_view(CharacterInfo(**replay.response[key]))
+                    for key in ("template", "instance")
+                }
+            template = characters.create(
+                system_id=DND5E.id,
+                name=name,
+                character_type="pc",
+                summary=summary,
+                sheet=normalized_sheet,
+                notes=normalized_notes,
+            )
+            created = actor_lifecycle.create(
+                campaign_id,
+                system_id=DND5E.id,
+                template_id=template.id,
+                name=name,
+                character_type="pc",
+                player_name=player_name,
+                summary=summary,
+                sheet=normalized_sheet,
+                notes=normalized_notes,
+                principal_id=principal_id,
+                idempotency_key=idempotency_key,
+                initial_grants=(InitialActorGrant(principal_id),),
+                operation="character.build",
+                actor=principal_id,
+                idempotency_payload={"operation": "character.build", **build_payload},
+            )
+            instance = created.character
+            idempotency.remember_in_session(
+                session,
+                scope,
+                idempotency_key,
+                build_payload,
+                {"template": asdict(template), "instance": asdict(instance)},
+                campaign_id=campaign_id,
+                mutation_group_id=created.mutation_group_id,
+            )
         return {"template": character_view(template), "instance": character_view(instance)}
 
     def character_get(

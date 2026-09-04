@@ -848,6 +848,13 @@ their contained items) into campaign `ground_items`, clears those hand slots,
 and preserves external ownership/attunement references atomically. A shield in
 the separate shield slot stays strapped on. Waking does not retrieve an object.
 Positive-HP unconsciousness does not require a death save to end the turn.
+An initially Unconscious 2014 campaign actor also falls Prone (unless immune)
+and drops held objects during creation, including direct creation, template
+instantiation, and build. The live actor and its ground records share one
+lifecycle revision group and replay
+receipt; undo/redo removes/restores both together. Build keeps its independent
+library template unchanged and atomically creates the live instance through the
+same custody boundary. A library template is not itself a scene participant.
 Another adjacent creature can use
 `combat_common_action(action="shake_sleep", target_id=...)` to spend an action
 ending that target's Sleep effect, without removing unrelated unconsciousness.
