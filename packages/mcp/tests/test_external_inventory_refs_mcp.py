@@ -68,7 +68,7 @@ def test_external_inventory_refs_are_engine_owned(tmp_path: Path) -> None:
                     "location": {"kind": "ground", "ground_id": "fake", "item_id": "ghost"},
                 }
             ]
-            with pytest.raises(ToolError, match="engine|external|ground|owned|inventory"):
+            with pytest.raises(ToolError, match="external_items is engine-owned"):
                 await _call(
                     server,
                     "character_sheet_replace",
@@ -79,7 +79,7 @@ def test_external_inventory_refs_are_engine_owned(tmp_path: Path) -> None:
                         "idempotency_key": "forge-replace",
                     },
                 )
-            with pytest.raises(ToolError, match="engine|external|ground|owned|inventory"):
+            with pytest.raises(ToolError, match="external_items is engine-owned"):
                 await _call(
                     server,
                     "character_create_from",

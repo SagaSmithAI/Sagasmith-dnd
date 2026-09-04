@@ -836,8 +836,12 @@ sleep-immune targets do not consume the pool. Sleep is not concentration and
 lasts one minute on the persistent clock, including after combat ends. Positive
 damage wakes the target even if temporary HP absorb it; zero damage does not.
 Falling unconscious also applies Prone (unless immune). Waking ends Sleep, not
-Prone: the creature must still stand up normally. Automatic held-item dropping
-is not yet implemented; do not claim the inventory projection models it.
+Prone: the creature must still stand up normally. For 2014 character updates,
+the authoritative settlement also moves main-hand and off-hand objects (and
+their contained items) into campaign `ground_items`, clears those hand slots,
+and preserves external ownership/attunement references atomically. A shield in
+the separate shield slot stays strapped on. Waking does not retrieve an object.
+Positive-HP unconsciousness does not require a death save to end the turn.
 Another adjacent creature can use
 `combat_common_action(action="shake_sleep", target_id=...)` to spend an action
 ending that target's Sleep effect, without removing unrelated unconsciousness.
@@ -863,6 +867,30 @@ requires a legal action payment and atomically ends that target's Sleep;
 missing contact facts do not pay the action. Grid combat retains its adjacent
 target check and does not accept this payload. A shake is not a free object
 interaction, and retrying the same successful request must not pay again.
+
+For 2014 ground custody in combat, use
+`combat_common_action(action="drop_held", payload={})` to release held objects,
+or `action="pickup_ground"` with `payload={ground_id,slot?}` to retrieve one
+ground record. An optional slot must be an empty `main_hand` or `off_hand`.
+Dropping costs no action; pickup spends the free object interaction if available,
+otherwise an available main/extra action. Both require the conscious actor's
+turn. Pickup in the same grid encounter checks the recorded drop position is
+within 5 feet; it does not accept caller spatial overrides.
+
+Outside combat, use `inventory_transfer(mode="character_to_ground" |
+"ground_to_character")`. Its payload requires `campaign_id`, `character_id`,
+`expected_campaign_revision`, and `expected_character_revision`; pickup also
+requires `ground_id` and may supply `slot`. For Agent positioning, noncombat,
+or a ground record from a previous encounter, the Owner/DM must supply pickup
+`spatial_facts={decision_id,reason,campaign_revision,can_reach_ground_item:true}`.
+The decision concerns the recorded drop location, not the source actor's current
+location. Never synthesize coordinates. Missing facts request a ruling; stale,
+malformed, false, or unauthorized facts do not move inventory or spend actions.
+Character cards, ground records and payment share a revision-checked atomic
+commit; replaying a successful request after restart must not repeat payment.
+These paths do not yet establish complete cross-owner attunement lifecycle or
+compatibility with every legacy inventory removal/transfer path; do not use
+generic card replacement to repair or manufacture `inventory.external_items`.
 
 A source-bound 2014 Core `Fly` is also engine-owned. Outside combat call
 `character_action(action="cast_spell")` with equal explicit

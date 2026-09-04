@@ -65,6 +65,14 @@ def test_drop_moves_both_held_roots_but_not_worn_shield() -> None:
     remaining = result["sheets"]["actor"]
     assert [item["id"] for item in remaining["inventory"]["items"]] == ["shield"]
     assert remaining["inventory"]["equipment_slots"]["shield"] == "shield"
+    recovered = pickup_ground_item(
+        result["sheets"], result["ground_items"], "actor", "ground-sword"
+    )
+    original = deepcopy(
+        next(item for item in sheet["inventory"]["items"] if item["id"] == sword_id)
+    )
+    original.update(equipped=False, equipped_slot=None)
+    assert recovered["picked_up"]["items"] == [original]
 
 
 def test_drop_clears_only_moved_weapon_ammunition_link() -> None:

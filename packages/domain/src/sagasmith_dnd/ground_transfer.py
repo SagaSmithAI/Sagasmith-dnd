@@ -222,7 +222,6 @@ def pickup_ground_item(
     record = next((item for item in records if item["id"] == ground_id), None)
     if record is None:
         raise LookupError(ground_id)
-    source_actor_id = record["source_actor_id"]
     next_sheets = deepcopy(values)
     target_items = next_sheets[actor_id]["inventory"]["items"]
     existing = {item["id"] for item in target_items}
@@ -282,8 +281,10 @@ def pickup_ground_item(
             ammo = item["mechanics"].get("ammunition_item_id")
             if ammo is not None:
                 item["mechanics"]["ammunition_item_id"] = remap.get(ammo, ammo)
-        attuned_owner, owner_state = attuned_owners.get(old_id, (source_actor_id, "attuned"))
-        if old_id in attuned_owners:
+        attuned_owner, owner_state = attuned_owners.get(old_id, (None, "required"))
+        if item["attunement"] == "none" and owner_state == "attuned":
+            raise ValueError("a non-attunable ground item cannot have an attuned owner")
+        if item["attunement"] != "none" and old_id in attuned_owners:
             item["attunement"] = (
                 "attuned" if actor_id == attuned_owner and owner_state == "attuned" else "required"
             )

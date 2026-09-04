@@ -325,6 +325,8 @@ from sagasmith_dnd.game_time import (
     game_time_ticks,
     rules_day_from_ticks,
 )
+from sagasmith_dnd.ground_transfer import drop_held_items, pickup_ground_item
+from sagasmith_dnd.held_items import held_item_roots
 from sagasmith_dnd.heroic_inspiration import reroll_recorded_d20_result
 from sagasmith_dnd.lifecycle import (
     LONG_REST_MINIMUM_MINUTES,
@@ -6777,7 +6779,7 @@ def _create_server(
             raise ValueError(f"module does not support campaign edition {campaign_edition}")
         validated_actors = [validate_dnd_content_actor(actor) for actor in normalized["actors"]]
         for actor in validated_actors:
-            require_engine_owned_short_rest_hit_die_state(actor["sheet"])
+            require_engine_owned_character_state(actor["sheet"])
             _reject_new_intrinsic_attack_provenance(actor["sheet"])
             _reject_new_tortle_natural_armor_provenance(actor.get("sheet"))
         mismatched = [
@@ -13665,7 +13667,7 @@ def _create_server(
             _require_preserved_intrinsic_attack_provenance(before.sheet, sheet)
         if before.campaign_id is None:
             if sheet is not None:
-                require_engine_owned_short_rest_hit_die_state(
+                require_engine_owned_character_state(
                     sheet,
                     current_sheet=before.sheet,
                 )
@@ -13701,7 +13703,7 @@ def _create_server(
         if replay is not None:
             return replay
         if sheet is not None:
-            require_engine_owned_short_rest_hit_die_state(
+            require_engine_owned_character_state(
                 sheet,
                 current_sheet=before.sheet,
             )
@@ -13759,11 +13761,15 @@ def _create_server(
                 )
             )
         )
+        campaign = campaigns.get(before.campaign_id)
+        ground_state, mutation_updates, response = reconcile_unconscious_inventory(
+            campaign, None, [character_update], response
+        )
         followup = narrative_followup_for_mutation(
-            campaigns.get(before.campaign_id),
+            campaign,
             branch_id=branch_id,
-            campaign_state=None,
-            character_updates=[character_update],
+            campaign_state=ground_state,
+            character_updates=mutation_updates,
         )
         if followup is not None:
             response = {**response, "narrative_followup": followup}
@@ -13773,8 +13779,13 @@ def _create_server(
             response.setdefault("random_stream_receipt", stream.receipt())
         StateMutationService(storage.database).replace(
             before.campaign_id,
-            character_updates=[character_update],
-            expected_campaign_revision=expected_campaign_revision,
+            campaign_state=validate_party_state(ground_state) if ground_state is not None else None,
+            character_updates=mutation_updates,
+            expected_campaign_revision=(
+                campaign.revision
+                if ground_state is not None and expected_campaign_revision is None
+                else expected_campaign_revision
+            ),
             operation=operation,
             actor=principal_id,
             branch_id=branch_id,
@@ -13933,6 +13944,104 @@ def _create_server(
             next_response_fields["result"] = result
         return source_state, updates, next_response_fields
 
+    def ground_drop_context(campaign: Any, state: dict[str, Any], actor_id: str) -> dict[str, Any]:
+        encounter = dict(state.get("combat") or {})
+        combatant = next(
+            (item for item in encounter.get("combatants", []) if item.get("actor_id") == actor_id),
+            None,
+        )
+        scene = npc_turn_scene_projection(modules.current_scene(campaign.id, scope_id="party"))
+        result = {
+            "scene_id": (
+                encounter.get("scene_id")
+                if encounter.get("active")
+                else (scene or {}).get("scene_id")
+            )
+            or None,
+            "encounter_id": encounter.get("id") if encounter.get("active") else None,
+            "campaign_revision": campaign.revision,
+            "location": {"mode": "agent", "anchor_actor_id": actor_id},
+        }
+        if encounter.get("active") and encounter.get("positioning_mode") == "grid" and combatant:
+            result["location"] = {"mode": "grid", "position": deepcopy(combatant["position"])}
+        return result
+
+    def reconcile_unconscious_inventory(
+        campaign: Any,
+        campaign_state: dict[str, Any] | None,
+        updates: list[CharacterStateUpdate] | None,
+        response_fields: dict[str, Any],
+    ) -> tuple[dict[str, Any] | None, list[CharacterStateUpdate], dict[str, Any]]:
+        """Drop held objects as part of the same authoritative unconscious mutation."""
+        candidates = list(updates or [])
+        actor_ids = [
+            update.character_id
+            for update in candidates
+            if update.sheet.get("edition") == "2014"
+            and "unconscious" in condition_ids(update.sheet.get("conditions"))
+            and held_item_roots(update.sheet)
+        ]
+        if not actor_ids:
+            return campaign_state, candidates, response_fields
+        records = {actor.id: actor for actor in characters.list(campaign_id=campaign.id)}
+        by_id = {update.character_id: update for update in candidates}
+        sheets = {
+            actor_id: deepcopy(by_id[actor_id].sheet if actor_id in by_id else actor.sheet)
+            for actor_id, actor in records.items()
+        }
+        state = deepcopy(
+            campaign_state if campaign_state is not None else dict(campaign.state or {})
+        )
+        ground = state.get("ground_items", [])
+        dropped = []
+        for actor_id in actor_ids:
+            result = drop_held_items(
+                sheets,
+                ground,
+                actor_id,
+                record_ids={
+                    item_id: f"ground-{uuid4().hex}"
+                    for item_id in held_item_roots(sheets[actor_id])
+                },
+                **ground_drop_context(campaign, state, actor_id),
+            )
+            sheets, ground = result["sheets"], result["ground_items"]
+            # A caster can cause another actor to drop a container. The receipt
+            # identifies ground records without disclosing private contents.
+            dropped.append(
+                {"actor_id": actor_id, "ground_ids": [item["id"] for item in result["dropped"]]}
+            )
+        state["ground_items"] = ground
+        for actor_id, sheet in sheets.items():
+            previous = by_id.get(actor_id)
+            if previous is not None:
+                by_id[actor_id] = replace(previous, sheet=sheet)
+            elif sheet != validate_character_sheet(records[actor_id].sheet):
+                actor = records[actor_id]
+                by_id[actor_id] = CharacterStateUpdate(actor_id, sheet, actor.notes, actor.revision)
+
+        def refresh_preview(value: Any) -> Any:
+            if isinstance(value, list):
+                return [refresh_preview(item) for item in value]
+            if not isinstance(value, dict):
+                return value
+            result = {key: refresh_preview(item) for key, item in value.items()}
+            if (
+                isinstance(value.get("sheet"), dict)
+                and isinstance(value.get("id"), str)
+                and value.get("id") in by_id
+            ):
+                result["sheet"] = deepcopy(by_id[value["id"]].sheet)
+                if "derived" in value:
+                    result["derived"] = character_view(
+                        replace(records[value["id"]], sheet=by_id[value["id"]].sheet)
+                    )["derived"]
+            return result
+
+        response = refresh_preview(response_fields)
+        response["ground_item_drops"] = dropped
+        return state, list(by_id.values()), response
+
     def commit_campaign_state(
         campaign: Any,
         campaign_state: dict[str, Any] | None,
@@ -13962,6 +14071,9 @@ def _create_server(
             campaign_state,
             character_updates,
             response_fields,
+        )
+        campaign_state, character_updates, response_fields = reconcile_unconscious_inventory(
+            campaign, campaign_state, character_updates, response_fields
         )
         if "narrative_followup" not in response_fields:
             followup = narrative_followup_for_mutation(
@@ -14239,12 +14351,28 @@ def _create_server(
                 + ", ".join(sorted(pending_actor_ids))
             )
 
-    def require_engine_owned_short_rest_hit_die_state(
+    def require_engine_owned_character_state(
         candidate_sheet: Mapping[str, Any],
         *,
         current_sheet: Mapping[str, Any] | None = None,
     ) -> None:
-        """Reject caller creation or alteration of the persisted rest-choice capability."""
+        """Preserve runtime-owned rest capabilities and external inventory references."""
+
+        current_external = deepcopy(
+            dict((current_sheet or {}).get("inventory") or {}).get("external_items") or []
+        )
+        if "dead" in condition_ids(candidate_sheet.get("conditions")):
+            for item in current_external:
+                if item.get("attunement") == "attuned":
+                    item["attunement"] = "required"
+        candidate_external = dict(candidate_sheet.get("inventory") or {}).get(
+            "external_items", []
+        )
+        if candidate_external != current_external:
+            raise ValueError(
+                "inventory.external_items is engine-owned and may only be changed "
+                "by an authoritative inventory settlement"
+            )
 
         candidate_combat = dict(candidate_sheet.get("combat") or {})
         candidate_has_window = "short_rest_hit_dice" in candidate_combat
@@ -19126,7 +19254,9 @@ def _create_server(
             turn_token=ended_turn_token,
         )
         next_state = dict(campaign.state or {})
-        next_state["combat"] = end_turn(next_encounter, actor_id_value=actor_id)
+        next_state["combat"] = end_turn(
+            next_encounter, actor_id_value=actor_id, current_actor_sheet=current_sheet
+        )
         expired_attack_advantage = expire_next_attack_advantage(
             next_state["combat"],
             actor_id=actor_id,
@@ -20729,6 +20859,7 @@ def _create_server(
             "dash",
             "disengage",
             "dodge",
+            "drop_held",
             "emerge_shell",
             "escape",
             "help",
@@ -20736,6 +20867,7 @@ def _create_server(
             "influence",
             "interact_object",
             "improvise",
+            "pickup_ground",
             "ready",
             "search",
             "shell_defense",
@@ -20756,6 +20888,20 @@ def _create_server(
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Settle a common action payment, including a turned creature's escape attempt."""
+        if action in {"drop_held", "pickup_ground"}:
+            if target_id is not None or trigger is not None:
+                raise ValueError("ground inventory actions use only their exact payload")
+            return ground_inventory_settlement(
+                campaign_id,
+                actor_id,
+                action,
+                dict(payload or {}),
+                principal_id=principal_id,
+                expected_revision=expected_revision,
+                branch_id=branch_id,
+                idempotency_key=idempotency_key,
+                in_combat=True,
+            )
         access.require_actor(campaign_id, actor_id, principal_id, control=True)
         require_write_contract(expected_revision, idempotency_key)
         resolved_branch_id = require_current_branch(campaign_id, branch_id)
@@ -28482,7 +28628,7 @@ def _create_server(
         if not idempotency_key:
             raise ValueError("idempotency_key is required for character creation")
         sheet_value = deepcopy(sheet or default_character_sheet())
-        require_engine_owned_short_rest_hit_die_state(sheet_value)
+        require_engine_owned_character_state(sheet_value)
         _reject_new_intrinsic_attack_provenance(sheet_value)
         _reject_new_tortle_natural_armor_provenance(sheet_value)
         _require_authoritative_background_state(
@@ -28592,7 +28738,7 @@ def _create_server(
         if template.campaign_id is not None:
             raise ValueError("template_id must reference a global library actor")
         sheet = deepcopy(template.sheet)
-        require_engine_owned_short_rest_hit_die_state(sheet)
+        require_engine_owned_character_state(sheet)
         _reject_new_intrinsic_attack_provenance(sheet)
         _reject_new_tortle_natural_armor_provenance(sheet)
         _require_authoritative_background_state(
@@ -28649,7 +28795,7 @@ def _create_server(
         if not idempotency_key:
             raise ValueError("idempotency_key is required for character build")
         sheet_value = deepcopy(sheet or default_character_sheet())
-        require_engine_owned_short_rest_hit_die_state(sheet_value)
+        require_engine_owned_character_state(sheet_value)
         _reject_new_intrinsic_attack_provenance(sheet_value)
         _reject_new_tortle_natural_armor_provenance(sheet_value)
         _require_authoritative_background_state(
@@ -29036,6 +29182,200 @@ def _create_server(
             idempotency_key=idempotency_key,
             payload={"weapon_id": weapon_id, "quantity": quantity},
             response_extra={"consumed": consumed},
+        )
+
+    @_agent_ruling_boundary
+    def ground_inventory_settlement(
+        campaign_id: str,
+        actor_id: str,
+        action: str,
+        payload: dict[str, Any],
+        *,
+        principal_id: str,
+        expected_revision: int | None,
+        expected_character_revision: int | None = None,
+        branch_id: str | None = None,
+        idempotency_key: str | None,
+        in_combat: bool,
+    ) -> dict[str, Any]:
+        """Commit ground custody, character cards and pickup payment atomically."""
+        access.require_actor(campaign_id, actor_id, principal_id, control=True)
+        require_write_contract(expected_revision, idempotency_key)
+        resolved_branch = require_current_branch(campaign_id, branch_id)
+        allowed = {"ground_id", "slot", "spatial_facts"} if action == "pickup_ground" else set()
+        if action not in {"drop_held", "pickup_ground"} or set(payload) - allowed:
+            raise ValueError("unsupported ground inventory action or payload")
+        request = {
+            "actor_id": actor_id,
+            "action": action,
+            "payload": deepcopy(payload),
+            "in_combat": in_combat,
+            "branch_id": resolved_branch,
+        }
+        scope = f"ground-inventory:{campaign_id}:{resolved_branch}:{principal_id}"
+        replay = replay_idempotent(scope, idempotency_key, request)
+        if replay is not None:
+            return replay
+        campaign = campaigns.get(campaign_id)
+        if campaign.revision != expected_revision:
+            raise ValueError("campaign revision conflict")
+        records = {actor.id: actor for actor in characters.list(campaign_id=campaign_id)}
+        actor = records[actor_id]
+        if (
+            expected_character_revision is not None
+            and actor.revision != expected_character_revision
+        ):
+            raise ValueError("character revision conflict")
+        if actor.sheet.get("edition") != "2014":
+            raise ValueError("this ground inventory settlement implements the 2014 rules")
+        if condition_ids(actor.sheet.get("conditions")) & INCAPACITATING_STATE_IDS:
+            raise CombatEngineError(
+                "an incapacitated actor cannot drop or pick up an object voluntarily"
+            )
+        state = deepcopy(dict(campaign.state or {}))
+        encounter = state.get("combat")
+        active = isinstance(encounter, dict) and encounter.get("active", False)
+        if bool(active) != in_combat:
+            raise CombatEngineError(
+                "use the ground inventory entry point for the current game phase"
+            )
+        if in_combat:
+            require_no_blocking_pending(encounter)
+            acting = current_combatant(encounter)
+            if not acting or acting.get("actor_id") != actor_id:
+                raise CombatEngineError("ground item interaction requires the actor's turn")
+        context = ground_drop_context(campaign, state, actor_id)
+        sheets = {key: deepcopy(record.sheet) for key, record in records.items()}
+        ground = state.get("ground_items", [])
+        payment = None
+        if action == "drop_held":
+            roots = held_item_roots(actor.sheet)
+            if not roots:
+                raise ValueError("actor has no held objects to drop")
+            settled = drop_held_items(
+                sheets,
+                ground,
+                actor_id,
+                record_ids={item_id: f"ground-{uuid4().hex}" for item_id in roots},
+                **context,
+            )
+            details = {"dropped": settled["dropped"]}
+        else:
+            ground_id = payload.get("ground_id")
+            if not isinstance(ground_id, str) or not ground_id.strip():
+                raise ValueError("pickup requires a ground_id")
+            entry = next((item for item in ground if item.get("id") == ground_id), None)
+            if entry is None:
+                raise ValueError("ground item is not available")
+            if (
+                entry.get("scene_id") is not None
+                and context["scene_id"] is not None
+                and entry["scene_id"] != context["scene_id"]
+            ):
+                raise CombatEngineError("ground item belongs to a different scene")
+            grid = (
+                in_combat
+                and encounter.get("positioning_mode") == "grid"
+                and entry["location"]["mode"] == "grid"
+                and entry["encounter_id"] == encounter.get("id")
+            )
+            if grid:
+                if "spatial_facts" in payload:
+                    raise CombatEngineError("grid pickup does not accept spatial overrides")
+                distance = combat_distance(
+                    acting.get("position"),
+                    entry["location"]["position"],
+                    cell_ft=int(
+                        dict(dict(encounter.get("battle_map") or {}).get("grid") or {}).get(
+                            "cell_ft", 5
+                        )
+                    ),
+                )
+                if distance is None or distance > 5:
+                    raise CombatEngineError("ground item must be within 5 feet")
+            else:
+                access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
+                facts = payload.get("spatial_facts")
+                if facts is None:
+                    raise NeedsRulingError(
+                        "ground pickup needs a source-location reach decision",
+                        missing=("ground_item.spatial_facts",),
+                        ruling_kind="agent_dm_adjudication",
+                    )
+                if not isinstance(facts, dict) or set(facts) != {
+                    "decision_id",
+                    "reason",
+                    "campaign_revision",
+                    "can_reach_ground_item",
+                }:
+                    raise ValueError("ground pickup requires exact reach decision fields")
+                if (
+                    not isinstance(facts["decision_id"], str)
+                    or not 1 <= len(facts["decision_id"].strip()) <= 100
+                    or not isinstance(facts["reason"], str)
+                    or not 10 <= len(facts["reason"].strip()) <= 1000
+                    or type(facts["campaign_revision"]) is not int
+                    or facts["campaign_revision"] != campaign.revision
+                    or facts["can_reach_ground_item"] is not True
+                ):
+                    raise ValueError("ground pickup needs current affirmative reach evidence")
+            settled = pickup_ground_item(sheets, ground, actor_id, ground_id)
+            slot = payload.get("slot")
+            if slot is not None:
+                if slot not in {"main_hand", "off_hand"}:
+                    raise ValueError("pickup slot must be main_hand or off_hand")
+                if settled["sheets"][actor_id]["inventory"]["equipment_slots"][slot] is not None:
+                    raise ValueError("pickup requires an empty hand slot")
+                picked_id = settled["picked_up"]["root_item_id"]
+                settled["sheets"][actor_id] = equip_inventory_item(
+                    settled["sheets"][actor_id], picked_id, slot
+                )
+            if in_combat:
+                payment = (
+                    "object_interaction"
+                    if acting.get("turn_budget", {}).get("object_interaction", 0) > 0
+                    else "main_action"
+                    if acting.get("turn_budget", {}).get("main_action", 0) > 0
+                    else "extra_action"
+                )
+                encounter = resolve_common_action(
+                    encounter,
+                    actor_id_value=actor_id,
+                    action="interact_object" if payment == "object_interaction" else "use_object",
+                    payload={
+                        "object_description": entry["items"][0]["name"],
+                        "interaction": "pick up",
+                    },
+                    payment=payment,
+                )
+                state["combat"] = encounter
+            details = {
+                "picked_up": settled["picked_up"],
+                "payment": payment,
+                "spatial_facts": deepcopy(payload.get("spatial_facts")),
+            }
+        state["ground_items"] = settled["ground_items"]
+        updates = [
+            CharacterStateUpdate(key, sheet, records[key].notes, records[key].revision)
+            for key, sheet in settled["sheets"].items()
+            if sheet != validate_character_sheet(records[key].sheet)
+        ]
+        after = replace(actor, sheet=settled["sheets"][actor_id], revision=actor.revision + 1)
+        return commit_campaign_state(
+            campaign,
+            state,
+            operation=f"inventory.{action}",
+            principal_id=principal_id,
+            branch_id=resolved_branch,
+            idempotency_key=idempotency_key,
+            scope=scope,
+            payload=request,
+            response_fields={
+                "status": "committed",
+                "result": details,
+                "character": visible_character_view(after, principal_id),
+            },
+            character_updates=updates,
         )
 
     def character_inventory_transfer(
@@ -49413,7 +49753,7 @@ boundary.
             template_variant=template_variant,
         )
         sheet = finalize_actor_sheet_rulings(sheet, campaign_id)
-        require_engine_owned_short_rest_hit_die_state(sheet)
+        require_engine_owned_character_state(sheet)
         _reject_new_intrinsic_attack_provenance(sheet)
         _require_authoritative_background_state(
             sheet,
@@ -49746,7 +50086,7 @@ boundary.
                 if len(matches) != 1:
                     raise ValueError("artifact_id must identify exactly one package actor")
                 card = validate_dnd_content_actor(matches[0])
-                require_engine_owned_short_rest_hit_die_state(card["sheet"])
+                require_engine_owned_character_state(card["sheet"])
                 package_checksum = package["checksum"]
                 card = runtime_actor_with_portrait(card, package, package_blobs)
             if card.get("schema") != "sagasmith.actor-card.v3":
@@ -50786,13 +51126,47 @@ boundary.
 
     @public_tool()
     def inventory_transfer(
-        mode: Literal["character_to_character", "party_to_character", "character_to_party"],
+        mode: Literal[
+            "character_to_character",
+            "party_to_character",
+            "character_to_party",
+            "character_to_ground",
+            "ground_to_character",
+        ],
         payload: dict[str, Any],
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Transfer inventory with the revision contract required by every affected owner."""
         data = facade_payload(payload)
+        if mode in {"character_to_ground", "ground_to_character"}:
+            shared = {
+                "campaign_id",
+                "character_id",
+                "expected_campaign_revision",
+                "expected_character_revision",
+            }
+            specific = (
+                {"ground_id", "slot", "spatial_facts"} if mode == "ground_to_character" else set()
+            )
+            if set(data) - shared - specific or shared - set(data):
+                raise ValueError(
+                    "ground transfer requires exact campaign, character and revision fields"
+                )
+            return facade_result(
+                mode,
+                ground_inventory_settlement(
+                    data["campaign_id"],
+                    data["character_id"],
+                    "pickup_ground" if mode == "ground_to_character" else "drop_held",
+                    {key: value for key, value in data.items() if key in specific},
+                    principal_id=principal_id,
+                    expected_revision=data["expected_campaign_revision"],
+                    expected_character_revision=data["expected_character_revision"],
+                    idempotency_key=idempotency_key,
+                    in_combat=False,
+                ),
+            )
         if mode == "character_to_character":
             result = character_inventory_transfer(
                 required(data, "source_character_id"),
