@@ -24,7 +24,13 @@ from sagasmith_dnd.character_schema import (
     equip_inventory_item,
 )
 from sagasmith_dnd.combat_engine import roll_attack_action as engine_roll_attack_action
-from sagasmith_dnd.content_actors import build_dnd_content_actor
+from sagasmith_dnd.content_actors import (
+    SRD2014_PRESET_PACK_ID,
+    SRD2014_PRESET_PACK_VERSION,
+    SRD2024_PRESET_PACK_ID,
+    SRD2024_PRESET_PACK_VERSION,
+    build_dnd_content_actor,
+)
 from sagasmith_dnd.content_packages import (
     build_preset_content_package,
     compose_addon_content_package,
@@ -1201,6 +1207,32 @@ def test_official_expansion_lock_matches_seeded_core_content(tmp_path: Path) -> 
                     "mechanic_refs": installed.manifest["native_mechanic_refs"],
                 }
             ]
+        for pack_id, version, content_pack_id, content_version in (
+            (
+                SRD2014_PRESET_PACK_ID,
+                SRD2014_PRESET_PACK_VERSION,
+                CORE_CONTENT_PACK_ID,
+                CORE_CONTENT_PACK_VERSION,
+            ),
+            (
+                SRD2024_PRESET_PACK_ID,
+                SRD2024_PRESET_PACK_VERSION,
+                server_module.CORE_2024_CONTENT_PACK_ID,
+                server_module.CORE_2024_CONTENT_PACK_VERSION,
+            ),
+        ):
+            assert version == "2.1.0"
+            installed = packs.get_version(pack_id, version)
+            assert installed.status == "installed"
+            assert installed.artifacts
+            for artifact in installed.artifacts:
+                actor = artifact["card"]["content_actor"]
+                assert actor["version"] == version
+                assert actor["sheet"]["inventory"]["external_items"] == []
+                assert actor["provenance"]["pack"] == {
+                    "id": content_pack_id,
+                    "version": content_version,
+                }
     finally:
         database.dispose()
         close_server(server)

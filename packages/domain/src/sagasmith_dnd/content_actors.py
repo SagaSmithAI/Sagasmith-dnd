@@ -37,9 +37,9 @@ from sagasmith_dnd.statblocks import (
 
 DND5E_SYSTEM_ID = "dnd5e"
 SRD2014_PRESET_PACK_ID = "dnd5e.presets.srd2014"
-SRD2014_PRESET_PACK_VERSION = "2.0.0"
+SRD2014_PRESET_PACK_VERSION = "2.1.0"
 SRD2024_PRESET_PACK_ID = "dnd5e.presets.srd2024"
-SRD2024_PRESET_PACK_VERSION = "2.0.0"
+SRD2024_PRESET_PACK_VERSION = "2.1.0"
 ACTOR_CARD_COMPILER = "sagasmith-dnd.actor-card.v3"
 
 
@@ -92,6 +92,12 @@ def validate_dnd_content_actor(actor: Mapping[str, Any]) -> dict[str, Any]:
     if "intrinsic_attacks" not in value["sheet"].get("traits", {}):
         if normalized["sheet"]["traits"].get("intrinsic_attacks") == []:
             normalized["sheet"]["traits"].pop("intrinsic_attacks")
+    # Older immutable archives also predate external item custody references.
+    # Accept only an absent empty default, without changing the signed payload
+    # or relaxing validation of explicit references and other canonical fields.
+    if "external_items" not in value["sheet"].get("inventory", {}):
+        if normalized["sheet"]["inventory"].get("external_items") == []:
+            normalized["sheet"]["inventory"].pop("external_items")
     if normalized["sheet"] != value["sheet"] or normalized["notes"] != value["notes"]:
         raise ContentPackageError("D&D content actor must use canonical sheet and notes")
     return value

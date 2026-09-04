@@ -13,6 +13,7 @@ from sagasmith_dnd.core_content import build_srd2014_content
 from sagasmith_dnd.core_rule_pack import get_core_rule_pack
 from sagasmith_dnd.standard_feature_ids import (
     CORE_DWARF_HEAVY_ARMOR_SPEED_MECHANIC_ID,
+    CORE_DWARVEN_RESILIENCE_MECHANIC_ID,
     SRD2014_DWARF_SPEED_LEGACY_PACK_VERSIONS,
     SRD2014_DWARF_SPEED_SOURCE_RULE_REF,
 )
@@ -1254,7 +1255,10 @@ def test_existing_legacy_dwarf_selection_survives_core_content_upgrade(
             if item["name"] == "Hill Dwarf" and item["pack_version"] == CORE_CONTENT_PACK_VERSION
         )
         assert current_hill_dwarf["pack_id"] == CORE_CONTENT_PACK_ID
-        assert current_hill_dwarf["mechanic_refs"] == [CORE_DWARF_HEAVY_ARMOR_SPEED_MECHANIC_ID]
+        assert current_hill_dwarf["mechanic_refs"] == [
+            CORE_DWARF_HEAVY_ARMOR_SPEED_MECHANIC_ID,
+            CORE_DWARVEN_RESILIENCE_MECHANIC_ID,
+        ]
         new_character = await call(
             current_server,
             "character_create_from",
