@@ -9,12 +9,15 @@ from __future__ import annotations
 
 from copy import deepcopy
 from typing import Any, Iterable
+from uuid import uuid4
 
 from sagasmith_dnd.character_schema import validate_character_sheet
 from sagasmith_dnd.conditions import (
     apply_effect_conditions,
     reconcile_ended_effect_conditions,
 )
+
+SLEEP_SPELL_ID = "dnd5e.content.srd2014.spell.sleep"
 
 
 def _sheet(actor: dict[str, Any]) -> dict[str, Any]:
@@ -47,16 +50,16 @@ def _has_magical_sleep_immunity(sheet: dict[str, Any]) -> bool:
         if not isinstance(feature, dict):
             continue
         trait = dict(dict(feature.get("choices") or {}).get("source_trait") or {})
-        if trait.get("kind") == "fey_ancestry" and trait.get("magical_sleep_immunity") is True:
+        if (
+            trait.get("kind") == "fey_ancestry"
+            and "dnd5e.core.save.fey_ancestry" in feature.get("mechanic_refs", [])
+            and trait.get("automatic") is True
+            and trait.get("magical_sleep_immunity") is True
+            and isinstance(trait.get("source_excerpt"), str)
+            and bool(trait["source_excerpt"].strip())
+        ):
             return True
     return False
-
-
-def _is_sleep_effect(effect: dict[str, Any]) -> bool:
-    return (
-        effect.get("kind") == "timed_conditions"
-        and str(effect.get("name") or "").strip().casefold() == "sleep"
-    )
 
 
 def resolve_sleep_targets(
@@ -66,6 +69,7 @@ def resolve_sleep_targets(
     source_actor_id: str,
     source_spell_id: str,
     source_rule_refs: Iterable[str] = (),
+    ruleset: str = "2014",
 ) -> dict[str, Any]:
     """Settle 2014 Sleep's HP pool against targets in ascending current HP.
 
@@ -73,12 +77,16 @@ def resolve_sleep_targets(
     (5d8 plus any higher-slot dice) and must persist the returned sheets.
     """
 
+    if str(ruleset).strip() != "2014":
+        raise ValueError("Sleep settlement requires the 2014 rules")
     if isinstance(pool, bool) or not isinstance(pool, int) or pool < 0:
         raise ValueError("Sleep pool must be a non-negative integer")
     source = str(source_actor_id).strip()
     spell = str(source_spell_id).strip()
     if not source or not spell:
         raise ValueError("Sleep source actor and spell ids are required")
+    if spell != SLEEP_SPELL_ID:
+        raise ValueError("Sleep settlement requires the exact 2014 Sleep spell id")
     refs = [str(item).strip() for item in source_rule_refs if str(item).strip()]
     ordered = sorted(
         ((str(actor.get("id") or ""), deepcopy(_sheet(actor))) for actor in target_actors),
@@ -104,15 +112,16 @@ def resolve_sleep_targets(
         elif _has_magical_sleep_immunity(original):
             reason = "immune_to_magical_sleep"
         elif hp <= remaining:
+            effect_id = f"sleep-{uuid4().hex}"
             effect = {
-                "id": f"sleep-{source}-{actor_id}",
+                "id": effect_id,
                 "name": "Sleep",
                 "kind": "timed_conditions",
                 "source": source,
                 "source_spell_id": spell,
                 "active": True,
                 "concentration": False,
-                "duration": {"period": "minute", "remaining": 1},
+                "duration": {"period": "round", "remaining": 10},
                 "changes": [{"path": "conditions", "mode": "add", "value": "unconscious"}],
                 "description": (
                     "Magical slumber; ends when the spell ends, the sleeper takes damage, "
@@ -122,6 +131,10 @@ def resolve_sleep_targets(
             value = deepcopy(original)
             value.setdefault("effects", []).append(effect)
             apply_effect_conditions(value, effect)
+            # Import locally to avoid a module import cycle with combat_engine.
+            from sagasmith_dnd.combat_engine import end_concentration_for_incapacitating_conditions
+
+            end_concentration_for_incapacitating_conditions(value, ended_reason="unconscious")
             value = validate_character_sheet(value)
             remaining -= hp
             affected = True
@@ -135,6 +148,7 @@ def resolve_sleep_targets(
                 "affected": affected,
                 "remaining_pool": remaining,
                 "skip_reason": reason,
+                "effect_id": effect_id if affected else "",
                 "source_rule_refs": list(refs),
             }
         )
@@ -147,7 +161,7 @@ def resolve_sleep_targets(
 
 
 def wake_sleep_effects(sheet: dict[str, Any], *, reason: str) -> dict[str, Any]:
-    """End active Sleep-owned effects and preserve other unconscious sources."""
+    """End active 2014 Sleep effects and preserve other unconscious sources."""
 
     normalized_reason = str(reason).strip()
     if not normalized_reason:
@@ -155,7 +169,7 @@ def wake_sleep_effects(sheet: dict[str, Any], *, reason: str) -> dict[str, Any]:
     value = deepcopy(validate_character_sheet(sheet))
     ended: list[dict[str, Any]] = []
     for effect in value.get("effects", []):
-        if effect.get("active") and _is_sleep_effect(effect):
+        if effect.get("active") and effect.get("source_spell_id") == SLEEP_SPELL_ID:
             effect["active"] = False
             effect["ended_reason"] = normalized_reason
             ended.append(deepcopy(effect))
