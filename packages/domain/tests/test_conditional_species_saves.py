@@ -3,9 +3,15 @@ from pathlib import Path
 import pytest
 
 from sagasmith_dnd.character_schema import default_character_sheet, derive_character_sheet
-from sagasmith_dnd.combat_engine import CombatEngineError, NeedsRulingError, resolve_actor_check
+from sagasmith_dnd.combat_engine import (
+    CombatEngineError,
+    NeedsRulingError,
+    resolve_actor_check,
+    resolve_hypnotic_pattern_target,
+)
 from sagasmith_dnd.core_content import build_srd2014_content
 from sagasmith_dnd.rule_engine import resolution_context
+from sagasmith_dnd.standard_spell_ids import CORE_HYPNOTIC_PATTERN_SPELL_ID
 
 
 class _SequenceRng:
@@ -29,11 +35,7 @@ def _actor(trait_kind: str, mechanic_id: str) -> dict:
                     "kind": trait_kind,
                     "automatic": True,
                     "source_excerpt": f"official {trait_kind}",
-                    **(
-                        {"magical_sleep_immunity": True}
-                        if trait_kind == "fey_ancestry"
-                        else {}
-                    ),
+                    **({"magical_sleep_immunity": True} if trait_kind == "fey_ancestry" else {}),
                 }
             },
         }
@@ -107,8 +109,7 @@ def test_2014_species_save_traits_add_authoritative_advantage(
     assert receipts[0]["event"] == "check.resolve"
 
 
-def test_species_save_advantage_cancels_disadvantage_and_is_2014_only(
-) -> None:
+def test_species_save_advantage_cancels_disadvantage_and_is_2014_only() -> None:
     actor = _actor("dwarven_resilience", "dnd5e.core.save.dwarven_resilience")
     cancelled = resolve_actor_check(
         actor,
@@ -265,8 +266,7 @@ def test_duplicate_and_combined_traits_roll_once_with_stable_receipts() -> None:
     def resolve(features: list[tuple[str, str]]) -> dict:
         actor = _actor(*features[0])
         actor["sheet"]["content"]["features"] = [
-            _actor(kind, mechanic)["sheet"]["content"]["features"][0]
-            for kind, mechanic in features
+            _actor(kind, mechanic)["sheet"]["content"]["features"][0] for kind, mechanic in features
         ]
         actor["derived"] = derive_character_sheet(actor["sheet"])
         return resolve_actor_check(
@@ -371,17 +371,76 @@ def test_gnome_unknown_source_kind_is_rejected_before_rng(source: str | None) ->
         )
 
 
-@pytest.mark.parametrize("conditions", ["charmed", True, 1])
-def test_condition_classification_rejects_non_list_types_before_rng(conditions: object) -> None:
+@pytest.mark.parametrize("source", ["argument", "fact"])
+@pytest.mark.parametrize("conditions", ["charmed", True, 1, False, 0, ""])
+def test_condition_classification_rejects_non_list_types_before_rng(
+    conditions: object, source: str
+) -> None:
     actor = _actor("fey_ancestry", "dnd5e.core.save.fey_ancestry")
-    with pytest.raises((CombatEngineError, TypeError)):
+    rules = resolution_context(
+        {"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []},
+        facts={"save_effect_conditions": conditions} if source == "fact" else {},
+    )
+    with pytest.raises(CombatEngineError):
         resolve_actor_check(
             actor,
             kind="save",
             ability="wisdom",
             dc=10,
             save_source_kind="spell",
-            save_effect_conditions=conditions,  # type: ignore[arg-type]
+            save_effect_conditions=conditions if source == "argument" else None,  # type: ignore[arg-type]
             ruleset="2014",
+            rules=rules,
             rng=_SequenceRng(20),
         )
+
+
+@pytest.mark.parametrize("conditions", [None, False, 0, ""])
+def test_condition_classification_rejects_invalid_rule_fact_values_before_rng(
+    conditions: object,
+) -> None:
+    actor = _actor("fey_ancestry", "dnd5e.core.save.fey_ancestry")
+    rules = resolution_context(
+        {"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []},
+        facts={"save_effect_conditions": conditions},
+    )
+    with pytest.raises(CombatEngineError):
+        resolve_actor_check(
+            actor,
+            kind="save",
+            ability="wisdom",
+            dc=10,
+            save_source_kind="spell",
+            ruleset="2014",
+            rules=rules,
+            rng=_SequenceRng(),
+        )
+
+
+@pytest.mark.parametrize(
+    ("name", "expected_rolls"),
+    [("Hill Dwarf", 1), ("High Elf", 2), ("Rock Gnome", 2), ("Halfling", 1)],
+)
+def test_native_hypnotic_pattern_uses_real_species_projection(
+    name: str, expected_rolls: int
+) -> None:
+    _, artifacts = build_srd2014_content(Path(__file__).resolve().parents[3] / "skills")
+    card = next(item["card"] for item in artifacts if item["card"].get("name") == name)
+    sheet = default_character_sheet()
+    sheet["edition"] = "2014"
+    sheet["content"]["features"] = list(card["grants"]["features"])
+    actor = {"id": name, "sheet": sheet, "derived": derive_character_sheet(sheet)}
+    rules = resolution_context(
+        {"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []},
+        facts={"save_against_poison": False},
+    )
+    result = resolve_hypnotic_pattern_target(
+        actor,
+        caster_id="caster",
+        spell_id=CORE_HYPNOTIC_PATTERN_SPELL_ID,
+        save_dc=10,
+        rules=rules,
+        rng=_SequenceRng(2, 18),
+    )
+    assert len(result["result"]["save"]["rolls"]) == expected_rolls
+    assert result["result"]["save"]["ruleset_fingerprint"] == rules.fingerprint

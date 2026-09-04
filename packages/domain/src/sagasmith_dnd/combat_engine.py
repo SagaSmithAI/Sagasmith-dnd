@@ -6942,11 +6942,12 @@ def resolve_actor_check(
             if save_source_kind is not None
             else rule_facts.get("save_source_kind") or ""
         ).strip().casefold()
-        raw_conditions = (
-            save_effect_conditions
-            if save_effect_conditions is not None
-            else rule_facts.get("save_effect_conditions") or []
-        )
+        if save_effect_conditions is not None:
+            raw_conditions = save_effect_conditions
+        elif "save_effect_conditions" in rule_facts:
+            raw_conditions = rule_facts["save_effect_conditions"]
+        else:
+            raw_conditions = []
         if not isinstance(raw_conditions, list) or any(
             not isinstance(item, str) for item in raw_conditions
         ):
