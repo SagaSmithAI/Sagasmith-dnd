@@ -5,6 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from mcp.server.mcpserver.exceptions import ToolError
 from sagasmith_dnd.character_schema import default_character_sheet
 from sagasmith_dnd.standard_spell_ids import CORE_SLEEP_SPELL_ID
 from test_official_expansions_mcp import _call, _config
@@ -110,9 +111,10 @@ def test_sleep_noncombat_agent_self_target_replay_and_incapacitated_guard(
 ) -> None:
     async def exercise() -> None:
         workspace = Path(__file__).resolve().parents[3]
-        server = create_server(
-            replace(_config(tmp_path), auto_seed_rules=True, dnd_skills_dir=workspace / "skills")
+        config = replace(
+            _config(tmp_path), auto_seed_rules=True, dnd_skills_dir=workspace / "skills"
         )
+        server = create_server(config)
         try:
             campaign = await _call(
                 server,
@@ -220,17 +222,66 @@ def test_sleep_noncombat_agent_self_target_replay_and_incapacitated_guard(
             assert result["status"] == "committed", result
             settled = result["result"]["result"]
             assert settled["pool_roll"]["expression"] == expression
-            assert result.get("random_stream_receipt") or settled.get("random_stream_receipt")
+            assert result["result"].get("random_stream_receipt"), result
+            assert result["result"]["game_time"]["elapsed_ticks"] == 1
+            caster_after = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": caster["id"]}},
+            )
+            target_after = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": target["id"]}},
+            )
+            assert (
+                caster_after["sheet"]["spellcasting"]["spell_slots"][str(cast_level)]["value"] == 1
+            )
+            assert "unconscious" in caster_after["sheet"]["conditions"]
+            assert "unconscious" in target_after["sheet"]["conditions"]
+
+            async def snapshot():
+                return {
+                    "campaign": await _call(
+                        server,
+                        "campaign_query",
+                        {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+                    ),
+                    "actors": [
+                        await _call(
+                            server,
+                            "character_query",
+                            {"view": "get", "payload": {"character_id": actor["id"]}},
+                        )
+                        for actor in (caster, target)
+                    ],
+                }
+
+            after_cast = await snapshot()
+            before_rng = current["state"]["random_stream"]
+            after_rng = after_cast["campaign"]["state"]["random_stream"]
+            receipt = result["result"]["random_stream_receipt"]
+            assert after_rng["position"] == before_rng["position"] + 5 + 2 * (cast_level - 1)
+            assert after_rng["last_receipt"] == receipt
+            assert receipt["position_before"] == before_rng["position"]
+            assert receipt["position_after"] == after_rng["position"]
+            assert receipt["draw_count"] == 5 + 2 * (cast_level - 1)
             assert await server.call_tool("character_action", arguments) == raw
-            with pytest.raises(Exception, match="incapacitated"):
+            assert await snapshot() == after_cast
+            close_server(server)
+            server = create_server(config)
+            assert await server.call_tool("character_action", arguments) == raw
+            assert await snapshot() == after_cast
+            with pytest.raises(ToolError, match="incapacitated"):
                 await server.call_tool(
                     "character_action",
                     {
                         **arguments,
                         "idempotency_key": f"new-{cast_level}",
-                        "expected_revision": result["result"]["character_revision"],
+                        "expected_revision": caster_after["revision"],
                     },
                 )
+            assert await snapshot() == after_cast
         finally:
             close_server(server)
 

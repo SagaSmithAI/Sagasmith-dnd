@@ -835,11 +835,34 @@ count). Undead, Charmed-immune, already unconscious and source-bound magical
 sleep-immune targets do not consume the pool. Sleep is not concentration and
 lasts one minute on the persistent clock, including after combat ends. Positive
 damage wakes the target even if temporary HP absorb it; zero damage does not.
+Falling unconscious also applies Prone (unless immune). Waking ends Sleep, not
+Prone: the creature must still stand up normally. Automatic held-item dropping
+is not yet implemented; do not claim the inventory projection models it.
 Another adjacent creature can use
 `combat_common_action(action="shake_sleep", target_id=...)` to spend an action
 ending that target's Sleep effect, without removing unrelated unconsciousness.
-Agent-positioned and out-of-combat area settlement still require a bounded
-spatial ruling; an unresolved request must not pay a slot or invent coordinates.
+For Agent-positioned combat, the Owner/DM supplies `declaration.spatial_facts`
+instead of coordinates. Outside combat, use the same declaration inside
+`character_action(action="cast_spell").payload`. Its exact fields are
+`decision_id`, `reason`, `origin_description`, `campaign_revision`,
+`origin_in_range=true`, `line_of_effect_clear=true`, `affected_target_ids`, and
+`excluded_actor_ids`. The two ID lists must account for every living encounter
+combatant (or campaign character outside combat) exactly once; put off-scene
+creatures in the excluded list. Include the caster if in the area, and let the
+engine exclude immune/unconscious creatures. The revision binds the judgment
+to the current campaign snapshot. Missing facts return a ruling request before
+payment; stale, malformed, or incomplete facts reject without state changes.
+The engine owns dice, slot/action payment, target effects, and persistent time.
+Never invent coordinates or override the spell's radius, range, or HP pool.
+
+In Agent combat, the Owner/DM can shake a different sleeping target using
+`combat_common_action(action="shake_sleep", target_id=...)` with
+`payload.spatial_facts={decision_id,reason,campaign_revision,can_touch_target:true}`.
+The DM judges physical contact, not a synthetic grid distance. The engine
+requires a legal action payment and atomically ends that target's Sleep;
+missing contact facts do not pay the action. Grid combat retains its adjacent
+target check and does not accept this payload. A shake is not a free object
+interaction, and retrying the same successful request must not pay again.
 
 A source-bound 2014 Core `Fly` is also engine-owned. Outside combat call
 `character_action(action="cast_spell")` with equal explicit
