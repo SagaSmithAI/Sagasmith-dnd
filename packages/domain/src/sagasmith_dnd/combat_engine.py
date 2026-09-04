@@ -821,6 +821,7 @@ def resolve_hypnotic_pattern_target(
             rules,
             save_source_kind="spell",
             save_effect_conditions=["charmed", "incapacitated"],
+            save_against_poison=False,
         ),
         rng=rng,
     )
@@ -3418,6 +3419,7 @@ def resolve_attack_damage(
                     rules,
                     save_source_kind="nonmagical_effect",
                     save_effect_conditions=["prone"],
+                    save_against_poison=False,
                     subject="target",
                 ),
                 rng=rng,
@@ -6533,6 +6535,7 @@ def resolve_divine_spark_to_sheet(
             rules,
             save_source_kind="magical_effect",
             save_effect_conditions=[],
+            save_against_poison=False,
         ),
         rng=rng,
     )
@@ -6642,6 +6645,7 @@ def resolve_turn_undead_to_sheets(
                 rules,
                 save_source_kind="magical_effect",
                 save_effect_conditions=effect_conditions,
+                save_against_poison=False,
             ),
             rng=rng,
         )
@@ -6851,6 +6855,12 @@ def resolve_actor_check(
         "concentration",
     }:
         raise CombatEngineError("save_purpose must be effect or concentration")
+    long_save_ability = _long_ability_name(ability)
+    automatic_physical_failure = (
+        kind == "save"
+        and long_save_ability in {"strength", "dexterity"}
+        and bool(conditions & {"paralyzed", "petrified", "stunned", "unconscious"})
+    )
     conditional_trait_mechanics = {
         "dwarven_resilience": "dnd5e.core.save.dwarven_resilience",
         "fey_ancestry": "dnd5e.core.save.fey_ancestry",
@@ -6881,11 +6891,10 @@ def resolve_actor_check(
         and normalized_ruleset == "2014"
         and normalized_save_purpose == "effect"
         and conditional_traits
+        and not automatic_physical_failure
     ):
-        long_save_ability = _long_ability_name(ability)
         needs_conditions = any(
-            trait in conditional_traits
-            for trait in ("dwarven_resilience", "fey_ancestry", "halfling_brave")
+            trait in conditional_traits for trait in ("fey_ancestry", "halfling_brave")
         )
         if (
             needs_conditions
@@ -6898,6 +6907,8 @@ def resolve_actor_check(
                 ruling_kind="source_or_scene_fact",
             )
         if (
+            not automatic_physical_failure
+            and
             "gnome_cunning" in conditional_traits
             and long_save_ability in {"intelligence", "wisdom", "charisma"}
             and save_source_kind is None

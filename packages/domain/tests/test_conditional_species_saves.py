@@ -211,3 +211,37 @@ def test_malformed_fey_trait_is_rejected_before_rng() -> None:
             ruleset="2014",
             rng=_SequenceRng(20),
         )
+
+
+def test_dwarf_uses_poison_fact_without_effect_condition_list() -> None:
+    actor = _actor("dwarven_resilience", "dnd5e.core.save.dwarven_resilience")
+    rules = resolution_context(
+        {"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []},
+        facts={"save_against_poison": True},
+    )
+    result = resolve_actor_check(
+        actor,
+        kind="save",
+        ability="constitution",
+        dc=10,
+        ruleset="2014",
+        rules=rules,
+        rng=_SequenceRng(2, 18),
+    )
+    assert result["roll_mode"] == "advantage"
+    assert len(result["rolls"]) == 2
+
+
+def test_auto_failed_strength_save_does_not_require_trait_classification_or_roll() -> None:
+    actor = _actor("dwarven_resilience", "dnd5e.core.save.dwarven_resilience")
+    actor["sheet"]["conditions"] = ["paralyzed"]
+    result = resolve_actor_check(
+        actor,
+        kind="save",
+        ability="strength",
+        dc=10,
+        ruleset="2014",
+        rng=_SequenceRng(20),
+    )
+    assert result["automatic_failure"] is True
+    assert result["rolls"] == []
