@@ -51,10 +51,12 @@ def test_real_core_evasion_is_applied_to_level_seven_classes(
             )
             class_artifact = next(item for item in class_catalog if item["name"] == class_name)
             sheet = default_character_sheet()
-            sheet["progression"]["level"] = 7
-            sheet["progression"]["classes"] = [
-                {"name": class_name, "level": 7, "subclass": "", "hit_die": 8}
-            ]
+            sheet["progression"]["level"] = 1 if edition == "2014" else 7
+            sheet["progression"]["classes"] = (
+                []
+                if edition == "2014"
+                else [{"name": class_name, "level": 7, "subclass": "", "hit_die": 8}]
+            )
             character = await _call(
                 server,
                 "character_create_from",
@@ -64,18 +66,46 @@ def test_real_core_evasion_is_applied_to_level_seven_classes(
                     "idempotency_key": "character",
                 },
             )
-            class_applied = await _call(
-                server,
-                "character_content_apply",
-                {
-                    "character_id": character["id"],
-                    "artifact_id": class_artifact["id"],
-                    "selection": {"skills": ["athletics", "perception"]},
-                    "expected_revision": character["revision"],
-                    "idempotency_key": "class",
-                },
-            )
-            character = class_applied.get("character", class_applied)
+            if edition == "2014":
+                class_applied = await _call(
+                    server,
+                    "character_content_apply",
+                    {
+                        "character_id": character["id"],
+                        "artifact_id": class_artifact["id"],
+                        "selection": {
+                            "skills": class_artifact["selection_requirements"]["skill_options"][
+                                : class_artifact["selection_requirements"]["skill_choice_count"]
+                            ]
+                        },
+                        "expected_revision": character["revision"],
+                        "idempotency_key": "class",
+                    },
+                )
+                assert "id" in class_applied or "character" in class_applied, class_applied
+                character = class_applied.get("character", class_applied)
+                for level in range(2, 8):
+                    advanced = await _call(
+                        server,
+                        "character_state_change",
+                        {
+                            "character_id": character["id"],
+                            "action": "level_advance",
+                            "payload": {
+                                "class_name": class_name,
+                                "hp_method": "fixed",
+                                "reason": "milestone",
+                                "source_ref": (
+                                    "bundled:srd2014/03_Characterization/Beyond_1st_Level.md"
+                                ),
+                            },
+                            "expected_revision": character["revision"],
+                            "idempotency_key": f"level-{level}",
+                        },
+                    )
+                    assert "character" in advanced, advanced
+                    character = advanced["character"]
+                    assert "id" in character, advanced
             catalog = await _call(
                 server,
                 "character_query",
@@ -88,14 +118,19 @@ def test_real_core_evasion_is_applied_to_level_seven_classes(
                     },
                 },
             )
-            evasion = next(item for item in catalog if item["name"] == "Evasion")
+            evasion = next(
+                item
+                for item in catalog
+                if item["name"] == "Evasion"
+                and str(item["id"]).casefold().endswith(f"{class_name.casefold()}-evasion")
+            )
             applied = await _call(
                 server,
                 "character_content_apply",
                 {
                     "character_id": character["id"],
                     "artifact_id": evasion["id"],
-                    "selection": {"grant_level": 7, "target_class_name": class_name},
+                    "selection": {},
                     "expected_revision": character["revision"],
                     "idempotency_key": "evasion",
                 },
@@ -117,6 +152,10 @@ def test_real_core_evasion_is_applied_to_level_seven_classes(
                 assert "incapacitated" not in trait["unavailable_conditions"]
             else:
                 assert "incapacitated" in trait["unavailable_conditions"]
+            assert feature["pack_id"] == f"dnd5e.content.srd{edition}"
+            assert feature["pack_version"]
+            assert feature["rule_refs"]
+            assert feature["mechanic_refs"]
             assert (
                 await _call(
                     server,
@@ -124,13 +163,33 @@ def test_real_core_evasion_is_applied_to_level_seven_classes(
                     {
                         "character_id": character["id"],
                         "artifact_id": evasion["id"],
-                        "selection": {"grant_level": 7, "target_class_name": class_name},
+                        "selection": {},
                         "expected_revision": character["revision"],
                         "idempotency_key": "evasion",
                     },
                 )
                 == applied
             )
+            close_server(server)
+            server = create_server(config)
+            reloaded = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": character["id"]}},
+            )
+            assert reloaded["sheet"] == applied["sheet"]
+            replayed = await _call(
+                server,
+                "character_content_apply",
+                {
+                    "character_id": character["id"],
+                    "artifact_id": evasion["id"],
+                    "selection": {},
+                    "expected_revision": reloaded["revision"],
+                    "idempotency_key": "evasion",
+                },
+            )
+            assert replayed == applied
         finally:
             close_server(server)
 
