@@ -474,6 +474,7 @@ from sagasmith_dnd.standard_feature_ids import (
     CORE_RELENTLESS_ENDURANCE_MECHANIC_ID,
     CORE_TORTLE_NATURAL_ARMOR_MECHANIC_ID,
     CORE_TORTLE_SHELL_DEFENSE_MECHANIC_ID,
+    CORE_WATCHERS_EYE_MECHANIC_ID,
     TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
     TORTLE_NATURAL_ARMOR_AUTHORITY_KEY,
     TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_CHECKSUM,
@@ -1063,6 +1064,7 @@ ENGINE_SETTLED_CARD_MECHANIC_IDS = frozenset(
         "dnd5e.core.activity.turn_undead",
         "dnd5e.core.item.healing_potion",
         CORE_RELENTLESS_ENDURANCE_MECHANIC_ID,
+        CORE_WATCHERS_EYE_MECHANIC_ID,
         "dnd5e.core.magic_ammunition.slaying",
         CORE_BLADE_WARD_MECHANIC_ID,
         CORE_FLY_MECHANIC_ID,
@@ -1074,6 +1076,107 @@ ENGINE_SETTLED_CARD_MECHANIC_IDS = frozenset(
         CORE_WITCH_BOLT_MECHANIC_ID,
     }
 )
+
+SCAG_OFFICIAL_ADDON_ID = (
+    "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a.addon"
+)
+SCAG_RULE_PACK_ID = "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a"
+SCAG_WATCHERS_EYE_BACKGROUND_IDS = frozenset(
+    {
+        (
+            "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide."
+            "16e6a243ef0a.background.city-watch"
+        ),
+        (
+            "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide."
+            "16e6a243ef0a.background.investigator"
+        ),
+    }
+)
+WATCHERS_EYE_CAPABILITIES = frozenset(
+    {
+        "local_law",
+        "local_criminal_activity",
+        "watch_outpost",
+        "law_enforcement_contact",
+        "watch_information",
+        "recognition",
+    }
+)
+WATCHERS_EYE_FACT_METADATA_KEY = "dnd5e_watchers_eye"
+WATCHERS_EYE_FACT_SCHEMA_VERSION = 1
+WATCHERS_EYE_FEATURE_NAME = "Watcher's Eye"
+WATCHERS_EYE_NARRATIVE_SCHEMA = "sagasmith.dnd.narrative-capability.v1"
+
+
+def _watchers_eye_source_binding(artifact: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Return exact source-review binding for the two SCAG background cards."""
+
+    artifact_id = str(artifact.get("id") or "")
+    if artifact_id not in SCAG_WATCHERS_EYE_BACKGROUND_IDS:
+        return None
+    if str(artifact.get("kind") or "") != "background":
+        return None
+    if str(artifact.get("application_state") or "") != "selection_ready":
+        return None
+    if str(artifact.get("execution_state") or "") != "ruling_ready":
+        return None
+    raw_selection_contract = artifact.get("selection_contract")
+    raw_catalog_review = artifact.get("catalog_review")
+    if raw_selection_contract is not None or raw_catalog_review is not None:
+        if selection_contract_errors(artifact):
+            return None
+        selection_contract = dict(raw_selection_contract or {})
+        catalog_review = dict(raw_catalog_review or {})
+        reviewed_content_hash = str(selection_contract.get("reviewed_content_hash") or "")
+        if (
+            selection_contract.get("status") != "ready"
+            or selection_contract.get("materializer") != "dnd5e.character.background.v1"
+            or catalog_review.get("status") != "approved"
+            or reviewed_content_hash != str(catalog_review.get("reviewed_content_hash") or "")
+            or len(reviewed_content_hash) != 64
+        ):
+            return None
+    else:
+        # The import boundary intentionally strips authoring attestations after
+        # binding them into the immutable addon checksum and definition provenance.
+        reviewed_content_hash = content_fingerprint(artifact)
+    card = dict(artifact.get("card") or {})
+    grants = dict(card.get("background_grants") or {})
+    if str(grants.get("feature") or "") != WATCHERS_EYE_FEATURE_NAME:
+        return None
+    source_refs = [
+        dict(item) for item in artifact.get("source_refs") or [] if isinstance(item, dict)
+    ]
+    feature_sources = [
+        item
+        for item in source_refs
+        if "watcher's eye" in str(item.get("note") or "").casefold()
+        and str(item.get("chunk_id") or item.get("chunk_key") or "")
+    ]
+    if len(feature_sources) != 1:
+        return None
+    chunk_key = str(feature_sources[0].get("chunk_id") or feature_sources[0].get("chunk_key"))
+    rule_refs = [str(item) for item in artifact.get("rule_refs") or []]
+    feature_rule_refs = [item for item in rule_refs if item.endswith(f"#chunk:{chunk_key}")]
+    if len(feature_rule_refs) != 1:
+        return None
+    ruling_requirements = [
+        dict(item) for item in card.get("ruling_requirements") or [] if isinstance(item, dict)
+    ]
+    if not any(
+        str(item.get("ruling_kind") or "") == "agent_dm_adjudication"
+        and len(str(item.get("source_excerpt") or "")) >= 100
+        for item in ruling_requirements
+    ):
+        return None
+    return {
+        "artifact_id": artifact_id,
+        "background_name": str(card.get("name") or artifact_id),
+        "reviewed_content_hash": reviewed_content_hash,
+        "rule_refs": rule_refs,
+        "feature_rule_ref": feature_rule_refs[0],
+    }
 
 
 def has_active_owned_condition(
@@ -24254,6 +24357,185 @@ def _create_server(
         )
         return check_response(list(revisions_result or []))
 
+    def character_source_feature(
+        campaign_id: str,
+        actor_id: str,
+        feature_id: str,
+        capability: str,
+        settlement_ref: str,
+        fact_key: str,
+        principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
+        expected_revision: int | None = None,
+        branch_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Resolve a source-bound narrative feature from one campaign-authored fact."""
+
+        access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
+        actor = require_campaign_actor(campaign_id, actor_id)
+        normalized_capability = str(capability or "").strip().casefold().replace("-", "_")
+        if normalized_capability not in WATCHERS_EYE_CAPABILITIES:
+            raise ValueError(
+                "Watcher's Eye capability must be one of: "
+                + ", ".join(sorted(WATCHERS_EYE_CAPABILITIES))
+            )
+        normalized_settlement_ref = normalize_context_entity_ref(
+            settlement_ref,
+            field="Watcher's Eye settlement_ref",
+        )
+        if not normalized_settlement_ref.startswith("location:"):
+            raise ValueError("Watcher's Eye settlement_ref must use location:<id>")
+        normalized_fact_key = str(fact_key or "").strip()
+        if not normalized_fact_key or len(normalized_fact_key) > 500:
+            raise ValueError("Watcher's Eye fact_key must contain 1 to 500 characters")
+        require_write_contract(expected_revision, idempotency_key)
+        resolved_branch_id = require_current_branch(campaign_id, branch_id)
+        feature, binding = executable_watchers_eye_feature(
+            actor,
+            feature_id,
+            campaign_id=campaign_id,
+            branch_id=resolved_branch_id,
+        )
+        payload = {
+            "actor_id": actor_id,
+            "feature_id": str(feature["id"]),
+            "capability": normalized_capability,
+            "settlement_ref": normalized_settlement_ref,
+            "fact_key": normalized_fact_key,
+            "branch_id": resolved_branch_id,
+        }
+        scope = f"source-feature:{campaign_id}:{resolved_branch_id}:{principal_id}"
+        replay = replay_idempotent(scope, idempotency_key, payload)
+        if replay is not None:
+            return replay
+        campaign = campaigns.get(campaign_id)
+        if dict(campaign.state or {}).get("combat", {}).get("active", False):
+            raise CombatEngineError("source-bound narrative features are unavailable in combat")
+        if campaign.revision != expected_revision:
+            raise ValueError(
+                "campaign revision conflict: "
+                f"expected {expected_revision}, found {campaign.revision}"
+            )
+        fact_matches = [
+            item
+            for item in memories.list(
+                campaign_id,
+                branch_id=resolved_branch_id,
+                include_inactive=False,
+            )
+            if item.fact_key == normalized_fact_key
+        ]
+        if len(fact_matches) > 1:
+            raise RulesetUnavailableError("fact_key resolves to multiple active campaign facts")
+        fact = fact_matches[0] if fact_matches else None
+        outcome = "pending_gm_ruling"
+        detail = ""
+        fact_revision_id = ""
+        if fact is not None:
+            expected_predicate = f"dnd5e.watchers_eye.{normalized_capability}"
+            metadata_contract = dict(fact.metadata or {}).get(WATCHERS_EYE_FACT_METADATA_KEY)
+            if (
+                fact.kind != "source_fact"
+                or fact.subject_ref != normalized_settlement_ref
+                or fact.predicate != expected_predicate
+                or not isinstance(metadata_contract, dict)
+                or set(metadata_contract) != {"schema_version", "capability", "outcome"}
+                or metadata_contract.get("schema_version") != WATCHERS_EYE_FACT_SCHEMA_VERSION
+                or metadata_contract.get("capability") != normalized_capability
+                or metadata_contract.get("outcome") not in {"granted", "unavailable"}
+            ):
+                raise RulesetUnavailableError(
+                    "campaign fact does not satisfy the Watcher's Eye source-fact contract"
+                )
+            outcome = str(metadata_contract["outcome"])
+            detail = fact.content
+            fact_revision_id = fact.revision_id
+        result = {
+            "feature_id": str(feature["id"]),
+            "feature_name": WATCHERS_EYE_FEATURE_NAME,
+            "capability": normalized_capability,
+            "settlement_ref": normalized_settlement_ref,
+            "fact_key": normalized_fact_key,
+            "outcome": outcome,
+            "detail": detail,
+            "fact_revision_id": fact_revision_id,
+        }
+        rules = effective_rule_context(campaign_id, branch_id=resolved_branch_id)
+        receipt = {
+            "ruleset_fingerprint": rules.fingerprint,
+            "mechanic_id": CORE_WATCHERS_EYE_MECHANIC_ID,
+            "event": "character.source_feature.watchers_eye",
+            "actor_id": actor_id,
+            "feature_id": str(feature["id"]),
+            "artifact_id": str(binding["artifact_id"]),
+            "pack_id": str(binding["pack_id"]),
+            "pack_version": str(binding["pack_version"]),
+            "pack_checksum": str(binding["pack_checksum"]),
+            "addon_id": str(binding["addon_id"]),
+            "addon_version": str(binding["addon_version"]),
+            "addon_checksum": str(binding["addon_checksum"]),
+            "reviewed_content_hash": str(binding["reviewed_content_hash"]),
+            "capability": normalized_capability,
+            "settlement_ref": normalized_settlement_ref,
+            "fact_key": normalized_fact_key,
+            "fact_revision_id": fact_revision_id,
+            "outcome": outcome,
+            "rule_refs": list(binding["rule_refs"]),
+        }
+        resolution_id = f"resolution-{uuid4().hex}"
+        next_state = deepcopy(dict(campaign.state or {}))
+        next_state["resolution_log"] = [
+            *list(next_state.get("resolution_log") or []),
+            {
+                "id": resolution_id,
+                "thread_id": resolution_id,
+                "event_sequence": 1,
+                "type": "source_feature",
+                "operation": "character.source_feature.watchers_eye",
+                "actor_id": actor_id,
+                "audience": {
+                    "scope": "actors",
+                    "actor_refs": [actor_id],
+                    "disclosure": "private",
+                },
+                "branch_id": resolved_branch_id,
+                "campaign_revision": campaign.revision + 1,
+                "result": result,
+            },
+        ][-100:]
+
+        def source_feature_response(revisions: list[Any]) -> dict[str, Any]:
+            return {
+                **(
+                    {"status": "committed"}
+                    if outcome != "pending_gm_ruling"
+                    else _ruling_status("pending_ruling", "agent_dm_adjudication")
+                ),
+                "outcome": outcome,
+                "resolution_id": resolution_id,
+                "result": result,
+                "campaign_revision": campaign.revision + 1,
+                "revisions": [asdict(item) for item in revisions],
+                "rule_receipts": [receipt],
+            }
+
+        revisions_result = StateMutationService(storage.database).replace(
+            campaign_id,
+            campaign_state=validate_party_state(next_state),
+            expected_campaign_revision=campaign.revision,
+            operation="character.source_feature.watchers_eye",
+            actor=principal_id,
+            branch_id=resolved_branch_id,
+            idempotency_key=idempotency_key,
+            idempotency_write=IdempotencyWrite(
+                scope=scope,
+                payload=payload,
+                response=source_feature_response,
+            ),
+            rule_receipts=[receipt],
+        )
+        return source_feature_response(list(revisions_result or []))
+
     def character_heroic_inspiration_reroll(
         campaign_id: str,
         actor_id: str,
@@ -39434,6 +39716,209 @@ def _create_server(
             "source_citations": deepcopy(list(artifact.get("source_citations") or [])),
         }
 
+    def trusted_watchers_eye_binding(
+        campaign_id: str,
+        branch_id: str,
+        pack_id: str,
+        version: str,
+        artifact: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """Accept Watcher's Eye only from the exact built-in official archive lock."""
+
+        if campaign_rules_edition(campaign_id) != "2014" or pack_id != SCAG_RULE_PACK_ID:
+            return None
+        binding = _watchers_eye_source_binding(artifact)
+        if binding is None:
+            return None
+        # Installed IDs and recorded provenance alone cannot attest an archive
+        # after its persisted payload changes; verify the independent source.
+        verified_reserved_official_rule_definition(pack_id, version)
+        catalog_matches = [
+            dict(item)
+            for item in official_expansion_catalog("2014")
+            if str(item.get("id") or "") == SCAG_OFFICIAL_ADDON_ID
+        ]
+        if len(catalog_matches) != 1:
+            return None
+        activations = [
+            item
+            for item in addons.activations(campaign_id, branch_id=branch_id)
+            if item.addon_id == SCAG_OFFICIAL_ADDON_ID and item.enabled
+        ]
+        if len(activations) != 1:
+            return None
+        activation = activations[0]
+        catalog_entry = catalog_matches[0]
+        if activation.version != str(
+            catalog_entry.get("version") or ""
+        ) or activation.checksum != str(catalog_entry.get("checksum") or ""):
+            return None
+        try:
+            installed_addon = addons.get_version(activation.addon_id, activation.version)
+        except LookupError:
+            return None
+        if installed_addon.status != "installed" or installed_addon.checksum != activation.checksum:
+            return None
+        try:
+            installed = rule_packs.get_version(pack_id, version)
+        except LookupError:
+            return None
+        component_matches = [
+            dict(item)
+            for item in activation.component_locks
+            if str(item.get("kind") or "") == "rule_pack"
+            and str(item.get("id") or "") == pack_id
+            and str(item.get("version") or "") == version
+        ]
+        if len(component_matches) != 1:
+            return None
+        pack_provenance = dict(rule_packs.provenance(pack_id, version) or {})
+        definition_provenance = dict(pack_provenance.get("content_definition") or {})
+        if (
+            str(definition_provenance.get("package_id") or "") != activation.addon_id
+            or str(definition_provenance.get("package_version") or "") != activation.version
+            or str(definition_provenance.get("package_checksum") or "") != activation.checksum
+            or str(definition_provenance.get("definition_checksum") or "")
+            != str(component_matches[0].get("checksum") or "")
+        ):
+            return None
+        installed_matches = [
+            item
+            for item in installed.artifacts
+            if str(item.get("id") or "") == binding["artifact_id"]
+        ]
+        if len(installed_matches) != 1 or content_fingerprint(
+            installed_matches[0]
+        ) != content_fingerprint(artifact):
+            return None
+        return {
+            **binding,
+            "pack_id": pack_id,
+            "pack_version": version,
+            "pack_checksum": installed.checksum,
+            "addon_id": activation.addon_id,
+            "addon_version": activation.version,
+            "addon_checksum": activation.checksum,
+        }
+
+    def watchers_eye_feature_card(binding: Mapping[str, Any]) -> dict[str, Any]:
+        artifact_id = str(binding["artifact_id"])
+        return {
+            "id": f"{artifact_id}.feature.watchers-eye",
+            "name": WATCHERS_EYE_FEATURE_NAME,
+            "source_key": str(binding["background_name"]),
+            "description": (
+                "Source-bound access to campaign-authored facts about local law, "
+                "law enforcement, and criminal activity; it never grants a numeric bonus."
+            ),
+            "activation": {"type": "passive", "cost": 0, "trigger": ""},
+            "choices": {
+                "narrative_capability": {
+                    "schema": WATCHERS_EYE_NARRATIVE_SCHEMA,
+                    "mechanic_id": CORE_WATCHERS_EYE_MECHANIC_ID,
+                    "capabilities": sorted(WATCHERS_EYE_CAPABILITIES),
+                    "fact_contract": {
+                        "kind": "source_fact",
+                        "predicate_prefix": "dnd5e.watchers_eye.",
+                        "metadata_key": WATCHERS_EYE_FACT_METADATA_KEY,
+                        "schema_version": WATCHERS_EYE_FACT_SCHEMA_VERSION,
+                        "outcomes": ["granted", "unavailable"],
+                    },
+                    "source_binding": {
+                        "artifact_id": artifact_id,
+                        "pack_id": str(binding["pack_id"]),
+                        "pack_version": str(binding["pack_version"]),
+                        "pack_checksum": str(binding["pack_checksum"]),
+                        "addon_id": str(binding["addon_id"]),
+                        "addon_version": str(binding["addon_version"]),
+                        "addon_checksum": str(binding["addon_checksum"]),
+                        "reviewed_content_hash": str(binding["reviewed_content_hash"]),
+                        "feature_rule_ref": str(binding["feature_rule_ref"]),
+                    },
+                }
+            },
+            "pack_id": str(binding["pack_id"]),
+            "pack_version": str(binding["pack_version"]),
+            "rule_refs": list(binding["rule_refs"]),
+            "mechanic_refs": [CORE_WATCHERS_EYE_MECHANIC_ID],
+            "ruling_requirements": [],
+        }
+
+    def executable_watchers_eye_feature(
+        actor: CharacterInfo,
+        feature_id: str,
+        *,
+        campaign_id: str,
+        branch_id: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Rebuild expected provenance before allowing the narrative capability."""
+
+        normalized_feature_id = str(feature_id or "").strip()
+        features = [
+            dict(item)
+            for item in dict(actor.sheet.get("content") or {}).get("features", [])
+            if str(dict(item).get("id") or "") == normalized_feature_id
+        ]
+        if len(features) != 1:
+            raise RulesetUnavailableError(
+                "feature_id must identify one source-bound Watcher's Eye feature"
+            )
+        feature = features[0]
+        selections = [
+            dict(item)
+            for item in dict(actor.sheet.get("content") or {}).get("selections", [])
+            if str(dict(item).get("artifact_id") or "") in SCAG_WATCHERS_EYE_BACKGROUND_IDS
+            and str(dict(item).get("kind") or "") == "background"
+        ]
+        if len(selections) != 1:
+            raise RulesetUnavailableError(
+                "Watcher's Eye requires one exact official SCAG background selection"
+            )
+        selection = selections[0]
+        pack_id = str(selection.get("pack_id") or "")
+        pack_version = str(selection.get("pack_version") or "")
+        try:
+            installed = rule_packs.get_version(pack_id, pack_version)
+        except LookupError as exc:
+            raise RulesetUnavailableError(
+                "the source-bound Watcher's Eye archive is not installed"
+            ) from exc
+        artifact_matches = [
+            item
+            for item in installed.artifacts
+            if str(item.get("id") or "") == str(selection.get("artifact_id") or "")
+        ]
+        if len(artifact_matches) != 1:
+            raise RulesetUnavailableError("the source-bound Watcher's Eye artifact is unavailable")
+        binding = trusted_watchers_eye_binding(
+            campaign_id,
+            branch_id,
+            pack_id,
+            pack_version,
+            artifact_matches[0],
+        )
+        if binding is None:
+            raise RulesetUnavailableError(
+                "Watcher's Eye provenance does not match the official expansion lock"
+            )
+        expected = watchers_eye_feature_card(binding)
+        capability = dict(dict(feature.get("choices") or {}).get("narrative_capability") or {})
+        if (
+            normalized_feature_id != expected["id"]
+            or str(feature.get("name") or "") != expected["name"]
+            or str(feature.get("source_key") or "") != expected["source_key"]
+            or str(feature.get("pack_id") or "") != expected["pack_id"]
+            or str(feature.get("pack_version") or "") != expected["pack_version"]
+            or list(feature.get("rule_refs") or []) != expected["rule_refs"]
+            or list(feature.get("mechanic_refs") or []) != expected["mechanic_refs"]
+            or capability != expected["choices"]["narrative_capability"]
+            or list(selection.get("rule_refs") or []) != expected["rule_refs"]
+        ):
+            raise RulesetUnavailableError(
+                "Watcher's Eye sheet data is incomplete or does not match its source provenance"
+            )
+        return feature, binding
+
     def hydrate_class_prepared_spell_cards(
         campaign_id: str,
         sheet: dict[str, Any],
@@ -42057,6 +42542,21 @@ def _create_server(
             if custom_name and campaign_rules_edition(current.campaign_id) != "2014":
                 raise ValueError("the PHB custom-background contract is available only in 2014")
             grants = dict(card.get("background_grants") or {})
+            watchers_eye_binding = trusted_watchers_eye_binding(
+                current.campaign_id,
+                branch_id,
+                pack_id,
+                version,
+                artifact,
+            )
+            if (
+                artifact_id in SCAG_WATCHERS_EYE_BACKGROUND_IDS
+                and str(grants.get("feature") or "") == WATCHERS_EYE_FEATURE_NAME
+                and watchers_eye_binding is None
+            ):
+                raise RulesetUnavailableError(
+                    "Watcher's Eye requires the exact source-reviewed official SCAG archive"
+                )
             fixed_equipment = deepcopy(dict(grants.pop("equipment", {}) or {}))
             grant_skills = [str(item).strip().casefold() for item in grants.pop("skills", [])]
             card_skills = [
@@ -42560,6 +43060,14 @@ def _create_server(
                 if skill_key not in sheet["skills"]:
                     raise ValueError(f"background references an unknown skill: {skill_key}")
                 sheet["skills"][skill_key]["proficiency"] = "proficient"
+            if watchers_eye_binding is not None:
+                feature_card = watchers_eye_feature_card(watchers_eye_binding)
+                if any(
+                    str(item.get("id") or "") == feature_card["id"]
+                    for item in sheet["content"]["features"]
+                ):
+                    raise ValueError("Watcher's Eye is already present")
+                sheet["content"]["features"].append(feature_card)
             origin_feat_name = str(requirements.get("origin_feat_name") or "")
             if origin_feat_name:
                 origin_feat_match = next(
@@ -45282,14 +45790,14 @@ boundary.
     @public_tool()
     def character_check(
         campaign_id: str,
-        action: Literal["check", "group", "contest", "reroll"] = "check",
+        action: Literal["check", "group", "contest", "reroll", "source_feature"] = "check",
         payload: dict[str, Any] | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
         expected_revision: int | None = None,
         branch_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Resolve an individual, group, or contested check in the Play phase."""
+        """Resolve a check or bounded source feature in the Play phase."""
         require_facade_phase(campaign_id, f"character_check({action})", PROFILE_PLAY)
         resolved_branch_id = require_current_branch(campaign_id, branch_id)
         if npc_conversations.active_ids(
@@ -45299,6 +45807,32 @@ boundary.
             raise CombatEngineError(
                 "close or abort the active NPC conversation before resolving "
                 "an authoritative character check"
+            )
+        if action == "source_feature":
+            data = facade_payload(payload)
+            required_fields = {
+                "actor_id",
+                "feature_id",
+                "capability",
+                "settlement_ref",
+                "fact_key",
+            }
+            if set(data) != required_fields:
+                raise ValueError(
+                    "character_check(source_feature).payload requires exactly actor_id, "
+                    "feature_id, capability, settlement_ref, and fact_key"
+                )
+            return character_source_feature(
+                campaign_id,
+                data["actor_id"],
+                data["feature_id"],
+                data["capability"],
+                data["settlement_ref"],
+                data["fact_key"],
+                principal_id,
+                expected_revision,
+                branch_id,
+                idempotency_key,
             )
         if action == "reroll":
             data = facade_payload(payload)

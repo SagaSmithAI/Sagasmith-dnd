@@ -1031,6 +1031,20 @@ BOUNDARIES = (
         "bundled:srd2014/02_Classes/Wizard.md#evocation-savant",
     ),
     CoreBoundary(
+        "dnd5e.core.narrative.watchers_eye",
+        ("2014",),
+        (
+            "sagasmith_dnd_mcp.server._watchers_eye_source_binding|"
+            "sagasmith_dnd_mcp.server.character_source_feature"
+        ),
+        ("packages/mcp/tests/test_scag_watchers_eye_mcp.py",),
+        (
+            "rule-source:user.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef"
+            "#chunk:user.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef/"
+            "section-613/chunk-787-c40f25fa340c7592"
+        ),
+    ),
+    CoreBoundary(
         "dnd5e.core.mcp.combat_mutation_guard",
         ("2014", "2024"),
         "sagasmith_dnd_mcp.server.require_outside_active_combat",

@@ -22,6 +22,8 @@ async def import_and_activate_addon_fixture(
     mechanics: list[dict[str, Any]],
     expected_revision: int,
     request_key: str,
+    rule_pack_id: str | None = None,
+    rule_pack_version: str | None = None,
     content_dependencies_override: list[dict[str, Any]] | None = None,
     content_package_id_override: str | None = None,
     content_package_version_override: str | None = None,
@@ -32,10 +34,10 @@ async def import_and_activate_addon_fixture(
 ) -> dict[str, Any]:
     """Import a finalized synthetic addon fixture through the new Pack boundary."""
 
-    definition_id = str(manifest["id"])
-    package_id = content_package_id_override or definition_id
-    definition_version = str(manifest["version"])
-    package_version = content_package_version_override or definition_version
+    definition_id = str(rule_pack_id or manifest["id"])
+    package_id = content_package_id_override or str(manifest["id"])
+    definition_version = str(rule_pack_version or manifest["version"])
+    package_version = content_package_version_override or str(manifest["version"])
     dependencies = (
         [
             {
@@ -107,6 +109,9 @@ async def import_and_activate_addon_fixture(
         "system_id": "dnd5e",
         "manifest": {
             **package_manifest,
+            "id": definition_id,
+            "version": definition_version,
+            "namespace": definition_id,
             "system_id": "dnd5e",
             "dependencies": [
                 {
