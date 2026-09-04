@@ -22,7 +22,11 @@ async def _call(server: Any, name: str, arguments: dict[str, Any]) -> Any:
 
 async def _raw(server: Any, name: str, arguments: dict[str, Any]) -> Any:
     _, response = await server.call_tool(name, arguments)
-    return response["result"] if isinstance(response, dict) and "action" in response else response
+    return (
+        response["result"]
+        if isinstance(response, dict) and "action" in response and "result" in response
+        else response
+    )
 
 
 @pytest.mark.parametrize("defense_mode", ["decline", "shield"])
@@ -237,8 +241,19 @@ def test_opportunity_sneak_attack_uses_trigger_snapshot_and_reaction_only(
                 {"campaign_id": campaign["id"], "action": "receipts", "payload": {}},
             )
             resolved = await _raw(server, "combat_reaction_attack", request)
+            initial_roll_response = resolved
             assert resolved["status"] == "pending_reaction"
             assert resolved["result"]["damage"] is None
+            pending_target = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": mover["id"]}},
+            )
+            assert pending_target["sheet"]["combat"]["hp"]["value"] == 20
+            pending_rogue = next(
+                item for item in resolved["combat"]["combatants"] if item["actor_id"] == rogue["id"]
+            )
+            assert not pending_rogue.get("turn_flags", {}).get("sneak_attack_turn_token")
             defense_choice = (
                 await _call(
                     server,
@@ -293,7 +308,10 @@ def test_opportunity_sneak_attack_uses_trigger_snapshot_and_reaction_only(
                 assert target_after["sheet"]["combat"]["hp"]["value"] == 20
                 assert target_after["sheet"]["spellcasting"]["spell_slots"]["1"]["value"] == 0
             else:
-                assert target_after["sheet"]["combat"]["hp"]["value"] < 20
+                assert target_after["sheet"]["combat"]["hp"]["value"] == (
+                    20 - resolved["result"]["damage"]["applied_amount"]
+                )
+                assert target_after["sheet"]["spellcasting"]["spell_slots"]["1"]["value"] == 1
             replay = await _call(server, "combat_choice", defense_request)
             assert replay == resolved
             status = await _call(
@@ -327,6 +345,43 @@ def test_opportunity_sneak_attack_uses_trigger_snapshot_and_reaction_only(
                 {"campaign_id": campaign["id"], "action": "receipts", "payload": {}},
             )
             assert len(receipts_after) > len(receipts_before)
+
+            async def snapshot():
+                return {
+                    "campaign": await _call(
+                        server,
+                        "campaign_query",
+                        {
+                            "view": "get",
+                            "payload": {"campaign_id": campaign["id"]},
+                        },
+                    ),
+                    "actors": [
+                        await _call(
+                            server,
+                            "character_query",
+                            {
+                                "view": "get",
+                                "payload": {"character_id": actor["id"]},
+                            },
+                        )
+                        for actor in (rogue, ally, mover)
+                    ],
+                    "receipts": await _call(
+                        server,
+                        "campaign_rules",
+                        {
+                            "campaign_id": campaign["id"],
+                            "action": "receipts",
+                            "payload": {},
+                        },
+                    ),
+                }
+
+            before_replays = await snapshot()
+            assert await _raw(server, "combat_reaction_attack", request) == initial_roll_response
+            assert await _call(server, "combat_choice", defense_request) == resolved
+            assert await snapshot() == before_replays
             with pytest.raises(ToolError, match="not this actor's opportunity-attack window"):
                 await _raw(
                     server,
@@ -338,6 +393,12 @@ def test_opportunity_sneak_attack_uses_trigger_snapshot_and_reaction_only(
                         "idempotency_key": "oa-sneak-second",
                     },
                 )
+            assert await snapshot() == before_replays
+            close_server(server)
+            server = create_server(config)
+            assert await _raw(server, "combat_reaction_attack", request) == initial_roll_response
+            assert await _call(server, "combat_choice", defense_request) == resolved
+            assert await snapshot() == before_replays
         finally:
             close_server(server)
 
