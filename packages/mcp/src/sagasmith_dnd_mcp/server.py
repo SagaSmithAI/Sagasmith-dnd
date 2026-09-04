@@ -467,6 +467,7 @@ from sagasmith_dnd.standard_feature_ids import (
     CORE_ORC_AGGRESSIVE_MECHANIC_ID,
     CORE_RELENTLESS_ENDURANCE_MECHANIC_ID,
     CORE_TORTLE_NATURAL_ARMOR_MECHANIC_ID,
+    CORE_TORTLE_SHELL_DEFENSE_MECHANIC_ID,
     TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
     TORTLE_NATURAL_ARMOR_AUTHORITY_KEY,
     TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_CHECKSUM,
@@ -475,7 +476,6 @@ from sagasmith_dnd.standard_feature_ids import (
     TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID,
     TORTLE_NATURAL_ARMOR_LEGACY_PACK_VERSIONS,
     TORTLE_NATURAL_ARMOR_SOURCE_RULE_REF_PREFIX,
-    CORE_TORTLE_SHELL_DEFENSE_MECHANIC_ID,
 )
 from sagasmith_dnd.standard_spell_ids import (
     CORE_BLADE_WARD_MECHANIC_ID,
@@ -12759,9 +12759,7 @@ def _create_server(
                 current_sheet=before.sheet,
             )
         candidate_sheet = deepcopy(sheet if sheet is not None else before.sheet)
-        candidate_window = dict(candidate_sheet.get("combat") or {}).get(
-            "short_rest_hit_dice"
-        )
+        candidate_window = dict(candidate_sheet.get("combat") or {}).get("short_rest_hit_dice")
         if isinstance(candidate_window, dict):
             # Only campaign_short_rest_hit_die may carry this decision window
             # forward. Every ordinary character write invalidates it, including
@@ -20148,7 +20146,9 @@ def _create_server(
             condition_resolution = {
                 "kind": "tortle_shell_defense",
                 "withdrawn": withdrawn,
-                "armor_class": derive_character_sheet(shell_defense_sheet)["armor_class"],
+                "armor_class": derive_character_sheet(
+                    shell_defense_sheet, character_id=actor_id
+                )["armor_class"],
                 "speed_multiplier": source_speed_multiplier(shell_defense_sheet),
                 "conditions": list(shell_defense_sheet.get("conditions") or []),
             }
@@ -29475,8 +29475,7 @@ def _create_server(
                     expected_character_revision=current.revision + 1,
                     song_of_rest_die_sides=(
                         validate_song_of_rest_source(song_source_sheet)
-                        if normalized_rest_type == "short_rest"
-                        and song_source_sheet is not None
+                        if normalized_rest_type == "short_rest" and song_source_sheet is not None
                         else None
                     ),
                     song_of_rest_used=applied.get("song_of_rest") is not None,
@@ -29630,10 +29629,7 @@ def _create_server(
             "expected_character_revision": expected_character_revision,
             "branch_id": resolved_branch_id,
         }
-        scope = (
-            f"campaign-short-rest-hit-die:{campaign_id}:"
-            f"{resolved_branch_id}:{principal_id}"
-        )
+        scope = f"campaign-short-rest-hit-die:{campaign_id}:{resolved_branch_id}:{principal_id}"
         replay = replay_idempotent(scope, idempotency_key, request_payload)
         if replay is not None:
             return replay
@@ -29651,9 +29647,7 @@ def _create_server(
                 "character revision conflict: "
                 f"expected {expected_character_revision}, found {current.revision}"
             )
-        choice_window = dict(current.sheet.get("combat") or {}).get(
-            "short_rest_hit_dice"
-        )
+        choice_window = dict(current.sheet.get("combat") or {}).get("short_rest_hit_dice")
         if not isinstance(choice_window, dict):
             raise CombatEngineError("no sequential Hit Die choice is open")
         if int(choice_window.get("expected_character_revision", -1)) != current.revision:
@@ -29715,9 +29709,7 @@ def _create_server(
                 rest_completed_elapsed_ticks=rest_completed_elapsed_ticks,
                 rules=rest_rules,
             )
-            continued_window = dict(applied["sheet"].get("combat") or {}).get(
-                "short_rest_hit_dice"
-            )
+            continued_window = dict(applied["sheet"].get("combat") or {}).get("short_rest_hit_dice")
             if isinstance(continued_window, dict):
                 continued_window["expected_character_revision"] = current.revision + 1
             next_sheet = validate_character_sheet(applied["sheet"])

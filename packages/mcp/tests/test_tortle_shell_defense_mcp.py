@@ -1,15 +1,17 @@
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from authoring_helpers import import_and_activate_addon_fixture
-from sagasmith_core.indexed_source import rule_chunk_key
-from sagasmith_dnd.character_schema import default_character_sheet
-from sagasmith_dnd.content_validation import build_selection_contract
+from sagasmith_dnd.character_schema import (
+    add_inventory_item,
+    default_character_sheet,
+    equip_inventory_item,
+)
 from sagasmith_dnd.standard_feature_ids import (
+    TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
+    TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
     TORTLE_SHELL_DEFENSE_ARTIFACT_ID,
-    TORTLE_SHELL_DEFENSE_LEGACY_PACK_ID,
-    TORTLE_SHELL_DEFENSE_SOURCE_KEY,
 )
 
 from sagasmith_dnd_mcp import server as server_module
@@ -39,98 +41,22 @@ def _config(tmp_path: Path) -> McpConfig:
     )
 
 
-def _tortle_artifact() -> dict:
-    source_text = (
-        "# Reviewed fixture\n\n## Tortle\n\n"
-        "Mechanics and choices for Tortle were reviewed for this fixture."
-    )
-    source_ref = (
-        f"rule-source:{TORTLE_SHELL_DEFENSE_SOURCE_KEY}#chunk:"
-        f"{rule_chunk_key(TORTLE_SHELL_DEFENSE_SOURCE_KEY, 0, 0, source_text)}"
-    )
-    artifact = {
-        "id": TORTLE_SHELL_DEFENSE_ARTIFACT_ID,
-        "kind": "species",
-        "application_state": "selection_ready",
-        "mechanical_scope": "mechanical",
-        "execution_state": "ruling_ready",
-        "semantic_resolution": {
-            "status": "resolved",
-            "mode": "agent_ruling",
-            "first_use_compilation_required": False,
-            "clause_ids": ["tortle-shell-defense"],
-        },
-        "ruling_requirements": [
-            {
-                "kind": "source_bound_import_resolution",
-                "policy_ref": "rule_clause.v1",
-                "reason": "Apply only the exact source-bound Tortle traits.",
-                "default_resolver": "agent",
-                "ruling_kind": "agent_dm_adjudication",
-                "source_excerpt": "The Tortle can withdraw and emerge under the cited rules.",
-                "requires_external_input_only_for": [],
-            }
-        ],
-        "rule_clauses": [
-            {
-                "schema_version": 1,
-                "id": "tortle-shell-defense",
-                "title": "Tortle Shell Defense",
-                "scope": "mechanical",
-                "source_citations": [
-                    {
-                        "source": f"rule-source:{TORTLE_SHELL_DEFENSE_SOURCE_KEY}",
-                        "source_ref": {"page": 4},
-                        "source_excerpt": (
-                            "Withdraw as an action; gain the cited AC and save modifiers, "
-                            "become prone and immobile, lose reactions, and emerge with a "
-                            "bonus action."
-                        ),
-                    }
-                ],
-                "settlement": {
-                    "mode": "agent_ruling",
-                    "default_resolver": "agent",
-                    "ruling_kind": "agent_dm_adjudication",
-                    "reason": "Apply only the exact source-bound Tortle traits.",
-                },
-            }
-        ],
-        "card": {
-            "name": "Tortle",
-            "base_species": "Tortle",
-            "grants": {
-                "natural_armor_base": 17,
-                "natural_armor_includes_dexterity": False,
-                "walk_speed": 30,
-                "features": [
-                    {
-                        "name": "Shell Defense",
-                        "description": (
-                            "Source-bound action: withdraw or emerge and apply the cited AC, "
-                            "save, speed, prone, reaction, and action restrictions."
-                        ),
-                    }
-                ],
-                "unresolved": [],
-            },
-        },
-        "rule_refs": [source_ref],
-    }
-    artifact["selection_contract"] = build_selection_contract(
-        artifact,
-        status="ready",
-        references=[source_ref],
-    )
-    return artifact
-
-
 @pytest.mark.fresh_database
+@pytest.mark.parametrize("official_armored", [False, True])
 def test_tortle_shell_defense_materializes_and_settles_atomically_across_restart(
     tmp_path: Path,
+    official_armored: bool,
 ) -> None:
     async def exercise() -> None:
         config = _config(tmp_path)
+        library = (
+            Path(__file__).resolve().parents[4]
+            / "SagaSmith-dnd-content-library"
+            / "content-library"
+        )
+        if not (library / "index.json").is_file():
+            pytest.skip("requires the sibling finalized content library")
+        config = replace(config, official_content_library=library)
         server = create_server(config)
         campaign = await _call(
             server,
@@ -142,27 +68,38 @@ def test_tortle_shell_defense_materializes_and_settles_atomically_across_restart
                 "idempotency_key": "campaign",
             },
         )
-        artifact = _tortle_artifact()
-        await import_and_activate_addon_fixture(
-            _call,
+        await _call(
             server,
-            campaign["id"],
-            config.home,
-            manifest={
-                "id": TORTLE_SHELL_DEFENSE_LEGACY_PACK_ID,
-                "version": "1.0.1",
-                "title": "Reviewed Tortle Package",
-                "namespace": TORTLE_SHELL_DEFENSE_LEGACY_PACK_ID,
-                "system_id": "dnd5e",
-                "editions": ["2014"],
-                "capabilities": [],
+            "content_pack",
+            {
+                "action": "activate",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "kind": "addon",
+                    "addon_id": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
+                    "version": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
+                },
+                "expected_revision": campaign["revision"],
+                "idempotency_key": "activate-official-tortle",
             },
-            artifacts=[artifact],
-            mechanics=[],
-            expected_revision=campaign["revision"],
-            request_key="tortle-shell-defense",
-            source_key_override=TORTLE_SHELL_DEFENSE_SOURCE_KEY,
         )
+        sheet = default_character_sheet()
+        if official_armored:
+            sheet, armor_id = add_inventory_item(
+                sheet,
+                {
+                    "id": "plate-plus-three",
+                    "name": "+3 Plate",
+                    "kind": "armor",
+                    "mechanics": {
+                        "base_ac": 18,
+                        "category": "heavy",
+                        "dexterity_mode": "none",
+                        "magic_bonus": 3,
+                    },
+                },
+            )
+            sheet = equip_inventory_item(sheet, armor_id, "armor")
         tortle = await _call(
             server,
             "character_create_from",
@@ -171,7 +108,7 @@ def test_tortle_shell_defense_materializes_and_settles_atomically_across_restart
                 "payload": {
                     "campaign_id": campaign["id"],
                     "name": "Source-bound Tortle",
-                    "sheet": default_character_sheet(),
+                    "sheet": sheet,
                 },
                 "principal_id": "system:local",
                 "idempotency_key": "tortle",
