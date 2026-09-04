@@ -295,3 +295,58 @@ def test_owner_pickup_preserves_three_item_attunement_capacity() -> None:
     carried = restored["sheets"]["owner"]["inventory"]
     assert sum(item["attunement"] == "attuned" for item in carried["items"]) == 1
     assert sum(item["attunement"] == "attuned" for item in carried["external_items"]) == 2
+
+
+def test_pickup_rejects_attuned_ground_item_without_owner_reference() -> None:
+    owner = validate_character_sheet({})
+    owner, item_id = add_inventory_item(owner, _weapon("orphan", attunement="attuned"))
+    owner = equip_inventory_item(owner, item_id, "main_hand")
+    dropped = drop_held_items(
+        {"owner": owner},
+        [],
+        "owner",
+        record_ids={item_id: "ground-orphan"},
+        scene_id=None,
+        encounter_id=None,
+        campaign_revision=1,
+        location=_location(),
+    )
+    dropped["sheets"]["owner"]["inventory"]["external_items"] = []
+    dropped["sheets"]["owner"] = validate_character_sheet(dropped["sheets"]["owner"])
+
+    with pytest.raises(ValueError, match="no owner reference"):
+        pickup_ground_item(
+            {"owner": dropped["sheets"]["owner"]},
+            dropped["ground_items"],
+            "owner",
+            "ground-orphan",
+        )
+
+
+def test_pickup_rejects_multiple_attuned_ground_owners() -> None:
+    owner = validate_character_sheet({})
+    owner, item_id = add_inventory_item(owner, _weapon("contested", attunement="attuned"))
+    owner = equip_inventory_item(owner, item_id, "main_hand")
+    dropped = drop_held_items(
+        {"owner": owner},
+        [],
+        "owner",
+        record_ids={item_id: "ground-contested"},
+        scene_id=None,
+        encounter_id=None,
+        campaign_revision=1,
+        location=_location(),
+    )
+    other = validate_character_sheet({})
+    other["inventory"]["external_items"] = deepcopy(
+        dropped["sheets"]["owner"]["inventory"]["external_items"]
+    )
+    other = validate_character_sheet(other)
+
+    with pytest.raises(ValueError, match="multiple attuned owners"):
+        pickup_ground_item(
+            {"owner": dropped["sheets"]["owner"], "other": other},
+            dropped["ground_items"],
+            "other",
+            "ground-contested",
+        )
