@@ -1,8 +1,9 @@
 {
   "schema": "sagasmith.dnd-official-expansions-lock.v1",
-  "generated_on": "2026-09-04",
+  "generated_on": "2026-09-05",
   "source_repository": "https://github.com/SagaSmithAI/SagaSmith-dnd-content-library",
   "source_commit": "cc83f2339ea1e20651178bb55998ac3f26650d88",
+  "source_commit_role": "Canonical input lineage only; repaired outputs are built locally by packages/mcp/scripts/build_official_expansion_library.py and are not published at this commit.",
   "builtin_rule_definitions": [
     {
       "id": "dnd5e.content.srd2014",
@@ -154,16 +155,17 @@
   "packages": [
     {
       "id": "dnd5e.addon.rulebook.d-d-5e-eberron-rising-from-the-last-war.31293633134f.addon",
-      "version": "1.0.2",
-      "checksum": "41088d90a6a8cc8cf325cc61143b95f7c46e50bdd6a590fa9689701affd9fa98",
-      "archive_sha256": "19ae3b071dfd25f0133c6159190e62fe4ae480299611e8ee8893106053c5038b",
+      "version": "1.0.3-local.artificer-context.1",
+      "checksum": "6bfa9168a6ca1cfac95d2e4c29e6b38b75eb2a9ee1ae4e673b10132f5b4b45c7",
+      "archive_sha256": "17d673579776c31f58ac412753676d8a9c811f950d763ed4230cebfc36ca25b3",
+      "local_repair": {"source_archive_sha256": "19ae3b071dfd25f0133c6159190e62fe4ae480299611e8ee8893106053c5038b", "steps": ["subclass_grants", "artificer_asi", "artificer_context"]},
       "publication_id": "erlw2014",
       "title": "D&D 5E - Eberron - Rising from the Last War",
       "classification": "official_supplement",
       "editions": ["2014"],
-      "content_summary": {"background": 14, "class": 1, "feat": 2, "feature": 44, "item": 26, "species": 24, "spell": 1, "statblock": 40, "subclass": 3},
+      "content_summary": {"background": 14, "class": 1, "feat": 2, "feature": 45, "item": 26, "species": 24, "spell": 1, "statblock": 40, "subclass": 3},
       "selection_ready": {"background": 14, "class": 1, "feat": 2, "feature": 44, "item": 26, "species": 24, "spell": 1, "subclass": 3},
-      "catalog_only": {"statblock": 40}
+      "catalog_only": {"feature": 1, "statblock": 40}
     },
     {
       "id": "dnd5e.addon.rulebook.d-d-5e-elemental-evil-player-s-companion.490f88d2c84c.addon",
@@ -180,9 +182,10 @@
     },
     {
       "id": "dnd5e.addon.rulebook.d-d-5e-guildmasters-guide-to-ravnica.59317c5cf3da.addon",
-      "version": "1.0.2",
-      "checksum": "ec8c5c3080db2071148fb430e0aeaca4a207e15fb9a02de5f91e00b6d5d719b3",
-      "archive_sha256": "f5f45016482354c213f7a3c84fb68f7db96b1da890e35da3e428cd9d579dd15a",
+      "version": "1.0.3-local.subclass-grants.1",
+      "checksum": "4e10189011b1c4cb17a11b809d03fcf9a31714fd1247ae37a51f2b4dcb4a60b8",
+      "archive_sha256": "f454eedba5a4b75d28c4a4ae28f37e0686047505226b314c4bcc3b30a5052b97",
+      "local_repair": {"source_archive_sha256": "f5f45016482354c213f7a3c84fb68f7db96b1da890e35da3e428cd9d579dd15a", "steps": ["subclass_grants"]},
       "publication_id": "ggr2014",
       "title": "D&D 5E - Guildmasters' Guide to Ravnica",
       "classification": "official_supplement",
@@ -206,9 +209,10 @@
     },
     {
       "id": "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a.addon",
-      "version": "1.0.3",
-      "checksum": "ff8bbff7268d3e9afab5fce2d2ae320422e9d64523c6d2c1c327689dae59a9d9",
-      "archive_sha256": "1bb977b1a54f9aeb6f31413d7e8918294f2f38a353c48597287ed6ef3d111d2a",
+      "version": "1.0.5-local.subclass-grants.1",
+      "checksum": "3c8c41ca3c3f7cf7b6eb00a5239333639814ee0909fafcfa4ec402954738481d",
+      "archive_sha256": "99de36e2c12f1e73993ba0e160456e6a6ae082a654255f38f2ec7074525c6b23",
+      "local_repair": {"source_archive_sha256": "1bb977b1a54f9aeb6f31413d7e8918294f2f38a353c48597287ed6ef3d111d2a", "steps": ["subclass_grants"]},
       "publication_id": "scag2014",
       "title": "D&D 5E - Sword Coast Adventurer's Guide",
       "classification": "official_supplement",
@@ -219,16 +223,17 @@
     },
     {
       "id": "dnd5e.addon.rulebook.d-d-5e-tasha-s-cauldron-of-everything.89a729b37a4b.addon",
-      "version": "1.0.1",
-      "checksum": "9f8059a4e9839c51fe046bd00d1776530b7e8caa729cb5deeeb1e625143e1bb4",
-      "archive_sha256": "127dbe5841a24feaa27a3efbbe0dc239adba958a79ced3c63292d1f32dd6dac7",
+      "version": "1.0.1-local.artificer-context.1",
+      "checksum": "ca4ac910727cbe4dcdb14abe4c29101fc5bd1296e0eaa2231838344b07a8bf31",
+      "archive_sha256": "c220eb1abe4125a48faf2b7b18078d3295c68c1053e4d6333577581226baf50b",
+      "local_repair": {"source_archive_sha256": "127dbe5841a24feaa27a3efbbe0dc239adba958a79ced3c63292d1f32dd6dac7", "steps": ["artificer_asi", "artificer_context"]},
       "publication_id": "tcoe2014",
       "title": "D&D 5E - Tasha's Cauldron of Everything",
       "classification": "official_supplement",
       "editions": ["2014"],
       "content_summary": {"background": 1, "feat": 41, "feature": 372, "item": 47, "species": 1, "spell": 21, "statblock": 18, "subclass": 30},
-      "selection_ready": {"background": 1, "feat": 39, "feature": 216, "item": 47, "species": 1, "spell": 21, "subclass": 30},
-      "catalog_only": {"feat": 2, "feature": 156, "statblock": 18}
+      "selection_ready": {"background": 1, "feat": 39, "feature": 214, "item": 47, "species": 1, "spell": 21, "subclass": 30},
+      "catalog_only": {"feat": 2, "feature": 158, "statblock": 18}
     },
     {
       "id": "dnd5e.addon.rulebook.d-d-5e-the-tortle-package.e3234de670da.addon",
@@ -258,16 +263,17 @@
     },
     {
       "id": "dnd5e.addon.rulebook.d-d-5e-wayfinders-guide-to-eberron.38e71ffb60c7.addon",
-      "version": "1.0.1",
-      "checksum": "6a3ad8f67cf3937610afeb872617548d7b2bd675366f3d7cf96d6d4e145d7c2e",
-      "archive_sha256": "41a60a99be6cb93259b0cfdbed584137f5484d6ab276f5fd26ecbb6de85a5d4f",
+      "version": "1.0.1-local.artificer-context.1",
+      "checksum": "236324a04a4e7303225eb1aad91f624b84e28573a22a2c905de6af3c8dca0f34",
+      "archive_sha256": "f9baf9832109ed3d805fd007c1a943497a13ebc42cee847be9d0b2c97551d8c5",
+      "local_repair": {"source_archive_sha256": "41a60a99be6cb93259b0cfdbed584137f5484d6ab276f5fd26ecbb6de85a5d4f", "steps": ["artificer_context"]},
       "publication_id": "wgte2014",
       "title": "D&D 5E - Wayfinders Guide to Eberron",
       "classification": "official_legacy",
       "editions": ["2014"],
       "content_summary": {"background": 13, "feat": 14, "feature": 96, "item": 16, "species": 22, "spell": 1, "statblock": 1},
-      "selection_ready": {"background": 13, "feat": 14, "feature": 2, "item": 16, "species": 22, "spell": 1},
-      "catalog_only": {"feature": 94, "statblock": 1}
+      "selection_ready": {"background": 13, "feat": 14, "feature": 1, "item": 16, "species": 22, "spell": 1},
+      "catalog_only": {"feature": 95, "statblock": 1}
     },
     {
       "id": "dnd5e.addon.rulebook.d-d-5e-xanathar-s-guide-to-everything.72d56f4f8dae.addon",

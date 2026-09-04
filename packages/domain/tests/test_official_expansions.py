@@ -104,14 +104,14 @@ def test_shipped_lock_covers_every_current_official_expansion_artifact() -> None
         catalog_only.update(package["catalog_only"])
 
     assert len(lock["packages"]) == 10
-    assert sum(content.values()) == 2007
-    assert sum(ready.values()) == 1134
-    assert sum(catalog_only.values()) == 873
+    assert sum(content.values()) == 2008
+    assert sum(ready.values()) == 1131
+    assert sum(catalog_only.values()) == 877
     assert ready == {
         "background": 51,
         "class": 1,
         "feat": 71,
-        "feature": 504,
+        "feature": 501,
         "item": 156,
         "species": 106,
         "spell": 168,
@@ -271,6 +271,67 @@ def test_verifier_rejects_archive_bytes_not_bound_by_the_lock(
 
     with pytest.raises(ValueError, match="archive checksum is stale"):
         verify_official_expansion_library(tmp_path, lock=lock)
+
+
+@pytest.mark.parametrize("tamper", [None, "bytes", "missing", "index_hash", "size", "definition"])
+def test_standalone_verifier_includes_locked_core_dependencies(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tamper: str | None,
+) -> None:
+    lock, expansion_path = _fixture_library(tmp_path)
+    monkeypatch.setattr(
+        official_expansions, "validate_dnd_content_package", lambda package: package
+    )
+    definition = {"id": "fixture.core", "version": "1.0.0", "checksum": "4" * 64}
+    support = {
+        "id": "dnd5e.addon.fixture.core", "version": "1.0.0", "checksum": "3" * 64,
+        "system_id": "dnd5e", "kind": "addon",
+        "manifest": {"classification": "official_core", "editions": ["2014"]},
+        "content": {"rule_definitions": [{
+            "id": definition["id"], "version": definition["version"],
+            "definition_checksum": definition["checksum"],
+        }]},
+    }
+    archive_path = expansion_path.parent / "support.sagasmith-pack"
+    with ZipFile(archive_path, "w", ZIP_DEFLATED) as archive:
+        archive.writestr("package.sagasmith.json", json.dumps(support))
+    digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+    locked = {
+        **{key: support[key] for key in ("id", "version", "checksum")},
+        "archive_sha256": digest, "role": "official_core_dependency", "title": "Fixture Core",
+        "classification": "official_core", "editions": ["2014"],
+        "provided_rule_definitions": [definition],
+    }
+    lock["support_packages"] = [locked]
+    index_path = expansion_path.parent.parent / "index.json"
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    entry = {
+        **{key: support[key] for key in ("id", "version", "checksum", "system_id", "kind")},
+        "archive_sha256": digest, "archive_size": archive_path.stat().st_size,
+        "path": "packages/support.sagasmith-pack",
+    }
+    if tamper != "missing":
+        index["packages"].append(entry)
+    if tamper == "bytes":
+        archive_path.write_bytes(archive_path.read_bytes() + b"tampered")
+    elif tamper == "index_hash":
+        entry["archive_sha256"] = "0" * 64
+    elif tamper == "size":
+        entry["archive_size"] += 1
+    elif tamper == "definition":
+        definition["checksum"] = "0" * 64
+    index_path.write_text(json.dumps(index), encoding="utf-8")
+    if tamper:
+        with pytest.raises(ValueError, match="official support"):
+            verify_official_expansion_library(tmp_path, lock=lock)
+    else:
+        report = verify_official_expansion_library(tmp_path, lock=lock)
+        assert report["verified"] is True
+        assert report["support_packages"] == [{
+            **{key: locked[key] for key in ("id", "version", "checksum", "archive_sha256", "role")},
+        }]
+        assert report["coverage"]["packages"] == 1  # Expansion counts stay separate.
 
 
 def test_cli_verifier_does_not_open_the_runtime_database(

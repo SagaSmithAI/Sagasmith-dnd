@@ -424,7 +424,7 @@ def verify_official_expansion_library(
     *,
     lock: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Verify every locked official expansion in an authorized local library.
+    """Verify every locked expansion and core dependency in a local library.
 
     The function performs no network access and never copies Pack contents.  A
     successful result proves archive identity, D&D package semantics, complete
@@ -457,9 +457,20 @@ def verify_official_expansion_library(
     if missing:
         raise ValueError("content library is missing official expansions: " + ", ".join(missing))
 
+    # Mounting already checks support archives independently. The standalone
+    # verifier must make the same check before claiming the library is valid.
+    support_archives = (
+        resolve_official_expansion_support_archives(root, lock=expected)
+        if expected.get("support_packages")
+        else ()
+    )
+    support_ids = {archive.id for archive in support_archives}
+
     reports: list[dict[str, Any]] = []
     discovered_official: set[str] = set()
     for package_id, item in indexed_by_id.items():
+        if package_id in support_ids:
+            continue
         if item.get("system_id") != "dnd5e" or item.get("kind") != "addon":
             continue
         archive_path = _portable_archive_path(root, item.get("path"))
@@ -515,8 +526,19 @@ def verify_official_expansion_library(
         "schema": "sagasmith.dnd-official-expansions-verification.v1",
         "source_repository": expected.get("source_repository"),
         "source_commit": expected.get("source_commit"),
+        "source_commit_role": expected.get("source_commit_role"),
         "library_root": str(root),
         "packages": sorted(reports, key=lambda item: item["publication_id"]),
+        "support_packages": [
+            {
+                "id": archive.id,
+                "version": archive.version,
+                "checksum": archive.checksum,
+                "archive_sha256": archive.archive_sha256,
+                "role": archive.role,
+            }
+            for archive in support_archives
+        ],
         "coverage": {
             "packages": len(reports),
             "artifacts": sum(content_summary.values()),
