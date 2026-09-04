@@ -191,6 +191,7 @@ def test_sleep_drops_held_items_to_ground_without_automatic_pickup(tmp_path: Pat
             )
             assert "unconscious" in target_after["sheet"]["conditions"]
             assert target_after["sheet"]["inventory"]["equipment_slots"]["main_hand"] == sword_id
+            assert target_after["sheet"]["inventory"]["equipment_slots"]["shield"] == shield_id
             campaign_after = await _call(
                 server,
                 "campaign_query",
