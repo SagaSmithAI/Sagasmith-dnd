@@ -27353,6 +27353,40 @@ def _create_server(
                 "campaign revision conflict: "
                 f"expected {expected_revision}, found {campaign.revision}"
             )
+        # Direct local tool calls do not enter the request-scoped RNG wrapper.
+        # Establish the same snapshot here, before any save or damage draw,
+        # and let the existing atomic mutation persist its receipt and position.
+        stream = active_random_stream()
+        if stream is None:
+            stream = CampaignRandomStream.from_campaign_state(
+                campaign_id,
+                campaign.state,
+                operation="combat_hp_change",
+                idempotency_key=idempotency_key,
+                campaign_revision=campaign.revision,
+            )
+            with use_random_stream(stream):
+                return combat_save_damage(
+                    campaign_id,
+                    **request_payload,
+                    principal_id=principal_id,
+                    expected_revision=expected_revision,
+                    idempotency_key=idempotency_key,
+                )
+        random_state = validate_random_stream_state(
+            dict(campaign.state or {}).get("random_stream")
+            or initial_random_stream(f"sagasmith-dnd:{campaign_id}")
+        )
+        if (
+            stream.campaign_id != campaign_id
+            or (
+                stream.campaign_revision is not None
+                and stream.campaign_revision != campaign.revision
+            )
+            or stream.seed != random_state["seed"]
+            or stream.start_position != random_state["position"]
+        ):
+            raise CombatEngineError("save damage requires the current campaign random snapshot")
         require_no_blocking_pending(encounter)
         positioning_mode = str(encounter.get("positioning_mode") or "grid")
         normalized_spatial_facts: dict[str, Any] | None = None
