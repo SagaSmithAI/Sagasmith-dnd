@@ -103,6 +103,7 @@ def resolve_sleep_targets(
         hp = _hit_points(original)
         reason = ""
         affected = False
+        ended_concentration_effect_ids: list[str] = []
         if "unconscious" in set(original.get("conditions") or []):
             reason = "already_unconscious"
         elif _is_undead(original):
@@ -111,6 +112,10 @@ def resolve_sleep_targets(
             reason = "immune_to_charmed"
         elif _has_magical_sleep_immunity(original):
             reason = "immune_to_magical_sleep"
+        elif str(original.get("edition") or "2014") != "2014":
+            reason = "unsupported_ruleset"
+        elif "unconscious" in _condition_immunities(original):
+            reason = "immune_to_unconscious"
         elif hp <= remaining:
             effect_id = f"sleep-{uuid4().hex}"
             effect = {
@@ -134,7 +139,9 @@ def resolve_sleep_targets(
             # Import locally to avoid a module import cycle with combat_engine.
             from sagasmith_dnd.combat_engine import end_concentration_for_incapacitating_conditions
 
-            end_concentration_for_incapacitating_conditions(value, ended_reason="unconscious")
+            ended_concentration_effect_ids = end_concentration_for_incapacitating_conditions(
+                value, ended_reason="unconscious"
+            )
             value = validate_character_sheet(value)
             remaining -= hp
             affected = True
@@ -149,6 +156,7 @@ def resolve_sleep_targets(
                 "remaining_pool": remaining,
                 "skip_reason": reason,
                 "effect_id": effect_id if affected else "",
+                "ended_concentration_effect_ids": ended_concentration_effect_ids,
                 "source_rule_refs": list(refs),
             }
         )
