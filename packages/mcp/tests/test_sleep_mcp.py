@@ -199,7 +199,7 @@ def test_real_2014_sleep_area_pool_and_replay(tmp_path: Path, cast_level: int) -
                     "participant_config": [
                         {
                             "actor_id": actor["id"],
-                            "initiative": 20 - index,
+                            "initiative": [20, 18, 19, 17, 16, 15, 14][index],
                             "position": {"x": position[0], "y": position[1]},
                             "disposition": "friendly" if index == 0 else "hostile",
                         }
@@ -255,6 +255,60 @@ def test_real_2014_sleep_area_pool_and_replay(tmp_path: Path, cast_level: int) -
                 close_server(server)
                 server = create_server(config)
                 assert await server.call_tool("combat_cast_spell", arguments) == raw
+                cast_revision = result["campaign_revision"]
+                ended = await _call(
+                    server,
+                    "combat_end_turn",
+                    {
+                        "campaign_id": campaign_id,
+                        "actor_id": actors[0]["id"],
+                        "expected_revision": cast_revision,
+                        "idempotency_key": "end-caster-turn",
+                    },
+                )
+                cast_revision = ended["campaign_revision"]
+                with pytest.raises(Exception, match="another target"):
+                    await server.call_tool(
+                        "combat_common_action",
+                        {
+                            "campaign_id": campaign_id,
+                            "actor_id": actors[2]["id"],
+                            "action": "shake_sleep",
+                            "target_id": actors[2]["id"],
+                            "expected_revision": cast_revision,
+                            "idempotency_key": "shake-self",
+                        },
+                    )
+                with pytest.raises(Exception, match="revision"):
+                    await server.call_tool(
+                        "combat_common_action",
+                        {
+                            "campaign_id": campaign_id,
+                            "actor_id": actors[2]["id"],
+                            "action": "shake_sleep",
+                            "target_id": actors[1]["id"],
+                            "expected_revision": cast_revision - 1,
+                            "idempotency_key": "shake-stale",
+                        },
+                    )
+                shaken = await server.call_tool(
+                    "combat_common_action",
+                    {
+                        "campaign_id": campaign_id,
+                        "actor_id": actors[2]["id"],
+                        "action": "shake_sleep",
+                        "target_id": actors[1]["id"],
+                        "expected_revision": cast_revision,
+                        "idempotency_key": "shake-sleep",
+                    },
+                )
+                assert shaken[1]["status"] == "committed"
+                awakened = await _call(
+                    server,
+                    "character_query",
+                    {"view": "get", "payload": {"character_id": actors[1]["id"]}},
+                )
+                assert "unconscious" not in awakened["sheet"]["conditions"]
             finally:
                 close_server(server)
         finally:
