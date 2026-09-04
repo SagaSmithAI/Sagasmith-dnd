@@ -2827,7 +2827,10 @@ def test_subclass_spell_prefers_exact_reviewed_dependency_over_bundled_duplicate
 
 
 @pytest.mark.fresh_database
-def test_reviewed_addon_base_class_uses_bound_level_one_materializer(tmp_path: Path) -> None:
+@pytest.mark.parametrize("repeatable_levels", [[], [6]])
+def test_reviewed_addon_base_class_uses_bound_level_one_materializer(
+    tmp_path: Path, repeatable_levels: list[int]
+) -> None:
     workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
         home=tmp_path / "home",
@@ -3009,6 +3012,7 @@ def test_reviewed_addon_base_class_uses_bound_level_one_materializer(tmp_path: P
                 "feature_subtype": "selectable_option",
                 "minimum_level": 1,
                 "description": "A learned artificer infusion.",
+                "repeatable_selection_levels": [],
                 "selection_requirements": {},
                 "selection_requirements_by_level": {},
                 "mechanical_grants": {},
@@ -3036,6 +3040,9 @@ def test_reviewed_addon_base_class_uses_bound_level_one_materializer(tmp_path: P
                 "class_name": "Artificer",
                 "subclass_name": "",
                 "minimum_level": 1,
+                # Synthetic level-one fixture: later unlocks need not repeat
+                # the initial minimum_level in their list (as in real Infuse Item).
+                "repeatable_selection_levels": repeatable_levels,
                 "selection_requirements": {
                     "field": "infusions",
                     "kind": "feature_grants",
@@ -3059,6 +3066,20 @@ def test_reviewed_addon_base_class_uses_bound_level_one_materializer(tmp_path: P
             status="ready",
             references=["book:addon:artificer:p4"],
         )
+        unowned_feature = deepcopy(infusion_feature)
+        unowned_feature["id"] = "dnd5e.addon.artificer.feature.unbound-advancement"
+        unowned_feature["card"].update(
+            name="Unbound Advancement",
+            class_name="",
+            minimum_level=2,
+            repeatable_selection_levels=[6],
+            selection_requirements={},
+        )
+        unowned_feature["selection_contract"] = build_selection_contract(
+            unowned_feature,
+            status="ready",
+            references=["book:addon:artificer:p4"],
+        )
         await import_and_activate_addon_fixture(
             _call,
             server,
@@ -3073,7 +3094,7 @@ def test_reviewed_addon_base_class_uses_bound_level_one_materializer(tmp_path: P
                 "editions": ["2014"],
                 "capabilities": [],
             },
-            artifacts=[artifact, tool_feature, infusion_feature, infusion_option],
+            artifacts=[artifact, tool_feature, infusion_feature, infusion_option, unowned_feature],
             mechanics=[],
             expected_revision=profile["campaign_revision"],
             request_key="addon-class",
@@ -3169,6 +3190,76 @@ def test_reviewed_addon_base_class_uses_bound_level_one_materializer(tmp_path: P
             if item["id"] == infusion_option["id"]
         )
         assert enhanced_defense["source_key"] == "Infuse Item"
+        assert "repeatable_selection_levels" not in enhanced_defense
+        with pytest.raises(Exception, match="not a repeatable selection level"):
+            await _call(
+                server,
+                "character_content_apply",
+                {
+                    "character_id": character["id"],
+                    "artifact_id": unowned_feature["id"],
+                    "expected_revision": infused["revision"],
+                    "idempotency_key": "unowned-initial",
+                },
+            )
+        parent_feature = next(
+            item
+            for item in infused["sheet"]["content"]["features"]
+            if item["id"] == infusion_feature["id"]
+        )
+        assert [item["level"] for item in parent_feature.get("advancement_grants", [])] == (
+            [1] if repeatable_levels else []
+        )
+        for label, grant_level, message in (
+            ("duplicate", None, "already present"),
+            ("invalid-level", 2, "not a repeatable selection level"),
+            ("future-level", 6, "exceeds the actor's class level"),
+        ):
+            if not repeatable_levels and label == "future-level":
+                continue
+            choices = {"infusions": ["Enhanced Defense"]}
+            if grant_level is not None:
+                choices["grant_level"] = grant_level
+            # Use a fresh actor for invalid/future first grants so the duplicate
+            # guard cannot mask whether the initial-grant exception is bounded.
+            target = character
+            if label != "duplicate":
+                target = await _call(
+                    server,
+                    "character_create_from",
+                    {
+                        "mode": "direct",
+                        "payload": {
+                            "campaign_id": campaign["id"],
+                            "name": label,
+                            "sheet": feature_applied["sheet"],
+                        },
+                        "idempotency_key": f"infusion-{label}-actor",
+                    },
+                )
+            else:
+                target = {"id": character["id"], "revision": infused["revision"]}
+            with pytest.raises(Exception, match=message):
+                await _call(
+                    server,
+                    "character_content_apply",
+                    {
+                        "character_id": target["id"],
+                        "artifact_id": infusion_feature["id"],
+                        "selection": choices,
+                        "expected_revision": target["revision"],
+                        "idempotency_key": f"infusion-{label}",
+                    },
+                )
+            unchanged = await _call(
+                server,
+                "character_query",
+                {
+                    "view": "get",
+                    "payload": {"character_id": target["id"]},
+                },
+            )
+            assert unchanged["revision"] == target["revision"]
         with pytest.raises(Exception, match="must be granted by their parent"):
             await _call(
                 server,

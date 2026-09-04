@@ -45055,7 +45055,19 @@ def _create_server(
                 and (kind != "feature" or grant_level not in repeatable_levels)
             ):
                 raise ValueError(f"content {kind} is already present")
-            if grant_level and grant_level not in repeatable_levels:
+            # Later choice unlocks need not include the initial feature level.
+            # Permit that first grant only; never turn it into a repeatable grant.
+            initial_feature_grant = (
+                kind == "feature"
+                and existing_content is None
+                and bool(repeatable_levels)
+                and (
+                    str(card.get("class_name") or "").strip()
+                    or str(card.get("species_name") or "").strip()
+                )
+                and grant_level == int(card.get("minimum_level", 1) or 1)
+            )
+            if grant_level and grant_level not in repeatable_levels and not initial_feature_grant:
                 raise ValueError("feature grant_level is not a repeatable selection level")
             if existing_content is not None and any(
                 int(item.get("level", 0) or 0) == grant_level
@@ -45663,6 +45675,7 @@ def _create_server(
                                 "subclass_name",
                                 "minimum_level",
                                 "feature_subtype",
+                                "repeatable_selection_levels",
                                 "selection_requirements",
                                 "selection_requirements_by_level",
                                 "mechanical_grants",
@@ -46239,6 +46252,7 @@ def _create_server(
                                     "required_cantrip",
                                     "required_invocation",
                                     "required_pact_boon",
+                                    "repeatable_selection_levels",
                                     "selection_requirements",
                                     "selection_requirements_by_level",
                                     "subclass_name",
