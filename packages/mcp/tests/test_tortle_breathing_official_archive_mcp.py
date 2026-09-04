@@ -2,6 +2,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from mcp.server.mcpserver.exceptions import ToolError
 from sagasmith_dnd.breathing import BREATHING_EFFECT_ID
 from sagasmith_dnd.character_schema import default_character_sheet
 from sagasmith_dnd.standard_feature_ids import (
@@ -205,6 +206,139 @@ def test_finalized_tortle_hold_breath_is_one_hour_and_recovers_after_restart(
             assert effect["metadata"]["phase"] == "suffocating"
             assert at_boundary["sheet"]["combat"]["hp"]["value"] == 10
 
+            observer = await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "direct",
+                    "payload": {
+                        "campaign_id": campaign["id"],
+                        "name": "Breathing observer",
+                        "sheet": default_character_sheet(),
+                    },
+                    "idempotency_key": "observer",
+                },
+            )
+            current_campaign = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            phase = await _call(
+                server,
+                "game_phase",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "set",
+                    "tool_profile": "play",
+                    "expected_revision": current_campaign["revision"],
+                    "idempotency_key": "play",
+                },
+            )
+            started = await _call(
+                server,
+                "combat_start",
+                {
+                    "campaign_id": campaign["id"],
+                    "positioning_mode": "agent",
+                    "participant_ids": [actor["id"], observer["id"]],
+                    "participant_config": [
+                        {"actor_id": actor["id"], "initiative": 20},
+                        {"actor_id": observer["id"], "initiative": 10},
+                    ],
+                    "expected_revision": phase["campaign_revision"],
+                    "idempotency_key": "combat-start",
+                },
+            )
+            after_tortle_turn = await _call(
+                server,
+                "combat_end_turn",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": actor["id"],
+                    "expected_revision": started["campaign_revision"],
+                    "idempotency_key": "tortle-turn",
+                },
+            )
+            still_alive = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": actor["id"]}},
+            )
+            assert still_alive["sheet"]["combat"]["hp"]["value"] == 10
+            after_observer_turn = await _call(
+                server,
+                "combat_end_turn",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": observer["id"],
+                    "expected_revision": after_tortle_turn["campaign_revision"],
+                    "idempotency_key": "observer-turn",
+                },
+            )
+            dropped = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": actor["id"]}},
+            )
+            assert dropped["sheet"]["combat"]["hp"]["value"] == 0
+            assert "suffocating" in dropped["sheet"]["conditions"]
+
+            ended = await _call(
+                server,
+                "combat_end",
+                {
+                    "campaign_id": campaign["id"],
+                    "outcome": {"status": "withdrawal", "summary": "The observer leaves."},
+                    "expected_revision": after_observer_turn["campaign_revision"],
+                    "idempotency_key": "combat-end",
+                },
+            )
+            assert ended["combat"]["active"] is False
+            # Ending combat legitimately refreshes the actor's combat state.
+            # Recovery rejection must be compared with that committed baseline.
+            dropped = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": actor["id"]}},
+            )
+            assert dropped["sheet"]["combat"]["hp"]["value"] == 0
+            dropped_revision = dropped["revision"]
+            dropped_sheet = dropped["sheet"]
+            for action, payload, key, message in (
+                (
+                    "heal",
+                    {"amount": 1},
+                    "heal-suffocating",
+                    "cannot regain hit points until it can breathe",
+                ),
+                (
+                    "stabilize",
+                    {"source_actor_id": observer["id"], "reason": "Immediate aid"},
+                    "stabilize-suffocating",
+                    "cannot become stable until it can breathe",
+                ),
+            ):
+                with pytest.raises(ToolError, match=message):
+                    await _call(
+                        server,
+                        "character_state_change",
+                        {
+                            "character_id": actor["id"],
+                            "action": action,
+                            "payload": payload,
+                            "expected_revision": dropped_revision,
+                            "idempotency_key": key,
+                        },
+                    )
+            unchanged = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": actor["id"]}},
+            )
+            assert unchanged["revision"] == dropped_revision
+            assert unchanged["sheet"] == dropped_sheet
+
             restored = await _call(
                 server,
                 "character_state_change",
@@ -212,7 +346,7 @@ def test_finalized_tortle_hold_breath_is_one_hour_and_recovers_after_restart(
                     "character_id": actor["id"],
                     "action": "breathing_transition",
                     "payload": {"can_breathe": True},
-                    "expected_revision": at_boundary["revision"],
+                    "expected_revision": unchanged["revision"],
                     "idempotency_key": "restore-air",
                 },
             )
@@ -229,7 +363,7 @@ def test_finalized_tortle_hold_breath_is_one_hour_and_recovers_after_restart(
                         "character_id": actor["id"],
                         "action": "breathing_transition",
                         "payload": {"can_breathe": True},
-                        "expected_revision": at_boundary["revision"],
+                        "expected_revision": unchanged["revision"],
                         "idempotency_key": "restore-air",
                     },
                 )
