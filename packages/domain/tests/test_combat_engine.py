@@ -403,7 +403,9 @@ def test_zero_walk_speed_is_preserved_when_a_combat_turn_starts() -> None:
     stopped["derived"] = derive_character_sheet(stopped["sheet"])
 
     encounter = start_encounter([first, stopped])
-    stopped_state = next(item for item in encounter["combatants"] if item["actor_id"] == "stopped")
+    stopped_state = next(
+        item for item in encounter["combatants"] if item["actor_id"] == "stopped"
+    )
     assert stopped_state["base_speed"] == 0
     assert stopped_state["turn_budget"]["movement"] == 0
 
@@ -600,9 +602,13 @@ def test_mid_turn_speed_change_caps_base_movement_and_preserves_locked_dash_gran
     half_current = current_combatant(half_speed)
     assert half_current is not None
     half_current["speed_multiplier"] = 0.5
-    exhausted_half_speed = spend_movement(half_speed, "mover", 15, destination={"x": 3, "y": 0})
+    exhausted_half_speed = spend_movement(
+        half_speed, "mover", 15, destination={"x": 3, "y": 0}
+    )
     with pytest.raises(CombatEngineError, match="no movement remaining"):
-        spend_movement(exhausted_half_speed, "mover", 5, destination={"x": 4, "y": 0})
+        spend_movement(
+            exhausted_half_speed, "mover", 5, destination={"x": 4, "y": 0}
+        )
 
     encounter = _grid_encounter([actor])
     moved = spend_movement(encounter, "mover", 10, destination={"x": 2, "y": 0})
@@ -663,7 +669,9 @@ def test_legacy_movement_budget_is_inferred_without_manufacturing_dash_grants() 
     stale_budget.pop("movement_spent")
     stale_budget.pop("extra_movement_granted")
     stale_budget["movement"] = 20
-    stale_moved = spend_movement(stale_after_spend, "legacy", 5, destination={"x": 1, "y": 0})
+    stale_moved = spend_movement(
+        stale_after_spend, "legacy", 5, destination={"x": 1, "y": 0}
+    )
     assert current_combatant(stale_moved)["turn_budget"]["movement"] == 0
 
     ambiguous_spend = deepcopy(encounter)
@@ -675,7 +683,9 @@ def test_legacy_movement_budget_is_inferred_without_manufacturing_dash_grants() 
     ambiguous_budget["movement"] = 10
     before_ambiguous_move = deepcopy(ambiguous_spend)
     with pytest.raises(CombatEngineError, match="no movement remaining"):
-        spend_movement(ambiguous_spend, "legacy", 5, destination={"x": 1, "y": 0})
+        spend_movement(
+            ambiguous_spend, "legacy", 5, destination={"x": 1, "y": 0}
+        )
     assert ambiguous_spend == before_ambiguous_move
 
     unknown_old_dash = deepcopy(encounter)
@@ -685,7 +695,9 @@ def test_legacy_movement_budget_is_inferred_without_manufacturing_dash_grants() 
     dash_budget.pop("movement_spent")
     dash_budget.pop("extra_movement_granted")
     dash_budget["movement"] = 45
-    capped = spend_movement(unknown_old_dash, "legacy", 15, destination={"x": 3, "y": 0})
+    capped = spend_movement(
+        unknown_old_dash, "legacy", 15, destination={"x": 3, "y": 0}
+    )
     capped_budget = current_combatant(capped)["turn_budget"]
     assert capped_budget["movement"] == 0
     assert capped_budget["extra_movement_granted"] == 0
@@ -2319,7 +2331,9 @@ def test_intrinsic_claws_settle_as_strength_unarmed_slashing_attack() -> None:
     ]
     attacker["derived"] = derive_character_sheet(attacker["sheet"])
     target = _actor("target", hp=20, ac=10)
-    rules = resolution_context({"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []})
+    rules = resolution_context(
+        {"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []}
+    )
 
     ordinary_unarmed = preflight_attack(
         attacker,
@@ -3708,7 +3722,10 @@ def test_initiative_ties_reject_duplicate_explicit_tie_breakers(
         start_encounter(participants, rng=_SequenceRng(10, 10))
     assert engine_rolled.value.ruling_kind == ruling_kind
 
-    tied = [{**participant, "initiative": 10, "tie_breaker": 0} for participant in participants]
+    tied = [
+        {**participant, "initiative": 10, "tie_breaker": 0}
+        for participant in participants
+    ]
 
     with pytest.raises(NeedsRulingError, match="unique tie_breaker") as raised:
         start_encounter(tied)
@@ -4799,7 +4816,9 @@ def test_dodge_lifecycle_does_not_reactivate_after_invalidating_state_ends(
     encounter = _grid_encounter([dodger, attacker])
     encounter = resolve_common_action(encounter, actor_id_value="dodger", action="dodge")
     encounter = end_turn(encounter, actor_id_value="dodger")
-    dodger_state = next(item for item in encounter["combatants"] if item["actor_id"] == "dodger")
+    dodger_state = next(
+        item for item in encounter["combatants"] if item["actor_id"] == "dodger"
+    )
     assert dodge_benefit_active(dodger_state) is True
 
     dodger_state["speed_multiplier"] = speed_multiplier
@@ -4882,7 +4901,9 @@ def test_dodge_advantage_uses_authoritative_encounter_and_normalized_dexterity()
     )
     assert saved["natural"] == 17
     assert saved["rolls"] == [2, 17]
-    assert [item["mechanic_id"] for item in saved["rule_receipts"]] == ["dnd5e.core.action.dodge"]
+    assert [item["mechanic_id"] for item in saved["rule_receipts"]] == [
+        "dnd5e.core.action.dodge"
+    ]
 
     cancelled = resolve_actor_check(
         dodger,
@@ -4941,9 +4962,9 @@ def test_area_save_damage_applies_dodge_per_authoritative_target() -> None:
     by_id = {item["target_id"]: item for item in settled["result"]["targets"]}
     assert by_id["dodger"]["save"]["rolls"] == [3, 18]
     assert by_id["bystander"]["save"]["rolls"] == [11]
-    assert [item["mechanic_id"] for item in by_id["dodger"]["save"]["rule_receipts"]] == [
-        "dnd5e.core.action.dodge"
-    ]
+    assert [
+        item["mechanic_id"] for item in by_id["dodger"]["save"]["rule_receipts"]
+    ] == ["dnd5e.core.action.dodge"]
     assert by_id["bystander"]["save"]["rule_receipts"] == []
 
 
@@ -5623,9 +5644,9 @@ def test_orc_aggressive_grants_separate_toward_only_movement() -> None:
         )
 
     hidden_target = deepcopy(granted)
-    next(item for item in hidden_target["combatants"] if item["actor_id"] == "hostile")[
-        "hidden"
-    ] = True
+    next(
+        item for item in hidden_target["combatants"] if item["actor_id"] == "hostile"
+    )["hidden"] = True
     with pytest.raises(CombatEngineError, match="no longer visible"):
         spend_movement(
             hidden_target,
