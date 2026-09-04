@@ -36,7 +36,7 @@ def _sheet(*items: dict) -> dict:
     return validate_character_sheet(sheet)
 
 
-def test_full_transfer_preserves_effects_and_moves_attuned_bond() -> None:
+def test_full_transfer_moves_attuned_bond() -> None:
     source = _sheet(_weapon("bonded", attunement="attuned"))
     source = equip_inventory_item(source, "bonded", "main_hand")
     sheets = {"source": source, "target": _sheet()}
@@ -151,3 +151,112 @@ def test_inputs_are_not_mutated_and_unknown_item_is_rejected() -> None:
     with pytest.raises(LookupError):
         transfer_actor_inventory_item(sheets, [], "source", "target", "missing")
     assert sheets == before
+
+
+def test_third_carrier_collision_then_return_restores_original_bond_and_id():
+    sheets = {
+        "a": _sheet(_weapon("blade", attunement="attuned")),
+        "b": _sheet(),
+        "c": _sheet(_weapon("blade")),
+    }
+    first = transfer_actor_inventory_item(sheets, [], "a", "b", "blade")
+    second = transfer_actor_inventory_item(first["sheets"], [], "b", "c", "blade")
+    assert second["item"]["id"] != "blade"
+    assert second["sheets"]["b"]["inventory"]["external_items"] == []
+    assert second["sheets"]["a"]["inventory"]["external_items"][0]["attunement"] == "attuned"
+    returned = transfer_actor_inventory_item(second["sheets"], [], "c", "a", second["item"]["id"])
+    assert returned["item"]["id"] == "blade"
+    assert returned["item"]["attunement"] == "attuned"
+    assert returned["sheets"]["a"]["inventory"]["external_items"] == []
+
+
+def test_mundane_background_equipment_keeps_original_history():
+    source = _sheet(_weapon("starting-weapon"))
+    source["progression"]["background_grants"]["equipment_item_ids"] = ["starting-weapon"]
+    first = transfer_actor_inventory_item(
+        {"a": source, "b": _sheet()}, [], "a", "b", "starting-weapon"
+    )
+    assert first["sheets"]["a"]["progression"]["background_grants"]["equipment_item_ids"] == [
+        "starting-weapon"
+    ]
+    assert first["sheets"]["a"]["inventory"]["external_items"][0]["attunement"] == "none"
+    returned = transfer_actor_inventory_item(first["sheets"], [], "b", "a", first["item"]["id"])
+    assert returned["sheets"]["a"] == validate_character_sheet(source)
+
+
+def test_container_tree_remaps_ammunition_and_preserves_each_child_bond():
+    bag = {"id": "bag", "name": "Bag", "kind": "container"}
+    bow = _weapon("bow", attunement="attuned")
+    bow["name"] = "Magic Bow"
+    bow["container_id"] = "bag"
+    bow["mechanics"].update(properties=["ammunition"], ammunition_item_id="arrows")
+    arrows = {
+        "id": "arrows",
+        "name": "Arrows",
+        "kind": "ammunition",
+        "quantity": 20,
+        "container_id": "bag",
+    }
+    ring = {
+        "id": "ring",
+        "name": "Magic Ring",
+        "kind": "equipment",
+        "attunement": "attuned",
+        "container_id": "bag",
+    }
+    result = transfer_actor_inventory_item(
+        {
+            "a": _sheet(bow, ring, arrows, bag),
+            "b": _sheet(_weapon("bow"), {**arrows, "container_id": None}),
+        },
+        [],
+        "a",
+        "b",
+        "bag",
+    )
+    mapping = result["id_map"]
+    received = {item["id"]: item for item in result["sheets"]["b"]["inventory"]["items"]}
+    assert received[mapping["bow"]]["mechanics"]["ammunition_item_id"] == mapping["arrows"]
+    assert received[mapping["bow"]]["container_id"] == mapping["bag"]
+    assert received[mapping["ring"]]["attunement"] == "required"
+    assert received[mapping["bow"]]["attunement"] == "required"
+    assert {
+        ref["id"]
+        for ref in result["sheets"]["a"]["inventory"]["external_items"]
+        if ref["attunement"] == "attuned"
+    } == {"bow", "ring"}
+
+
+def test_partial_stack_collision_is_deterministic_bounded_and_non_mutating():
+    item_id = "x" * 100
+    sheets = {"a": _sheet(_weapon(item_id, quantity=4)), "b": _sheet(_weapon(item_id))}
+    before = deepcopy(sheets)
+    first = transfer_actor_inventory_item(sheets, [], "a", "b", item_id, 2)
+    assert first == transfer_actor_inventory_item(sheets, [], "a", "b", item_id, 2)
+    assert sheets == before
+    assert len(first["item"]["id"]) <= 100
+    assert first["item"]["id"] != item_id
+    assert first["sheets"]["a"]["inventory"]["items"][0]["quantity"] == 2
+
+
+def test_transferred_spellcasting_item_does_not_delete_ongoing_effect():
+    source = _sheet(
+        {
+            "id": "stone",
+            "name": "Light Stone",
+            "kind": "magic_item",
+            "mechanics": {"spellcasting": {"spells": [{"card": {"id": "test-light"}}]}},
+        }
+    )
+    source["effects"] = [
+        {
+            "id": "light-effect",
+            "name": "Light",
+            "source_spell_id": "test-light",
+            "duration": {"period": "round", "remaining": 5},
+        }
+    ]
+    source = validate_character_sheet(source)
+    result = transfer_actor_inventory_item({"a": source, "b": _sheet()}, [], "a", "b", "stone")
+    assert result["sheets"]["a"]["effects"] == [{**source["effects"][0], "source": "actor:a"}]
+    assert result["sheets"]["b"]["effects"] == []

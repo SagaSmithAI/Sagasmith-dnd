@@ -243,10 +243,15 @@ def test_attuned_ground_item_preserves_custody_across_actor_transfer(tmp_path: P
                     "idempotency_key": "b-to-c",
                 },
             )
-            assert transfer["status"] == "committed"
-            moved_id = transfer["item"]["id"]
+            assert transfer["status"] == "ok"
+            moved_id = transfer["result"]["item"]["id"]
             assert moved_id != sword_id
-            assert transfer["item"]["attunement"] == "attuned"
+            assert transfer["result"]["item"]["attunement"] == "required"
+            assert transfer["result"]["item"] == {
+                **item_record,
+                "id": moved_id,
+                "attunement": "required",
+            }
             c_after = await _call(
                 server,
                 "character_query",
@@ -280,6 +285,7 @@ def test_attuned_ground_item_preserves_custody_across_actor_transfer(tmp_path: P
                 "actor_id": actors[2]["id"],
                 "item_id": moved_id,
             }
+            assert a_external_after_transfer["attunement"] == "attuned"
             a_return = await _raw(
                 server,
                 "inventory_transfer",
@@ -296,7 +302,7 @@ def test_attuned_ground_item_preserves_custody_across_actor_transfer(tmp_path: P
                     "idempotency_key": "c-to-a",
                 },
             )
-            assert a_return["status"] == "committed"
+            assert a_return["status"] == "ok"
             a_final = await _call(
                 server,
                 "character_query",
@@ -309,17 +315,7 @@ def test_attuned_ground_item_preserves_custody_across_actor_transfer(tmp_path: P
             )
             assert returned["id"] == sword_id
             assert returned["attunement"] == "attuned"
-            for field in (
-                "name",
-                "description",
-                "mechanics",
-                "attunement",
-                "weight_oz",
-                "price_cp",
-                "source_key",
-                "condition",
-            ):
-                assert returned[field] == item_record[field]
+            assert returned == item_record
             assert all(
                 ref["id"] != sword_id for ref in a_final["sheet"]["inventory"]["external_items"]
             )

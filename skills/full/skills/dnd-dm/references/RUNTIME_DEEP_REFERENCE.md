@@ -891,11 +891,19 @@ commit; replaying a successful request after restart must not repeat payment.
 Common character/campaign settlements reject missing physical-item references
 and conflicting attuned owners. The state adapter repeats this check inside the
 owning transaction after candidate writes, so failure rolls back state, audit
-records and retry receipts together. Consequently, legacy removal/transfer paths
-that cannot migrate the references are rejected, not silently repaired. These
-guards do not yet establish complete cross-owner attunement lifecycle or
-compatibility with every legacy inventory removal/transfer path; do not use
-generic card replacement to repair or manufacture `inventory.external_items`.
+records and retry receipts together. For two 2014 actors,
+`inventory_transfer(mode="character_to_character")` migrates physical item trees
+and existing references together, including container/ammunition links and ID
+collisions. Mere transfer does not transfer attunement: the old owner's bond
+survives, and return restores that owner's original item identity. When another
+carrier completes an authorized short-rest attunement through `party_rest` or
+the resting members of `stable_recovery`, the same settlement ends the prior
+owner's bond. Play-phase card replacement cannot bypass that rest workflow.
+Legacy removal and party-inventory paths that cannot migrate references remain
+rejected, not silently repaired. This does not establish the complete attunement
+lifecycle (including distance/time, lost prerequisites and cursed voluntary
+unattunement), or cover lifecycle/import writes outside the state adapter. Do not
+use generic card replacement to repair or manufacture `inventory.external_items`.
 
 A source-bound 2014 Core `Fly` is also engine-owned. Outside combat call
 `character_action(action="cast_spell")` with equal explicit

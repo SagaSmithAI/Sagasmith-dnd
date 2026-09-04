@@ -51,7 +51,9 @@ async def _snapshot(server, campaign_id: str, actor_ids: list[str]) -> tuple[dic
 
 
 @pytest.mark.fresh_database
-def test_ground_custody_rejects_stale_owner_transfer_and_remove(tmp_path: Path) -> None:
+def test_ground_custody_rejects_untracked_removal_and_raw_custody_corruption(
+    tmp_path: Path,
+) -> None:
     async def exercise() -> None:
         workspace = Path(__file__).resolve().parents[3]
         config = replace(
@@ -132,32 +134,6 @@ def test_ground_custody_rejects_stale_owner_transfer_and_remove(tmp_path: Path) 
             assert state_before_bad[1][0]["sheet"]["inventory"]["external_items"][0][
                 "location"
             ] == {"kind": "actor", "actor_id": actors["B"]["id"], "item_id": b_item_id}
-            payload = {
-                "source_character_id": actors["B"]["id"],
-                "target_character_id": actors["C"]["id"],
-                "item_id": b_item_id,
-                "expected_campaign_revision": state_before_bad[0]["revision"],
-                "expected_source_revision": state_before_bad[1][1]["revision"],
-                "expected_target_revision": state_before_bad[1][2]["revision"],
-            }
-            with pytest.raises(ToolError, match="missing physical item"):
-                await _call(
-                    server,
-                    "inventory_transfer",
-                    {
-                        "mode": "character_to_character",
-                        "payload": payload,
-                        "idempotency_key": "bad-b-c",
-                    },
-                )
-            assert (
-                await _snapshot(
-                    server,
-                    campaign["id"],
-                    [actors["A"]["id"], actors["B"]["id"], actors["C"]["id"]],
-                )
-                == state_before_bad
-            )
             with pytest.raises(ToolError, match="missing physical item"):
                 await _call(
                     server,

@@ -33,7 +33,7 @@ def test_play_sheet_replace_cannot_bypass_attunement_rest_gate(tmp_path: Path) -
             campaign = await _call(
                 server,
                 "campaign_create",
-                {"name": "Attunement guard", "idempotency_key": "campaign"},
+                {"name": "Attunement guard", "edition": "2014", "idempotency_key": "campaign"},
             )
             created = await _call(
                 server,
@@ -77,11 +77,19 @@ def test_play_sheet_replace_cannot_bypass_attunement_rest_gate(tmp_path: Path) -
                 },
             )
             before = deepcopy(created["sheet"])
+            before_campaign = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            before_actor = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": created["id"]}},
+            )
             item_patch = {
                 "item_id": "ring",
                 "patch": {"attunement": "attuned"},
-                "expected_revision": created["revision"],
-                "idempotency_key": "inventory-block",
             }
             with pytest.raises(ToolError, match="short rest"):
                 await _call(
@@ -120,7 +128,6 @@ def test_play_sheet_replace_cannot_bypass_attunement_rest_gate(tmp_path: Path) -
                 )
                 pytest.fail(
                     "sheet replacement bypassed rest gate: "
-                    f"campaign_revision={replaced.get('campaign_revision')}, "
                     f"character_revision={replaced.get('revision')}, "
                     f"attunement={replaced['sheet']['inventory']['items'][0]['attunement']}"
                 )
@@ -131,6 +138,15 @@ def test_play_sheet_replace_cannot_bypass_attunement_rest_gate(tmp_path: Path) -
             )
             assert current["sheet"] == before
             assert current["revision"] == created["revision"]
+            assert current == before_actor
+            assert (
+                await _call(
+                    server,
+                    "campaign_query",
+                    {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+                )
+                == before_campaign
+            )
         finally:
             close_server(server)
 

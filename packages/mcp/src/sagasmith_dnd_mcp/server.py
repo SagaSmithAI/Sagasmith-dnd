@@ -131,6 +131,7 @@ from sagasmith_dnd.activities import (
     recharge_activities_at_turn_start,
 )
 from sagasmith_dnd.activity_identity import is_multiattack_source_name
+from sagasmith_dnd.actor_inventory_transfer import transfer_actor_inventory_item
 from sagasmith_dnd.actor_types import (
     NON_PLAYER_CHARACTER_TYPES,
     require_agent_decidable_character_type,
@@ -329,6 +330,7 @@ from sagasmith_dnd.game_time import (
 from sagasmith_dnd.ground_transfer import drop_held_items, pickup_ground_item
 from sagasmith_dnd.held_items import held_item_roots
 from sagasmith_dnd.heroic_inspiration import reroll_recorded_d20_result
+from sagasmith_dnd.item_attunement_ownership import complete_item_attunement_ownership
 from sagasmith_dnd.lifecycle import (
     LONG_REST_MINIMUM_MINUTES,
     advance_effect_durations,
@@ -13945,6 +13947,31 @@ def _create_server(
                     target_result["ended_reason"] = ended_by_target_effect_id[effect_id]
             next_response_fields["result"] = result
         return source_state, updates, next_response_fields
+
+    def reconcile_completed_item_attunements(
+        campaign: Any,
+        state: dict[str, Any],
+        updates: list[CharacterStateUpdate],
+        completed: dict[str, str],
+    ) -> list[CharacterStateUpdate]:
+        if not completed:
+            return updates
+        records = {actor.id: actor for actor in characters.list(campaign_id=campaign.id)}
+        by_id = {update.character_id: update for update in updates}
+        sheets = {
+            actor_id: by_id[actor_id].sheet if actor_id in by_id else actor.sheet
+            for actor_id, actor in records.items()
+        }
+        resolved = complete_item_attunement_ownership(
+            sheets, state.get("ground_items", []), completed
+        )
+        for actor_id, sheet in resolved.items():
+            if actor_id in by_id:
+                by_id[actor_id] = replace(by_id[actor_id], sheet=sheet)
+            elif sheet != validate_character_sheet(records[actor_id].sheet):
+                actor = records[actor_id]
+                by_id[actor_id] = CharacterStateUpdate(actor_id, sheet, actor.notes, actor.revision)
+        return list(by_id.values())
 
     def validate_inventory_custody_update(
         campaign: Any,
@@ -28942,6 +28969,25 @@ def _create_server(
             normalized_sheet,
         )
         normalized_notes = validate_character_notes(notes if notes is not None else current.notes)
+        if (
+            current.campaign_id is not None
+            and authoritative_phase(current.campaign_id) != PROFILE_LOBBY
+        ):
+            old_items = {
+                item["id"]: item["attunement"]
+                for item in validate_character_sheet(current.sheet)["inventory"]["items"]
+            }
+            new_items = {
+                item["id"]: item["attunement"] for item in normalized_sheet["inventory"]["items"]
+            }
+            if {key for key, value in old_items.items() if value == "attuned"} != {
+                key for key, value in new_items.items() if value == "attuned"
+            } or any(
+                old_items[key] != new_items[key] for key in old_items.keys() & new_items.keys()
+            ):
+                raise ValueError(
+                    "attunement cannot be patched in Play; use the short rest workflow"
+                )
         return update_character(
             current,
             operation="character.sheet.replace",
@@ -29444,9 +29490,36 @@ def _create_server(
         access.require_actor(source.campaign_id, source.id, principal_id, control=True)
         access.require_actor(source.campaign_id, target.id, principal_id, control=True)
         campaign = campaigns.get(source.campaign_id)
-        source_sheet, moved = remove_inventory_item(source.sheet, item_id, quantity)
-        moved = inventory_item_for_receipt(target.sheet, moved)
-        target_sheet = receive_inventory_item(target.sheet, moved)
+        if campaign.revision != expected_campaign_revision:
+            raise ValueError("campaign revision conflict")
+        if (
+            source.revision != expected_source_revision
+            or target.revision != expected_target_revision
+        ):
+            raise ValueError("character revision conflict")
+        reference_updates = []
+        if source.sheet.get("edition") == target.sheet.get("edition") == "2014":
+            records = {actor.id: actor for actor in characters.list(campaign_id=campaign.id)}
+            settled = transfer_actor_inventory_item(
+                {key: actor.sheet for key, actor in records.items()},
+                (campaign.state or {}).get("ground_items", []),
+                source.id,
+                target.id,
+                item_id,
+                quantity,
+            )
+            source_sheet, target_sheet = settled["sheets"][source.id], settled["sheets"][target.id]
+            moved = settled["item"]
+            reference_updates = [
+                CharacterStateUpdate(key, sheet, records[key].notes, records[key].revision)
+                for key, sheet in settled["sheets"].items()
+                if key not in {source.id, target.id}
+                and sheet != validate_character_sheet(records[key].sheet)
+            ]
+        else:
+            source_sheet, moved = remove_inventory_item(source.sheet, item_id, quantity)
+            moved = inventory_item_for_receipt(target.sheet, moved)
+            target_sheet = receive_inventory_item(target.sheet, moved)
         source_sheet = finalize_actor_sheet_rulings(source_sheet, source.campaign_id)
         target_sheet = finalize_actor_sheet_rulings(target_sheet, target.campaign_id)
         source_after = replace(
@@ -29480,6 +29553,7 @@ def _create_server(
                 CharacterStateUpdate(
                     target.id, target_sheet, target.notes, expected_target_revision
                 ),
+                *reference_updates,
             ],
             include_campaign_revision=False,
             include_revisions=False,
@@ -29580,6 +29654,7 @@ def _create_server(
             },
         )
 
+    @_agent_ruling_boundary
     def campaign_stable_recovery(
         campaign_id: str,
         members: list[dict[str, Any]],
@@ -29952,6 +30027,17 @@ def _create_server(
                 expired[current.id] = list(dict.fromkeys(character_expired))
         next_state, updates, _ = reconcile_actor_effect_dependencies(
             campaign, next_state, updates, {}
+        )
+        updates = reconcile_completed_item_attunements(
+            campaign,
+            next_state,
+            updates,
+            {
+                member["character_id"]: str(member["attune_item_id"])
+                for member in normalized_resting
+                if member["attune_item_id"] is not None
+                and all_characters[member["character_id"]].sheet.get("edition") == "2014"
+            },
         )
         update_by_id = {item.character_id: item for item in updates}
         stream = active_random_stream()
@@ -31385,6 +31471,18 @@ def _create_server(
         stream = active_random_stream()
         next_state, updates, _ = reconcile_actor_effect_dependencies(
             campaign, next_state, updates, {}
+        )
+        updates = reconcile_completed_item_attunements(
+            campaign,
+            next_state,
+            updates,
+            {
+                member["character_id"]: str(member["attune_item_id"])
+                for member in normalized_members
+                if normalized_rest_type == "short_rest"
+                and member["attune_item_id"] is not None
+                and all_characters[member["character_id"]].sheet.get("edition") == "2014"
+            },
         )
         base_response = {
             "status": "committed",
