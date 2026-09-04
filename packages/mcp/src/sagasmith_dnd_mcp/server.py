@@ -1250,7 +1250,7 @@ def _structured_spell_save_facts(
     spell: dict[str, Any], resolution: dict[str, Any]
 ) -> dict[str, Any]:
     """Classify the exact native spell clause, never its display name or damage type."""
-    facts: dict[str, Any] = {"save_source_kind": "spell", "save_effect_conditions": []}
+    facts: dict[str, Any] = {"save_source_kind": "spell"}
     spell_id = str(spell.get("id") or "")
     nonpoison_spell_ids = {
         f"dnd5e.content.srd2014.spell.{slug}"
@@ -1259,7 +1259,7 @@ def _structured_spell_save_facts(
     if spell_id in nonpoison_spell_ids and resolution == effective_spell_resolution(
         {"id": spell_id}
     ):
-        facts["save_against_poison"] = False
+        facts.update(save_against_poison=False, save_effect_conditions=[])
     return facts
 
 
@@ -23164,7 +23164,6 @@ def _create_server(
                     encounter=next_encounter,
                     bonus=cover_bonus,
                     save_source_kind="spell",
-                    save_effect_conditions=[],
                     ruleset=str(next_encounter.get("ruleset") or "2014"),
                     rules=target_rule_context,
                 )
@@ -24557,6 +24556,7 @@ def _create_server(
                     rules=context_with_facts(
                         rule_context,
                         save_source_kind="nonmagical_effect",
+                        save_effect_conditions=[],
                         # This is the validated Dragonborn ancestry breath
                         # table, not a generic poison-damage heuristic.
                         save_against_poison=breath_spec["damage_type"] == "poison",

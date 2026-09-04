@@ -7,10 +7,11 @@ from pathlib import Path
 import pytest
 import sagasmith_dnd.character_schema as character_schema
 from sagasmith_dnd.character_schema import default_character_sheet
+from sagasmith_dnd.random_stream import CampaignRandomStream, use_random_stream
 from test_official_expansions_mcp import _call, _config
 from test_structured_spell_mcp import (
+    _campaign_actor_snapshot,
     _campaign_with_combat,
-    _deterministic_rolls,
     _hypnotic_pattern,
     _slot,
 )
@@ -165,10 +166,8 @@ def test_real_2014_species_save_traits_apply_and_replay(tmp_path: Path, species_
 
 
 @pytest.mark.fresh_database
-def test_real_2014_gnome_cunning_enters_native_wisdom_save(tmp_path: Path, monkeypatch) -> None:
+def test_real_2014_gnome_cunning_enters_native_wisdom_save(tmp_path: Path) -> None:
     """The source-bound Hypnotic Pattern path must consume the applied Gnome trait."""
-
-    _deterministic_rolls(monkeypatch)
 
     async def exercise() -> None:
         workspace = Path(__file__).resolve().parents[3]
@@ -250,7 +249,19 @@ def test_real_2014_gnome_cunning_enters_native_wisdom_save(tmp_path: Path, monke
                 "expected_revision": revision,
                 "idempotency_key": "gnome-hypnotic",
             }
-            result = await server.call_tool("combat_cast_spell", arguments)
+            actor_ids = [actor["id"] for actor in actors]
+            before = await _campaign_actor_snapshot(server, campaign_id, actor_ids)
+            stream = CampaignRandomStream.from_campaign_state(
+                campaign_id,
+                before["campaign"]["state"],
+                operation="combat_cast_spell",
+                idempotency_key=arguments["idempotency_key"],
+                campaign_revision=revision,
+            )
+            # Exercise the real campaign stream normally supplied by the MCP
+            # request wrapper, without substituting dice or settlement helpers.
+            with use_random_stream(stream):
+                result = await server.call_tool("combat_cast_spell", arguments)
             payload = result[1]
             assert payload["status"] == "committed"
             target = next(
@@ -264,7 +275,21 @@ def test_real_2014_gnome_cunning_enters_native_wisdom_save(tmp_path: Path, monke
                 receipt["mechanic_id"] == "dnd5e.core.save.gnome_cunning"
                 for receipt in target["save"]["rule_receipts"]
             )
+            after = await _campaign_actor_snapshot(server, campaign_id, actor_ids)
+            assert target["save"]["success"] is False
+            assert {"charmed", "incapacitated"} <= set(after["actors"][1]["sheet"]["conditions"])
+            assert after["actors"][0]["sheet"]["spellcasting"]["spell_slots"]["3"]["value"] == 0
+            receipt = payload["random_stream_receipt"]
+            assert receipt["position_after"] == receipt["position_before"] + 2
+            assert after["campaign"]["state"]["random_stream"]["last_receipt"] == receipt
+            assert (
+                after["campaign"]["state"]["random_stream"]["position"] == receipt["position_after"]
+            )
             assert await server.call_tool("combat_cast_spell", arguments) == result
+            close_server(server)
+            server = create_server(combat_config)
+            assert await server.call_tool("combat_cast_spell", arguments) == result
+            assert await _campaign_actor_snapshot(server, campaign_id, actor_ids) == after
         finally:
             close_server(server)
 

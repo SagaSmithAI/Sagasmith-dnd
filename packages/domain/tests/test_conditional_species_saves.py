@@ -8,6 +8,7 @@ from sagasmith_dnd.combat_engine import (
     NeedsRulingError,
     resolve_actor_check,
     resolve_hypnotic_pattern_target,
+    resolve_save_damage_to_sheets,
 )
 from sagasmith_dnd.core_content import build_srd2014_content
 from sagasmith_dnd.rule_engine import resolution_context
@@ -20,6 +21,61 @@ class _SequenceRng:
 
     def randint(self, _lower: int, _upper: int) -> int:
         return next(self._values)
+
+
+@pytest.mark.parametrize(
+    ("trait", "condition"), [("fey_ancestry", "charmed"), ("halfling_brave", "frightened")]
+)
+@pytest.mark.parametrize("disadvantage", [False, True])
+def test_shared_save_damage_preserves_authoritative_effect_conditions(
+    trait, condition, disadvantage
+):
+    mechanic = f"dnd5e.core.save.{trait}"
+    actor = _actor(trait, mechanic)
+    actor["sheet"]["combat"]["hp"] = {"value": 30, "max": 30, "temp": 0}
+    actor["derived"] = derive_character_sheet(actor["sheet"])
+    result = resolve_save_damage_to_sheets(
+        [actor],
+        save_ability="wisdom",
+        save_dc=10,
+        damage_expression="1d6",
+        damage_type="psychic",
+        half_on_success=True,
+        source="reviewed-effect",
+        disadvantage=disadvantage,
+        ruleset="2014",
+        rules=resolution_context(
+            {"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []},
+            facts={
+                "save_source_kind": "magical_effect",
+                "save_effect_conditions": [condition],
+                "save_against_poison": False,
+            },
+        ),
+        rng=_SequenceRng(2, 2, 18),
+    )
+    saved = result["result"]["targets"][0]["save"]
+    assert saved["roll_mode"] == ("normal" if disadvantage else "advantage")
+    assert saved["rolls"] == ([2] if disadvantage else [2, 18])
+    assert sum(receipt["mechanic_id"] == mechanic for receipt in saved["rule_receipts"]) == 1
+    assert result["sheets"]["species-test"]["combat"]["hp"]["value"] == (28 if disadvantage else 29)
+
+
+@pytest.mark.parametrize("trait", ["fey_ancestry", "halfling_brave"])
+def test_shared_save_damage_cannot_invent_empty_effect_conditions(trait):
+    actor = _actor(trait, f"dnd5e.core.save.{trait}")
+    with pytest.raises(NeedsRulingError, match="authoritative effect conditions"):
+        resolve_save_damage_to_sheets(
+            [actor],
+            save_ability="wisdom",
+            save_dc=10,
+            damage_expression="1d6",
+            damage_type="psychic",
+            half_on_success=True,
+            source="unclassified-effect",
+            ruleset="2014",
+            rng=_SequenceRng(2, 2, 18),
+        )
 
 
 def _actor(trait_kind: str, mechanic_id: str) -> dict:

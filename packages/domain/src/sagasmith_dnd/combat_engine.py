@@ -7326,12 +7326,10 @@ def resolve_save_damage_to_sheets(
             bonus=int(normalized_save_bonuses.get(target_id, 0)),
             advantage=advantage,
             disadvantage=disadvantage,
-            save_effect_conditions=[],
             ruleset=normalized_ruleset,
-            rules=context_with_facts(
-                rules,
-                save_effect_conditions=[],
-            ),
+            # Damage does not prove that this save has no other effects. Keep
+            # the caller's source-bound charm/fear classification intact.
+            rules=rules,
             rng=rng,
         )
         reduction_settlement = standard_save_damage_reduction(

@@ -772,6 +772,12 @@ in settlement. Legacy text-only sources carry no classification; a conditional
 save requiring missing facts remains unresolved, not silently an ordinary roll.
 Do not pass these engine-owned classification fields through generic
 `rule_facts`, or bypass the source's action/resource payment with a generic check.
+The shared save/damage resolver preserves these verified conditions; damage
+alone does not mean the save is unrelated to charm or fear. Native Dragonborn
+breath declares no accompanying conditions from its exact ancestry mechanism.
+Native Sacred Flame, Fireball and Lightning Bolt do likewise only while their
+structured contracts exactly match the built-in source implementation. A custom
+or modified spell contract must not inherit that empty-condition classification.
 
 When an attack returns `status: pending_reaction`, no damage has been rolled or
 applied. The target actor reads its owned window with

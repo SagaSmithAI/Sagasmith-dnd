@@ -25,9 +25,9 @@ def test_structured_spell_poison_classification_requires_exact_native_clause(slu
     }
     altered = deepcopy(resolution)
     altered["save"]["damage"]["damage_type"] = "poison"
-    assert "save_against_poison" not in _structured_spell_save_facts(spell, altered)
+    assert _structured_spell_save_facts(spell, altered) == {"save_source_kind": "spell"}
     custom = {"id": "custom.fireball", "name": "Fireball", "resolution": resolution}
-    assert "save_against_poison" not in _structured_spell_save_facts(custom, resolution)
+    assert _structured_spell_save_facts(custom, resolution) == {"save_source_kind": "spell"}
 
 
 def test_generic_checks_reject_caller_owned_save_classification(tmp_path: Path) -> None:
