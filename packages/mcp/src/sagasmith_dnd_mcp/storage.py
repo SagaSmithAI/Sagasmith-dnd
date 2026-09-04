@@ -35,7 +35,25 @@ class SagaSmithStorage:
         self.config = config
         self.config.prepare()
         self.database = Database(config.database_url or sqlite_database_url(config.database_path))
-        self.vectors = VectorStore(DND5E.id)
+        try:
+            self.vectors = VectorStore(DND5E.id)
+        except BaseException as initialization_error:
+            # The caller cannot own our resources until this constructor returns.
+            try:
+                self.database.dispose()
+            except BaseException as cleanup_error:
+                diagnostics = (
+                    [initialization_error.__cause__]
+                    if initialization_error.__cause__ is not None
+                    else []
+                )
+                diagnostics.append(cleanup_error)
+                initialization_error.__cause__ = BaseExceptionGroup(
+                    "SagaSmith storage initialization diagnostics", diagnostics
+                )
+                initialization_error.__suppress_context__ = True
+                initialization_error.add_note("The partial storage database also failed to close.")
+            raise
         self._rule_ocr_provider: RapidOcrProvider | None = None
         self._module_ocr_provider: RapidOcrProvider | None = None
         self._rule_document_ocr_provider: CascadingOcrProvider | None = None
