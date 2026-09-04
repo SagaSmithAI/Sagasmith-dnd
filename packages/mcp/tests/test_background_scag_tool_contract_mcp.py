@@ -190,19 +190,6 @@ def test_scag_103_clan_crafter_tool_duplicate_replacement_and_custom_contract(
             },
         )
         city_watch = next(item for item in backgrounds if item["name"] == "City Watch")
-        investigator_catalog = await _call(
-            server,
-            "character_query",
-            {
-                "view": "catalog",
-                "payload": {
-                    "campaign_id": campaign["id"],
-                    "kind": "background",
-                    "query": "Investigator",
-                },
-            },
-        )
-        investigator = next(item for item in investigator_catalog if item["name"] == "Investigator")
         classes = await _call(
             server,
             "character_query",
@@ -348,7 +335,7 @@ def test_scag_103_clan_crafter_tool_duplicate_replacement_and_custom_contract(
 
         custom = {
             "custom_name": "Custom Watch",
-            "custom_feature_artifact_id": investigator["id"],
+            "custom_feature_artifact_id": clan["id"],
             "skills": ["medicine", "religion"],
             "tools": [],
             "languages": ["Elvish", "Goblin"],
@@ -367,7 +354,7 @@ def test_scag_103_clan_crafter_tool_duplicate_replacement_and_custom_contract(
             },
         )
         grants = custom_result["sheet"]["progression"]["background_grants"]
-        assert grants["feature"] == "Watcher's Eye"
+        assert grants["feature"] == "Respect of the Stout Folk"
         assert grants["choices"]["equipment_mode"] == "source"
         assert all(
             custom_result["sheet"]["skills"][skill]["proficiency"] == "proficient"
