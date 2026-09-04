@@ -807,6 +807,22 @@ adjacent creature wakes one affected target with
 spends its action. Never supply a hand-picked target list, roll the saves,
 patch conditions/speed, or model these endings as Agent narrative rulings.
 
+A source-bound 2014 Core `Sleep` uses
+`declaration={origin:{x,y},target_contexts:[{target_id,cover}]}` in grid combat.
+Declare every living creature in the 20-foot radius, including allies and
+unconscious or immune creatures; the engine checks the point's 90-foot range
+and applies eligibility itself. It rolls `5d8`, plus `2d8` for each slot above
+1st, and spends the pool in ascending current HP order (temporary HP do not
+count). Undead, Charmed-immune, already unconscious and source-bound magical
+sleep-immune targets do not consume the pool. Sleep is not concentration and
+lasts one minute on the persistent clock, including after combat ends. Positive
+damage wakes the target even if temporary HP absorb it; zero damage does not.
+Another adjacent creature can use
+`combat_common_action(action="shake_sleep", target_id=...)` to spend an action
+ending that target's Sleep effect, without removing unrelated unconsciousness.
+Agent-positioned and out-of-combat area settlement still require a bounded
+spatial ruling; an unresolved request must not pay a slot or invent coordinates.
+
 A source-bound 2014 Core `Fly` is also engine-owned. Outside combat call
 `character_action(action="cast_spell")` with equal explicit
 `target_character_ids` and `willing_target_ids`; in combat call

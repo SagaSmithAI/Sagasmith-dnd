@@ -29829,6 +29829,15 @@ def _create_server(
         )
         fly = is_core_fly_spell(spell_entry)
         invisibility = is_core_invisibility_spell(spell_entry)
+        if spell_id == CORE_SLEEP_SPELL_ID:
+            # A scalar out-of-combat resource payment must not masquerade as
+            # complete area settlement. The source-bound area path validates
+            # the complete target snapshot before committing the slot.
+            raise NeedsRulingError(
+                "Sleep needs its source-bound area settlement before resources are paid",
+                missing=("sleep.area_targets",),
+                ruling_kind="agent_dm_adjudication",
+            )
         normalized_fly_targets: list[str] = []
         normalized_willing_targets: list[str] = []
         normalized_invisibility_targets: list[str] = []

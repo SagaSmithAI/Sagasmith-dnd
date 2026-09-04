@@ -933,10 +933,11 @@ BOUNDARIES = (
     CoreBoundary(
         "dnd5e.core.save.fey_ancestry",
         ("2014",),
-        "combat_engine.resolve_actor_check",
+        "combat_engine.resolve_actor_check|sleep.resolve_sleep_targets",
         (
             "tests/test_conditional_species_content.py",
             "tests/test_conditional_species_saves.py",
+            "tests/test_sleep.py",
         ),
         "bundled:srd2014/01_Races/Races_Each/Elf.md#fey-ancestry",
     ),
