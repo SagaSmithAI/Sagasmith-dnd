@@ -12259,7 +12259,10 @@ def _create_server(
     def sync_combatant_conditions(
         encounter: dict[str, Any], actor_id: str, sheet: dict[str, Any]
     ) -> None:
-        for combatant in encounter.get("combatants", []):
+        for combatant in [
+            *encounter.get("combatants", []),
+            *encounter.get("reinforcements", []),
+        ]:
             if combatant.get("actor_id") == actor_id:
                 # Upgrade old encounter snapshots before replacing their stale
                 # projection. Otherwise removing a zero-speed or grappling
@@ -13841,6 +13844,7 @@ def _create_server(
         """Reconcile card and encounter dependencies before one atomic commit."""
 
         updates = list(character_updates or [])
+        card_dependency_changes: set[str] = set()
         if updates:
             # Narrative spell effects carry durable source links on actor cards,
             # without an encounter registry. They must end on the same commit as
@@ -13858,6 +13862,7 @@ def _create_server(
                 for actor_id_value, actor in campaign_actors.items()
             }
             card_dependencies = reconcile_source_effect_dependencies(candidate_sheets)
+            card_dependency_changes = set(card_dependencies["changed_actor_ids"])
             for actor_id_value in card_dependencies["changed_actor_ids"]:
                 sheet = validate_character_sheet(card_dependencies["sheets"][actor_id_value])
                 existing = by_actor_id.get(actor_id_value)
@@ -13881,6 +13886,15 @@ def _create_server(
             else deepcopy(dict(campaign.state or {}))
         )
         encounter = source_state.get("combat")
+        if isinstance(encounter, dict) and card_dependency_changes:
+            original_encounter = deepcopy(encounter)
+            for update in updates:
+                if update.character_id in card_dependency_changes:
+                    sync_combatant_conditions(encounter, update.character_id, update.sheet)
+            if encounter != original_encounter:
+                campaign_state = source_state
+                if "combat" in response_fields:
+                    response_fields = {**response_fields, "combat": deepcopy(encounter)}
         if (
             not isinstance(encounter, dict)
             or not isinstance(encounter.get("dependent_effects"), list)
@@ -14040,8 +14054,19 @@ def _create_server(
         updates: list[CharacterStateUpdate] | None,
         response_fields: dict[str, Any],
     ) -> tuple[dict[str, Any] | None, list[CharacterStateUpdate], dict[str, Any]]:
-        """Drop held objects as part of the same authoritative unconscious mutation."""
+        """Settle Prone and held objects in the same unconscious mutation."""
         candidates = list(updates or [])
+        posture_changes: set[str] = set()
+        for index, update in enumerate(candidates):
+            if update.sheet.get("edition") != "2014" or "unconscious" not in condition_ids(
+                update.sheet.get("conditions")
+            ):
+                continue
+            sheet = deepcopy(update.sheet)
+            apply_condition_change(sheet, condition_id="prone", add=True)
+            if sheet != update.sheet:
+                candidates[index] = replace(update, sheet=sheet)
+                posture_changes.add(update.character_id)
         actor_ids = [
             update.character_id
             for update in candidates
@@ -14049,7 +14074,7 @@ def _create_server(
             and "unconscious" in condition_ids(update.sheet.get("conditions"))
             and held_item_roots(update.sheet)
         ]
-        if not actor_ids:
+        if not actor_ids and not posture_changes:
             return campaign_state, candidates, response_fields
         records = {actor.id: actor for actor in characters.list(campaign_id=campaign.id)}
         by_id = {update.character_id: update for update in candidates}
@@ -14057,9 +14082,14 @@ def _create_server(
             actor_id: deepcopy(by_id[actor_id].sheet if actor_id in by_id else actor.sheet)
             for actor_id, actor in records.items()
         }
-        state = deepcopy(
+        original_state = (
             campaign_state if campaign_state is not None else dict(campaign.state or {})
         )
+        state = deepcopy(original_state)
+        encounter = state.get("combat")
+        if isinstance(encounter, dict):
+            for actor_id in sorted(posture_changes):
+                sync_combatant_conditions(encounter, actor_id, sheets[actor_id])
         ground = state.get("ground_items", [])
         dropped = []
         for actor_id in actor_ids:
@@ -14079,7 +14109,8 @@ def _create_server(
             dropped.append(
                 {"actor_id": actor_id, "ground_ids": [item["id"] for item in result["dropped"]]}
             )
-        state["ground_items"] = ground
+        if actor_ids:
+            state["ground_items"] = ground
         for actor_id, sheet in sheets.items():
             previous = by_id.get(actor_id)
             if previous is not None:
@@ -14107,8 +14138,14 @@ def _create_server(
             return result
 
         response = refresh_preview(response_fields)
-        response["ground_item_drops"] = dropped
-        return state, list(by_id.values()), response
+        if posture_changes and "combat" in response and isinstance(encounter, dict):
+            response["combat"] = deepcopy(encounter)
+        if dropped:
+            response["ground_item_drops"] = dropped
+        # A card-only posture correction must not invent ground records or a
+        # campaign revision when no encounter projection needs to change.
+        settled_state = state if state != original_state else campaign_state
+        return settled_state, list(by_id.values()), response
 
     def commit_campaign_state(
         campaign: Any,
@@ -18173,9 +18210,18 @@ def _create_server(
             for actor_id_value, sheet in initial_sheets.items()
             if sheet != source_condition_characters[actor_id_value].sheet
         ]
+        updated_state, source_start_updates, _ = reconcile_actor_effect_dependencies(
+            campaign, updated_state, source_start_updates, {}
+        )
+        updated_state, source_start_updates, start_fields = reconcile_unconscious_inventory(
+            campaign, updated_state, source_start_updates, {"combat": encounter}
+        )
+        validate_inventory_custody_update(campaign, updated_state, source_start_updates)
+        encounter = updated_state["combat"]
 
         def start_response(revisions: list[Any]) -> dict[str, Any]:
             return {
+                **start_fields,
                 "combat": encounter,
                 "tool_profile": PROFILE_COMBAT,
                 "campaign_revision": campaign.revision + 1,
@@ -18350,9 +18396,21 @@ def _create_server(
             if joining_sheet is not None
             else []
         )
+        next_state, character_updates, _ = reconcile_actor_effect_dependencies(
+            campaign, next_state, character_updates, {}
+        )
+        next_state, character_updates, join_fields = reconcile_unconscious_inventory(
+            campaign, next_state, character_updates, {"combat": next_encounter}
+        )
+        validate_inventory_custody_update(campaign, next_state, character_updates)
+        next_encounter = next_state["combat"]
+        queued = next(
+            item for item in next_encounter["reinforcements"] if item.get("actor_id") == actor_id
+        )
 
         def join_response(revisions: list[Any]) -> dict[str, Any]:
             return {
+                **join_fields,
                 "status": "committed",
                 "queued": deepcopy(queued),
                 "combat": next_encounter,
