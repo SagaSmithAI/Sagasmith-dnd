@@ -6857,38 +6857,53 @@ def resolve_actor_check(
         "gnome_cunning": "dnd5e.core.save.gnome_cunning",
         "halfling_brave": "dnd5e.core.save.halfling_brave",
     }
-    conditional_traits: set[str] = set()
+    conditional_traits: list[str] = []
     for feature in sheet.get("content", {}).get("features", []):
         if not isinstance(feature, dict):
             continue
         mechanic_refs = {str(item) for item in feature.get("mechanic_refs") or []}
         source_trait = dict(dict(feature.get("choices") or {}).get("source_trait") or {})
         trait_kind = str(source_trait.get("kind") or "").strip().casefold()
-        if (
-            trait_kind in conditional_trait_mechanics
-            and conditional_trait_mechanics[trait_kind] in mechanic_refs
-            and bool(source_trait.get("automatic"))
-        ):
-            conditional_traits.add(trait_kind)
+        if trait_kind not in conditional_trait_mechanics:
+            continue
+        if conditional_trait_mechanics[trait_kind] not in mechanic_refs:
+            continue
+        if source_trait.get("automatic") is not True or not str(
+            source_trait.get("source_excerpt") or ""
+        ).strip():
+            raise CombatEngineError("conditional species save trait metadata is malformed")
+        if trait_kind == "fey_ancestry" and source_trait.get("magical_sleep_immunity") is not True:
+            raise CombatEngineError("Fey Ancestry metadata must declare magical sleep immunity")
+        if trait_kind not in conditional_traits:
+            conditional_traits.append(trait_kind)
     if (
         kind == "save"
         and normalized_ruleset == "2014"
         and normalized_save_purpose == "effect"
         and conditional_traits
     ):
-        if save_effect_conditions is None and "save_effect_conditions" not in rule_facts:
+        long_save_ability = _long_ability_name(ability)
+        needs_conditions = any(
+            trait in conditional_traits
+            for trait in ("dwarven_resilience", "fey_ancestry", "halfling_brave")
+        )
+        if needs_conditions and save_effect_conditions is None and "save_effect_conditions" not in rule_facts:
             raise NeedsRulingError(
                 "conditional save requires authoritative effect conditions",
                 missing=("save_effect_conditions",),
                 ruling_kind="source_or_scene_fact",
             )
-        if save_source_kind is None and "save_source_kind" not in rule_facts:
-            if "gnome_cunning" in conditional_traits:
-                raise NeedsRulingError(
-                    "Gnome Cunning requires an authoritative save source kind",
-                    missing=("save_source_kind",),
-                    ruling_kind="source_or_scene_fact",
-                )
+        if (
+            "gnome_cunning" in conditional_traits
+            and long_save_ability in {"intelligence", "wisdom", "charisma"}
+            and save_source_kind is None
+            and "save_source_kind" not in rule_facts
+        ):
+            raise NeedsRulingError(
+                "Gnome Cunning requires an authoritative save source kind",
+                missing=("save_source_kind",),
+                ruling_kind="source_or_scene_fact",
+            )
         authoritative_source_kind = str(
             save_source_kind
             if save_source_kind is not None
@@ -6902,9 +6917,18 @@ def resolve_actor_check(
                 else rule_facts.get("save_effect_conditions") or []
             )
         }
-        long_save_ability = _long_ability_name(ability)
+        save_against_poison = rule_facts.get("save_against_poison")
+        if "dwarven_resilience" in conditional_traits and save_against_poison is not None:
+            if not isinstance(save_against_poison, bool):
+                raise CombatEngineError("save_against_poison must be a boolean")
+        if "dwarven_resilience" in conditional_traits and save_against_poison is None:
+            raise NeedsRulingError(
+                "Dwarven Resilience requires authoritative poison classification",
+                missing=("save_against_poison",),
+                ruling_kind="source_or_scene_fact",
+            )
         trait_matches = (
-            ("dwarven_resilience" in conditional_traits and "poison" in authoritative_conditions)
+            ("dwarven_resilience" in conditional_traits and save_against_poison is True)
             or ("fey_ancestry" in conditional_traits and "charmed" in authoritative_conditions)
             or (
                 "gnome_cunning" in conditional_traits
@@ -6917,7 +6941,7 @@ def resolve_actor_check(
             advantage = True
             for trait_kind in conditional_traits:
                 if (
-                    (trait_kind == "dwarven_resilience" and "poison" in authoritative_conditions)
+                    (trait_kind == "dwarven_resilience" and save_against_poison is True)
                     or (trait_kind == "fey_ancestry" and "charmed" in authoritative_conditions)
                     or (
                         trait_kind == "gnome_cunning"

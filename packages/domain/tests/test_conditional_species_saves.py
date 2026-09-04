@@ -1,7 +1,9 @@
 import pytest
 
+import sagasmith_dnd.combat_engine as combat_engine
 from sagasmith_dnd.character_schema import default_character_sheet, derive_character_sheet
 from sagasmith_dnd.combat_engine import resolve_actor_check
+from sagasmith_dnd.rule_engine import resolution_context
 
 
 class _SequenceRng:
@@ -25,6 +27,11 @@ def _actor(trait_kind: str, mechanic_id: str) -> dict:
                     "kind": trait_kind,
                     "automatic": True,
                     "source_excerpt": f"official {trait_kind}",
+                    **(
+                        {"magical_sleep_immunity": True}
+                        if trait_kind == "fey_ancestry"
+                        else {}
+                    ),
                 }
             },
         }
@@ -43,7 +50,7 @@ def _actor(trait_kind: str, mechanic_id: str) -> dict:
             "dwarven_resilience",
             "dnd5e.core.save.dwarven_resilience",
             "constitution",
-            "poison",
+            "nonmagical_effect",
             ["poison"],
         ),
         (
@@ -75,7 +82,9 @@ def test_2014_species_save_traits_add_authoritative_advantage(
     ability: str,
     source: str,
     conditions: list[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(combat_engine, "core_receipts", lambda *_args: [])
     actor = _actor(trait, mechanic)
     result = resolve_actor_check(
         actor,
@@ -85,13 +94,20 @@ def test_2014_species_save_traits_add_authoritative_advantage(
         save_source_kind=source,
         save_effect_conditions=conditions,
         ruleset="2014",
+        rules=resolution_context(
+            {"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []},
+            facts={"save_against_poison": True} if trait == "dwarven_resilience" else {},
+        ),
         rng=_SequenceRng(2, 18),
     )
 
     assert result["roll_mode"] == "advantage"
 
 
-def test_species_save_advantage_cancels_disadvantage_and_is_2014_only() -> None:
+def test_species_save_advantage_cancels_disadvantage_and_is_2014_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(combat_engine, "core_receipts", lambda *_args: [])
     actor = _actor("dwarven_resilience", "dnd5e.core.save.dwarven_resilience")
     cancelled = resolve_actor_check(
         actor,
@@ -101,6 +117,10 @@ def test_species_save_advantage_cancels_disadvantage_and_is_2014_only() -> None:
         save_source_kind="poison",
         save_effect_conditions=["poison"],
         ruleset="2014",
+        rules=resolution_context(
+            {"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []},
+            facts={"save_against_poison": True},
+        ),
         disadvantage=True,
         rng=_SequenceRng(12, 3),
     )
