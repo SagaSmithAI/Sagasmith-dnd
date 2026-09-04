@@ -10,6 +10,7 @@ from sagasmith_core import CampaignService, CharacterService
 from sagasmith_core.actor_lifecycle import ActorLifecycleService
 from sagasmith_core.idempotency import IdempotencyService
 from sagasmith_dnd.character_schema import validate_party_state
+from sagasmith_dnd.combat_engine import end_concentration_for_incapacitating_conditions
 from sagasmith_dnd.conditions import apply_condition_change, condition_ids
 from sagasmith_dnd.external_custody import validate_external_inventory_custody
 from sagasmith_dnd.ground_transfer import drop_held_items
@@ -78,6 +79,8 @@ class InventoryActorLifecycleService(ActorLifecycleService):
             unconscious = sheet.get("edition") == "2014" and "unconscious" in condition_ids(
                 sheet.get("conditions")
             )
+            if sheet.get("edition") == "2014":
+                end_concentration_for_incapacitating_conditions(sheet)
             if unconscious:
                 apply_condition_change(sheet, condition_id="prone", add=True)
             kwargs = {

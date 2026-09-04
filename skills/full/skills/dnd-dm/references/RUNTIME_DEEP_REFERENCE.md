@@ -855,6 +855,12 @@ lifecycle revision group and replay
 receipt; undo/redo removes/restores both together. Build keeps its independent
 library template unchanged and atomically creates the live instance through the
 same custody boundary. A library template is not itself a scene participant.
+For 2014 live actor creation and full-sheet replacement, incapacitation or
+death also ends active concentration. Full-sheet replacement reconciles linked
+spell effects on the caster and other targets in the same revision group; ending
+the source concentration cannot leave its dependent Invisibility active. The
+returned character sheet reflects the reconciled state. A target revision
+conflict rejects the entire replacement, and retries replay the original receipt.
 Another adjacent creature can use
 `combat_common_action(action="shake_sleep", target_id=...)` to spend an action
 ending that target's Sleep effect, without removing unrelated unconsciousness.

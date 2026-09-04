@@ -13738,6 +13738,8 @@ def _create_server(
             # a full-sheet update that tries to forge the next revision.
             candidate_window["expected_character_revision"] = before.revision
         normalized_sheet = validate_character_sheet(candidate_sheet)
+        if normalized_sheet.get("edition") == "2014":
+            end_concentration_for_incapacitating_conditions(normalized_sheet)
         normalized_notes = (
             validate_character_notes(
                 canonical_character_notes(
@@ -13765,6 +13767,16 @@ def _create_server(
             player_name=player_name,
             summary=summary,
         )
+        campaign = campaigns.get(before.campaign_id)
+        effect_state, mutation_updates, _ = reconcile_actor_effect_dependencies(
+            campaign, None, [character_update], {}
+        )
+        # A self-targeted spell can also change the source sheet while its
+        # dependency is reconciled. Build the replay preview from that final
+        # candidate, not from the caller's pre-reconciliation sheet.
+        normalized_sheet = next(
+            update.sheet for update in mutation_updates if update.character_id == before.id
+        )
         response = response_for(
             character_view(
                 replace(
@@ -13778,9 +13790,8 @@ def _create_server(
                 )
             )
         )
-        campaign = campaigns.get(before.campaign_id)
         ground_state, mutation_updates, response = reconcile_unconscious_inventory(
-            campaign, None, [character_update], response
+            campaign, effect_state, mutation_updates, response
         )
         validate_inventory_custody_update(campaign, ground_state, mutation_updates)
         followup = narrative_followup_for_mutation(
