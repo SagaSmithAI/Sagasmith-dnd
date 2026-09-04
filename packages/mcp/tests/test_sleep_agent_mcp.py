@@ -111,9 +111,10 @@ def test_sleep_noncombat_agent_self_target_replay_and_incapacitated_guard(
 ) -> None:
     async def exercise() -> None:
         workspace = Path(__file__).resolve().parents[3]
-        server = create_server(
-            replace(_config(tmp_path), auto_seed_rules=True, dnd_skills_dir=workspace / "skills")
+        config = replace(
+            _config(tmp_path), auto_seed_rules=True, dnd_skills_dir=workspace / "skills"
         )
+        server = create_server(config)
         try:
             campaign = await _call(
                 server,
@@ -238,7 +239,39 @@ def test_sleep_noncombat_agent_self_target_replay_and_incapacitated_guard(
             )
             assert "unconscious" in caster_after["sheet"]["conditions"]
             assert "unconscious" in target_after["sheet"]["conditions"]
+
+            async def snapshot():
+                return {
+                    "campaign": await _call(
+                        server,
+                        "campaign_query",
+                        {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+                    ),
+                    "actors": [
+                        await _call(
+                            server,
+                            "character_query",
+                            {"view": "get", "payload": {"character_id": actor["id"]}},
+                        )
+                        for actor in (caster, target)
+                    ],
+                }
+
+            after_cast = await snapshot()
+            before_rng = current["state"]["random_stream"]
+            after_rng = after_cast["campaign"]["state"]["random_stream"]
+            receipt = result["result"]["random_stream_receipt"]
+            assert after_rng["position"] == before_rng["position"] + 5 + 2 * (cast_level - 1)
+            assert after_rng["last_receipt"] == receipt
+            assert receipt["position_before"] == before_rng["position"]
+            assert receipt["position_after"] == after_rng["position"]
+            assert receipt["draw_count"] == 5 + 2 * (cast_level - 1)
             assert await server.call_tool("character_action", arguments) == raw
+            assert await snapshot() == after_cast
+            close_server(server)
+            server = create_server(config)
+            assert await server.call_tool("character_action", arguments) == raw
+            assert await snapshot() == after_cast
             with pytest.raises(ToolError, match="incapacitated"):
                 await server.call_tool(
                     "character_action",
@@ -248,6 +281,7 @@ def test_sleep_noncombat_agent_self_target_replay_and_incapacitated_guard(
                         "expected_revision": caster_after["revision"],
                     },
                 )
+            assert await snapshot() == after_cast
         finally:
             close_server(server)
 
