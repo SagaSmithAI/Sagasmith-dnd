@@ -119,8 +119,10 @@ async def _selection_for(
         if count:
             options = list(requirements.get(options_key) or [])
             if key == "languages" and len(options) < count:
+                # This fixture exercises ordinary choices, not DM-authorized
+                # exotic languages such as Draconic.
                 options.extend(
-                    value for value in ("Draconic", "Dwarvish", "Elvish") if value not in options
+                    value for value in ("Dwarvish", "Elvish", "Giant") if value not in options
                 )
             selection[key] = options[:count]
     equipment = list(requirements.get("equipment_package_options") or [])
