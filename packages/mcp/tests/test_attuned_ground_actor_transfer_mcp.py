@@ -202,7 +202,11 @@ def test_attuned_ground_item_preserves_custody_across_actor_transfer(tmp_path: P
                     for item in actors
                 ],
             }
-            for field in ("expected_source_revision", "expected_target_revision"):
+            for field in (
+                "expected_campaign_revision",
+                "expected_source_revision",
+                "expected_target_revision",
+            ):
                 stale = dict(transfer_payload)
                 stale[field] -= 1
                 with pytest.raises(ToolError, match="revision"):
@@ -242,7 +246,7 @@ def test_attuned_ground_item_preserves_custody_across_actor_transfer(tmp_path: P
             assert transfer["status"] == "committed"
             moved_id = transfer["item"]["id"]
             assert moved_id != sword_id
-            assert transfer["item"]["attunement"] == "required"
+            assert transfer["item"]["attunement"] == "attuned"
             c_after = await _call(
                 server,
                 "character_query",
@@ -304,29 +308,85 @@ def test_attuned_ground_item_preserves_custody_across_actor_transfer(tmp_path: P
                 if item["name"] == item_record["name"]
             )
             assert returned["id"] == sword_id
-            assert returned["attunement"] == "required"
+            assert returned["attunement"] == "attuned"
+            for field in (
+                "name",
+                "description",
+                "mechanics",
+                "attunement",
+                "weight_oz",
+                "price_cp",
+                "source_key",
+                "condition",
+            ):
+                assert returned[field] == item_record[field]
             assert all(
                 ref["id"] != sword_id for ref in a_final["sheet"]["inventory"]["external_items"]
             )
+            return_payload = {
+                "source_character_id": actors[2]["id"],
+                "target_character_id": actors[0]["id"],
+                "item_id": moved_id,
+                "expected_campaign_revision": after_transfer_campaign["revision"],
+                "expected_source_revision": c_after["revision"],
+                "expected_target_revision": a_after_transfer["revision"],
+            }
             assert (
                 await _raw(
                     server,
                     "inventory_transfer",
                     {
                         "mode": "character_to_character",
-                        "payload": {
-                            "source_character_id": actors[2]["id"],
-                            "target_character_id": actors[0]["id"],
-                            "item_id": moved_id,
-                            "expected_campaign_revision": transfer["campaign_revision"],
-                            "expected_source_revision": c_after["revision"],
-                            "expected_target_revision": a_after_transfer["revision"],
-                        },
+                        "payload": return_payload,
                         "idempotency_key": "c-to-a",
                     },
                 )
                 == a_return
             )
+            final_snapshot = {
+                "campaign": await _call(
+                    server,
+                    "campaign_query",
+                    {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+                ),
+                "actors": [
+                    await _call(
+                        server,
+                        "character_query",
+                        {"view": "get", "payload": {"character_id": item["id"]}},
+                    )
+                    for item in actors
+                ],
+            }
+            close_server(server)
+            server = create_server(config)
+            assert (
+                await _raw(
+                    server,
+                    "inventory_transfer",
+                    {
+                        "mode": "character_to_character",
+                        "payload": return_payload,
+                        "idempotency_key": "c-to-a",
+                    },
+                )
+                == a_return
+            )
+            assert {
+                "campaign": await _call(
+                    server,
+                    "campaign_query",
+                    {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+                ),
+                "actors": [
+                    await _call(
+                        server,
+                        "character_query",
+                        {"view": "get", "payload": {"character_id": item["id"]}},
+                    )
+                    for item in actors
+                ],
+            } == final_snapshot
             with pytest.raises(ToolError, match="revision"):
                 await _call(
                     server,
