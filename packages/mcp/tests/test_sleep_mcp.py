@@ -349,6 +349,7 @@ def test_real_2014_sleep_area_pool_and_replay(tmp_path: Path, cast_level: int) -
                     {"view": "get", "payload": {"character_id": actors[1]["id"]}},
                 )
                 assert "unconscious" not in awakened["sheet"]["conditions"]
+                assert "prone" in awakened["sheet"]["conditions"]
                 assert all(
                     not effect["active"]
                     for effect in awakened["sheet"]["effects"]
@@ -423,6 +424,7 @@ def test_real_2014_sleep_area_pool_and_replay(tmp_path: Path, cast_level: int) -
                     {"view": "get", "payload": {"character_id": actors[2]["id"]}},
                 )
                 assert "unconscious" not in damaged["sheet"]["conditions"]
+                assert "prone" in damaged["sheet"]["conditions"]
                 assert damaged["sheet"]["combat"]["hp"]["value"] == 1
                 after_damage = await snapshot()
                 assert (

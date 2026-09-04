@@ -83,9 +83,10 @@ def test_agent_sleep_wake_requires_contact_facts_and_one_helper_action(tmp_path:
             helper = await create("Helper")
             target_sheet = default_character_sheet()
             target_sheet["combat"]["hp"] = {"value": 1, "max": 1, "temp": 0}
-            target_sheet["conditions"] = ["prone"]
             sleeper_one = await create("Sleeper One", target_sheet)
             sleeper_two = await create("Sleeper Two", target_sheet)
+            assert "prone" not in sleeper_one["sheet"]["conditions"]
+            assert "prone" not in sleeper_two["sheet"]["conditions"]
 
             current = await _call(
                 server,
@@ -182,6 +183,12 @@ def test_agent_sleep_wake_requires_contact_facts_and_one_helper_action(tmp_path:
                 }
 
             before_missing = await snapshot()
+            assert {"prone", "unconscious"} <= set(
+                before_missing["actors"][2]["sheet"]["conditions"]
+            )
+            assert {"prone", "unconscious"} <= set(
+                before_missing["actors"][3]["sheet"]["conditions"]
+            )
             missing = await _call(
                 server,
                 "combat_common_action",
