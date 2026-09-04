@@ -40943,6 +40943,98 @@ def _create_server(
         ]
         return reviewed_dependency_matches or dependency_matches or matches
 
+    def selected_progression_content_source(
+        sheet: dict[str, Any],
+        candidates: list[tuple[str, str, dict[str, Any]]],
+        *,
+        class_name: str,
+        subclass_name: str = "",
+    ) -> tuple[str, str, dict[str, Any]] | None:
+        """Resolve recorded class/subclass identity, never infer a printing from a name."""
+        kind = "subclass" if subclass_name else "class"
+        selected: dict[tuple[str, str, str], tuple[str, str, dict[str, Any]]] = {}
+        by_identity = {
+            (pack_id, version, str(artifact.get("id") or "")): (pack_id, version, artifact)
+            for pack_id, version, artifact in candidates
+        }
+        for record in sheet.get("content", {}).get("selections", []):
+            if record.get("kind") != kind:
+                continue
+            identity = (
+                str(record.get("pack_id") or ""),
+                str(record.get("pack_version") or ""),
+                str(record.get("artifact_id") or ""),
+            )
+            source = by_identity.get(identity)
+            if source is None or source[2].get("kind") != kind:
+                raise RulesetUnavailableError("selected progression source is unavailable")
+            source = (
+                source[0],
+                source[1],
+                reviewed_official_runtime_artifact(source[0], source[1], source[2]),
+            )
+            source_card = dict(source[2].get("card") or {})
+            source_class = str(source_card.get("class_name" if subclass_name else "name") or "")
+            if source_class.casefold() != class_name.casefold():
+                continue
+            if subclass_name and str(source_card.get("name") or "").casefold() != (
+                subclass_name.casefold()
+            ):
+                continue
+            selected[identity] = source
+        if len(selected) > 1:
+            raise RulesetUnavailableError("selected progression source is ambiguous")
+        return next(iter(selected.values()), None)
+
+    def progression_feature_source_matches(
+        sheet: dict[str, Any],
+        candidates: list[tuple[str, str, dict[str, Any]]],
+        artifact: dict[str, Any],
+        *,
+        source_cache: dict[tuple[str, str], tuple[str, str, dict[str, Any]] | None] | None = None,
+    ) -> list[tuple[str, str, dict[str, Any]]]:
+        """Prefer a selected printing only among matching class/subclass features.
+
+        A differently named addition from another pack is not a reprint and
+        remains available. Equal names across different classes/subclasses are
+        likewise distinct; genuinely ambiguous source choices fail closed.
+        """
+        card = dict(artifact.get("card") or {})
+        fields = ("class_name", "subclass_name", "name")
+        identity = tuple(str(card.get(field) or "").casefold() for field in fields)
+        matches = [
+            item
+            for item in candidates
+            if item[2].get("kind") == "feature"
+            and tuple(
+                str(dict(item[2].get("card") or {}).get(field) or "").casefold() for field in fields
+            )
+            == identity
+        ]
+        if not identity[0]:
+            return matches
+        source_key = (identity[0], identity[1])
+        if source_cache is not None and source_key in source_cache:
+            source = source_cache[source_key]
+        else:
+            source = selected_progression_content_source(
+                sheet,
+                candidates,
+                class_name=identity[0],
+                subclass_name=identity[1],
+            )
+            if source_cache is not None:
+                source_cache[source_key] = source
+        if source is not None:
+            matches = source_scoped_content_matches(
+                matches,
+                source_pack_id=source[0],
+                source_pack_version=source[1],
+            )
+        if len(matches) != 1:
+            raise RulesetUnavailableError("progression feature source is ambiguous")
+        return matches
+
     def content_runtime_context(
         pack_id: str,
         version: str,
@@ -41960,6 +42052,9 @@ def _create_server(
         subclass_name = str(target_class.get("subclass") or "")
         feature_options: list[dict[str, Any]] = []
         subclass_options: list[dict[str, Any]] = []
+        # Only reuse verification inside this read-only operation, never across
+        # requests or after a write. A full archive need not be rebuilt per feature.
+        feature_sources: dict[tuple[str, str], tuple[str, str, dict[str, Any]] | None] = {}
         for pack_id, version, artifact in candidates:
             if str(artifact.get("application_state") or "selection_ready") != "selection_ready":
                 continue
@@ -41986,6 +42081,19 @@ def _create_server(
                     continue
                 declared_subclass = str(card.get("subclass_name") or "")
                 if declared_subclass and declared_subclass.casefold() != subclass_name.casefold():
+                    continue
+                source_matches = progression_feature_source_matches(
+                    sheet,
+                    candidates,
+                    artifact,
+                    source_cache=feature_sources,
+                )
+                if not any(
+                    item[0] == pack_id
+                    and item[1] == version
+                    and str(item[2].get("id") or "") == artifact_id
+                    for item in source_matches
+                ):
                     continue
                 requirements_by_level = dict(card.get("selection_requirements_by_level") or {})
                 selection_requirements = deepcopy(
@@ -43707,6 +43815,19 @@ def _create_server(
             existing_subclass = str(target.get("subclass") or "")
             if existing_subclass and existing_subclass != str(card.get("name") or artifact_id):
                 raise ValueError("target class already has a different subclass")
+            if existing_subclass:
+                selected_source = selected_progression_content_source(
+                    sheet,
+                    candidates,
+                    class_name=target_class,
+                    subclass_name=existing_subclass,
+                )
+                if selected_source is not None and (
+                    selected_source[0] != pack_id
+                    or selected_source[1] != version
+                    or str(selected_source[2].get("id") or "") != artifact_id
+                ):
+                    raise ValueError("target class already has a source-bound subclass")
             target["subclass"] = str(card.get("name") or artifact_id)
             sheet["progression"]["classes"] = classes
             resolved_expansion, unresolved_spell_name = resolve_spell_list_expansion(
@@ -45015,6 +45136,15 @@ def _create_server(
                 }
             )
         elif kind in {"feature", "activity"}:
+            if kind == "feature" and str(card.get("class_name") or "").strip():
+                source_matches = progression_feature_source_matches(sheet, candidates, artifact)
+                if not any(
+                    item[0] == pack_id
+                    and item[1] == version
+                    and str(item[2].get("id") or "") == artifact_id
+                    for item in source_matches
+                ):
+                    raise ValueError("feature does not belong to the selected progression source")
             if kind == "activity" and selection:
                 raise ValueError("activity content selection does not accept input fields")
             if kind == "feature" and str(card.get("feature_subtype") or "") == (
