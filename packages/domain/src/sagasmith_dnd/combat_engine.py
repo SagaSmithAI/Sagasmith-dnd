@@ -6851,6 +6851,80 @@ def resolve_actor_check(
         "concentration",
     }:
         raise CombatEngineError("save_purpose must be effect or concentration")
+    conditional_trait_mechanics = {
+        "dwarven_resilience": "dnd5e.core.save.dwarven_resilience",
+        "fey_ancestry": "dnd5e.core.save.fey_ancestry",
+        "gnome_cunning": "dnd5e.core.save.gnome_cunning",
+        "halfling_brave": "dnd5e.core.save.halfling_brave",
+    }
+    conditional_traits: set[str] = set()
+    for feature in sheet.get("content", {}).get("features", []):
+        if not isinstance(feature, dict):
+            continue
+        mechanic_refs = {str(item) for item in feature.get("mechanic_refs") or []}
+        source_trait = dict(dict(feature.get("choices") or {}).get("source_trait") or {})
+        trait_kind = str(source_trait.get("kind") or "").strip().casefold()
+        if (
+            trait_kind in conditional_trait_mechanics
+            and conditional_trait_mechanics[trait_kind] in mechanic_refs
+            and bool(source_trait.get("automatic"))
+        ):
+            conditional_traits.add(trait_kind)
+    if (
+        kind == "save"
+        and normalized_ruleset == "2014"
+        and normalized_save_purpose == "effect"
+        and conditional_traits
+    ):
+        if save_effect_conditions is None and "save_effect_conditions" not in rule_facts:
+            raise NeedsRulingError(
+                "conditional save requires authoritative effect conditions",
+                missing=("save_effect_conditions",),
+                ruling_kind="source_or_scene_fact",
+            )
+        if save_source_kind is None and "save_source_kind" not in rule_facts:
+            if "gnome_cunning" in conditional_traits:
+                raise NeedsRulingError(
+                    "Gnome Cunning requires an authoritative save source kind",
+                    missing=("save_source_kind",),
+                    ruling_kind="source_or_scene_fact",
+                )
+        authoritative_source_kind = str(
+            save_source_kind if save_source_kind is not None else rule_facts.get("save_source_kind") or ""
+        ).strip().casefold()
+        authoritative_conditions = {
+            str(item).strip().casefold()
+            for item in (
+                save_effect_conditions
+                if save_effect_conditions is not None
+                else rule_facts.get("save_effect_conditions") or []
+            )
+        }
+        long_save_ability = _long_ability_name(ability)
+        trait_matches = (
+            ("dwarven_resilience" in conditional_traits and "poison" in authoritative_conditions)
+            or ("fey_ancestry" in conditional_traits and "charmed" in authoritative_conditions)
+            or (
+                "gnome_cunning" in conditional_traits
+                and long_save_ability in {"intelligence", "wisdom", "charisma"}
+                and authoritative_source_kind in {"spell", "magical_effect"}
+            )
+            or ("halfling_brave" in conditional_traits and "frightened" in authoritative_conditions)
+        )
+        if trait_matches:
+            advantage = True
+            for trait_kind in conditional_traits:
+                if (
+                    (trait_kind == "dwarven_resilience" and "poison" in authoritative_conditions)
+                    or (trait_kind == "fey_ancestry" and "charmed" in authoritative_conditions)
+                    or (
+                        trait_kind == "gnome_cunning"
+                        and long_save_ability in {"intelligence", "wisdom", "charisma"}
+                        and authoritative_source_kind in {"spell", "magical_effect"}
+                    )
+                    or (trait_kind == "halfling_brave" and "frightened" in authoritative_conditions)
+                ):
+                    boundary_ids.append(conditional_trait_mechanics[trait_kind])
     if kind == "save" and _long_ability_name(ability) == "dexterity" and "restrained" in conditions:
         boundary_ids.append("dnd5e.core.save.restrained_dexterity")
     if armor_stealth_disadvantage:
