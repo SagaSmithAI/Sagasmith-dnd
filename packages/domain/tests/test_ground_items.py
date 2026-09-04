@@ -50,12 +50,16 @@ def _record(*, location: dict | None = None, items: list[dict] | None = None) ->
 
 def test_ground_items_normalizes_nested_container_and_preserves_attunement() -> None:
     record = _record()
-    record["items"][1]["attunement"] = "required"
+    record["items"][1]["attunement"] = "attuned"
+    record["items"][1]["condition"] = "worn"
+    record["items"][1]["description"] = "a preserved gem"
     before = deepcopy(record)
     result = validate_ground_items([record])
     assert record == before
     assert result[0]["location"] == {"mode": "grid", "position": {"x": 2, "y": -1}}
-    assert result[0]["items"][1]["attunement"] == "required"
+    assert result[0]["items"][1]["attunement"] == "attuned"
+    assert result[0]["items"][1]["condition"] == "worn"
+    assert result[0]["items"][1]["description"] == "a preserved gem"
     assert result[0]["items"][1]["container_id"] == "pack"
 
 
@@ -63,6 +67,11 @@ def test_ground_items_normalizes_nested_container_and_preserves_attunement() -> 
     "mutate",
     [
         lambda record: record.update({"id": ""}),
+        lambda record: record["items"][1].pop("id"),
+        lambda record: record["items"][1].update({"id": None}),
+        lambda record: record["items"][1].update({"id": "   "}),
+        lambda record: record["items"][1].update({"id": 7}),
+        lambda record: record["items"][1].update({"id": True}),
         lambda record: record.update({"campaign_revision": True}),
         lambda record: record.update(
             {"location": {"mode": "grid", "position": {"x": 1.0, "y": 2}}}
@@ -74,10 +83,11 @@ def test_ground_items_normalizes_nested_container_and_preserves_attunement() -> 
             {
                 "items": [
                     _item("pack", kind="container", container_id="gem"),
-                    _item("gem", container_id="pack"),
+                    _item("gem", kind="container", container_id="pack"),
                 ]
             }
         ),
+        lambda record: record["items"].__getitem__(1).update({"container_id": "missing"}),
         lambda record: record.update(
             {
                 "items": [
@@ -114,3 +124,13 @@ def test_ground_items_rejects_duplicate_record_ids() -> None:
     second["scene_id"] = "scene-2"
     with pytest.raises(ValueError, match="duplicate"):
         validate_ground_items([first, second])
+
+
+def test_ground_items_rejects_duplicate_physical_item_ids_but_allows_other_actor() -> None:
+    first = _record()
+    second = deepcopy(first)
+    second["id"] = "ground-2"
+    with pytest.raises(ValueError, match="physical"):
+        validate_ground_items([first, second])
+    second["source_actor_id"] = "actor-2"
+    assert len(validate_ground_items([first, second])) == 2

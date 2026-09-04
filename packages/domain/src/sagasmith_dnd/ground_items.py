@@ -57,6 +57,14 @@ def _location(value: Any, *, source_actor_id: str) -> dict[str, Any]:
 def _normalized_items(raw_items: Any, root_item_id: str) -> list[dict[str, Any]]:
     if not isinstance(raw_items, list) or not raw_items:
         raise ValueError("ground item record requires non-empty items")
+    for index, item in enumerate(raw_items):
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("id"), str)
+            or not item["id"].strip()
+            or len(item["id"] ) > 100
+        ):
+            raise ValueError(f"ground_items.items[{index}].id must be an explicit string id")
     inventory = deepcopy(default_character_sheet()["inventory"])
     inventory["items"] = deepcopy(raw_items)
     inventory["equipment_slots"] = {slot: None for slot in inventory["equipment_slots"]}
@@ -91,6 +99,7 @@ def validate_ground_items(value: Any) -> list[dict[str, Any]]:
         raise ValueError("ground items must be an array")
     records: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
+    seen_physical_items: set[tuple[str, str]] = set()
     for index, raw in enumerate(value):
         field = f"ground_items[{index}]"
         if not isinstance(raw, dict) or set(raw) != _RECORD_KEYS:
@@ -109,6 +118,11 @@ def validate_ground_items(value: Any) -> list[dict[str, Any]]:
             raise ValueError(f"{field}.campaign_revision must be a non-negative integer")
         root_item_id = _text(raw["root_item_id"], f"{field}.root_item_id")
         assert root_item_id is not None
+        normalized_items = _normalized_items(raw["items"], root_item_id)
+        physical_items = {(source_actor_id, item["id"]) for item in normalized_items}
+        if seen_physical_items.intersection(physical_items):
+            raise ValueError("ground items contain duplicate physical item ids")
+        seen_physical_items.update(physical_items)
         records.append(
             {
                 "id": record_id,
@@ -118,7 +132,7 @@ def validate_ground_items(value: Any) -> list[dict[str, Any]]:
                 "campaign_revision": revision,
                 "location": _location(raw["location"], source_actor_id=source_actor_id),
                 "root_item_id": root_item_id,
-                "items": _normalized_items(raw["items"], root_item_id),
+                "items": normalized_items,
             }
         )
     return records
