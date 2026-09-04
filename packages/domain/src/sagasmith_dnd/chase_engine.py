@@ -25,7 +25,7 @@ from sagasmith_dnd.combat_engine import (
 from sagasmith_dnd.conditions import apply_condition_change, condition_ids
 from sagasmith_dnd.editions import DEFAULT_CHARACTER_EDITION, normalize_dnd_edition
 from sagasmith_dnd.engine import resolve_attack, roll
-from sagasmith_dnd.rule_engine import ResolutionContext
+from sagasmith_dnd.rule_engine import ResolutionContext, context_with_facts
 
 CHASE_BOUNDARY_IDS = (
     "dnd5e.core.chase.sequence",
@@ -273,7 +273,9 @@ def _check(
         save_source_kind=("nonmagical_effect" if kind == "save" else None),
         save_effect_conditions=([] if kind == "save" else None),
         ruleset="2014",
-        rules=rules,
+        # The implemented urban complications involve collisions/obstacles,
+        # not poison. Do not inherit a previous operation's poison context.
+        rules=context_with_facts(rules, save_against_poison=False),
         rng=rng,
     )
 
