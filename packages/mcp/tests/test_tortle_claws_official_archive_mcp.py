@@ -167,6 +167,7 @@ def test_finalized_tortle_archive_claws_are_intrinsic_and_unarmed(
                 assert claws[0]["name"] == "Claws"
                 assert claws[0]["damage_formula"] == "1d4"
                 assert claws[0]["damage_type"] == "slashing"
+                assert applied["sheet"]["abilities"]["strength"]["score"] == 18
                 assert claws[0]["source"] == {
                     "artifact_id": _TORTLE_ID,
                     "pack_id": _TORTLE_ID.removesuffix(".species.tortle"),
@@ -323,11 +324,7 @@ def test_finalized_tortle_archive_claws_are_intrinsic_and_unarmed(
                     attack_request,
                 )
                 assert attacked["status"] == "committed"
-                assert attacked["result"]["damage"]["expression"] == (
-                    "1d4 + 4"
-                    if applied_by_id[actor["id"]]["sheet"]["abilities"]["strength"]["score"] == 18
-                    else "1d4 + 3"
-                )
+                assert attacked["result"]["damage"]["expression"] == "1d4 + 4"
                 assert attacked["result"]["damage"]["damage_type"] == "slashing"
                 assert attacked["result"]["unarmed_strike"] is True
                 assert any(

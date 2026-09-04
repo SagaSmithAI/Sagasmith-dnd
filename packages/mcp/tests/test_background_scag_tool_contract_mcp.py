@@ -87,10 +87,27 @@ def test_scag_103_clan_crafter_tool_duplicate_replacement_and_custom_contract(
                 "idempotency_key": "create-crafter",
             },
         )
+
+        async def apply_without_mutation(arguments: dict) -> dict:
+            before = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": arguments["character_id"]}},
+            )
+            try:
+                return await _call(server, "character_content_apply", arguments)
+            finally:
+                assert (
+                    await _call(
+                        server,
+                        "character_query",
+                        {"view": "get", "payload": {"character_id": arguments["character_id"]}},
+                    )
+                    == before
+                )
+
         selection = {"languages": ["Dwarvish"], "tools": ["Alchemist's Supplies"]}
-        pending = await _call(
-            server,
-            "character_content_apply",
+        pending = await apply_without_mutation(
             {
                 "character_id": actor["id"],
                 "artifact_id": clan["id"],
@@ -147,9 +164,7 @@ def test_scag_103_clan_crafter_tool_duplicate_replacement_and_custom_contract(
             },
         )
         with pytest.raises(ToolError):
-            await _call(
-                server,
-                "character_content_apply",
+            await apply_without_mutation(
                 {
                     "character_id": bad["id"],
                     "artifact_id": clan["id"],
@@ -225,9 +240,7 @@ def test_scag_103_clan_crafter_tool_duplicate_replacement_and_custom_contract(
                 "idempotency_key": "background-first",
             },
         )
-        class_pending = await _call(
-            server,
-            "character_content_apply",
+        class_pending = await apply_without_mutation(
             {
                 "character_id": background_first["id"],
                 "artifact_id": fighter["id"],
@@ -260,6 +273,18 @@ def test_scag_103_clan_crafter_tool_duplicate_replacement_and_custom_contract(
             for key, value in class_done["sheet"]["skills"].items()
             if value["proficiency"] != "none"
         } == {"athletics", "arcana", "insight", "perception"}
+        first_order_request = {
+            "character_id": background_first["id"],
+            "artifact_id": fighter["id"],
+            "selection": {
+                "skills": ["athletics", "perception"],
+                "skill_replacements": {"athletics": "arcana"},
+            },
+            "expected_revision": background_done["revision"],
+            "idempotency_key": "background-first-class",
+        }
+        first_order_result = class_done
+        assert await _call(server, "character_content_apply", first_order_request) == class_done
 
         class_first = await make("Class first")
         class_done = await _call(
@@ -273,9 +298,7 @@ def test_scag_103_clan_crafter_tool_duplicate_replacement_and_custom_contract(
                 "idempotency_key": "class-first",
             },
         )
-        pending_background = await _call(
-            server,
-            "character_content_apply",
+        pending_background = await apply_without_mutation(
             {
                 "character_id": class_first["id"],
                 "artifact_id": city_watch["id"],
@@ -351,6 +374,11 @@ def test_scag_103_clan_crafter_tool_duplicate_replacement_and_custom_contract(
             for skill in ("medicine", "religion")
         )
         assert len(custom_result["sheet"]["traits"]["languages"]) == 2
+        assert {
+            key
+            for key, value in custom_result["sheet"]["skills"].items()
+            if value["proficiency"] != "none"
+        } == {"medicine", "religion"}
         assert custom_result["sheet"]["inventory"]["items"]
         assert custom_result["sheet"]["inventory"]["wallet"]["gp"] == 10
         coin_actor = await make("Custom coin")
@@ -370,6 +398,7 @@ def test_scag_103_clan_crafter_tool_duplicate_replacement_and_custom_contract(
             == "starting_coin"
         )
         assert coin["sheet"]["inventory"]["items"] == []
+        assert coin["sheet"]["inventory"]["wallet"]["gp"] == 0
 
         persisted = {
             actor_id: await _call(
@@ -386,6 +415,27 @@ def test_scag_103_clan_crafter_tool_duplicate_replacement_and_custom_contract(
         }
         close_server(server)
         restarted = create_server(config)
+        assert (
+            await _call(restarted, "character_content_apply", first_order_request)
+            == first_order_result
+        )
+        assert (
+            await _call(
+                restarted,
+                "character_content_apply",
+                {
+                    "character_id": class_first["id"],
+                    "artifact_id": city_watch["id"],
+                    "selection": {
+                        "languages": ["Elvish", "Goblin"],
+                        "skill_replacements": {"athletics": "arcana"},
+                    },
+                    "expected_revision": class_done["revision"],
+                    "idempotency_key": "class-first-background",
+                },
+            )
+            == class_background
+        )
         for actor_id, before in persisted.items():
             after = await _call(
                 restarted,

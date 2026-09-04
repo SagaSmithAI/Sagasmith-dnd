@@ -284,9 +284,12 @@ def test_scag_103_official_archive_activates_and_applies_watchers_eye(tmp_path: 
                     assert result["outcome"] == outcome
                     assert bool(result["fact_revision_id"]) == (outcome != "pending_gm_ruling")
                     receipt = response["rule_receipts"][0]
-                    assert receipt["artifact_id"] == feature["choices"]["narrative_capability"][
-                        "source_binding"
-                    ]["artifact_id"]
+                    assert (
+                        receipt["artifact_id"]
+                        == feature["choices"]["narrative_capability"]["source_binding"][
+                            "artifact_id"
+                        ]
+                    )
                     assert receipt["capability"] == capability
                     assert receipt["outcome"] == outcome
                     assert receipt["addon_checksum"] == package["checksum"]
@@ -311,19 +314,28 @@ def test_scag_103_official_archive_activates_and_applies_watchers_eye(tmp_path: 
             )
             with pytest.raises(ToolError, match=message):
                 await _call(server, "character_check", args)
-            assert await _call(
-                server,
-                "campaign_query",
-                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
-            ) == before_campaign
-            assert await _call(
-                server,
-                "character_query",
-                {"view": "get", "payload": {"character_id": actors[0][0]["id"]}},
-            ) == before_actor
-            assert await _call(
-                server, "campaign_rules", {"campaign_id": campaign["id"], "action": "receipts"}
-            ) == before_receipts
+            assert (
+                await _call(
+                    server,
+                    "campaign_query",
+                    {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+                )
+                == before_campaign
+            )
+            assert (
+                await _call(
+                    server,
+                    "character_query",
+                    {"view": "get", "payload": {"character_id": actors[0][0]["id"]}},
+                )
+                == before_actor
+            )
+            assert (
+                await _call(
+                    server, "campaign_rules", {"campaign_id": campaign["id"], "action": "receipts"}
+                )
+                == before_receipts
+            )
 
         # JSON boolean/float equality with integer 1 must not satisfy a versioned
         # source-fact contract or create a capability receipt.
