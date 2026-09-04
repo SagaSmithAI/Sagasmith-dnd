@@ -6887,7 +6887,11 @@ def resolve_actor_check(
             trait in conditional_traits
             for trait in ("dwarven_resilience", "fey_ancestry", "halfling_brave")
         )
-        if needs_conditions and save_effect_conditions is None and "save_effect_conditions" not in rule_facts:
+        if (
+            needs_conditions
+            and save_effect_conditions is None
+            and "save_effect_conditions" not in rule_facts
+        ):
             raise NeedsRulingError(
                 "conditional save requires authoritative effect conditions",
                 missing=("save_effect_conditions",),
