@@ -16,14 +16,16 @@ from .ground_transfer import _clear_dangling_ammunition, _item_closure
 
 
 def _bounded_id(seed: str, used: set[str]) -> str:
-    candidate = seed
+    candidate = (
+        seed
+        if len(seed) <= 100
+        else seed[:87] + "~" + sha256(seed.encode()).hexdigest()[:12]
+    )
     counter = 2
     while candidate in used:
         digest = sha256(f"{seed}:{counter}".encode()).hexdigest()[:12]
         candidate = f"{seed[:86]}~{digest}"
         counter += 1
-    if len(candidate) > 100:
-        candidate = candidate[:87] + "~" + sha256(seed.encode()).hexdigest()[:12]
     return candidate
 
 
@@ -76,7 +78,6 @@ def transfer_actor_inventory_item(
     if count > item["quantity"]:
         raise ValueError("quantity exceeds the item stack")
     full = count == item["quantity"]
-    attuned_transfer = full and item["attunement"] == "attuned"
     if not full and item["attunement"] != "none":
         raise ValueError("cannot split an attunable item stack")
 
@@ -105,19 +106,45 @@ def transfer_actor_inventory_item(
         _clear_dangling_ammunition(next_source_items, moved_ids)
     else:
         moved = [deepcopy(source_item)]
+        moved_original_id = moved[0]["id"]
         source_item["quantity"] -= count
         moved[0]["quantity"] = count
-        moved[0]["id"] = _bounded_id(
-            f"{item_id}~transfer", {entry["id"] for entry in next_source_items}
-        )
         moved[0]["equipped"] = False
         moved[0]["equipped_slot"] = None
 
     used = {entry["id"] for entry in next_target["inventory"]["items"]}
-    used.update(ref["id"] for ref in _refs(next_target))
+    moved_original_ids = (
+        [entry["id"] for entry in moved] if full else [moved_original_id]
+    )
+    used.update(
+        ref["id"]
+        for ref in _refs(next_target)
+        if not (
+            _location(ref).get("kind") == "actor"
+            and _location(ref).get("actor_id") == source_actor_id
+            and _location(ref).get("item_id") in moved_original_ids
+        )
+    )
+    attuned_original_ids = {
+        entry["id"] for entry in moved if entry["attunement"] == "attuned"
+    }
+    attuned_owners: dict[str, str] = {}
+    for owner_id, sheet in next_sheets.items():
+        for ref in _refs(sheet):
+            loc = _location(ref)
+            old_id = loc.get("item_id")
+            if (
+                loc.get("kind") == "actor"
+                and loc.get("actor_id") == source_actor_id
+                and old_id in moved_original_ids
+                and ref["attunement"] == "attuned"
+            ):
+                if old_id in attuned_owners and attuned_owners[old_id] != owner_id:
+                    raise ValueError(f"physical item {old_id!r} has multiple attuned owners")
+                attuned_owners[old_id] = owner_id
     id_map: dict[str, str] = {}
-    for entry in moved:
-        id_map[entry["id"]] = _bounded_id(entry["id"], used | set(id_map.values()))
+    for original_id in moved_original_ids:
+        id_map[original_id] = _bounded_id(original_id, used | set(id_map.values()))
     for entry in moved:
         old_id = entry["id"]
         entry["id"] = id_map[old_id]
@@ -127,11 +154,15 @@ def transfer_actor_inventory_item(
             ammo_id = entry["mechanics"].get("ammunition_item_id")
             if ammo_id not in id_map:
                 entry["mechanics"]["ammunition_item_id"] = None
-    root_new_id = id_map[item_id] if full else id_map[moved[0]["id"]]
-    if attuned_transfer:
-        for entry in moved:
-            if entry["id"] == root_new_id:
-                entry["attunement"] = "required"
+    root_new_id = id_map[item_id] if full else id_map[moved_original_id]
+    for entry in moved:
+        original_id = next(old for old, new in id_map.items() if new == entry["id"])
+        if original_id in attuned_owners and attuned_owners[original_id] == target_actor_id:
+            entry["attunement"] = "attuned"
+        elif original_id in attuned_original_ids:
+            entry["attunement"] = "required"
+    if full and moved and moved[0]["id"] == root_new_id:
+        moved[0]["container_id"] = None
 
     next_target["inventory"]["items"].extend(moved)
     # Every external physical reference follows the item, including the
@@ -139,6 +170,17 @@ def transfer_actor_inventory_item(
     # the remainder and therefore have no reference to rewrite.
     if full:
         for sheet in next_sheets.values():
+            refs = _refs(sheet)
+            refs[:] = [
+                ref
+                for ref in refs
+                if not (
+                    sheet is next_target
+                    and _location(ref).get("kind") == "actor"
+                    and _location(ref).get("actor_id") == source_actor_id
+                    and _location(ref).get("item_id") in moved_original_ids
+                )
+            ]
             for ref in _refs(sheet):
                 loc = _location(ref)
                 if loc.get("kind") == "actor" and loc.get("actor_id") == source_actor_id:
@@ -152,7 +194,10 @@ def transfer_actor_inventory_item(
         # A carried attuned item has no external record while held.  Once it
         # leaves the owner's inventory, retain an explicit bond record there.
         for entry in moved:
-            if not attuned_transfer or entry["id"] != root_new_id:
+            original_id = next(old for old, new in id_map.items() if new == entry["id"])
+            if original_id not in attuned_original_ids and original_id not in attuned_owners:
+                continue
+            if attuned_owners.get(original_id) == target_actor_id:
                 continue
             if any(
                 _location(ref).get("item_id") == entry["id"]
@@ -162,7 +207,7 @@ def transfer_actor_inventory_item(
                 continue
             _refs(next_source).append(
                 {
-                    "id": entry["id"],
+                    "id": original_id,
                     "name": entry["name"],
                     "attunement": "attuned",
                     "location": {
@@ -172,6 +217,16 @@ def transfer_actor_inventory_item(
                     },
                 }
             )
+
+    moved_spell_ids = {
+        spec.get("card", {}).get("id")
+        for entry in moved
+        for spec in dict(entry.get("mechanics") or {}).get("spellcasting", {}).get("spells", [])
+        if isinstance(spec, dict) and isinstance(spec.get("card"), dict)
+    }
+    for effect in next_source.get("effects", []):
+        if effect.get("source_spell_id") in moved_spell_ids and not effect.get("source"):
+            effect["source"] = f"actor:{source_actor_id}"
 
     # Effects remain active; only an ammunition selection pointing to a
     # physical item not transferred is cleared.  Weapon ammunition properties

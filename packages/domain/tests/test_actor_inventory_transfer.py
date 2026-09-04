@@ -53,6 +53,47 @@ def test_full_transfer_preserves_effects_and_moves_attuned_bond() -> None:
     }
 
 
+def test_attuned_item_return_restores_original_id_and_bond() -> None:
+    first = transfer_actor_inventory_item(
+        {"a": _sheet(_weapon("amulet", attunement="attuned")), "b": _sheet()},
+        [],
+        "a",
+        "b",
+        "amulet",
+    )
+    second = transfer_actor_inventory_item(
+        first["sheets"],
+        [],
+        "b",
+        "a",
+        first["item"]["id"],
+    )
+    assert second["item"]["id"] == "amulet"
+    assert second["item"]["attunement"] == "attuned"
+    assert second["sheets"]["a"]["inventory"]["external_items"] == []
+
+
+def test_transfer_from_container_detaches_root_and_preserves_children() -> None:
+    container = {
+        "id": "pack",
+        "name": "Pack",
+        "kind": "container",
+        "quantity": 1,
+        "weight_oz": 16,
+    }
+    child = _weapon("inside")
+    child["container_id"] = "pack"
+    result = transfer_actor_inventory_item(
+        {"a": _sheet(container, child), "b": _sheet()},
+        [],
+        "a",
+        "b",
+        "inside",
+    )
+    assert result["item"]["container_id"] is None
+    assert result["sheets"]["a"]["inventory"]["items"][0]["id"] == "pack"
+
+
 def test_partial_nonattuned_stack_moves_only_requested_quantity() -> None:
     result = transfer_actor_inventory_item(
         {"source": _sheet(_weapon("stack", quantity=4)), "target": _sheet()},
