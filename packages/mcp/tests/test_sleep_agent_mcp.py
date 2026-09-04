@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 
@@ -98,6 +99,95 @@ def test_sleep_noncombat_missing_agent_spatial_facts_is_pending_without_payment(
                 {"view": "get", "payload": {"character_id": caster["id"]}},
             )
             assert after == before
+            # A player controlling the caster still cannot author the DM's area decision.
+            await _call(
+                server,
+                "access_grant",
+                {
+                    "scope": "campaign",
+                    "campaign_id": campaign["id"],
+                    "principal_id": "player:caster",
+                    "payload": {"role": "player"},
+                },
+            )
+            await _call(
+                server,
+                "access_grant",
+                {
+                    "scope": "actor",
+                    "campaign_id": campaign["id"],
+                    "principal_id": "player:caster",
+                    "payload": {
+                        "actor_id": caster["id"],
+                        "can_control": True,
+                        "can_view_private": True,
+                    },
+                },
+            )
+
+            async def snapshot():
+                return {
+                    "campaign": await _call(
+                        server,
+                        "campaign_query",
+                        {
+                            "view": "get",
+                            "payload": {"campaign_id": campaign["id"]},
+                        },
+                    ),
+                    "caster": await _call(
+                        server,
+                        "character_query",
+                        {
+                            "view": "get",
+                            "payload": {"character_id": caster["id"]},
+                        },
+                    ),
+                }
+
+            before_rejected = await snapshot()
+            facts = {
+                "decision_id": "source-area",
+                "reason": "Only the caster is present in the selected area.",
+                "origin_description": "The point immediately beside the caster.",
+                "campaign_revision": before_rejected["campaign"]["revision"],
+                "origin_in_range": True,
+                "line_of_effect_clear": True,
+                "affected_target_ids": [caster["id"]],
+                "excluded_actor_ids": [],
+            }
+            arguments = {
+                "character_id": caster["id"],
+                "action": "cast_spell",
+                "payload": {
+                    "spell_id": sleep["id"],
+                    "cast_level": 1,
+                    "declaration": {"spatial_facts": facts},
+                },
+                "expected_revision": before_rejected["caster"]["revision"],
+                "idempotency_key": "player-decision",
+                "principal_id": "player:caster",
+            }
+            with pytest.raises(ToolError, match="cannot access|role"):
+                await server.call_tool("character_action", arguments)
+            assert await snapshot() == before_rejected
+            for index, (field, value) in enumerate(
+                [
+                    ("campaign_revision", facts["campaign_revision"] - 1),
+                    ("origin_in_range", 1),
+                    ("line_of_effect_clear", False),
+                    ("affected_target_ids", []),
+                    ("affected_target_ids", [caster["id"], "foreign"]),
+                    ("origin", {"x": 0, "y": 0}),
+                ]
+            ):
+                invalid = deepcopy(arguments)
+                invalid.pop("principal_id")
+                invalid["idempotency_key"] = f"invalid-area-{index}"
+                invalid["payload"]["declaration"]["spatial_facts"][field] = value
+                with pytest.raises(ToolError):
+                    await server.call_tool("character_action", invalid)
+                assert await snapshot() == before_rejected
         finally:
             close_server(server)
 
