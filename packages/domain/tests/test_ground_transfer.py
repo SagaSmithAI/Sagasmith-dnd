@@ -213,7 +213,7 @@ def test_pickup_remaps_id_collision_deterministically() -> None:
 
 def test_background_owner_roundtrip_restores_original_item_id_after_collision() -> None:
     owner = validate_character_sheet({})
-    owner, item_id = add_inventory_item(owner, _weapon("sword"))
+    owner, item_id = add_inventory_item(owner, _weapon("sword", attunement="attuned"))
     owner["progression"]["background_grants"]["equipment_item_ids"] = [item_id]
     owner = validate_character_sheet(equip_inventory_item(owner, item_id, "main_hand"))
     first = drop_held_items(
@@ -254,6 +254,7 @@ def test_background_owner_roundtrip_restores_original_item_id_after_collision() 
     )
 
     assert returned["picked_up"]["root_item_id"] == item_id
+    assert returned["picked_up"]["items"][0]["attunement"] == "attuned"
     assert returned["sheets"]["owner"]["progression"]["background_grants"][
         "equipment_item_ids"
     ] == [item_id]

@@ -226,6 +226,11 @@ def pickup_ground_item(
     next_sheets = deepcopy(values)
     target_items = next_sheets[actor_id]["inventory"]["items"]
     existing = {item["id"] for item in target_items}
+    existing.update(
+        ref["id"]
+        for ref in _external_items(values[actor_id])
+        if dict(ref.get("location") or {}).get("ground_id") != ground_id
+    )
     remap: dict[str, str] = {}
     preferred_ids: dict[str, str] = {}
     for owner_id, sheet in values.items():
@@ -260,6 +265,14 @@ def pickup_ground_item(
                     previous = attuned_owners.get(item_ref_id)
                     if previous is None or ref["attunement"] == "attuned":
                         attuned_owners[item_ref_id] = (owner_id, ref["attunement"])
+    for old_id, refs in ground_ref_owners.items():
+        attuned_owner_ids = {owner_id for owner_id, ref in refs if ref["attunement"] == "attuned"}
+        if len(attuned_owner_ids) > 1:
+            raise ValueError(f"ground item {old_id!r} has multiple attuned owners")
+    for item in moved:
+        old_id = item["id"]
+        if item["attunement"] == "attuned" and old_id not in ground_ref_owners:
+            raise ValueError(f"attuned ground item {old_id!r} has no owner reference")
     for item in moved:
         old_id = item["id"]
         item["id"] = remap[old_id]
@@ -270,7 +283,7 @@ def pickup_ground_item(
             if ammo is not None:
                 item["mechanics"]["ammunition_item_id"] = remap.get(ammo, ammo)
         attuned_owner, owner_state = attuned_owners.get(old_id, (source_actor_id, "attuned"))
-        if item["attunement"] == "attuned":
+        if old_id in attuned_owners:
             item["attunement"] = (
                 "attuned" if actor_id == attuned_owner and owner_state == "attuned" else "required"
             )
