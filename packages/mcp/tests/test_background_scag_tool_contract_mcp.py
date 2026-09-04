@@ -252,6 +252,14 @@ def test_scag_103_clan_crafter_tool_duplicate_replacement_and_custom_contract(
             },
         )
         assert class_done["sheet"]["skills"]["athletics"]["proficiency"] == "proficient"
+        assert class_done["sheet"]["skills"]["arcana"]["proficiency"] == "proficient"
+        assert class_done["sheet"]["skills"]["insight"]["proficiency"] == "proficient"
+        assert class_done["sheet"]["skills"]["perception"]["proficiency"] == "proficient"
+        assert {
+            key
+            for key, value in class_done["sheet"]["skills"].items()
+            if value["proficiency"] != "none"
+        } == {"athletics", "arcana", "insight", "perception"}
 
         class_first = await make("Class first")
         class_done = await _call(
@@ -299,6 +307,21 @@ def test_scag_103_clan_crafter_tool_duplicate_replacement_and_custom_contract(
             for key, value in class_background["sheet"]["skills"].items()
             if value["proficiency"] != "none"
         } == {"athletics", "arcana", "insight", "perception"}
+        class_background_replay = await _call(
+            server,
+            "character_content_apply",
+            {
+                "character_id": class_first["id"],
+                "artifact_id": city_watch["id"],
+                "selection": {
+                    "languages": ["Elvish", "Goblin"],
+                    "skill_replacements": {"athletics": "arcana"},
+                },
+                "expected_revision": class_done["revision"],
+                "idempotency_key": "class-first-background",
+            },
+        )
+        assert class_background_replay == class_background
 
         custom = {
             "custom_name": "Custom Watch",
@@ -328,6 +351,8 @@ def test_scag_103_clan_crafter_tool_duplicate_replacement_and_custom_contract(
             for skill in ("medicine", "religion")
         )
         assert len(custom_result["sheet"]["traits"]["languages"]) == 2
+        assert custom_result["sheet"]["inventory"]["items"]
+        assert custom_result["sheet"]["inventory"]["wallet"]["gp"] == 10
         coin_actor = await make("Custom coin")
         coin = await _call(
             server,
@@ -346,6 +371,29 @@ def test_scag_103_clan_crafter_tool_duplicate_replacement_and_custom_contract(
         )
         assert coin["sheet"]["inventory"]["items"] == []
 
+        persisted = {
+            actor_id: await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": actor_id}},
+            )
+            for actor_id in (
+                background_first["id"],
+                class_first["id"],
+                custom_actor["id"],
+                coin_actor["id"],
+            )
+        }
         close_server(server)
+        restarted = create_server(config)
+        for actor_id, before in persisted.items():
+            after = await _call(
+                restarted,
+                "character_query",
+                {"view": "get", "payload": {"character_id": actor_id}},
+            )
+            assert after["revision"] == before["revision"]
+            assert after["sheet"] == before["sheet"]
+        close_server(restarted)
 
     asyncio.run(exercise())
