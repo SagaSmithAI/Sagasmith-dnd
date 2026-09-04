@@ -132,7 +132,12 @@ def test_opportunity_sneak_attack_uses_trigger_snapshot_and_reaction_only(
                     "access": {"known": True, "prepared": True},
                     "definition": {
                         "casting_time": "1 reaction, which you take when hit by an attack",
-                        "duration": {"kind": "timed", "value": 1, "unit": "round", "concentration": False},
+                        "duration": {
+                            "kind": "timed",
+                            "value": 1,
+                            "unit": "round",
+                            "concentration": False,
+                        },
                         "components": {"verbal": True, "somatic": True},
                     },
                     "mechanic_refs": [CORE_SHIELD_MECHANIC_ID],
@@ -315,9 +320,7 @@ def test_opportunity_sneak_attack_uses_trigger_snapshot_and_reaction_only(
             mover_state = next(
                 item for item in status["combatants"] if item["actor_id"] == mover["id"]
             )
-            assert mover_state["turn_budget"]["reaction"] == (
-                0 if defense_mode == "shield" else 1
-            )
+            assert mover_state["turn_budget"]["reaction"] == (0 if defense_mode == "shield" else 1)
             receipts_after = await _call(
                 server,
                 "campaign_rules",
