@@ -99,6 +99,9 @@ def test_2014_species_save_traits_add_authoritative_advantage(
     )
 
     assert result["roll_mode"] == "advantage"
+    receipts = [item for item in result["rule_receipts"] if item["mechanic_id"] == mechanic]
+    assert len(receipts) == 1
+    assert receipts[0]["event"] == "check.resolve"
 
 
 def test_species_save_advantage_cancels_disadvantage_and_is_2014_only(
