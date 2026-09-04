@@ -1162,6 +1162,107 @@ ENGINE_SETTLED_CARD_MECHANIC_IDS = frozenset(
     }
 )
 
+SCAG_OFFICIAL_ADDON_ID = (
+    "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a.addon"
+)
+SCAG_RULE_PACK_ID = "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a"
+SCAG_WATCHERS_EYE_BACKGROUND_IDS = frozenset(
+    {
+        (
+            "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide."
+            "16e6a243ef0a.background.city-watch"
+        ),
+        (
+            "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide."
+            "16e6a243ef0a.background.investigator"
+        ),
+    }
+)
+WATCHERS_EYE_CAPABILITIES = frozenset(
+    {
+        "local_law",
+        "local_criminal_activity",
+        "watch_outpost",
+        "law_enforcement_contact",
+        "watch_information",
+        "recognition",
+    }
+)
+WATCHERS_EYE_FACT_METADATA_KEY = "dnd5e_watchers_eye"
+WATCHERS_EYE_FACT_SCHEMA_VERSION = 1
+WATCHERS_EYE_FEATURE_NAME = "Watcher's Eye"
+WATCHERS_EYE_NARRATIVE_SCHEMA = "sagasmith.dnd.narrative-capability.v1"
+
+
+def _watchers_eye_source_binding(artifact: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Return exact source-review binding for the two SCAG background cards."""
+
+    artifact_id = str(artifact.get("id") or "")
+    if artifact_id not in SCAG_WATCHERS_EYE_BACKGROUND_IDS:
+        return None
+    if str(artifact.get("kind") or "") != "background":
+        return None
+    if str(artifact.get("application_state") or "") != "selection_ready":
+        return None
+    if str(artifact.get("execution_state") or "") != "ruling_ready":
+        return None
+    raw_selection_contract = artifact.get("selection_contract")
+    raw_catalog_review = artifact.get("catalog_review")
+    if raw_selection_contract is not None or raw_catalog_review is not None:
+        if selection_contract_errors(artifact):
+            return None
+        selection_contract = dict(raw_selection_contract or {})
+        catalog_review = dict(raw_catalog_review or {})
+        reviewed_content_hash = str(selection_contract.get("reviewed_content_hash") or "")
+        if (
+            selection_contract.get("status") != "ready"
+            or selection_contract.get("materializer") != "dnd5e.character.background.v1"
+            or catalog_review.get("status") != "approved"
+            or reviewed_content_hash != str(catalog_review.get("reviewed_content_hash") or "")
+            or len(reviewed_content_hash) != 64
+        ):
+            return None
+    else:
+        # The import boundary intentionally strips authoring attestations after
+        # binding them into the immutable addon checksum and definition provenance.
+        reviewed_content_hash = content_fingerprint(artifact)
+    card = dict(artifact.get("card") or {})
+    grants = dict(card.get("background_grants") or {})
+    if str(grants.get("feature") or "") != WATCHERS_EYE_FEATURE_NAME:
+        return None
+    source_refs = [
+        dict(item) for item in artifact.get("source_refs") or [] if isinstance(item, dict)
+    ]
+    feature_sources = [
+        item
+        for item in source_refs
+        if "watcher's eye" in str(item.get("note") or "").casefold()
+        and str(item.get("chunk_id") or item.get("chunk_key") or "")
+    ]
+    if len(feature_sources) != 1:
+        return None
+    chunk_key = str(feature_sources[0].get("chunk_id") or feature_sources[0].get("chunk_key"))
+    rule_refs = [str(item) for item in artifact.get("rule_refs") or []]
+    feature_rule_refs = [item for item in rule_refs if item.endswith(f"#chunk:{chunk_key}")]
+    if len(feature_rule_refs) != 1:
+        return None
+    ruling_requirements = [
+        dict(item) for item in card.get("ruling_requirements") or [] if isinstance(item, dict)
+    ]
+    if not any(
+        str(item.get("ruling_kind") or "") == "agent_dm_adjudication"
+        and len(str(item.get("source_excerpt") or "")) >= 100
+        for item in ruling_requirements
+    ):
+        return None
+    return {
+        "artifact_id": artifact_id,
+        "background_name": str(card.get("name") or artifact_id),
+        "reviewed_content_hash": reviewed_content_hash,
+        "rule_refs": rule_refs,
+        "feature_rule_ref": feature_rule_refs[0],
+    }
+
 
 def _semantic_plan_save_facts(
     source_card: dict[str, Any], compiled_plan: Any
