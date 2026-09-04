@@ -6623,6 +6623,11 @@ def resolve_turn_undead_to_sheets(
         raise CombatEngineError("Turn Undead requires the cleric's canonical spell save DC")
     if not target_actors:
         raise CombatEngineError("Turn Undead requires at least one perceiving undead target")
+    for target_id, target_actor in target_actors.items():
+        target_sheet = actor_sheet(target_actor)
+        creature_type = str(target_sheet.get("progression", {}).get("species") or "").strip()
+        if re.fullmatch(r"undead(?:\s+\([^()]+\))?", creature_type, re.IGNORECASE) is None:
+            raise CombatEngineError(f"Turn Undead target is not Undead: {target_id}")
     sear_feature = next(
         (
             item
@@ -6645,9 +6650,6 @@ def resolve_turn_undead_to_sheets(
     results: list[dict[str, Any]] = []
     for target_id, target_actor in target_actors.items():
         target_sheet = actor_sheet(target_actor)
-        creature_type = str(target_sheet.get("progression", {}).get("species") or "").strip()
-        if re.fullmatch(r"undead(?:\s+\([^()]+\))?", creature_type, re.IGNORECASE) is None:
-            raise CombatEngineError(f"Turn Undead target is not Undead: {target_id}")
         effect_conditions = ["frightened", "incapacitated"] if edition == "2024" else ["turned"]
         save = resolve_actor_check(
             target_actor,
