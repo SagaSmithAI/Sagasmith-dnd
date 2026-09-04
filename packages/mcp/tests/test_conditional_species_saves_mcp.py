@@ -5,6 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+import sagasmith_dnd.character_schema as character_schema
 from sagasmith_dnd.character_schema import default_character_sheet
 from test_official_expansions_mcp import _call, _config
 from test_structured_spell_mcp import (
@@ -14,6 +15,7 @@ from test_structured_spell_mcp import (
     _slot,
 )
 
+import sagasmith_dnd_mcp.server as server_module
 from sagasmith_dnd_mcp.server import close_server, create_server
 
 
@@ -51,6 +53,8 @@ def test_real_2014_species_save_traits_apply_and_replay(tmp_path: Path, species_
         server = create_server(config)
         try:
             assert Path(__import__("sagasmith_dnd").__file__).resolve().is_relative_to(workspace)
+            assert Path(character_schema.__file__).resolve().is_relative_to(workspace)
+            assert Path(server_module.__file__).resolve().is_relative_to(workspace)
             campaign = await _call(
                 server,
                 "campaign_create",
