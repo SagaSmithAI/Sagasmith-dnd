@@ -418,7 +418,7 @@ from sagasmith_dnd.rule_engine import (
     validate_source_bound_mechanics,
 )
 from sagasmith_dnd.rule_providers import load_native_rule_providers
-from sagasmith_dnd.sleep import resolve_sleep_targets
+from sagasmith_dnd.sleep import resolve_sleep_targets, wake_sleep_effects
 from sagasmith_dnd.spatial import (
     BattleMapError,
     compile_battle_map,
@@ -20519,6 +20519,7 @@ def _create_server(
             "search",
             "shell_defense",
             "shake_hypnotic_pattern",
+            "shake_sleep",
             "stabilize",
             "study",
             "sustain_spell",
@@ -20764,11 +20765,11 @@ def _create_server(
                 if normalized_action == "shell_defense"
                 else emerge_tortle_shell_defense(shell_defense_record.sheet)
             )
-        if normalized_action == "shake_hypnotic_pattern":
+        if normalized_action in {"shake_hypnotic_pattern", "shake_sleep"}:
             if target_id is None or target_id == actor_id:
-                raise CombatEngineError("shaking Hypnotic Pattern requires another target creature")
+                raise CombatEngineError("shaking awake requires another target creature")
             if payload:
-                raise CombatEngineError("shake_hypnotic_pattern does not accept a payload")
+                raise CombatEngineError(f"{normalized_action} does not accept a payload")
             acting_combatant = require_encounter_combatant(
                 encounter,
                 actor_id,
@@ -20787,10 +20788,19 @@ def _create_server(
                 cell_ft=cell_ft,
             )
             if distance is None or distance > 5:
-                raise CombatEngineError("shaking Hypnotic Pattern requires an adjacent target")
+                raise CombatEngineError("shaking awake requires an adjacent target")
             hypnotic_target_record = characters.get(target_id)
-            if not active_hypnotic_pattern_effect_ids(hypnotic_target_record.sheet):
-                raise CombatEngineError("target has no active Hypnotic Pattern effect")
+            active_shaken_effect_ids = (
+                active_hypnotic_pattern_effect_ids(hypnotic_target_record.sheet)
+                if normalized_action == "shake_hypnotic_pattern"
+                else [
+                    str(effect["id"])
+                    for effect in hypnotic_target_record.sheet.get("effects", [])
+                    if effect.get("active") and effect.get("source_spell_id") == CORE_SLEEP_SPELL_ID
+                ]
+            )
+            if not active_shaken_effect_ids:
+                raise CombatEngineError(f"target has no active effect for {normalized_action}")
         if "agent_ruling_commitment" in dict(payload or {}):
             if normalized_action != "improvise":
                 raise CombatEngineError(
@@ -20965,9 +20975,17 @@ def _create_server(
                 "conditions": list(shell_defense_sheet.get("conditions") or []),
             }
         if hypnotic_target_record is not None:
-            ended_hypnotic = end_hypnotic_pattern_effects(
-                hypnotic_target_record.sheet,
-                ended_reason="shaken_awake",
+            ended_hypnotic = (
+                end_hypnotic_pattern_effects(
+                    hypnotic_target_record.sheet, ended_reason="shaken_awake"
+                )
+                if normalized_action == "shake_hypnotic_pattern"
+                else wake_sleep_effects(hypnotic_target_record.sheet, reason="shaken_awake")
+            )
+            shaken_kind = (
+                "hypnotic_pattern_shaken_awake"
+                if normalized_action == "shake_hypnotic_pattern"
+                else "sleep_shaken_awake"
             )
             sync_combatant_conditions(
                 next_encounter,
@@ -20983,7 +21001,7 @@ def _create_server(
                 )
             )
             condition_resolution = {
-                "kind": "hypnotic_pattern_shaken_awake",
+                "kind": shaken_kind,
                 "target_id": str(target_id),
                 "ended_effect_ids": ended_hypnotic["ended_effect_ids"],
                 "ended_reason": "shaken_awake",
@@ -20991,7 +21009,7 @@ def _create_server(
             next_encounter["log"] = [
                 *list(next_encounter.get("log") or []),
                 {
-                    "type": "hypnotic_pattern_shaken_awake",
+                    "type": shaken_kind,
                     "actor_id": actor_id,
                     "target_id": str(target_id),
                     "ended_effect_ids": ended_hypnotic["ended_effect_ids"],
@@ -21083,6 +21101,8 @@ def _create_server(
             boundary_ids.append("dnd5e.core.ready.action")
         if normalized_action == "shake_hypnotic_pattern":
             boundary_ids.append(CORE_HYPNOTIC_PATTERN_MECHANIC_ID)
+        if normalized_action == "shake_sleep":
+            boundary_ids.append(CORE_SLEEP_MECHANIC_ID)
         if normalized_action in {"shell_defense", "emerge_shell"}:
             boundary_ids.append(CORE_TORTLE_SHELL_DEFENSE_MECHANIC_ID)
         acting_combatant = next(
@@ -29809,6 +29829,15 @@ def _create_server(
         )
         fly = is_core_fly_spell(spell_entry)
         invisibility = is_core_invisibility_spell(spell_entry)
+        if spell_id == CORE_SLEEP_SPELL_ID:
+            # A scalar out-of-combat resource payment must not masquerade as
+            # complete area settlement. The source-bound area path validates
+            # the complete target snapshot before committing the slot.
+            raise NeedsRulingError(
+                "Sleep needs its source-bound area settlement before resources are paid",
+                missing=("sleep.area_targets",),
+                ruling_kind="agent_dm_adjudication",
+            )
         normalized_fly_targets: list[str] = []
         normalized_willing_targets: list[str] = []
         normalized_invisibility_targets: list[str] = []

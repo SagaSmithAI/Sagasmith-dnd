@@ -82,6 +82,7 @@ from sagasmith_dnd.standard_feature_ids import (
 from sagasmith_dnd.standard_spell_ids import (
     CORE_BLADE_WARD_MECHANIC_ID,
     CORE_HYPNOTIC_PATTERN_SPELL_IDS,
+    CORE_SLEEP_SPELL_ID,
     CORE_WITCH_BOLT_MECHANIC_ID,
 )
 from sagasmith_dnd.vocabulary import WEAPON_HAND_SLOTS
@@ -1748,6 +1749,7 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
             actions.extend(["influence", "study", "utilize"])
         else:
             actions.extend(["improvise", "use_object"])
+            actions.append("shake_sleep")
         if conditions & {"grappled", "restrained"}:
             actions.append("escape")
         if (
@@ -4006,7 +4008,12 @@ def _apply_adjusted_damage(
     if adjusted > 0:
         for effect in value.get("effects", []):
             if effect.get("active") and (
-                effect.get("kind") == "turn_undead" or _is_hypnotic_pattern_target_effect(effect)
+                effect.get("kind") == "turn_undead"
+                or _is_hypnotic_pattern_target_effect(effect)
+                or (
+                    effect.get("kind") == "timed_conditions"
+                    and effect.get("source_spell_id") == CORE_SLEEP_SPELL_ID
+                )
             ):
                 effect["active"] = False
                 effect["ended_reason"] = "damaged"
@@ -4057,6 +4064,10 @@ def _apply_adjusted_damage(
     conditions = reconcile_condition_projection(value, conditions)
     if ended_turn_effects:
         reconcile_ended_effect_conditions(value, ended_effects=ended_turn_effects)
+        # Ending magical slumber cannot erase the independent unconsciousness
+        # caused by this same damage reducing a living creature to zero HP.
+        if hp["value"] == 0 and "unconscious" in conditions and "dead" not in conditions:
+            apply_condition_change(value, condition_id="unconscious", add=True)
     if hp["value"] > 0 and not knocked_out_2024:
         apply_condition_change(value, condition_id="unconscious", add=False)
     conditions = _condition_set(value.get("conditions"))
@@ -5351,6 +5362,7 @@ def resolve_common_action(
         "search",
         "shell_defense",
         "shake_hypnotic_pattern",
+        "shake_sleep",
         "influence",
         "improvise",
         "study",
@@ -5360,6 +5372,8 @@ def resolve_common_action(
     }
     if action not in supported:
         raise CombatEngineError(f"unsupported common action: {action}")
+    if action == "shake_sleep" and _normalize_ruleset(value.get("ruleset")) != "2014":
+        raise CombatEngineError("shake_sleep requires the 2014 Sleep mechanic")
     current = current_combatant(value)
     combatant = next(
         (item for item in value.get("combatants", []) if item.get("actor_id") == actor_id_value),
@@ -5545,6 +5559,7 @@ def resolve_common_action(
         "hide",
         "search",
         "shake_hypnotic_pattern",
+        "shake_sleep",
         "influence",
         "improvise",
         "study",
@@ -6942,11 +6957,12 @@ def resolve_actor_check(
             if save_source_kind is not None
             else rule_facts.get("save_source_kind") or ""
         ).strip().casefold()
-        raw_conditions = (
-            save_effect_conditions
-            if save_effect_conditions is not None
-            else rule_facts.get("save_effect_conditions") or []
-        )
+        if save_effect_conditions is not None:
+            raw_conditions = save_effect_conditions
+        elif "save_effect_conditions" in rule_facts:
+            raw_conditions = rule_facts["save_effect_conditions"]
+        else:
+            raw_conditions = []
         if not isinstance(raw_conditions, list) or any(
             not isinstance(item, str) for item in raw_conditions
         ):
