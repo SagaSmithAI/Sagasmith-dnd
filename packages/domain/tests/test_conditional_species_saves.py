@@ -1,8 +1,7 @@
 import pytest
 
-import sagasmith_dnd.combat_engine as combat_engine
 from sagasmith_dnd.character_schema import default_character_sheet, derive_character_sheet
-from sagasmith_dnd.combat_engine import resolve_actor_check
+from sagasmith_dnd.combat_engine import CombatEngineError, NeedsRulingError, resolve_actor_check
 from sagasmith_dnd.rule_engine import resolution_context
 
 
@@ -82,9 +81,7 @@ def test_2014_species_save_traits_add_authoritative_advantage(
     ability: str,
     source: str,
     conditions: list[str],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(combat_engine, "core_receipts", lambda *_args: [])
     actor = _actor(trait, mechanic)
     result = resolve_actor_check(
         actor,
@@ -105,9 +102,7 @@ def test_2014_species_save_traits_add_authoritative_advantage(
 
 
 def test_species_save_advantage_cancels_disadvantage_and_is_2014_only(
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(combat_engine, "core_receipts", lambda *_args: [])
     actor = _actor("dwarven_resilience", "dnd5e.core.save.dwarven_resilience")
     cancelled = resolve_actor_check(
         actor,
@@ -139,3 +134,74 @@ def test_species_save_advantage_cancels_disadvantage_and_is_2014_only(
         rng=_SequenceRng(12, 3),
     )
     assert modern["roll_mode"] == "normal"
+
+
+@pytest.mark.parametrize("ability", ["strength", "dexterity", "constitution", "intelligence", "wisdom", "charisma"])
+@pytest.mark.parametrize("source", ["spell", "magical_effect", "nonmagical_effect"])
+def test_gnome_cunning_only_applies_to_mental_magical_saves(ability: str, source: str) -> None:
+    actor = _actor("gnome_cunning", "dnd5e.core.save.gnome_cunning")
+    result = resolve_actor_check(
+        actor,
+        kind="save",
+        ability=ability,
+        dc=10,
+        save_source_kind=source,
+        save_effect_conditions=[],
+        ruleset="2014",
+        rng=_SequenceRng(2, 18),
+    )
+    expected = ability in {"intelligence", "wisdom", "charisma"} and source != "nonmagical_effect"
+    assert result["roll_mode"] == ("advantage" if expected else "normal")
+
+
+@pytest.mark.parametrize("value", [None, "true", 1])
+def test_dwarven_resilience_requires_strict_poison_fact(value: object) -> None:
+    actor = _actor("dwarven_resilience", "dnd5e.core.save.dwarven_resilience")
+    rules = resolution_context(
+        {"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []},
+        facts={} if value is None else {"save_against_poison": value},
+    )
+    expected_error = NeedsRulingError if value is None else CombatEngineError
+    with pytest.raises(expected_error):
+        resolve_actor_check(
+            actor,
+            kind="save",
+            ability="constitution",
+            dc=10,
+            save_effect_conditions=[],
+            ruleset="2014",
+            rules=rules,
+            rng=_SequenceRng(2, 18),
+        )
+
+    false_rules = resolution_context(
+        {"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []},
+        facts={"save_against_poison": False},
+    )
+    normal = resolve_actor_check(
+        actor,
+        kind="save",
+        ability="constitution",
+        dc=10,
+        save_effect_conditions=[],
+        ruleset="2014",
+        rules=false_rules,
+        rng=_SequenceRng(2, 18),
+    )
+    assert normal["roll_mode"] == "normal"
+
+
+def test_malformed_fey_trait_is_rejected_before_rng() -> None:
+    actor = _actor("fey_ancestry", "dnd5e.core.save.fey_ancestry")
+    actor["sheet"]["content"]["features"][0]["choices"]["source_trait"]["automatic"] = "true"
+    with pytest.raises(CombatEngineError):
+        resolve_actor_check(
+            actor,
+            kind="save",
+            ability="wisdom",
+            dc=10,
+            save_source_kind="spell",
+            save_effect_conditions=["charmed"],
+            ruleset="2014",
+            rng=_SequenceRng(20),
+        )
