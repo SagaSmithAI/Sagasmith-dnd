@@ -7504,7 +7504,12 @@ def resolve_actor_contest(
     }
 
 
-def end_turn(encounter: dict[str, Any], *, actor_id_value: str | None = None) -> dict[str, Any]:
+def end_turn(
+    encounter: dict[str, Any],
+    *,
+    actor_id_value: str | None = None,
+    current_actor_sheet: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     value = deepcopy(encounter)
     current = current_combatant(value)
     if current is None:
@@ -7526,9 +7531,17 @@ def end_turn(encounter: dict[str, Any], *, actor_id_value: str | None = None) ->
         )
     current_conditions = _condition_set(current.get("conditions"))
     current_flags = dict(current.get("turn_flags") or {})
+    positive_hp_unconscious = False
+    if current_actor_sheet is not None:
+        canonical_sheet = validate_character_sheet(current_actor_sheet)
+        positive_hp_unconscious = (
+            int(dict(canonical_sheet.get("combat", {}).get("hp") or {}).get("value", 0) or 0) > 0
+            and "unconscious" in condition_ids(canonical_sheet.get("conditions"))
+        )
     if (
         current.get("death_saves", False)
         and "unconscious" in current_conditions
+        and not positive_hp_unconscious
         and not current_conditions & DEATH_SAVE_SETTLED_CONDITIONS
         and not current_flags.get("death_save_used")
     ):
