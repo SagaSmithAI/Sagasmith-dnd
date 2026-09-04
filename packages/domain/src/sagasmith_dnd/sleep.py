@@ -52,12 +52,15 @@ def _has_magical_sleep_immunity(sheet: dict[str, Any]) -> bool:
         trait = dict(dict(feature.get("choices") or {}).get("source_trait") or {})
         if (
             trait.get("kind") == "fey_ancestry"
-            and "dnd5e.core.save.fey_ancestry" in feature.get("mechanic_refs", [])
-            and trait.get("automatic") is True
-            and trait.get("magical_sleep_immunity") is True
-            and isinstance(trait.get("source_excerpt"), str)
-            and bool(trait["source_excerpt"].strip())
         ):
+            if (
+                feature.get("mechanic_refs") != ["dnd5e.core.save.fey_ancestry"]
+                or trait.get("automatic") is not True
+                or trait.get("magical_sleep_immunity") is not True
+                or not isinstance(trait.get("source_excerpt"), str)
+                or not trait["source_excerpt"].strip()
+            ):
+                raise ValueError("malformed Fey Ancestry sleep-immunity trait")
             return True
     return False
 
@@ -96,6 +99,8 @@ def resolve_sleep_targets(
         {item[0] for item in ordered}
     ) != len(ordered):
         raise ValueError("Sleep targets require unique actor ids")
+    if any(str(sheet.get("edition") or "2014") != "2014" for _, sheet in ordered):
+        raise ValueError("Sleep settlement requires 2014 target sheets")
     remaining = pool
     updated: dict[str, dict[str, Any]] = {}
     results: list[dict[str, Any]] = []
@@ -112,8 +117,6 @@ def resolve_sleep_targets(
             reason = "immune_to_charmed"
         elif _has_magical_sleep_immunity(original):
             reason = "immune_to_magical_sleep"
-        elif str(original.get("edition") or "2014") != "2014":
-            reason = "unsupported_ruleset"
         elif "unconscious" in _condition_immunities(original):
             reason = "immune_to_unconscious"
         elif hp <= remaining:

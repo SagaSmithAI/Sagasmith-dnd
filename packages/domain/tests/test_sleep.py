@@ -6,7 +6,7 @@ import pytest
 from sagasmith_dnd.character_schema import default_character_sheet, derive_character_sheet
 from sagasmith_dnd.conditions import apply_effect_conditions
 from sagasmith_dnd.core_content import build_srd2014_content
-from sagasmith_dnd.lifecycle import advance_effect_durations, advance_elapsed_effect_durations
+from sagasmith_dnd.lifecycle import advance_effect_durations
 from sagasmith_dnd.sleep import SLEEP_SPELL_ID, resolve_sleep_targets, wake_sleep_effects
 
 
@@ -94,10 +94,21 @@ def test_sleep_orders_current_hp_skips_immunity_and_does_not_mutate_inputs() -> 
 
     malformed = _actor("malformed-elf", 1, elf=True)
     malformed["sheet"]["content"]["features"][0]["mechanic_refs"] = []
-    malformed_result = resolve_sleep_targets(
-        [malformed], pool=1, source_actor_id="caster", source_spell_id=SLEEP_SPELL_ID
-    )
-    assert malformed_result["targets"][0]["affected"] is True
+    malformed_before = deepcopy(malformed)
+    with pytest.raises(ValueError, match="malformed Fey"):
+        resolve_sleep_targets(
+            [malformed], pool=1, source_actor_id="caster", source_spell_id=SLEEP_SPELL_ID
+        )
+    assert malformed == malformed_before
+    for field, value in (("automatic", False), ("source_excerpt", "")):
+        invalid = _actor(f"malformed-{field}", 1, elf=True)
+        invalid["sheet"]["content"]["features"][0]["choices"]["source_trait"][field] = value
+        invalid_before = deepcopy(invalid)
+        with pytest.raises(ValueError, match="malformed Fey"):
+            resolve_sleep_targets(
+                [invalid], pool=1, source_actor_id="caster", source_spell_id=SLEEP_SPELL_ID
+            )
+        assert invalid == invalid_before
 
 
 def test_sleep_pool_requires_exact_current_hp_and_wake_preserves_other_source() -> None:
@@ -142,14 +153,19 @@ def test_sleep_pool_requires_exact_current_hp_and_wake_preserves_other_source() 
     assert sleep_effect["id"] in woke["ended_effect_ids"]
     assert woke["sheet"]["effects"][-1]["active"] is True
 
+    first = resolve_sleep_targets(
+        [_actor("repeat", 1)], pool=1, source_actor_id="caster", source_spell_id=SLEEP_SPELL_ID
+    )
+    first_effect_id = first["targets"][0]["effect_id"]
+    repeat_awake = wake_sleep_effects(first["sheets"]["repeat"], reason="damaged")
     second = resolve_sleep_targets(
-        [_actor("second", 1)], pool=1, source_actor_id="caster", source_spell_id=SLEEP_SPELL_ID
+        [{"id": "repeat", "sheet": repeat_awake["sheet"]}],
+        pool=1,
+        source_actor_id="caster",
+        source_spell_id=SLEEP_SPELL_ID,
     )
-    third = resolve_sleep_targets(
-        [_actor("third", 1)], pool=1, source_actor_id="caster", source_spell_id=SLEEP_SPELL_ID
-    )
-    assert second["targets"][0]["effect_id"] != third["targets"][0]["effect_id"]
-    same_name = deepcopy(second["sheets"]["second"])
+    assert first_effect_id != second["targets"][0]["effect_id"]
+    same_name = deepcopy(second["sheets"]["repeat"])
     same_name["effects"].append(
         {
             "id": "homebrew-sleep",
@@ -210,8 +226,20 @@ def test_sleep_rejects_2024_ruleset_and_preserves_concentration_on_affected_copy
     )
     assert settled["sheets"]["target"]["effects"][0]["active"] is False
 
+    edition_2024 = _actor("edition-2024", 1)
+    edition_2024["sheet"]["edition"] = "2024"
+    mixed_before = deepcopy([target, edition_2024])
+    with pytest.raises(ValueError, match="2014 target sheets"):
+        resolve_sleep_targets(
+            [target, edition_2024],
+            pool=1,
+            source_actor_id="caster",
+            source_spell_id=SLEEP_SPELL_ID,
+        )
+    assert [target, edition_2024] == mixed_before
 
-def test_sleep_duration_expires_after_ten_rounds_or_sixty_elapsed_seconds() -> None:
+
+def test_sleep_duration_expires_after_ten_real_rounds_without_mutating_other_effects() -> None:
     target = _actor("target", 1)
     applied = resolve_sleep_targets(
         [target], pool=1, source_actor_id="caster", source_spell_id=SLEEP_SPELL_ID
@@ -241,14 +269,7 @@ def test_sleep_duration_expires_after_ten_rounds_or_sixty_elapsed_seconds() -> N
         is True
     )
 
-    elapsed_sheet = deepcopy(sheet)
-    next(item for item in elapsed_sheet["effects"] if item["name"] == "Sleep")["duration"] = {
-        "period": "minute",
-        "remaining": 1,
+    assert next(item for item in sheet["effects"] if item["name"] == "Sleep")["duration"] == {
+        "period": "round",
+        "remaining": 10,
     }
-    elapsed = advance_elapsed_effect_durations(elapsed_sheet, elapsed_ticks=60)["sheet"]
-    assert next(item for item in elapsed["effects"] if item["name"] == "Sleep")["active"] is False
-    assert (
-        next(item for item in elapsed["effects"] if item["id"] == "other-duration")["active"]
-        is True
-    )
