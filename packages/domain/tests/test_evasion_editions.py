@@ -83,6 +83,22 @@ def test_real_evasion_artifacts_preserve_edition_specific_incapacitation(
     assert [item["mechanic_id"] for item in receipts] == (
         ["dnd5e.core.save.evasion"] if applies else []
     )
+    if applies:
+        receipt = receipts[0]
+        assert receipt["event"] == "save.damage_reduction"
+        assert receipt["operations"] == [{"op": "builtin.core_provider"}]
+        assert receipt["core_pack_fingerprint"] == rules.core_pack.fingerprint
+        assert receipt["ruleset_fingerprint"] == rules.fingerprint
+        assert receipt["citations"] == [
+            {
+                "source": (
+                    "bundled:srd2014/02_Classes/Rogue.md#evasion"
+                    if edition == "2014"
+                    else "bundled:srd2024/DND5eSRD_047-063.md#level-7-evasion"
+                ),
+                "edition": edition,
+            }
+        ]
 
 
 @pytest.mark.parametrize("edition", ["2014", "2024"])
