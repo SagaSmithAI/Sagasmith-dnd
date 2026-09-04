@@ -1215,7 +1215,10 @@ def _normalize_sleep_wake_spatial_facts(
         raise CombatEngineError("Agent shake_sleep accepts only spatial_facts, not coordinates")
     facts = payload["spatial_facts"]
     if not isinstance(facts, dict) or set(facts) != {
-        "decision_id", "reason", "campaign_revision", "can_touch_target"
+        "decision_id",
+        "reason",
+        "campaign_revision",
+        "can_touch_target",
     }:
         raise CombatEngineError("shake_sleep requires a complete contact-range decision")
     normalized = deepcopy(facts)
@@ -1228,7 +1231,9 @@ def _normalize_sleep_wake_spatial_facts(
         type(facts["campaign_revision"]) is not int
         or facts["campaign_revision"] != campaign_revision
     ):
-        raise CombatEngineError("shake_sleep spatial facts must match the current campaign revision")
+        raise CombatEngineError(
+            "shake_sleep spatial facts must match the current campaign revision"
+        )
     if facts["can_touch_target"] is not True:
         raise CombatEngineError("shake_sleep requires an affirmative boolean can_touch_target")
     return normalized

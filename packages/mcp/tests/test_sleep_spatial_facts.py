@@ -3,7 +3,10 @@ from copy import deepcopy
 import pytest
 from sagasmith_dnd.combat_engine import CombatEngineError, NeedsRulingError
 
-from sagasmith_dnd_mcp.server import _normalize_sleep_spatial_facts
+from sagasmith_dnd_mcp.server import (
+    _normalize_sleep_spatial_facts,
+    _normalize_sleep_wake_spatial_facts,
+)
 
 
 def _declaration():
@@ -91,3 +94,59 @@ def test_sleep_can_be_cast_into_an_empty_area_without_selecting_creatures():
     declaration["spatial_facts"]["affected_target_ids"] = []
     declaration["spatial_facts"]["excluded_actor_ids"] = ["caster", "target", "outside"]
     assert _normalize(declaration)["targets"] == []
+
+
+def _wake_declaration():
+    return {
+        "spatial_facts": {
+            "decision_id": "wake-1",
+            "reason": "The actor can reach and physically shake the sleeping target.",
+            "campaign_revision": 7,
+            "can_touch_target": True,
+        }
+    }
+
+
+def test_sleep_wake_preserves_coordinate_free_contact_decision():
+    payload = _wake_declaration()
+    before = deepcopy(payload)
+    result = _normalize_sleep_wake_spatial_facts(payload, campaign_revision=7)
+    assert result == payload["spatial_facts"]
+    result["reason"] = "changed"
+    assert payload == before
+
+
+@pytest.mark.parametrize("payload", [None, {}])
+def test_sleep_wake_requires_contact_ruling(payload):
+    with pytest.raises(NeedsRulingError, match="contact-range"):
+        _normalize_sleep_wake_spatial_facts(payload, campaign_revision=7)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("decision_id", ""),
+        ("decision_id", 17),
+        ("reason", "short"),
+        ("reason", "x" * 1001),
+        ("campaign_revision", 6),
+        ("campaign_revision", 7.0),
+        ("campaign_revision", True),
+        ("can_touch_target", False),
+        ("can_touch_target", 1),
+        ("can_touch_target", "true"),
+        ("position", {"x": 0, "y": 0}),
+    ],
+)
+def test_sleep_wake_rejects_malformed_stale_or_injected_facts(field, value):
+    payload = _wake_declaration()
+    payload["spatial_facts"][field] = value
+    with pytest.raises(CombatEngineError):
+        _normalize_sleep_wake_spatial_facts(payload, campaign_revision=7)
+
+
+def test_sleep_wake_rejects_coordinates_outside_facts():
+    payload = _wake_declaration()
+    payload["position"] = {"x": 0, "y": 0}
+    with pytest.raises(CombatEngineError, match="not coordinates"):
+        _normalize_sleep_wake_spatial_facts(payload, campaign_revision=7)
