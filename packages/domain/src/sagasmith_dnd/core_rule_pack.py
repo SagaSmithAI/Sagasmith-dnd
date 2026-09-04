@@ -886,6 +886,13 @@ BOUNDARIES = (
         "bundled:srd2014/07_Spells/Spells_Each/Raise_Dead.md",
     ),
     CoreBoundary(
+        "dnd5e.core.spell.sleep",
+        ("2014",),
+        "sleep.resolve_sleep_targets|sleep.wake_sleep_effects",
+        ("tests/test_sleep.py",),
+        "bundled:srd2014/07_Spells/Spells_Each/Sleep.md",
+    ),
+    CoreBoundary(
         "dnd5e.core.ready.action",
         ("2014", "2024"),
         "combat_engine.trigger_readied_action|resolve_readied_action_window",
