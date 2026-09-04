@@ -11790,6 +11790,71 @@ def _create_server(
             "agent_ruling": deepcopy(agent_ruling),
         }
 
+    def validate_scene_save_damage_source(
+        campaign_id: str,
+        commitment: dict[str, Any],
+        *,
+        encounter: dict[str, Any],
+    ) -> None:
+        """Check the same reviewed clause before payment and before settlement."""
+        card_excerpt = commitment["mechanic_source_excerpt"]
+        try:
+            _normalized, _source, expanded = managed_module_source_ref(
+                campaign_id,
+                commitment["agent_ruling"]["source_ref"],
+                require_exact=True,
+                expected_scene_id=str(encounter.get("scene_id") or ""),
+                require_active_module=True,
+            )
+            assert expanded is not None
+            managed_module_source_excerpt(
+                expanded, card_excerpt,
+                field="save damage mechanic_source_excerpt", minimum_length=10,
+            )
+        except (LookupError, ValueError) as error:
+            raise CombatEngineError(str(error)) from error
+        ability_pattern = {
+            "strength": "strength|str",
+            "dexterity": "dexterity|dex",
+            "constitution": "constitution|con",
+            "intelligence": "intelligence|int",
+            "wisdom": "wisdom|wis",
+            "charisma": "charisma|cha",
+        }.get(commitment["save_ability"], "")
+        printed_half_damage = re.search(
+            r"(?i)\bhalf\s+(?:as\s+much|the)\s+damage\b.*"
+            r"\b(?:successful|success)\b", card_excerpt,
+        )
+        printed_expressions = {
+            "".join(expression.split()).casefold()
+            for expression in re.findall(
+                r"(?i)\b\d+\s*d\s*\d+(?:\s*[+-]\s*\d+)?\b", card_excerpt
+            )
+        }
+        save_dc = commitment["save_dc"]
+        if (
+            not ability_pattern
+            or isinstance(save_dc, bool)
+            or not isinstance(save_dc, int)
+            or not 1 <= save_dc <= 40
+            or not isinstance(commitment["half_on_success"], bool)
+            or not isinstance(commitment["save_advantage"], bool)
+            or not isinstance(commitment["save_disadvantage"], bool)
+            or (commitment["save_advantage"] and commitment["save_disadvantage"])
+            or re.search(
+                rf"(?i)\bDC\s*{save_dc}\s+(?:{ability_pattern})\s+saving throw\b",
+                card_excerpt,
+            ) is None
+            or commitment["damage_expression"] not in printed_expressions
+            or re.search(
+                rf"(?i)\b{re.escape(commitment['damage_type'])}\b", card_excerpt,
+            ) is None
+            or bool(printed_half_damage) != commitment["half_on_success"]
+        ):
+            raise CombatEngineError(
+                "save-damage declaration does not match the reviewed save, damage, or success terms"
+            )
+
     def validate_agent_save_damage_commitment(
         campaign_id: str,
         raw_commitment: Any,
@@ -11892,6 +11957,7 @@ def _create_server(
             raise CombatEngineError(
                 "agent_ruling_commitment is not a canonical source-bound save-damage contract"
             )
+        validate_scene_save_damage_source(campaign_id, normalized, encounter=encounter)
         for target_id in normalized_target_ids:
             require_campaign_actor(campaign_id, target_id)
             require_encounter_combatant(
@@ -27399,64 +27465,9 @@ def _create_server(
                 "save damage requires distinct source/target actors and one "
                 "reviewed scene procedure; actor-card mechanics use content_solution"
             )
-        try:
-            _normalized, _source, expanded = managed_module_source_ref(
-                campaign_id,
-                normalized_ruling["source_ref"],
-                require_exact=True,
-                expected_scene_id=str(encounter.get("scene_id") or ""),
-                require_active_module=True,
-            )
-            assert expanded is not None
-            managed_module_source_excerpt(
-                expanded,
-                normalized_mechanic_excerpt,
-                field="save damage mechanic_source_excerpt",
-                minimum_length=10,
-            )
-        except (LookupError, ValueError) as error:
-            raise CombatEngineError(str(error)) from error
-        card_excerpt = normalized_mechanic_excerpt
         normalized_expression = "".join(str(damage_expression or "").split()).casefold()
         normalized_damage_type = str(damage_type or "").strip().casefold()
         normalized_save_ability = str(save_ability or "").strip().casefold()
-        ability_pattern = {
-            "strength": "strength|str",
-            "dexterity": "dexterity|dex",
-            "constitution": "constitution|con",
-            "intelligence": "intelligence|int",
-            "wisdom": "wisdom|wis",
-            "charisma": "charisma|cha",
-        }.get(normalized_save_ability, "")
-        printed_half_damage = re.search(
-            r"(?i)\bhalf\s+(?:as\s+much|the)\s+damage\b.*"
-            r"\b(?:successful|success)\b",
-            card_excerpt,
-        )
-        if (
-            not ability_pattern
-            or isinstance(save_dc, bool)
-            or not isinstance(save_dc, int)
-            or not isinstance(half_on_success, bool)
-            or not isinstance(save_advantage, bool)
-            or not isinstance(save_disadvantage, bool)
-            or (save_advantage and save_disadvantage)
-            or re.search(
-                rf"(?i)\bDC\s*{save_dc}\s+(?:{ability_pattern})\s+saving throw\b",
-                card_excerpt,
-            )
-            is None
-            or normalized_expression not in "".join(card_excerpt.split()).casefold()
-            or re.search(
-                rf"(?i)\b{re.escape(normalized_damage_type)}\b",
-                card_excerpt,
-            )
-            is None
-            or bool(printed_half_damage) != half_on_success
-        ):
-            raise CombatEngineError(
-                "save-damage declaration does not match the reviewed save, damage, or success terms"
-            )
         commitment = agent_save_damage_commitment(
             application_id=str(normalized_ruling["application_id"]),
             source_card_id=normalized_card_id,
@@ -27472,6 +27483,7 @@ def _create_server(
             mechanic_source_excerpt=normalized_mechanic_excerpt,
             agent_ruling=normalized_ruling,
         )
+        validate_scene_save_damage_source(campaign_id, commitment, encounter=encounter)
         payment_entry = require_agent_save_damage_payment(
             encounter,
             source_actor_id=source_actor_id,
