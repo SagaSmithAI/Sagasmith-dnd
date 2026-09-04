@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 from copy import deepcopy
 from pathlib import Path
 
@@ -8,6 +9,7 @@ import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 from sagasmith_core.content_pack import dumps_content_archive
 from sagasmith_dnd.character_schema import default_character_notes, default_character_sheet
+from sagasmith_dnd.combat_engine import roll_attack_action as engine_roll_attack_action
 from sagasmith_dnd.content_actors import build_dnd_content_actor
 from sagasmith_dnd.content_packages import build_preset_content_package
 from sagasmith_dnd.content_validation import build_selection_contract
@@ -185,6 +187,13 @@ def test_tortle_claws_survive_real_play_and_reject_forged_mutations(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # This scenario checks on-hit settlement, not a randomly occurring natural 1.
+    # Keep the real attack resolver and control only its dice stream.
+    def deterministic_attack(*, plan):
+        return engine_roll_attack_action(plan=plan, rng=random.Random(0))
+
+    monkeypatch.setattr(server_module, "roll_attack_action", deterministic_attack)
+
     async def exercise() -> None:
         config = _config(tmp_path)
         server = create_server(config)
