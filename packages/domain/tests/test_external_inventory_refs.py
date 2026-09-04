@@ -12,9 +12,9 @@ from sagasmith_dnd.character_schema import (
 
 def ref(item_id, name="Wand", attunement="required", *, kind="ground"):
     location = (
-        {"kind": "ground", "ground_id": "scene-1", "item_id": "physical-1"}
+        {"kind": "ground", "ground_id": "scene-1", "item_id": f"physical-{item_id}"}
         if kind == "ground"
-        else {"kind": "actor", "actor_id": "actor-2", "item_id": "physical-1"}
+        else {"kind": "actor", "actor_id": "actor-2", "item_id": f"physical-{item_id}"}
     )
     return {"id": item_id, "name": name, "attunement": attunement, "location": location}
 
@@ -89,11 +89,43 @@ def test_external_ids_and_attunement_capacity_include_carried_items():
 def test_attune_external_ref_and_dead_character_clear_all_attunement():
     sheet = default_character_sheet()
     sheet["inventory"]["external_items"] = [ref("ref-1", "Wand", "required")]
-    attuned = attune_inventory_item(sheet, "ref-1")
-    assert attuned["inventory"]["external_items"][0]["attunement"] == "attuned"
+    with pytest.raises(LookupError):
+        attune_inventory_item(sheet, "ref-1")
+    sheet["inventory"]["items"] = [
+        {"id": "carried", "name": "Sword", "kind": "equipment", "attunement": "attuned"}
+    ]
+    attuned = validate_character_sheet(sheet)
+    attuned["inventory"]["external_items"][0]["attunement"] = "attuned"
     attuned["conditions"] = ["dead"]
     dead = validate_character_sheet(attuned)
     assert dead["inventory"]["external_items"][0]["attunement"] == "required"
+
+
+def test_duplicate_physical_external_reference_is_rejected():
+    sheet = default_character_sheet()
+    sheet["inventory"]["external_items"] = [ref("a"), ref("b")]
+    sheet["inventory"]["external_items"][1]["location"]["item_id"] = "physical-a"
+    with pytest.raises(ValueError, match="physical item"):
+        validate_character_sheet(sheet)
+
+
+def test_attuning_carried_item_counts_three_external_bonds_and_rejects_duplicate_name():
+    sheet = default_character_sheet()
+    sheet["inventory"]["external_items"] = [
+        ref(f"ref-{i}", f"Bond {i}", "attuned") for i in range(3)
+    ]
+    sheet["inventory"]["items"] = [
+        {"id": "carried", "name": "Sword", "kind": "equipment", "attunement": "required"}
+    ]
+    with pytest.raises(ValueError, match="more than three"):
+        attune_inventory_item(sheet, "carried")
+    duplicate = default_character_sheet()
+    duplicate["inventory"]["external_items"] = [ref("bond", "Sword", "attuned")]
+    duplicate["inventory"]["items"] = [
+        {"id": "carried", "name": "Sword", "kind": "equipment", "attunement": "required"}
+    ]
+    with pytest.raises(ValueError, match="one copy"):
+        attune_inventory_item(duplicate, "carried")
 
 
 def test_external_refs_are_not_carried_weight_or_equipment_or_weapon_benefits():

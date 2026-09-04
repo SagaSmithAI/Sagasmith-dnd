@@ -1496,6 +1496,8 @@ def validate_inventory(value: Any) -> dict[str, Any]:
         if not external_id:
             raise ValueError(f"{field}.id must be a non-empty string")
         name = _text(entry.get("name"), f"{field}.name", maximum=300)
+        if not name:
+            raise ValueError(f"{field}.name must be a non-empty string")
         attunement = _text(entry.get("attunement"), f"{field}.attunement")
         if attunement not in {"none", "required", "attuned"}:
             raise ValueError(f"{field}.attunement is invalid")
@@ -1537,6 +1539,12 @@ def validate_inventory(value: Any) -> dict[str, Any]:
         raise ValueError("inventory.external_items contains duplicate ids")
     if item_ids & external_ids:
         raise ValueError("inventory.external_items ids must not collide with inventory item ids")
+    location_keys = [
+        tuple([location["kind"]] + [value for key, value in location.items() if key != "kind"])
+        for location in (item["location"] for item in external_items)
+    ]
+    if len(location_keys) != len(set(location_keys)):
+        raise ValueError("inventory.external_items contains duplicate physical item references")
     attuned_items = [item for item in items + external_items if item["attunement"] == "attuned"]
     if len(attuned_items) > 3:
         raise ValueError("a character cannot be attuned to more than three magic items")
@@ -5056,11 +5064,6 @@ def attune_inventory_item(sheet: dict[str, Any], item_id: str) -> dict[str, Any]
         (entry for entry in value["inventory"]["items"] if entry["id"] == item_id),
         None,
     )
-    if item is None:
-        item = next(
-            (entry for entry in value["inventory"]["external_items"] if entry["id"] == item_id),
-            None,
-        )
     if item is None:
         raise LookupError(item_id)
     if item["attunement"] == "none":
