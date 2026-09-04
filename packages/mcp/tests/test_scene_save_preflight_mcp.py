@@ -304,7 +304,13 @@ def test_scene_save_commitment_is_source_bound_before_improvise_payment(tmp_path
         damage_roll = settled_result["damage_roll"]
         assert len(damage_roll["rolls"]) == 16
         assert sum(damage_roll["rolls"]) == damage_roll["total"]
+        receipt = settled["result"]["random_stream_receipt"]
+        assert receipt["draw_count"] == 17
+        assert receipt["cursor_after"] - receipt["cursor_before"] == 17
         settled_campaign_snapshot = after_settle
+        before_random = dict(before_settle.get("state", {}).get("random_stream") or {})
+        after_random = dict(after_settle.get("state", {}).get("random_stream") or {})
+        assert after_random["position"] - before_random["position"] == 17
         settled_actor_snapshots = [
             await _call(
                 server,
