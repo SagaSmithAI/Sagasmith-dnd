@@ -19602,6 +19602,14 @@ def _create_server(
                 **dict(action_payload.get("context") or {}),
                 "attacker_can_see_target": True,
             }
+        trigger_encounter = deepcopy(encounter)
+        if isinstance(window.get("target_position"), dict):
+            trigger_target = next(
+                item
+                for item in trigger_encounter["combatants"]
+                if item.get("actor_id") == target_id
+            )
+            trigger_target["position"] = dict(window["target_position"])
         rule_context = effective_rule_context(
             campaign_id,
             facts={"actor_id": actor_id, "target_id": target_id, "kind": "attack"},
@@ -19610,7 +19618,7 @@ def _create_server(
             attacker,
             target,
             action=action_payload,
-            encounter=None,
+            encounter=trigger_encounter,
             allow_out_of_turn=True,
             rules=rule_context,
         )
