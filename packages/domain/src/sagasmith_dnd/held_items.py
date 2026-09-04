@@ -20,22 +20,14 @@ def held_item_roots(sheet: dict[str, Any]) -> list[str]:
 
     Validation is deliberately performed on the complete sheet so stale slot
     references cannot be interpreted as a drop.  A shield is worn/strapped,
-    not held for this rule, even if a future compatible schema represents it
-    as armor with ``mechanics.category == "shield"``.
+    not held for this rule; the schema has a separate ``shield`` slot.
     """
 
     value = validate_character_sheet(sheet)
-    items = {item["id"]: item for item in value["inventory"]["items"]}
     roots: list[str] = []
     for slot in ("main_hand", "off_hand"):
         item_id = value["inventory"]["equipment_slots"][slot]
         if item_id is None or item_id in roots:
-            continue
-        item = items[item_id]
-        mechanics = dict(item.get("mechanics") or {})
-        if item["kind"] == "shield" or (
-            item["kind"] == "armor" and mechanics.get("category") == "shield"
-        ):
             continue
         roots.append(item_id)
     return roots

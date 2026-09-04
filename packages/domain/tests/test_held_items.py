@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 
+import pytest
+
 from sagasmith_dnd.character_schema import (
     add_inventory_item,
     equip_inventory_item,
@@ -86,3 +88,34 @@ def test_held_roots_does_not_include_linked_ammunition() -> None:
     sheet = equip_inventory_item(sheet, bow_id, "main_hand")
 
     assert held_item_roots(sheet) == ["bow"]
+
+
+@pytest.mark.parametrize("kind", ["focus", "equipment"])
+def test_held_roots_includes_nonweapon_hand_items(kind: str) -> None:
+    sheet = validate_character_sheet({})
+    sheet, item_id = add_inventory_item(
+        sheet,
+        {"id": kind, "name": kind.title(), "kind": kind},
+    )
+    sheet = equip_inventory_item(sheet, item_id, "off_hand")
+
+    assert held_item_roots(sheet) == [kind]
+
+
+def test_held_roots_keeps_attuned_weapon_as_a_held_root() -> None:
+    sheet = validate_character_sheet({})
+    sheet, item_id = add_inventory_item(
+        sheet,
+        {**_weapon("attuned-sword"), "attunement": "attuned"},
+    )
+    sheet = equip_inventory_item(sheet, item_id, "main_hand")
+
+    assert held_item_roots(sheet) == [item_id]
+
+
+def test_held_roots_rejects_stale_hand_slot_reference() -> None:
+    sheet = validate_character_sheet({})
+    sheet["inventory"]["equipment_slots"]["main_hand"] = "missing-item"
+
+    with pytest.raises(ValueError, match="references an unknown item"):
+        held_item_roots(sheet)
