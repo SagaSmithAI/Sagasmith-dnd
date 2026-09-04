@@ -54,7 +54,8 @@ def _has_magical_sleep_immunity(sheet: dict[str, Any]) -> bool:
             trait.get("kind") == "fey_ancestry"
         ):
             if (
-                feature.get("mechanic_refs") != ["dnd5e.core.save.fey_ancestry"]
+                not isinstance(feature.get("mechanic_refs"), list)
+                or "dnd5e.core.save.fey_ancestry" not in feature.get("mechanic_refs", [])
                 or trait.get("automatic") is not True
                 or trait.get("magical_sleep_immunity") is not True
                 or not isinstance(trait.get("source_excerpt"), str)
@@ -129,7 +130,7 @@ def resolve_sleep_targets(
                 "source_spell_id": spell,
                 "active": True,
                 "concentration": False,
-                "duration": {"period": "round", "remaining": 10},
+                "duration": {"period": "minute", "remaining": 1},
                 "changes": [{"path": "conditions", "mode": "add", "value": "unconscious"}],
                 "description": (
                     "Magical slumber; ends when the spell ends, the sleeper takes damage, "

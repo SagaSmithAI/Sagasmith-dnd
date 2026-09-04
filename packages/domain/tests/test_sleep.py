@@ -6,7 +6,7 @@ import pytest
 from sagasmith_dnd.character_schema import default_character_sheet, derive_character_sheet
 from sagasmith_dnd.conditions import apply_effect_conditions
 from sagasmith_dnd.core_content import build_srd2014_content
-from sagasmith_dnd.lifecycle import advance_effect_durations
+from sagasmith_dnd.lifecycle import advance_elapsed_effect_durations, expire_combat_bound_effects
 from sagasmith_dnd.sleep import SLEEP_SPELL_ID, resolve_sleep_targets, wake_sleep_effects
 
 
@@ -89,7 +89,7 @@ def test_sleep_orders_current_hp_skips_immunity_and_does_not_mutate_inputs() -> 
     effect = next(item for item in low["effects"] if item["active"])
     assert effect["source"] == "caster"
     assert effect["source_spell_id"] == SLEEP_SPELL_ID
-    assert effect["duration"] == {"period": "round", "remaining": 10}
+    assert effect["duration"] == {"period": "minute", "remaining": 1}
     assert low["conditions"] == ["unconscious"]
 
     malformed = _actor("malformed-elf", 1, elf=True)
@@ -239,7 +239,7 @@ def test_sleep_rejects_2024_ruleset_and_preserves_concentration_on_affected_copy
     assert [target, edition_2024] == mixed_before
 
 
-def test_sleep_duration_expires_after_ten_real_rounds_without_mutating_other_effects() -> None:
+def test_sleep_duration_expires_after_ten_six_second_ticks_without_mutating_other_effects() -> None:
     target = _actor("target", 1)
     applied = resolve_sleep_targets(
         [target], pool=1, source_actor_id="caster", source_spell_id=SLEEP_SPELL_ID
@@ -253,23 +253,28 @@ def test_sleep_duration_expires_after_ten_real_rounds_without_mutating_other_eff
         "source_spell_id": "other",
         "active": True,
         "concentration": False,
-        "duration": {"period": "round", "remaining": 12},
-        "changes": [],
+        "duration": {"period": "minute", "remaining": 2},
+        "changes": [{"path": "conditions", "mode": "add", "value": "unconscious"}],
         "description": "other",
     }
     sheet["effects"].append(other)
-    after_nine = advance_effect_durations(sheet, period="round", amount=9)["sheet"]
+    apply_effect_conditions(sheet, other)
+    after_nine = advance_elapsed_effect_durations(sheet, elapsed_ticks=9)["sheet"]
     sleep_effect = next(item for item in after_nine["effects"] if item["name"] == "Sleep")
     assert sleep_effect["active"] is True
     assert sleep_effect["duration"]["remaining"] == 1
-    after_ten = advance_effect_durations(after_nine, period="round", amount=1)["sheet"]
+    after_ten = advance_elapsed_effect_durations(after_nine, elapsed_ticks=1)["sheet"]
     assert next(item for item in after_ten["effects"] if item["name"] == "Sleep")["active"] is False
     assert (
         next(item for item in after_ten["effects"] if item["id"] == "other-duration")["active"]
         is True
     )
 
-    assert next(item for item in sheet["effects"] if item["name"] == "Sleep")["duration"] == {
-        "period": "round",
-        "remaining": 10,
-    }
+    assert after_ten["conditions"] == ["unconscious"]
+    expired = expire_combat_bound_effects(after_ten)["sheet"]
+    assert next(item for item in expired["effects"] if item["name"] == "Sleep")["active"] is False
+    assert (
+        next(item for item in expired["effects"] if item["id"] == "other-duration")["active"]
+        is True
+    )
+    assert expired["conditions"] == ["unconscious"]
