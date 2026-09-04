@@ -22,7 +22,7 @@ from dataclasses import asdict, replace
 from datetime import datetime
 from functools import lru_cache, wraps
 from pathlib import Path
-from typing import Annotated, Any, Callable, Literal, Mapping, TypeVar
+from typing import Annotated, Any, Callable, Iterable, Literal, Mapping, TypeVar
 from uuid import NAMESPACE_URL, uuid4, uuid5
 from weakref import WeakValueDictionary
 
@@ -118,6 +118,7 @@ from sagasmith_core.visibility import (
     PLAYER_OWNED_ACTOR_DISCLOSURE_SCOPES,
 )
 from sagasmith_dnd import source_cards
+from sagasmith_dnd.abilities import SKILL_ABILITIES
 from sagasmith_dnd.ability_generation import (
     apply_ability_generation,
     apply_pending_rolled_ability_generation,
@@ -133,6 +134,11 @@ from sagasmith_dnd.activity_identity import is_multiattack_source_name
 from sagasmith_dnd.actor_types import (
     NON_PLAYER_CHARACTER_TYPES,
     require_agent_decidable_character_type,
+)
+from sagasmith_dnd.breathing import (
+    advance_breathing_rounds,
+    begin_holding_breath,
+    restore_breathing,
 )
 from sagasmith_dnd.bundled_rules import (
     build_bundled_rule_sources,
@@ -153,7 +159,6 @@ from sagasmith_dnd.character_schema import (
     consume_weapon_limited_use,
     default_character_notes,
     default_character_sheet,
-    derive_character_sheet,
     equip_inventory_item,
     receive_inventory_item,
     remove_effect,
@@ -166,6 +171,9 @@ from sagasmith_dnd.character_schema import (
     validate_character_sheet,
     validate_party_state,
     validate_world_effect,
+)
+from sagasmith_dnd.character_schema import (
+    derive_character_sheet as derive_domain_character_sheet,
 )
 from sagasmith_dnd.chase_engine import (
     CHASE_BOUNDARY_IDS,
@@ -197,9 +205,11 @@ from sagasmith_dnd.combat_engine import (
     consume_weapon_mastery_attack_effects,
     current_combatant,
     damage_amount_after_reduction,
+    emerge_tortle_shell_defense,
     end_concentration_for_incapacitating_conditions,
     end_hypnotic_pattern_effects,
     end_turn,
+    enter_tortle_shell_defense,
     force_move_directly_away,
     newly_ended_witch_bolt_tethers,
     pay_activity_activation,
@@ -212,6 +222,7 @@ from sagasmith_dnd.combat_engine import (
     reconcile_dodge_lifecycle,
     reconcile_effect_dependencies,
     reconcile_readied_spells,
+    reconcile_tortle_shell_defense_projection,
     reconcile_witch_bolt_concentration,
     reconcile_witch_bolt_range,
     require_death_save_eligibility,
@@ -461,6 +472,17 @@ from sagasmith_dnd.standard_content import (
 from sagasmith_dnd.standard_feature_ids import (
     CORE_ORC_AGGRESSIVE_MECHANIC_ID,
     CORE_RELENTLESS_ENDURANCE_MECHANIC_ID,
+    CORE_TORTLE_NATURAL_ARMOR_MECHANIC_ID,
+    CORE_TORTLE_SHELL_DEFENSE_MECHANIC_ID,
+    CORE_WATCHERS_EYE_MECHANIC_ID,
+    TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
+    TORTLE_NATURAL_ARMOR_AUTHORITY_KEY,
+    TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_CHECKSUM,
+    TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
+    TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
+    TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID,
+    TORTLE_NATURAL_ARMOR_LEGACY_PACK_VERSIONS,
+    TORTLE_NATURAL_ARMOR_SOURCE_RULE_REF_PREFIX,
 )
 from sagasmith_dnd.standard_spell_ids import (
     CORE_BLADE_WARD_MECHANIC_ID,
@@ -655,6 +677,318 @@ def _render_immutable_pdf_page(
     )
 
 
+def _intrinsic_attack_provenance(sheet: Mapping[str, Any] | None) -> Any:
+    """Return authoritative anatomy attack projections from one actor card."""
+
+    value = dict(sheet or {})
+    traits = value.get("traits")
+    if not isinstance(traits, Mapping):
+        return None
+    projection = traits.get("intrinsic_attacks", [])
+    return [] if projection is None else deepcopy(projection)
+
+
+def _reject_new_intrinsic_attack_provenance(sheet: Mapping[str, Any] | None) -> None:
+    projection = _intrinsic_attack_provenance(sheet)
+    if projection not in (None, []):
+        raise ValueError(
+            "intrinsic attack provenance can be created only by character_content_apply"
+        )
+
+
+def _require_preserved_intrinsic_attack_provenance(
+    current: Mapping[str, Any], replacement: Mapping[str, Any]
+) -> None:
+    if _intrinsic_attack_provenance(current) != _intrinsic_attack_provenance(replacement):
+        raise ValueError(
+            "character mutation cannot add, remove, or alter authoritative "
+            "intrinsic attack provenance"
+        )
+
+
+def _tortle_natural_armor_provenance(sheet: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Return caller-writable records that can authorize the Tortle AC exception."""
+
+    value = dict(sheet or {})
+    content = dict(value.get("content") or {})
+
+    def privileged_selection(item: Any) -> bool:
+        if not isinstance(item, dict):
+            return False
+        refs = item.get("rule_refs")
+        return (
+            item.get("artifact_id") == TORTLE_NATURAL_ARMOR_ARTIFACT_ID
+            or item.get("pack_id") == TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID
+            or (
+                isinstance(refs, list)
+                and any(
+                    isinstance(ref, str)
+                    and ref.startswith(TORTLE_NATURAL_ARMOR_SOURCE_RULE_REF_PREFIX)
+                    for ref in refs
+                )
+            )
+        )
+
+    def privileged_feature(item: Any) -> bool:
+        if not isinstance(item, dict):
+            return False
+        mechanic_refs = item.get("mechanic_refs")
+        trait = dict(dict(item.get("choices") or {}).get("source_trait") or {})
+        return (
+            (
+                isinstance(mechanic_refs, list)
+                and CORE_TORTLE_NATURAL_ARMOR_MECHANIC_ID in mechanic_refs
+            )
+            or trait.get("kind") == "tortle_natural_armor"
+            or (trait.get("effect_source") == TORTLE_NATURAL_ARMOR_ARTIFACT_ID)
+        )
+
+    def privileged_effect(item: Any) -> bool:
+        return isinstance(item, dict) and item.get("source") == TORTLE_NATURAL_ARMOR_ARTIFACT_ID
+
+    selections = [
+        deepcopy(item) for item in content.get("selections", []) if privileged_selection(item)
+    ]
+    features = [deepcopy(item) for item in content.get("features", []) if privileged_feature(item)]
+    effects = [deepcopy(item) for item in value.get("effects", []) if privileged_effect(item)]
+    if not selections and not features and not effects:
+        return {}
+    return {
+        "species": str(dict(value.get("progression") or {}).get("species") or ""),
+        "selections": selections,
+        "features": features,
+        "effects": effects,
+    }
+
+
+def _reserved_official_definition_owners() -> dict[str, str]:
+    owners = {
+        str(item["definition_id"]): str(item["package_id"])
+        for item in official_expansion_dependency_rebinds()
+    }
+    for support in official_expansion_support_catalog():
+        for definition in support.get("provided_rule_definitions", []):
+            if isinstance(definition, dict):
+                owners[str(definition.get("id") or "")] = str(support["id"])
+    return owners
+
+
+def _validate_unreserved_rule_definition_identity(pack_id: str) -> None:
+    owner = _reserved_official_definition_owners().get(str(pack_id))
+    if owner is not None:
+        raise ValueError(f"rule definition {pack_id} is reserved for official package {owner}")
+
+
+def _validate_reserved_official_artifact_identities(
+    *,
+    definition_id: str,
+    artifacts: Iterable[Mapping[str, Any]],
+    package_id: str | None = None,
+) -> None:
+    owners = {
+        TORTLE_NATURAL_ARMOR_ARTIFACT_ID: (
+            TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
+            TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID,
+        )
+    }
+    for artifact in artifacts:
+        nested = artifact.get("artifact")
+        artifact_ids = {
+            str(artifact.get("id") or ""),
+            str(nested.get("id") or "") if isinstance(nested, dict) else "",
+        }
+        for artifact_id in artifact_ids:
+            owner = owners.get(artifact_id)
+            if owner is None:
+                continue
+            owner_package_id, owner_definition_id = owner
+            if definition_id != owner_definition_id or (
+                package_id is not None and package_id != owner_package_id
+            ):
+                raise ValueError(
+                    f"content artifact {artifact_id} is reserved for official package "
+                    f"{owner_package_id} definition {owner_definition_id}"
+                )
+
+
+def _validate_reserved_official_package_identity(package: Mapping[str, Any]) -> None:
+    """Reject archives that occupy a locked official package or definition identity."""
+
+    package_id = str(package.get("id") or "")
+    package_version = str(package.get("version") or "")
+    package_checksum = str(package.get("checksum") or "")
+    locked_packages = {
+        str(item["id"]): dict(item)
+        for item in (*official_expansion_catalog(), *official_expansion_support_catalog())
+    }
+    definition_owners = _reserved_official_definition_owners()
+    locked = locked_packages.get(package_id)
+    if locked is not None and (
+        package_version != str(locked["version"]) or package_checksum != str(locked["checksum"])
+    ):
+        raise ValueError(
+            "content package occupies a reserved official identity without its locked checksum"
+        )
+    definitions = list(dict(package.get("content") or {}).get("rule_definitions") or [])
+    for definition in definitions:
+        if not isinstance(definition, dict):
+            continue
+        definition_id = str(definition.get("id") or "")
+        owner = definition_owners.get(definition_id)
+        if owner is not None and owner != package_id:
+            raise ValueError(
+                f"rule definition {definition_id} is reserved for official package {owner}"
+            )
+    artifacts = list(dict(package.get("content") or {}).get("artifacts") or [])
+    for definition in definitions:
+        if not isinstance(definition, dict):
+            continue
+        definition_id = str(definition.get("id") or "")
+        _validate_reserved_official_artifact_identities(
+            definition_id=definition_id,
+            package_id=package_id,
+            artifacts=(
+                artifact
+                for artifact in artifacts
+                if isinstance(artifact, dict)
+                and str(artifact.get("rule_definition_id") or "") == definition_id
+            ),
+        )
+
+
+def _verified_tortle_natural_armor_authority(
+    *,
+    pack_id: str,
+    pack_version: str,
+    artifact_id: str,
+    provenance: Mapping[str, Any],
+    archive_definition_verified: bool = False,
+) -> dict[str, str] | None:
+    """Bind the privileged armor exception to the immutable official outer archive."""
+
+    if artifact_id != TORTLE_NATURAL_ARMOR_ARTIFACT_ID:
+        return None
+    locked = next(
+        (
+            dict(item)
+            for item in official_expansion_catalog("2014")
+            if item["id"] == TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID
+        ),
+        None,
+    )
+    content_definition = dict(provenance.get("content_definition") or {})
+    authority = {
+        "package_id": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
+        "package_version": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
+        "package_checksum": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_CHECKSUM,
+    }
+    valid = (
+        locked is not None
+        and str(locked.get("version") or "") == authority["package_version"]
+        and str(locked.get("checksum") or "") == authority["package_checksum"]
+        and pack_id == TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID
+        and pack_version in TORTLE_NATURAL_ARMOR_LEGACY_PACK_VERSIONS
+        and str(content_definition.get("package_id") or "") == authority["package_id"]
+        and str(content_definition.get("package_version") or "") == authority["package_version"]
+        and str(content_definition.get("package_checksum") or "") == authority["package_checksum"]
+        and archive_definition_verified
+    )
+    if not valid:
+        raise RulesetUnavailableError(
+            "Tortle Natural Armor requires the immutable official expansion archive"
+        )
+    return authority
+
+
+def _load_or_create_content_authority_secret(path: Path) -> bytes:
+    """Load the durable server key used to authorize privileged content effects."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        value = path.read_bytes()
+        if len(value) != 32:
+            raise RuntimeError("content authority key is invalid")
+        return value
+    value = secrets.token_bytes(32)
+    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(value)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, path)
+            return value
+        except FileExistsError:
+            published = path.read_bytes()
+            if len(published) != 32:
+                raise RuntimeError("content authority key is invalid")
+            return published
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _verified_content_authority_ids(
+    sheet: Mapping[str, Any], *, character_id: str | None, secret: bytes
+) -> frozenset[str]:
+    """Verify actor-bound server capabilities embedded in official content records."""
+
+    if not character_id:
+        return frozenset()
+    verified: set[str] = set()
+    for item in dict(sheet.get("content") or {}).get("selections", []):
+        if not isinstance(item, dict) or item.get("artifact_id") != (
+            TORTLE_NATURAL_ARMOR_ARTIFACT_ID
+        ):
+            continue
+        raw_authority = dict(item.get("selection") or {}).get(TORTLE_NATURAL_ARMOR_AUTHORITY_KEY)
+        if not isinstance(raw_authority, Mapping):
+            continue
+        authority = dict(raw_authority)
+        if not isinstance(authority.get("authorization"), Mapping):
+            continue
+        authority_id = str(authority.get("authority_id") or "")
+        try:
+            payload = verify_receipt_signature(
+                authority.get("authorization"),
+                secret,
+                missing_error="content authority signature is missing",
+                invalid_error="content authority signature is invalid",
+            )
+        except ValueError:
+            continue
+        if payload == {
+            "schema_version": 1,
+            "purpose": "official_content_authority",
+            "character_id": character_id,
+            "artifact_id": TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
+            "package_id": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
+            "package_version": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
+            "package_checksum": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_CHECKSUM,
+            "authority_id": authority_id,
+        }:
+            verified.add(authority_id)
+    return frozenset(verified)
+
+
+def _reject_new_tortle_natural_armor_provenance(sheet: Mapping[str, Any] | None) -> None:
+    if _tortle_natural_armor_provenance(sheet):
+        raise ValueError(
+            "Tortle Natural Armor provenance can be created only by character_content_apply"
+        )
+
+
+def _require_preserved_tortle_natural_armor_provenance(
+    current: Mapping[str, Any], replacement: Mapping[str, Any]
+) -> None:
+    if _tortle_natural_armor_provenance(current) != _tortle_natural_armor_provenance(replacement):
+        raise ValueError(
+            "character sheet replacement cannot add, remove, or alter authoritative "
+            "Tortle Natural Armor provenance"
+        )
+
+
 def _character_spell_card(catalog_card: dict[str, Any]) -> dict[str, Any]:
     """Project a rule-catalog spell into the persistable character-card schema."""
     return {
@@ -730,6 +1064,7 @@ ENGINE_SETTLED_CARD_MECHANIC_IDS = frozenset(
         "dnd5e.core.activity.turn_undead",
         "dnd5e.core.item.healing_potion",
         CORE_RELENTLESS_ENDURANCE_MECHANIC_ID,
+        CORE_WATCHERS_EYE_MECHANIC_ID,
         "dnd5e.core.magic_ammunition.slaying",
         CORE_BLADE_WARD_MECHANIC_ID,
         CORE_FLY_MECHANIC_ID,
@@ -741,6 +1076,107 @@ ENGINE_SETTLED_CARD_MECHANIC_IDS = frozenset(
         CORE_WITCH_BOLT_MECHANIC_ID,
     }
 )
+
+SCAG_OFFICIAL_ADDON_ID = (
+    "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a.addon"
+)
+SCAG_RULE_PACK_ID = "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a"
+SCAG_WATCHERS_EYE_BACKGROUND_IDS = frozenset(
+    {
+        (
+            "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide."
+            "16e6a243ef0a.background.city-watch"
+        ),
+        (
+            "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide."
+            "16e6a243ef0a.background.investigator"
+        ),
+    }
+)
+WATCHERS_EYE_CAPABILITIES = frozenset(
+    {
+        "local_law",
+        "local_criminal_activity",
+        "watch_outpost",
+        "law_enforcement_contact",
+        "watch_information",
+        "recognition",
+    }
+)
+WATCHERS_EYE_FACT_METADATA_KEY = "dnd5e_watchers_eye"
+WATCHERS_EYE_FACT_SCHEMA_VERSION = 1
+WATCHERS_EYE_FEATURE_NAME = "Watcher's Eye"
+WATCHERS_EYE_NARRATIVE_SCHEMA = "sagasmith.dnd.narrative-capability.v1"
+
+
+def _watchers_eye_source_binding(artifact: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Return exact source-review binding for the two SCAG background cards."""
+
+    artifact_id = str(artifact.get("id") or "")
+    if artifact_id not in SCAG_WATCHERS_EYE_BACKGROUND_IDS:
+        return None
+    if str(artifact.get("kind") or "") != "background":
+        return None
+    if str(artifact.get("application_state") or "") != "selection_ready":
+        return None
+    if str(artifact.get("execution_state") or "") != "ruling_ready":
+        return None
+    raw_selection_contract = artifact.get("selection_contract")
+    raw_catalog_review = artifact.get("catalog_review")
+    if raw_selection_contract is not None or raw_catalog_review is not None:
+        if selection_contract_errors(artifact):
+            return None
+        selection_contract = dict(raw_selection_contract or {})
+        catalog_review = dict(raw_catalog_review or {})
+        reviewed_content_hash = str(selection_contract.get("reviewed_content_hash") or "")
+        if (
+            selection_contract.get("status") != "ready"
+            or selection_contract.get("materializer") != "dnd5e.character.background.v1"
+            or catalog_review.get("status") != "approved"
+            or reviewed_content_hash != str(catalog_review.get("reviewed_content_hash") or "")
+            or len(reviewed_content_hash) != 64
+        ):
+            return None
+    else:
+        # The import boundary intentionally strips authoring attestations after
+        # binding them into the immutable addon checksum and definition provenance.
+        reviewed_content_hash = content_fingerprint(artifact)
+    card = dict(artifact.get("card") or {})
+    grants = dict(card.get("background_grants") or {})
+    if str(grants.get("feature") or "") != WATCHERS_EYE_FEATURE_NAME:
+        return None
+    source_refs = [
+        dict(item) for item in artifact.get("source_refs") or [] if isinstance(item, dict)
+    ]
+    feature_sources = [
+        item
+        for item in source_refs
+        if "watcher's eye" in str(item.get("note") or "").casefold()
+        and str(item.get("chunk_id") or item.get("chunk_key") or "")
+    ]
+    if len(feature_sources) != 1:
+        return None
+    chunk_key = str(feature_sources[0].get("chunk_id") or feature_sources[0].get("chunk_key"))
+    rule_refs = [str(item) for item in artifact.get("rule_refs") or []]
+    feature_rule_refs = [item for item in rule_refs if item.endswith(f"#chunk:{chunk_key}")]
+    if len(feature_rule_refs) != 1:
+        return None
+    ruling_requirements = [
+        dict(item) for item in card.get("ruling_requirements") or [] if isinstance(item, dict)
+    ]
+    if not any(
+        str(item.get("ruling_kind") or "") == "agent_dm_adjudication"
+        and len(str(item.get("source_excerpt") or "")) >= 100
+        for item in ruling_requirements
+    ):
+        return None
+    return {
+        "artifact_id": artifact_id,
+        "background_name": str(card.get("name") or artifact_id),
+        "reviewed_content_hash": reviewed_content_hash,
+        "rule_refs": rule_refs,
+        "feature_rule_ref": feature_rule_refs[0],
+    }
 
 
 def has_active_owned_condition(
@@ -2403,6 +2839,428 @@ def _source_contains_narrative_name(*, name: str, content: str) -> bool:
     return split_name.search(normalized_content) is not None
 
 
+PHB2014_STANDARD_LANGUAGES = (
+    "Common",
+    "Dwarvish",
+    "Elvish",
+    "Giant",
+    "Gnomish",
+    "Goblin",
+    "Halfling",
+    "Orc",
+)
+PHB2014_RESTRICTED_LANGUAGES = (
+    "Abyssal",
+    "Celestial",
+    "Deep Speech",
+    "Draconic",
+    "Druidic",
+    "Infernal",
+    "Primordial",
+    "Sylvan",
+    "Thieves' Cant",
+    "Undercommon",
+)
+PHB2014_TOOL_PROFICIENCIES = (
+    "Alchemist's Supplies",
+    "Brewer's Supplies",
+    "Calligrapher's Supplies",
+    "Carpenter's Tools",
+    "Cartographer's Tools",
+    "Cobbler's Tools",
+    "Cook's Utensils",
+    "Disguise Kit",
+    "Forgery Kit",
+    "Glassblower's Tools",
+    "Herbalism Kit",
+    "Jeweler's Tools",
+    "Leatherworker's Tools",
+    "Mason's Tools",
+    "Navigator's Tools",
+    "Painter's Supplies",
+    "Poisoner's Kit",
+    "Potter's Tools",
+    "Smith's Tools",
+    "Thieves' Tools",
+    "Tinker's Tools",
+    "Vehicles (Land)",
+    "Vehicles (Water)",
+    "Weaver's Tools",
+    "Woodcarver's Tools",
+)
+BACKGROUND_AUTHORITY_SELECTION_KEY = "_background_authority"
+
+
+def _load_or_create_content_authority_secret(path: Path) -> bytes:
+    """Load the durable server key used for actor-bound content receipts."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        value = path.read_bytes()
+        if len(value) != 32:
+            raise RuntimeError("content authority key is invalid")
+        return value
+    value = secrets.token_bytes(32)
+    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(value)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, path)
+            return value
+        except FileExistsError:
+            published = path.read_bytes()
+            if len(published) != 32:
+                raise RuntimeError("content authority key is invalid")
+            return published
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _background_selection_records(sheet: Mapping[str, Any]) -> list[dict[str, Any]]:
+    return [
+        dict(item)
+        for item in dict(sheet.get("content") or {}).get("selections", [])
+        if isinstance(item, Mapping) and str(item.get("kind") or "").casefold() == "background"
+    ]
+
+
+def _has_background_grants(sheet: Mapping[str, Any]) -> bool:
+    progression = dict(sheet.get("progression") or {})
+    grants = dict(progression.get("background_grants") or {})
+    return bool(
+        str(grants.get("feature") or "").strip()
+        or list(grants.get("equipment_item_ids") or [])
+        or list(grants.get("languages") or [])
+        or list(grants.get("spell_list_expansion") or [])
+        or list(grants.get("tools") or [])
+        or dict(grants.get("choices") or {})
+    )
+
+
+def _background_authority_payload(
+    sheet: Mapping[str, Any],
+    record: Mapping[str, Any],
+    *,
+    character_id: str,
+    authority_id: str,
+) -> dict[str, Any]:
+    selection = deepcopy(dict(record.get("selection") or {}))
+    selection.pop(BACKGROUND_AUTHORITY_SELECTION_KEY, None)
+    progression = dict(sheet.get("progression") or {})
+    return {
+        "schema_version": 1,
+        "purpose": "background_selection_authority",
+        "authority_id": authority_id,
+        "character_id": character_id,
+        "artifact_id": str(record.get("artifact_id") or ""),
+        "pack_id": str(record.get("pack_id") or ""),
+        "pack_version": str(record.get("pack_version") or ""),
+        "background": str(progression.get("background") or ""),
+        "background_grants_checksum": json_sha256(dict(progression.get("background_grants") or {})),
+        "selection_checksum": json_sha256(selection),
+    }
+
+
+def _require_authoritative_background_state(
+    candidate_sheet: Mapping[str, Any],
+    *,
+    character_id: str | None,
+    secret: bytes,
+    current_sheet: Mapping[str, Any] | None = None,
+) -> None:
+    """Reject forged, removed, or altered official background materialization."""
+
+    records = _background_selection_records(candidate_sheet)
+    meaningful = _has_background_grants(candidate_sheet)
+    current_protected = bool(
+        current_sheet
+        and (_has_background_grants(current_sheet) or _background_selection_records(current_sheet))
+    )
+    if current_protected and not (meaningful or records):
+        raise ValueError("authoritative background state cannot be removed by sheet ingress")
+    if not meaningful and not records:
+        return
+    if character_id is None:
+        raise ValueError(
+            "background grants can be created only by character_content_apply after actor creation"
+        )
+    if len(records) != 1:
+        raise ValueError("authoritative background state requires one background selection receipt")
+    record = records[0]
+    raw_authority = dict(record.get("selection") or {}).get(BACKGROUND_AUTHORITY_SELECTION_KEY)
+    if not isinstance(raw_authority, Mapping):
+        raise ValueError("background selection authority receipt is missing")
+    authority = dict(raw_authority)
+    authority_id = str(authority.get("authority_id") or "")
+    if not authority_id or not isinstance(authority.get("authorization"), Mapping):
+        raise ValueError("background selection authority receipt is invalid")
+    try:
+        payload = verify_receipt_signature(
+            authority["authorization"],
+            secret,
+            missing_error="background selection authority signature is missing",
+            invalid_error="background selection authority signature is invalid",
+        )
+    except ValueError as error:
+        raise ValueError("background selection authority receipt is invalid") from error
+    expected = _background_authority_payload(
+        candidate_sheet,
+        record,
+        character_id=character_id,
+        authority_id=authority_id,
+    )
+    if payload != expected:
+        raise ValueError("background selection authority receipt does not match the actor state")
+
+    progression = dict(candidate_sheet.get("progression") or {})
+    grants = dict(progression.get("background_grants") or {})
+    choices = dict(grants.get("choices") or {})
+    skills = dict(candidate_sheet.get("skills") or {})
+    for skill in choices.get("effective_skills", []):
+        skill_key = str(skill).casefold().replace(" ", "_")
+        if str(dict(skills.get(skill_key) or {}).get("proficiency") or "none") == "none":
+            raise ValueError("background selection receipt is missing a granted skill")
+    known_languages = {
+        str(item).casefold()
+        for item in dict(candidate_sheet.get("traits") or {}).get("languages", [])
+    }
+    if any(str(item).casefold() not in known_languages for item in grants.get("languages", [])):
+        raise ValueError("background selection receipt is missing a granted language")
+    known_tools = {
+        str(item).casefold()
+        for item in dict(dict(candidate_sheet.get("traits") or {}).get("proficiencies") or {}).get(
+            "tools", []
+        )
+    }
+    if any(str(item).casefold() not in known_tools for item in grants.get("tools", [])):
+        raise ValueError("background selection receipt is missing a granted tool")
+
+
+class _PendingProficiencyReplacementsError(ValueError):
+    def __init__(self, kind: str, duplicates: list[str]) -> None:
+        self.kind = kind
+        self.duplicates = duplicates
+        message = f"{kind} proficiency replacements are required for: {', '.join(duplicates)}"
+        super().__init__(message)
+
+
+def _resolve_duplicate_proficiencies(
+    source_values: Any,
+    *,
+    existing_values: set[str],
+    replacements: Any,
+    options: Mapping[str, str],
+    kind: str,
+) -> tuple[list[str], dict[str, str]]:
+    if not isinstance(source_values, list):
+        raise RulesetUnavailableError(f"background {kind} grants are not executable")
+    normalized_sources = [" ".join(str(item).split()) for item in source_values]
+    if any(not item for item in normalized_sources):
+        raise RulesetUnavailableError(f"background {kind} grants must be non-empty")
+    seen = set(existing_values)
+    collision_counts: dict[str, int] = {}
+    collisions: list[tuple[int, str, str]] = []
+    for index, item in enumerate(normalized_sources):
+        source_key = item.casefold()
+        if source_key in seen:
+            collision_counts[source_key] = collision_counts.get(source_key, 0) + 1
+            collision_number = collision_counts[source_key]
+            receipt_key = (
+                source_key if collision_number == 1 else f"{source_key}#{collision_number}"
+            )
+            collisions.append((index, item, receipt_key))
+        seen.add(source_key)
+    duplicate_sources = [item for _index, item, _receipt_key in collisions]
+    duplicate_prompts = [
+        item if receipt_key == item.casefold() else f"{item} ({receipt_key})"
+        for _index, item, receipt_key in collisions
+    ]
+    expected_replacement_keys = {receipt_key for _index, _item, receipt_key in collisions}
+    if replacements is None:
+        if duplicate_sources:
+            raise _PendingProficiencyReplacementsError(kind, duplicate_prompts)
+        normalized_replacements: dict[str, str] = {}
+    else:
+        if not isinstance(replacements, dict):
+            raise ValueError(f"background {kind}_replacements must be an object")
+        normalized_replacements = {}
+        for raw_source, raw_replacement in replacements.items():
+            source = " ".join(str(raw_source).split()).casefold()
+            replacement = " ".join(str(raw_replacement).split())
+            if not source or not replacement or source in normalized_replacements:
+                raise ValueError(
+                    f"background {kind}_replacements must contain distinct non-empty names"
+                )
+            replacement_key = replacement.casefold()
+            if replacement_key not in options:
+                raise ValueError(f"background {kind} replacement is not an allowed {kind}")
+            normalized_replacements[source] = options[replacement_key]
+        if set(normalized_replacements) != expected_replacement_keys:
+            raise ValueError(
+                f"background {kind}_replacements must answer exactly the duplicate grants"
+            )
+    replacements_by_index = {
+        index: normalized_replacements[receipt_key] for index, _item, receipt_key in collisions
+    }
+    effective = [
+        replacements_by_index.get(index, options.get(item.casefold(), item))
+        for index, item in enumerate(normalized_sources)
+    ]
+    effective_keys = [item.casefold() for item in effective]
+    if len(set(effective_keys)) != len(effective_keys):
+        raise ValueError(f"background effective {kind} proficiencies must be distinct")
+    if any(item in existing_values for item in effective_keys):
+        raise ValueError(f"background {kind} replacement is already proficient")
+    return effective, normalized_replacements
+
+
+def _reviewed_tool_options(
+    candidates: list[tuple[str, str, dict[str, Any]]],
+) -> dict[str, str]:
+    values = {
+        item.casefold(): item
+        for item in (
+            *PHB2014_TOOL_PROFICIENCIES,
+            "Dice Set",
+            "Dragonchess Set",
+            "Gaming Set",
+            "Playing Card Set",
+            "Three-Dragon Ante Set",
+            "Musical Instrument",
+        )
+    }
+    for _pack_id, _version, artifact in candidates:
+        card = dict(artifact.get("card") or {})
+        containers = [
+            dict(card.get("background_grants") or {}),
+            dict(card.get("class_definition") or {}),
+            dict(card.get("grants") or {}),
+            dict(card.get("mechanical_grants") or {}),
+        ]
+        for container in containers:
+            choices = dict(container.get("choices") or {})
+            for field in (
+                "tools",
+                "tool_proficiencies",
+                "tool_options",
+                "tool_choices",
+            ):
+                raw_items = [
+                    *list(container.get(field) or []),
+                    *list(choices.get(field) or []),
+                ]
+                for raw_item in raw_items:
+                    item = " ".join(str(raw_item).split())
+                    if item:
+                        values.setdefault(item.casefold(), item)
+    return values
+
+
+def _campaign_language_options(settings: Mapping[str, Any]) -> dict[str, str]:
+    raw_catalog = settings.get("language_catalog")
+    if raw_catalog is None:
+        raw_allowed: Any = list(PHB2014_STANDARD_LANGUAGES)
+    elif isinstance(raw_catalog, Mapping) and set(raw_catalog) == {"allowed_languages"}:
+        raw_allowed = raw_catalog.get("allowed_languages")
+    else:
+        raise RulesetUnavailableError(
+            "campaign language_catalog must contain exactly allowed_languages"
+        )
+    if not isinstance(raw_allowed, list) or len(raw_allowed) > 100:
+        raise RulesetUnavailableError("campaign allowed language catalog is invalid")
+    options: dict[str, str] = {}
+    for raw_item in raw_allowed:
+        item = " ".join(str(raw_item).split())
+        if not item or len(item) > 100 or item.casefold() in options:
+            raise RulesetUnavailableError(
+                "campaign allowed languages must be distinct non-empty names"
+            )
+        options[item.casefold()] = item
+    return options
+
+
+def _validated_background_languages(
+    raw_languages: Any,
+    *,
+    count: int,
+    fixed: Any,
+    existing: Any,
+    campaign_id: str,
+    campaign_revision: int,
+    campaign_settings: Mapping[str, Any],
+    authorization: Any,
+    principal_id: str,
+    principal_is_dm: bool,
+) -> tuple[list[str], list[str], dict[str, Any] | None]:
+    fixed_values = _validated_distinct_choices(
+        fixed,
+        count=len(fixed) if isinstance(fixed, list) else 0,
+        label="fixed background language",
+    )
+    selected = _validated_distinct_choices(
+        raw_languages,
+        count=count,
+        label="background language",
+    )
+    existing_map = {
+        str(item).casefold(): str(item)
+        for item in (existing if isinstance(existing, list) else [])
+        if str(item).strip()
+    }
+    fixed_keys = {item.casefold() for item in fixed_values}
+    selected_keys = {item.casefold() for item in selected}
+    if fixed_keys & selected_keys:
+        raise ValueError("background language cannot duplicate a fixed grant")
+    if (fixed_keys | selected_keys) & set(existing_map):
+        raise ValueError("background languages must be new to the character")
+    catalog = _campaign_language_options(campaign_settings)
+    restricted = {item.casefold() for item in PHB2014_RESTRICTED_LANGUAGES}
+    needs_authorization = [
+        item for item in selected if item.casefold() not in catalog or item.casefold() in restricted
+    ]
+    authorization_receipt: dict[str, Any] | None = None
+    if needs_authorization:
+        if not principal_is_dm:
+            raise PermissionError(
+                "campaign-external, exotic, and secret background languages require the DM"
+            )
+        if not isinstance(authorization, dict) or set(authorization) != {
+            "languages",
+            "reason",
+        }:
+            raise ValueError("language_authorization requires exactly languages and reason")
+        authorized = _validated_distinct_choices(
+            authorization.get("languages"),
+            count=len(needs_authorization),
+            label="authorized background language",
+        )
+        if {item.casefold() for item in authorized} != {
+            item.casefold() for item in needs_authorization
+        }:
+            raise ValueError("language_authorization must cover exactly the restricted selections")
+        reason = " ".join(str(authorization.get("reason") or "").split())
+        if not reason or len(reason) > 1000:
+            raise ValueError("language_authorization reason must contain 1 to 1000 characters")
+        authorization_receipt = {
+            "schema_version": 1,
+            "kind": "dm_language_authorization",
+            "campaign_id": campaign_id,
+            "campaign_revision": campaign_revision,
+            "principal_id": principal_id,
+            "languages": sorted(needs_authorization, key=str.casefold),
+            "reason": reason,
+            "catalog_checksum": json_sha256(catalog),
+        }
+    elif authorization is not None:
+        raise ValueError("language_authorization is accepted only for restricted language choices")
+    normalized_selected = [catalog.get(item.casefold(), item) for item in selected]
+    return normalized_selected, [*fixed_values, *normalized_selected], authorization_receipt
+
+
 def _validated_distinct_choices(value: Any, *, count: int, label: str) -> list[str]:
     if value is None:
         values: list[Any] = []
@@ -2426,6 +3284,7 @@ def _validated_additive_choices(
     fixed: Any,
     options: Any,
     allow_unlisted: bool = False,
+    allow_fixed_duplicates: bool = False,
 ) -> tuple[list[str], list[str]]:
     """Validate a choice grant without replacing or duplicating fixed grants."""
 
@@ -2436,7 +3295,7 @@ def _validated_additive_choices(
     )
     selected = _validated_distinct_choices(value, count=count, label=label)
     fixed_keys = {item.casefold() for item in fixed_values}
-    if fixed_keys.intersection(item.casefold() for item in selected):
+    if not allow_fixed_duplicates and fixed_keys.intersection(item.casefold() for item in selected):
         raise ValueError(f"{label} cannot duplicate a fixed grant")
 
     if not isinstance(options, list):
@@ -2507,6 +3366,14 @@ def _apply_skill_proficiency_or_expertise(sheet: dict[str, Any], proficiencies: 
         if skill is None:
             raise ValueError(f"feature references an unknown skill: {raw_skill}")
         skill["proficiency"] = "proficient" if skill.get("proficiency") == "none" else "expertise"
+
+
+def _apply_fixed_skill_proficiency(sheet: dict[str, Any], skill_name: str, *, source: str) -> None:
+    skill = sheet["skills"].get(skill_name)
+    if skill is None:
+        raise ValueError(f"{source} references an unknown skill: {skill_name}")
+    if skill.get("proficiency") in {"none", "half"}:
+        skill["proficiency"] = "proficient"
 
 
 def _materialize_feature_proficiency_groups(
@@ -4139,11 +5006,7 @@ class RequestScopedMCPServer(MCPServer):
             if auth_context is not None and legacy_session_key is None:
                 policy_campaign_id = self._argument_campaign_id(arguments) or None
                 policy = policy_for_tool(name)
-                if (
-                    policy_campaign_id is None
-                    and policy is not None
-                    and policy.requires_campaign
-                ):
+                if policy_campaign_id is None and policy is not None and policy.requires_campaign:
                     policy_campaign_id = auth_context.campaign_id
                 self._tool_policy_authorizer(
                     name,
@@ -4237,10 +5100,77 @@ def close_server(server: MCPServer) -> None:
         close()
 
 
+class _ServerResourceStack:
+    """Own initialization resources until they transfer to a completed server."""
+
+    def __init__(self) -> None:
+        self._callbacks: list[tuple[str, Callable[[], Any]]] = []
+
+    def track(self, label: str, resource: Any) -> Any:
+        for method_name in ("close", "dispose"):
+            callback = getattr(resource, method_name, None)
+            if callable(callback):
+                self._callbacks.append((label, callback))
+                break
+        return resource
+
+    def close(self) -> None:
+        callbacks, self._callbacks = self._callbacks, []
+        errors: list[BaseException] = []
+        for label, callback in reversed(callbacks):
+            try:
+                callback()
+            except BaseException as error:
+                error.add_note(f"while closing SagaSmith server resource: {label}")
+                errors.append(error)
+        if errors:
+            raise BaseExceptionGroup("SagaSmith server resource cleanup failed", errors)
+
+    def close_after_failure(self, initialization_error: BaseException) -> None:
+        try:
+            self.close()
+        except BaseException as cleanup_error:
+            diagnostics: list[BaseException] = []
+            if initialization_error.__cause__ is not None:
+                diagnostics.append(initialization_error.__cause__)
+            if isinstance(cleanup_error, BaseExceptionGroup):
+                diagnostics.extend(cleanup_error.exceptions)
+            else:
+                diagnostics.append(cleanup_error)
+            initialization_error.__cause__ = BaseExceptionGroup(
+                "SagaSmith server initialization diagnostics",
+                diagnostics,
+            )
+            initialization_error.__suppress_context__ = True
+            initialization_error.add_note(
+                "One or more initialized server resources also failed to close; "
+                "cleanup diagnostics are chained as the cause."
+            )
+
+
 def create_server(config: McpConfig | None = None) -> MCPServer:
+    """Create one server and clean up every opened resource if initialization fails."""
+
+    resources = _ServerResourceStack()
+    try:
+        server = _create_server(config, resources=resources)
+        setattr(server, "_sagasmith_close", resources.close)
+        return server
+    except BaseException as error:
+        resources.close_after_failure(error)
+        raise
+
+
+def _create_server(
+    config: McpConfig | None = None,
+    *,
+    resources: _ServerResourceStack,
+) -> MCPServer:
     """Create one dual-era MCP server over either supported transport."""
     config = config or McpConfig.from_environment()
     storage = SagaSmithStorage(config)
+    resources.track("campaign database", storage.database)
+    resources.track("vector store", storage.vectors)
     storage.migrate()
     campaigns = CampaignService(storage.database)
     characters = CharacterService(storage.database)
@@ -4270,6 +5200,36 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
     )
     native_rule_providers = load_native_rule_providers()
     npc_conversations = ConversationStore(config.npc_conversations_dir)
+    content_authority_secret = _load_or_create_content_authority_secret(
+        config.home / "data" / ".content-authority-key"
+    )
+
+    def verified_content_authority_ids(
+        sheet: Mapping[str, Any], *, character_id: str | None
+    ) -> frozenset[str]:
+        """Verify server-issued content capabilities before privileged derivation."""
+
+        return _verified_content_authority_ids(
+            sheet,
+            character_id=character_id,
+            secret=content_authority_secret,
+        )
+
+    def derive_character_sheet(
+        sheet: dict[str, Any],
+        *,
+        rules: ResolutionContext | None = None,
+        character_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Derive a card only after validating server-issued privileged content."""
+
+        return derive_domain_character_sheet(
+            sheet,
+            rules=rules,
+            trusted_content_authority_ids=verified_content_authority_ids(
+                sheet, character_id=character_id
+            ),
+        )
 
     def require_no_active_npc_conversation(
         campaign_id: str,
@@ -4769,9 +5729,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             ("front_progress", front_ids),
             ("thread_progress", thread_ids),
         ):
-            unknown = sorted(
-                item["id"] for item in manifest[field] if item["id"] not in known_ids
-            )
+            unknown = sorted(item["id"] for item in manifest[field] if item["id"] not in known_ids)
             if unknown:
                 raise ValueError(
                     f"{field} references unknown runtime_manifest ids: {', '.join(unknown)}"
@@ -4860,9 +5818,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     }
                 )
         missing = sorted(
-            f"{kind}:{ref_id}"
-            for kind, ref_id in requested
-            if ref_id not in available[kind]
+            f"{kind}:{ref_id}" for kind, ref_id in requested if ref_id not in available[kind]
         )
         if missing:
             raise ValueError(
@@ -5294,6 +6250,49 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
 
         return refresh_references(refresh(value))
 
+    def canonicalize_portable_evidence(
+        item: Any,
+        *,
+        field: str = "",
+        parent: str = "",
+    ) -> Any:
+        """Sort only evidence collections whose order has no semantics."""
+
+        if isinstance(item, list):
+            normalized = [
+                canonicalize_portable_evidence(
+                    child,
+                    field=field,
+                    parent=parent,
+                )
+                for child in item
+            ]
+            if field in {"rule_refs", "source_chunk_ids"} or (
+                field == "references" and parent == "selection_contract"
+            ):
+                return sorted(dict.fromkeys(str(child) for child in normalized))
+            if field == "source_citations":
+                return sorted(
+                    normalized,
+                    key=lambda child: json.dumps(
+                        child,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                )
+            return normalized
+        if not isinstance(item, dict):
+            return deepcopy(item)
+        return {
+            key: canonicalize_portable_evidence(
+                child,
+                field=key,
+                parent=field,
+            )
+            for key, child in item.items()
+        }
+
     def rule_content_descriptor(
         pack_id: str,
         version: str,
@@ -5422,49 +6421,6 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     raise ValueError(f"rule pack chunk_id is not portable: {chunk_id}")
                 result["chunk_key"] = chunk_key
             return result
-
-        def canonicalize_portable_evidence(
-            item: Any,
-            *,
-            field: str = "",
-            parent: str = "",
-        ) -> Any:
-            """Sort only evidence collections whose order has no semantics."""
-
-            if isinstance(item, list):
-                normalized = [
-                    canonicalize_portable_evidence(
-                        child,
-                        field=field,
-                        parent=parent,
-                    )
-                    for child in item
-                ]
-                if field in {"rule_refs", "source_chunk_ids"} or (
-                    field == "references" and parent == "selection_contract"
-                ):
-                    return sorted(dict.fromkeys(str(child) for child in normalized))
-                if field == "source_citations":
-                    return sorted(
-                        normalized,
-                        key=lambda child: json.dumps(
-                            child,
-                            ensure_ascii=False,
-                            sort_keys=True,
-                            separators=(",", ":"),
-                        ),
-                    )
-                return normalized
-            if not isinstance(item, dict):
-                return deepcopy(item)
-            return {
-                key: canonicalize_portable_evidence(
-                    child,
-                    field=key,
-                    parent=field,
-                )
-                for key, child in item.items()
-            }
 
         portable_definition = refresh_portable_resolution_plans(
             canonicalize_portable_evidence(make_portable(definition))
@@ -5643,6 +6599,8 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         validated_actors = [validate_dnd_content_actor(actor) for actor in normalized["actors"]]
         for actor in validated_actors:
             require_engine_owned_short_rest_hit_die_state(actor["sheet"])
+            _reject_new_intrinsic_attack_provenance(actor["sheet"])
+            _reject_new_tortle_natural_armor_provenance(actor.get("sheet"))
         mismatched = [
             actor["id"]
             for actor in validated_actors
@@ -5817,6 +6775,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             "preset",
         }:
             raise ValueError("content package must be a dnd5e addon, core_rules, or preset")
+        _validate_reserved_official_package_identity(value)
         managed_archive = storage.write_content_archive(value, blobs)
         dependency_rebinds = official_expansion_dependency_rebinds()
         component_equivalence: list[dict[str, str]] = []
@@ -5912,14 +6871,10 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                         definition_provenance = dict(
                             dependency_provenance.get("content_definition") or {}
                         )
-                        if (
-                            definition_provenance.get("source_definition_checksum")
-                            == runtime_checksum
-                            and definition_provenance.get("definition_checksum")
-                        ):
-                            runtime_checksum = str(
-                                definition_provenance["definition_checksum"]
-                            )
+                        if definition_provenance.get(
+                            "source_definition_checksum"
+                        ) == runtime_checksum and definition_provenance.get("definition_checksum"):
+                            runtime_checksum = str(definition_provenance["definition_checksum"])
                     matches[0]["checksum"] = runtime_checksum
                     applied_rebinds.append(
                         {**deepcopy(rebind), "resolved_runtime_checksum": runtime_checksum}
@@ -6015,9 +6970,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                                 "package_version": value["version"],
                                 "package_checksum": value["checksum"],
                                 "definition_checksum": runtime_definition_checksum,
-                                "source_definition_checksum": definition[
-                                    "definition_checksum"
-                                ],
+                                "source_definition_checksum": definition["definition_checksum"],
                             },
                             "official_dependency_rebinds": applied_rebinds,
                             "content_package_kind": value["kind"],
@@ -6151,6 +7104,221 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         }
         return response
 
+    def verified_reserved_official_rule_definition(
+        pack_id: str,
+        version: str,
+    ) -> dict[str, Any] | None:
+        """Prove an installed reserved definition came from its locked managed archive."""
+
+        owner = _reserved_official_definition_owners().get(str(pack_id))
+        if owner is None:
+            return None
+        try:
+            installed = rule_packs.get_version(pack_id, version)
+            if installed.status != "installed":
+                raise ValueError("reserved official rule definition is not installed")
+            provenance = rule_packs.provenance(pack_id, version)
+            content_definition = dict(provenance.get("content_definition") or {})
+            archive_artifact = str(provenance.get("content_archive_artifact") or "")
+            if not archive_artifact:
+                raise ValueError("reserved official rule definition has no managed archive")
+            archive, _blobs = storage.read_content_archive(artifact=archive_artifact)
+            archive = validate_dnd_content_package(archive)
+            _validate_reserved_official_package_identity(archive)
+            if str(archive["id"]) != owner:
+                raise ValueError("reserved official rule definition archive owner mismatch")
+            definition = next(
+                (
+                    dict(item)
+                    for item in archive["content"].get("rule_definitions") or []
+                    if str(item.get("id") or "") == pack_id
+                    and str(item.get("version") or "") == version
+                ),
+                None,
+            )
+            if definition is None:
+                raise ValueError("reserved official rule definition is absent from its archive")
+            # The stored Pack is a localized runtime representation: source/chunk
+            # IDs are local, authoring attestations are stripped, and the save
+            # boundary adds runtime resolution metadata.  Rebuild that expected
+            # representation from the locked archive before comparing it.  A
+            # checksum over ``installed`` alone would reject every valid import;
+            # trusting the recorded provenance alone would permit tampering.
+            expected_manifest = deepcopy(dict(definition["manifest"]))
+            expected_artifacts = [
+                deepcopy(item)
+                for item in archive["content"].get("artifacts") or []
+                if str(item.get("rule_definition_id") or "") == pack_id
+            ]
+            expected_mechanics = [
+                deepcopy(item)
+                for item in archive["content"].get("mechanics") or []
+                if str(item.get("rule_definition_id") or "") == pack_id
+            ]
+            for rebind in matching_official_expansion_dependency_rebinds(
+                official_expansion_dependency_rebinds(),
+                package_id=str(archive["id"]),
+                definition_id=pack_id,
+            ):
+                matches = [
+                    item
+                    for item in expected_manifest.get("dependencies") or []
+                    if isinstance(item, dict)
+                    and str(item.get("id") or "") == rebind["dependency_id"]
+                    and str(item.get("version") or "") == rebind["dependency_version"]
+                    and str(item.get("checksum") or "") == rebind["source_checksum"]
+                ]
+                if len(matches) != 1:
+                    raise ValueError(
+                        "official dependency rebind no longer matches reserved definition"
+                    )
+                matches[0]["version"] = str(rebind["runtime_version"])
+                matches[0]["checksum"] = str(rebind["runtime_checksum"])
+                try:
+                    runtime_dependency = rule_packs.get_version(
+                        str(rebind["dependency_id"]), str(rebind["runtime_version"])
+                    )
+                except LookupError:
+                    runtime_dependency = None
+                if runtime_dependency is not None:
+                    dependency_provenance = dict(
+                        rule_packs.provenance(
+                            runtime_dependency.pack_id,
+                            runtime_dependency.version,
+                        ).get("content_definition")
+                        or {}
+                    )
+                    if dependency_provenance.get("source_definition_checksum") == rebind[
+                        "runtime_checksum"
+                    ] and dependency_provenance.get("definition_checksum"):
+                        matches[0]["checksum"] = str(
+                            dependency_provenance["definition_checksum"]
+                        )
+            # Import provenance records this pre-save portable representation:
+            # rebinds have been applied, but export dependency normalization,
+            # authoring stripping, and runtime metadata have not yet happened.
+            recorded_expected_checksum = content_definition_checksum(
+                manifest=expected_manifest,
+                artifacts=expected_artifacts,
+                mechanics=expected_mechanics,
+            )
+            persisted_expected_dependencies = deepcopy(
+                expected_manifest.get("dependencies") or []
+            )
+            # The portable export pins each installed dependency to its runtime
+            # definition checksum (the same canonical value used by
+            # rule_content_descriptor), rather than the archive rebind's source
+            # proof checksum.
+            for dependency in expected_manifest.get("dependencies") or []:
+                if not isinstance(dependency, dict):
+                    continue
+                try:
+                    dependency_pack = rule_packs.get_version(
+                        str(dependency["id"]), str(dependency["version"])
+                    )
+                except (KeyError, LookupError):
+                    continue
+                dependency_content = dict(
+                    rule_packs.provenance(
+                        dependency_pack.pack_id,
+                        dependency_pack.version,
+                    ).get("content_definition")
+                    or {}
+                )
+                if dependency_content.get("definition_checksum"):
+                    dependency["checksum"] = str(dependency_content["definition_checksum"])
+                else:
+                    dependency_descriptor = rule_content_descriptor(
+                        dependency_pack.pack_id,
+                        dependency_pack.version,
+                    )
+                    dependency["checksum"] = content_definition_checksum(
+                        manifest=dependency_descriptor["manifest"],
+                        artifacts=dependency_descriptor["artifacts"],
+                        mechanics=dependency_descriptor["mechanics"],
+                    )
+            # Export sorts order-insensitive evidence, including multi-citation
+            # variant backgrounds. Rebuild the identical canonical ordering
+            # without dropping or trusting any installed source evidence.
+            expected_artifacts = canonicalize_portable_evidence(expected_artifacts)
+            expected_mechanics = canonicalize_portable_evidence(expected_mechanics)
+            expected_artifacts = _strip_artifact_authoring_state(expected_artifacts)
+            expected_artifacts = refresh_portable_resolution_plans(expected_artifacts)
+            expected_mechanics = refresh_portable_resolution_plans(expected_mechanics)
+            expected_manifest, native_errors = bind_native_mechanic_contract(
+                expected_manifest,
+                expected_artifacts,
+                expected_mechanics,
+            )
+            if native_errors:
+                raise ValueError("reserved definition failed native contract binding")
+            expected_manifest["resolution_policy"] = "compiled_or_agent"
+            expected_manifest["semantic_validation"] = audit_release_semantic_validation(
+                expected_artifacts,
+                settled_mechanic_ids=_rule_payload_settled_mechanic_ids(
+                    {"manifest": expected_manifest, "mechanics": expected_mechanics}
+                ),
+            )
+            installed_descriptor = rule_content_descriptor(pack_id, version)
+            expected_checksum = content_definition_checksum(
+                manifest=expected_manifest,
+                artifacts=expected_artifacts,
+                mechanics=expected_mechanics,
+            )
+            installed_checksum = content_definition_checksum(
+                manifest=installed_descriptor["manifest"],
+                artifacts=installed_descriptor["artifacts"],
+                mechanics=installed_descriptor["mechanics"],
+            )
+            local_expected_semantic_validation = audit_release_semantic_validation(
+                list(installed.artifacts),
+                settled_mechanic_ids=_rule_payload_settled_mechanic_ids(
+                    {"manifest": installed.manifest, "mechanics": installed.mechanics}
+                ),
+            )
+            recorded_runtime_checksum = str(content_definition.get("definition_checksum") or "")
+            recorded_source_checksum = str(
+                content_definition.get("source_definition_checksum") or ""
+            )
+            valid = (
+                str(content_definition.get("package_id") or "") == str(archive["id"])
+                and str(content_definition.get("package_version") or "") == str(archive["version"])
+                and str(content_definition.get("package_checksum") or "")
+                == str(archive["checksum"])
+                and recorded_runtime_checksum == recorded_expected_checksum
+                and installed_checksum == expected_checksum
+                and recorded_source_checksum == str(definition["definition_checksum"])
+                # Compare persisted, security-relevant manifest fields before
+                # descriptor export, which normalizes resolution metadata and
+                # could otherwise hide tampering.
+                and all(
+                    installed.manifest.get(key) == expected_manifest.get(key)
+                    for key in ("resolution_policy",)
+                )
+                and installed.manifest.get("dependencies") == persisted_expected_dependencies
+                and installed.manifest.get("semantic_validation")
+                == local_expected_semantic_validation
+            )
+            if not valid:
+                raise ValueError(
+                    "reserved official rule definition does not match its managed archive "
+                    f"(recorded={recorded_runtime_checksum}, "
+                    f"expected_recorded={recorded_expected_checksum}, "
+                    f"installed={installed_checksum}, expected={expected_checksum})"
+                )
+            return {
+                "package": archive,
+                "definition": definition,
+                "provenance": provenance,
+                "runtime_definition_checksum": installed_checksum,
+            }
+        except RulesetUnavailableError:
+            raise
+        except Exception as error:
+            raise RulesetUnavailableError(
+                f"{pack_id}@{version} requires its immutable official content archive"
+            ) from error
+
     def import_content_rules_package(
         campaign_id: str,
         package: dict[str, Any],
@@ -6234,8 +7402,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 or package.get("checksum") != archive.checksum
             ):
                 raise ValueError(
-                    f"official expansion archive identity changed after verification: "
-                    f"{archive.id}"
+                    f"official expansion archive identity changed after verification: {archive.id}"
                 )
             with storage.database.transaction():
                 stored = store_content_rules_package(
@@ -6453,9 +7620,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         if policy is None:
             return
         if policy.local_only and principal_id != LOCAL_SYSTEM_PRINCIPAL_ID:
-            raise ExposureError(
-                f"Tool {tool_id!r} is restricted to the local system principal."
-            )
+            raise ExposureError(f"Tool {tool_id!r} is restricted to the local system principal.")
         if policy.requires_campaign and campaign_id is None:
             raise ExposureError(f"Tool {tool_id!r} requires a campaign-bound request.")
         if campaign_id is None:
@@ -6571,7 +7736,10 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         )
         return use_random_stream(stream)
 
-    task_store = DurableTaskStore(config.home / "mcp-tasks.sqlite3")
+    task_store = resources.track(
+        "durable MCP task store",
+        DurableTaskStore(config.home / "mcp-tasks.sqlite3"),
+    )
     task_create_nonces = AuthContextNonceGuard() if config.auth_context_secret else None
     task_followup_nonces = AuthContextNonceGuard() if config.auth_context_secret else None
 
@@ -7200,8 +8368,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         actor_state = [
             item
             for item in actor_state
-            if str(item.get("disclosure_scope") or "dm")
-            in knowledge_disclosure_scopes
+            if str(item.get("disclosure_scope") or "dm") in knowledge_disclosure_scopes
         ]
         actor_knowledge = knowledge.list(
             campaign_id,
@@ -7256,9 +8423,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             *exact_events,
             *list(retrieved_events or []),
         ]:
-            event_id = str(
-                item.get("id") if isinstance(item, dict) else getattr(item, "id", "")
-            )
+            event_id = str(item.get("id") if isinstance(item, dict) else getattr(item, "id", ""))
             if event_id:
                 actor_events_by_id[event_id] = item
         return select_actor_memory_context(
@@ -7686,9 +8851,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 for item in actor_memory["motivational"]
                 if item["source"] == "actor_state_fact"
             ]
-            actor_knowledge = [
-                dict(item["record"]) for item in actor_memory["semantic"]
-            ]
+            actor_knowledge = [dict(item["record"]) for item in actor_memory["semantic"]]
             events_context = [dict(item["record"]) for item in actor_memory["episodic"]]
             target_refs = sorted(
                 {f"actor:{actor_id}", *(f"actor:{item}" for item in interlocutor_actor_ids)}
@@ -7980,9 +9143,13 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 resolved_rules = (
                     effective_rule_context(character.campaign_id) if character.campaign_id else None
                 )
-            value["derived"] = derive_character_sheet(value["sheet"], rules=resolved_rules)
+            value["derived"] = derive_character_sheet(
+                value["sheet"],
+                rules=resolved_rules,
+                character_id=character.id,
+            )
         except RulesetUnavailableError as error:
-            value["derived"] = derive_character_sheet(value["sheet"])
+            value["derived"] = derive_character_sheet(value["sheet"], character_id=character.id)
             value["derived"]["unresolved_rules"] = sorted(
                 {*value["derived"].get("unresolved_rules", []), "ruleset_unavailable"}
             )
@@ -10827,6 +11994,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 combatant["conditions"] = list(sheet.get("conditions") or [])
                 combatant["condition_sources"] = timed_condition_sources(sheet)
                 combatant["speed_multiplier"] = source_speed_multiplier(sheet)
+                reconcile_tortle_shell_defense_projection(combatant, sheet)
                 current_dodge_transition = reconcile_dodge_lifecycle(combatant)
                 dodge_transition = (
                     prior_dodge_transition
@@ -12222,6 +13390,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         response_extra: dict[str, Any] | None = None,
         flatten_response_extra: bool = False,
         rule_receipts: list[dict[str, Any]] | None = None,
+        expected_campaign_revision: int | None = None,
     ) -> dict[str, Any]:
         def response_for(character: dict[str, Any]) -> dict[str, Any]:
             if response_extra is None:
@@ -12230,10 +13399,18 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 return {**character, **response_extra}
             return {"character": character, **response_extra}
 
+        if sheet is not None and operation != "character.content.apply":
+            _require_preserved_intrinsic_attack_provenance(before.sheet, sheet)
         if before.campaign_id is None:
             if sheet is not None:
                 require_engine_owned_short_rest_hit_die_state(
                     sheet,
+                    current_sheet=before.sheet,
+                )
+                _require_authoritative_background_state(
+                    sheet,
+                    character_id=before.id,
+                    secret=content_authority_secret,
                     current_sheet=before.sheet,
                 )
             updated = characters.update(
@@ -12266,10 +13443,14 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 sheet,
                 current_sheet=before.sheet,
             )
+            _require_authoritative_background_state(
+                sheet,
+                character_id=before.id,
+                secret=content_authority_secret,
+                current_sheet=before.sheet,
+            )
         candidate_sheet = deepcopy(sheet if sheet is not None else before.sheet)
-        candidate_window = dict(candidate_sheet.get("combat") or {}).get(
-            "short_rest_hit_dice"
-        )
+        candidate_window = dict(candidate_sheet.get("combat") or {}).get("short_rest_hit_dice")
         if isinstance(candidate_window, dict):
             # Only campaign_short_rest_hit_die may carry this decision window
             # forward. Every ordinary character write invalidates it, including
@@ -12331,6 +13512,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         StateMutationService(storage.database).replace(
             before.campaign_id,
             character_updates=[character_update],
+            expected_campaign_revision=expected_campaign_revision,
             operation=operation,
             actor=principal_id,
             branch_id=branch_id,
@@ -12354,7 +13536,42 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         list[CharacterStateUpdate],
         dict[str, Any],
     ]:
-        """Apply active encounter effect dependencies before one atomic commit."""
+        """Reconcile card and encounter dependencies before one atomic commit."""
+
+        updates = list(character_updates or [])
+        if updates:
+            # Narrative spell effects carry durable source links on actor cards,
+            # without an encounter registry. They must end on the same commit as
+            # their source concentration, including time-driven incapacitation.
+            campaign_actors = {
+                actor.id: actor for actor in characters.list(campaign_id=campaign.id)
+            }
+            by_actor_id = {item.character_id: item for item in updates}
+            candidate_sheets = {
+                actor_id_value: (
+                    by_actor_id[actor_id_value].sheet
+                    if actor_id_value in by_actor_id
+                    else actor.sheet
+                )
+                for actor_id_value, actor in campaign_actors.items()
+            }
+            card_dependencies = reconcile_source_effect_dependencies(candidate_sheets)
+            for actor_id_value in card_dependencies["changed_actor_ids"]:
+                sheet = validate_character_sheet(card_dependencies["sheets"][actor_id_value])
+                existing = by_actor_id.get(actor_id_value)
+                if existing is not None:
+                    updates[updates.index(existing)] = replace(existing, sheet=sheet)
+                else:
+                    actor = campaign_actors[actor_id_value]
+                    updates.append(
+                        CharacterStateUpdate(
+                            character_id=actor_id_value,
+                            sheet=sheet,
+                            notes=validate_character_notes(actor.notes),
+                            expected_revision=actor.revision,
+                        )
+                    )
+            character_updates = updates
 
         source_state = (
             deepcopy(campaign_state)
@@ -15781,6 +16998,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 elapsed_duration = advance_elapsed_effect_durations(
                     sheet,
                     elapsed_ticks=elapsed_ticks,
+                    advance_breathing=False,
                 )
                 sheet = elapsed_duration["sheet"]
                 actor_advanced.extend(elapsed_duration["advanced"])
@@ -15825,6 +17043,9 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 list(CHASE_BOUNDARY_IDS),
                 "chase.turn",
             )
+        )
+        next_state, character_updates, _ = reconcile_actor_effect_dependencies(
+            campaign, next_state, character_updates, {}
         )
         updated_actor = current_actor
         for character_update in character_updates:
@@ -17714,6 +18935,14 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         ]
         source_duration_expired: list[str] = []
         for target_id, sheet in list(source_sheets.items()):
+            if elapsed_ticks:
+                # Consume the one real clock interval before resolving the new
+                # turn. Turn starts themselves never spend grace rounds.
+                sheet = advance_breathing_rounds(
+                    sheet,
+                    rounds=elapsed_ticks,
+                    defer_drop_until_turn_start=True,
+                )["sheet"]
             for source_actor_id in source_turn_actor_ids:
                 source_duration = advance_source_turn_effect_durations(
                     sheet,
@@ -17780,13 +19009,19 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             if target_id in started_effects_by_actor:
                 expired.extend(started_effects_by_actor[target_id]["expired"])
             if round_changed:
-                rounded = advance_effect_durations(sheet, period="round")
+                rounded = advance_effect_durations(
+                    sheet,
+                    period="round",
+                    advance_breathing=False,
+                )
                 sheet = rounded["sheet"]
                 expired.extend(rounded["expired"])
             if elapsed_ticks:
                 minutes = advance_elapsed_effect_durations(
                     sheet,
                     elapsed_ticks=elapsed_ticks,
+                    # Breathing consumed this interval before the turn-start pass.
+                    advance_breathing=False,
                 )
                 sheet = minutes["sheet"]
                 expired.extend(minutes["expired"])
@@ -17870,6 +19105,10 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     "actor_id": actor_id,
                     "round": int(next_state["combat"].get("round", 1) or 1),
                 }
+
+        next_state, combat_updates, _ = reconcile_actor_effect_dependencies(
+            campaign, next_state, combat_updates, {}
+        )
 
         def turn_end_response(revisions: list[Any]) -> dict[str, Any]:
             response = {
@@ -18203,6 +19442,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     sheet,
                     period=effect_period,
                     amount=amount,
+                    advance_breathing=not bool(elapsed_ticks and effect_period == "round"),
                 )
                 extension = apply_rule_event(
                     result["sheet"],
@@ -18230,6 +19470,9 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             )
             advanced[character.id] = list(dict.fromkeys(character_advanced))
             expired[character.id] = list(dict.fromkeys(character_expired))
+        next_state, updates, _ = reconcile_actor_effect_dependencies(
+            campaign, next_state, updates, {}
+        )
         mutation_required = bool(updates or time_transition is not None or world_state_changed)
 
         def clock_advance_response(revisions: list[Any]) -> dict[str, Any]:
@@ -18730,7 +19973,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 if spell_result.get("status") != "committed":
                     raise CombatEngineError("Shield has an unresolved rule choice")
                 target["sheet"] = spell_result["sheet"]
-                target["derived"] = derive_character_sheet(target["sheet"])
+                target["derived"] = derive_character_sheet(target["sheet"], character_id=actor_id)
                 record_combat_spell_cast(
                     next_encounter,
                     actor_id=actor_id,
@@ -18756,7 +19999,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 if activity_result.get("status") != "committed":
                     raise CombatEngineError("reviewed defensive activity could not be consumed")
                 target["sheet"] = activity_result["sheet"]
-                target["derived"] = derive_character_sheet(target["sheet"])
+                target["derived"] = derive_character_sheet(target["sheet"], character_id=actor_id)
             else:
                 raise CombatEngineError("defensive reaction kind is not executable")
             attack = apply_attack_ac_bonus(
@@ -19205,6 +20448,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             "dash",
             "disengage",
             "dodge",
+            "emerge_shell",
             "escape",
             "help",
             "hide",
@@ -19213,6 +20457,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             "improvise",
             "ready",
             "search",
+            "shell_defense",
             "shake_hypnotic_pattern",
             "stabilize",
             "study",
@@ -19446,6 +20691,19 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         source_condition = ""
         source_condition_ruling = None
         hypnotic_target_record = None
+        shell_defense_record = None
+        shell_defense_sheet = None
+        if normalized_action in {"shell_defense", "emerge_shell"}:
+            if target_id is not None or trigger is not None or payload:
+                raise CombatEngineError(
+                    f"{normalized_action} does not accept a target, trigger, or payload"
+                )
+            shell_defense_record = characters.get(actor_id)
+            shell_defense_sheet = (
+                enter_tortle_shell_defense(shell_defense_record.sheet)
+                if normalized_action == "shell_defense"
+                else emerge_tortle_shell_defense(shell_defense_record.sheet)
+            )
         if normalized_action == "shake_hypnotic_pattern":
             if target_id is None or target_id == actor_id:
                 raise CombatEngineError("shaking Hypnotic Pattern requires another target creature")
@@ -19626,6 +20884,26 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             trigger=trigger,
             payload=engine_payload,
         )
+        if shell_defense_record is not None and shell_defense_sheet is not None:
+            sync_combatant_conditions(next_encounter, actor_id, shell_defense_sheet)
+            character_updates.append(
+                CharacterStateUpdate(
+                    character_id=actor_id,
+                    sheet=validate_character_sheet(shell_defense_sheet),
+                    notes=validate_character_notes(shell_defense_record.notes),
+                    expected_revision=shell_defense_record.revision,
+                )
+            )
+            withdrawn = normalized_action == "shell_defense"
+            condition_resolution = {
+                "kind": "tortle_shell_defense",
+                "withdrawn": withdrawn,
+                "armor_class": derive_character_sheet(
+                    shell_defense_sheet, character_id=actor_id
+                )["armor_class"],
+                "speed_multiplier": source_speed_multiplier(shell_defense_sheet),
+                "conditions": list(shell_defense_sheet.get("conditions") or []),
+            }
         if hypnotic_target_record is not None:
             ended_hypnotic = end_hypnotic_pattern_effects(
                 hypnotic_target_record.sheet,
@@ -19745,6 +21023,8 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             boundary_ids.append("dnd5e.core.ready.action")
         if normalized_action == "shake_hypnotic_pattern":
             boundary_ids.append(CORE_HYPNOTIC_PATTERN_MECHANIC_ID)
+        if normalized_action in {"shell_defense", "emerge_shell"}:
+            boundary_ids.append(CORE_TORTLE_SHELL_DEFENSE_MECHANIC_ID)
         acting_combatant = next(
             item for item in encounter.get("combatants", []) if item.get("actor_id") == actor_id
         )
@@ -20896,7 +22176,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             return combat_response(campaign_id, principal_id, response)
         if hypnotic_pattern:
             assert hypnotic_pattern_target is not None
-            derived_caster = derive_character_sheet(applied["sheet"])
+            derived_caster = derive_character_sheet(applied["sheet"], character_id=actor_id)
             save_dc = dict(derived_caster.get("spellcasting") or {}).get("save_dc")
             if save_dc is None:
                 raise CombatEngineError(
@@ -20942,7 +22222,9 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 target_sheet = deepcopy(final_sheets.get(target_id, target_record.sheet))
                 target_actor = combat_actor_snapshot(target_id)
                 target_actor["sheet"] = target_sheet
-                target_actor["derived"] = derive_character_sheet(target_sheet)
+                target_actor["derived"] = derive_character_sheet(
+                    target_sheet, character_id=target_id
+                )
                 resolved_target = resolve_hypnotic_pattern_target(
                     target_actor,
                     caster_id=actor_id,
@@ -21139,7 +22421,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 healing = dict(structured_resolution.get("healing") or {})
                 ability_modifier = 0
                 if healing.get("add_spellcasting_modifier"):
-                    derived_caster = derive_character_sheet(applied["sheet"])
+                    derived_caster = derive_character_sheet(applied["sheet"], character_id=actor_id)
                     ability = str(
                         dict(derived_caster.get("spellcasting") or {}).get("ability") or ""
                     )
@@ -21220,7 +22502,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 actor_level=int(applied["sheet"].get("progression", {}).get("level", 1) or 1),
             )
             damage_roll = asdict(roll(damage_expression))
-            derived_caster = derive_character_sheet(applied["sheet"])
+            derived_caster = derive_character_sheet(applied["sheet"], character_id=actor_id)
             save_dc = save_spec.get("save_dc_override")
             if save_dc is None:
                 save_dc = dict(derived_caster.get("spellcasting") or {}).get("save_dc")
@@ -21241,7 +22523,9 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 target_sheet = deepcopy(final_sheets.get(target_id, target_record.sheet))
                 target_actor = combat_actor_snapshot(target_id)
                 target_actor["sheet"] = target_sheet
-                target_actor["derived"] = derive_character_sheet(target_sheet)
+                target_actor["derived"] = derive_character_sheet(
+                    target_sheet, character_id=target_id
+                )
                 cover_bonus = {
                     "half": 2,
                     "three_quarters": 5,
@@ -22214,7 +23498,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 "include_proficiency": True,
             }:
                 raise CombatEngineError("Dragonborn Breath Weapon has an invalid save DC formula")
-            source_derived = derive_character_sheet(current.sheet)
+            source_derived = derive_character_sheet(current.sheet, character_id=current.id)
             breath_save_dc = (
                 8
                 + int(source_derived["ability_modifiers"]["constitution"])
@@ -22593,7 +23877,9 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             if legendary_kind == "skill_check":
                 source_actor = combat_actor_snapshot(actor_id)
                 source_actor["sheet"] = applied["sheet"]
-                source_actor["derived"] = derive_character_sheet(applied["sheet"])
+                source_actor["derived"] = derive_character_sheet(
+                    applied["sheet"], character_id=actor_id
+                )
                 core_effect = {
                     "kind": "legendary_action",
                     "effect_kind": "skill_check",
@@ -22699,7 +23985,9 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         if turn_undead:
             source_actor = combat_actor_snapshot(actor_id)
             source_actor["sheet"] = applied["sheet"]
-            source_actor["derived"] = derive_character_sheet(applied["sheet"])
+            source_actor["derived"] = derive_character_sheet(
+                applied["sheet"], character_id=actor_id
+            )
             settled_turn = resolve_turn_undead_to_sheets(
                 source_actor,
                 turn_targets,
@@ -22767,7 +24055,9 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             assert divine_spark_target is not None
             source_actor = combat_actor_snapshot(actor_id)
             source_actor["sheet"] = applied["sheet"]
-            source_actor["derived"] = derive_character_sheet(applied["sheet"])
+            source_actor["derived"] = derive_character_sheet(
+                applied["sheet"], character_id=actor_id
+            )
             settled_spark = resolve_divine_spark_to_sheet(
                 source_actor,
                 divine_spark_target,
@@ -23071,6 +24361,185 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             rule_receipts=list(result.get("rule_receipts") or []),
         )
         return check_response(list(revisions_result or []))
+
+    def character_source_feature(
+        campaign_id: str,
+        actor_id: str,
+        feature_id: str,
+        capability: str,
+        settlement_ref: str,
+        fact_key: str,
+        principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
+        expected_revision: int | None = None,
+        branch_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Resolve a source-bound narrative feature from one campaign-authored fact."""
+
+        access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
+        actor = require_campaign_actor(campaign_id, actor_id)
+        normalized_capability = str(capability or "").strip().casefold().replace("-", "_")
+        if normalized_capability not in WATCHERS_EYE_CAPABILITIES:
+            raise ValueError(
+                "Watcher's Eye capability must be one of: "
+                + ", ".join(sorted(WATCHERS_EYE_CAPABILITIES))
+            )
+        normalized_settlement_ref = normalize_context_entity_ref(
+            settlement_ref,
+            field="Watcher's Eye settlement_ref",
+        )
+        if not normalized_settlement_ref.startswith("location:"):
+            raise ValueError("Watcher's Eye settlement_ref must use location:<id>")
+        normalized_fact_key = str(fact_key or "").strip()
+        if not normalized_fact_key or len(normalized_fact_key) > 500:
+            raise ValueError("Watcher's Eye fact_key must contain 1 to 500 characters")
+        require_write_contract(expected_revision, idempotency_key)
+        resolved_branch_id = require_current_branch(campaign_id, branch_id)
+        feature, binding = executable_watchers_eye_feature(
+            actor,
+            feature_id,
+            campaign_id=campaign_id,
+            branch_id=resolved_branch_id,
+        )
+        payload = {
+            "actor_id": actor_id,
+            "feature_id": str(feature["id"]),
+            "capability": normalized_capability,
+            "settlement_ref": normalized_settlement_ref,
+            "fact_key": normalized_fact_key,
+            "branch_id": resolved_branch_id,
+        }
+        scope = f"source-feature:{campaign_id}:{resolved_branch_id}:{principal_id}"
+        replay = replay_idempotent(scope, idempotency_key, payload)
+        if replay is not None:
+            return replay
+        campaign = campaigns.get(campaign_id)
+        if dict(campaign.state or {}).get("combat", {}).get("active", False):
+            raise CombatEngineError("source-bound narrative features are unavailable in combat")
+        if campaign.revision != expected_revision:
+            raise ValueError(
+                "campaign revision conflict: "
+                f"expected {expected_revision}, found {campaign.revision}"
+            )
+        fact_matches = [
+            item
+            for item in memories.list(
+                campaign_id,
+                branch_id=resolved_branch_id,
+                include_inactive=False,
+            )
+            if item.fact_key == normalized_fact_key
+        ]
+        if len(fact_matches) > 1:
+            raise RulesetUnavailableError("fact_key resolves to multiple active campaign facts")
+        fact = fact_matches[0] if fact_matches else None
+        outcome = "pending_gm_ruling"
+        detail = ""
+        fact_revision_id = ""
+        if fact is not None:
+            expected_predicate = f"dnd5e.watchers_eye.{normalized_capability}"
+            metadata_contract = dict(fact.metadata or {}).get(WATCHERS_EYE_FACT_METADATA_KEY)
+            if (
+                fact.kind != "source_fact"
+                or fact.subject_ref != normalized_settlement_ref
+                or fact.predicate != expected_predicate
+                or not isinstance(metadata_contract, dict)
+                or set(metadata_contract) != {"schema_version", "capability", "outcome"}
+                or metadata_contract.get("schema_version") != WATCHERS_EYE_FACT_SCHEMA_VERSION
+                or metadata_contract.get("capability") != normalized_capability
+                or metadata_contract.get("outcome") not in {"granted", "unavailable"}
+            ):
+                raise RulesetUnavailableError(
+                    "campaign fact does not satisfy the Watcher's Eye source-fact contract"
+                )
+            outcome = str(metadata_contract["outcome"])
+            detail = fact.content
+            fact_revision_id = fact.revision_id
+        result = {
+            "feature_id": str(feature["id"]),
+            "feature_name": WATCHERS_EYE_FEATURE_NAME,
+            "capability": normalized_capability,
+            "settlement_ref": normalized_settlement_ref,
+            "fact_key": normalized_fact_key,
+            "outcome": outcome,
+            "detail": detail,
+            "fact_revision_id": fact_revision_id,
+        }
+        rules = effective_rule_context(campaign_id, branch_id=resolved_branch_id)
+        receipt = {
+            "ruleset_fingerprint": rules.fingerprint,
+            "mechanic_id": CORE_WATCHERS_EYE_MECHANIC_ID,
+            "event": "character.source_feature.watchers_eye",
+            "actor_id": actor_id,
+            "feature_id": str(feature["id"]),
+            "artifact_id": str(binding["artifact_id"]),
+            "pack_id": str(binding["pack_id"]),
+            "pack_version": str(binding["pack_version"]),
+            "pack_checksum": str(binding["pack_checksum"]),
+            "addon_id": str(binding["addon_id"]),
+            "addon_version": str(binding["addon_version"]),
+            "addon_checksum": str(binding["addon_checksum"]),
+            "reviewed_content_hash": str(binding["reviewed_content_hash"]),
+            "capability": normalized_capability,
+            "settlement_ref": normalized_settlement_ref,
+            "fact_key": normalized_fact_key,
+            "fact_revision_id": fact_revision_id,
+            "outcome": outcome,
+            "rule_refs": list(binding["rule_refs"]),
+        }
+        resolution_id = f"resolution-{uuid4().hex}"
+        next_state = deepcopy(dict(campaign.state or {}))
+        next_state["resolution_log"] = [
+            *list(next_state.get("resolution_log") or []),
+            {
+                "id": resolution_id,
+                "thread_id": resolution_id,
+                "event_sequence": 1,
+                "type": "source_feature",
+                "operation": "character.source_feature.watchers_eye",
+                "actor_id": actor_id,
+                "audience": {
+                    "scope": "actors",
+                    "actor_refs": [actor_id],
+                    "disclosure": "private",
+                },
+                "branch_id": resolved_branch_id,
+                "campaign_revision": campaign.revision + 1,
+                "result": result,
+            },
+        ][-100:]
+
+        def source_feature_response(revisions: list[Any]) -> dict[str, Any]:
+            return {
+                **(
+                    {"status": "committed"}
+                    if outcome != "pending_gm_ruling"
+                    else _ruling_status("pending_ruling", "agent_dm_adjudication")
+                ),
+                "outcome": outcome,
+                "resolution_id": resolution_id,
+                "result": result,
+                "campaign_revision": campaign.revision + 1,
+                "revisions": [asdict(item) for item in revisions],
+                "rule_receipts": [receipt],
+            }
+
+        revisions_result = StateMutationService(storage.database).replace(
+            campaign_id,
+            campaign_state=validate_party_state(next_state),
+            expected_campaign_revision=campaign.revision,
+            operation="character.source_feature.watchers_eye",
+            actor=principal_id,
+            branch_id=resolved_branch_id,
+            idempotency_key=idempotency_key,
+            idempotency_write=IdempotencyWrite(
+                scope=scope,
+                payload=payload,
+                response=source_feature_response,
+            ),
+            rule_receipts=[receipt],
+        )
+        return source_feature_response(list(revisions_result or []))
 
     def character_heroic_inspiration_reroll(
         campaign_id: str,
@@ -23947,8 +25416,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             if normalized_ability not in allowed_search_checks:
                 if search_ruleset == "2014":
                     raise CombatEngineError(
-                        "2014 Search requires Wisdom (Perception) or "
-                        "Intelligence (Investigation)"
+                        "2014 Search requires Wisdom (Perception) or Intelligence (Investigation)"
                     )
                 raise CombatEngineError(
                     "2024 Search requires a Wisdom check, optionally using Insight, "
@@ -24102,9 +25570,9 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 ruleset=ruleset,
             )
             if ruleset == "2014":
-                updated["sheet"].setdefault("combat", {})[
-                    "last_death_save_elapsed_tick"
-                ] = int(dict(next_state.get("game_time") or {}).get("elapsed_ticks", 0))
+                updated["sheet"].setdefault("combat", {})["last_death_save_elapsed_tick"] = int(
+                    dict(next_state.get("game_time") or {}).get("elapsed_ticks", 0)
+                )
                 updated["rule_receipts"] = [
                     *list(updated.get("rule_receipts") or []),
                     *core_receipts(
@@ -24611,7 +26079,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             def actor(self, actor_id: str) -> dict[str, Any]:
                 actor = combat_actor_snapshot(actor_id)
                 actor["sheet"] = deepcopy(self.sheet(actor_id))
-                actor["derived"] = derive_character_sheet(actor["sheet"])
+                actor["derived"] = derive_character_sheet(actor["sheet"], character_id=actor_id)
                 return actor
 
             def set_sheet(self, actor_id: str, sheet: dict[str, Any]) -> None:
@@ -26603,6 +28071,13 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             raise ValueError("idempotency_key is required for character creation")
         sheet_value = deepcopy(sheet or default_character_sheet())
         require_engine_owned_short_rest_hit_die_state(sheet_value)
+        _reject_new_intrinsic_attack_provenance(sheet_value)
+        _reject_new_tortle_natural_armor_provenance(sheet_value)
+        _require_authoritative_background_state(
+            sheet_value,
+            character_id=None,
+            secret=content_authority_secret,
+        )
         if campaign_id is not None:
             sheet_value["edition"] = campaign_rules_edition(campaign_id)
         sheet_value = finalize_actor_sheet_rulings(sheet_value, campaign_id)
@@ -26649,12 +28124,11 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         )
 
     def character_list(
-        campaign_id: str | None = None,
+        campaign_id: str,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
     ) -> list[dict[str, Any]]:
         """List bounded actor identities; use get/batch for full authorized cards."""
-        if campaign_id is not None:
-            access.require_campaign(campaign_id, principal_id)
+        access.require_campaign(campaign_id, principal_id)
         result: list[dict[str, Any]] = []
         for item in characters.list(system_id=DND5E.id, campaign_id=campaign_id):
             visible = visible_character_view(item, principal_id)
@@ -26703,13 +28177,27 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         if not idempotency_key:
             raise ValueError("idempotency_key is required for character instantiation")
         template = characters.get(template_id)
+        if template.campaign_id is not None:
+            raise ValueError("template_id must reference a global library actor")
         sheet = deepcopy(template.sheet)
         require_engine_owned_short_rest_hit_die_state(sheet)
+        _reject_new_intrinsic_attack_provenance(sheet)
+        _reject_new_tortle_natural_armor_provenance(sheet)
+        _require_authoritative_background_state(
+            sheet,
+            character_id=None,
+            secret=content_authority_secret,
+        )
         sheet["edition"] = campaign_rules_edition(campaign_id)
         sheet = finalize_actor_sheet_rulings(sheet, campaign_id)
         instance_name = name if name is not None else template.name
+        visible_template_notes = (
+            template.notes
+            if principal_id == LOCAL_SYSTEM_PRINCIPAL_ID
+            else default_character_notes()
+        )
         notes = canonical_character_notes(
-            template.notes,
+            visible_template_notes,
             character_type=template.character_type,
             name=instance_name,
             summary=template.summary,
@@ -26750,6 +28238,13 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             raise ValueError("idempotency_key is required for character build")
         sheet_value = deepcopy(sheet or default_character_sheet())
         require_engine_owned_short_rest_hit_die_state(sheet_value)
+        _reject_new_intrinsic_attack_provenance(sheet_value)
+        _reject_new_tortle_natural_armor_provenance(sheet_value)
+        _require_authoritative_background_state(
+            sheet_value,
+            character_id=None,
+            secret=content_authority_secret,
+        )
         sheet_value["edition"] = campaign_rules_edition(campaign_id)
         sheet_value = finalize_actor_sheet_rulings(sheet_value, campaign_id)
         normalized_sheet = validate_character_sheet(
@@ -26776,13 +28271,14 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
     ) -> dict[str, Any]:
         """Read one validated D&D character card."""
         current = characters.get(character_id)
-        if current.campaign_id is not None:
-            access.require_actor(
-                current.campaign_id,
-                current.id,
-                principal_id,
-                private=True,
-            )
+        if current.campaign_id is None:
+            return library_character_view(current, principal_id)
+        access.require_actor(
+            current.campaign_id,
+            current.id,
+            principal_id,
+            private=True,
+        )
         return character_view(current)
 
     @_agent_ruling_boundary
@@ -26798,6 +28294,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         response_extra: dict[str, Any] | None = None,
         flatten_response_extra: bool = False,
         rule_receipts: list[dict[str, Any]] | None = None,
+        expected_campaign_revision: int | None = None,
     ) -> dict[str, Any]:
         """Persist a D&D schema mutation with derived values recalculated."""
         current = characters.get(character_id)
@@ -26823,6 +28320,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             response_extra=response_extra,
             flatten_response_extra=flatten_response_extra,
             rule_receipts=rule_receipts,
+            expected_campaign_revision=expected_campaign_revision,
         )
 
     @public_tool()
@@ -26863,6 +28361,10 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         normalized_sheet = validate_character_sheet(
             sheet_value,
             rules=(effective_rule_context(current.campaign_id) if current.campaign_id else None),
+        )
+        _require_preserved_tortle_natural_armor_provenance(
+            current.sheet,
+            normalized_sheet,
         )
         normalized_notes = validate_character_notes(notes if notes is not None else current.notes)
         return update_character(
@@ -27554,6 +29056,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 duration_result["sheet"],
                 period="round",
                 amount=int(time_transition["elapsed_ticks"]),
+                advance_breathing=False,
             )
             extension = apply_rule_event(
                 round_result["sheet"],
@@ -27672,6 +29175,9 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 advanced[current.id] = list(dict.fromkeys(character_advanced))
             if character_expired:
                 expired[current.id] = list(dict.fromkeys(character_expired))
+        next_state, updates, _ = reconcile_actor_effect_dependencies(
+            campaign, next_state, updates, {}
+        )
         update_by_id = {item.character_id: item for item in updates}
         stream = active_random_stream()
         response = {
@@ -28288,6 +29794,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             elapsed_duration = advance_elapsed_effect_durations(
                 sheet,
                 elapsed_ticks=elapsed_ticks,
+                advance_breathing=False,
             )
             sheet = elapsed_duration["sheet"]
             actor_advanced.extend(elapsed_duration["advanced"])
@@ -28835,6 +30342,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 duration["sheet"],
                 period="round",
                 amount=int(time_transition["elapsed_ticks"]),
+                advance_breathing=False,
             )
             extension = apply_rule_event(
                 round_duration["sheet"],
@@ -28919,8 +30427,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     expected_character_revision=current.revision + 1,
                     song_of_rest_die_sides=(
                         validate_song_of_rest_source(song_source_sheet)
-                        if normalized_rest_type == "short_rest"
-                        and song_source_sheet is not None
+                        if normalized_rest_type == "short_rest" and song_source_sheet is not None
                         else None
                     ),
                     song_of_rest_used=applied.get("song_of_rest") is not None,
@@ -28985,6 +30492,9 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             if actor_expired:
                 expired[current.id] = list(dict.fromkeys(actor_expired))
         stream = active_random_stream()
+        next_state, updates, _ = reconcile_actor_effect_dependencies(
+            campaign, next_state, updates, {}
+        )
         base_response = {
             "status": "committed",
             "rest_type": normalized_rest_type,
@@ -29074,10 +30584,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             "expected_character_revision": expected_character_revision,
             "branch_id": resolved_branch_id,
         }
-        scope = (
-            f"campaign-short-rest-hit-die:{campaign_id}:"
-            f"{resolved_branch_id}:{principal_id}"
-        )
+        scope = f"campaign-short-rest-hit-die:{campaign_id}:{resolved_branch_id}:{principal_id}"
         replay = replay_idempotent(scope, idempotency_key, request_payload)
         if replay is not None:
             return replay
@@ -29095,9 +30602,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 "character revision conflict: "
                 f"expected {expected_character_revision}, found {current.revision}"
             )
-        choice_window = dict(current.sheet.get("combat") or {}).get(
-            "short_rest_hit_dice"
-        )
+        choice_window = dict(current.sheet.get("combat") or {}).get("short_rest_hit_dice")
         if not isinstance(choice_window, dict):
             raise CombatEngineError("no sequential Hit Die choice is open")
         if int(choice_window.get("expected_character_revision", -1)) != current.revision:
@@ -29159,9 +30664,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 rest_completed_elapsed_ticks=rest_completed_elapsed_ticks,
                 rules=rest_rules,
             )
-            continued_window = dict(applied["sheet"].get("combat") or {}).get(
-                "short_rest_hit_dice"
-            )
+            continued_window = dict(applied["sheet"].get("combat") or {}).get("short_rest_hit_dice")
             if isinstance(continued_window, dict):
                 continued_window["expected_character_revision"] = current.revision + 1
             next_sheet = validate_character_sheet(applied["sheet"])
@@ -29491,7 +30994,9 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 raise ValueError(str(exc)) from exc
             source_actor = combat_actor_snapshot(character_id)
             source_actor["sheet"] = applied["sheet"]
-            source_actor["derived"] = derive_character_sheet(applied["sheet"])
+            source_actor["derived"] = derive_character_sheet(
+                applied["sheet"], character_id=character_id
+            )
             target_actor = combat_actor_snapshot(target_id)
             settled_spark = resolve_divine_spark_to_sheet(
                 source_actor,
@@ -29809,9 +31314,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         operation = "character.death_save.resolve"
         branch_id = require_current_branch(current.campaign_id, None)
         request_payload = {"operation": operation, "character_id": current.id}
-        scope = (
-            f"character-write:{current.campaign_id}:{branch_id}:{principal_id}:{current.id}"
-        )
+        scope = f"character-write:{current.campaign_id}:{branch_id}:{principal_id}:{current.id}"
         replay = replay_idempotent(scope, idempotency_key, request_payload)
         if replay is not None:
             return replay
@@ -29846,13 +31349,9 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                         "the request"
                     )
             elapsed_tick = int(
-                dict(dict(campaign.state or {}).get("game_time") or {}).get(
-                    "elapsed_ticks", 0
-                )
+                dict(dict(campaign.state or {}).get("game_time") or {}).get("elapsed_ticks", 0)
             )
-            last_tick = dict(current.sheet.get("combat") or {}).get(
-                "last_death_save_elapsed_tick"
-            )
+            last_tick = dict(current.sheet.get("combat") or {}).get("last_death_save_elapsed_tick")
             require_death_save_eligibility(current.sheet)
             if last_tick is not None and int(last_tick) >= elapsed_tick:
                 raise CombatEngineError(
@@ -29866,9 +31365,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         )
         rule_receipts: list[dict[str, Any]] = []
         if elapsed_tick is not None:
-            applied["sheet"].setdefault("combat", {})[
-                "last_death_save_elapsed_tick"
-            ] = elapsed_tick
+            applied["sheet"].setdefault("combat", {})["last_death_save_elapsed_tick"] = elapsed_tick
             rule_receipts = core_receipts(
                 effective_rule_context(current.campaign_id, branch_id=branch_id),
                 ["dnd5e.core.mcp.death_save_turn_cadence"],
@@ -29979,6 +31476,88 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             idempotency_key=idempotency_key,
             payload={"source_actor_id": source.id, "reason": normalized_reason},
             response_extra={"result": result},
+        )
+
+    def character_breathing_transition(
+        character_id: str,
+        *,
+        can_breathe: bool,
+        choking: bool = False,
+        principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
+        expected_revision: int | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Record an explicit environmental breathing transition outside combat."""
+
+        current = characters.get(character_id)
+        require_character_control(current, principal_id)
+        require_outside_active_combat(current, "breathing transition")
+        if current.campaign_id is None:
+            raise CombatEngineError("breathing transitions require a campaign-bound actor")
+        access.require_campaign(current.campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
+        if not isinstance(can_breathe, bool):
+            raise ValueError("can_breathe must be a boolean")
+        if not isinstance(choking, bool):
+            raise ValueError("choking must be a boolean")
+        if can_breathe and choking:
+            raise ValueError("choking cannot be combined with can_breathe")
+        branch_id = require_current_branch(current.campaign_id, None)
+        request_payload = {
+            "operation": "character.breathing.transition",
+            "character_id": current.id,
+            "can_breathe": can_breathe,
+            "choking": choking,
+        }
+        scope = f"character-write:{current.campaign_id}:{branch_id}:{principal_id}:{current.id}"
+        replay = replay_idempotent(scope, idempotency_key, request_payload)
+        if replay is not None:
+            return replay
+        try:
+            applied = (
+                restore_breathing(current.sheet)
+                if can_breathe
+                else begin_holding_breath(current.sheet, choking=choking)
+            )
+        except ValueError as error:
+            raise CombatEngineError(str(error)) from error
+        result = {key: value for key, value in applied.items() if key != "sheet"}
+        normalized_sheet = finalize_actor_sheet_rulings(
+            applied["sheet"], current.campaign_id
+        )
+        normalized_sheet = validate_character_sheet(
+            normalized_sheet,
+            rules=effective_rule_context(current.campaign_id),
+        )
+        if expected_revision is None or not idempotency_key:
+            raise ValueError(
+                "expected_revision and idempotency_key are required for character writes"
+            )
+        branch_id = require_current_branch(current.campaign_id, None)
+        update = CharacterStateUpdate(
+            character_id=current.id,
+            sheet=normalized_sheet,
+            notes=validate_character_notes(current.notes),
+            expected_revision=expected_revision,
+        )
+        response_fields = {
+            "character": character_view(
+                replace(current, sheet=normalized_sheet, revision=current.revision + 1)
+            ),
+            "result": result,
+        }
+        campaign = campaigns.get(current.campaign_id)
+        return commit_campaign_state(
+            campaign,
+            None,
+            operation="character.breathing.transition",
+            principal_id=principal_id,
+            branch_id=branch_id,
+            idempotency_key=idempotency_key,
+            scope=scope,
+            payload=request_payload,
+            response_fields=response_fields,
+            character_updates=[update],
+            expected_campaign_revision=campaign.revision,
         )
 
     def character_apply_raise_dead(
@@ -30976,9 +32555,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 validate_actor_knowledge_source_audience(
                     campaign_id,
                     branch_id,
-                    source_event_id=(
-                        str(source_event_id) if source_event_id is not None else None
-                    ),
+                    source_event_id=(str(source_event_id) if source_event_id is not None else None),
                     event_audience_scope=(
                         None if source_event_id is not None else event_audience_scope
                     ),
@@ -31389,9 +32966,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
     ) -> list[dict[str, Any]]:
         """List audited reversible campaign and character mutations."""
         access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
-        return [
-            asdict(item) for item in revisions.history(campaign_id, limit=limit, offset=offset)
-        ]
+        return [asdict(item) for item in revisions.history(campaign_id, limit=limit, offset=offset)]
 
     def state_undo(
         campaign_id: str,
@@ -31811,9 +33386,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
     ) -> dict[str, Any]:
         """Retrieve current continuity plus pinned, source-exact DM module context."""
-        continuity_purposes = NPC_TURN_PURPOSES | BOUNDED_EVALUATION_PURPOSES | {
-            "actor_memory"
-        }
+        continuity_purposes = NPC_TURN_PURPOSES | BOUNDED_EVALUATION_PURPOSES | {"actor_memory"}
         if purpose not in continuity_purposes:
             raise ValueError(f"unsupported continuity context purpose: {purpose}")
         live_turn_purposes = {
@@ -31871,9 +33444,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             candidate = str(item or "").strip()
             if candidate.startswith("event:"):
                 if re.fullmatch(r"event:[^\s:][^\s]{0,279}", candidate) is None:
-                    raise ValueError(
-                        "related_refs[] event refs must use event:<non-empty-id>"
-                    )
+                    raise ValueError("related_refs[] event refs must use event:<non-empty-id>")
                 resolved_related_refs.add(candidate)
             else:
                 resolved_related_refs.add(
@@ -32065,10 +33636,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             )
             memory_refs = {
                 *resolved_related_refs,
-                *(
-                    f"event:{item}"
-                    for item in normalized_stimulus.get("source_event_ids") or []
-                ),
+                *(f"event:{item}" for item in normalized_stimulus.get("source_event_ids") or []),
             }
             actor_memory = actor_memory_projection(
                 campaign_id=campaign_id,
@@ -32301,9 +33869,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 "retrieval": {
                     **dict(result.get("retrieval") or {}),
                     "actor_state_count": len(actor_state),
-                    "actor_memory_selected_count": actor_memory["diagnostics"][
-                        "selected_count"
-                    ],
+                    "actor_memory_selected_count": actor_memory["diagnostics"]["selected_count"],
                     "conversation_event_count": len(conversation_events),
                 },
             }
@@ -34866,8 +36432,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             values = [
                 asdict(hit)
                 for hit in hits
-                if hit.metadata.get("visibility", "restricted")
-                in PLAYER_MODULE_VISIBILITY_SCOPES
+                if hit.metadata.get("visibility", "restricted") in PLAYER_MODULE_VISIBILITY_SCOPES
             ]
         values, page = _bounded_page(
             values,
@@ -35083,10 +36648,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             ]
         values, pagination = _bounded_page(
             values,
-            scope=(
-                f"rule_search:{campaign_id}:{principal_id}:{query}:"
-                f"{json_sha256(filter_data)}"
-            ),
+            scope=(f"rule_search:{campaign_id}:{principal_id}:{query}:{json_sha256(filter_data)}"),
             limit=top_k,
             cursor=cursor,
         )
@@ -37433,6 +38995,12 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         provenance: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create or replace an inactive draft and validate its safe D&D mechanic IR."""
+        definition_id = str(manifest.get("id") or "")
+        _validate_unreserved_rule_definition_identity(definition_id)
+        _validate_reserved_official_artifact_identities(
+            definition_id=definition_id,
+            artifacts=(item for item in artifacts or [] if isinstance(item, dict)),
+        )
         return save_rule_pack_draft(
             manifest=manifest,
             artifacts=artifacts,
@@ -37448,6 +39016,12 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         provenance: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Draft a pack whose citations are resolved from imported rule chunks."""
+        definition_id = str(manifest.get("id") or "")
+        _validate_unreserved_rule_definition_identity(definition_id)
+        _validate_reserved_official_artifact_identities(
+            definition_id=definition_id,
+            artifacts=(item for item in artifacts or [] if isinstance(item, dict)),
+        )
         source = rules.source(source_id)
         if source["system_id"] != DND5E.id:
             raise ValueError("rule source is not a D&D source")
@@ -37570,6 +39144,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         pack_id = str(manifest.get("id") or "").strip()
         if not pack_id:
             raise ValueError("manifest.id is required")
+        _validate_unreserved_rule_definition_identity(pack_id)
         payload = {
             "job_id": job_id,
             "operation": "compile",
@@ -37617,6 +39192,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
 
     def rule_pack_install(pack_id: str, version: str) -> dict[str, Any]:
         """Install one validated immutable version without enabling it for a campaign."""
+        _validate_unreserved_rule_definition_identity(pack_id)
         return asdict(rule_packs.install(pack_id, version))
 
     def rule_pack_list(pack_id: str | None = None) -> list[dict[str, Any]]:
@@ -37852,6 +39428,8 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             "options": options or {},
             "branch_id": resolved_branch_id,
         }
+        if enabled:
+            verified_reserved_official_rule_definition(pack_id, version)
         scope = f"campaign-rule-pack-set:{campaign_id}:{resolved_branch_id}:{principal_id}"
         replay = replay_idempotent(scope, idempotency_key, payload)
         if replay is not None:
@@ -38142,6 +39720,214 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             "rule_refs": list(artifact.get("rule_refs") or []),
             "source_citations": deepcopy(list(artifact.get("source_citations") or [])),
         }
+
+    def trusted_watchers_eye_binding(
+        campaign_id: str,
+        branch_id: str,
+        pack_id: str,
+        version: str,
+        artifact: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """Accept Watcher's Eye only from the exact built-in official archive lock."""
+
+        if campaign_rules_edition(campaign_id) != "2014" or pack_id != SCAG_RULE_PACK_ID:
+            return None
+        binding = _watchers_eye_source_binding(artifact)
+        if binding is None:
+            return None
+        # Installed IDs and recorded provenance alone cannot attest an archive
+        # after its persisted payload changes; verify the independent source.
+        verified_definition = verified_reserved_official_rule_definition(pack_id, version)
+        catalog_matches = [
+            dict(item)
+            for item in official_expansion_catalog("2014")
+            if str(item.get("id") or "") == SCAG_OFFICIAL_ADDON_ID
+        ]
+        if len(catalog_matches) != 1:
+            return None
+        activations = [
+            item
+            for item in addons.activations(campaign_id, branch_id=branch_id)
+            if item.addon_id == SCAG_OFFICIAL_ADDON_ID and item.enabled
+        ]
+        if len(activations) != 1:
+            return None
+        activation = activations[0]
+        catalog_entry = catalog_matches[0]
+        if activation.version != str(
+            catalog_entry.get("version") or ""
+        ) or activation.checksum != str(catalog_entry.get("checksum") or ""):
+            return None
+        try:
+            installed_addon = addons.get_version(activation.addon_id, activation.version)
+        except LookupError:
+            return None
+        if installed_addon.status != "installed" or installed_addon.checksum != activation.checksum:
+            return None
+        try:
+            installed = rule_packs.get_version(pack_id, version)
+        except LookupError:
+            return None
+        component_matches = [
+            dict(item)
+            for item in activation.component_locks
+            if str(item.get("kind") or "") == "rule_pack"
+            and str(item.get("id") or "") == pack_id
+            and str(item.get("version") or "") == version
+        ]
+        if len(component_matches) != 1:
+            return None
+        pack_provenance = dict(rule_packs.provenance(pack_id, version) or {})
+        definition_provenance = dict(pack_provenance.get("content_definition") or {})
+        # Activation locks preserve the archive's source identity. The canonical
+        # verifier above separately proves the dependency-rebound runtime, whose
+        # definition checksum need not equal that immutable source checksum.
+        component_checksum = str(definition_provenance.get("definition_checksum") or "")
+        if verified_definition is not None:
+            component_checksum = str(verified_definition["definition"]["definition_checksum"])
+        if (
+            str(definition_provenance.get("package_id") or "") != activation.addon_id
+            or str(definition_provenance.get("package_version") or "") != activation.version
+            or str(definition_provenance.get("package_checksum") or "") != activation.checksum
+            or component_checksum != str(component_matches[0].get("checksum") or "")
+        ):
+            return None
+        installed_matches = [
+            item
+            for item in installed.artifacts
+            if str(item.get("id") or "") == binding["artifact_id"]
+        ]
+        if len(installed_matches) != 1 or content_fingerprint(
+            installed_matches[0]
+        ) != content_fingerprint(artifact):
+            return None
+        return {
+            **binding,
+            "pack_id": pack_id,
+            "pack_version": version,
+            "pack_checksum": installed.checksum,
+            "addon_id": activation.addon_id,
+            "addon_version": activation.version,
+            "addon_checksum": activation.checksum,
+        }
+
+    def watchers_eye_feature_card(binding: Mapping[str, Any]) -> dict[str, Any]:
+        artifact_id = str(binding["artifact_id"])
+        return {
+            "id": f"{artifact_id}.feature.watchers-eye",
+            "name": WATCHERS_EYE_FEATURE_NAME,
+            "source_key": str(binding["background_name"]),
+            "description": (
+                "Source-bound access to campaign-authored facts about local law, "
+                "law enforcement, and criminal activity; it never grants a numeric bonus."
+            ),
+            "activation": {"type": "passive", "cost": 0, "trigger": ""},
+            "choices": {
+                "narrative_capability": {
+                    "schema": WATCHERS_EYE_NARRATIVE_SCHEMA,
+                    "mechanic_id": CORE_WATCHERS_EYE_MECHANIC_ID,
+                    "capabilities": sorted(WATCHERS_EYE_CAPABILITIES),
+                    "fact_contract": {
+                        "kind": "source_fact",
+                        "predicate_prefix": "dnd5e.watchers_eye.",
+                        "metadata_key": WATCHERS_EYE_FACT_METADATA_KEY,
+                        "schema_version": WATCHERS_EYE_FACT_SCHEMA_VERSION,
+                        "outcomes": ["granted", "unavailable"],
+                    },
+                    "source_binding": {
+                        "artifact_id": artifact_id,
+                        "pack_id": str(binding["pack_id"]),
+                        "pack_version": str(binding["pack_version"]),
+                        "pack_checksum": str(binding["pack_checksum"]),
+                        "addon_id": str(binding["addon_id"]),
+                        "addon_version": str(binding["addon_version"]),
+                        "addon_checksum": str(binding["addon_checksum"]),
+                        "reviewed_content_hash": str(binding["reviewed_content_hash"]),
+                        "feature_rule_ref": str(binding["feature_rule_ref"]),
+                    },
+                }
+            },
+            "pack_id": str(binding["pack_id"]),
+            "pack_version": str(binding["pack_version"]),
+            "rule_refs": list(binding["rule_refs"]),
+            "mechanic_refs": [CORE_WATCHERS_EYE_MECHANIC_ID],
+            "ruling_requirements": [],
+        }
+
+    def executable_watchers_eye_feature(
+        actor: CharacterInfo,
+        feature_id: str,
+        *,
+        campaign_id: str,
+        branch_id: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Rebuild expected provenance before allowing the narrative capability."""
+
+        normalized_feature_id = str(feature_id or "").strip()
+        features = [
+            dict(item)
+            for item in dict(actor.sheet.get("content") or {}).get("features", [])
+            if str(dict(item).get("id") or "") == normalized_feature_id
+        ]
+        if len(features) != 1:
+            raise RulesetUnavailableError(
+                "feature_id must identify one source-bound Watcher's Eye feature"
+            )
+        feature = features[0]
+        selections = [
+            dict(item)
+            for item in dict(actor.sheet.get("content") or {}).get("selections", [])
+            if str(dict(item).get("artifact_id") or "") in SCAG_WATCHERS_EYE_BACKGROUND_IDS
+            and str(dict(item).get("kind") or "") == "background"
+        ]
+        if len(selections) != 1:
+            raise RulesetUnavailableError(
+                "Watcher's Eye requires one exact official SCAG background selection"
+            )
+        selection = selections[0]
+        pack_id = str(selection.get("pack_id") or "")
+        pack_version = str(selection.get("pack_version") or "")
+        try:
+            installed = rule_packs.get_version(pack_id, pack_version)
+        except LookupError as exc:
+            raise RulesetUnavailableError(
+                "the source-bound Watcher's Eye archive is not installed"
+            ) from exc
+        artifact_matches = [
+            item
+            for item in installed.artifacts
+            if str(item.get("id") or "") == str(selection.get("artifact_id") or "")
+        ]
+        if len(artifact_matches) != 1:
+            raise RulesetUnavailableError("the source-bound Watcher's Eye artifact is unavailable")
+        binding = trusted_watchers_eye_binding(
+            campaign_id,
+            branch_id,
+            pack_id,
+            pack_version,
+            artifact_matches[0],
+        )
+        if binding is None:
+            raise RulesetUnavailableError(
+                "Watcher's Eye provenance does not match the official expansion lock"
+            )
+        expected = watchers_eye_feature_card(binding)
+        capability = dict(dict(feature.get("choices") or {}).get("narrative_capability") or {})
+        if (
+            normalized_feature_id != expected["id"]
+            or str(feature.get("name") or "") != expected["name"]
+            or str(feature.get("source_key") or "") != expected["source_key"]
+            or str(feature.get("pack_id") or "") != expected["pack_id"]
+            or str(feature.get("pack_version") or "") != expected["pack_version"]
+            or list(feature.get("rule_refs") or []) != expected["rule_refs"]
+            or list(feature.get("mechanic_refs") or []) != expected["mechanic_refs"]
+            or capability != expected["choices"]["narrative_capability"]
+            or list(selection.get("rule_refs") or []) != expected["rule_refs"]
+        ):
+            raise RulesetUnavailableError(
+                "Watcher's Eye sheet data is incomplete or does not match its source provenance"
+            )
+        return feature, binding
 
     def hydrate_class_prepared_spell_cards(
         campaign_id: str,
@@ -39027,9 +40813,10 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         if include_context and not lowered:
             raise ValueError("include_context requires an exact artifact id query")
         result = []
-        for pack_id, version, artifact in available_content_artifacts(
+        catalog_candidates = available_content_artifacts(
             campaign_id, kind=kind, branch_id=resolved_branch_id
-        ):
+        )
+        for pack_id, version, artifact in catalog_candidates:
             card = dict(artifact.get("card") or {})
             name = str(card.get("name") or artifact["id"])
             if include_context and lowered != str(artifact["id"]).casefold():
@@ -39075,6 +40862,14 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     "skill_options": list(definition.get("skill_options") or []),
                     "tool_choice_count": tool_count,
                     "tool_options": list(definition.get("tool_options") or []),
+                    "duplicate_replacement_fields": [
+                        "skill_replacements",
+                        "tool_replacements",
+                    ],
+                    "skill_replacement_options": sorted(SKILL_ABILITIES),
+                    "tool_replacement_options": sorted(
+                        _reviewed_tool_options(catalog_candidates).values(), key=str.casefold
+                    ),
                 }
             elif artifact_kind == "subclass":
                 selection_requirements = {
@@ -39102,6 +40897,11 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     fields.append("equipment_package")
                 if choices.get("origin_feat_name") == "Magic Initiate":
                     fields.append("origin_feat_selection")
+                campaign = campaigns.get(campaign_id)
+                language_catalog = _campaign_language_options(dict(campaign.settings or {}))
+                tool_replacement_options = sorted(
+                    _reviewed_tool_options(catalog_candidates).values(), key=str.casefold
+                )
                 selection_requirements = {
                     "fields": fields,
                     "language_count": int(choices.get("language_count", 0) or 0),
@@ -39128,13 +40928,35 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     "equipment_packages": equipment_packages,
                     "origin_feat_name": str(choices.get("origin_feat_name") or ""),
                     "origin_feat_preset": deepcopy(dict(choices.get("origin_feat_preset") or {})),
-                    "customizable": True,
+                    "duplicate_replacement_fields": [
+                        "skill_replacements",
+                        "tool_replacements",
+                    ],
+                    "skill_replacement_options": sorted(SKILL_ABILITIES),
+                    "tool_replacement_options": tool_replacement_options,
+                    "allowed_language_catalog": sorted(language_catalog.values(), key=str.casefold),
+                    "restricted_languages_requiring_dm_authorization": sorted(
+                        PHB2014_RESTRICTED_LANGUAGES, key=str.casefold
+                    ),
+                    "customizable": campaign_rules_edition(campaign_id) == "2014",
                     "customization_fields": [
                         "custom_name",
                         "skills",
+                        "skill_replacements",
+                        "tools",
+                        "tool_replacements",
                         "languages",
-                        "equipment_item_ids",
+                        "language_authorization",
+                        "custom_feature_artifact_id",
+                        "equipment_mode",
+                        "equipment_package",
                     ],
+                    "custom_contract": {
+                        "skill_count": 2,
+                        "combined_tool_or_language_count": 2,
+                        "equipment_modes": ["source", "starting_coin"],
+                        "equipment_modes_are_mutually_exclusive": True,
+                    },
                 }
             elif artifact_kind == "feat":
                 requirements = deepcopy(dict(card.get("selection_requirements") or {}))
@@ -39501,6 +41323,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 duration["sheet"],
                 period="round",
                 amount=int(time_transition["elapsed_ticks"]),
+                advance_breathing=False,
             )
             extension = apply_rule_event(
                 round_duration["sheet"],
@@ -39542,6 +41365,9 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         )
         if content_receipt is not None:
             receipts.append(deepcopy(content_receipt))
+        next_state, updates, _ = reconcile_actor_effect_dependencies(
+            campaign, next_state, updates, {}
+        )
         current_update = next(item for item in updates if item.character_id == current.id)
         response = character_view(
             replace(
@@ -39612,10 +41438,16 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             raise ValueError(
                 "expected_revision and idempotency_key are required for content selection"
             )
+        campaign = campaigns.get(current.campaign_id)
         candidates = available_content_artifacts(current.campaign_id)
-        match = next((item for item in candidates if item[2].get("id") == artifact_id), None)
-        if match is None:
+        matches = [item for item in candidates if item[2].get("id") == artifact_id]
+        if not matches:
             raise LookupError("content artifact is not available for this campaign")
+        if len(matches) != 1:
+            raise RulesetUnavailableError(
+                "content artifact identity is ambiguous across active rule packs"
+            )
+        match = matches[0]
         pack_id, version, artifact = match
         application_state = str(artifact.get("application_state") or "selection_ready")
         if application_state != "selection_ready":
@@ -39632,6 +41464,10 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         kind = str(artifact.get("kind") or "")
         card = deepcopy(dict(artifact.get("card") or {}))
         selection = deepcopy(selection or {})
+        if TORTLE_NATURAL_ARMOR_AUTHORITY_KEY in selection:
+            raise ValueError("official expansion authority is server-managed")
+        if BACKGROUND_AUTHORITY_SELECTION_KEY in selection:
+            raise ValueError("background selection authority is server-managed")
         contract_required = artifact.get("selection_contract") is not None
         if contract_required:
             contract_errors = selection_input_errors(artifact, selection)
@@ -39648,6 +41484,37 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     "errors": contract_errors,
                 }
         runtime_context = content_runtime_context(pack_id, version, artifact)
+        tortle_archive_verification = (
+            verified_reserved_official_rule_definition(pack_id, version)
+            if artifact_id == TORTLE_NATURAL_ARMOR_ARTIFACT_ID
+            else None
+        )
+        tortle_natural_armor_authority = _verified_tortle_natural_armor_authority(
+            pack_id=pack_id,
+            pack_version=version,
+            artifact_id=artifact_id,
+            provenance=rule_packs.provenance(pack_id, version),
+            archive_definition_verified=tortle_archive_verification is not None,
+        )
+        if tortle_natural_armor_authority is not None:
+            authority_id = uuid4().hex
+            tortle_natural_armor_authority = {
+                **tortle_natural_armor_authority,
+                "authority_id": authority_id,
+                "authorization": sign_receipt(
+                    {
+                        "schema_version": 1,
+                        "purpose": "official_content_authority",
+                        "character_id": current.id,
+                        "artifact_id": TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
+                        "package_id": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
+                        "package_version": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
+                        "package_checksum": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_CHECKSUM,
+                        "authority_id": authority_id,
+                    },
+                    content_authority_secret,
+                ),
+            }
         content_receipt: dict[str, Any] | None = None
         raw_selection_contract = artifact.get("selection_contract")
         if isinstance(raw_selection_contract, dict) and not selection_contract_errors(artifact):
@@ -39658,14 +41525,18 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     "mechanic_id": str(selection_contract["materializer"]),
                     "event": "character.content.apply",
                     "artifact_id": artifact_id,
+                    "character_id": current.id,
                     "pack_id": pack_id,
                     "pack_version": version,
                     "reviewed_content_hash": str(selection_contract["reviewed_content_hash"]),
                     "selection": deepcopy(selection),
                     "rule_refs": list(artifact.get("rule_refs") or []),
                 }
+                if tortle_natural_armor_authority is not None:
+                    content_receipt["content_authority_id"] = str(
+                        tortle_natural_armor_authority["authority_id"]
+                    )
         sheet = deepcopy(current.sheet)
-        campaign = campaigns.get(current.campaign_id)
         phase = authoritative_phase(current.campaign_id)
         spellbook_copy: dict[str, Any] | None = None
         subclass_spell_grants: list[dict[str, Any]] = []
@@ -39737,6 +41608,11 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
         )
         if replay is not None:
             return replay
+        if current.revision != expected_revision:
+            raise ValueError(
+                "character revision conflict: "
+                f"expected {expected_revision}, found {current.revision}"
+            )
         provenance = {
             "id": artifact_id,
             "pack_id": pack_id,
@@ -40414,11 +42290,31 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     class_definition=class_definition,
                     skill_choices=raw_skills,
                     tool_choices=raw_tools,
+                    skill_replacements=selection.get("skill_replacements"),
+                    tool_replacements=selection.get("tool_replacements"),
+                    tool_replacement_options=list(_reviewed_tool_options(candidates).values()),
                     source=f"{pack_id}@{version}:{artifact_id}",
                 )
             except CombatEngineError as error:
+                if "proficiency replacements are required for:" in str(error):
+                    return {
+                        "status": "pending_choice",
+                        "reason": str(error),
+                    }
                 raise ValueError(str(error)) from error
             sheet = class_result.pop("sheet")
+            selection = {
+                "skills": list(class_result.get("skill_proficiency_choices") or []),
+                "tools": list(class_result.get("tool_proficiency_choices") or []),
+            }
+            if class_result.get("skill_proficiency_replacements"):
+                selection["skill_replacements"] = deepcopy(
+                    dict(class_result["skill_proficiency_replacements"])
+                )
+            if class_result.get("tool_proficiency_replacements"):
+                selection["tool_replacements"] = deepcopy(
+                    dict(class_result["tool_proficiency_replacements"])
+                )
             class_materialization = class_result
         elif kind == "spell":
             if any(item.get("id") == artifact_id for item in sheet["content"]["spells"]):
@@ -40653,7 +42549,24 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             base_background = str(card.get("name") or artifact_id)
             custom_name = str(selection.get("custom_name") or "").strip()
             custom_skills_raw = selection.get("skills")
+            if custom_name and campaign_rules_edition(current.campaign_id) != "2014":
+                raise ValueError("the PHB custom-background contract is available only in 2014")
             grants = dict(card.get("background_grants") or {})
+            watchers_eye_binding = trusted_watchers_eye_binding(
+                current.campaign_id,
+                branch_id,
+                pack_id,
+                version,
+                artifact,
+            )
+            if (
+                artifact_id in SCAG_WATCHERS_EYE_BACKGROUND_IDS
+                and str(grants.get("feature") or "") == WATCHERS_EYE_FEATURE_NAME
+                and watchers_eye_binding is None
+            ):
+                raise RulesetUnavailableError(
+                    "Watcher's Eye requires the exact source-reviewed official SCAG archive"
+                )
             fixed_equipment = deepcopy(dict(grants.pop("equipment", {}) or {}))
             grant_skills = [str(item).strip().casefold() for item in grants.pop("skills", [])]
             card_skills = [
@@ -40670,7 +42583,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 return {
                     "status": "pending_choice",
                     "reason": (
-                        "custom background requires both custom_name and exactly two skill choices"
+                        "custom background requires custom_name and exactly two skill choices"
                     ),
                 }
             if not custom_name and skill_choice_count and custom_skills_raw is None:
@@ -40686,31 +42599,64 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             selected_background = custom_name or base_background
             if existing_background and existing_background != selected_background:
                 raise ValueError("character already has a different background")
-            language_count = int(requirements.get("language_count", 0) or 0)
-            raw_languages = selection.get("languages")
-            if raw_languages is None:
-                raw_languages = []
-            if (
-                not isinstance(raw_languages, list)
-                or len(raw_languages) != language_count
-                or any(not str(item).strip() for item in raw_languages)
-            ):
-                return {
-                    "status": "pending_choice",
-                    "reason": f"background requires exactly {language_count} language choices",
+            raw_languages = selection.get("languages", [])
+            raw_tools = selection.get("tools", [])
+            if custom_name:
+                if not isinstance(raw_languages, list) or not isinstance(raw_tools, list):
+                    raise ValueError("custom background languages and tools must be arrays")
+                if len(raw_languages) + len(raw_tools) != 2:
+                    return {
+                        "status": "pending_choice",
+                        "reason": (
+                            "custom background requires a total of exactly two tool "
+                            "proficiencies or languages"
+                        ),
+                    }
+                language_count = len(raw_languages)
+                fixed_languages: list[str] = []
+            else:
+                language_count = int(requirements.get("language_count", 0) or 0)
+                fixed_languages = list(grants.get("languages") or [])
+                if (
+                    not isinstance(raw_languages, list)
+                    or len(raw_languages) != language_count
+                    or any(not str(item).strip() for item in raw_languages)
+                ):
+                    return {
+                        "status": "pending_choice",
+                        "reason": f"background requires exactly {language_count} language choices",
+                    }
+                language_options = {
+                    str(item).casefold()
+                    for item in requirements.get("language_options", [])
+                    if str(item).strip()
                 }
-            selected_languages, all_languages = _validated_additive_choices(
-                raw_languages,
-                count=language_count,
-                label="background language",
-                fixed=grants.get("languages") or [],
-                options=requirements.get("language_options") or [],
-                allow_unlisted=requirements.get("allow_any_language") is True,
+                if (
+                    language_options
+                    and requirements.get("allow_any_language") is not True
+                    and any(str(item).casefold() not in language_options for item in raw_languages)
+                ):
+                    raise ValueError("background language is not one of the source options")
+            selected_languages, all_languages, language_authorization_receipt = (
+                _validated_background_languages(
+                    raw_languages,
+                    count=language_count,
+                    fixed=fixed_languages,
+                    existing=sheet["traits"]["languages"],
+                    campaign_id=current.campaign_id,
+                    campaign_revision=campaign.revision,
+                    campaign_settings=dict(campaign.settings or {}),
+                    authorization=selection.get("language_authorization"),
+                    principal_id=principal_id,
+                    principal_is_dm=is_dm(current.campaign_id, principal_id),
+                )
             )
             ability_options = [
                 str(item).casefold() for item in requirements.get("ability_score_options", [])
             ]
             selected_ability_increases: dict[str, int] = {}
+            if custom_name and ability_options:
+                raise ValueError("2014 custom backgrounds cannot replace ability score grants")
             if ability_options:
                 selected_ability_increases = apply_ability_score_increases(
                     {
@@ -40723,22 +42669,48 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     selection.get("ability_score_increases"),
                     source=f"{base_background} background",
                 )
-            tool_choice_count = int(requirements.get("tool_choice_count", 0) or 0)
-            selected_tools, all_tools = _validated_additive_choices(
-                selection.get("tools"),
-                count=tool_choice_count,
-                label="background tool",
-                fixed=grants.get("tools") or [],
-                options=requirements.get("tool_options") or [],
-            )
-            raw_tool_groups = requirements.get("tool_option_groups") or []
-            if raw_tool_groups:
-                _validate_group_limited_choices(
-                    selected_tools,
-                    groups=raw_tool_groups,
-                    label="background tool",
+            reviewed_tool_options = _reviewed_tool_options(candidates)
+            if custom_name:
+                selected_tools = _validated_distinct_choices(
+                    raw_tools,
+                    count=len(raw_tools),
+                    label="custom background tool",
                 )
-            selected_skill_choices: list[str] = []
+                if any(item.casefold() not in reviewed_tool_options for item in selected_tools):
+                    raise ValueError("custom background tool is not in the reviewed tool catalog")
+                source_tools = [reviewed_tool_options[item.casefold()] for item in selected_tools]
+            else:
+                tool_choice_count = int(requirements.get("tool_choice_count", 0) or 0)
+                selected_tools, source_tools = _validated_additive_choices(
+                    raw_tools,
+                    count=tool_choice_count,
+                    label="background tool",
+                    fixed=grants.get("tools") or [],
+                    options=requirements.get("tool_options") or [],
+                    allow_fixed_duplicates=True,
+                )
+                raw_tool_groups = requirements.get("tool_option_groups") or []
+                if raw_tool_groups:
+                    _validate_group_limited_choices(
+                        selected_tools,
+                        groups=raw_tool_groups,
+                        label="background tool",
+                    )
+            existing_tools = {
+                str(item).casefold() for item in sheet["traits"]["proficiencies"]["tools"]
+            }
+            try:
+                all_tools, normalized_tool_replacements = _resolve_duplicate_proficiencies(
+                    source_tools,
+                    existing_values=existing_tools,
+                    replacements=selection.get("tool_replacements"),
+                    options=reviewed_tool_options,
+                    kind="tool",
+                )
+            except _PendingProficiencyReplacementsError as error:
+                return {"status": "pending_choice", "reason": str(error)}
+            effective_selected_tools = all_tools[len(source_tools) - len(selected_tools) :]
+            selected_skill_choices: list[str]
             if custom_name:
                 if not isinstance(custom_skills_raw, list):
                     raise ValueError("custom background skills must be an array")
@@ -40757,19 +42729,6 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     raise ValueError(
                         "custom background references unknown skills: " + ", ".join(unknown_skills)
                     )
-                duplicate_skills = [
-                    skill
-                    for skill in selected_skills
-                    if sheet["skills"][skill]["proficiency"] != "none"
-                ]
-                if duplicate_skills:
-                    return {
-                        "status": "pending_choice",
-                        "reason": (
-                            "custom background skill choices must replace proficiencies "
-                            "already granted by another source: " + ", ".join(duplicate_skills)
-                        ),
-                    }
                 selected_skill_choices = list(selected_skills)
             else:
                 selected_skill_choices, selected_skills = _validated_additive_choices(
@@ -40778,6 +42737,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     label="background skill",
                     fixed=declared_skills,
                     options=requirements.get("skill_options") or [],
+                    allow_fixed_duplicates=True,
                 )
                 selected_skill_choices = [skill.casefold() for skill in selected_skill_choices]
                 selected_skills = [skill.casefold() for skill in selected_skills]
@@ -40788,7 +42748,116 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     raise ValueError(
                         "background references unknown skills: " + ", ".join(unknown_skills)
                     )
+            skill_options = {skill.casefold(): skill.casefold() for skill in sheet["skills"]}
+            existing_skills = {
+                skill.casefold()
+                for skill, state in sheet["skills"].items()
+                if str(state.get("proficiency") or "none") != "none"
+            }
+            try:
+                effective_skills, normalized_skill_replacements = _resolve_duplicate_proficiencies(
+                    selected_skills,
+                    existing_values=existing_skills,
+                    replacements=selection.get("skill_replacements"),
+                    options=skill_options,
+                    kind="skill",
+                )
+            except _PendingProficiencyReplacementsError as error:
+                return {"status": "pending_choice", "reason": str(error)}
+
+            feature_source_artifact_id = artifact_id
+            feature_source_identity = {
+                "artifact_id": artifact_id,
+                "pack_id": pack_id,
+                "pack_version": version,
+                "content_hash": content_fingerprint(artifact),
+            }
+            custom_feature_artifact_id = str(
+                selection.get("custom_feature_artifact_id") or ""
+            ).strip()
+            if custom_feature_artifact_id:
+                if not custom_name:
+                    raise ValueError("feature replacement requires a custom background")
+                feature_candidates = [
+                    item
+                    for item in candidates
+                    if item[2].get("kind") == "background"
+                    and str(item[2].get("id") or "") == custom_feature_artifact_id
+                ]
+                if len(feature_candidates) != 1:
+                    raise RulesetUnavailableError(
+                        "custom background feature artifact is unavailable or ambiguous"
+                    )
+                feature_matches = source_scoped_content_matches(
+                    feature_candidates,
+                    source_pack_id=pack_id,
+                    source_pack_version=version,
+                )
+                if len(feature_matches) != 1:
+                    raise RulesetUnavailableError(
+                        "custom background feature artifact is unavailable or ambiguous"
+                    )
+                feature_match = feature_matches[0]
+                feature_application_state = str(
+                    feature_match[2].get("application_state") or "selection_ready"
+                )
+                if feature_application_state != "selection_ready":
+                    raise RulesetUnavailableError(
+                        "custom background feature artifact is not selection-ready"
+                    )
+                feature_contract = feature_match[2].get("selection_contract")
+                if isinstance(feature_contract, dict) and selection_contract_errors(
+                    feature_match[2]
+                ):
+                    raise RulesetUnavailableError(
+                        "custom background feature artifact has an invalid reviewed contract"
+                    )
+                feature_card = dict(feature_match[2].get("card") or {})
+                feature_grants = dict(feature_card.get("background_grants") or {})
+                replacement_feature = str(feature_grants.get("feature") or "").strip()
+                if not replacement_feature:
+                    raise RulesetUnavailableError(
+                        "custom background feature artifact has no reviewed feature"
+                    )
+                grants["feature"] = replacement_feature
+                feature_source_artifact_id = custom_feature_artifact_id
+                feature_source_identity = {
+                    "artifact_id": custom_feature_artifact_id,
+                    "pack_id": feature_match[0],
+                    "pack_version": feature_match[1],
+                    "content_hash": content_fingerprint(feature_match[2]),
+                }
             equipment_packages = dict(requirements.get("equipment_packages") or {})
+            equipment_mode = str(selection.get("equipment_mode") or "").strip().casefold()
+            if custom_name:
+                if equipment_mode not in {"source", "starting_coin"}:
+                    return {
+                        "status": "pending_choice",
+                        "reason": (
+                            "custom background requires equipment_mode source or starting_coin"
+                        ),
+                    }
+                if equipment_mode == "starting_coin":
+                    if selection.get("equipment_package") or selection.get(
+                        "equipment_item_ids"
+                    ) not in (None, []):
+                        raise ValueError(
+                            "custom background starting_coin cannot stack source equipment"
+                        )
+                    fixed_equipment = {}
+                    equipment_packages = {}
+                elif not fixed_equipment and not equipment_packages:
+                    return {
+                        **_ruling_status(
+                            "pending_ruling",
+                            "missing_or_conflicting_source_review",
+                        ),
+                        "reason": "source background equipment is not structurally executable",
+                    }
+            elif equipment_mode:
+                raise ValueError("equipment_mode is accepted only for a custom background")
+            else:
+                equipment_mode = "source"
             selected_equipment_package = (
                 str(selection.get("equipment_package") or "").strip().upper()
             )
@@ -40851,7 +42920,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     if isinstance(embedded_template, dict):
                         inventory_template = deepcopy(embedded_template)
                     elif raw_item.get("selected_tool") is True:
-                        if len(selected_tools) != 1:
+                        if len(effective_selected_tools) != 1:
                             raise RulesetUnavailableError(
                                 "background equipment package requires its selected tool"
                             )
@@ -40863,7 +42932,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                                 and str(
                                     dict(item[2].get("card") or {}).get("name") or ""
                                 ).casefold()
-                                == selected_tools[0].casefold()
+                                == effective_selected_tools[0].casefold()
                             ),
                             None,
                         )
@@ -40921,6 +42990,10 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     sheet = adjust_wallet(sheet, normalized_denomination, amount)
             else:
                 equipment_item_ids_raw = selection.get("equipment_item_ids", [])
+                if custom_name and equipment_item_ids_raw not in (None, []):
+                    raise ValueError(
+                        "custom background cannot use caller-supplied equipment item ids"
+                    )
                 if not isinstance(equipment_item_ids_raw, list):
                     raise ValueError("background equipment_item_ids must be an array")
                 equipment_item_ids = [str(item).strip() for item in equipment_item_ids_raw]
@@ -40963,8 +43036,17 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 "customized": bool(custom_name),
                 "selected_skills": selected_skills,
                 "selected_skill_choices": selected_skill_choices,
+                "effective_skills": effective_skills,
+                "skill_replacements": normalized_skill_replacements,
                 "ability_score_increases": selected_ability_increases,
                 "selected_tools": selected_tools,
+                "effective_tools": all_tools,
+                "tool_replacements": normalized_tool_replacements,
+                "selected_languages": selected_languages,
+                "language_authorization": language_authorization_receipt,
+                "feature_source_artifact_id": feature_source_artifact_id,
+                "feature_source": deepcopy(feature_source_identity),
+                "equipment_mode": equipment_mode,
                 "selected_equipment_package": (
                     "" if selected_equipment_package == "__FIXED__" else selected_equipment_package
                 ),
@@ -40984,10 +43066,18 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                     ]
                 )
             )
-            for skill_key in selected_skills:
+            for skill_key in effective_skills:
                 if skill_key not in sheet["skills"]:
                     raise ValueError(f"background references an unknown skill: {skill_key}")
                 sheet["skills"][skill_key]["proficiency"] = "proficient"
+            if watchers_eye_binding is not None:
+                feature_card = watchers_eye_feature_card(watchers_eye_binding)
+                if any(
+                    str(item.get("id") or "") == feature_card["id"]
+                    for item in sheet["content"]["features"]
+                ):
+                    raise ValueError("Watcher's Eye is already present")
+                sheet["content"]["features"].append(feature_card)
             origin_feat_name = str(requirements.get("origin_feat_name") or "")
             if origin_feat_name:
                 origin_feat_match = next(
@@ -41031,6 +43121,23 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                         {},
                         source=f"{base_background} background",
                     )
+            selection = {
+                "custom_name": custom_name,
+                "skills": list(selected_skill_choices),
+                "languages": list(selected_languages),
+                "tools": list(selected_tools),
+                "skill_replacements": deepcopy(normalized_skill_replacements),
+                "tool_replacements": deepcopy(normalized_tool_replacements),
+                "custom_feature_artifact_id": custom_feature_artifact_id,
+                "equipment_mode": equipment_mode,
+                "equipment_package": (
+                    "" if selected_equipment_package == "__FIXED__" else selected_equipment_package
+                ),
+                "equipment_item_ids": list(equipment_item_ids),
+                "ability_score_increases": deepcopy(selected_ability_increases),
+                "origin_feat_selection": deepcopy(selection.get("origin_feat_selection") or {}),
+                "language_authorization": deepcopy(language_authorization_receipt),
+            }
         elif kind == "species":
             selected_species = str(card.get("name") or artifact_id)
             constitution_score_before = int(sheet["abilities"]["constitution"]["score"])
@@ -41349,9 +43456,7 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 )
             )
             for skill in all_skills:
-                if skill not in sheet["skills"]:
-                    raise ValueError(f"species references an unknown skill: {skill}")
-                sheet["skills"][skill]["proficiency"] = "proficient"
+                _apply_fixed_skill_proficiency(sheet, skill, source="species")
             proficiencies = sheet["traits"]["proficiencies"]
             proficiencies["armor"] = list(dict.fromkeys([*proficiencies["armor"], *all_armor]))
             proficiencies["weapons"] = list(
@@ -41374,26 +43479,26 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 weapon_identity = hashlib.sha256(
                     f"{artifact_id}\0{weapon_name.casefold()}".encode("utf-8")
                 ).hexdigest()[:16]
-                sheet, _ = add_inventory_item(
-                    sheet,
-                    {
-                        "id": f"species-natural-weapon-{weapon_identity}",
-                        "name": weapon_name,
-                        "kind": "weapon",
-                        "description": str(weapon.get("description") or ""),
-                        "mechanics": {
-                            "category": "other",
-                            "attack_type": "melee",
-                            "attack_ability": str(weapon["attack_ability"]).casefold(),
-                            "damage_formula": str(weapon["damage_formula"]).casefold(),
-                            "damage_type": str(weapon["damage_type"]).casefold(),
-                            "reach_ft": int(weapon.get("reach_ft", 5)),
-                            "proficient": True,
-                            "always_available": True,
-                        },
-                        "source_key": artifact_id,
+                intrinsic_attack = {
+                    "id": f"species-natural-weapon-{weapon_identity}",
+                    "name": weapon_name,
+                    "attack_ability": str(weapon["attack_ability"]).casefold(),
+                    "damage_formula": str(weapon["damage_formula"]).casefold(),
+                    "damage_type": str(weapon["damage_type"]).casefold(),
+                    "reach_ft": int(weapon.get("reach_ft", 5)),
+                    "source": {
+                        "artifact_id": artifact_id,
+                        "pack_id": pack_id,
+                        "pack_version": version,
+                        "rule_refs": list(artifact.get("rule_refs") or []),
                     },
-                )
+                }
+                if any(
+                    str(item.get("id") or "") == intrinsic_attack["id"]
+                    for item in sheet["traits"]["intrinsic_attacks"]
+                ):
+                    raise ValueError("species intrinsic attack is already present")
+                sheet["traits"]["intrinsic_attacks"].append(intrinsic_attack)
             sheet["traits"]["resistances"] = list(
                 dict.fromkeys(
                     [
@@ -43251,18 +45356,42 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
                 item.get("artifact_id") == artifact_id for item in sheet["content"]["selections"]
             ):
                 raise ValueError("content selection is already present")
-            sheet["content"]["selections"].append(
-                {
-                    "artifact_id": artifact_id,
-                    "kind": kind,
-                    "name": str(card.get("name") or artifact_id),
-                    "pack_id": pack_id,
-                    "pack_version": version,
-                    "rule_refs": list(artifact.get("rule_refs") or []),
-                    "mechanic_refs": list(artifact.get("mechanic_refs") or []),
-                    "selection": selection,
+            recorded_selection = deepcopy(selection)
+            if tortle_natural_armor_authority is not None:
+                recorded_selection[TORTLE_NATURAL_ARMOR_AUTHORITY_KEY] = deepcopy(
+                    tortle_natural_armor_authority
+                )
+            selection_record = {
+                "artifact_id": artifact_id,
+                "kind": kind,
+                "name": str(card.get("name") or artifact_id),
+                "pack_id": pack_id,
+                "pack_version": version,
+                "rule_refs": list(artifact.get("rule_refs") or []),
+                "mechanic_refs": list(artifact.get("mechanic_refs") or []),
+                "selection": recorded_selection,
+            }
+            if kind == "background":
+                if BACKGROUND_AUTHORITY_SELECTION_KEY in selection_record["selection"]:
+                    raise ValueError("background selection authority is server-managed")
+                authority_id = uuid4().hex
+                authority_payload = _background_authority_payload(
+                    sheet,
+                    selection_record,
+                    character_id=current.id,
+                    authority_id=authority_id,
+                )
+                selection_record["selection"][BACKGROUND_AUTHORITY_SELECTION_KEY] = {
+                    "authority_id": authority_id,
+                    "authorization": sign_receipt(
+                        authority_payload,
+                        content_authority_secret,
+                    ),
                 }
-            )
+                selection = deepcopy(selection_record["selection"])
+            sheet["content"]["selections"].append(selection_record)
+            if content_receipt is not None:
+                content_receipt["selection"] = deepcopy(selection_record["selection"])
         resource_sync = synchronize_class_feature_resources(sheet)
         sheet = resource_sync["sheet"]
         if spellbook_copy is not None:
@@ -43315,15 +45444,14 @@ def create_server(config: McpConfig | None = None) -> MCPServer:
             expected_revision=expected_revision,
             idempotency_key=idempotency_key,
             payload={
-                "artifact_id": artifact_id,
-                "pack_id": pack_id,
-                "version": version,
-                "selection": selection,
-                "grant": play_grant,
+                key: deepcopy(value)
+                for key, value in request_payload.items()
+                if key not in {"operation", "character_id"}
             },
             response_extra=response_extra,
             flatten_response_extra=True,
             rule_receipts=([content_receipt] if content_receipt is not None else None),
+            expected_campaign_revision=campaign.revision,
         )
 
     def character_rule_artifact_add(
@@ -43672,14 +45800,14 @@ boundary.
     @public_tool()
     def character_check(
         campaign_id: str,
-        action: Literal["check", "group", "contest", "reroll"] = "check",
+        action: Literal["check", "group", "contest", "reroll", "source_feature"] = "check",
         payload: dict[str, Any] | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
         expected_revision: int | None = None,
         branch_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Resolve an individual, group, or contested check in the Play phase."""
+        """Resolve a check or bounded source feature in the Play phase."""
         require_facade_phase(campaign_id, f"character_check({action})", PROFILE_PLAY)
         resolved_branch_id = require_current_branch(campaign_id, branch_id)
         if npc_conversations.active_ids(
@@ -43689,6 +45817,32 @@ boundary.
             raise CombatEngineError(
                 "close or abort the active NPC conversation before resolving "
                 "an authoritative character check"
+            )
+        if action == "source_feature":
+            data = facade_payload(payload)
+            required_fields = {
+                "actor_id",
+                "feature_id",
+                "capability",
+                "settlement_ref",
+                "fact_key",
+            }
+            if set(data) != required_fields:
+                raise ValueError(
+                    "character_check(source_feature).payload requires exactly actor_id, "
+                    "feature_id, capability, settlement_ref, and fact_key"
+                )
+            return character_source_feature(
+                campaign_id,
+                data["actor_id"],
+                data["feature_id"],
+                data["capability"],
+                data["settlement_ref"],
+                data["fact_key"],
+                principal_id,
+                expected_revision,
+                branch_id,
+                idempotency_key,
             )
         if action == "reroll":
             data = facade_payload(payload)
@@ -44207,17 +46361,10 @@ boundary.
 
         profile = rule_profiles.get(campaign_id)
         edition = str(profile.edition) if profile is not None else ""
-        all_official = {
-            str(item["id"]): dict(item) for item in official_expansion_catalog()
-        }
-        all_support = {
-            str(item["id"]): dict(item) for item in official_expansion_support_catalog()
-        }
+        all_official = {str(item["id"]): dict(item) for item in official_expansion_catalog()}
+        all_support = {str(item["id"]): dict(item) for item in official_expansion_support_catalog()}
         official = (
-            {
-                str(item["id"]): dict(item)
-                for item in official_expansion_catalog(edition)
-            }
+            {str(item["id"]): dict(item) for item in official_expansion_catalog(edition)}
             if edition
             else {}
         )
@@ -44267,19 +46414,15 @@ boundary.
                     dict(official.get(item.addon_id) or {}).get("publication_id") or ""
                 ),
                 "classification": str(
-                    dict(
-                        official.get(item.addon_id)
-                        or support.get(item.addon_id)
-                        or {}
-                    ).get("classification")
+                    dict(official.get(item.addon_id) or support.get(item.addon_id) or {}).get(
+                        "classification"
+                    )
                     or ""
                 ),
                 "editions": list(
-                    dict(
-                        official.get(item.addon_id)
-                        or support.get(item.addon_id)
-                        or {}
-                    ).get("editions")
+                    dict(official.get(item.addon_id) or support.get(item.addon_id) or {}).get(
+                        "editions"
+                    )
                     or []
                 ),
             }
@@ -44767,6 +46910,7 @@ boundary.
             raise ValueError("payload.manifest must be an object")
         for field in ("id", "version", "system_id"):
             required(manifest, field)
+        _validate_unreserved_rule_definition_identity(str(manifest["id"]))
         editions = manifest.get("editions")
         if not isinstance(editions, list) or not editions:
             raise ValueError("payload.manifest.editions must be a non-empty array")
@@ -44777,6 +46921,10 @@ boundary.
             if data.get(field) is not None and not isinstance(data[field], dict):
                 raise ValueError(f"payload.{field} must be an object")
         job = require_import_job(campaign_id, job_id, "rulebook")
+        _validate_reserved_official_artifact_identities(
+            definition_id=str(manifest["id"]),
+            artifacts=(import_candidate_view(item) for item in job.candidates),
+        )
         if dict(job.result or {}).get("finalized_package"):
             raise ValueError("a finalized rulebook draft is immutable")
         review_finalization = dict(dict(job.result or {}).get("review_finalization") or {})
@@ -45687,6 +47835,8 @@ boundary.
             "branch_id": branch_id,
             "expected_revision": expected_revision,
         }
+        if enabled:
+            _validate_reserved_official_package_identity(addons.get_package(addon_id, version))
         scope = f"addon-activation:{campaign_id}:{principal_id}"
         replay = replay_idempotent(scope, idempotency_key, request)
         if replay is not None:
@@ -46137,9 +48287,7 @@ boundary.
                 raise LookupError(module_id)
             if bool(module.get("active")):
                 raise ValueError("an active module Pack cannot be removed")
-            playthrough = dict(
-                campaigns.get(campaign_id).state.get("playthrough_manifest") or {}
-            )
+            playthrough = dict(campaigns.get(campaign_id).state.get("playthrough_manifest") or {})
             if module_id in {str(item) for item in playthrough.get("module_ids") or []}:
                 raise ValueError(
                     "a module Pack referenced by the playthrough manifest cannot be removed"
@@ -46419,7 +48567,7 @@ boundary.
                 },
             }
         else:
-            result = character_list(data.get("campaign_id"), principal_id)
+            result = character_list(str(required(data, "campaign_id")), principal_id)
             result = sorted(
                 result, key=lambda item: (str(item.get("name", "")), str(item.get("id", "")))
             )
@@ -46427,8 +48575,7 @@ boundary.
             result, page = _bounded_page(
                 result,
                 scope=(
-                    f"character_query:{view}:{principal_id}:"
-                    f"{str(data.get('campaign_id') or '')}"
+                    f"character_query:{view}:{principal_id}:{str(data.get('campaign_id') or '')}"
                 ),
                 query=query or str(data.get("query") or ""),
                 limit=data.get("limit", limit),
@@ -46527,7 +48674,7 @@ boundary.
         solution = dict(requirement.get("solution") or {})
         expected = set(solution.get("numeric_parameters") or [])
         owner_sheet = deepcopy(owner.sheet)
-        derived = derive_character_sheet(owner_sheet)
+        derived = derive_character_sheet(owner_sheet, character_id=owner.id)
         abilities = dict(derived.get("ability_modifiers") or {})
         spellcasting = dict(derived.get("spellcasting") or {})
         classes = [
@@ -46739,6 +48886,12 @@ boundary.
         )
         sheet = finalize_actor_sheet_rulings(sheet, campaign_id)
         require_engine_owned_short_rest_hit_die_state(sheet)
+        _reject_new_intrinsic_attack_provenance(sheet)
+        _require_authoritative_background_state(
+            sheet,
+            character_id=None,
+            secret=content_authority_secret,
+        )
         if character_type not in NON_PLAYER_CHARACTER_TYPES:
             raise ValueError("addon actor templates create only npc or monster actors")
         requested_name = str(name or "").strip()
@@ -46875,6 +49028,7 @@ boundary.
                 "combat": next_encounter,
                 "campaign_revision": campaign.revision + 1,
             }
+        _reject_new_tortle_natural_armor_provenance(actor_sheet)
         created = actor_lifecycle.create(
             campaign_id,
             system_id=DND5E.id,
@@ -47104,6 +49258,7 @@ boundary.
                 "actor_knowledge_imported": False,
             }
         elif mode == "direct":
+            _reject_new_tortle_natural_armor_provenance(data.get("sheet"))
             result = character_create(
                 required(data, "name"),
                 data.get("campaign_id"),
@@ -47296,6 +49451,7 @@ boundary.
                 },
             }
         elif mode == "build":
+            _reject_new_tortle_natural_armor_provenance(data.get("sheet"))
             result = character_build(
                 required(data, "campaign_id"),
                 required(data, "name"),
@@ -48195,6 +50351,7 @@ boundary.
             "source_state",
             "stand",
             "knock_prone",
+            "breathing_transition",
         ],
         payload: dict[str, Any] | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
@@ -48270,6 +50427,21 @@ boundary.
                 character_id,
                 source_actor_id=required(data, "source_actor_id"),
                 reason=required(data, "reason"),
+                principal_id=principal_id,
+                expected_revision=expected_revision,
+                idempotency_key=idempotency_key,
+            )
+        elif action == "breathing_transition":
+            unexpected = set(data) - {"can_breathe", "choking"}
+            if unexpected:
+                raise ValueError(
+                    "breathing_transition payload accepts only can_breathe; "
+                    f"unexpected fields: {sorted(unexpected)}"
+                )
+            result = character_breathing_transition(
+                character_id,
+                can_breathe=required(data, "can_breathe"),
+                choking=data.get("choking", False),
                 principal_id=principal_id,
                 expected_revision=expected_revision,
                 idempotency_key=idempotency_key,
@@ -48854,7 +51026,7 @@ boundary.
             sheet = validate_character_sheet(actor.sheet)
             progression = dict(sheet["progression"])
             hp = dict(sheet["combat"]["hp"])
-            effective_hp = dict(derive_character_sheet(sheet)["hit_points"])
+            effective_hp = dict(derive_character_sheet(sheet, character_id=actor.id)["hit_points"])
             conditions = {str(item) for item in sheet.get("conditions") or []}
             narrative_status = str(member["status"])
             status = (
@@ -49090,7 +51262,8 @@ boundary.
             "configure_ending",
             "sync",
             "verify_ending",
-        ] | None = None,
+        ]
+        | None = None,
         payload: dict[str, Any] | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
         expected_revision: int | None = None,
@@ -49638,9 +51811,12 @@ boundary.
                 branch_id=resolved_branch_id,
                 expected_revision_id=expected_revision_id,
                 status=(
-                    "superseded" if action == "supersede"
-                    else "retracted" if action == "retract"
-                    else "forgotten" if action == "forget"
+                    "superseded"
+                    if action == "supersede"
+                    else "retracted"
+                    if action == "retract"
+                    else "forgotten"
+                    if action == "forget"
                     else data.get("status")
                 ),
                 valid_from=optional_datetime(data.get("valid_from"), "valid_from"),
@@ -49705,7 +51881,10 @@ boundary.
             )
         else:
             result = actor_knowledge_list(
-                campaign_id, actor_id, data.get("branch_id"), principal_id,
+                campaign_id,
+                actor_id,
+                data.get("branch_id"),
+                principal_id,
                 include_inactive,
             )
             result, page = _bounded_page(
@@ -50655,8 +52834,7 @@ boundary.
             page_items, page = _bounded_page(
                 matches,
                 scope=(
-                    f"exposure:search:{current.id}:{current.revision}:"
-                    f"{' '.join(sorted(terms))}"
+                    f"exposure:search:{current.id}:{current.revision}:{' '.join(sorted(terms))}"
                 ),
                 limit=limit,
                 cursor=cursor,
@@ -50747,10 +52925,6 @@ boundary.
         if registered_tool.name == "campaign_query":
             registered_tool.meta["sagasmith_context_sync"] = True
 
-    # Direct-Python callers do not enter FastMCP's transport lifecycle. Give
-    # them an explicit, idempotent way to release SQLite handles and other
-    # database pool resources before removing a temporary home directory.
-    setattr(mcp, "_sagasmith_close", storage.database.dispose)
     return mcp
 
 

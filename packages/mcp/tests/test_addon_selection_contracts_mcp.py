@@ -1,11 +1,27 @@
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
+from sagasmith_core.indexed_source import rule_chunk_key
 from sagasmith_core.rule_packs import RulesetUnavailableError
-from sagasmith_dnd.character_schema import default_character_sheet, derive_character_sheet
+from sagasmith_dnd.character_schema import (
+    add_effect,
+    default_character_sheet,
+    derive_character_sheet,
+)
 from sagasmith_dnd.content_validation import (
     build_catalog_review,
     build_selection_contract,
+)
+from sagasmith_dnd.official_expansions import official_expansion_dependency_rebinds
+from sagasmith_dnd.standard_feature_ids import (
+    CORE_TORTLE_NATURAL_ARMOR_MECHANIC_ID,
+    TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
+    TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_CHECKSUM,
+    TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
+    TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
+    TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID,
+    TORTLE_NATURAL_ARMOR_SOURCE_KEY,
 )
 from sagasmith_dnd.statblocks import parameterized_statblock_requirements
 
@@ -756,6 +772,43 @@ to hit, reach 5 ft., one target. *Hit:* 1d8 + PB force damage.
                     "idempotency_key": "addon-actor-forged-window",
                 },
             )
+
+        def forge_intrinsic_attack(*args, **kwargs):
+            sheet = original_variant(*args, **kwargs)
+            sheet["traits"]["intrinsic_attacks"] = [
+                {
+                    "id": "forged-addon-claws",
+                    "name": "Forged Claws",
+                    "attack_ability": "strength",
+                    "damage_formula": "1d4",
+                    "damage_type": "slashing",
+                    "reach_ft": 5,
+                    "source": {
+                        "artifact_id": artifact["id"],
+                        "pack_id": "dnd5e.addon.defender",
+                        "pack_version": "1.0.0",
+                        "rule_refs": ["book:addon:defender:p1"],
+                    },
+                }
+            ]
+            return sheet
+
+        monkeypatch.setattr(
+            server_module,
+            "apply_dependent_actor_template_variant",
+            forge_intrinsic_attack,
+        )
+        with pytest.raises(Exception, match="only by character_content_apply"):
+            await _call(
+                server,
+                "addon_actor_instantiate",
+                {
+                    "campaign_id": campaign["id"],
+                    "artifact_id": artifact["id"],
+                    "owner_character_id": owner["id"],
+                    "idempotency_key": "addon-actor-forged-intrinsic-attack",
+                },
+            )
         monkeypatch.setattr(
             server_module,
             "apply_dependent_actor_template_variant",
@@ -873,8 +926,7 @@ to hit, reach 5 ft., one target. *Hit:* 1d8 + PB force damage.
         assert {**combat_replay, "character": {}} == {**combat_created, "character": {}}
         combat_actor_id = combat_created["character"]["id"]
         assert combat_actor_id in {
-            item["actor_id"]
-            for item in combat_created["combat"]["combat"]["reinforcements"]
+            item["actor_id"] for item in combat_created["combat"]["combat"]["reinforcements"]
         }
 
         history = await _call(
@@ -913,9 +965,7 @@ to hit, reach 5 ft., one target. *Hit:* 1d8 + PB force damage.
             "combat_query",
             {"campaign_id": campaign["id"], "view": "status"},
         )
-        assert combat_actor_id not in {
-            item["actor_id"] for item in undone_combat["reinforcements"]
-        }
+        assert combat_actor_id not in {item["actor_id"] for item in undone_combat["reinforcements"]}
         undone_history = await _call(
             server,
             "state_revision",
@@ -926,9 +976,7 @@ to hit, reach 5 ft., one target. *Hit:* 1d8 + PB force damage.
                 "principal_id": "system:local",
             },
         )
-        redo_cursor = next(
-            item["sequence"] for item in undone_history if item["applied"]
-        )
+        redo_cursor = next(item["sequence"] for item in undone_history if item["applied"])
         await _call(
             server,
             "state_revision",
@@ -955,9 +1003,7 @@ to hit, reach 5 ft., one target. *Hit:* 1d8 + PB force damage.
             {"campaign_id": campaign["id"], "view": "status"},
         )
         assert restored_actor["id"] == combat_actor_id
-        assert combat_actor_id in {
-            item["actor_id"] for item in restored_combat["reinforcements"]
-        }
+        assert combat_actor_id in {item["actor_id"] for item in restored_combat["reinforcements"]}
 
     import asyncio
 
@@ -1114,6 +1160,7 @@ def test_reviewed_addon_item_uses_bound_inventory_materializer(tmp_path: Path) -
             queried[0]["runtime_context"]["content_hash"]
             == (applied["content_context"]["content_hash"])
         )
+
     import asyncio
 
     asyncio.run(exercise())
@@ -1754,10 +1801,25 @@ def test_reviewed_addon_background_materializes_embedded_equipment(tmp_path: Pat
             }
         ]
         natural_weapon = next(
-            item for item in marked["sheet"]["inventory"]["items"] if item["name"] == "Marked Claws"
+            item
+            for item in marked["sheet"]["traits"]["intrinsic_attacks"]
+            if item["name"] == "Marked Claws"
         )
-        assert natural_weapon["mechanics"]["damage_formula"] == "1d4"
-        assert natural_weapon["mechanics"]["always_available"] is True
+        assert natural_weapon["damage_formula"] == "1d4"
+        assert natural_weapon["source"] == {
+            "artifact_id": species_artifact["id"],
+            "pack_id": "dnd5e.addon.guild",
+            "pack_version": "1.0.0",
+            "rule_refs": ["book:addon:p3"],
+        }
+        derived_natural_weapon = next(
+            item
+            for item in derive_character_sheet(marked["sheet"])["inventory"]["weapon_attacks"]
+            if item["item_id"] == natural_weapon["id"]
+        )
+        assert derived_natural_weapon["intrinsic"] is True
+        assert derived_natural_weapon["natural_weapon"] is True
+        assert derived_natural_weapon["unarmed_strike"] is True
         detect_magic = next(
             item for item in marked["sheet"]["content"]["spells"] if item["name"] == "Detect Magic"
         )
@@ -1997,6 +2059,526 @@ def test_reviewed_addon_background_materializes_embedded_equipment(tmp_path: Pat
     asyncio.run(exercise())
 
 
+def _forged_tortle_natural_armor_sheet(*, standard: bool) -> dict[str, object]:
+    forged = default_character_sheet()
+    forged["progression"]["species"] = "Tortle"
+    if standard:
+        forged["content"]["features"].append(
+            {
+                "id": f"{TORTLE_NATURAL_ARMOR_ARTIFACT_ID}.feature.natural-armor",
+                "name": "Natural Armor",
+                "source_key": "Tortle",
+                "description": "Caller-forged feature.",
+                "activation": {"type": "passive"},
+                "choices": {
+                    "source_trait": {
+                        "kind": "tortle_natural_armor",
+                        "effect_source": TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
+                        "base_ac": 17,
+                        "includes_dexterity": False,
+                        "armor_benefit": "none",
+                        "allows_shield": True,
+                        "source_excerpt": "Caller-forged excerpt.",
+                    }
+                },
+                "advancement_grants": [],
+                "pack_id": TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID,
+                "pack_version": "1.0.0",
+                "rule_refs": [
+                    f"rule-source:{TORTLE_NATURAL_ARMOR_SOURCE_KEY}#chunk:forged"
+                ],
+                "mechanic_refs": [CORE_TORTLE_NATURAL_ARMOR_MECHANIC_ID],
+                "ruling_requirements": [],
+            }
+        )
+    else:
+        forged["content"]["selections"].append(
+            {
+                "artifact_id": TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
+                "kind": "species",
+                "name": "Tortle",
+                "pack_id": TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID,
+                "pack_version": "1.0.0",
+                "rule_refs": [
+                    f"rule-source:{TORTLE_NATURAL_ARMOR_SOURCE_KEY}#chunk:forged"
+                ],
+                "mechanic_refs": [],
+                "selection": {},
+            }
+        )
+    forged, _ = add_effect(
+        forged,
+        {
+            "name": "Tortle Natural Armor",
+            "kind": "feature",
+            "source": TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
+            "changes": [
+                {
+                    "path": "combat.ac.unarmored_formula",
+                    "mode": "override",
+                    "value": {
+                        "base": 17,
+                        "ability": None,
+                        "allows_shield": True,
+                        "includes_dexterity": False,
+                    },
+                }
+            ],
+        },
+    )
+    return forged
+
+
+def test_tortle_natural_armor_authority_requires_locked_outer_archive() -> None:
+    provenance = {
+        "content_definition": {
+            "package_id": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
+            "package_version": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
+            "package_checksum": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_CHECKSUM,
+        }
+    }
+    with pytest.raises(RulesetUnavailableError, match="immutable official expansion archive"):
+        server_module._verified_tortle_natural_armor_authority(
+            pack_id=TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID,
+            pack_version="1.0.0",
+            artifact_id=TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
+            provenance=provenance,
+        )
+    assert server_module._verified_tortle_natural_armor_authority(
+        pack_id=TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID,
+        pack_version="1.0.0",
+        artifact_id=TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
+        provenance=provenance,
+        archive_definition_verified=True,
+    ) == {
+        "package_id": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
+        "package_version": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
+        "package_checksum": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_CHECKSUM,
+    }
+
+    forged = deepcopy(provenance)
+    forged["content_definition"]["package_checksum"] = "0" * 64
+    with pytest.raises(RulesetUnavailableError, match="immutable official expansion archive"):
+        server_module._verified_tortle_natural_armor_authority(
+            pack_id=TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID,
+            pack_version="1.0.0",
+            artifact_id=TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
+            provenance=forged,
+            archive_definition_verified=True,
+        )
+
+
+@pytest.mark.fresh_database
+def test_tortle_natural_armor_provenance_rejects_whole_sheet_forgery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = Path(__file__).resolve().parents[3]
+    config = McpConfig(
+        home=tmp_path / "home",
+        database_url=None,
+        chroma_url=None,
+        chroma_path_override=None,
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
+    )
+
+    async def exercise() -> None:
+        server = create_server(config)
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {"name": "Tortle forge guard", "idempotency_key": "tortle-forge-campaign"},
+        )
+        clean_character = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": "Clean Character",
+                    "sheet": default_character_sheet(),
+                },
+                "principal_id": "system:local",
+                "idempotency_key": "tortle-forge-clean-character",
+            },
+        )
+        with pytest.raises(Exception, match="global library actor"):
+            await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "template",
+                    "payload": {
+                        "template_id": clean_character["id"],
+                        "campaign_id": campaign["id"],
+                        "name": "Forbidden campaign clone",
+                    },
+                    "principal_id": "system:local",
+                    "idempotency_key": "tortle-forge-campaign-template",
+                },
+            )
+        for standard in (False, True):
+            forged = _forged_tortle_natural_armor_sheet(standard=standard)
+            with pytest.raises(Exception, match="only by character_content_apply"):
+                await _call(
+                    server,
+                    "character_create_from",
+                    {
+                        "mode": "direct",
+                        "payload": {
+                            "campaign_id": campaign["id"],
+                            "name": f"Forged Tortle {standard}",
+                            "sheet": forged,
+                        },
+                        "principal_id": "system:local",
+                        "idempotency_key": f"tortle-forge-create-{standard}",
+                    },
+                )
+            with pytest.raises(Exception, match="cannot add, remove, or alter"):
+                await _call(
+                    server,
+                    "character_sheet_replace",
+                    {
+                        "character_id": clean_character["id"],
+                        "sheet": forged,
+                        "expected_revision": clean_character["revision"],
+                        "idempotency_key": f"tortle-forge-replace-{standard}",
+                    },
+                )
+
+        original_guard = server_module._reject_new_tortle_natural_armor_provenance
+        monkeypatch.setattr(
+            server_module,
+            "_reject_new_tortle_natural_armor_provenance",
+            lambda _sheet: None,
+        )
+        poisoned_template = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "name": "Pre-upgrade forged Tortle template",
+                    "sheet": _forged_tortle_natural_armor_sheet(standard=False),
+                },
+                "principal_id": "system:local",
+                "idempotency_key": "tortle-forge-poisoned-template",
+            },
+        )
+        monkeypatch.setattr(
+            server_module,
+            "_reject_new_tortle_natural_armor_provenance",
+            original_guard,
+        )
+        with pytest.raises(Exception, match="only by character_content_apply"):
+            await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "template",
+                    "payload": {
+                        "template_id": poisoned_template["id"],
+                        "campaign_id": campaign["id"],
+                    },
+                    "principal_id": "system:local",
+                    "idempotency_key": "tortle-forge-poisoned-template-instantiate",
+                },
+            )
+
+    import asyncio
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.fresh_database
+def test_preupgrade_forged_tortle_addon_cannot_replay_activation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = Path(__file__).resolve().parents[3]
+    config = McpConfig(
+        home=tmp_path / "home",
+        database_url=None,
+        chroma_url=None,
+        chroma_path_override=None,
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
+    )
+
+    async def exercise() -> None:
+        server = create_server(config)
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {"name": "Tortle AC", "idempotency_key": "tortle-ac-campaign"},
+        )
+        profile = await _call(
+            server,
+            "campaign_rules",
+            {
+                "campaign_id": campaign["id"],
+                "action": "set_profile",
+                "payload": {"edition": "2014"},
+                "principal_id": "system:local",
+                "expected_revision": campaign["revision"],
+                "idempotency_key": "tortle-ac-profile",
+            },
+        )
+
+        source_chunks = [
+            "# Reviewed fixture\n\n## Tortle\n\nThe Tortle species was reviewed.",
+            (
+                "## Natural Armor\n\nThe shell gives base AC 17, Dexterity does not "
+                "affect it, armor gives no benefit, and a shield applies normally."
+            ),
+        ]
+        source_rule_refs = [
+            f"rule-source:{TORTLE_NATURAL_ARMOR_SOURCE_KEY}#chunk:"
+            f"{rule_chunk_key(TORTLE_NATURAL_ARMOR_SOURCE_KEY, 0, index, chunk)}"
+            for index, chunk in enumerate(source_chunks)
+        ]
+        artifact = {
+            "id": TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
+            "kind": "species",
+            "application_state": "selection_ready",
+            "mechanical_scope": "mechanical",
+            "execution_state": "ruling_ready",
+            "semantic_resolution": {
+                "status": "resolved",
+                "mode": "agent_ruling",
+                "first_use_compilation_required": False,
+                "clause_ids": ["tortle-natural-armor"],
+            },
+            "ruling_requirements": [
+                {
+                    "kind": "source_bound_import_resolution",
+                    "policy_ref": "rule_clause.v1",
+                    "reason": "Apply only the exact source-bound Tortle trait.",
+                    "default_resolver": "agent",
+                    "ruling_kind": "agent_dm_adjudication",
+                    "source_excerpt": "Armor gives no benefit; a shield applies normally.",
+                    "requires_external_input_only_for": [],
+                }
+            ],
+            "rule_clauses": [
+                {
+                    "schema_version": 1,
+                    "id": "tortle-natural-armor",
+                    "title": "Tortle Natural Armor",
+                    "scope": "mechanical",
+                    "source_citations": [
+                        {
+                            "source": f"rule-source:{TORTLE_NATURAL_ARMOR_SOURCE_KEY}",
+                            "source_ref": {"page": 4},
+                            "source_excerpt": (
+                                "The shell gives base AC 17, armor gives no benefit, "
+                                "and a shield applies normally."
+                            ),
+                        }
+                    ],
+                    "settlement": {
+                        "mode": "agent_ruling",
+                        "default_resolver": "agent",
+                        "ruling_kind": "agent_dm_adjudication",
+                        "reason": "Apply only the exact source-bound Tortle trait.",
+                    },
+                }
+            ],
+            "card": {
+                "name": "Tortle",
+                "base_species": "Tortle",
+                "grants": {
+                    "natural_armor_base": 17,
+                    "natural_armor_includes_dexterity": False,
+                    "features": [
+                        {
+                            "name": "Natural Armor",
+                            "description": "Fixed AC 17; a shield applies normally.",
+                        }
+                    ],
+                    "unresolved": [],
+                },
+            },
+            "rule_refs": source_rule_refs,
+        }
+        artifact["selection_contract"] = build_selection_contract(
+            artifact,
+            status="ready",
+            references=source_rule_refs,
+        )
+        with pytest.raises(Exception, match="reserved for official package"):
+            await import_and_activate_addon_fixture(
+                _call,
+                server,
+                campaign["id"],
+                config.home,
+                manifest={
+                    "id": "dnd5e.addon.third-party-tortle-shadow",
+                    "version": "1.0.0",
+                    "title": "Third-party Tortle shadow",
+                    "namespace": "dnd5e.addon.third-party-tortle-shadow",
+                    "system_id": "dnd5e",
+                    "editions": ["2014"],
+                    "capabilities": [],
+                },
+                artifacts=[artifact],
+                mechanics=[],
+                expected_revision=profile["campaign_revision"],
+                request_key="tortle-artifact-shadow",
+            )
+        campaign_after_shadow = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        assert campaign_after_shadow["revision"] == profile["campaign_revision"]
+        assert await _call(
+            server,
+            "content_pack",
+            {
+                "action": "list",
+                "payload": {"campaign_id": campaign["id"], "kind": "addon"},
+            },
+        ) == []
+        tortle_rebind = next(
+            item
+            for item in official_expansion_dependency_rebinds()
+            if item["package_id"] == TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID
+            and item["definition_id"] == TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID
+        )
+        await _call(
+            server,
+            "content_pack",
+            {
+                "action": "activate",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "kind": "core_rules",
+                    "pack_id": tortle_rebind["dependency_id"],
+                    "version": tortle_rebind["runtime_version"],
+                },
+                "expected_revision": profile["campaign_revision"],
+                "idempotency_key": "tortle-ac-support-activate",
+            },
+        )
+        campaign_after_support = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        original_official_validator = (
+            server_module._validate_reserved_official_package_identity
+        )
+
+        def trust_synthetic_fixture(package: dict[str, object]) -> None:
+            with pytest.raises(ValueError, match="reserved official identity"):
+                server_module._validate_reserved_official_package_identity(package)
+            monkeypatch.setattr(
+                server_module,
+                "_validate_reserved_official_package_identity",
+                lambda _package: None,
+            )
+
+        fixture = await import_and_activate_addon_fixture(
+            _call,
+            server,
+            campaign["id"],
+            config.home,
+            manifest={
+                "id": TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID,
+                "version": "1.0.0",
+                "title": "Reviewed Tortle Package",
+                "namespace": TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID,
+                "system_id": "dnd5e",
+                "editions": ["2014"],
+                "capabilities": [],
+                "dependencies": [
+                    {
+                        "id": tortle_rebind["dependency_id"],
+                        "version": tortle_rebind["dependency_version"],
+                        "checksum": tortle_rebind["source_checksum"],
+                        "rule_checksum": tortle_rebind["source_checksum"],
+                    }
+                ],
+            },
+            artifacts=[artifact],
+            mechanics=[],
+            expected_revision=campaign_after_support["revision"],
+            request_key="tortle-ac",
+            content_dependencies_override=[],
+            content_package_id_override=TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
+            content_package_version_override=TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
+            source_key_override=TORTLE_NATURAL_ARMOR_SOURCE_KEY,
+            source_chunks_override=source_chunks,
+            before_import=trust_synthetic_fixture,
+        )
+        assert fixture["package"]["id"] == TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID
+        monkeypatch.setattr(
+            server_module,
+            "_validate_reserved_official_package_identity",
+            original_official_validator,
+        )
+        with pytest.raises(Exception, match="reserved official identity"):
+            await _call(
+                server,
+                "content_pack",
+                {
+                    "action": "activate",
+                    "payload": {
+                        "campaign_id": campaign["id"],
+                        "kind": "addon",
+                        "addon_id": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
+                        "version": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
+                    },
+                    "expected_revision": campaign_after_support["revision"],
+                    "idempotency_key": "tortle-ac:activate",
+                },
+            )
+        unchanged = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        assert unchanged["revision"] == fixture["campaign_revision"]
+        forged_inner_arguments = {
+            "action": "activate",
+            "payload": {
+                "campaign_id": campaign["id"],
+                "kind": "core_rules",
+                "pack_id": TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID,
+                "version": "1.0.0",
+            },
+            "expected_revision": fixture["campaign_revision"],
+            "idempotency_key": "tortle-forged-inner-activate",
+        }
+        with pytest.raises(Exception, match="immutable official content archive"):
+            await _call(server, "content_pack", forged_inner_arguments)
+        restarted = create_server(config)
+        with pytest.raises(Exception, match="reserved official identity"):
+            await _call(
+                restarted,
+                "content_pack",
+                {
+                    "action": "activate",
+                    "payload": {
+                        "campaign_id": campaign["id"],
+                        "kind": "addon",
+                        "addon_id": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
+                        "version": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
+                    },
+                    "expected_revision": campaign_after_support["revision"],
+                    "idempotency_key": "tortle-ac:activate",
+                },
+            )
+        with pytest.raises(Exception, match="immutable official content archive"):
+            await _call(restarted, "content_pack", forged_inner_arguments)
+    import asyncio
+
+    asyncio.run(exercise())
+
+
 @pytest.mark.fresh_database
 def test_subclass_spell_prefers_exact_reviewed_dependency_over_bundled_duplicate(
     tmp_path: Path,
@@ -2165,9 +2747,7 @@ def test_subclass_spell_prefers_exact_reviewed_dependency_over_bundled_duplicate
                         "id": "dnd5e.addon.reviewed-dependency",
                         "version": "1.0.0",
                         "checksum": dependency_pack["package"]["checksum"],
-                        "rule_checksum": dependency_pack["imported"]["components"][0][
-                            "checksum"
-                        ],
+                        "rule_checksum": dependency_pack["imported"]["components"][0]["checksum"],
                     }
                 ],
             },

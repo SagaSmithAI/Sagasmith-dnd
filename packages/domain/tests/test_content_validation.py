@@ -222,9 +222,7 @@ def test_background_materializer_requires_bounded_choice_semantics() -> None:
         "Investigation",
         "Religion",
     ]
-    assert background_materializer_errors(card) == [
-        "background skill_options cannot repeat fixed skills"
-    ]
+    assert background_materializer_errors(card) == []
 
 
 def test_background_materializer_accepts_only_reviewed_embedded_equipment() -> None:
@@ -561,6 +559,11 @@ def test_species_materializer_accepts_decreases_defenses_and_shared_spell_resour
     )
     card["grants"]["spell_grants"][1]["free_casts"] = 1
     card["grants"]["natural_weapons"][0]["damage_formula"] = "source dice"
+    assert any(
+        "damage_formula must be one bounded dice formula" in error
+        for error in species_materializer_errors(card)
+    )
+    card["grants"]["natural_weapons"][0]["damage_formula"] = "101d6"
     assert any(
         "damage_formula must be one bounded dice formula" in error
         for error in species_materializer_errors(card)

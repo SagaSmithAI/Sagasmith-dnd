@@ -192,6 +192,7 @@ def resolve_death_save(
     bonus: int = 0,
     reroll_ones: bool = False,
     rng: RandomSource | None = None,
+    recovery_allowed: bool = True,
 ) -> dict:
     """Resolve a death save, including natural 1/20 special cases."""
     die = roll_d20(
@@ -204,16 +205,28 @@ def resolve_death_save(
     next_failures = failures
     outcome = "pending"
     if die["natural"] == 20:
-        outcome = "revived"
-        next_successes = 0
-        next_failures = 0
+        if recovery_allowed:
+            outcome = "revived"
+            next_successes = 0
+            next_failures = 0
+        else:
+            # The successful save still counts; only HP recovery (and therefore
+            # its counter reset) is prohibited while the creature cannot breathe.
+            next_successes += 1
     elif die["natural"] == 1:
         next_failures += 2
     elif die["natural"] + int(bonus) >= 10:
         next_successes += 1
     else:
         next_failures += 1
-    if outcome == "pending" and next_successes >= 3:
+    # Successes accumulated while stabilization was forbidden are not a new
+    # successful save. After air returns, a failed roll must still be a failure.
+    if (
+        outcome == "pending"
+        and next_successes > successes
+        and next_successes >= 3
+        and recovery_allowed
+    ):
         outcome = "stable"
     elif outcome == "pending" and next_failures >= 3:
         outcome = "dead"

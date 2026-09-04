@@ -4,6 +4,7 @@ from copy import deepcopy
 import pytest
 
 from sagasmith_dnd.character_schema import (
+    add_effect,
     add_inventory_item,
     default_character_sheet,
     derive_character_sheet,
@@ -31,9 +32,11 @@ from sagasmith_dnd.combat_engine import (
     current_combatant,
     damage_amount_after_reduction,
     dodge_benefit_active,
+    emerge_tortle_shell_defense,
     encounter_dodge_save_advantage,
     end_concentration_for_incapacitating_conditions,
     end_turn,
+    enter_tortle_shell_defense,
     force_move_directly_away,
     force_move_directly_toward,
     pay_activity_activation,
@@ -45,6 +48,7 @@ from sagasmith_dnd.combat_engine import (
     queue_combatant,
     reconcile_dodge_lifecycle,
     reconcile_effect_dependencies,
+    reconcile_tortle_shell_defense_projection,
     resolve_actor_check,
     resolve_actor_contest,
     resolve_actor_group_check,
@@ -83,7 +87,12 @@ from sagasmith_dnd.spatial import compile_battle_map
 from sagasmith_dnd.standard_feature_ids import (
     CORE_ORC_AGGRESSIVE_MECHANIC_ID,
     CORE_RELENTLESS_ENDURANCE_MECHANIC_ID,
+    CORE_TORTLE_SHELL_DEFENSE_MECHANIC_ID,
     ORC_AGGRESSIVE_ACTIVITY_ID,
+    TORTLE_SHELL_DEFENSE_ARTIFACT_ID,
+    TORTLE_SHELL_DEFENSE_FEATURE_ID,
+    TORTLE_SHELL_DEFENSE_LEGACY_PACK_ID,
+    TORTLE_SHELL_DEFENSE_SOURCE_KEY,
 )
 from sagasmith_dnd.standard_spell_ids import (
     CORE_2024_HYPNOTIC_PATTERN_SPELL_ID,
@@ -345,6 +354,44 @@ def _actor(identifier: str, *, hp: int = 12, ac: int = 10) -> dict:
         "sheet": sheet,
         "derived": derive_character_sheet(sheet),
     }
+
+
+def _tortle_actor(identifier: str) -> dict:
+    actor = _actor(identifier, ac=17)
+    source_ref = (
+        f"rule-source:{TORTLE_SHELL_DEFENSE_SOURCE_KEY}#chunk:"
+        f"{TORTLE_SHELL_DEFENSE_SOURCE_KEY}/section-9/chunk-10-fb5a021f5935d9e8"
+    )
+    actor["sheet"]["content"]["features"].append(
+        {
+            "id": TORTLE_SHELL_DEFENSE_FEATURE_ID,
+            "name": "Shell Defense",
+            "description": (
+                "Source-bound action: withdraw or emerge and apply the cited AC, save, speed, "
+                "prone, reaction, and action restrictions."
+            ),
+            "source_key": "Tortle",
+            "pack_id": TORTLE_SHELL_DEFENSE_LEGACY_PACK_ID,
+            "pack_version": "1.0.1",
+            "rule_refs": [source_ref],
+            "mechanic_refs": [],
+        }
+    )
+    actor["sheet"]["content"]["selections"].append(
+        {
+            "artifact_id": TORTLE_SHELL_DEFENSE_ARTIFACT_ID,
+            "kind": "species",
+            "name": "Tortle",
+            "pack_id": TORTLE_SHELL_DEFENSE_LEGACY_PACK_ID,
+            "pack_version": "1.0.1",
+            "rule_refs": [source_ref],
+            "mechanic_refs": [],
+            "selection": {},
+        }
+    )
+    actor["sheet"] = validate_character_sheet(actor["sheet"])
+    actor["derived"] = derive_character_sheet(actor["sheet"])
+    return actor
 
 
 def test_zero_walk_speed_is_preserved_when_a_combat_turn_starts() -> None:
@@ -2254,6 +2301,86 @@ def test_unarmed_strike_remains_available_with_an_unusable_equipped_weapon() -> 
 
     assert plan["weapon_id"] == "unarmed-strike"
     assert plan["damage_expression"] == "1 + 3"
+
+
+def test_intrinsic_claws_settle_as_strength_unarmed_slashing_attack() -> None:
+    attacker = _actor("tortle")
+    attacker["sheet"]["traits"]["intrinsic_attacks"] = [
+        {
+            "id": "tortle-claws",
+            "name": "Claws",
+            "attack_ability": "strength",
+            "damage_formula": "1d4",
+            "damage_type": "slashing",
+            "reach_ft": 5,
+            "source": {
+                "artifact_id": "test.species.tortle",
+                "pack_id": "test.tortle",
+                "pack_version": "1.0.0",
+                "rule_refs": ["test:tortle:p4"],
+            },
+        }
+    ]
+    attacker["sheet"]["content"]["features"] = [
+        {
+            "id": "dnd5e.content.srd2014.feature.fighter-fighting-style",
+            "name": "Fighting Style",
+            "source_key": "Fighter",
+            "choices": {"option": "Dueling"},
+        }
+    ]
+    attacker["derived"] = derive_character_sheet(attacker["sheet"])
+    target = _actor("target", hp=20, ac=10)
+    rules = resolution_context(
+        {"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []}
+    )
+
+    ordinary_unarmed = preflight_attack(
+        attacker,
+        target,
+        action={"weapon_id": "unarmed-strike"},
+        rules=rules,
+    )
+    assert ordinary_unarmed["damage_expression"] == "1 + 3"
+    assert ordinary_unarmed["damage_type"] == "bludgeoning"
+    assert ordinary_unarmed["natural_weapon"] is False
+    assert ordinary_unarmed["intrinsic_attack"] is False
+
+    plan = preflight_attack(
+        attacker,
+        target,
+        action={"weapon_id": "tortle-claws"},
+        rules=rules,
+    )
+
+    assert plan["attack_bonus"] == 5
+    assert plan["damage_expression"] == "1d4 + 3"
+    assert plan["damage_modifiers"] == []
+    assert plan["damage_type"] == "slashing"
+    assert plan["unarmed_strike"] is True
+    assert plan["natural_weapon"] is True
+    assert plan["intrinsic_attack"] is True
+    assert "dnd5e.core.attack.unarmed_strike" in {
+        receipt["mechanic_id"] for receipt in plan["rule_receipts"]
+    }
+
+    _, damaged, result = resolve_attack_action(
+        attacker,
+        target,
+        plan=plan,
+        rules=rules,
+        rng=_SequenceRng(10, 4),
+    )
+    assert result["hit"] is True
+    assert result["unarmed_strike"] is True
+    assert result["natural_weapon"] is True
+    assert result["intrinsic_attack"] is True
+    assert result["damage"]["input_amount"] == 7
+    assert result["damage"]["roll_parts"][0]["expression"] == "1d4 + 3"
+    assert result["damage"]["roll_parts"][0]["rolls"] == [4]
+    assert result["damage"]["roll_parts"][0]["amount"] == 7
+    assert result["damage"]["roll_parts"][0]["damage_type"] == "slashing"
+    assert damaged["sheet"]["combat"]["hp"]["value"] == 13
 
 
 def test_positioned_ranged_attack_requires_recorded_range() -> None:
@@ -4440,6 +4567,202 @@ def test_dodge_lasts_until_start_of_next_turn_and_affects_attacks() -> None:
     encounter = end_turn(encounter, actor_id_value="attacker")
     dodger_state = next(item for item in encounter["combatants"] if item["actor_id"] == "dodger")
     assert not dict(dodger_state.get("turn_flags") or {}).get("dodging")
+
+
+def test_2014_tortle_shell_defense_settles_exact_source_effects() -> None:
+    tortle = _tortle_actor("tortle")
+    tortle["sheet"]["traits"]["proficiencies"]["armor"].append("shields")
+    tortle.update(initiative=20, position={"x": 0, "y": 0})
+    tortle["sheet"], shield_id = add_inventory_item(
+        tortle["sheet"],
+        {
+            "id": "shield",
+            "name": "Shield",
+            "kind": "shield",
+            "mechanics": {"ac_bonus": 2, "magic_bonus": 0},
+        },
+    )
+    tortle["sheet"] = equip_inventory_item(tortle["sheet"], shield_id, "shield")
+    tortle["derived"] = derive_character_sheet(tortle["sheet"])
+    attacker = _actor("attacker")
+    attacker.update(initiative=10, position={"x": 1, "y": 0})
+    encounter = _grid_encounter([tortle, attacker])
+    assert "shell_defense" in available_actions(encounter, "tortle")
+    assert tortle["derived"]["armor_class"] == 19
+    encounter["combatants"][0].setdefault("turn_flags", {})["dodging"] = True
+
+    withdrawn_sheet = enter_tortle_shell_defense(tortle["sheet"])
+    encounter = resolve_common_action(
+        encounter,
+        actor_id_value="tortle",
+        action="shell_defense",
+    )
+    tortle_state = encounter["combatants"][0]
+    reconcile_tortle_shell_defense_projection(tortle_state, withdrawn_sheet)
+    tortle["sheet"] = withdrawn_sheet
+    tortle["derived"] = derive_character_sheet(withdrawn_sheet)
+
+    assert tortle["derived"]["armor_class"] == 23
+    assert tortle_state["turn_budget"]["main_action"] == 0
+    assert tortle_state["turn_budget"]["reaction"] == 0
+    assert tortle_state["turn_budget"]["movement"] == 0
+    assert tortle_state["conditions"] == ["prone"]
+    assert tortle_state["turn_flags"]["dodge_ended"]["reason"] == "speed_zero"
+    assert not tortle_state["turn_flags"].get("dodging")
+    assert available_actions(encounter, "tortle") == ["emerge_shell"]
+    assert CORE_TORTLE_SHELL_DEFENSE_MECHANIC_ID in tortle_state["source_capabilities"]
+
+    incapacitated = deepcopy(encounter)
+    incapacitated["combatants"][0]["conditions"].append("incapacitated")
+    assert "emerge_shell" not in available_actions(incapacitated, "tortle")
+
+    strength_save = resolve_actor_check(
+        tortle,
+        kind="save",
+        ability="strength",
+        dc=15,
+        encounter=encounter,
+        rng=_SequenceRng(4, 18),
+    )
+    constitution_save = resolve_actor_check(
+        tortle,
+        kind="save",
+        ability="constitution",
+        dc=15,
+        encounter=encounter,
+        rng=_SequenceRng(5, 17),
+    )
+    dexterity_save = resolve_actor_check(
+        tortle,
+        kind="save",
+        ability="dexterity",
+        dc=15,
+        encounter=encounter,
+        rng=_SequenceRng(18, 4),
+    )
+    assert strength_save["rolls"] == [4, 18]
+    assert strength_save["natural"] == 18
+    assert constitution_save["rolls"] == [5, 17]
+    assert constitution_save["natural"] == 17
+    assert dexterity_save["rolls"] == [18, 4]
+    assert dexterity_save["natural"] == 4
+
+    with pytest.raises(CombatEngineError, match="effective speed is zero"):
+        spend_movement(
+            encounter,
+            "tortle",
+            5,
+            destination={"x": 1, "y": 0},
+            movement_mode="voluntary",
+        )
+    with pytest.raises(CombatEngineError, match="effective speed is zero"):
+        stand_up(encounter, "tortle")
+    teleported = spend_movement(
+        encounter,
+        "tortle",
+        5,
+        destination={"x": 0, "y": 1},
+        movement_mode="teleport",
+    )
+    assert teleported["combatants"][0]["position"] == {"x": 0, "y": 1}
+    forced = spend_movement(
+        teleported,
+        "tortle",
+        5,
+        destination={"x": 0, "y": 2},
+        movement_mode="forced",
+    )
+    assert forced["combatants"][0]["position"] == {"x": 0, "y": 2}
+
+    attacker_turn = end_turn(encounter, actor_id_value="tortle")
+    attack_plan = preflight_attack(attacker, tortle, action={}, encounter=attacker_turn)
+    assert attack_plan["target_ac"] == 23
+    assert attack_plan["advantage"] is True
+    assert "target_prone_within_5_ft" in attack_plan["advantage_sources"]
+    next_tortle_turn = end_turn(attacker_turn, actor_id_value="attacker")
+    next_tortle_state = current_combatant(next_tortle_turn)
+    assert next_tortle_state["turn_budget"]["reaction"] == 0
+    assert available_actions(next_tortle_turn, "tortle") == ["emerge_shell"]
+    with pytest.raises(CombatEngineError, match="only the bonus action to emerge"):
+        resolve_common_action(
+            next_tortle_turn,
+            actor_id_value="tortle",
+            action="dodge",
+        )
+    with pytest.raises(CombatEngineError, match="only the bonus action to emerge"):
+        pay_attack_action(
+            next_tortle_turn,
+            tortle,
+            weapon_id="unarmed-strike",
+            attack_mode="melee",
+        )
+    with pytest.raises(CombatEngineError, match="only the bonus action to emerge"):
+        pay_activity_activation(
+            next_tortle_turn,
+            actor_id_value="tortle",
+            activation_type="bonus_action",
+        )
+    with pytest.raises(CombatEngineError, match="only the bonus action to emerge"):
+        settle_core_activity_effect(
+            next_tortle_turn,
+            actor_id_value="tortle",
+            activity_id="dnd5e.content.srd2014.feature.fighter-action-surge",
+        )
+
+    emerged_sheet = emerge_tortle_shell_defense(withdrawn_sheet)
+    emerged = resolve_common_action(
+        next_tortle_turn,
+        actor_id_value="tortle",
+        action="emerge_shell",
+    )
+    reconcile_tortle_shell_defense_projection(current_combatant(emerged), emerged_sheet)
+    assert current_combatant(emerged)["turn_budget"]["bonus_action"] == 0
+    assert current_combatant(emerged)["turn_budget"]["reaction"] == 1
+    assert current_combatant(emerged)["turn_budget"]["movement"] == 30
+    assert "prone" not in current_combatant(emerged)["conditions"]
+    assert derive_character_sheet(emerged_sheet)["armor_class"] == 19
+
+
+def test_2014_tortle_shell_defense_preserves_overlapping_prone_source() -> None:
+    tortle = _tortle_actor("tortle")
+    withdrawn = enter_tortle_shell_defense(tortle["sheet"])
+    overlapped, _ = add_effect(
+        withdrawn,
+        {
+            "id": "other-prone-source",
+            "name": "Other prone source",
+            "kind": "timed_conditions",
+            "source": "test:other-prone-source",
+            "changes": [{"path": "conditions", "mode": "add", "value": "prone"}],
+        },
+    )
+
+    emerged = emerge_tortle_shell_defense(overlapped)
+
+    assert "prone" in emerged["conditions"]
+    assert [item["id"] for item in emerged["effects"]] == ["other-prone-source"]
+
+
+def test_2014_tortle_shell_defense_rejects_spoofed_source() -> None:
+    spoofed = _actor("spoofed")["sheet"]
+    spoofed["content"]["features"].append(
+        {
+            "name": "Shell Defense",
+            "description": "Claims the same bonuses without finalized source provenance.",
+        }
+    )
+    with pytest.raises(CombatEngineError, match="source-bound"):
+        enter_tortle_shell_defense(spoofed)
+
+    incompatible = _tortle_actor("incompatible")["sheet"]
+    incompatible["content"]["selections"][0]["pack_version"] = "1.0.0"
+    with pytest.raises(CombatEngineError, match="source-bound"):
+        enter_tortle_shell_defense(incompatible)
+
+    orphaned_effect = enter_tortle_shell_defense(_tortle_actor("orphaned")["sheet"])
+    orphaned_effect["content"]["selections"][0]["pack_version"] = "1.0.0"
+    with pytest.raises(CombatEngineError, match="exact source provenance"):
+        reconcile_tortle_shell_defense_projection({}, orphaned_effect)
 
 
 @pytest.mark.parametrize(

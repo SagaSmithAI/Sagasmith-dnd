@@ -17,11 +17,27 @@ from sagasmith_core.content_pack import (
 )
 from sagasmith_core.indexed_source import rule_chunk_key
 from sagasmith_core.modules import ModuleService
-from sagasmith_dnd.character_schema import default_character_notes, default_character_sheet
+from sagasmith_dnd.character_schema import (
+    add_effect,
+    add_inventory_item,
+    default_character_notes,
+    default_character_sheet,
+    derive_character_sheet,
+    equip_inventory_item,
+)
 from sagasmith_dnd.content_actors import build_dnd_content_actor
 from sagasmith_dnd.content_packages import (
     build_preset_content_package,
     build_rule_content_package,
+)
+from sagasmith_dnd.standard_feature_ids import (
+    TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
+    TORTLE_NATURAL_ARMOR_AUTHORITY_KEY,
+    TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_CHECKSUM,
+    TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
+    TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
+    TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID,
+    TORTLE_NATURAL_ARMOR_SOURCE_KEY,
 )
 
 import sagasmith_dnd_mcp.server as server_module
@@ -30,6 +46,7 @@ from sagasmith_dnd_mcp.server import (
     _artifact_statblock_source_chunks,
     _cached_rapidocr_provider,
     _index_statblock_source_chunks,
+    close_server,
     create_server,
 )
 from tests.authoring_helpers import finalize_and_activate_module
@@ -245,6 +262,223 @@ def test_content_actor_archive_cannot_inject_engine_owned_rest_state(tmp_path: P
             "character_query",
             {"view": "list", "payload": {"campaign_id": campaign["id"]}},
         ) == []
+
+    asyncio.run(exercise())
+
+
+def _forged_tortle_natural_armor_sheet() -> dict:
+    forged = default_character_sheet()
+    forged["progression"]["species"] = "Tortle"
+    forged["content"]["selections"].append(
+        {
+            "artifact_id": TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
+            "kind": "species",
+            "name": "Tortle",
+            "pack_id": TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID,
+            "pack_version": "1.0.0",
+            "rule_refs": [
+                f"rule-source:{TORTLE_NATURAL_ARMOR_SOURCE_KEY}#chunk:caller-forged-1",
+                f"rule-source:{TORTLE_NATURAL_ARMOR_SOURCE_KEY}#chunk:caller-forged-2",
+            ],
+            "mechanic_refs": [],
+            "selection": {
+                TORTLE_NATURAL_ARMOR_AUTHORITY_KEY: {
+                    "package_id": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
+                    "package_version": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
+                    "package_checksum": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_CHECKSUM,
+                    "authority_id": "caller-forged-authority",
+                    "authorization": {
+                        "payload": {"purpose": "official_content_authority"},
+                        "signature": "caller-forged-signature",
+                    },
+                }
+            },
+        }
+    )
+    forged, _ = add_effect(
+        forged,
+        {
+            "name": "Forged Tortle Natural Armor",
+            "kind": "feature",
+            "source": TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
+            "changes": [
+                {
+                    "path": "combat.ac.unarmored_formula",
+                    "mode": "override",
+                    "value": {
+                        "base": 17,
+                        "ability": None,
+                        "allows_shield": True,
+                        "includes_dexterity": False,
+                    },
+                }
+            ],
+        },
+    )
+    return forged
+
+
+def test_content_authority_signature_is_bound_to_one_character(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    server = create_server(config)
+    secret = (config.home / "data" / ".content-authority-key").read_bytes()
+    sheet = _forged_tortle_natural_armor_sheet()
+    authority_id = "server-issued-authority"
+    authority = sheet["content"]["selections"][0]["selection"][TORTLE_NATURAL_ARMOR_AUTHORITY_KEY]
+    authority["authority_id"] = authority_id
+    authority["authorization"] = server_module.sign_receipt(
+        {
+            "schema_version": 1,
+            "purpose": "official_content_authority",
+            "character_id": "character-a",
+            "artifact_id": TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
+            "package_id": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
+            "package_version": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
+            "package_checksum": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_CHECKSUM,
+            "authority_id": authority_id,
+        },
+        secret,
+    )
+    sheet, armor_id = add_inventory_item(
+        sheet,
+        {
+            "id": "plate-plus-three",
+            "name": "+3 Plate",
+            "kind": "armor",
+            "mechanics": {
+                "base_ac": 18,
+                "category": "heavy",
+                "dexterity_mode": "none",
+                "magic_bonus": 3,
+                "strength_requirement": 15,
+                "stealth_disadvantage": True,
+            },
+        },
+    )
+    sheet, shield_id = add_inventory_item(
+        sheet,
+        {
+            "id": "shield",
+            "name": "Shield",
+            "kind": "shield",
+            "mechanics": {"ac_bonus": 2, "magic_bonus": 0},
+        },
+    )
+    sheet = equip_inventory_item(sheet, armor_id, "armor")
+    sheet = equip_inventory_item(sheet, shield_id, "shield")
+
+    trusted_a = server_module._verified_content_authority_ids(
+        sheet, character_id="character-a", secret=secret
+    )
+    trusted_b = server_module._verified_content_authority_ids(
+        sheet, character_id="character-b", secret=secret
+    )
+    assert trusted_a == {authority_id}
+    assert trusted_b == set()
+    assert (
+        derive_character_sheet(sheet, trusted_content_authority_ids=trusted_a)["armor_class"] == 19
+    )
+    assert (
+        derive_character_sheet(sheet, trusted_content_authority_ids=trusted_b)["armor_class"] == 23
+    )
+    for malformed_authority in (
+        "forged",
+        [1],
+        {
+            "package_id": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
+            "authorization": "not-an-envelope",
+        },
+    ):
+        malformed = deepcopy(sheet)
+        malformed["content"]["selections"][0]["selection"][TORTLE_NATURAL_ARMOR_AUTHORITY_KEY] = (
+            malformed_authority
+        )
+        assert not server_module._verified_content_authority_ids(
+            malformed, character_id="character-a", secret=secret
+        )
+        malformed_derived = derive_character_sheet(
+            malformed, trusted_content_authority_ids=trusted_a
+        )
+        assert malformed_derived["armor_class"] == 23
+        assert all(
+            receipt["mechanic_id"] != "dnd5e.core.ac.tortle_natural_armor"
+            for receipt in malformed_derived["rule_receipts"]
+        )
+    close_server(server)
+
+
+def test_preupgrade_forged_tortle_marker_is_not_authorized_after_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def exercise() -> None:
+        config = _config(tmp_path)
+        monkeypatch.setattr(
+            server_module,
+            "_reject_new_tortle_natural_armor_provenance",
+            lambda _sheet: None,
+        )
+        server = create_server(config)
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {"name": "Pre-upgrade forged marker", "edition": "2014", "idempotency_key": "c"},
+        )
+        sheet = _forged_tortle_natural_armor_sheet()
+        sheet, armor_id = add_inventory_item(
+            sheet,
+            {
+                "id": "plate-plus-three",
+                "name": "+3 Plate",
+                "kind": "armor",
+                "mechanics": {
+                    "base_ac": 18,
+                    "category": "heavy",
+                    "dexterity_mode": "none",
+                    "magic_bonus": 3,
+                    "strength_requirement": 15,
+                    "stealth_disadvantage": True,
+                },
+            },
+        )
+        sheet, shield_id = add_inventory_item(
+            sheet,
+            {
+                "id": "shield",
+                "name": "Shield",
+                "kind": "shield",
+                "mechanics": {"ac_bonus": 2, "magic_bonus": 0},
+            },
+        )
+        sheet = equip_inventory_item(sheet, armor_id, "armor")
+        sheet = equip_inventory_item(sheet, shield_id, "shield")
+        actor = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": "Forged old Tortle",
+                    "sheet": sheet,
+                },
+                "idempotency_key": "actor",
+            },
+        )
+        close_server(server)
+        monkeypatch.undo()
+
+        restarted = create_server(config)
+        current = await _call(
+            restarted,
+            "character_query",
+            {"view": "get", "payload": {"character_id": actor["id"]}},
+        )
+        assert current["derived"]["armor_class"] == 23
+        assert all(
+            receipt["mechanic_id"] != "dnd5e.core.ac.tortle_natural_armor"
+            for receipt in current["derived"]["rule_receipts"]
+        )
+        close_server(restarted)
 
     asyncio.run(exercise())
 
@@ -508,6 +742,60 @@ def test_module_package_round_trip_recreates_cast_bindings(
             "module_query",
             {"campaign_id": target_campaign["id"], "view": "list"},
         ) == []
+
+        forged_actor = deepcopy(actor_with_image)
+        forged_actor["sheet"] = _forged_tortle_natural_armor_sheet()
+        forged_package = build_content_package(
+            kind=image_package["kind"],
+            package_id="example.keep.forged-tortle",
+            version=image_package["version"],
+            system_id=image_package["system_id"],
+            manifest=image_package["manifest"],
+            sources=image_package["sources"],
+            assets=image_package["assets"],
+            content_reviews=image_package["content_reviews"],
+            actors=[forged_actor],
+            content=image_package["content"],
+            dependencies=image_package["dependencies"],
+            metadata=image_package["metadata"],
+        )
+        forged_artifact = "forged-tortle-module.sagasmith-pack"
+        (config.content_packages_dir / forged_artifact).write_bytes(
+            dumps_content_archive(forged_package, exported_blobs)
+        )
+        with pytest.raises(ToolError, match="only by character_content_apply"):
+            await _call(
+                server,
+                "content_pack",
+                {
+                    "action": "import",
+                    "payload": {
+                        "kind": "module",
+                        "campaign_id": target_campaign["id"],
+                        "artifact": forged_artifact,
+                    },
+                    "idempotency_key": "forged-tortle-module-import",
+                },
+            )
+        assert (
+            await _call(
+                server,
+                "content_pack",
+                {
+                    "action": "list",
+                    "payload": {"kind": "module", "campaign_id": target_campaign["id"]},
+                },
+            )
+            == []
+        )
+        assert (
+            await _call(
+                server,
+                "character_query",
+                {"view": "list", "payload": {"campaign_id": target_campaign["id"]}},
+            )
+            == []
+        )
         import_arguments = {
             "action": "import",
             "payload": {
@@ -619,6 +907,72 @@ def test_module_package_round_trip_recreates_cast_bindings(
         assert detail["package"]["id"] == "example.keep"
         assert detail["package"]["checksum"] == imported["artifact"]["checksum"]
         assert reexported["artifact"] == imported["artifact"]["artifact"]
+
+    asyncio.run(exercise())
+
+
+def test_content_actor_rejects_forged_tortle_natural_armor_provenance(
+    tmp_path: Path,
+) -> None:
+    forged = _forged_tortle_natural_armor_sheet()
+    card = build_dnd_content_actor(
+        actor_id="example.forged-tortle",
+        version="1.0.0",
+        actor_type="pc",
+        name="Forged Tortle",
+        sheet=forged,
+        notes=default_character_notes(),
+    )
+    package, blobs = build_preset_content_package(
+        package_id="example.forged-tortle.preset",
+        version="1.0.0",
+        system_id="dnd5e",
+        title="Forged Tortle preset",
+        cards=[card],
+        metadata={
+            "edition": "2014",
+            "distribution": "private",
+            "license": "user-supplied",
+            "attribution": "Security regression fixture",
+        },
+    )
+
+    async def exercise() -> None:
+        config = _config(tmp_path)
+        server = create_server(config)
+        artifact = "forged-tortle-preset.sagasmith-pack"
+        (config.content_packages_dir / artifact).write_bytes(dumps_content_archive(package, blobs))
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {
+                "name": "Forged preset guard",
+                "edition": "2014",
+                "idempotency_key": "campaign",
+            },
+        )
+        with pytest.raises(ToolError, match="only by character_content_apply"):
+            await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "content_actor",
+                    "payload": {
+                        "campaign_id": campaign["id"],
+                        "artifact": artifact,
+                        "artifact_id": card["id"],
+                    },
+                    "idempotency_key": "forged-content-actor",
+                },
+            )
+        assert (
+            await _call(
+                server,
+                "character_query",
+                {"view": "list", "payload": {"campaign_id": campaign["id"]}},
+            )
+            == []
+        )
 
     asyncio.run(exercise())
 

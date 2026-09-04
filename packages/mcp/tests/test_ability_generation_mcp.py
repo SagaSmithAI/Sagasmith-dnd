@@ -193,20 +193,25 @@ def test_bundled_2014_class_catalog_can_complete_a_bootstrap_actor(tmp_path: Pat
         )
         fighter = next(item for item in catalog if item["name"] == "Fighter")
         assert fighter["application_state"] == "selection_ready"
-        assert fighter["selection_requirements"] == {
-            "fields": ["skills"],
-            "skill_choice_count": 2,
-            "skill_options": [
-                "acrobatics",
-                "athletics",
-                "history",
-                "insight",
-                "intimidation",
-                "perception",
-            ],
-            "tool_choice_count": 0,
-            "tool_options": [],
-        }
+        fighter_requirements = fighter["selection_requirements"]
+        assert fighter_requirements["fields"] == ["skills"]
+        assert fighter_requirements["skill_choice_count"] == 2
+        assert fighter_requirements["skill_options"] == [
+            "acrobatics",
+            "athletics",
+            "history",
+            "insight",
+            "intimidation",
+            "perception",
+        ]
+        assert fighter_requirements["tool_choice_count"] == 0
+        assert fighter_requirements["tool_options"] == []
+        assert fighter_requirements["duplicate_replacement_fields"] == [
+            "skill_replacements",
+            "tool_replacements",
+        ]
+        assert "arcana" in fighter_requirements["skill_replacement_options"]
+        assert "Herbalism Kit" in fighter_requirements["tool_replacement_options"]
 
         applied = await _call(
             server,

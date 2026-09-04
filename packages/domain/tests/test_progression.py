@@ -119,6 +119,121 @@ def test_initialize_reviewed_addon_base_class_rejects_unreviewed_choices() -> No
         )
 
 
+def test_initialize_base_class_requires_duplicate_replacements_and_preserves_expertise() -> None:
+    sheet = default_character_sheet()
+    sheet["skills"]["arcana"]["proficiency"] = "expertise"
+
+    definition = {
+        "hit_die": 8,
+        "saving_throw_proficiencies": ["constitution", "intelligence"],
+        "armor_proficiencies": [],
+        "weapon_proficiencies": [],
+        "tool_proficiencies": [],
+        "skill_choice_count": 2,
+        "skill_options": ["arcana", "investigation"],
+    }
+    with pytest.raises(CombatEngineError, match="replacements are required for: arcana"):
+        initialize_base_class(
+            sheet,
+            class_name="Artificer",
+            class_definition=definition,
+            skill_choices=["Arcana", "Investigation"],
+        )
+
+    result = initialize_base_class(
+        sheet,
+        class_name="Artificer",
+        class_definition=definition,
+        skill_choices=["Investigation", "Arcana"],
+        skill_replacements={"ARCANA": "Perception"},
+    )
+
+    assert result["skill_proficiency_replacements"] == {"arcana": "perception"}
+    assert result["skill_proficiencies"] == ["investigation", "perception"]
+    assert result["sheet"]["skills"]["arcana"]["proficiency"] == "expertise"
+    assert result["sheet"]["skills"]["perception"]["proficiency"] == "proficient"
+
+
+def test_initialize_base_class_replaces_duplicate_fixed_and_selected_tools() -> None:
+    sheet = default_character_sheet()
+    sheet["traits"]["proficiencies"]["tools"] = ["Thieves' Tools", "Smith's Tools"]
+    definition = {
+        "hit_die": 8,
+        "saving_throw_proficiencies": ["constitution", "intelligence"],
+        "armor_proficiencies": [],
+        "weapon_proficiencies": [],
+        "tool_proficiencies": ["thieves' tools"],
+        "tool_choice_count": 1,
+        "tool_options": ["smith's tools", "weaver's tools"],
+        "skill_choice_count": 0,
+        "skill_options": [],
+    }
+
+    with pytest.raises(CombatEngineError, match="thieves' tools, Smith's Tools"):
+        initialize_base_class(
+            sheet,
+            class_name="Artificer",
+            class_definition=definition,
+            skill_choices=[],
+            tool_choices=["Smith's Tools"],
+        )
+
+    result = initialize_base_class(
+        sheet,
+        class_name="Artificer",
+        class_definition=definition,
+        skill_choices=[],
+        tool_choices=["Smith's Tools"],
+        tool_replacements={
+            "THIEVES' TOOLS": "Herbalism Kit",
+            "smith's tools": "Weaver's Tools",
+        },
+        tool_replacement_options=["Herbalism Kit", "Weaver's Tools"],
+    )
+
+    assert result["proficiencies"]["tools"] == ["Herbalism Kit", "Weaver's Tools"]
+    assert result["sheet"]["traits"]["proficiencies"]["tools"] == [
+        "Thieves' Tools",
+        "Smith's Tools",
+        "Herbalism Kit",
+        "Weaver's Tools",
+    ]
+
+
+def test_initialize_base_class_replaces_a_same_source_fixed_and_selected_tool() -> None:
+    definition = {
+        "hit_die": 8,
+        "saving_throw_proficiencies": ["constitution", "intelligence"],
+        "armor_proficiencies": [],
+        "weapon_proficiencies": [],
+        "tool_proficiencies": ["Thieves' Tools"],
+        "tool_choice_count": 1,
+        "tool_options": ["Thieves' Tools", "Weaver's Tools"],
+        "skill_choice_count": 0,
+        "skill_options": [],
+    }
+
+    with pytest.raises(CombatEngineError, match="replacements are required"):
+        initialize_base_class(
+            default_character_sheet(),
+            class_name="Artificer",
+            class_definition=definition,
+            skill_choices=[],
+            tool_choices=["Thieves' Tools"],
+        )
+
+    result = initialize_base_class(
+        default_character_sheet(),
+        class_name="Artificer",
+        class_definition=definition,
+        skill_choices=[],
+        tool_choices=["Thieves' Tools"],
+        tool_replacements={"thieves' tools": "Weaver's Tools"},
+        tool_replacement_options=["Weaver's Tools"],
+    )
+    assert result["proficiencies"]["tools"] == ["Thieves' Tools", "Weaver's Tools"]
+
+
 def test_reviewed_addon_class_spellcasting_survives_selection_and_advancement() -> None:
     sheet = default_character_sheet()
     sheet["abilities"]["intelligence"]["score"] = 16

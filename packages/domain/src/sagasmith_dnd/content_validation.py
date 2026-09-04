@@ -89,6 +89,23 @@ _SELECTION_FIELDS = {
     "subclass": ("target_class_name",),
 }
 
+# These fields implement edition-wide character-building rules rather than
+# content-card semantics.  They are validated by the engine and may extend an
+# immutable v2 content selection contract without changing its reviewed card
+# binding or forcing a republish of finalized archives.
+_ENGINE_SELECTION_FIELDS = {
+    "background": frozenset(
+        {
+            "custom_feature_artifact_id",
+            "equipment_mode",
+            "language_authorization",
+            "skill_replacements",
+            "tool_replacements",
+        }
+    ),
+    "class": frozenset({"skill_replacements", "tool_replacements"}),
+}
+
 _CARD_BINDINGS = {
     "activity": ("name",),
     "background": ("name", "background_grants"),
@@ -314,7 +331,8 @@ def selection_input_errors(artifact: Mapping[str, Any], selection: Mapping[str, 
     if contract.get("status") != "ready":
         return [f"{artifact_id}.selection_contract is not ready"]
     schema = dict(contract["schema"])
-    allowed = set(schema["selection_fields"])
+    kind = str(artifact.get("kind") or "")
+    allowed = set(schema["selection_fields"]) | set(_ENGINE_SELECTION_FIELDS.get(kind, ()))
     unknown = sorted(set(selection) - allowed)
     return (
         [f"{artifact_id}.selection has unsupported fields: {', '.join(unknown)}"] if unknown else []
@@ -433,7 +451,7 @@ def background_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
         return normalized
 
     fixed_languages = string_list(grants.get("languages", []), "languages")
-    fixed_tools = string_list(grants.get("tools", []), "tools")
+    string_list(grants.get("tools", []), "tools")
     grant_skills = string_list(grants.get("skills", []), "skills")
     card_skills = string_list(binding.get("skill_proficiencies", []), "skill_proficiencies")
     if (
@@ -512,15 +530,9 @@ def background_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
         item.casefold() for item in language_options
     ):
         errors.append("background language_options cannot repeat fixed languages")
-    if {item.casefold() for item in fixed_tools}.intersection(
-        item.casefold() for item in tool_options
-    ):
-        errors.append("background tool_options cannot repeat fixed tools")
-    fixed_skills = card_skills or grant_skills
-    if {item.casefold() for item in fixed_skills}.intersection(
-        item.casefold() for item in skill_options
-    ):
-        errors.append("background skill_options cannot repeat fixed skills")
+    # A reviewed source may include an option the same source also fixes.  The
+    # 2014 materializer treats choosing it as a duplicate proficiency and
+    # requires an exact same-kind replacement instead of dropping the grant.
 
     def validate_equipment_package(package_name: str, raw_package: Any) -> None:
         prefix = f"background equipment package {package_name}"
@@ -697,7 +709,16 @@ def species_materializer_errors(binding: Mapping[str, Any]) -> list[str]:
             if str(raw_weapon.get("attack_ability") or "").casefold() not in ability_names:
                 errors.append(f"{prefix}.attack_ability is invalid")
             damage_formula = str(raw_weapon.get("damage_formula") or "").strip().casefold()
-            if not re.fullmatch(r"\d+d\d+(?:\s*[+-]\s*\d+)?", damage_formula):
+            damage_match = re.fullmatch(
+                r"([1-9]\d*)d([1-9]\d*)(?:\s*[+-]\s*(\d+))?",
+                damage_formula,
+            )
+            if (
+                damage_match is None
+                or int(damage_match.group(1)) > 100
+                or not 2 <= int(damage_match.group(2)) <= 1000
+                or int(damage_match.group(3) or 0) > 1000
+            ):
                 errors.append(f"{prefix}.damage_formula must be one bounded dice formula")
             if str(raw_weapon.get("damage_type") or "").casefold() not in {
                 "acid",

@@ -8,6 +8,12 @@ from typing import Any
 from uuid import uuid4
 
 from sagasmith_dnd.activities import ACTIVITY_CONTENT_SECTIONS
+from sagasmith_dnd.breathing import (
+    BREATHING_EFFECT_ID,
+    advance_breathing_rounds,
+    breathing_blocks_recovery,
+    settle_breathing_turn_start,
+)
 from sagasmith_dnd.character_schema import (
     effective_ability_modifier,
     effective_hit_point_maximum,
@@ -570,7 +576,8 @@ def apply_short_rest_hit_die_choice(
 
 
 def advance_effect_durations(
-    sheet: dict[str, Any], *, period: str, amount: int = 1
+    sheet: dict[str, Any], *, period: str, amount: int = 1,
+    advance_breathing: bool = True,
 ) -> dict[str, Any]:
     """Advance effects whose declared period matches and deactivate expired ones."""
     if isinstance(amount, bool) or not isinstance(amount, int) or amount < 1:
@@ -581,10 +588,43 @@ def advance_effect_durations(
     value = deepcopy(sheet)
     advanced: list[str] = []
     expired: list[str] = []
+    breathing_result: dict[str, Any] | None = None
+    if advance_breathing and (
+        normalized == "round"
+        or normalized == "turn_start"
+        and any(
+            isinstance(effect, dict)
+            and effect.get("id") == BREATHING_EFFECT_ID
+            and effect.get("active")
+            and dict(effect.get("metadata") or {}).get("phase") == "suffocating"
+            for effect in value.get("effects", [])
+        )
+    ) and any(
+        isinstance(effect, dict)
+        and effect.get("id") == BREATHING_EFFECT_ID
+        and effect.get("active")
+        for effect in value.get("effects", [])
+    ):
+        try:
+            breathing_result = (
+                settle_breathing_turn_start(value)
+                if normalized == "turn_start"
+                else advance_breathing_rounds(value, rounds=amount)
+            )
+        except ValueError as error:
+            raise CombatEngineError(str(error)) from error
+        value = breathing_result["sheet"]
+        if breathing_result["status"] != "unchanged":
+            if breathing_result["status"] == "dropped_to_zero":
+                expired.append(BREATHING_EFFECT_ID)
+            else:
+                advanced.append(BREATHING_EFFECT_ID)
     for effect in value.get("effects", []):
         if not effect.get("active"):
             continue
         duration = dict(effect.get("duration") or {})
+        if effect.get("id") == BREATHING_EFFECT_ID:
+            continue
         if duration.get("period") != normalized:
             continue
         remaining = int(duration.get("remaining", 0) or 0)
@@ -732,6 +772,7 @@ def advance_elapsed_effect_durations(
     sheet: dict[str, Any],
     *,
     elapsed_ticks: int,
+    advance_breathing: bool = True,
 ) -> dict[str, Any]:
     """Advance actor effects by an exact interval on the canonical tick stream."""
 
@@ -739,11 +780,34 @@ def advance_elapsed_effect_durations(
         elapsed_ticks=elapsed_ticks,
         subject="effect",
     )
-    value, advanced, expired = _advance_elapsed_effect_collection(
-        sheet,
+    # Narrative game time uses the same six-second ticks as combat rounds.
+    # Settle breathing here before generic minute/hour effects so a clock
+    # advance cannot leave a round-based suffocation lifecycle untouched.
+    value = deepcopy(sheet)
+    advanced: list[str] = []
+    expired: list[str] = []
+    if advance_breathing and any(
+        isinstance(effect, dict)
+        and effect.get("id") == BREATHING_EFFECT_ID
+        and effect.get("active")
+        for effect in value.get("effects", [])
+    ):
+        try:
+            breathing = advance_breathing_rounds(value, rounds=delta_ticks)
+        except ValueError as error:
+            raise CombatEngineError(str(error)) from error
+        value = breathing["sheet"]
+        if breathing["status"] == "dropped_to_zero":
+            expired.append(BREATHING_EFFECT_ID)
+        elif breathing["status"] != "unchanged":
+            advanced.append(BREATHING_EFFECT_ID)
+    value, generic_advanced, generic_expired = _advance_elapsed_effect_collection(
+        value,
         collection_key="effects",
         elapsed_ticks=delta_ticks,
     )
+    advanced.extend(generic_advanced)
+    expired.extend(generic_expired)
     _reconcile_ended_effects(value, expired)
     return {
         "sheet": value,
@@ -825,6 +889,8 @@ def recover_stable_creature(sheet: dict[str, Any], *, recovery_hours: int) -> di
     conditions = condition_ids(value.get("conditions"))
     if "dead" in conditions:
         raise CombatEngineError("a dead creature cannot recover from being stable")
+    if breathing_blocks_recovery(value):
+        raise CombatEngineError("a suffocating creature cannot recover until it can breathe")
     if int(hp.get("value", 0) or 0) != 0 or "stable" not in conditions:
         raise CombatEngineError("stable recovery requires a Stable creature at 0 hit points")
     value = apply_basic_healing_to_sheet(value, amount=1)["sheet"]

@@ -39,6 +39,12 @@ def apply_basic_healing_to_sheet(
     conditions = condition_ids(value.get("conditions"))
     if "dead" in conditions:
         raise ValueError("ordinary healing cannot restore a dead actor")
+    # Local import avoids the character_schema -> hit_points -> breathing
+    # import cycle during package initialization.
+    from sagasmith_dnd.breathing import breathing_blocks_recovery
+
+    if breathing_blocks_recovery(value):
+        raise ValueError("a suffocating actor cannot regain hit points until it can breathe")
     before = int(hp.get("value", 0) or 0)
     maximum = effective_hit_point_maximum_value(
         edition=str(value.get("edition") or DEFAULT_CHARACTER_EDITION),

@@ -87,6 +87,11 @@ def validate_dnd_content_actor(actor: Mapping[str, Any]) -> dict[str, Any]:
     """Validate a package-owned v3 actor with the full D&D sheet contracts."""
 
     value, normalized = _normalized_dnd_content_actor(actor)
+    # Immutable actor archives predate optional intrinsic attacks. Absence is
+    # equivalent only to the empty default; retain the original signed payload.
+    if "intrinsic_attacks" not in value["sheet"].get("traits", {}):
+        if normalized["sheet"]["traits"].get("intrinsic_attacks") == []:
+            normalized["sheet"]["traits"].pop("intrinsic_attacks")
     if normalized["sheet"] != value["sheet"] or normalized["notes"] != value["notes"]:
         raise ContentPackageError("D&D content actor must use canonical sheet and notes")
     return value

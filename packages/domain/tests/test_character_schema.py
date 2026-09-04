@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from typing import Any
 
 import pytest
 
@@ -28,11 +29,19 @@ from sagasmith_dnd.chase_engine import start_chase
 from sagasmith_dnd.combat_engine import start_encounter
 from sagasmith_dnd.content_solution import build_content_solution
 from sagasmith_dnd.resolution_plan import compile_resolution_plan
-from sagasmith_dnd.rule_engine import resolution_context
+from sagasmith_dnd.rule_engine import ResolutionContext, resolution_context
 from sagasmith_dnd.standard_feature_ids import (
     CORE_DWARF_HEAVY_ARMOR_SPEED_MECHANIC_ID,
+    CORE_TORTLE_NATURAL_ARMOR_MECHANIC_ID,
     SRD2014_DWARF_SPEED_LEGACY_PACK_VERSIONS,
     SRD2014_DWARF_SPEED_SOURCE_RULE_REF,
+    TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
+    TORTLE_NATURAL_ARMOR_AUTHORITY_KEY,
+    TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_CHECKSUM,
+    TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
+    TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
+    TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID,
+    TORTLE_NATURAL_ARMOR_SOURCE_RULE_REFS,
 )
 from sagasmith_dnd.vocabulary import DENOMINATION_CP_VALUES
 
@@ -67,6 +76,97 @@ def test_runtime_notes_accept_source_bound_portrait_reference() -> None:
 def test_runtime_notes_reject_unbound_portrait_uri() -> None:
     with pytest.raises(ValueError, match="portrait_uri"):
         validate_character_notes({"profile": {"portrait_uri": "https://example.com/goblin.png"}})
+
+
+def _tortle_claws_projection() -> dict:
+    return {
+        "id": "species-natural-weapon-tortle-claws",
+        "name": "Claws",
+        "attack_ability": "strength",
+        "damage_formula": "1d4",
+        "damage_type": "slashing",
+        "reach_ft": 5,
+        "source": {
+            "artifact_id": "test.species.tortle",
+            "pack_id": "test.tortle",
+            "pack_version": "1.0.0",
+            "rule_refs": ["test:tortle:p4"],
+        },
+    }
+
+
+def test_intrinsic_natural_weapon_is_not_inventory_and_remains_available_with_full_hands() -> None:
+    sheet = default_character_sheet()
+    sheet["abilities"]["strength"]["score"] = 16
+    sheet["traits"]["intrinsic_attacks"] = [_tortle_claws_projection()]
+    for item_id, slot in (("sword", "main_hand"), ("torch", "off_hand")):
+        sheet, _ = add_inventory_item(
+            sheet,
+            {
+                "id": item_id,
+                "name": item_id.title(),
+                "kind": "weapon" if item_id == "sword" else "equipment",
+                "mechanics": (
+                    {
+                        "attack_type": "melee",
+                        "attack_ability": "strength",
+                        "damage_formula": "1d8",
+                        "damage_type": "slashing",
+                    }
+                    if item_id == "sword"
+                    else {}
+                ),
+            },
+        )
+        sheet = equip_inventory_item(sheet, item_id, slot)
+
+    normalized = validate_character_sheet(sheet)
+    assert all(
+        item["id"] != "species-natural-weapon-tortle-claws"
+        for item in normalized["inventory"]["items"]
+    )
+    claws = next(
+        attack
+        for attack in derive_character_sheet(normalized)["inventory"]["weapon_attacks"]
+        if attack["item_id"] == "species-natural-weapon-tortle-claws"
+    )
+    assert claws["attack_bonus"] == 5
+    assert claws["damage_expression"] == "1d4 + 3"
+    assert claws["damage_type"] == "slashing"
+    assert claws["proficient"] is True
+    assert claws["intrinsic"] is True
+    assert claws["natural_weapon"] is True
+    assert claws["unarmed_strike"] is True
+    with pytest.raises(LookupError):
+        remove_inventory_item(normalized, claws["item_id"])
+
+
+def test_intrinsic_natural_weapon_requires_narrow_unique_source_bound_profile() -> None:
+    sheet = default_character_sheet()
+    sheet["traits"]["intrinsic_attacks"] = [_tortle_claws_projection()]
+    sheet["inventory"]["items"] = [
+        {
+            "id": "species-natural-weapon-tortle-claws",
+            "name": "Forgery",
+            "kind": "equipment",
+        }
+    ]
+    with pytest.raises(ValueError, match="must not collide"):
+        validate_character_sheet(sheet)
+
+    missing_source = default_character_sheet()
+    forged = _tortle_claws_projection()
+    forged["source"]["rule_refs"] = []
+    missing_source["traits"]["intrinsic_attacks"] = [forged]
+    with pytest.raises(ValueError, match="exact content provenance"):
+        validate_character_sheet(missing_source)
+
+    oversized_dice = default_character_sheet()
+    forged = _tortle_claws_projection()
+    forged["damage_formula"] = "101d6"
+    oversized_dice["traits"]["intrinsic_attacks"] = [forged]
+    with pytest.raises(ValueError, match="bounded dice formula"):
+        validate_character_sheet(oversized_dice)
 
 
 def test_weapon_attacks_derive_actor_proficiency_and_finesse_ability() -> None:
@@ -847,6 +947,52 @@ def test_wallet_valuation_uses_the_shared_denomination_contract() -> None:
     )
 
 
+def test_2014_currency_weight_is_counted_by_default_and_can_be_opted_out() -> None:
+    sheet = validate_character_sheet({"inventory": {"wallet": {"gp": 10}}})
+
+    assert sheet["inventory"]["encumbrance"] == {
+        "mode": "standard",
+        "ignore_currency_weight": False,
+    }
+    assert derive_character_sheet(sheet)["inventory"]["total_weight_oz"] == pytest.approx(3.2)
+
+    house_rule_sheet = validate_character_sheet(
+        {
+            "inventory": {
+                "wallet": {"gp": 10},
+                "encumbrance": {"ignore_currency_weight": True},
+            }
+        }
+    )
+
+    assert derive_character_sheet(house_rule_sheet)["inventory"]["total_weight_oz"] == 0
+
+
+def test_default_currency_weight_can_cross_a_variant_encumbrance_threshold() -> None:
+    sheet = validate_character_sheet(
+        {
+            "abilities": {"strength": {"score": 10}},
+            "inventory": {
+                "wallet": {"cp": 1},
+                "items": [
+                    {
+                        "id": "threshold-load",
+                        "name": "Threshold load",
+                        "kind": "equipment",
+                        "weight_oz": 800,
+                    }
+                ],
+                "encumbrance": {"mode": "variant"},
+            },
+        }
+    )
+
+    derived = derive_character_sheet(sheet)
+    assert derived["inventory"]["total_weight_oz"] == pytest.approx(800.32)
+    assert derived["inventory"]["encumbrance"]["state"] == "encumbered"
+    assert derived["speed"]["walk"] == 20
+
+
 def test_removing_an_effect_cleans_only_conditions_no_longer_owned() -> None:
     sheet = default_character_sheet()
     sheet["conditions"] = ["prone"]
@@ -1463,6 +1609,342 @@ def test_unarmored_base_formula_keeps_shield_and_chooses_highest_source() -> Non
         item["effect_id"]: item["applied"] for item in derived["armor_class_breakdown"]["effects"]
     }
     assert applied == {weaker_id: False, stronger_id: True}
+
+
+def test_2014_tortle_natural_armor_ignores_worn_armor_but_allows_shields() -> None:
+    authority_id = "test-server-issued-tortle-authority"
+
+    def derive_tortle(
+        candidate: dict[str, Any], *, rules: ResolutionContext | None = None
+    ) -> dict[str, Any]:
+        return derive_character_sheet(
+            candidate,
+            rules=rules,
+            trusted_content_authority_ids={authority_id},
+        )
+
+    rules_2014 = resolution_context(
+        {"edition": "2014", "fingerprint": "tortle-test", "lock": [], "mechanics": []}
+    )
+    sheet = default_character_sheet()
+    sheet["progression"]["species"] = "Tortle"
+    sheet["abilities"]["dexterity"]["score"] = 20
+    sheet["content"]["selections"].append(
+        {
+            "artifact_id": TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
+            "kind": "species",
+            "name": "Tortle",
+            "pack_id": TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID,
+            "pack_version": "1.0.0",
+            "rule_refs": list(TORTLE_NATURAL_ARMOR_SOURCE_RULE_REFS),
+            "mechanic_refs": [],
+            "selection": {
+                TORTLE_NATURAL_ARMOR_AUTHORITY_KEY: {
+                    "package_id": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
+                    "package_version": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
+                    "package_checksum": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_CHECKSUM,
+                    "authority_id": authority_id,
+                }
+            },
+        }
+    )
+    sheet, natural_armor_effect_id = add_effect(
+        sheet,
+        {
+            "id": "tortle-natural-armor",
+            "name": "Tortle Natural Armor",
+            "kind": "feature",
+            "source": TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
+            "changes": [
+                {
+                    "path": "combat.ac.unarmored_formula",
+                    "mode": "override",
+                    "value": {
+                        "base": 17,
+                        "ability": None,
+                        "allows_shield": True,
+                        "includes_dexterity": False,
+                    },
+                }
+            ],
+        },
+    )
+    unarmored = derive_tortle(sheet, rules=rules_2014)
+    assert unarmored["armor_class"] == 17
+    assert CORE_TORTLE_NATURAL_ARMOR_MECHANIC_ID in {
+        receipt["mechanic_id"] for receipt in unarmored["rule_receipts"]
+    }
+    sheet, armor_id = add_inventory_item(
+        sheet,
+        {
+            "id": "plate-plus-three",
+            "name": "+3 Plate",
+            "kind": "armor",
+            "mechanics": {
+                "base_ac": 18,
+                "category": "heavy",
+                "dexterity_mode": "none",
+                "magic_bonus": 3,
+                "strength_requirement": 15,
+                "stealth_disadvantage": True,
+            },
+        },
+    )
+    sheet, shield_id = add_inventory_item(
+        sheet,
+        {
+            "id": "shield",
+            "name": "Shield",
+            "kind": "shield",
+            "mechanics": {"ac_bonus": 2, "magic_bonus": 0},
+        },
+    )
+    sheet = equip_inventory_item(sheet, armor_id, "armor")
+    sheet = equip_inventory_item(sheet, shield_id, "shield")
+
+    assert derive_character_sheet(sheet, rules=rules_2014)["armor_class"] == 23
+    derived = derive_tortle(sheet, rules=rules_2014)
+
+    assert derived["armor_class"] == 19
+    assert derived["armor_class_breakdown"]["mode"] == "unarmored_formula"
+    assert derived["armor_class_breakdown"]["armor"]["ignored_for_ac"] is True
+    assert derived["armor_class_breakdown"]["shield"]["bonus"] == 2
+    assert derived["stealth_disadvantage"] is True
+    assert derived["armor_strength"] == {
+        "requirement": 15,
+        "meets_requirement": False,
+        "speed_penalty_ft": 10,
+    }
+    assert derived["speed"]["walk"] == 20
+    assert derived["armor_proficiency"]["proficient"] is False
+    assert derived["equipment_penalties"]["spellcasting_blocked"] is True
+    assert (
+        next(
+            item
+            for item in derived["armor_class_breakdown"]["effects"]
+            if item["effect_id"] == natural_armor_effect_id
+        )["applied"]
+        is True
+    )
+    assert CORE_TORTLE_NATURAL_ARMOR_MECHANIC_ID in {
+        receipt["mechanic_id"] for receipt in derived["rule_receipts"]
+    }
+    assert derive_tortle(sheet, rules=rules_2014) == derived
+
+    for mechanics in (
+        {
+            "base_ac": 11,
+            "category": "light",
+            "dexterity_mode": "full",
+            "magic_bonus": 0,
+            "stealth_disadvantage": False,
+        },
+        {
+            "base_ac": 15,
+            "category": "medium",
+            "dexterity_mode": "max",
+            "dexterity_max": 2,
+            "magic_bonus": 0,
+            "stealth_disadvantage": True,
+        },
+        {
+            "base_ac": 16,
+            "category": "heavy",
+            "dexterity_mode": "none",
+            "magic_bonus": 0,
+            "strength_requirement": 13,
+            "stealth_disadvantage": True,
+        },
+        {
+            "base_ac": 18,
+            "category": "heavy",
+            "dexterity_mode": "none",
+            "magic_bonus": 3,
+            "strength_requirement": 15,
+            "stealth_disadvantage": True,
+        },
+    ):
+        armored = deepcopy(sheet)
+        armored["inventory"]["items"][0]["mechanics"] = mechanics
+        armored_derived = derive_tortle(armored)
+        assert armored_derived["armor_class"] == 19
+        assert armored_derived["stealth_disadvantage"] == mechanics["stealth_disadvantage"]
+        assert armored_derived["equipment_penalties"]["spellcasting_blocked"] is True
+        assert armored_derived["speed"]["walk"] == (
+            20 if mechanics.get("strength_requirement", 0) > 10 else 30
+        )
+        armored["inventory"]["equipment_slots"]["shield"] = None
+        for item in armored["inventory"]["items"]:
+            if item["id"] == shield_id:
+                item["equipped"] = False
+                item["equipped_slot"] = None
+        assert derive_tortle(armored)["armor_class"] == 17
+
+    without_shield = deepcopy(sheet)
+    without_shield["inventory"]["equipment_slots"]["shield"] = None
+    shield = next(item for item in without_shield["inventory"]["items"] if item["id"] == shield_id)
+    shield["equipped"] = False
+    shield["equipped_slot"] = None
+    assert derive_tortle(without_shield)["armor_class"] == 17
+
+    without_armor = deepcopy(sheet)
+    without_armor["inventory"]["equipment_slots"]["armor"] = None
+    armor = next(item for item in without_armor["inventory"]["items"] if item["id"] == armor_id)
+    armor["equipped"] = False
+    armor["equipped_slot"] = None
+    natural_with_shield = derive_tortle(without_armor, rules=rules_2014)
+    assert natural_with_shield["armor_class"] == 19
+    assert CORE_TORTLE_NATURAL_ARMOR_MECHANIC_ID in {
+        receipt["mechanic_id"] for receipt in natural_with_shield["rule_receipts"]
+    }
+
+    stronger_formula, stronger_id = add_effect(
+        without_armor,
+        {
+            "id": "stronger-natural-armor",
+            "name": "Stronger Natural Armor",
+            "kind": "feature",
+            "source": "feature:stronger-natural-armor",
+            "changes": [
+                {
+                    "path": "combat.ac.unarmored_formula",
+                    "mode": "override",
+                    "value": {
+                        "base": 20,
+                        "ability": None,
+                        "allows_shield": True,
+                        "includes_dexterity": False,
+                    },
+                }
+            ],
+        },
+    )
+    stronger = derive_tortle(stronger_formula, rules=rules_2014)
+    assert stronger["armor_class"] == 22
+    assert CORE_TORTLE_NATURAL_ARMOR_MECHANIC_ID not in {
+        receipt["mechanic_id"] for receipt in stronger["rule_receipts"]
+    }
+    assert (
+        next(
+            item
+            for item in stronger["armor_class_breakdown"]["effects"]
+            if item["effect_id"] == stronger_id
+        )["applied"]
+        is True
+    )
+    assert (
+        next(
+            item
+            for item in stronger["armor_class_breakdown"]["effects"]
+            if item["effect_id"] == natural_armor_effect_id
+        )["applied"]
+        is False
+    )
+
+    weak_armor = deepcopy(sheet)
+    weak_armor["inventory"]["items"][0]["mechanics"]["base_ac"] = 11
+    weak_armor["inventory"]["items"][0]["mechanics"]["magic_bonus"] = 0
+    assert derive_tortle(weak_armor)["armor_class"] == 19
+
+    simultaneous = deepcopy(sheet)
+    simultaneous, mage_armor_effect_id = add_effect(
+        simultaneous,
+        {
+            "id": "mage-armor",
+            "name": "Mage Armor",
+            "kind": "spell",
+            "source": "spell:mage-armor",
+            "changes": [
+                {
+                    "path": "combat.ac.unarmored_formula",
+                    "mode": "override",
+                    "value": {
+                        "base": 13,
+                        "ability": None,
+                        "allows_shield": True,
+                        "includes_dexterity": True,
+                    },
+                }
+            ],
+        },
+    )
+    simultaneous_derived = derive_tortle(simultaneous)
+    assert simultaneous_derived["armor_class"] == 19
+    assert (
+        next(
+            item
+            for item in simultaneous_derived["armor_class_breakdown"]["effects"]
+            if item["effect_id"] == mage_armor_effect_id
+        )["applied"]
+        is False
+    )
+
+    unequipped = deepcopy(sheet)
+    unequipped["inventory"]["equipment_slots"]["armor"] = None
+    armor = next(item for item in unequipped["inventory"]["items"] if item["id"] == armor_id)
+    armor["equipped"] = False
+    armor["equipped_slot"] = None
+    assert derive_tortle(unequipped)["armor_class"] == 19
+    unequipped["inventory"]["equipment_slots"]["shield"] = None
+    shield = next(item for item in unequipped["inventory"]["items"] if item["id"] == shield_id)
+    shield["equipped"] = False
+    shield["equipped_slot"] = None
+    assert derive_tortle(unequipped)["armor_class"] == 17
+
+    standard = deepcopy(sheet)
+    standard["content"]["selections"] = []
+    standard["content"]["features"].append(
+        {
+            "id": TORTLE_NATURAL_ARMOR_ARTIFACT_ID + ".feature.natural-armor",
+            "name": "Natural Armor",
+            "source_key": "Tortle",
+            "description": "Source-bound Tortle Natural Armor.",
+            "choices": {
+                "source_trait": {
+                    "kind": "tortle_natural_armor",
+                    "effect_source": TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
+                    "base_ac": 17,
+                    "includes_dexterity": False,
+                    "armor_benefit": "none",
+                    "allows_shield": True,
+                    "source_excerpt": "You gain no benefit from wearing armor.",
+                }
+            },
+            "mechanic_refs": [CORE_TORTLE_NATURAL_ARMOR_MECHANIC_ID],
+        }
+    )
+    assert derive_tortle(standard)["armor_class"] == 23
+
+    human_with_legacy_forge = deepcopy(sheet)
+    human_with_legacy_forge["progression"]["species"] = "Human"
+    assert derive_tortle(human_with_legacy_forge)["armor_class"] == 23
+
+    human_with_standard_forge = deepcopy(standard)
+    human_with_standard_forge["progression"]["species"] = "Human"
+    assert derive_tortle(human_with_standard_forge)["armor_class"] == 23
+
+    for field, forged_value in (
+        ("artifact_id", TORTLE_NATURAL_ARMOR_ARTIFACT_ID + ".forged"),
+        ("pack_id", TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID + ".forged"),
+        ("pack_version", "1.0.1"),
+        ("rule_refs", ["rule-source:forged"]),
+        ("mechanic_refs", [CORE_TORTLE_NATURAL_ARMOR_MECHANIC_ID]),
+    ):
+        forged = deepcopy(sheet)
+        forged["content"]["selections"][0][field] = forged_value
+        assert derive_tortle(forged)["armor_class"] == 23
+
+    forged_authority = deepcopy(sheet)
+    forged_authority["content"]["selections"][0]["selection"] = {}
+    assert derive_tortle(forged_authority)["armor_class"] == 23
+
+    modern = deepcopy(sheet)
+    modern["edition"] = "2024"
+    assert derive_tortle(modern)["armor_class"] == 23
+
+    malformed_formula = deepcopy(sheet)
+    malformed_formula["effects"][0]["changes"][0]["value"]["base"] = 18
+    assert derive_tortle(malformed_formula)["armor_class"] == 23
 
 
 def test_class_unarmored_formulas_honor_ability_and_shield_conditions() -> None:

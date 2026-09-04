@@ -424,6 +424,9 @@ def initialize_base_class(
     class_definition: dict[str, Any],
     skill_choices: list[str],
     tool_choices: list[str] | None = None,
+    skill_replacements: dict[str, str] | None = None,
+    tool_replacements: dict[str, str] | None = None,
+    tool_replacement_options: list[str] | None = None,
     source: str = "",
 ) -> dict[str, Any]:
     """Materialize the source-reviewed, system-neutral portion of a level-1 class.
@@ -484,8 +487,30 @@ def initialize_base_class(
         raise CombatEngineError(f"class requires exactly {choice_count} distinct skill choices")
     if any(item not in skill_options for item in selected_skills):
         raise CombatEngineError("class skill choice is not one of the reviewed options")
-    if any(value["skills"][item].get("proficiency") != "none" for item in selected_skills):
-        raise CombatEngineError("class skill choice is already proficient")
+    duplicate_skills = [
+        item for item in selected_skills if value["skills"][item].get("proficiency") != "none"
+    ]
+    normalized_skill_replacements = _normalized_replacement_map(
+        skill_replacements,
+        field="skill_replacements",
+        normalize_name=lambda item: item.casefold().replace(" ", "_"),
+    )
+    if set(normalized_skill_replacements) != set(duplicate_skills):
+        if not normalized_skill_replacements and duplicate_skills:
+            raise CombatEngineError(
+                "class skill proficiency replacements are required for: "
+                + ", ".join(duplicate_skills)
+            )
+        raise CombatEngineError(
+            "class skill_replacements must answer exactly the duplicate skill grants"
+        )
+    effective_skills = [normalized_skill_replacements.get(item, item) for item in selected_skills]
+    if len(set(effective_skills)) != len(effective_skills):
+        raise CombatEngineError("class effective skill proficiencies must be distinct")
+    if any(item not in value.get("skills", {}) for item in effective_skills):
+        raise CombatEngineError("class skill replacement names an unknown skill")
+    if any(value["skills"][item].get("proficiency") != "none" for item in effective_skills):
+        raise CombatEngineError("class skill replacement is already proficient")
     tool_options = _display_distinct_names(definition.get("tool_options", []), field="tool_options")
     tool_choice_count = definition.get("tool_choice_count", 0)
     if (
@@ -510,16 +535,73 @@ def initialize_base_class(
         target: _display_distinct_names(definition.get(field), field=field)
         for target, field in proficiency_fields.items()
     }
-    fixed_tool_keys = {item.casefold() for item in normalized_proficiencies["tools"]}
-    if any(item.casefold() in fixed_tool_keys for item in selected_tools):
-        raise CombatEngineError("class tool choice duplicates a fixed tool proficiency")
+    source_tools = [*normalized_proficiencies["tools"], *selected_tools]
     existing_tool_keys = {
         str(item).casefold()
         for item in value.get("traits", {}).get("proficiencies", {}).get("tools", [])
     }
-    if any(item.casefold() in existing_tool_keys for item in selected_tools):
-        raise CombatEngineError("class tool choice is already proficient")
-    normalized_proficiencies["tools"].extend(selected_tools)
+    seen_tool_keys = set(existing_tool_keys)
+    tool_collision_counts: dict[str, int] = {}
+    tool_collisions: list[tuple[int, str, str]] = []
+    for index, item in enumerate(source_tools):
+        source_key = item.casefold()
+        if source_key in seen_tool_keys:
+            tool_collision_counts[source_key] = tool_collision_counts.get(source_key, 0) + 1
+            collision_number = tool_collision_counts[source_key]
+            receipt_key = (
+                source_key if collision_number == 1 else f"{source_key}#{collision_number}"
+            )
+            tool_collisions.append((index, item, receipt_key))
+        seen_tool_keys.add(source_key)
+    duplicate_tools = [item for _index, item, _receipt_key in tool_collisions]
+    duplicate_tool_prompts = [
+        item if receipt_key == item.casefold() else f"{item} ({receipt_key})"
+        for _index, item, receipt_key in tool_collisions
+    ]
+    normalized_tool_replacements = _normalized_replacement_map(
+        tool_replacements,
+        field="tool_replacements",
+        normalize_name=lambda item: item.casefold(),
+        preserve_values=True,
+    )
+    duplicate_tool_keys = {receipt_key for _index, _item, receipt_key in tool_collisions}
+    if set(normalized_tool_replacements) != duplicate_tool_keys:
+        if not normalized_tool_replacements and duplicate_tools:
+            raise CombatEngineError(
+                "class tool proficiency replacements are required for: "
+                + ", ".join(duplicate_tool_prompts)
+            )
+        raise CombatEngineError(
+            "class tool_replacements must answer exactly the duplicate tool grants"
+        )
+    replacement_option_map = {
+        item.casefold(): item
+        for item in _display_distinct_names(
+            tool_replacement_options or [], field="tool_replacement_options"
+        )
+    }
+    if normalized_tool_replacements and not replacement_option_map:
+        raise CombatEngineError("class tool replacements require reviewed replacement options")
+    replacements_by_index = {
+        index: normalized_tool_replacements[receipt_key]
+        for index, _item, receipt_key in tool_collisions
+    }
+    effective_tools = []
+    for index, item in enumerate(source_tools):
+        replacement = replacements_by_index.get(index)
+        if replacement is not None:
+            replacement_key = replacement.casefold()
+            if replacement_key not in replacement_option_map:
+                raise CombatEngineError("class tool replacement is not an allowed tool")
+            effective_tools.append(replacement_option_map[replacement_key])
+        else:
+            effective_tools.append(item)
+    effective_tool_keys = [item.casefold() for item in effective_tools]
+    if len(set(effective_tool_keys)) != len(effective_tool_keys):
+        raise CombatEngineError("class effective tool proficiencies must be distinct")
+    if any(item in existing_tool_keys for item in effective_tool_keys):
+        raise CombatEngineError("class tool replacement is already proficient")
+    normalized_proficiencies["tools"] = effective_tools
 
     combat = value.setdefault("combat", {})
     hp = combat.setdefault("hp", {})
@@ -567,7 +649,7 @@ def initialize_base_class(
     progression["classes"] = [class_entry]
     for ability in saving_throws:
         value["abilities"][ability]["save_proficient"] = True
-    for skill in selected_skills:
+    for skill in effective_skills:
         value["skills"][skill]["proficiency"] = "proficient"
     proficiencies = value.setdefault("traits", {}).setdefault("proficiencies", {})
     for target, additions in normalized_proficiencies.items():
@@ -581,8 +663,11 @@ def initialize_base_class(
         "hit_die_key": hit_die_key,
         "hit_points": {"class_base": class_hp, "prior_bonus": prior_bonus},
         "saving_throw_proficiencies": saving_throws,
-        "skill_proficiencies": selected_skills,
+        "skill_proficiency_choices": selected_skills,
+        "skill_proficiency_replacements": normalized_skill_replacements,
+        "skill_proficiencies": effective_skills,
         "tool_proficiency_choices": selected_tools,
+        "tool_proficiency_replacements": normalized_tool_replacements,
         "proficiencies": normalized_proficiencies,
         "spellcasting": spellcasting_materialization,
     }
@@ -605,6 +690,30 @@ def _display_distinct_names(value: Any, *, field: str) -> list[str]:
         normalized
     ):
         raise CombatEngineError(f"class {field} must contain distinct non-empty names")
+    return normalized
+
+
+def _normalized_replacement_map(
+    value: Any,
+    *,
+    field: str,
+    normalize_name: Any,
+    preserve_values: bool = False,
+) -> dict[str, str]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise CombatEngineError(f"class {field} must be an object")
+    normalized: dict[str, str] = {}
+    for raw_source, raw_replacement in value.items():
+        source = " ".join(str(raw_source).split())
+        replacement = " ".join(str(raw_replacement).split())
+        if not source or not replacement:
+            raise CombatEngineError(f"class {field} must contain non-empty names")
+        source_key = normalize_name(source)
+        if source_key in normalized:
+            raise CombatEngineError(f"class {field} keys must be distinct")
+        normalized[source_key] = replacement if preserve_values else normalize_name(replacement)
     return normalized
 
 

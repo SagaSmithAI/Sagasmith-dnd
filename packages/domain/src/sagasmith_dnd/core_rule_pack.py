@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.73.0"
+CORE_RULE_PACK_VERSION = "1.75.0"
 
 
 @dataclass(frozen=True)
@@ -168,6 +168,14 @@ _2024_BOUNDARY_CITATIONS = {
 
 
 BOUNDARIES = (
+    CoreBoundary(
+        "dnd5e.core.environment.suffocation",
+        ("2014",),
+        "breathing.begin_holding_breath|lifecycle.advance_effect_durations|"
+        "lifecycle.advance_elapsed_effect_durations",
+        ("tests/test_breathing.py", "../mcp/tests/test_breathing_mcp.py"),
+        "bundled:srd2014/06_Gameplay/Adventuring.md#suffocating",
+    ),
     CoreBoundary(
         "dnd5e.core.heroic_inspiration",
         ("2024",),
@@ -463,6 +471,21 @@ BOUNDARIES = (
         "bundled:srd2014/06_Gameplay/Order_of_Combat.md#dodge",
     ),
     CoreBoundary(
+        "dnd5e.core.activity.tortle_shell_defense",
+        ("2014",),
+        (
+            "combat_engine.enter_tortle_shell_defense|"
+            "combat_engine.emerge_tortle_shell_defense|"
+            "combat_engine.reconcile_tortle_shell_defense_projection|"
+            "combat_engine.resolve_actor_check"
+        ),
+        (
+            "tests/test_combat_engine.py::test_2014_tortle_shell_defense_settles_exact_source_effects",
+            "tests/test_combat_engine.py::test_2014_tortle_shell_defense_rejects_spoofed_source",
+        ),
+        "rulebook:tortle-package/tortle#shell-defense",
+    ),
+    CoreBoundary(
         "dnd5e.core.action.multiattack_choice",
         ("2014", "2024"),
         "combat_engine.pay_attack_action",
@@ -589,6 +612,16 @@ BOUNDARIES = (
             "test_2014_dwarf_heavy_armor_speed_exception_is_source_bound_and_narrow",
         ),
         "bundled:srd2014/01_Races/Races_Each/Dwarf.md#speed",
+    ),
+    CoreBoundary(
+        "dnd5e.core.ac.tortle_natural_armor",
+        ("2014",),
+        "character_schema._derive_armor_class",
+        (
+            "tests/test_character_schema.py::"
+            "test_2014_tortle_natural_armor_ignores_worn_armor_but_allows_shields",
+        ),
+        "rulebook:tortle-package/tortle#natural-armor",
     ),
     CoreBoundary(
         "dnd5e.core.damage.knockout",
@@ -996,6 +1029,20 @@ BOUNDARIES = (
         "sagasmith_dnd_mcp.server.settle_spellbook_copy",
         ("packages/mcp/tests/test_spellbook_copy_mcp.py",),
         "bundled:srd2014/02_Classes/Wizard.md#evocation-savant",
+    ),
+    CoreBoundary(
+        "dnd5e.core.narrative.watchers_eye",
+        ("2014",),
+        (
+            "sagasmith_dnd_mcp.server._watchers_eye_source_binding|"
+            "sagasmith_dnd_mcp.server.character_source_feature"
+        ),
+        ("packages/mcp/tests/test_scag_watchers_eye_mcp.py",),
+        (
+            "rule-source:user.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef"
+            "#chunk:user.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef/"
+            "section-613/chunk-787-c40f25fa340c7592"
+        ),
     ),
     CoreBoundary(
         "dnd5e.core.mcp.combat_mutation_guard",
