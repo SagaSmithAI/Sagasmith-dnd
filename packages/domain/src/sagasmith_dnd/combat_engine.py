@@ -1099,6 +1099,7 @@ def start_encounter(
                     "attack_budget": 0,
                 },
                 "conditions": list(sheet.get("conditions") or []),
+                "hit_points": int(sheet["combat"]["hp"]["value"]),
                 "condition_sources": timed_condition_sources(sheet),
                 "speed_multiplier": speed_multiplier,
                 "base_speed": speed,
@@ -1168,6 +1169,8 @@ def start_encounter(
     combatants.sort(
         key=lambda value: (-value["initiative"], value["tie_breaker"], value["actor_id"])
     )
+    if combatants:
+        record_death_save_turn_start(combatants[0])
     return {
         "id": f"encounter-{uuid4().hex}",
         "active": True,
@@ -7504,6 +7507,42 @@ def resolve_actor_contest(
     }
 
 
+def death_save_due(combatant: dict[str, Any], sheet: dict[str, Any] | None = None) -> bool:
+    """Whether an unresolved start-of-turn death save is still applicable.
+
+    Old encounters without a captured start retain their conservative legacy
+    gate until the next turn boundary; current HP cannot reconstruct the past.
+    """
+    flags = dict(combatant.get("turn_flags") or {})
+    conditions = (
+        condition_ids(sheet.get("conditions"))
+        if sheet is not None
+        else _condition_set(combatant.get("conditions"))
+    )
+    hp = (
+        sheet["combat"]["hp"]["value"]
+        if sheet is not None
+        else combatant.get("hit_points", 0 if "unconscious" in conditions else 1)
+    )
+    return bool(
+        combatant.get("death_saves", False)
+        and hp == 0
+        and not conditions & DEATH_SAVE_SETTLED_CONDITIONS
+        and flags.get("death_save_due", True)
+        and not flags.get("death_save_used")
+    )
+
+
+def record_death_save_turn_start(
+    combatant: dict[str, Any], sheet: dict[str, Any] | None = None
+) -> None:
+    """Capture eligibility once at a turn boundary, never on later damage."""
+    flags = combatant.setdefault("turn_flags", {})
+    flags.pop("death_save_used", None)
+    flags.pop("death_save_due", None)
+    flags["death_save_due"] = death_save_due(combatant, sheet)
+
+
 def end_turn(
     encounter: dict[str, Any],
     *,
@@ -7529,22 +7568,8 @@ def end_turn(
         raise CombatEngineError(
             "a paid legendary weapon attack must be resolved before ending the turn"
         )
-    current_conditions = _condition_set(current.get("conditions"))
     current_flags = dict(current.get("turn_flags") or {})
-    positive_hp_unconscious = False
-    if current_actor_sheet is not None:
-        canonical_sheet = validate_character_sheet(current_actor_sheet)
-        positive_hp_unconscious = (
-            int(dict(canonical_sheet.get("combat", {}).get("hp") or {}).get("value", 0) or 0) > 0
-            and "unconscious" in condition_ids(canonical_sheet.get("conditions"))
-        )
-    if (
-        current.get("death_saves", False)
-        and "unconscious" in current_conditions
-        and not positive_hp_unconscious
-        and not current_conditions & DEATH_SAVE_SETTLED_CONDITIONS
-        and not current_flags.get("death_save_used")
-    ):
+    if death_save_due(current, current_actor_sheet):
         raise CombatEngineError("a required death save must be resolved before ending the turn")
     was_surprised = bool(current.get("surprised"))
     current["surprised"] = False
@@ -7678,6 +7703,7 @@ def end_turn(
             next_actor["turn_flags"] = next_flags
         else:
             next_actor.pop("turn_flags", None)
+        record_death_save_turn_start(next_actor)
         value["readied"] = [
             item
             for item in value.get("readied", [])

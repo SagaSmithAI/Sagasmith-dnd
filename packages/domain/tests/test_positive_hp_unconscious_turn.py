@@ -44,3 +44,30 @@ def test_zero_hp_settled_actor_does_not_need_another_death_save(condition):
     encounter = start_encounter([actor, other])
     ended = end_turn(encounter, actor_id_value="settled", current_actor_sheet=actor["sheet"])
     assert ended["turn_index"] == 1
+
+
+def test_actor_reduced_to_zero_during_own_turn_waits_until_next_turn():
+    actor = _actor("falling", 10, [])
+    other = _actor("other", 10, [])
+    other["initiative"] = 10
+    encounter = start_encounter([actor, other], ruleset="2014")
+    actor["sheet"]["combat"]["hp"]["value"] = 0
+    actor["sheet"]["conditions"] = ["unconscious"]
+    encounter["combatants"][0]["conditions"] = ["unconscious"]
+    encounter["combatants"][0]["hit_points"] = 0
+    ended = end_turn(encounter, actor_id_value="falling", current_actor_sheet=actor["sheet"])
+    returned = end_turn(ended, actor_id_value="other", current_actor_sheet=other["sheet"])
+    with pytest.raises(CombatEngineError, match="death save"):
+        end_turn(returned, actor_id_value="falling", current_actor_sheet=actor["sheet"])
+
+
+def test_stable_at_turn_start_then_damaged_does_not_owe_a_start_save():
+    actor = _actor("stable", 0, ["unconscious", "stable"])
+    other = _actor("other", 10, [])
+    other["initiative"] = 10
+    encounter = start_encounter([actor, other], ruleset="2014")
+    actor["sheet"]["conditions"] = ["unconscious"]
+    actor["sheet"]["combat"]["death_saves"]["failures"] = 1
+    encounter["combatants"][0]["conditions"] = ["unconscious"]
+    ended = end_turn(encounter, actor_id_value="stable", current_actor_sheet=actor["sheet"])
+    assert ended["turn_index"] == 1

@@ -1043,6 +1043,14 @@ call `combat_check(kind="death_save")` with no `ability`, bonus, proficiency, DC
 or target. Resolve it before any other action or `combat_end_turn`. Refresh the
 actor card and combat state immediately; a natural 20 can restore 1 HP and leave
 the action available, three successes add Stable, and three failures add Dead.
+The engine captures this obligation at the turn boundary. Falling to 0 HP
+during your own turn does not create an extra death save that turn; neither does
+damage that ends stability after the turn has already begun. Damage at 0 HP
+still applies its immediate failure separately. Healing or stabilization cancels
+an outstanding save, and only a later eligible turn start creates another one.
+Saved encounters predating this start-of-turn record retain the conservative
+legacy gate until their next turn boundary: current HP alone cannot prove the
+missing historical start state.
 
 To stabilize a dying creature with Medicine, call
 `combat_check(kind="stabilize", ability="wisdom", target_id=...)`. The MCP

@@ -4566,6 +4566,7 @@ def test_end_turn_skips_dead_actor_but_keeps_death_save_turn() -> None:
     dead["sheet"]["conditions"] = ["dead", "prone"]
     dying = _actor("dying")
     dying.update(initiative=10, death_saves=True)
+    dying["sheet"]["combat"]["hp"]["value"] = 0
     dying["sheet"]["conditions"] = ["unconscious", "prone"]
     encounter = start_encounter([first, dead, dying])
 

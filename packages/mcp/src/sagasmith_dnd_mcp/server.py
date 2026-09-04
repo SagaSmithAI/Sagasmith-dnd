@@ -206,6 +206,7 @@ from sagasmith_dnd.combat_engine import (
     consume_weapon_mastery_attack_effects,
     current_combatant,
     damage_amount_after_reduction,
+    death_save_due,
     emerge_tortle_shell_defense,
     end_concentration_for_incapacitating_conditions,
     end_hypnotic_pattern_effects,
@@ -226,6 +227,7 @@ from sagasmith_dnd.combat_engine import (
     reconcile_tortle_shell_defense_projection,
     reconcile_witch_bolt_concentration,
     reconcile_witch_bolt_range,
+    record_death_save_turn_start,
     require_death_save_eligibility,
     resolve_actor_check,
     resolve_actor_contest,
@@ -12259,6 +12261,13 @@ def _create_server(
                 # effect could make a persisted dodging=True flag active again.
                 prior_dodge_transition = reconcile_dodge_lifecycle(combatant)
                 combatant["conditions"] = list(sheet.get("conditions") or [])
+                combatant["hit_points"] = int(sheet["combat"]["hp"]["value"])
+                if combatant["hit_points"] > 0 or condition_ids(
+                    sheet.get("conditions")
+                ) & DEATH_SAVE_SETTLED_CONDITIONS:
+                    flags = combatant.get("turn_flags")
+                    if isinstance(flags, dict) and "death_save_due" in flags:
+                        flags["death_save_due"] = False
                 combatant["condition_sources"] = timed_condition_sources(sheet)
                 combatant["speed_multiplier"] = source_speed_multiplier(sheet)
                 reconcile_tortle_shell_defense_projection(combatant, sheet)
@@ -18382,20 +18391,14 @@ def _create_server(
         actions = available_actions(encounter, actor_id)
         actor = combat_actor_snapshot(actor_id)
         hit_points = int(dict(actor.get("derived", {}).get("hit_points") or {}).get("value", 0))
-        conditions = {str(item).casefold() for item in actor.get("sheet", {}).get("conditions", [])}
         current = current_combatant(encounter)
-        death_save_used = bool(dict(combatant.get("turn_flags") or {}).get("death_save_used"))
         if (
             current is not None
             and current.get("actor_id") == actor_id
             and bool(combatant.get("death_saves", False))
             and hit_points == 0
         ):
-            actions = (
-                ["death_save"]
-                if not conditions & DEATH_SAVE_SETTLED_CONDITIONS and not death_save_used
-                else []
-            )
+            actions = ["death_save"] if death_save_due(combatant, actor["sheet"]) else []
         return {
             "actor_id": actor_id,
             "actions": actions,
@@ -19318,6 +19321,7 @@ def _create_server(
         expired_standard_turn_start: list[str] = []
         if next_combatant is not None:
             next_actor_id = str(next_combatant.get("actor_id") or "")
+            record_death_save_turn_start(next_combatant, characters.get(next_actor_id).sheet)
             expired_standard_turn_start = expire_standard_source_turn_effects(
                 next_state["combat"],
                 actor_id=next_actor_id,
@@ -26126,6 +26130,44 @@ def _create_server(
                 raise CombatEngineError("this combatant is not configured to make death saves")
             if dict(death_save_combatant.get("turn_flags") or {}).get("death_save_used"):
                 raise CombatEngineError("this actor already made a death save this turn")
+            if not death_save_due(death_save_combatant, characters.get(actor_id).sheet):
+                raise CombatEngineError("no death save is due from the start of this actor's turn")
+            if encounter_rules_edition(campaign_id, active) == "2014":
+                # Local call_tool invocations can lack the request RNG wrapper.
+                # Keep the roll, turn flag and receipt in the same settlement.
+                stream = active_random_stream()
+                if stream is None:
+                    stream = CampaignRandomStream.from_campaign_state(
+                        campaign_id,
+                        campaign.state,
+                        operation="combat_check",
+                        idempotency_key=idempotency_key,
+                        campaign_revision=campaign.revision,
+                    )
+                    with use_random_stream(stream):
+                        return combat_check(
+                            campaign_id,
+                            **payload,
+                            principal_id=principal_id,
+                            expected_revision=expected_revision,
+                            idempotency_key=idempotency_key,
+                        )
+                random_state = validate_random_stream_state(
+                    dict(campaign.state or {}).get("random_stream")
+                    or initial_random_stream(f"sagasmith-dnd:{campaign_id}")
+                )
+                if (
+                    stream.campaign_id != campaign_id
+                    or (
+                        stream.campaign_revision is not None
+                        and stream.campaign_revision != campaign.revision
+                    )
+                    or stream.seed != random_state["seed"]
+                    or stream.start_position != random_state["position"]
+                ):
+                    raise CombatEngineError(
+                        "death save requires the current campaign random snapshot"
+                    )
         elif kind == "stabilize":
             assert target_id is not None
             _campaign, active = active_encounter(campaign_id)
