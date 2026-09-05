@@ -7,10 +7,14 @@ import re
 from dataclasses import asdict
 from typing import Any, Mapping
 
-from sagasmith_dnd.character_schema import add_inventory_item, adjust_wallet, validate_character_sheet
+from sagasmith_dnd.character_schema import (
+    add_inventory_item,
+    adjust_wallet,
+    validate_character_sheet,
+)
 from sagasmith_dnd.engine import roll
 
-_DICE = re.compile(r"^[1-9]\d*d[1-9]\d*$", re.IGNORECASE)
+_DICE = re.compile(r"^([1-9]\d*)d([1-9]\d*)$", re.IGNORECASE)
 _DENOMINATIONS = {"cp", "sp", "ep", "gp", "pp"}
 
 
@@ -74,6 +78,8 @@ def normalize_starting_equipment_contract(raw: Any) -> dict[str, Any]:
         allow_duplicates = choice.get("allow_duplicates", False)
         if not isinstance(allow_duplicates, bool):
             raise ValueError(f"{field}.allow_duplicates must be a boolean")
+        if not allow_duplicates and count > len(options):
+            raise ValueError(f"{field}.count exceeds the available options")
         if group_id in choice_ids:
             raise ValueError("starting equipment choice ids must be distinct")
         choice_ids.add(group_id)
@@ -97,8 +103,13 @@ def normalize_starting_equipment_contract(raw: Any) -> dict[str, Any]:
             "starting equipment gold_alternative",
         )
         dice = _text(gold_raw.get("dice"), "starting equipment gold_alternative.dice")
-        if not _DICE.fullmatch(dice):
+        dice_match = _DICE.fullmatch(dice)
+        if not dice_match:
             raise ValueError("starting equipment gold_alternative.dice must be NdS")
+        if int(dice_match.group(1)) > 100 or int(dice_match.group(2)) > 1000:
+            raise ValueError(
+                "starting equipment gold_alternative.dice exceeds engine limits"
+            )
         multiplier = _positive_int(
             gold_raw.get("multiplier"), "starting equipment gold_alternative.multiplier"
         )
@@ -110,7 +121,8 @@ def normalize_starting_equipment_contract(raw: Any) -> dict[str, Any]:
         replaces = gold_raw.get("replaces_background_equipment")
         if not isinstance(replaces, bool):
             raise ValueError(
-                "starting equipment gold_alternative.replaces_background_equipment must be a boolean"
+                "starting equipment gold_alternative.replaces_background_equipment "
+                "must be a boolean"
             )
         gold = {
             "dice": dice,
@@ -121,6 +133,48 @@ def normalize_starting_equipment_contract(raw: Any) -> dict[str, Any]:
     if not items and not choices and gold is None:
         raise ValueError("starting equipment contract must offer equipment or gold")
     return {"items": items, "choices": choices, "gold_alternative": gold}
+
+
+def normalize_starting_equipment_selection(
+    contract: Mapping[str, Any], selection: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Validate a selection without inspecting or mutating an actor or RNG."""
+
+    normalized = normalize_starting_equipment_contract(contract)
+    if not isinstance(selection, Mapping):
+        raise ValueError("starting equipment selection must be an object")
+    _reject_unknown(selection, {"mode", "choices"}, "starting equipment selection")
+    mode = _text(selection.get("mode"), "starting equipment selection.mode").casefold()
+    if mode not in {"equipment", "gold"}:
+        raise ValueError("starting equipment selection.mode must be equipment or gold")
+    if mode == "gold":
+        if normalized["gold_alternative"] is None:
+            raise ValueError("starting equipment contract has no gold alternative")
+        if "choices" in selection:
+            raise ValueError("gold starting equipment selection cannot include choices")
+        return {"mode": "gold"}
+    if not normalized["items"] and not normalized["choices"]:
+        raise ValueError("equipment selection requires at least one equipment grant")
+    chosen = selection.get("choices", {})
+    if not isinstance(chosen, Mapping):
+        raise ValueError("starting equipment choices must be an object")
+    groups = {item["id"]: item for item in normalized["choices"]}
+    if set(chosen) != set(groups):
+        raise ValueError("starting equipment choices must answer exactly the reviewed groups")
+    selected: dict[str, list[str]] = {}
+    for group_id, spec in groups.items():
+        values = chosen[group_id]
+        if not isinstance(values, list) or len(values) != spec["count"]:
+            raise ValueError(f"starting equipment choice {group_id} has the wrong count")
+        values = [_text(value, f"starting equipment choices.{group_id}") for value in values]
+        if any(value not in spec["options"] for value in values):
+            raise ValueError(
+                f"starting equipment choice {group_id} contains an unavailable option"
+            )
+        if not spec["allow_duplicates"] and len(set(values)) != len(values):
+            raise ValueError(f"starting equipment choice {group_id} does not allow duplicates")
+        selected[group_id] = values
+    return {"mode": "equipment", "choices": selected}
 
 
 def apply_starting_equipment(
@@ -135,45 +189,25 @@ def apply_starting_equipment(
     """Apply one validated contract without mutating inputs or auto-equipping items."""
 
     normalized = normalize_starting_equipment_contract(contract)
-    if not isinstance(selection, Mapping):
-        raise ValueError("starting equipment selection must be an object")
-    _reject_unknown(selection, {"mode", "choices"}, "starting equipment selection")
-    mode = _text(selection.get("mode"), "starting equipment selection.mode").casefold()
-    if mode not in {"equipment", "gold"}:
-        raise ValueError("starting equipment selection.mode must be equipment or gold")
+    normalized_selection = normalize_starting_equipment_selection(normalized, selection)
+    mode = normalized_selection["mode"]
     source = _text(source_key, "starting equipment source_key")
+    if len(source) > 300:
+        raise ValueError("starting equipment source_key must not exceed 300 characters")
     # Validate all templates and selection choices before touching the RNG.
     templates = {str(key): value for key, value in item_templates.items()}
     for artifact_id, template in templates.items():
         if not isinstance(template, Mapping):
             raise ValueError(f"starting equipment template is not an object: {artifact_id}")
     gold = normalized["gold_alternative"]
-    if mode == "gold":
-        if gold is None:
-            raise ValueError("starting equipment contract has no gold alternative")
-        if "choices" in selection:
-            raise ValueError("gold starting equipment selection cannot include choices")
-    else:
-        if gold is not None and not isinstance(selection.get("choices", {}), Mapping):
-            raise ValueError("starting equipment choices must be an object")
-        chosen = selection.get("choices", {})
-        if not isinstance(chosen, Mapping):
-            raise ValueError("starting equipment choices must be an object")
-        groups = {item["id"]: item for item in normalized["choices"]}
-        if set(chosen) != set(groups):
-            raise ValueError("starting equipment choices must answer exactly the reviewed groups")
-        for group_id, spec in groups.items():
-            values = chosen[group_id]
-            if not isinstance(values, list) or len(values) != spec["count"]:
-                raise ValueError(f"starting equipment choice {group_id} has the wrong count")
-            if any(value not in spec["options"] for value in values):
-                raise ValueError(f"starting equipment choice {group_id} contains an unavailable option")
-            if not spec["allow_duplicates"] and len(set(values)) != len(values):
-                raise ValueError(f"starting equipment choice {group_id} does not allow duplicates")
+    if mode == "equipment":
+        chosen = normalized_selection.get("choices", {})
         selected_ids = [item["artifact_id"] for item in normalized["items"]]
         selected_ids.extend(value for values in chosen.values() for value in values)
         if any(artifact_id not in templates for artifact_id in selected_ids):
-            missing = sorted({artifact_id for artifact_id in selected_ids if artifact_id not in templates})
+            missing = sorted(
+                {artifact_id for artifact_id in selected_ids if artifact_id not in templates}
+            )
             raise ValueError("starting equipment template is missing: " + ", ".join(missing))
 
     result_sheet = validate_character_sheet(copy.deepcopy(sheet))
@@ -189,7 +223,7 @@ def apply_starting_equipment(
         result_sheet = adjust_wallet(result_sheet, gold["denomination"], amount)
         wallet[gold["denomination"]] = amount
     else:
-        chosen = selection.get("choices", {})
+        chosen = normalized_selection.get("choices", {})
         entries = list(normalized["items"])
         entries.extend(
             {"artifact_id": artifact_id, "quantity": 1}
@@ -201,11 +235,12 @@ def apply_starting_equipment(
             item.pop("id", None)
             item["quantity"] = entry["quantity"]
             item["source_key"] = source
+            item["equipped"] = False
+            item["equipped_slot"] = None
+            item["attunement"] = "none"
             result_sheet, item_id = add_inventory_item(result_sheet, item)
             item_ids.append(item_id)
-    recorded_selection = {"mode": mode}
-    if mode == "equipment":
-        recorded_selection["choices"] = copy.deepcopy(dict(selection.get("choices", {})))
+    recorded_selection = copy.deepcopy(normalized_selection)
     return {
         "sheet": result_sheet,
         "selection": recorded_selection,

@@ -9,6 +9,7 @@ from sagasmith_dnd.random_stream import CampaignRandomStream
 from sagasmith_dnd.starting_equipment import (
     apply_starting_equipment,
     normalize_starting_equipment_contract,
+    normalize_starting_equipment_selection,
 )
 
 
@@ -49,10 +50,26 @@ def test_equipment_adds_fixed_and_duplicate_choice_without_equipping():
         source_key="eberron:artificer",
     )
     assert len(result["item_ids"]) == 3
-    assert all(item["source_key"] == "eberron:artificer" for item in result["sheet"]["inventory"]["items"])
+    assert all(
+        item["source_key"] == "eberron:artificer"
+        for item in result["sheet"]["inventory"]["items"]
+    )
     assert all(not item["equipped"] for item in result["sheet"]["inventory"]["items"])
     assert result["wallet"] == {}
     assert sheet == default_character_sheet()
+
+
+def test_public_selection_normalizer_is_pure_and_canonical():
+    original = {"mode": "equipment", "choices": {"weapon": ["sword", "bow"]}}
+    normalized = normalize_starting_equipment_selection(contract(), original)
+    assert normalized == original
+    assert original == {"mode": "equipment", "choices": {"weapon": ["sword", "bow"]}}
+
+
+def test_gold_only_contract_cannot_succeed_as_empty_equipment():
+    gold_only = {"items": [], "choices": [], "gold_alternative": contract()["gold_alternative"]}
+    with pytest.raises(ValueError, match="at least one equipment"):
+        normalize_starting_equipment_selection(gold_only, {"mode": "equipment"})
 
 
 def test_gold_extremes_are_recorded_and_replace_background():
@@ -89,7 +106,28 @@ def test_bad_selection_does_not_consume_rng_or_mutate_inputs():
         )
     assert stream.position == 0
     assert sheet == original_sheet
-    assert bad == {**original_contract, "choices": [{**original_contract["choices"][0], "allow_duplicates": False}]}
+    assert bad == {
+        **original_contract,
+        "choices": [{**original_contract["choices"][0], "allow_duplicates": False}],
+    }
+
+
+def test_template_cannot_force_equipped_or_attuned():
+    item_templates = templates()
+    item_templates["pack"].update(
+        equipped=True, equipped_slot="armor", attunement="attuned"
+    )
+    result = apply_starting_equipment(
+        default_character_sheet(),
+        contract=contract(),
+        selection={"mode": "equipment", "choices": {"weapon": ["sword", "bow"]}},
+        item_templates=item_templates,
+        source_key="x",
+    )
+    item = next(item for item in result["sheet"]["inventory"]["items"] if item["name"] == "pack")
+    assert item["equipped"] is False
+    assert item["equipped_slot"] is None
+    assert item["attunement"] == "none"
 
 
 @pytest.mark.parametrize(
@@ -97,12 +135,46 @@ def test_bad_selection_does_not_consume_rng_or_mutate_inputs():
     [
         {"items": [{"artifact_id": "x", "quantity": True}]},
         {"items": [{"artifact_id": "x", "quantity": 1, "extra": 2}]},
-        {"gold_alternative": {"dice": "0d4", "multiplier": 1, "denomination": "gp", "replaces_background_equipment": False}},
+        {
+            "gold_alternative": {
+                "dice": "0d4",
+                "multiplier": 1,
+                "denomination": "gp",
+                "replaces_background_equipment": False,
+            }
+        },
     ],
 )
 def test_contract_rejects_invalid_shapes(bad):
     with pytest.raises(ValueError):
         normalize_starting_equipment_contract(bad)
+
+
+def test_contract_rejects_count_above_options_without_duplicates():
+    bad = {
+        "items": [{"artifact_id": "x", "quantity": 1}],
+        "choices": [
+            {"id": "group", "count": 2, "options": ["x"], "allow_duplicates": False}
+        ],
+    }
+    with pytest.raises(ValueError, match="exceeds"):
+        normalize_starting_equipment_contract(bad)
+
+
+def test_invalid_gold_dice_does_not_consume_rng():
+    stream = CampaignRandomStream("c", "d" * 64, 0, "starting-equipment", "k")
+    bad = deepcopy(contract())
+    bad["gold_alternative"]["dice"] = "101d4"
+    with pytest.raises(ValueError, match="engine limits"):
+        apply_starting_equipment(
+            default_character_sheet(),
+            contract=bad,
+            selection={"mode": "gold"},
+            item_templates=templates(),
+            source_key="x",
+            rng=stream,
+        )
+    assert stream.position == 0
 
 
 def test_missing_template_is_rejected_before_equipment_mutation():
