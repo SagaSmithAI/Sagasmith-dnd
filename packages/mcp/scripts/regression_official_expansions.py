@@ -12,9 +12,12 @@ import asyncio
 import json
 import tempfile
 from collections import Counter
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+from mcp import Client
+from mcp.server.mcpserver.exceptions import ToolError
 from sagasmith_dnd.character_schema import default_character_sheet
 from sagasmith_dnd.core_content import PACK_ID as CORE_CONTENT_PACK_ID
 from sagasmith_dnd.core_content import PACK_VERSION as CORE_CONTENT_PACK_VERSION
@@ -26,6 +29,21 @@ from sagasmith_dnd.starting_equipment import (
 
 from sagasmith_dnd_mcp.config import McpConfig
 from sagasmith_dnd_mcp.server import close_server, create_server
+
+
+class _ProtocolTools:
+    """Adapt actual modern MCP requests to existing regression catalog helpers."""
+
+    def __init__(self, client: Client):
+        self.client = client
+
+    async def call_tool(self, name: str, arguments: dict):
+        result = await self.client.call_tool(name, arguments)
+        if result.is_error:
+            raise ToolError(" ".join(getattr(item, "text", "") for item in result.content))
+        if not isinstance(result.structured_content, dict):
+            raise RuntimeError(f"MCP tool {name} did not return a structured result")
+        return result.content, result.structured_content
 
 _ADVANCEMENT_SOURCE = "bundled:srd2014/03_Characterization/Beyond_1st_Level.md"
 _ARTIFICER = (
@@ -1004,25 +1022,38 @@ async def _verify_restart(server: Any, checkpoint: dict[str, Any]) -> int:
     return len(persisted)
 
 
-def _execute(content_library: Path, home: Path) -> dict[str, Any]:
+@asynccontextmanager
+async def _regression_session(content_library: Path, home: Path):
     server = _create_regression_server(content_library, home)
     try:
-        report, checkpoint = asyncio.run(_run(server))
+        # No-context server.call_tool is a historical embedding API. It bypasses
+        # request-scoped randomness, so cannot establish protocol acceptance.
+        async with Client(server, mode="2026-07-28") as client:
+            yield _ProtocolTools(client)
     finally:
         close_server(server)
-    restarted = _create_regression_server(content_library, home)
-    try:
-        persisted_receipts = asyncio.run(_verify_restart(restarted, checkpoint))
-    finally:
-        close_server(restarted)
+
+
+async def _execute_async(content_library: Path, home: Path) -> dict[str, Any]:
+    async with _regression_session(content_library, home) as client:
+        report, checkpoint = await _run(client)
+    async with _regression_session(content_library, home) as client:
+        persisted_receipts = await _verify_restart(client, checkpoint)
     report["receipts"]["restart_persisted"] = persisted_receipts
     report["persistence"]["restart_verified"] = True
+    report["transport"] = {
+        "protocol_version": "2026-07-28", "request_context": True, "process_isolation": False,
+    }
     # Persisting an incomplete build is not a successful official-rules regression.
     build = report["build"]
     report["passed"] = (
         build.get("failures") == [] and build.get("unverified_requirements") == []
     )
     return report
+
+
+def _execute(content_library: Path, home: Path) -> dict[str, Any]:
+    return asyncio.run(_execute_async(content_library, home))
 
 
 def main() -> int:

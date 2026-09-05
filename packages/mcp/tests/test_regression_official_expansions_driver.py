@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import asynccontextmanager
 from copy import deepcopy
 from typing import Any
 
@@ -504,10 +505,15 @@ def test_execute_never_marks_persisted_incomplete_build_passed(
     if unverified is not None:
         report["build"]["unverified_requirements"] = unverified
 
-    def create(library, home):
+    @asynccontextmanager
+    async def session(library, home):
         assert library == tmp_path / "library" and home == tmp_path / "home"
         created.append(servers[len(created)])
-        return created[-1]
+        server = created[-1]
+        try:
+            yield server
+        finally:
+            closed.append(server)
 
     async def run(server):
         assert server is servers[0]
@@ -517,10 +523,9 @@ def test_execute_never_marks_persisted_incomplete_build_passed(
         assert server is servers[1] and checkpoint == {"fixture": "checkpoint"}
         return 8
 
-    monkeypatch.setattr(driver, "_create_regression_server", create)
+    monkeypatch.setattr(driver, "_regression_session", session)
     monkeypatch.setattr(driver, "_run", run)
     monkeypatch.setattr(driver, "_verify_restart", restart)
-    monkeypatch.setattr(driver, "close_server", closed.append)
     result = driver._execute(tmp_path / "library", tmp_path / "home")
     assert result["passed"] is expected
     assert result["receipts"]["restart_persisted"] == 8
