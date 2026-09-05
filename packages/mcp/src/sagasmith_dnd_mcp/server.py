@@ -30563,7 +30563,7 @@ def _create_server(
             "notes": normalized_notes,
         }
         scope = f"character-build:{campaign_id}:{principal_id}"
-        with storage.database.transaction() as session:
+        with storage.database.transaction(immediate=True) as session:
             replay = idempotency.lookup_in_session(session, scope, idempotency_key, build_payload)
             if replay is not None and replay.response is not None:
                 return {
