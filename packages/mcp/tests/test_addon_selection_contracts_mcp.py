@@ -1,3 +1,6 @@
+import hashlib
+import json
+import sqlite3
 from copy import deepcopy
 from pathlib import Path
 
@@ -6,6 +9,7 @@ from sagasmith_core.indexed_source import rule_chunk_key
 from sagasmith_core.rule_packs import RulesetUnavailableError
 from sagasmith_dnd.character_schema import (
     add_effect,
+    add_inventory_item,
     default_character_sheet,
     derive_character_sheet,
 )
@@ -23,7 +27,18 @@ from sagasmith_dnd.standard_feature_ids import (
     TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID,
     TORTLE_NATURAL_ARMOR_SOURCE_KEY,
 )
-from sagasmith_dnd.statblocks import parameterized_statblock_requirements
+from sagasmith_dnd.standard_spell_ids import (
+    CORE_MENDING_MECHANIC_ID,
+    CORE_MENDING_SPELL_ID,
+)
+from sagasmith_dnd.statblocks import (
+    compile_parameterized_statblock_solution,
+    parameterized_statblock_requirements,
+)
+from sagasmith_dnd.steel_defender import (
+    STEEL_DEFENDER_DEFLECT_ATTACK_MECHANIC_ID,
+    STEEL_DEFENDER_VIGILANT_MECHANIC_ID,
+)
 
 import sagasmith_dnd_mcp.server as server_module
 from sagasmith_dnd_mcp.config import McpConfig
@@ -39,6 +54,7 @@ from sagasmith_dnd_mcp.server import (
     _validated_narrative_choices,
     _validated_species_ability_choices,
     _validated_species_proficiency_choices,
+    close_server,
     create_server,
 )
 from tests.authoring_helpers import import_and_activate_addon_fixture
@@ -1011,6 +1027,1723 @@ to hit, reach 5 ft., one target. *Hit:* 1d8 + PB force damage.
 
 
 @pytest.mark.fresh_database
+def test_dependent_actor_feature_binding_is_atomic_unique_and_restart_safe(
+    tmp_path: Path,
+) -> None:
+    workspace = Path(__file__).resolve().parents[3]
+    config = McpConfig(
+        home=tmp_path / "home",
+        database_url=None,
+        chroma_url=None,
+        chroma_path_override=None,
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
+    )
+    source_text = (
+        "### Steel Defender\n\n*Medium construct, neutral*\n\n"
+        "**Armor Class** 15 (natural armor)\n\n"
+        "**Hit Points** equal the steel defender's Constitution modifier + your Intelligence "
+        "modifier + five times your level in this class\n\n"
+        "**Speed** 40 ft.\n\n"
+        "| STR | DEX | CON | INT | WIS | CHA |\n"
+        "|:---:|:---:|:---:|:---:|:---:|:---:|\n"
+        "| 14 (+2) | 12 (+1) | 14 (+2) | 4 (-3) | 10 (+0) | 6 (-2) |\n\n"
+        "**Saving Throws** Dex +3, Con +4\n\n"
+        "**Skills** Athletics +4, Perception +4\n\n"
+        "**Senses** darkvision 60 ft., passive Perception 14\n\n"
+        "**Languages** understands the languages you speak\n\n"
+        "***Might of the Master.*** The following numbers increase by 1 when your proficiency "
+        "bonus increases by 1: the defender's skill and saving throw bonuses (above), the "
+        "bonuses to hit and damage of its rend attack, and the number of hit points restored by "
+        "its Repair action (below).\n\n"
+        "***Vigilant.*** The defender can't be surprised.\n\n"
+        "###### Actions\n\n"
+        "***Force-Empowered Rend.*** *Melee Weapon Attack:* +4 to hit, reach 5 ft., "
+        "one target. *Hit:* 1d8 + 2 force damage.\n\n"
+        "***Repair (3/Day).*** The magical mechanisms inside the defender restore 2d8 + 2 hit "
+        "points to itself or to one construct or object within 5 feet of it.\n\n"
+        "###### Reactions\n\n"
+        "***Deflect Attack.*** The defender imposes disadvantage on the attack roll of one "
+        "creature it can see that is within 5 feet of it, provided the attack roll is against "
+        "a creature other than the defender.\n"
+    )
+    requirement = parameterized_statblock_requirements(source_text)
+    assert requirement is not None
+    requirement["parameters"].append("owner_proficiency_bonus")
+    requirement["owner_class_name"] = "Artificer"
+    requirement["owner_class_binding"] = "reviewed_context"
+    requirement["solution"] = compile_parameterized_statblock_solution(
+        requirement["source_expressions"],
+        parameters=requirement["parameters"],
+    )
+    assert requirement["solution"] is not None
+    feature_id = "dnd5e.addon.binding.feature.steel-defender"
+    requirement["owner_binding"] = {
+        "schema_version": 1,
+        "kind": "feature_entitlement",
+        "feature_artifact_id": feature_id,
+        "relation_key": "steel_defender",
+    }
+    artifact = {
+        "id": "dnd5e.addon.binding.statblock.steel-defender",
+        "rule_definition_id": "dnd5e.addon.binding",
+        "kind": "statblock",
+        "application_state": "catalog_only",
+        "mechanical_scope": "mechanical",
+        "execution_state": "ruling_ready",
+        "semantic_resolution": {
+            "status": "resolved",
+            "mode": "agent_ruling",
+            "first_use_compilation_required": False,
+            "clause_ids": ["steel-defender-source"],
+        },
+        "rule_clauses": [
+            {
+                "schema_version": 1,
+                "id": "steel-defender-source",
+                "title": "Steel Defender",
+                "scope": "mechanical",
+                "source_citations": [
+                    {
+                        "source": "book:addon:binding",
+                        "source_ref": {"page": 1},
+                        "source_excerpt": "Steel Defender",
+                    }
+                ],
+                "settlement": {
+                    "mode": "agent_ruling",
+                    "default_resolver": "agent",
+                    "ruling_kind": "agent_dm_adjudication",
+                    "reason": "Resolve remaining source-specific behavior as DM.",
+                },
+            }
+        ],
+        "card": {
+            "name": "Steel Defender",
+            "normalized_content": source_text,
+            "dependent_actor_template": requirement,
+        },
+        "rule_refs": ["book:addon:binding:p1"],
+    }
+    fixture_source_key = "fixture.bound-addon"
+    fixture_source_text = (
+        "# Reviewed fixture\n\n"
+        "## Steel Defender Entitlement\n\n"
+        "Mechanics and choices for Steel Defender Entitlement were reviewed for this fixture.\n\n"
+        "## Steel Defender\n\n"
+        "Mechanics and choices for Steel Defender were reviewed for this fixture."
+    )
+    fixture_source_checksum = hashlib.sha256(fixture_source_text.encode()).hexdigest()
+    fixture_chunk_key = rule_chunk_key(fixture_source_key, 0, 0, fixture_source_text)
+    fixture_citation = {
+        "source": f"rule-source:{fixture_source_key}",
+        "source_key": fixture_source_key,
+        "chunk_key": fixture_chunk_key,
+        "source_checksum": fixture_source_checksum,
+        "page_start": 1,
+        "page_end": 1,
+        "source_excerpt": fixture_source_text,
+    }
+    artifact["source_citations"] = [deepcopy(fixture_citation)]
+    artifact["selection_contract"] = build_selection_contract(
+        artifact,
+        status="not_applicable",
+        references=["book:addon:binding:p1"],
+    )
+    artifact["catalog_review"] = build_catalog_review(
+        artifact,
+        decisions=[
+            _review_decision("primary", "agent:binding-author"),
+            _review_decision("critic", "agent:binding-critic"),
+        ],
+    )
+    feature_artifact = {
+        "id": feature_id,
+        "rule_definition_id": "dnd5e.addon.binding",
+        "kind": "feature",
+        "application_state": "selection_ready",
+        "mechanical_scope": "mechanical",
+        "execution_state": "engine_ready",
+        "semantic_resolution": {
+            "status": "resolved",
+            "mode": "static_grant",
+            "first_use_compilation_required": False,
+            "clause_ids": ["steel-defender-entitlement"],
+        },
+        "rule_clauses": [
+            {
+                "schema_version": 1,
+                "id": "steel-defender-entitlement",
+                "title": "Steel Defender entitlement",
+                "scope": "mechanical",
+                "source_citations": [
+                    {
+                        "source": "book:addon:binding",
+                        "source_ref": {"page": 1},
+                        "source_excerpt": "You create a Steel Defender.",
+                    }
+                ],
+                "settlement": {
+                    "mode": "static_grant",
+                    "grant_refs": ["card.mechanical_grants"],
+                },
+            }
+        ],
+        "card": {
+            "name": "Steel Defender Entitlement",
+            "description": "Authorizes one bound Steel Defender.",
+            "minimum_level": 1,
+            "repeatable_selection_levels": [],
+            "selection_requirements": {},
+            "selection_requirements_by_level": {},
+            "mechanical_grants": {},
+        },
+        "rule_refs": ["book:addon:binding:p1"],
+        "source_citations": [deepcopy(fixture_citation)],
+    }
+    feature_artifact["selection_contract"] = build_selection_contract(
+        feature_artifact,
+        status="ready",
+        references=["book:addon:binding:p1"],
+    )
+    feature_artifact["catalog_review"] = build_catalog_review(
+        feature_artifact,
+        decisions=[
+            _review_decision("primary", "agent:binding-author"),
+            _review_decision("critic", "agent:binding-critic"),
+        ],
+    )
+
+    async def exercise() -> tuple[str, str, str, dict]:
+        server = create_server(config)
+        try:
+            campaign = await _call(
+                server,
+                "campaign_create",
+                {"name": "Bound actor", "idempotency_key": "bound-campaign"},
+            )
+            profile = await _call(
+                server,
+                "campaign_rules",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "set_profile",
+                    "payload": {"edition": "2014"},
+                    "expected_revision": campaign["revision"],
+                    "idempotency_key": "bound-profile",
+                },
+            )
+            await import_and_activate_addon_fixture(
+                _call,
+                server,
+                campaign["id"],
+                config.home,
+                manifest={
+                    "id": "dnd5e.addon.binding",
+                    "version": "1.0.0",
+                    "title": "Bound Defender",
+                    "namespace": "dnd5e.addon.binding",
+                    "system_id": "dnd5e",
+                    "editions": ["2014"],
+                    "capabilities": [],
+                },
+                artifacts=[feature_artifact, artifact],
+                mechanics=[],
+                expected_revision=profile["campaign_revision"],
+                request_key="bound-addon",
+                source_key_override=fixture_source_key,
+                source_chunks_override=[fixture_source_text],
+            )
+            base_sheet = default_character_sheet()
+            base_sheet["progression"]["level"] = 3
+            base_sheet["progression"]["classes"] = [
+                {"name": "Artificer", "level": 3, "subclass": "Battle Smith", "hit_die": 8}
+            ]
+            base_sheet["abilities"]["intelligence"]["score"] = 16
+            base_sheet["spellcasting"]["ability"] = "intelligence"
+            base_sheet["spellcasting"]["spell_slots"] = {
+                "1": {"value": 1, "max": 1, "unlimited": False}
+            }
+            base_sheet["content"]["spells"].append(
+                {
+                    "id": CORE_MENDING_SPELL_ID,
+                    "name": "Mending",
+                    "level": 0,
+                    "grant": {
+                        "source_type": "class",
+                        "source_key": "artificer",
+                        "method": "known",
+                    },
+                    "access": {"known": True, "prepared": True},
+                    "mechanic_refs": [CORE_MENDING_MECHANIC_ID],
+                    "definition": {
+                        "casting_time": "1 minute",
+                        "range": {"kind": "touch"},
+                        "duration": {"kind": "instantaneous", "concentration": False},
+                        "components": {
+                            "verbal": True,
+                            "somatic": True,
+                            "material": True,
+                            "material_description": "two lodestones",
+                        },
+                        "effect": "Repairs a single break or tear in a touched object.",
+                    },
+                    "pack_id": "dnd5e.content.srd2014",
+                    "pack_version": "1.16.0",
+                    "rule_refs": ["bundled:srd2014/07_Spells/Spells_Each/Mending.md"],
+                }
+            )
+            base_sheet, _ = add_inventory_item(
+                base_sheet,
+                {
+                    "id": "smiths-tools",
+                    "name": "Smith's Tools",
+                    "kind": "tool",
+                    "quantity": 1,
+                },
+            )
+            unauthorized = await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "direct",
+                    "payload": {
+                        "campaign_id": campaign["id"],
+                        "name": "Missing feature",
+                        "sheet": base_sheet,
+                    },
+                    "idempotency_key": "missing-owner",
+                },
+            )
+            before = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            with pytest.raises(Exception, match="feature entitlement"):
+                await _call(
+                    server,
+                    "addon_actor_instantiate",
+                    {
+                        "campaign_id": campaign["id"],
+                        "artifact_id": artifact["id"],
+                        "owner_character_id": unauthorized["id"],
+                        "idempotency_key": "unauthorized-defender",
+                    },
+                )
+            assert (
+                await _call(
+                    server,
+                    "campaign_query",
+                    {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+                )
+                == before
+            )
+
+            forged_sheet = deepcopy(base_sheet)
+            forged_sheet["content"]["features"] = [
+                {
+                    "id": feature_id,
+                    "name": "Steel Defender",
+                    "pack_id": "dnd5e.addon.binding",
+                    "pack_version": "1.0.0",
+                }
+            ]
+            forged = await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "direct",
+                    "payload": {
+                        "campaign_id": campaign["id"],
+                        "name": "Forged feature metadata",
+                        "sheet": forged_sheet,
+                    },
+                    "idempotency_key": "forged-owner",
+                },
+            )
+            with pytest.raises(Exception, match="applied feature entitlement"):
+                await _call(
+                    server,
+                    "addon_actor_instantiate",
+                    {
+                        "campaign_id": campaign["id"],
+                        "artifact_id": artifact["id"],
+                        "owner_character_id": forged["id"],
+                        "idempotency_key": "forged-defender",
+                    },
+                )
+
+            async def create_entitled_owner(name: str, key: str) -> dict:
+                created_owner = await _call(
+                    server,
+                    "character_create_from",
+                    {
+                        "mode": "direct",
+                        "payload": {
+                            "campaign_id": campaign["id"],
+                            "name": name,
+                            "sheet": base_sheet,
+                        },
+                        "idempotency_key": key,
+                    },
+                )
+                applied = await _call(
+                    server,
+                    "character_content_apply",
+                    {
+                        "character_id": created_owner["id"],
+                        "artifact_id": feature_id,
+                        "expected_revision": created_owner["revision"],
+                        "idempotency_key": key + "-feature",
+                    },
+                )
+                receipt = applied["rule_receipts"][0]
+                assert receipt["event"] == "character.content.apply"
+                assert receipt["artifact_id"] == feature_id
+                assert len(receipt["artifact_content_hash"]) == 64
+                assert "reviewed_content_hash" not in receipt
+                return applied
+
+            revoked_owner = await create_entitled_owner("Revoked Battle Smith", "revoked-owner")
+            revoked_arguments = {
+                "campaign_id": campaign["id"],
+                "artifact_id": artifact["id"],
+                "owner_character_id": revoked_owner["id"],
+                "idempotency_key": "revoked-defender",
+            }
+            await _call(server, "addon_actor_instantiate", revoked_arguments)
+            history = await _call(
+                server,
+                "state_revision",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "history",
+                    "payload": {},
+                    "principal_id": "system:local",
+                },
+            )
+            revoked_actor_revision = next(
+                item
+                for item in history
+                if item["idempotency_key"] == "revoked-defender" and item["applied"]
+            )
+            await _call(
+                server,
+                "state_revision",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "undo",
+                    "payload": {"expected_history_sequence": revoked_actor_revision["sequence"]},
+                    "principal_id": "system:local",
+                    "idempotency_key": "undo-revoked-defender",
+                },
+            )
+            history = await _call(
+                server,
+                "state_revision",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "history",
+                    "payload": {},
+                    "principal_id": "system:local",
+                },
+            )
+            revoked_feature_revision = next(
+                item
+                for item in history
+                if item["idempotency_key"] == "revoked-owner-feature" and item["applied"]
+            )
+            await _call(
+                server,
+                "state_revision",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "undo",
+                    "payload": {"expected_history_sequence": revoked_feature_revision["sequence"]},
+                    "principal_id": "system:local",
+                    "idempotency_key": "undo-revoked-owner-feature",
+                },
+            )
+            with pytest.raises(Exception, match="feature entitlement"):
+                await _call(server, "addon_actor_instantiate", revoked_arguments)
+
+            owner = await create_entitled_owner("Battle Smith", "bound-owner")
+            arguments = {
+                "campaign_id": campaign["id"],
+                "artifact_id": artifact["id"],
+                "owner_character_id": owner["id"],
+                "idempotency_key": "bound-defender",
+            }
+            created = await _call(server, "addon_actor_instantiate", arguments)
+            replay = await _call(server, "addon_actor_instantiate", arguments)
+            assert replay["character"] == created["character"]
+            after = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            relation = after["state"]["dependent_actor_relations"][0]
+            expected_relation = {
+                "owner_character_id": owner["id"],
+                "dependent_actor_id": created["character"]["id"],
+                "relation_key": "steel_defender",
+                "source_artifact_id": artifact["id"],
+                "source_pack_id": "dnd5e.addon.binding",
+                "source_pack_version": "1.0.0",
+                "status": "active",
+                "created_campaign_revision": after["revision"],
+                "created_long_rest_elapsed_ticks": None,
+            }
+            assert {key: relation[key] for key in expected_relation} == expected_relation
+            binding = relation["template_binding"]
+            assert binding["owner_class_name"].casefold() == "artificer"
+            assert binding["casting_slot_level"] is None
+            assert binding["template_variant"] is None
+            assert binding["numeric_parameters"] == created["content_receipt"]["numeric_parameters"]
+            assert len(binding["reviewed_expression_hash"]) == 64
+            authorization = dict(binding["authorization"])
+            assert len(authorization.pop("signature")) == 64
+            assert authorization == {
+                "schema_version": 1,
+                "purpose": "dependent_actor_template",
+                "campaign_id": campaign["id"],
+                "owner_character_id": owner["id"],
+                "dependent_actor_id": created["character"]["id"],
+                "relation_key": "steel_defender",
+                "source_artifact_id": artifact["id"],
+                "source_pack_id": "dnd5e.addon.binding",
+                "source_pack_version": "1.0.0",
+                "owner_class_name": binding["owner_class_name"],
+                "casting_slot_level": None,
+                "template_variant": None,
+                "numeric_parameters": binding["numeric_parameters"],
+                "reviewed_expression_hash": binding["reviewed_expression_hash"],
+            }
+
+            initial_defender = created["character"]
+            vigilant = next(
+                item
+                for item in initial_defender["sheet"]["content"]["features"]
+                if item["name"] == "Vigilant"
+            )
+            assert vigilant["mechanic_refs"] == [STEEL_DEFENDER_VIGILANT_MECHANIC_ID]
+            deflect = next(
+                item
+                for item in initial_defender["sheet"]["content"]["activities"]
+                if item["name"] == "Deflect Attack"
+            )
+            assert deflect["mechanic_refs"] == [
+                STEEL_DEFENDER_DEFLECT_ATTACK_MECHANIC_ID
+            ]
+            level_four = await _call(
+                server,
+                "character_state_change",
+                {
+                    "character_id": owner["id"],
+                    "action": "level_advance",
+                    "payload": {
+                        "class_name": "Artificer",
+                        "hp_method": "fixed",
+                        "reason": "Steel Defender owner scaling regression",
+                        "source_ref": ("bundled:srd2014/03_Characterization/Beyond_1st_Level.md"),
+                    },
+                    "expected_revision": owner["revision"],
+                    "idempotency_key": "bound-owner-level-4",
+                },
+            )
+            owner = level_four["character"]
+            defender_four = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": initial_defender["id"]}},
+            )
+            assert defender_four["sheet"]["combat"]["hp"]["max"] == (
+                initial_defender["sheet"]["combat"]["hp"]["max"] + 5
+            )
+            assert defender_four["sheet"]["abilities"]["dexterity"]["bonus"] == 2
+
+            level_five_arguments = {
+                "character_id": owner["id"],
+                "action": "level_advance",
+                "payload": {
+                    "class_name": "Artificer",
+                    "hp_method": "fixed",
+                    "reason": "Steel Defender owner scaling regression",
+                    "source_ref": "bundled:srd2014/03_Characterization/Beyond_1st_Level.md",
+                },
+                "expected_revision": owner["revision"],
+                "idempotency_key": "bound-owner-level-5",
+            }
+            level_five = await _call(server, "character_state_change", level_five_arguments)
+            owner = level_five["character"]
+            defender_five = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": initial_defender["id"]}},
+            )
+            assert defender_five["sheet"]["combat"]["hp"]["max"] == (
+                defender_four["sheet"]["combat"]["hp"]["max"] + 5
+            )
+            assert defender_five["sheet"]["abilities"]["dexterity"]["bonus"] == 3
+            assert defender_five["sheet"]["abilities"]["constitution"]["bonus"] == 3
+            assert defender_five["sheet"]["skills"]["athletics"]["bonus"] == 3
+            assert defender_five["sheet"]["skills"]["perception"]["bonus"] == 5
+            rend = next(
+                item
+                for item in defender_five["sheet"]["inventory"]["items"]
+                if item["name"] == "Force-Empowered Rend"
+            )
+            assert rend["mechanics"]["attack_bonus_override"] == 5
+            assert rend["mechanics"]["damage_bonus_override"] == 3
+            repair = next(
+                item
+                for item in defender_five["sheet"]["content"]["activities"]
+                if item["name"].startswith("Repair")
+            )
+            assert "2d8 + 3 hit points" in repair["description"]
+            after_level_five = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            refreshed_binding = after_level_five["state"]["dependent_actor_relations"][0][
+                "template_binding"
+            ]
+            refreshed_authorization = dict(refreshed_binding["authorization"])
+            assert "authorization" not in refreshed_authorization
+            assert refreshed_authorization["numeric_parameters"]["owner_proficiency_bonus"] == 3
+            assert await _call(server, "character_state_change", level_five_arguments) == level_five
+            assert (
+                await _call(
+                    server,
+                    "character_query",
+                    {"view": "get", "payload": {"character_id": initial_defender["id"]}},
+                )
+                == defender_five
+            )
+            damaged_for_mending = await _call(
+                server,
+                "character_state_change",
+                {
+                    "character_id": initial_defender["id"],
+                    "action": "damage",
+                    "payload": {
+                        "parts": [{"amount": 10, "damage_type": "force"}],
+                    },
+                    "expected_revision": defender_five["revision"],
+                    "idempotency_key": "damage-defender-before-mending",
+                },
+            )
+            mending_arguments = {
+                "character_id": owner["id"],
+                "action": "cast_spell",
+                "payload": {
+                    "spell_id": CORE_MENDING_SPELL_ID,
+                    "target_character_ids": [initial_defender["id"]],
+                    "declaration": {
+                        "spatial_facts": {
+                            "distance_ft": 5,
+                            "default_resolver": "agent",
+                            "ruling_kind": "agent_dm_adjudication",
+                            "reason": "The owner is touching the adjacent Steel Defender.",
+                        }
+                    },
+                },
+                "expected_revision": owner["revision"],
+                "idempotency_key": "mend-bound-defender",
+            }
+            with pytest.raises(Exception, match="spell is not recorded"):
+                await _call(
+                    server,
+                    "character_action",
+                    {
+                        **mending_arguments,
+                        "payload": {
+                            **mending_arguments["payload"],
+                            "spell_id": "dnd5e.content.srd2014.spell.not-present",
+                        },
+                        "idempotency_key": "reject-unrecorded-spell",
+                    },
+                )
+            mended = await _call(server, "character_action", mending_arguments)
+            assert await _call(server, "character_action", mending_arguments) == mended
+            assert mended["result"]["automatic_effect"] == "steel_defender_mending"
+            assert mended["result"]["target_id"] == initial_defender["id"]
+            assert mended["elapsed_ticks"] == 10
+            mending_source_receipt = next(
+                item
+                for item in mended["result"]["rule_receipts"]
+                if item["mechanic_id"] == "dnd5e.expansion.steel_defender.mending"
+            )
+            assert mending_source_receipt["citations"] == [
+                {
+                    "source_artifact_id": artifact["id"],
+                    "source_pack_id": "dnd5e.addon.binding",
+                    "source_pack_version": "1.0.0",
+                    "reviewed_expression_hash": requirement["solution"][
+                        "reviewed_expression_hash"
+                    ],
+                }
+            ]
+            assert any(
+                item["mechanic_id"] == CORE_MENDING_MECHANIC_ID
+                for item in mended["result"]["rule_receipts"]
+            )
+            owner = mended["character"]
+            defender_after_mending = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": initial_defender["id"]}},
+            )
+            assert defender_after_mending["sheet"]["combat"]["hp"]["value"] > (
+                damaged_for_mending["character"]["sheet"]["combat"]["hp"]["value"]
+            )
+            damaged_for_item_mending = await _call(
+                server,
+                "character_state_change",
+                {
+                    "character_id": initial_defender["id"],
+                    "action": "damage",
+                    "payload": {"parts": [{"amount": 5, "damage_type": "force"}]},
+                    "expected_revision": defender_after_mending["revision"],
+                    "idempotency_key": "damage-defender-before-item-mending",
+                },
+            )
+            owner_before_mending_tool = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": owner["id"]}},
+            )
+            mending_tool = await _call(
+                server,
+                "inventory_change",
+                {
+                    "owner": "character",
+                    "action": "add",
+                    "owner_id": owner["id"],
+                    "payload": {
+                        "item": {
+                            "id": "mending-tool",
+                            "name": "Mending Tool",
+                            "kind": "magic_item",
+                            "source_key": "test:mending-tool",
+                            "attunement": "attuned",
+                            "charges": {
+                                "label": "Mending Tool charges",
+                                "value": 1,
+                                "max": 1,
+                                "recovers_on": "dawn",
+                                "source_key": "test:mending-tool",
+                            },
+                            "mechanics": {
+                                "rarity": "artifact",
+                                "requires_attunement": True,
+                                "spellcasting": {
+                                    "requires_attunement": True,
+                                    "requires_class_spell_list": False,
+                                    "components_required": False,
+                                    "spells": [
+                                        {
+                                            "artifact_id": CORE_MENDING_SPELL_ID,
+                                            "charge_cost": 1,
+                                            "casting_time": "1 minute",
+                                        }
+                                    ],
+                                },
+                            },
+                        }
+                    },
+                    "expected_revision": owner_before_mending_tool["revision"],
+                    "idempotency_key": "add-mending-tool",
+                },
+            )
+            await _call(
+                server,
+                "inventory_change",
+                {
+                    "owner": "character",
+                    "action": "equip",
+                    "owner_id": owner["id"],
+                    "payload": {"item_id": "mending-tool", "slot": "main_hand"},
+                    "expected_revision": mending_tool["character"]["revision"],
+                    "idempotency_key": "equip-mending-tool",
+                },
+            )
+            owner_with_mending_tool = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": owner["id"]}},
+            )
+            item_mending_arguments = {
+                "character_id": owner["id"],
+                "action": "cast_spell",
+                "payload": {
+                    "spell_id": CORE_MENDING_SPELL_ID,
+                    "source_item_id": "mending-tool",
+                    "target_character_ids": [initial_defender["id"]],
+                    "declaration": {
+                        "spatial_facts": {
+                            "distance_ft": 5,
+                            "default_resolver": "agent",
+                            "ruling_kind": "agent_dm_adjudication",
+                            "reason": "The magic item casts Mending on the touched defender.",
+                        }
+                    },
+                },
+                "expected_revision": owner_with_mending_tool["revision"],
+                "idempotency_key": "item-mend-bound-defender",
+            }
+            item_mended = await _call(server, "character_action", item_mending_arguments)
+            assert item_mended["result"]["automatic_effect"] == "steel_defender_mending"
+            owner = item_mended["character"]
+            mending_item_after = next(
+                item
+                for item in owner["sheet"]["inventory"]["items"]
+                if item["id"] == "mending-tool"
+            )
+            assert mending_item_after["charges"]["value"] == 0
+            defender_after_item_mending = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": initial_defender["id"]}},
+            )
+            assert defender_after_item_mending["sheet"]["combat"]["hp"]["value"] > (
+                damaged_for_item_mending["character"]["sheet"]["combat"]["hp"]["value"]
+            )
+            after = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            with pytest.raises(Exception, match="already has an active"):
+                await _call(
+                    server,
+                    "addon_actor_instantiate",
+                    {**arguments, "idempotency_key": "duplicate-defender"},
+                )
+            assert (
+                await _call(
+                    server,
+                    "campaign_query",
+                    {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+                )
+                == after
+            )
+
+            second_owner = await create_entitled_owner("Combat Battle Smith", "combat-bound-owner")
+            attack_target = await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "direct",
+                    "payload": {
+                        "campaign_id": campaign["id"],
+                        "name": "Deflect Attack Target",
+                        "character_type": "npc",
+                        "sheet": default_character_sheet(),
+                    },
+                    "idempotency_key": "deflect-attack-target",
+                },
+            )
+            await _call(
+                server,
+                "access_grant",
+                {
+                    "scope": "campaign",
+                    "campaign_id": campaign["id"],
+                    "principal_id": "player:combat-battle-smith",
+                    "payload": {"role": "player"},
+                    "by_principal_id": "system:local",
+                },
+            )
+            await _call(
+                server,
+                "access_grant",
+                {
+                    "scope": "campaign",
+                    "campaign_id": campaign["id"],
+                    "principal_id": "player:unrelated-artificer",
+                    "payload": {"role": "player"},
+                    "by_principal_id": "system:local",
+                },
+            )
+            await _call(
+                server,
+                "access_grant",
+                {
+                    "scope": "actor",
+                    "campaign_id": campaign["id"],
+                    "principal_id": "player:combat-battle-smith",
+                    "payload": {
+                        "actor_id": second_owner["id"],
+                        "can_control": True,
+                        "can_view_private": True,
+                    },
+                    "by_principal_id": "system:local",
+                },
+            )
+            phase = await _call(
+                server,
+                "game_phase",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "set",
+                    "tool_profile": "play",
+                    "expected_revision": after["revision"],
+                    "idempotency_key": "bound-actor-play",
+                },
+            )
+            owner = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": owner["id"]}},
+            )
+            rested = await _call(
+                server,
+                "campaign_change",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "party_rest",
+                    "payload": {
+                        "rest_type": "long_rest",
+                        "duration_minutes": 480,
+                        "members": [
+                            {
+                                "character_id": owner["id"],
+                                "expected_revision": owner["revision"],
+                            }
+                        ],
+                    },
+                    "expected_revision": phase["campaign_revision"],
+                    "idempotency_key": "bound-owner-long-rest",
+                },
+            )
+            rested_owner = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": owner["id"]}},
+            )
+            await _call(
+                server,
+                "inventory_change",
+                {
+                    "owner": "character",
+                    "action": "remove",
+                    "owner_id": owner["id"],
+                    "payload": {"item_id": "smiths-tools"},
+                    "expected_revision": rested_owner["revision"],
+                    "idempotency_key": "remove-smiths-tools-before-replacement",
+                },
+            )
+            with pytest.raises(Exception, match="smith's tools"):
+                await _call(
+                    server,
+                    "addon_actor_instantiate",
+                    {
+                        **arguments,
+                        "replace_existing": True,
+                        "expected_revision": rested["campaign_revision"],
+                        "idempotency_key": "replacement-without-tools",
+                    },
+                )
+            without_tools = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": owner["id"]}},
+            )
+            await _call(
+                server,
+                "inventory_change",
+                {
+                    "owner": "character",
+                    "action": "add",
+                    "owner_id": owner["id"],
+                    "payload": {
+                        "item": {
+                            "id": "smiths-tools",
+                            "name": "Smith's Tools",
+                            "kind": "tool",
+                            "quantity": 1,
+                        }
+                    },
+                    "expected_revision": without_tools["revision"],
+                    "idempotency_key": "restore-smiths-tools-for-replacement",
+                },
+            )
+            before_tampered_replacement = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": created["character"]["id"]}},
+            )
+            database_path = config.home / "data" / "ttrpgbase.db"
+            with sqlite3.connect(database_path) as database:
+                stored_state = database.execute(
+                    "select state from campaigns where id = ?", (campaign["id"],)
+                ).fetchone()[0]
+                tampered_state = json.loads(stored_state)
+                active_relation = next(
+                    item
+                    for item in tampered_state["dependent_actor_relations"]
+                    if item["dependent_actor_id"] == created["character"]["id"]
+                    and item["status"] == "active"
+                )
+                signature = active_relation["template_binding"]["authorization"]["signature"]
+                active_relation["template_binding"]["authorization"]["signature"] = (
+                    "0" if signature[0] != "0" else "1"
+                ) + signature[1:]
+                database.execute(
+                    "update campaigns set state = ? where id = ?",
+                    (json.dumps(tampered_state), campaign["id"]),
+                )
+            with pytest.raises(Exception, match="authorization signature is invalid"):
+                await _call(
+                    server,
+                    "addon_actor_instantiate",
+                    {
+                        **arguments,
+                        "replace_existing": True,
+                        "expected_revision": rested["campaign_revision"],
+                        "idempotency_key": "replacement-tampered-signature",
+                    },
+                )
+            assert (
+                await _call(
+                    server,
+                    "character_query",
+                    {
+                        "view": "get",
+                        "payload": {"character_id": created["character"]["id"]},
+                    },
+                )
+                == before_tampered_replacement
+            )
+            with sqlite3.connect(database_path) as database:
+                database.execute(
+                    "update campaigns set state = ? where id = ?",
+                    (stored_state, campaign["id"]),
+                )
+            stale_state = json.loads(stored_state)
+            stale_relation = next(
+                item
+                for item in stale_state["dependent_actor_relations"]
+                if item["dependent_actor_id"] == created["character"]["id"]
+                and item["status"] == "active"
+            )
+            stale_relation["template_binding"] = deepcopy(binding)
+            with sqlite3.connect(database_path) as database:
+                database.execute(
+                    "update campaigns set state = ? where id = ?",
+                    (json.dumps(stale_state), campaign["id"]),
+                )
+            with pytest.raises(Exception, match="binding is stale or conflicts"):
+                await _call(
+                    server,
+                    "addon_actor_instantiate",
+                    {
+                        **arguments,
+                        "replace_existing": True,
+                        "expected_revision": rested["campaign_revision"],
+                        "idempotency_key": "replacement-stale-owner-binding",
+                    },
+                )
+            assert (
+                await _call(
+                    server,
+                    "character_query",
+                    {
+                        "view": "get",
+                        "payload": {"character_id": created["character"]["id"]},
+                    },
+                )
+                == before_tampered_replacement
+            )
+            with sqlite3.connect(database_path) as database:
+                database.execute(
+                    "update campaigns set state = ? where id = ?",
+                    (stored_state, campaign["id"]),
+                )
+            replacement = await _call(
+                server,
+                "addon_actor_instantiate",
+                {
+                    **arguments,
+                    "replace_existing": True,
+                    "expected_revision": rested["campaign_revision"],
+                    "idempotency_key": "replacement-defender",
+                },
+            )
+            assert replacement["replaced_actor_id"] == created["character"]["id"]
+            perished = await _call(
+                server,
+                "character_query",
+                {
+                    "view": "get",
+                    "payload": {"character_id": created["character"]["id"]},
+                },
+            )
+            assert perished["sheet"]["combat"]["hp"]["value"] == 0
+            assert "dead" in perished["sheet"]["conditions"]
+            replaced_state = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            owner_relations = [
+                item
+                for item in replaced_state["state"]["dependent_actor_relations"]
+                if item["owner_character_id"] == owner["id"]
+            ]
+            assert [item["status"] for item in owner_relations] == ["replaced", "active"]
+            assert owner_relations[1]["created_long_rest_elapsed_ticks"] == replaced_state["state"][
+                "game_time"
+            ]["elapsed_ticks"]
+            with pytest.raises(Exception, match="already created"):
+                await _call(
+                    server,
+                    "addon_actor_instantiate",
+                    {
+                        **arguments,
+                        "replace_existing": True,
+                        "expected_revision": replaced_state["revision"],
+                        "idempotency_key": "same-rest-replacement-defender",
+                    },
+                )
+            started = await _call(
+                server,
+                "combat_start",
+                {
+                    "campaign_id": campaign["id"],
+                    "positioning_mode": "agent",
+                    "participant_ids": [second_owner["id"]],
+                    "expected_revision": replaced_state["revision"],
+                    "idempotency_key": "bound-actor-combat",
+                },
+            )
+            combat_arguments = {
+                "campaign_id": campaign["id"],
+                "artifact_id": artifact["id"],
+                "owner_character_id": second_owner["id"],
+                "participant_config": {
+                    "disposition": "friendly",
+                },
+                "expected_revision": started["campaign_revision"],
+                "idempotency_key": "combat-bound-defender",
+            }
+            combat_created = await _call(server, "addon_actor_instantiate", combat_arguments)
+            combat_replay = await _call(server, "addon_actor_instantiate", combat_arguments)
+            assert combat_replay["character"] == combat_created["character"]
+            committed = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            assert len(committed["state"]["dependent_actor_relations"]) == 3
+            assert (
+                committed["state"]["dependent_actor_relations"][2]["dependent_actor_id"]
+                == combat_created["character"]["id"]
+            )
+            assert combat_created["character"]["id"] in {
+                item["actor_id"] for item in combat_created["combat"]["combat"]["reinforcements"]
+            }
+            owner_combatant = next(
+                item
+                for item in combat_created["combat"]["combat"]["combatants"]
+                if item["actor_id"] == second_owner["id"]
+            )
+            queued_defender = next(
+                item
+                for item in combat_created["combat"]["combat"]["reinforcements"]
+                if item["actor_id"] == combat_created["character"]["id"]
+            )
+            assert queued_defender["initiative"] == owner_combatant["initiative"]
+            assert queued_defender["tie_breaker"] == owner_combatant["tie_breaker"]
+            assert queued_defender["dependent_turn"] == {
+                "kind": "steel_defender_2014",
+                "owner_actor_id": second_owner["id"],
+                "source_artifact_id": artifact["id"],
+                "source_pack_id": "dnd5e.addon.binding",
+                "source_pack_version": "1.0.0",
+                "reviewed_expression_hash": binding["reviewed_expression_hash"],
+            }
+
+            joined = await _call(
+                server,
+                "combat_end_turn",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": second_owner["id"],
+                    "expected_revision": committed["revision"],
+                    "idempotency_key": "join-bound-defender-next-round",
+                },
+            )
+            assert joined["combat"]["round"] == 2
+            assert [item["actor_id"] for item in joined["combat"]["combatants"]] == [
+                second_owner["id"],
+                combat_created["character"]["id"],
+            ]
+            queued_target = await _call(
+                server,
+                "combat_join",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": attack_target["id"],
+                    "participant_config": {
+                        "disposition": "friendly",
+                        "initiative": 0,
+                    },
+                    "expected_revision": joined["campaign_revision"],
+                    "idempotency_key": "queue-deflect-attack-target",
+                },
+            )
+            damaged_combat_defender = await _call(
+                server,
+                "combat_hp_change",
+                {
+                    "campaign_id": campaign["id"],
+                    "target_id": combat_created["character"]["id"],
+                    "action": "damage",
+                    "payload": {"parts": [{"amount": 10, "damage_type": "force"}]},
+                    "expected_revision": queued_target["campaign_revision"],
+                    "idempotency_key": "damage-commanded-defender-before-repair",
+                },
+            )
+            command_arguments = {
+                "campaign_id": campaign["id"],
+                "actor_id": second_owner["id"],
+                "action": "command_dependent",
+                "target_id": combat_created["character"]["id"],
+                "principal_id": "player:combat-battle-smith",
+                "expected_revision": damaged_combat_defender["campaign_revision"],
+                "idempotency_key": "command-bound-defender",
+            }
+            commanded = await _call(server, "combat_common_action", command_arguments)
+            assert await _call(server, "combat_common_action", command_arguments) == commanded
+            commanded_audit = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            commanded_owner = commanded_audit["state"]["combat"]["combatants"][0]
+            assert commanded_owner["turn_budget"]["bonus_action"] == 0
+            defender_turn = await _call(
+                server,
+                "combat_end_turn",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": second_owner["id"],
+                    "principal_id": "player:combat-battle-smith",
+                    "expected_revision": commanded["campaign_revision"],
+                    "idempotency_key": "begin-commanded-defender-turn",
+                },
+            )
+            defender_turn_audit = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            commanded_defender = defender_turn_audit["state"]["combat"]["combatants"][1]
+            assert commanded_defender["turn_budget"]["main_action"] == 1
+            assert commanded_defender["turn_flags"]["dependent_command_active"] is True
+            combat_repair = next(
+                item
+                for item in combat_created["character"]["sheet"]["content"]["activities"]
+                if item["name"].startswith("Repair")
+            )
+            repair_arguments = {
+                "campaign_id": campaign["id"],
+                "actor_id": combat_created["character"]["id"],
+                "activity_id": combat_repair["id"],
+                "declaration": {
+                    "target_id": combat_created["character"]["id"],
+                },
+                "principal_id": "player:combat-battle-smith",
+                "expected_revision": defender_turn["campaign_revision"],
+                "idempotency_key": "repair-commanded-defender",
+            }
+            too_far_repair_arguments = deepcopy(repair_arguments)
+            too_far_repair_arguments["declaration"]["spatial_facts"] = {
+                "distance_ft": 6,
+                "default_resolver": "agent",
+                "ruling_kind": "agent_dm_adjudication",
+                "reason": "A forged self-distance must not override the exact target.",
+            }
+            too_far_repair_arguments["idempotency_key"] = "repair-commanded-defender-forged-self"
+            with pytest.raises(Exception, match="derives zero distance"):
+                await server.call_tool("combat_use_activity", too_far_repair_arguments)
+            unrelated_repair_arguments = {
+                **repair_arguments,
+                "principal_id": "player:unrelated-artificer",
+                "idempotency_key": "repair-commanded-defender-unrelated-player",
+            }
+            with pytest.raises(Exception, match="cannot access actor"):
+                await _call(server, "combat_use_activity", unrelated_repair_arguments)
+            after_rejected_repair = await _call(
+                server,
+                "character_query",
+                {
+                    "view": "get",
+                    "payload": {"character_id": combat_created["character"]["id"]},
+                },
+            )
+            rejected_repair_activity = next(
+                item
+                for item in after_rejected_repair["sheet"]["content"]["activities"]
+                if item["id"] == combat_repair["id"]
+            )
+            assert rejected_repair_activity["uses"]["value"] == 3
+            assert after_rejected_repair["sheet"]["combat"]["hp"]["value"] == (
+                damaged_combat_defender["result"]["after_hp"]
+            )
+            _, repaired = await server.call_tool("combat_use_activity", repair_arguments)
+            _, repaired_replay = await server.call_tool("combat_use_activity", repair_arguments)
+            assert repaired_replay == repaired
+            assert repaired["status"] == "committed"
+            repaired_defender = await _call(
+                server,
+                "character_query",
+                {
+                    "view": "get",
+                    "payload": {"character_id": combat_created["character"]["id"]},
+                },
+            )
+            assert repaired_defender["sheet"]["combat"]["hp"]["value"] > (
+                damaged_combat_defender["result"]["after_hp"]
+            )
+            repaired_activity = next(
+                item
+                for item in repaired_defender["sheet"]["content"]["activities"]
+                if item["id"] == combat_repair["id"]
+            )
+            assert repaired_activity["uses"]["value"] == 2
+            owner_round_three = await _call(
+                server,
+                "combat_end_turn",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": combat_created["character"]["id"],
+                    "expected_revision": repaired["campaign_revision"],
+                    "idempotency_key": "finish-commanded-defender-turn",
+                },
+            )
+            deflect_attack_arguments = {
+                "campaign_id": campaign["id"],
+                "actor_id": second_owner["id"],
+                "target_id": attack_target["id"],
+                "action": {
+                    "weapon_id": "unarmed-strike",
+                    "attack_mode": "melee",
+                    "context": {
+                        "spatial_facts": {
+                            "decision_id": "deflect-attack-primary-spatial-facts",
+                            "reason": (
+                                "The attacker can reach and see the target in the current scene."
+                            ),
+                            "targetable": True,
+                            "in_range": True,
+                            "cover_degree": "none",
+                            "attacker_can_see_target": True,
+                            "target_can_see_attacker": True,
+                        }
+                    },
+                    "deflect_attack": {
+                        "defender_id": combat_created["character"]["id"],
+                        "spatial_facts": {
+                            "decision_id": "steel-defender-deflect-spatial-facts",
+                            "defender_can_see_attacker": True,
+                            "attacker_within_5_ft_of_defender": True,
+                            "default_resolver": "agent",
+                            "ruling_kind": "agent_dm_adjudication",
+                            "reason": (
+                                "The Steel Defender sees the adjacent attacker before the roll."
+                            ),
+                        },
+                    },
+                },
+                "expected_revision": owner_round_three["campaign_revision"],
+                "idempotency_key": "resolve-source-bound-deflect-attack",
+            }
+            deflect_preflight = await _call(
+                server,
+                "combat_preflight_attack",
+                {
+                    key: value
+                    for key, value in deflect_attack_arguments.items()
+                    if key not in {"expected_revision", "idempotency_key"}
+                },
+            )
+            assert deflect_preflight["disadvantage"] is True
+            assert deflect_preflight["deflect_attack"] == {
+                "mechanic_id": STEEL_DEFENDER_DEFLECT_ATTACK_MECHANIC_ID,
+                "defender_id": combat_created["character"]["id"],
+            }
+            ineligible_deflect = deepcopy(deflect_attack_arguments)
+            ineligible_deflect["action"]["deflect_attack"]["spatial_facts"][
+                "attacker_within_5_ft_of_defender"
+            ] = False
+            ineligible_deflect["idempotency_key"] = "reject-out-of-range-deflect-attack"
+            with pytest.raises(Exception, match="attacker_not_within_5_ft"):
+                await server.call_tool("combat_resolve_attack", ineligible_deflect)
+            before_deflect = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            assert before_deflect["revision"] == owner_round_three["campaign_revision"]
+            assert next(
+                item
+                for item in before_deflect["state"]["combat"]["combatants"]
+                if item["actor_id"] == second_owner["id"]
+            )["turn_budget"]["main_action"] == 1
+            assert next(
+                item
+                for item in before_deflect["state"]["combat"]["combatants"]
+                if item["actor_id"] == combat_created["character"]["id"]
+            )["turn_budget"]["reaction"] == 1
+            _, deflected = await server.call_tool(
+                "combat_resolve_attack",
+                deflect_attack_arguments,
+            )
+            _, deflected_replay = await server.call_tool(
+                "combat_resolve_attack",
+                deflect_attack_arguments,
+            )
+            assert deflected_replay == deflected
+            assert len(deflected["result"]["rolls"]) == 2
+            assert deflected["result"]["deflect_attack"] == {
+                "defender_id": combat_created["character"]["id"],
+                "activity_id": deflect["id"],
+                "reaction_paid": True,
+            }
+            deflect_receipt = next(
+                item
+                for item in deflected["result"]["rule_receipts"]
+                if item["mechanic_id"] == STEEL_DEFENDER_DEFLECT_ATTACK_MECHANIC_ID
+            )
+            assert deflect_receipt["event"] == "attack.before_roll.steel_defender_deflect"
+            deflected_audit = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            deflecting_combatant = next(
+                item
+                for item in deflected_audit["state"]["combat"]["combatants"]
+                if item["actor_id"] == combat_created["character"]["id"]
+            )
+            assert deflecting_combatant["turn_budget"]["reaction"] == 0
+            removed_attack_target = await _call(
+                server,
+                "combat_hp_change",
+                {
+                    "campaign_id": campaign["id"],
+                    "target_id": attack_target["id"],
+                    "action": "damage",
+                    "payload": {"parts": [{"amount": 100, "damage_type": "force"}]},
+                    "expected_revision": deflected["campaign_revision"],
+                    "idempotency_key": "remove-deflect-attack-target",
+                },
+            )
+            default_turn = await _call(
+                server,
+                "combat_end_turn",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": second_owner["id"],
+                    "expected_revision": removed_attack_target["campaign_revision"],
+                    "idempotency_key": "begin-default-defender-turn",
+                },
+            )
+            default_defender = default_turn["combat"]["combatants"][1]
+            assert default_defender["turn_budget"]["main_action"] == 0
+            assert default_defender["turn_budget"]["reaction"] == 1
+            assert default_defender["turn_flags"]["dodging"] is True
+            killed_defender = await _call(
+                server,
+                "combat_hp_change",
+                {
+                    "campaign_id": campaign["id"],
+                    "target_id": combat_created["character"]["id"],
+                    "action": "damage",
+                    "payload": {"parts": [{"amount": 100, "damage_type": "force"}]},
+                    "expected_revision": default_turn["campaign_revision"],
+                    "idempotency_key": "kill-bound-defender-for-revival",
+                },
+            )
+            dead_campaign = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            dead_relation = next(
+                item
+                for item in dead_campaign["state"]["dependent_actor_relations"]
+                if item["dependent_actor_id"] == combat_created["character"]["id"]
+            )
+            assert dead_relation["status"] == "dead"
+            assert dead_relation["death_elapsed_ticks"] == dead_campaign["state"]["game_time"][
+                "elapsed_ticks"
+            ]
+            assert dead_relation["revival_started_elapsed_ticks"] is None
+            assert dead_relation["revival_completes_elapsed_ticks"] is None
+            owner_revival_turn = await _call(
+                server,
+                "combat_end_turn",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": combat_created["character"]["id"],
+                    "expected_revision": killed_defender["campaign_revision"],
+                    "idempotency_key": "begin-owner-revival-turn",
+                },
+            )
+            revival_arguments = {
+                "campaign_id": campaign["id"],
+                "actor_id": second_owner["id"],
+                "action": "revive_steel_defender",
+                "target_id": combat_created["character"]["id"],
+                "payload": {
+                    "slot_level": 1,
+                    "spatial_facts": {
+                        "distance_ft": 5,
+                        "default_resolver": "agent",
+                        "ruling_kind": "agent_dm_adjudication",
+                        "reason": (
+                            "The owner works beside the destroyed defender with Smith's Tools."
+                        ),
+                    },
+                },
+                "expected_revision": owner_revival_turn["campaign_revision"],
+                "idempotency_key": "revive-bound-defender",
+            }
+            revival_started = await _call(server, "combat_common_action", revival_arguments)
+            assert (
+                await _call(server, "combat_common_action", revival_arguments)
+                == revival_started
+            )
+            assert revival_started["status"] == "committed"
+            assert revival_started["condition_resolution"]["action_paid"] is True
+            assert revival_started["condition_resolution"]["kind"] == (
+                "steel_defender_revival_started"
+            )
+            second_owner_after_start = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": second_owner["id"]}},
+            )
+            assert (
+                second_owner_after_start["sheet"]["spellcasting"]["spell_slots"]["1"][
+                    "value"
+                ]
+                == 0
+            )
+            pending_campaign = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            pending_relation = next(
+                item
+                for item in pending_campaign["state"]["dependent_actor_relations"]
+                if item["dependent_actor_id"] == combat_created["character"]["id"]
+            )
+            assert pending_relation["status"] == "dead"
+            assert pending_relation["revival_completes_elapsed_ticks"] == (
+                pending_relation["revival_started_elapsed_ticks"] + 10
+            )
+            round_result = revival_started
+            for round_offset in range(10):
+                round_result = await _call(
+                    server,
+                    "combat_end_turn",
+                    {
+                        "campaign_id": campaign["id"],
+                        "actor_id": second_owner["id"],
+                        "expected_revision": round_result["campaign_revision"],
+                        "idempotency_key": f"wait-for-defender-revival-{round_offset}",
+                    },
+                )
+            revived_defender = await _call(
+                server,
+                "character_query",
+                {
+                    "view": "get",
+                    "payload": {"character_id": combat_created["character"]["id"]},
+                },
+            )
+            assert revived_defender["sheet"]["combat"]["hp"]["value"] == (
+                revived_defender["sheet"]["combat"]["hp"]["max"]
+            )
+            assert "dead" not in revived_defender["sheet"]["conditions"]
+            committed = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            revived_relation = next(
+                item
+                for item in committed["state"]["dependent_actor_relations"]
+                if item["dependent_actor_id"] == combat_created["character"]["id"]
+            )
+            assert revived_relation["status"] == "active"
+            assert revived_relation["death_elapsed_ticks"] is None
+            assert revived_relation["revival_started_elapsed_ticks"] is None
+            assert revived_relation["revival_completes_elapsed_ticks"] is None
+            await _call(
+                server,
+                "combat_end",
+                {
+                    "campaign_id": campaign["id"],
+                    "outcome": {
+                        "status": "interrupted",
+                        "summary": "The defender returned after the one-minute combat delay.",
+                    },
+                    "expected_revision": round_result["campaign_revision"],
+                    "idempotency_key": "end-bound-defender-revival-combat",
+                },
+            )
+            owner_after_revival = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": second_owner["id"]}},
+            )
+            owner_death = await _call(
+                server,
+                "character_state_change",
+                {
+                    "character_id": second_owner["id"],
+                    "action": "damage",
+                    "payload": {"parts": [{"amount": 100, "damage_type": "force"}]},
+                    "expected_revision": owner_after_revival["revision"],
+                    "idempotency_key": "kill-bound-defender-owner",
+                },
+            )
+            assert "dead" in owner_death["character"]["sheet"]["conditions"]
+            defender_after_owner_death = await _call(
+                server,
+                "character_query",
+                {
+                    "view": "get",
+                    "payload": {"character_id": combat_created["character"]["id"]},
+                },
+            )
+            assert defender_after_owner_death["sheet"]["combat"]["hp"]["value"] == 0
+            assert "dead" in defender_after_owner_death["sheet"]["conditions"]
+            committed = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            owner_death_relation = next(
+                item
+                for item in committed["state"]["dependent_actor_relations"]
+                if item["dependent_actor_id"] == combat_created["character"]["id"]
+            )
+            assert owner_death_relation["status"] == "dead"
+            assert owner_death_relation["death_elapsed_ticks"] == committed["state"][
+                "game_time"
+            ]["elapsed_ticks"]
+            snapshot = await _call(
+                server,
+                "snapshot_create",
+                {
+                    "campaign_id": campaign["id"],
+                    "label": "Idempotency branch boundary",
+                    "expected_revision": committed["revision"],
+                    "expected_head_snapshot_id": "",
+                    "idempotency_key": "idempotency-branch-snapshot",
+                },
+            )
+            branches = await _call(
+                server,
+                "branch_query",
+                {"campaign_id": campaign["id"], "view": "list", "payload": {}},
+            )
+            main_branch = next(item for item in branches if item["is_current"])
+            branch_campaign = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            feature_branch = await _call(
+                server,
+                "branch_change",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "create",
+                    "payload": {
+                        "name": "idempotency-branch",
+                        "from_snapshot_id": snapshot["id"],
+                        "checkout": True,
+                    },
+                    "expected_revision": branch_campaign["revision"],
+                    "expected_branch_id": main_branch["id"],
+                    "idempotency_key": "idempotency-branch-create",
+                },
+            )
+            with pytest.raises(Exception, match="idempotency"):
+                await _call(server, "addon_actor_instantiate", arguments)
+            checked_out = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            await _call(
+                server,
+                "snapshot_create",
+                {
+                    "campaign_id": campaign["id"],
+                    "label": "Idempotency branch clean head",
+                    "expected_revision": checked_out["revision"],
+                    "expected_head_snapshot_id": snapshot["id"],
+                    "idempotency_key": "idempotency-branch-snapshot-clean",
+                },
+            )
+            checked_out = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            await _call(
+                server,
+                "branch_change",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "checkout",
+                    "payload": {"branch_id": main_branch["id"]},
+                    "expected_revision": checked_out["revision"],
+                    "expected_branch_id": feature_branch["id"],
+                    "idempotency_key": "idempotency-branch-checkout-main",
+                },
+            )
+            return campaign["id"], owner["id"], created["character"]["id"], arguments
+        finally:
+            close_server(server)
+
+    async def verify_restart(
+        campaign_id: str, owner_id: str, defender_id: str, arguments: dict
+    ) -> None:
+        server = create_server(config)
+        try:
+            replay = await _call(server, "addon_actor_instantiate", arguments)
+            assert replay["character"]["id"] == defender_id
+            campaign = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign_id}},
+            )
+            assert (
+                campaign["state"]["dependent_actor_relations"][0]["owner_character_id"] == owner_id
+            )
+        finally:
+            close_server(server)
+
+    import asyncio
+
+    checkpoint = asyncio.run(exercise())
+    asyncio.run(verify_restart(*checkpoint))
+
+
+@pytest.mark.fresh_database
 def test_reviewed_addon_item_uses_bound_inventory_materializer(tmp_path: Path) -> None:
     workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
@@ -1153,9 +2886,9 @@ def test_reviewed_addon_item_uses_bound_inventory_materializer(tmp_path: Path) -
                     "query": artifact["id"],
                     "include_context": True,
                 },
-                "principal_id": "system:local",
-            },
-        )
+                    "principal_id": "system:local",
+                },
+            )
         assert (
             queried[0]["runtime_context"]["content_hash"]
             == (applied["content_context"]["content_hash"])
@@ -2084,9 +3817,7 @@ def _forged_tortle_natural_armor_sheet(*, standard: bool) -> dict[str, object]:
                 "advancement_grants": [],
                 "pack_id": TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID,
                 "pack_version": "1.0.0",
-                "rule_refs": [
-                    f"rule-source:{TORTLE_NATURAL_ARMOR_SOURCE_KEY}#chunk:forged"
-                ],
+                "rule_refs": [f"rule-source:{TORTLE_NATURAL_ARMOR_SOURCE_KEY}#chunk:forged"],
                 "mechanic_refs": [CORE_TORTLE_NATURAL_ARMOR_MECHANIC_ID],
                 "ruling_requirements": [],
             }
@@ -2099,9 +3830,7 @@ def _forged_tortle_natural_armor_sheet(*, standard: bool) -> dict[str, object]:
                 "name": "Tortle",
                 "pack_id": TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID,
                 "pack_version": "1.0.0",
-                "rule_refs": [
-                    f"rule-source:{TORTLE_NATURAL_ARMOR_SOURCE_KEY}#chunk:forged"
-                ],
+                "rule_refs": [f"rule-source:{TORTLE_NATURAL_ARMOR_SOURCE_KEY}#chunk:forged"],
                 "mechanic_refs": [],
                 "selection": {},
             }
@@ -2434,14 +4163,17 @@ def test_preupgrade_forged_tortle_addon_cannot_replay_activation(
             {"view": "get", "payload": {"campaign_id": campaign["id"]}},
         )
         assert campaign_after_shadow["revision"] == profile["campaign_revision"]
-        assert await _call(
-            server,
-            "content_pack",
-            {
-                "action": "list",
-                "payload": {"campaign_id": campaign["id"], "kind": "addon"},
-            },
-        ) == []
+        assert (
+            await _call(
+                server,
+                "content_pack",
+                {
+                    "action": "list",
+                    "payload": {"campaign_id": campaign["id"], "kind": "addon"},
+                },
+            )
+            == []
+        )
         tortle_rebind = next(
             item
             for item in official_expansion_dependency_rebinds()
@@ -2468,9 +4200,7 @@ def test_preupgrade_forged_tortle_addon_cannot_replay_activation(
             "campaign_query",
             {"view": "get", "payload": {"campaign_id": campaign["id"]}},
         )
-        original_official_validator = (
-            server_module._validate_reserved_official_package_identity
-        )
+        original_official_validator = server_module._validate_reserved_official_package_identity
 
         def trust_synthetic_fixture(package: dict[str, object]) -> None:
             with pytest.raises(ValueError, match="reserved official identity"):
@@ -2574,6 +4304,7 @@ def test_preupgrade_forged_tortle_addon_cannot_replay_activation(
             )
         with pytest.raises(Exception, match="immutable official content archive"):
             await _call(restarted, "content_pack", forged_inner_arguments)
+
     import asyncio
 
     asyncio.run(exercise())
@@ -2827,7 +4558,10 @@ def test_subclass_spell_prefers_exact_reviewed_dependency_over_bundled_duplicate
 
 
 @pytest.mark.fresh_database
-def test_reviewed_addon_base_class_uses_bound_level_one_materializer(tmp_path: Path) -> None:
+@pytest.mark.parametrize("repeatable_levels", [[], [6]])
+def test_reviewed_addon_base_class_uses_bound_level_one_materializer(
+    tmp_path: Path, repeatable_levels: list[int]
+) -> None:
     workspace = Path(__file__).resolve().parents[3]
     config = McpConfig(
         home=tmp_path / "home",
@@ -3009,6 +4743,7 @@ def test_reviewed_addon_base_class_uses_bound_level_one_materializer(tmp_path: P
                 "feature_subtype": "selectable_option",
                 "minimum_level": 1,
                 "description": "A learned artificer infusion.",
+                "repeatable_selection_levels": [],
                 "selection_requirements": {},
                 "selection_requirements_by_level": {},
                 "mechanical_grants": {},
@@ -3036,6 +4771,9 @@ def test_reviewed_addon_base_class_uses_bound_level_one_materializer(tmp_path: P
                 "class_name": "Artificer",
                 "subclass_name": "",
                 "minimum_level": 1,
+                # Synthetic level-one fixture: later unlocks need not repeat
+                # the initial minimum_level in their list (as in real Infuse Item).
+                "repeatable_selection_levels": repeatable_levels,
                 "selection_requirements": {
                     "field": "infusions",
                     "kind": "feature_grants",
@@ -3059,6 +4797,20 @@ def test_reviewed_addon_base_class_uses_bound_level_one_materializer(tmp_path: P
             status="ready",
             references=["book:addon:artificer:p4"],
         )
+        unowned_feature = deepcopy(infusion_feature)
+        unowned_feature["id"] = "dnd5e.addon.artificer.feature.unbound-advancement"
+        unowned_feature["card"].update(
+            name="Unbound Advancement",
+            class_name="",
+            minimum_level=2,
+            repeatable_selection_levels=[6],
+            selection_requirements={},
+        )
+        unowned_feature["selection_contract"] = build_selection_contract(
+            unowned_feature,
+            status="ready",
+            references=["book:addon:artificer:p4"],
+        )
         await import_and_activate_addon_fixture(
             _call,
             server,
@@ -3073,7 +4825,7 @@ def test_reviewed_addon_base_class_uses_bound_level_one_materializer(tmp_path: P
                 "editions": ["2014"],
                 "capabilities": [],
             },
-            artifacts=[artifact, tool_feature, infusion_feature, infusion_option],
+            artifacts=[artifact, tool_feature, infusion_feature, infusion_option, unowned_feature],
             mechanics=[],
             expected_revision=profile["campaign_revision"],
             request_key="addon-class",
@@ -3169,6 +4921,76 @@ def test_reviewed_addon_base_class_uses_bound_level_one_materializer(tmp_path: P
             if item["id"] == infusion_option["id"]
         )
         assert enhanced_defense["source_key"] == "Infuse Item"
+        assert "repeatable_selection_levels" not in enhanced_defense
+        with pytest.raises(Exception, match="not a repeatable selection level"):
+            await _call(
+                server,
+                "character_content_apply",
+                {
+                    "character_id": character["id"],
+                    "artifact_id": unowned_feature["id"],
+                    "expected_revision": infused["revision"],
+                    "idempotency_key": "unowned-initial",
+                },
+            )
+        parent_feature = next(
+            item
+            for item in infused["sheet"]["content"]["features"]
+            if item["id"] == infusion_feature["id"]
+        )
+        assert [item["level"] for item in parent_feature.get("advancement_grants", [])] == (
+            [1] if repeatable_levels else []
+        )
+        for label, grant_level, message in (
+            ("duplicate", None, "already present"),
+            ("invalid-level", 2, "not a repeatable selection level"),
+            ("future-level", 6, "exceeds the actor's class level"),
+        ):
+            if not repeatable_levels and label == "future-level":
+                continue
+            choices = {"infusions": ["Enhanced Defense"]}
+            if grant_level is not None:
+                choices["grant_level"] = grant_level
+            # Use a fresh actor for invalid/future first grants so the duplicate
+            # guard cannot mask whether the initial-grant exception is bounded.
+            target = character
+            if label != "duplicate":
+                target = await _call(
+                    server,
+                    "character_create_from",
+                    {
+                        "mode": "direct",
+                        "payload": {
+                            "campaign_id": campaign["id"],
+                            "name": label,
+                            "sheet": feature_applied["sheet"],
+                        },
+                        "idempotency_key": f"infusion-{label}-actor",
+                    },
+                )
+            else:
+                target = {"id": character["id"], "revision": infused["revision"]}
+            with pytest.raises(Exception, match=message):
+                await _call(
+                    server,
+                    "character_content_apply",
+                    {
+                        "character_id": target["id"],
+                        "artifact_id": infusion_feature["id"],
+                        "selection": choices,
+                        "expected_revision": target["revision"],
+                        "idempotency_key": f"infusion-{label}",
+                    },
+                )
+            unchanged = await _call(
+                server,
+                "character_query",
+                {
+                    "view": "get",
+                    "payload": {"character_id": target["id"]},
+                },
+            )
+            assert unchanged["revision"] == target["revision"]
         with pytest.raises(Exception, match="must be granted by their parent"):
             await _call(
                 server,

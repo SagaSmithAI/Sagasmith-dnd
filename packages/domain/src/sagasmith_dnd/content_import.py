@@ -4739,6 +4739,7 @@ def class_selection_definition_from_source(description: str) -> dict[str, Any] |
     for label, body in re.findall(
         r"(?is)\b(Armor|Weapons|Tools|Saving\s+Throws|Skills)\s*:\s*(.+?)"
         r"(?=\s+(?:Armor|Weapons|Tools|Saving\s+Throws|Skills)\s*:|"
+        r"\s+#{1,6}\s+|\s+Equipment\b|"
         r"\s+You\s+start\s+with\b|\s+The\s+\w+\s+Proficiency\b|$)",
         description,
     ):
@@ -5443,7 +5444,32 @@ def artifact_with_direct_resolution(
     excerpt = ""
     excerpt_transcription_repair: dict[str, Any] | None = None
     if source_chunks_by_id is not None:
-        for chunk_id in chunk_ids:
+        # A candidate can carry the complete source span, with the first
+        # chunk belonging to a preceding class/table section.  Prefer the
+        # chunk that actually evidences this artifact; otherwise a broad
+        # source-bound clause can cite unrelated text (for example the
+        # Artificer spell table instead of the Steel Defender statblock).
+        candidate_kind = str(value.get("kind") or candidate.get("kind") or "").casefold()
+        name_folded = name.casefold()
+        scored_chunks = []
+        for index, chunk_id in enumerate(chunk_ids):
+            raw_content = str(source_chunks_by_id.get(chunk_id) or "")
+            folded_content = raw_content.casefold()
+            score = 0
+            if name_folded and name_folded in folded_content:
+                score += 4
+            if candidate_kind == "statblock":
+                if re.search(r"(?i)\barmor class\b", raw_content):
+                    score += 3
+                if re.search(r"(?i)\bhit points\b", raw_content):
+                    score += 3
+                if re.search(r"(?i)\b(?:actions|reactions)\b", raw_content):
+                    score += 1
+                if re.search(r"(?i)\bmight of the master\b", raw_content):
+                    score += 2
+            scored_chunks.append((score, -index, chunk_id))
+        ordered_chunk_ids = [item[2] for item in sorted(scored_chunks, reverse=True)]
+        for chunk_id in ordered_chunk_ids:
             exact_content, excerpt_transcription_repair = _reviewed_exact_source_excerpt(
                 str(source_chunks_by_id.get(chunk_id) or ""),
                 agent_review_complete=candidate.get("agent_review_complete") is True,

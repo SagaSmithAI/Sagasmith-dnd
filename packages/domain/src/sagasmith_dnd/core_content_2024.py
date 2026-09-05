@@ -19,7 +19,7 @@ from sagasmith_dnd.spell_resolution import (
 )
 
 PACK_ID = "dnd5e.content.srd2024"
-PACK_VERSION = "1.2.0"
+PACK_VERSION = "1.3.0"
 
 _CLASS_FEATURE_TABLE_HEADINGS = {
     *(f"{class_name} Features" for class_name in _CLASS_NAMES),

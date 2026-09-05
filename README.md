@@ -342,21 +342,29 @@ verifiable license and distribution metadata.
 
 For authorized local copies of the current SagaSmith Content Library, the
 Domain package includes a metadata-only lock and verifier for all ten D&D
-official expansion addons (2,007 artifacts; one additional class and 77
+official expansion addons (2,008 artifacts; one additional class and 77
 subclasses):
 
 ```bash
+python packages/mcp/scripts/build_official_expansion_library.py \
+  --source-library /private/canonical/content-library \
+  --output /private/repaired-content-library
 sagasmith-dnd content verify-official-expansions \
-  --path /path/to/SagaSmith-dnd-content-library --json
+  --path /private/repaired-content-library --json
 ```
 
+The offline [local repair builder](packages/mcp/scripts/build_official_expansion_library.md)
+reproduces the five repaired private packages pinned by the current lock. The
+recorded upstream commit identifies original inputs, not a public release of
+repaired archives. Source archives and saves are never overwritten or deleted.
+
 The verifier checks exact Pack/archive identities, D&D semantics, complete
-artifact accounting, and selection-materializer coverage. To mount the same
+artifact accounting, selection-materializer coverage and the PHB dependency. To mount the same
 locked set as first-class, core-visible content in the MCP runtime, point the
-server at that authorized checkout before startup:
+server at the generated local library before startup:
 
 ```powershell
-$env:SAGASMITH_DND_OFFICIAL_CONTENT_LIBRARY = "C:\path\to\SagaSmith-dnd-content-library"
+$env:SAGASMITH_DND_OFFICIAL_CONTENT_LIBRARY = "C:\private\repaired-content-library"
 sagasmith-dnd-mcp
 ```
 

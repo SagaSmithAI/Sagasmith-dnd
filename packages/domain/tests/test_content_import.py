@@ -15,6 +15,7 @@ from sagasmith_dnd.content_import import (
     audit_release_semantic_validation,
     author_selection_card_from_candidate,
     candidate_draft_issues,
+    class_selection_definition_from_source,
     compiled_artifacts_from_candidates,
     extract_content_candidates,
     extract_content_inventory,
@@ -29,6 +30,20 @@ from sagasmith_dnd.statblocks import (
     parse_2014_statblock,
     split_2014_statblock_action_variants,
 )
+
+
+@pytest.mark.parametrize("heading", ["", "Equipment", "#### Equipment", "## Equipment"])
+def test_class_skill_list_stops_before_equipment_section(heading: str) -> None:
+    definition = class_selection_definition_from_source(
+        "Hit Dice: 1d10 per level\n"
+        "Armor: All armor, shields\nWeapons: Simple weapons, martial weapons\n"
+        "Tools: None\nSaving Throws: Strength, Constitution\n"
+        "Skills: Choose two from Animal Handling, Perception, and Survival\n\n"
+        f"{heading}\n\nYou start with the following equipment: Arcana, Deception."
+    )
+    assert definition is not None
+    assert definition["skill_options"] == ["animal_handling", "perception", "survival"]
+    assert definition["skill_choice_count"] == 2
 
 
 def test_extracts_review_required_catalog_candidates() -> None:
@@ -5459,6 +5474,41 @@ def test_direct_import_resolution_persists_source_bound_agent_clause() -> None:
     assert clause["source_citations"][0]["source"] == ("rule-source:example.odd-device")
     assert clause["source_citations"][0]["source_excerpt"] == exact_source
     assert validate_selection_ready_artifacts(artifacts) == []
+
+
+def test_direct_import_resolution_prefers_statblock_evidence_over_leading_context() -> None:
+    candidate = {
+        "id": "candidate:steel-defender",
+        "kind": "statblock",
+        "name": "Steel Defender",
+        "source_chunk_ids": ["chunk:artificer-table", "chunk:steel-defender"],
+        "mechanical_scope": "mechanical",
+        "artifact": {
+            "kind": "statblock",
+            "application_state": "catalog_only",
+            "mechanical_scope": "mechanical",
+            "card": {"name": "Steel Defender"},
+        },
+    }
+    resolved = artifact_with_direct_resolution(
+        candidate,
+        citation_source="rule-source:example-eberron",
+        source_chunks_by_id={
+            "chunk:artificer-table": (
+                "Artificer Level Spell Steel Defender appears in the class table."
+            ),
+            "chunk:steel-defender": (
+                "STEEL DEFENDER\n\n**Armor Class** 15 (natural armor)\n\n"
+                "**Hit Points** equal the steel defender's Constitution modifier + "
+                "your Intelligence modifier + five times your level in this class\n\n"
+                "***Might of the Master.*** The defender's bonuses increase with PB."
+            ),
+        },
+    )
+    citation = resolved["rule_clauses"][0]["source_citations"][0]
+    assert citation["source_ref"] == {"chunk_id": "chunk:steel-defender"}
+    assert "Armor Class" in citation["source_excerpt"]
+    assert "Might of the Master" in citation["source_excerpt"]
 
 
 def test_direct_import_resolution_repairs_reviewed_exact_source_excerpt() -> None:

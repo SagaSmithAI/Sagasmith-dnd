@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
-from sagasmith_core import Database
+from sagasmith_core import Database, RulePackService
 from sagasmith_core.content_pack import dumps_content_archive
 from sagasmith_core.database import sqlite_database_url
 from sagasmith_core.models import RulePackPayload, RulePackVersion
@@ -24,7 +24,13 @@ from sagasmith_dnd.character_schema import (
     equip_inventory_item,
 )
 from sagasmith_dnd.combat_engine import roll_attack_action as engine_roll_attack_action
-from sagasmith_dnd.content_actors import build_dnd_content_actor
+from sagasmith_dnd.content_actors import (
+    SRD2014_PRESET_PACK_ID,
+    SRD2014_PRESET_PACK_VERSION,
+    SRD2024_PRESET_PACK_ID,
+    SRD2024_PRESET_PACK_VERSION,
+    build_dnd_content_actor,
+)
 from sagasmith_dnd.content_packages import (
     build_preset_content_package,
     compose_addon_content_package,
@@ -1172,7 +1178,64 @@ def test_official_expansion_lock_matches_seeded_core_content(tmp_path: Path) -> 
         auto_seed_rules=True,
     )
 
-    create_server(config)
+    server = create_server(config)
+    database = Database(sqlite_database_url(config.database_path))
+    try:
+        packs = RulePackService(database)
+        for pack_id, version, edition in (
+            (CORE_CONTENT_PACK_ID, CORE_CONTENT_PACK_VERSION, "2014"),
+            (
+                server_module.STANDARD_2014_CONTENT_PACK_ID,
+                server_module.STANDARD_2014_CONTENT_PACK_VERSION,
+                "2014",
+            ),
+            (
+                server_module.CORE_2024_CONTENT_PACK_ID,
+                server_module.CORE_2024_CONTENT_PACK_VERSION,
+                "2024",
+            ),
+        ):
+            installed = packs.get_version(pack_id, version)
+            core = server_module.get_core_rule_pack(edition)
+            assert installed.status == "installed"
+            assert installed.manifest["native_provider_locks"] == [
+                {
+                    "id": core.id,
+                    "version": core.version,
+                    "edition": edition,
+                    "fingerprint": core.fingerprint,
+                    "mechanic_refs": installed.manifest["native_mechanic_refs"],
+                }
+            ]
+        for pack_id, version, content_pack_id, content_version in (
+            (
+                SRD2014_PRESET_PACK_ID,
+                SRD2014_PRESET_PACK_VERSION,
+                CORE_CONTENT_PACK_ID,
+                CORE_CONTENT_PACK_VERSION,
+            ),
+            (
+                SRD2024_PRESET_PACK_ID,
+                SRD2024_PRESET_PACK_VERSION,
+                server_module.CORE_2024_CONTENT_PACK_ID,
+                server_module.CORE_2024_CONTENT_PACK_VERSION,
+            ),
+        ):
+            assert version == "2.1.0"
+            installed = packs.get_version(pack_id, version)
+            assert installed.status == "installed"
+            assert installed.artifacts
+            for artifact in installed.artifacts:
+                actor = artifact["card"]["content_actor"]
+                assert actor["version"] == version
+                assert actor["sheet"]["inventory"]["external_items"] == []
+                assert actor["provenance"]["pack"] == {
+                    "id": content_pack_id,
+                    "version": content_version,
+                }
+    finally:
+        database.dispose()
+        close_server(server)
 
     with sqlite3.connect(config.home / "data" / "ttrpgbase.db") as connection:
         row = connection.execute(
@@ -1293,6 +1356,25 @@ def test_locked_scag_and_tortle_activate_exact_dependency_closure_apply_and_rest
                 },
             )
             for index, artifact_id in enumerate((_CITY_WATCH_ID, _TORTLE_ID)):
+                with sqlite3.connect(config.database_path) as connection:
+                    installed_before = connection.execute(
+                        "SELECT pack_id, version, checksum, payload_document_id "
+                        "FROM rule_pack_versions ORDER BY pack_id, version"
+                    ).fetchall()
+                catalog = await _call(
+                    server,
+                    "character_query",
+                    {
+                        "view": "catalog",
+                        "payload": {
+                            "campaign_id": campaign["id"],
+                            "query": artifact_id,
+                            "include_context": True,
+                        },
+                    },
+                )
+                reviewed = catalog[0]["runtime_context"]["selection_contract"]
+                assert reviewed["status"] == "ready"
                 applied = await _call(
                     server,
                     "character_content_apply",
@@ -1308,9 +1390,66 @@ def test_locked_scag_and_tortle_activate_exact_dependency_closure_apply_and_rest
                         "idempotency_key": f"apply-locked-official-{index}",
                     },
                 )
+                assert len(applied["rule_receipts"]) == 1
+                receipt = applied["rule_receipts"][0]
+                assert receipt["artifact_id"] == artifact_id
+                assert receipt["character_id"] == character["id"]
+                assert receipt["reviewed_content_hash"] == reviewed["reviewed_content_hash"]
+                with sqlite3.connect(config.database_path) as connection:
+                    assert connection.execute(
+                        "SELECT pack_id, version, checksum, payload_document_id "
+                        "FROM rule_pack_versions ORDER BY pack_id, version"
+                    ).fetchall() == installed_before
                 character = applied
             assert character["sheet"]["progression"]["background"] == "City Watch"
             assert character["sheet"]["progression"]["species"] == "Tortle"
+            character = await _call(
+                server,
+                "character_content_apply",
+                {
+                    "character_id": character["id"],
+                    "artifact_id": f"{CORE_CONTENT_PACK_ID}.class.fighter",
+                    "selection": {
+                        "skills": ["animal_handling", "survival"],
+                        # Tortle already grants Survival; resolve the duplicate explicitly.
+                        "skill_replacements": {"survival": "perception"},
+                    },
+                    "expected_revision": character["revision"],
+                    "idempotency_key": "official-closure-class",
+                },
+            )
+            prior_max_hp = character["sheet"]["combat"]["hp"]["max"]
+            assert all(
+                character["sheet"]["skills"][skill]["proficiency"] == "proficient"
+                for skill in ("animal_handling", "survival", "perception")
+            )
+            watchers_eye = next(
+                feature
+                for feature in character["sheet"]["content"]["features"]
+                if feature["id"] == f"{_CITY_WATCH_ID}.feature.watchers-eye"
+            )
+            advance_args = {
+                "character_id": character["id"],
+                "action": "level_advance",
+                "payload": {
+                    "class_name": "Fighter",
+                    "hp_method": "fixed",
+                    "reason": "Official background must preserve ordinary level advancement",
+                    "source_ref": (
+                        "bundled:srd2014/03_Characterization/Beyond_1st_Level.md"
+                    ),
+                },
+                "expected_revision": character["revision"],
+                "idempotency_key": "official-closure-level",
+            }
+            _, advance_raw = await server.call_tool("character_state_change", advance_args)
+            _, replay_raw = await server.call_tool("character_state_change", advance_args)
+            assert replay_raw == advance_raw
+            advanced = advance_raw.get("result", advance_raw)
+            character = advanced["character"]
+            assert character["sheet"]["progression"]["level"] == 2
+            assert character["sheet"]["combat"]["hp"]["max"] == prior_max_hp + 6
+            assert watchers_eye in character["sheet"]["content"]["features"]
             character_id = character["id"]
             campaign_id = campaign["id"]
         finally:
@@ -1331,6 +1470,11 @@ def test_locked_scag_and_tortle_activate_exact_dependency_closure_apply_and_rest
             )
             assert restored["sheet"]["progression"]["background"] == "City Watch"
             assert restored["sheet"]["progression"]["species"] == "Tortle"
+            assert restored["sheet"]["progression"]["level"] == 2
+            assert restored["sheet"]["combat"]["hp"]["max"] == prior_max_hp + 6
+            assert watchers_eye in restored["sheet"]["content"]["features"]
+            _, restarted_replay = await restarted.call_tool("character_state_change", advance_args)
+            assert restarted_replay == advance_raw
             assert {item["artifact_id"] for item in restored["sheet"]["content"]["selections"]} >= {
                 _CITY_WATCH_ID,
                 _TORTLE_ID,

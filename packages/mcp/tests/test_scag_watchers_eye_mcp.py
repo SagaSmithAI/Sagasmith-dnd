@@ -572,17 +572,69 @@ def test_scag_watchers_eye_is_source_bound_bounded_and_persistent(
                     "idempotency_key": "title-spoof",
                 },
             )
+        unsupported_revision = current_campaign["revision"]
+        unsupported_actor = await _call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": city["id"]}},
+        )
+        unsupported_receipts = await _call(
+            server,
+            "campaign_rules",
+            {"campaign_id": campaign["id"], "action": "receipts"},
+        )
+        for capability in ("law_enforcement_contact", "watch_information", "recognition"):
+            with pytest.raises(Exception, match="capability must be one of"):
+                await _call(
+                    server,
+                    "character_check",
+                    {
+                        "campaign_id": campaign["id"],
+                        "action": "source_feature",
+                        "payload": {
+                            "actor_id": city["id"],
+                            "feature_id": city_feature["id"],
+                            "capability": capability,
+                            "settlement_ref": "location:waterdeep",
+                            "fact_key": f"location:waterdeep:{capability}",
+                        },
+                        "expected_revision": unsupported_revision,
+                        "idempotency_key": f"watchers-eye-reject-expanded:{capability}",
+                    },
+                )
+        after_unsupported = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        assert after_unsupported["revision"] == unsupported_revision
+        assert (
+            await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": city["id"]}},
+            )
+            == unsupported_actor
+        )
+        assert (
+            await _call(
+                server,
+                "campaign_rules",
+                {"campaign_id": campaign["id"], "action": "receipts"},
+            )
+            == unsupported_receipts
+        )
         unavailable_fact = {
-            "fact_key": "location:waterdeep:recognition",
+            "fact_key": "location:waterdeep:local-law",
             "kind": "source_fact",
-            "subject": "Waterdeep watch recognition",
+            "subject": "Waterdeep local law",
             "subject_ref": "location:waterdeep",
-            "predicate": "dnd5e.watchers_eye.recognition",
-            "content": "This watch does not recognize the officer in the current scene.",
+            "predicate": "dnd5e.watchers_eye.local_law",
+            "content": "No settled local-law answer is available for this question.",
             "metadata": {
                 "dnd5e_watchers_eye": {
                     "schema_version": 1,
-                    "capability": "recognition",
+                    "capability": "local_law",
                     "outcome": "unavailable",
                 }
             },
@@ -596,7 +648,7 @@ def test_scag_watchers_eye_is_source_bound_bounded_and_persistent(
                 "action": "upsert",
                 "payload": unavailable_fact,
                 "expected_revision": current_campaign["revision"],
-                "idempotency_key": "recognition-unavailable-fact",
+                "idempotency_key": "local-law-unavailable-fact",
             },
         )
         current_campaign = await _call(
@@ -613,7 +665,7 @@ def test_scag_watchers_eye_is_source_bound_bounded_and_persistent(
                 "payload": {
                     "actor_id": city["id"],
                     "feature_id": city_feature["id"],
-                    "capability": "recognition",
+                    "capability": "local_law",
                     "settlement_ref": "location:waterdeep",
                     "fact_key": unavailable_fact["fact_key"],
                 },
@@ -634,9 +686,9 @@ def test_scag_watchers_eye_is_source_bound_bounded_and_persistent(
             "payload": {
                 "actor_id": city["id"],
                 "feature_id": city_feature["id"],
-                "capability": "watch_information",
+                "capability": "local_criminal_activity",
                 "settlement_ref": "location:waterdeep",
-                "fact_key": "location:waterdeep:watch-information",
+                "fact_key": "location:waterdeep:local-criminal-activity",
             },
             "expected_revision": current_campaign["revision"],
             "idempotency_key": "watchers-eye-pending",

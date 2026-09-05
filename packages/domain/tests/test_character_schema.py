@@ -227,6 +227,51 @@ def test_weapon_attacks_derive_actor_proficiency_and_finesse_ability() -> None:
     assert finesse_attack["damage_expression"] == "1d4 + 3"
 
 
+@pytest.mark.parametrize(
+    "strength,dexterity,properties,expected_ability,expected_modifier",
+    [
+        (18, 12, ["finesse", "thrown"], "strength", 4),
+        (12, 18, ["Finesse", "thrown"], "dexterity", 4),
+        (8, 6, ["finesse", "thrown"], "strength", -1),
+        (18, 12, ["thrown"], "dexterity", 1),
+    ],
+)
+def test_ranged_finesse_uses_the_same_ability_for_attack_and_damage(
+    strength, dexterity, properties, expected_ability, expected_modifier
+) -> None:
+    # SRD 2014 Weapons: Finesse applies to attacks with the property, including
+    # darts in the Simple Ranged Weapons table, not only melee weapons.
+    sheet = default_character_sheet()
+    sheet["abilities"]["strength"]["score"] = strength
+    sheet["abilities"]["dexterity"]["score"] = dexterity
+    sheet["traits"]["proficiencies"]["weapons"] = ["simple weapons"]
+    sheet, weapon_id = add_inventory_item(
+        sheet,
+        {
+            "id": "ranged-finesse-fixture",
+            "name": "Ranged fixture",
+            "kind": "weapon",
+            "mechanics": {
+                "category": "simple",
+                "attack_type": "ranged",
+                "attack_ability": "dexterity",
+                "damage_formula": "1d4",
+                "damage_type": "piercing",
+                "properties": properties,
+                "magic_bonus": 1,
+                "normal_range_ft": 20,
+                "long_range_ft": 60,
+            },
+        },
+    )
+    sheet = equip_inventory_item(sheet, weapon_id, "main_hand")
+    attack = derive_character_sheet(sheet)["inventory"]["weapon_attacks"][0]
+    assert attack["attack_ability"] == expected_ability
+    assert attack["attack_ability_modifier"] == expected_modifier
+    assert attack["attack_bonus"] == expected_modifier + 1 + 2
+    assert attack["damage_bonus"] == expected_modifier + 1
+
+
 def test_2014_armor_proficiency_strength_and_encumbrance_affect_derived_rules() -> None:
     sheet = default_character_sheet()
     sheet["abilities"]["strength"]["score"] = 8

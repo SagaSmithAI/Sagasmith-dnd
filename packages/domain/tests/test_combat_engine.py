@@ -356,6 +356,120 @@ def _actor(identifier: str, *, hp: int = 12, ac: int = 10) -> dict:
     }
 
 
+def _steel_defender(identifier: str, owner_id: str) -> dict:
+    actor = _actor(identifier)
+    actor["dependent_turn"] = {
+        "kind": "steel_defender_2014",
+        "owner_actor_id": owner_id,
+        "source_artifact_id": "dnd5e.addon.feature.steel-defender",
+        "source_pack_id": "dnd5e.addon.rulebook.tashas-cauldron-of-everything",
+        "source_pack_version": "1.0.5",
+        "reviewed_expression_hash": "a" * 64,
+    }
+    return actor
+
+
+def test_steel_defender_shares_owner_initiative_and_immediately_follows_owner() -> None:
+    owner = _actor("owner")
+    rival = _actor("rival")
+    defender = _steel_defender("defender", "owner")
+    owner.update(initiative=17, tie_breaker=5)
+    rival.update(initiative=17, tie_breaker=2)
+
+    encounter = start_encounter([defender, owner, rival], ruleset="2014")
+
+    assert [item["actor_id"] for item in encounter["combatants"]] == [
+        "rival",
+        "owner",
+        "defender",
+    ]
+    defender_state = encounter["combatants"][2]
+    assert defender_state["initiative"] == 17
+    assert defender_state["tie_breaker"] == 5
+    assert defender_state["initiative_roll"] is None
+
+
+def test_steel_defender_defaults_to_dodge_but_keeps_movement_and_reaction() -> None:
+    owner = _actor("owner")
+    owner["initiative"] = 20
+    defender = _steel_defender("defender", "owner")
+    encounter = start_encounter([owner, defender], ruleset="2014")
+
+    defender_turn = end_turn(encounter, actor_id_value="owner")
+    current = current_combatant(defender_turn)
+
+    assert current["actor_id"] == "defender"
+    assert current["turn_budget"]["main_action"] == 0
+    assert current["turn_budget"]["reaction"] == 1
+    assert current["turn_budget"]["movement"] == current["turn_budget"]["speed"]
+    assert current["turn_flags"]["dodging"] is True
+    assert current["turn_flags"]["dependent_default_dodge"] is True
+    assert "attack" not in available_actions(defender_turn, "defender")
+    assert "move" in available_actions(defender_turn, "defender")
+
+
+def test_owner_bonus_action_command_unlocks_one_steel_defender_turn() -> None:
+    owner = _actor("owner")
+    owner["initiative"] = 20
+    defender = _steel_defender("defender", "owner")
+    encounter = start_encounter([owner, defender], ruleset="2014")
+
+    commanded = resolve_common_action(
+        encounter,
+        actor_id_value="owner",
+        action="command_dependent",
+        target_id="defender",
+    )
+    owner_state = current_combatant(commanded)
+    assert owner_state["turn_budget"]["bonus_action"] == 0
+    assert "command_dependent" not in available_actions(commanded, "owner")
+
+    defender_turn = end_turn(commanded, actor_id_value="owner")
+    defender_state = current_combatant(defender_turn)
+    assert defender_state["actor_id"] == "defender"
+    assert defender_state["turn_budget"]["main_action"] == 1
+    assert defender_state["turn_flags"]["dependent_command_active"] is True
+    assert "attack" in available_actions(defender_turn, "defender")
+
+    next_round = end_turn(defender_turn, actor_id_value="defender")
+    assert current_combatant(next_round)["actor_id"] == "owner"
+    defaulted_again = end_turn(next_round, actor_id_value="owner")
+    assert current_combatant(defaulted_again)["turn_budget"]["main_action"] == 0
+
+
+def test_incapacitated_owner_releases_steel_defender_action_restriction() -> None:
+    owner = _actor("owner")
+    owner["initiative"] = 20
+    defender = _steel_defender("defender", "owner")
+    encounter = start_encounter([owner, defender], ruleset="2014")
+    encounter["combatants"][0]["conditions"] = ["incapacitated"]
+
+    defender_turn = end_turn(encounter, actor_id_value="owner")
+    defender_state = current_combatant(defender_turn)
+
+    assert defender_state["turn_budget"]["main_action"] == 1
+    assert defender_state["turn_flags"]["dependent_owner_incapacitated"] is True
+    assert "attack" in available_actions(defender_turn, "defender")
+
+
+def test_queued_steel_defender_joins_immediately_after_owner_next_round() -> None:
+    owner = _actor("owner")
+    rival = _actor("rival")
+    owner["initiative"] = 20
+    rival["initiative"] = 10
+    encounter = start_encounter([owner, rival], ruleset="2014")
+
+    queued = queue_combatant(encounter, _steel_defender("defender", "owner"))
+    rival_turn = end_turn(queued, actor_id_value="owner")
+    next_round = end_turn(rival_turn, actor_id_value="rival")
+
+    assert [item["actor_id"] for item in next_round["combatants"]] == [
+        "owner",
+        "defender",
+        "rival",
+    ]
+
+
 def _tortle_actor(identifier: str) -> dict:
     actor = _actor(identifier, ac=17)
     source_ref = (
@@ -2381,6 +2495,44 @@ def test_intrinsic_claws_settle_as_strength_unarmed_slashing_attack() -> None:
     assert result["damage"]["roll_parts"][0]["amount"] == 7
     assert result["damage"]["roll_parts"][0]["damage_type"] == "slashing"
     assert damaged["sheet"]["combat"]["hp"]["value"] == 13
+
+
+@pytest.mark.parametrize("natural,damage_rolls,expected_damage", [(10, [4], 9), (20, [4, 3], 12)])
+def test_ranged_finesse_settles_strength_attack_and_damage(
+    natural, damage_rolls, expected_damage
+) -> None:
+    attacker = _actor("dart-user")
+    attacker["sheet"]["abilities"]["strength"]["score"] = 18
+    attacker["sheet"]["abilities"]["dexterity"]["score"] = 12
+    attacker["sheet"]["traits"]["proficiencies"]["weapons"] = ["simple weapons"]
+    sheet, weapon_id = add_inventory_item(
+        attacker["sheet"],
+        {
+            "id": "dart",
+            "name": "Dart +1",
+            "kind": "weapon",
+            "mechanics": {
+                "category": "simple", "attack_type": "ranged", "attack_ability": "dexterity",
+                "damage_formula": "1d4", "damage_type": "piercing", "magic_bonus": 1,
+                "properties": ["finesse", "thrown"], "normal_range_ft": 20, "long_range_ft": 60,
+            },
+        },
+    )
+    attacker["sheet"] = equip_inventory_item(sheet, weapon_id, "main_hand")
+    attacker["derived"] = derive_character_sheet(attacker["sheet"])
+    target = _actor("target", hp=20, ac=10)
+    before = deepcopy((attacker, target))
+    rules = resolution_context({"edition": "2014", "fingerprint": "", "lock": [], "mechanics": []})
+    plan = preflight_attack(attacker, target, action={"weapon_id": weapon_id}, rules=rules)
+    assert plan["attack_bonus"] == 7
+    assert plan["damage_expression"] == "1d4 + 5"
+    _, damaged, result = resolve_attack_action(
+        attacker, target, plan=plan, rules=rules, rng=_SequenceRng(natural, *damage_rolls)
+    )
+    assert result["hit"] is True
+    assert result["damage"]["input_amount"] == expected_damage
+    assert damaged["sheet"]["combat"]["hp"]["value"] == 20 - expected_damage
+    assert (attacker, target) == before
 
 
 def test_positioned_ranged_attack_requires_recorded_range() -> None:
@@ -4566,6 +4718,7 @@ def test_end_turn_skips_dead_actor_but_keeps_death_save_turn() -> None:
     dead["sheet"]["conditions"] = ["dead", "prone"]
     dying = _actor("dying")
     dying.update(initiative=10, death_saves=True)
+    dying["sheet"]["combat"]["hp"]["value"] = 0
     dying["sheet"]["conditions"] = ["unconscious", "prone"]
     encounter = start_encounter([first, dead, dying])
 

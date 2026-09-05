@@ -755,6 +755,30 @@ other semantics that the generic plan vocabulary cannot express remain an
 explicit Agent/DM ruling plus ordinary public continuity and state operations;
 the engine must not infer them from a monster name or prose fragment.
 
+For a semantic `check.save`, record conditional-save classification in that
+step's existing `args.source` object when authoring its plan. Include the exact
+`source`, `source_ref`, and `source_excerpt` of one plan citation, plus
+`save_source_kind` (`spell`, `magical_effect`, or `nonmagical_effect`),
+`save_effect_conditions` (the conditions this save prevents), and strict boolean
+`save_against_poison`. A spell card must use `spell`. The excerpt must occur in
+that exact card's recorded effect text; another relevant citation elsewhere in
+the plan is insufficient. Keep these values constant, with no slot/result
+references. Runtime bindings select only the plan's declared variable inputs.
+Interpret each save clause separately: damage type, the target's existing
+conditions, or conditions applied by another step do not classify this save.
+The engine uses the validated per-step facts for 2014 Dwarven Resilience, Fey
+Ancestry, Gnome Cunning, and Brave, retaining the plan fingerprint and citations
+in settlement. Legacy text-only sources carry no classification; a conditional
+save requiring missing facts remains unresolved, not silently an ordinary roll.
+Do not pass these engine-owned classification fields through generic
+`rule_facts`, or bypass the source's action/resource payment with a generic check.
+The shared save/damage resolver preserves these verified conditions; damage
+alone does not mean the save is unrelated to charm or fear. Native Dragonborn
+breath declares no accompanying conditions from its exact ancestry mechanism.
+Native Sacred Flame, Fireball and Lightning Bolt do likewise only while their
+structured contracts exactly match the built-in source implementation. A custom
+or modified spell contract must not inherit that empty-condition classification.
+
 When an attack returns `status: pending_reaction`, no damage has been rolled or
 applied. The target actor reads its owned window with
 `combat_query(view="reactions")`, chooses a listed defense or `decline`, and calls
@@ -806,6 +830,110 @@ adjacent creature wakes one affected target with
 `combat_common_action(action="shake_hypnotic_pattern", target_id=...)`, which
 spends its action. Never supply a hand-picked target list, roll the saves,
 patch conditions/speed, or model these endings as Agent narrative rulings.
+
+A source-bound 2014 Core `Sleep` uses
+`declaration={origin:{x,y},target_contexts:[{target_id,cover}]}` in grid combat.
+Declare every living creature in the 20-foot radius, including allies and
+unconscious or immune creatures; the engine checks the point's 90-foot range
+and applies eligibility itself. It rolls `5d8`, plus `2d8` for each slot above
+1st, and spends the pool in ascending current HP order (temporary HP do not
+count). Undead, Charmed-immune, already unconscious and source-bound magical
+sleep-immune targets do not consume the pool. Sleep is not concentration and
+lasts one minute on the persistent clock, including after combat ends. Positive
+damage wakes the target even if temporary HP absorb it; zero damage does not.
+Falling unconscious also applies Prone (unless immune). Waking ends Sleep, not
+Prone: the creature must still stand up normally. For 2014 character updates,
+the authoritative settlement also moves main-hand and off-hand objects (and
+their contained items) into campaign `ground_items`, clears those hand slots,
+and preserves external ownership/attunement references atomically. A shield in
+the separate shield slot stays strapped on. Waking does not retrieve an object.
+Positive-HP unconsciousness does not require a death save to end the turn.
+An initially Unconscious 2014 campaign actor also falls Prone (unless immune)
+and drops held objects during creation, including direct creation, template
+instantiation, and build. The live actor and its ground records share one
+lifecycle revision group and replay
+receipt; undo/redo removes/restores both together. Build keeps its independent
+library template unchanged and atomically creates the live instance through the
+same custody boundary. A library template is not itself a scene participant.
+For 2014 live actor creation and full-sheet replacement, incapacitation or
+death also ends active concentration. Full-sheet replacement reconciles linked
+spell effects on the caster and other targets in the same revision group; ending
+the source concentration cannot leave its dependent Invisibility active. The
+returned character sheet reflects the reconciled state. A target revision
+conflict rejects the entire replacement, and retries replay the original receipt.
+Full-sheet replacement also applies Prone to an Unconscious 2014 actor even
+with empty hands, respecting Prone immunity. Posture alone does not create ground
+records. Source-declared Unconscious conditions at combat start or reinforcement
+join use the same posture, held-item and effect-dependency settlement; the actor
+card, combat or queued projection, and replay response remain consistent. Ending
+an encounter-duration Unconscious condition does not itself stand the actor up.
+Combat start and reinforcement join also reconcile pre-existing Unconscious
+cards from older saves, even without new source conditions or when Prone is
+already present. A pre-existing condition is not assigned an encounter duration.
+Grid reinforcement drops retain the declared reinforcement position; Agent
+mode retains its coordinate-free actor anchor.
+Another adjacent creature can use
+`combat_common_action(action="shake_sleep", target_id=...)` to spend an action
+ending that target's Sleep effect, without removing unrelated unconsciousness.
+For Agent-positioned combat, the Owner/DM supplies `declaration.spatial_facts`
+instead of coordinates. Outside combat, use the same declaration inside
+`character_action(action="cast_spell").payload`. Its exact fields are
+`decision_id`, `reason`, `origin_description`, `campaign_revision`,
+`origin_in_range=true`, `line_of_effect_clear=true`, `affected_target_ids`, and
+`excluded_actor_ids`. The two ID lists must account for every living encounter
+combatant (or campaign character outside combat) exactly once; put off-scene
+creatures in the excluded list. Include the caster if in the area, and let the
+engine exclude immune/unconscious creatures. The revision binds the judgment
+to the current campaign snapshot. Missing facts return a ruling request before
+payment; stale, malformed, or incomplete facts reject without state changes.
+The engine owns dice, slot/action payment, target effects, and persistent time.
+Never invent coordinates or override the spell's radius, range, or HP pool.
+
+In Agent combat, the Owner/DM can shake a different sleeping target using
+`combat_common_action(action="shake_sleep", target_id=...)` with
+`payload.spatial_facts={decision_id,reason,campaign_revision,can_touch_target:true}`.
+The DM judges physical contact, not a synthetic grid distance. The engine
+requires a legal action payment and atomically ends that target's Sleep;
+missing contact facts do not pay the action. Grid combat retains its adjacent
+target check and does not accept this payload. A shake is not a free object
+interaction, and retrying the same successful request must not pay again.
+
+For 2014 ground custody in combat, use
+`combat_common_action(action="drop_held", payload={})` to release held objects,
+or `action="pickup_ground"` with `payload={ground_id,slot?}` to retrieve one
+ground record. An optional slot must be an empty `main_hand` or `off_hand`.
+Dropping costs no action; pickup spends the free object interaction if available,
+otherwise an available main/extra action. Both require the conscious actor's
+turn. Pickup in the same grid encounter checks the recorded drop position is
+within 5 feet; it does not accept caller spatial overrides.
+
+Outside combat, use `inventory_transfer(mode="character_to_ground" |
+"ground_to_character")`. Its payload requires `campaign_id`, `character_id`,
+`expected_campaign_revision`, and `expected_character_revision`; pickup also
+requires `ground_id` and may supply `slot`. For Agent positioning, noncombat,
+or a ground record from a previous encounter, the Owner/DM must supply pickup
+`spatial_facts={decision_id,reason,campaign_revision,can_reach_ground_item:true}`.
+The decision concerns the recorded drop location, not the source actor's current
+location. Never synthesize coordinates. Missing facts request a ruling; stale,
+malformed, false, or unauthorized facts do not move inventory or spend actions.
+Character cards, ground records and payment share a revision-checked atomic
+commit; replaying a successful request after restart must not repeat payment.
+Common character/campaign settlements reject missing physical-item references
+and conflicting attuned owners. The state adapter repeats this check inside the
+owning transaction after candidate writes, so failure rolls back state, audit
+records and retry receipts together. For two 2014 actors,
+`inventory_transfer(mode="character_to_character")` migrates physical item trees
+and existing references together, including container/ammunition links and ID
+collisions. Mere transfer does not transfer attunement: the old owner's bond
+survives, and return restores that owner's original item identity. When another
+carrier completes an authorized short-rest attunement through `party_rest` or
+the resting members of `stable_recovery`, the same settlement ends the prior
+owner's bond. Play-phase card replacement cannot bypass that rest workflow.
+Legacy removal and party-inventory paths that cannot migrate references remain
+rejected, not silently repaired. This does not establish the complete attunement
+lifecycle (including distance/time, lost prerequisites and cursed voluntary
+unattunement), or cover lifecycle/import writes outside the state adapter. Do not
+use generic card replacement to repair or manufacture `inventory.external_items`.
 
 A source-bound 2014 Core `Fly` is also engine-owned. Outside combat call
 `character_action(action="cast_spell")` with equal explicit
@@ -945,6 +1073,14 @@ call `combat_check(kind="death_save")` with no `ability`, bonus, proficiency, DC
 or target. Resolve it before any other action or `combat_end_turn`. Refresh the
 actor card and combat state immediately; a natural 20 can restore 1 HP and leave
 the action available, three successes add Stable, and three failures add Dead.
+The engine captures this obligation at the turn boundary. Falling to 0 HP
+during your own turn does not create an extra death save that turn; neither does
+damage that ends stability after the turn has already begun. Damage at 0 HP
+still applies its immediate failure separately. Healing or stabilization cancels
+an outstanding save, and only a later eligible turn start creates another one.
+Saved encounters predating this start-of-turn record retain the conservative
+legacy gate until their next turn boundary: current HP alone cannot prove the
+missing historical start state.
 
 To stabilize a dying creature with Medicine, call
 `combat_check(kind="stabilize", ability="wisdom", target_id=...)`. The MCP

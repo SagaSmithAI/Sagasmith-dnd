@@ -7,10 +7,11 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
-from sagasmith_core import CampaignService
+from sagasmith_core import CampaignService, CharacterService
 from sagasmith_core import StateMutationService as CoreStateMutationService
 from sagasmith_core.idempotency import request_hash
 from sagasmith_dnd.character_schema import validate_party_state
+from sagasmith_dnd.external_custody import validate_external_inventory_custody
 from sagasmith_dnd.random_stream import active_random_stream
 
 
@@ -87,11 +88,22 @@ class RandomStateMutationService(CoreStateMutationService):
             )
             source_state["random_stream"] = stream.persisted_state()
             campaign_state = validate_party_state(source_state)
-        result = super().replace(
-            campaign_id,
-            campaign_state=campaign_state,
-            **kwargs,
-        )
+        # Core services join this ambient transaction. Validate the resulting
+        # cross-actor custody before state, audit groups or replay receipts can
+        # commit, including callers that bypass server-level preflight helpers.
+        with self.database.transaction():
+            result = super().replace(
+                campaign_id,
+                campaign_state=campaign_state,
+                **kwargs,
+            )
+            sheets = {
+                actor.id: actor.sheet
+                for actor in CharacterService(self.database).list(campaign_id=campaign_id)
+            }
+            if sheets:
+                state = CampaignService(self.database).get(campaign_id).state or {}
+                validate_external_inventory_custody(sheets, state.get("ground_items", []))
         if should_persist:
             stream.mark_persisted()
         return result

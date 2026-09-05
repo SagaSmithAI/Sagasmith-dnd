@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.76.0"
+CORE_RULE_PACK_VERSION = "1.77.0"
 
 
 @dataclass(frozen=True)
@@ -886,6 +886,20 @@ BOUNDARIES = (
         "bundled:srd2014/07_Spells/Spells_Each/Raise_Dead.md",
     ),
     CoreBoundary(
+        "dnd5e.core.spell.sleep",
+        ("2014",),
+        "sleep.resolve_sleep_targets|sleep.wake_sleep_effects",
+        ("tests/test_sleep.py",),
+        "bundled:srd2014/07_Spells/Spells_Each/Sleep.md",
+    ),
+    CoreBoundary(
+        "dnd5e.core.spell.mending",
+        ("2014",),
+        "steel_defender.mending_steel_defender",
+        ("tests/test_steel_defender.py", "tests/test_mending_core_content.py"),
+        "bundled:srd2014/07_Spells/Spells_Each/Mending.md",
+    ),
+    CoreBoundary(
         "dnd5e.core.ready.action",
         ("2014", "2024"),
         "combat_engine.trigger_readied_action|resolve_readied_action_window",
@@ -912,6 +926,47 @@ BOUNDARIES = (
             "test_srd2014_content_uses_leaf_records_and_structured_eligibility",
         ),
         "bundled:srd2014/02_Classes/Rogue.md#evasion",
+    ),
+    CoreBoundary(
+        "dnd5e.core.save.dwarven_resilience",
+        ("2014",),
+        "combat_engine.resolve_actor_check",
+        (
+            "tests/test_conditional_species_content.py",
+            "tests/test_conditional_species_saves.py",
+        ),
+        "bundled:srd2014/01_Races/Races_Each/Dwarf.md#dwarven-resilience",
+    ),
+    CoreBoundary(
+        "dnd5e.core.save.fey_ancestry",
+        ("2014",),
+        "combat_engine.resolve_actor_check|sleep.resolve_sleep_targets",
+        (
+            "tests/test_conditional_species_content.py",
+            "tests/test_conditional_species_saves.py",
+            "tests/test_sleep.py",
+        ),
+        "bundled:srd2014/01_Races/Races_Each/Elf.md#fey-ancestry",
+    ),
+    CoreBoundary(
+        "dnd5e.core.save.gnome_cunning",
+        ("2014",),
+        "combat_engine.resolve_actor_check",
+        (
+            "tests/test_conditional_species_content.py",
+            "tests/test_conditional_species_saves.py",
+        ),
+        "bundled:srd2014/01_Races/Races_Each/Gnome.md#gnome-cunning",
+    ),
+    CoreBoundary(
+        "dnd5e.core.save.halfling_brave",
+        ("2014",),
+        "combat_engine.resolve_actor_check",
+        (
+            "tests/test_conditional_species_content.py",
+            "tests/test_conditional_species_saves.py",
+        ),
+        "bundled:srd2014/01_Races/Races_Each/Halfling.md#brave",
     ),
     CoreBoundary(
         "dnd5e.core.rest.hit_dice",

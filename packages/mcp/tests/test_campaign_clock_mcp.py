@@ -446,7 +446,9 @@ def test_minute_clock_advances_accumulate_for_hour_effects(tmp_path: Path) -> No
                 "kind": "concentration",
                 "source_spell_id": "invisibility",
                 "active": True,
-                "concentration": True,
+                # This synthetic timed effect starts on an incapacitated actor;
+                # keep it non-concentration so the test isolates elapsed duration.
+                "concentration": False,
                 "duration": {"period": "hour", "remaining": 1},
                 "changes": [],
             },

@@ -41,7 +41,7 @@ class StatblockImportError(ValueError):
     """Raised when required statblock facts cannot be recovered from the source text."""
 
 
-OCR_STATBLOCK_RECOVERY_VERSION = 20
+OCR_STATBLOCK_RECOVERY_VERSION = 21
 
 
 @dataclass(frozen=True)
@@ -1398,6 +1398,22 @@ def _recharge_contract(entry_name: str) -> dict[str, Any] | None:
     }
 
 
+def _daily_uses_contract(entry_name: str) -> dict[str, Any] | None:
+    """Recover the standard ``X/Day`` limited-use marker from an entry name."""
+
+    match = re.search(r"(?i)\(\s*([1-9]\d*)\s*/\s*Day(?:\s+Each)?\s*\)", entry_name)
+    if match is None:
+        return None
+    maximum = int(match.group(1))
+    return {
+        "label": entry_name,
+        "value": maximum,
+        "max": maximum,
+        "unlimited": False,
+        "recovers_on": "long_rest",
+    }
+
+
 def legendary_action_spec(
     sheet: dict[str, Any],
     activity_id: str,
@@ -1796,6 +1812,7 @@ def _parse_srd_statblock(
             descriptive.append(("actions", entry_name, description))
     for section, entry_name, description in descriptive:
         recharge = _recharge_contract(entry_name)
+        daily_uses = _daily_uses_contract(entry_name)
         normalized_description = " ".join(description.split())
         orc_aggressive = (
             edition == "2014"
@@ -1900,6 +1917,8 @@ def _parse_srd_statblock(
                         "dnd5e.core.activity.recharge",
                     }
                 )
+            elif daily_uses is not None:
+                entry["uses"] = {**daily_uses, "source_key": source_key}
         sheet["content"]["activities" if activation != "passive" else "features"].append(entry)
         if legendary_action is None and not orc_aggressive:
             warnings.append(
@@ -5177,7 +5196,8 @@ def parameterized_statblock_requirements(source_text: str) -> dict[str, Any] | N
     source_expressions = []
     markdown_fields = list(
         re.finditer(
-            r"(?ims)^\s*\*\*(?P<label>Armor Class|Hit Points|Proficiency Bonus)\*\*\s+"
+            r"(?ims)^\s*\*\*(?P<label>Armor Class|Hit Points|Proficiency Bonus)"
+            r"(?:\s*\(PB\))?\*\*\s+"
             r"(?P<expression>.+?)\s*(?=\r?\n\s*\r?\n|\r?\n\s*\*\*|"
             r"\r?\n\s*#{1,6}\s|\Z)",
             text,
@@ -5611,12 +5631,51 @@ def dependent_actor_template_solution_errors(
                     "dependent actor template reviewed owner class conflicts with its formula"
                 )
     elif owner_class_binding is not None:
-        errors.append(
-            "dependent actor template owner_class_binding requires owner_class_level"
-        )
+        errors.append("dependent actor template owner_class_binding requires owner_class_level")
+    owner_binding = requirement.get("owner_binding")
+    if owner_binding is not None:
+        if not isinstance(owner_binding, Mapping) or set(owner_binding) != {
+            "schema_version",
+            "kind",
+            "feature_artifact_id",
+            "relation_key",
+        }:
+            errors.append("dependent actor template owner_binding is invalid")
+        else:
+            feature_artifact_id = owner_binding.get("feature_artifact_id")
+            relation_key = owner_binding.get("relation_key")
+            if (
+                owner_binding.get("schema_version") != 1
+                or owner_binding.get("kind") != "feature_entitlement"
+                or not isinstance(feature_artifact_id, str)
+                or not feature_artifact_id.strip()
+                or len(feature_artifact_id) > 500
+                or not isinstance(relation_key, str)
+                or re.fullmatch(r"[a-z0-9]+(?:_[a-z0-9]+)*", relation_key) is None
+                or len(relation_key) > 200
+            ):
+                errors.append("dependent actor template owner_binding is invalid")
     if requirement.get("runtime_ready") is not True:
         errors.append("dependent actor template is not runtime-ready")
     return errors
+
+
+def dependent_actor_owner_binding(requirement: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Return the strict feature entitlement contract for a dependent template."""
+
+    raw = requirement.get("owner_binding")
+    if raw is None:
+        return None
+    errors = dependent_actor_template_solution_errors(requirement)
+    if errors:
+        raise ValueError("; ".join(errors))
+    binding = dict(raw)
+    return {
+        "schema_version": 1,
+        "kind": "feature_entitlement",
+        "feature_artifact_id": str(binding["feature_artifact_id"]).strip(),
+        "relation_key": str(binding["relation_key"]),
+    }
 
 
 def _evaluate_dependent_template_formula(
@@ -5770,7 +5829,11 @@ def materialize_parameterized_statblock_source(
         "owner_charisma_modifier": lambda value: f"{value:+d}",
     }
     token_patterns = {
-        "owner_proficiency_bonus": r"\byour proficiency bonus\b",
+        # Resolve values printed in mechanical fields, but preserve the
+        # Steel Defender's Might of the Master scaling condition. Turning
+        # "when your proficiency bonus increases" into "when +3 increases"
+        # corrupts source meaning and still does not implement the scaling.
+        "owner_proficiency_bonus": r"\byour proficiency bonus\b(?!\s+increases?\b)",
         "owner_spell_attack_modifier": r"\byour spell attack modifier\b",
         "owner_spell_save_dc": r"\byour spell save dc\b",
         "owner_spellcasting_ability_modifier": r"\byour spellcasting ability modifier\b",
@@ -5797,7 +5860,9 @@ def materialize_parameterized_statblock_source(
         )
     if "owner_proficiency_bonus" in normalized_parameters:
         rendered = re.sub(
-            r"(?<![A-Za-z])PB(?![A-Za-z])",
+            # Keep the printed ``Proficiency Bonus (PB)`` label intact while
+            # resolving PB operands in saves, attacks, damage, and healing.
+            r"(?<![A-Za-z(])PB(?![A-Za-z)])",
             str(normalized_parameters["owner_proficiency_bonus"]),
             rendered,
         )
@@ -5926,6 +5991,7 @@ __all__ = [
     "finalize_imported_actor_rulings",
     "compile_parameterized_statblock_solution",
     "dependent_actor_template_solution_errors",
+    "dependent_actor_owner_binding",
     "materialize_parameterized_statblock_source",
     "parameterized_statblock_requirements",
     "parse_2014_statblock_template_preview",

@@ -566,6 +566,10 @@ def test_shield_reaction_atomically_pays_and_expires_at_next_turn_start(
         assert resolved["result"]["reaction_defense"]["source_type"] == "spell"
         assert resolved["result"]["reaction_defense"]["cast_level"] == 1
         assert resolved["result"]["reaction_defense"]["payment"]["economy"] == "slots"
+        assert any(
+            receipt["mechanic_id"] == "dnd5e.core.action.multiattack_choice"
+            for receipt in resolved["result"]["rule_receipts"]
+        )
         target_state = next(
             item for item in resolved["combat"]["combatants"] if item["actor_id"] == target["id"]
         )

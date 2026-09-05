@@ -20,6 +20,7 @@ from sagasmith_dnd.statblocks import (
     apply_dependent_actor_template_variant,
     apply_reviewed_statblock_fill,
     apply_statblock_variant,
+    dependent_actor_owner_binding,
     dependent_actor_template_solution_errors,
     discover_2014_statblock_names_from_layout,
     discover_2014_statblock_slots_from_layout,
@@ -199,10 +200,40 @@ def test_parameterized_statblock_compiles_printed_pb_abbreviation() -> None:
     )
     assert "**Armor Class** 16" in rendered
     assert "**Hit Points** 40" in rendered
+    assert "**Proficiency Bonus (PB)** 3" in rendered
     assert resolved == {
         "combat.armor_class": 16,
         "combat.hp.max": 40,
+        "combat.proficiency_bonus": 3,
     }
+
+
+def test_materialization_preserves_proficiency_label_and_scaling_condition() -> None:
+    source = (
+        "# Steel Defender\n\n"
+        "**Armor Class** 15 (natural armor)\n\n"
+        "**Hit Points** 2 + your Intelligence modifier + five times your artificer level\n\n"
+        "**Proficiency Bonus (PB)** equals your bonus\n\n"
+        "***Might of the Master.*** The following numbers increase by 1 when your "
+        "proficiency bonus increases by 1.\n\n"
+        "***Force-Empowered Rend.*** Hit: 1d8 + PB force damage.\n"
+    )
+    requirement = parameterized_statblock_requirements(source)
+    assert requirement is not None
+
+    rendered, _ = materialize_parameterized_statblock_source(
+        source,
+        requirement,
+        numeric_parameters={
+            "owner_class_level": 3,
+            "owner_intelligence_modifier": 3,
+            "owner_proficiency_bonus": 2,
+        },
+    )
+
+    assert "**Proficiency Bonus (PB)** 2" in rendered
+    assert "when your proficiency bonus increases by 1" in rendered
+    assert "Hit: 1d8 + 2 force damage" in rendered
 
 
 def test_parameterized_statblock_requirements_accept_bounded_flat_pdf_fields() -> None:
@@ -251,6 +282,52 @@ def test_dependent_actor_template_requires_explicit_owner_class_binding_policy()
     requirement.pop("owner_class_binding")
     assert dependent_actor_template_solution_errors(requirement) == [
         "dependent actor template owner_class_binding does not match its source evidence"
+    ]
+
+
+def test_dependent_actor_template_accepts_strict_feature_owner_binding() -> None:
+    requirement = parameterized_statblock_requirements(
+        "# Steel Defender\n\n**Armor Class** 15\n\n"
+        "**Hit Points** 2 + your Intelligence modifier + five times your artificer level\n"
+    )
+    assert requirement is not None
+    requirement["owner_binding"] = {
+        "schema_version": 1,
+        "kind": "feature_entitlement",
+        "feature_artifact_id": "official.feature.steel-defender",
+        "relation_key": "steel_defender",
+    }
+    assert dependent_actor_template_solution_errors(requirement) == []
+    assert dependent_actor_owner_binding(requirement) == requirement["owner_binding"]
+
+
+@pytest.mark.parametrize(
+    "binding",
+    [
+        {},
+        {
+            "schema_version": 1,
+            "kind": "feature_entitlement",
+            "feature_artifact_id": "official.feature.steel-defender",
+            "relation_key": "Steel Defender",
+        },
+        {
+            "schema_version": 1,
+            "kind": "feature_entitlement",
+            "feature_artifact_id": "",
+            "relation_key": "steel_defender",
+        },
+    ],
+)
+def test_dependent_actor_template_rejects_invalid_feature_owner_binding(binding) -> None:
+    requirement = parameterized_statblock_requirements(
+        "# Steel Defender\n\n**Armor Class** 15\n\n"
+        "**Hit Points** 2 + your Intelligence modifier + five times your artificer level\n"
+    )
+    assert requirement is not None
+    requirement["owner_binding"] = binding
+    assert dependent_actor_template_solution_errors(requirement) == [
+        "dependent actor template owner_binding is invalid"
     ]
 
 
@@ -483,9 +560,7 @@ COMMONER = """### Commoner
 
 
 def test_zero_reach_statblock_attack_survives_derivation_and_rendering() -> None:
-    source = COMMONER.replace("### Commoner", "### Swarm").replace(
-        "reach 5 ft.", "reach 0 ft."
-    )
+    source = COMMONER.replace("### Commoner", "### Swarm").replace("reach 5 ft.", "reach 0 ft.")
 
     parsed = parse_2014_statblock(source, source_key="bundled:srd2014/swarm")
     item = next(entry for entry in parsed.sheet["inventory"]["items"] if entry["id"] == "club")
@@ -1431,6 +1506,15 @@ one target. *Hit:* 22 (5d8) damage of the type selected for this creature.
             "*Ranged Spell Attack:* TBD to hit, range 90 ft., one target. "
             "*Hit:* 22 (5d8) damage of the type selected for this creature."
         ),
+    }
+    assert orb["uses"] == {
+        "label": "Elemental Orb (2/Day)",
+        "value": 2,
+        "max": 2,
+        "unlimited": False,
+        "recovers_on": "long_rest",
+        "source_key": "module-review:variant-cultist",
+        "slot_level": 0,
     }
     assert (
         "Elemental Orb (2/Day): descriptive action is not automatically settled" in parsed.warnings

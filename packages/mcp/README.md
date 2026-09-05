@@ -327,17 +327,23 @@ them.
 
 The repository contains only the compatibility registry and checksums. The
 commercial archives remain in the authorized local library and are never
-returned by profile or inventory APIs. A rights-gated end-to-end regression can
+returned by profile or inventory APIs. First use the offline
+[local repair builder](scripts/build_official_expansion_library.md) to reproduce
+the current lock from exact canonical inputs, and point the host at that new
+library. No old-save compatibility layer or automatic campaign migration is
+provided. A rights-gated end-to-end regression can
 be run locally without exporting content:
 
 ```powershell
 uv run --package sagasmith-dnd-mcp python packages/mcp/scripts/regression_official_expansions.py `
-  --content-library C:\path\to\SagaSmith-dnd-content-library
+  --content-library C:\private\repaired-content-library
 ```
 
-It activates all ten Packs, checks all 2,007 catalog entries and 1,134
+It activates all ten Packs, checks all 2,008 catalog entries and 1,131
 selection-ready entries, builds and advances an Artificer/Battle Smith with an
 official species and background, and commits an actual rules settlement.
+These are the driver's acceptance targets, not a claim that the full build
+and every official rule have already passed validation.
 
 ## Workbench gateway
 

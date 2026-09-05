@@ -1,0 +1,510 @@
+from __future__ import annotations
+
+import asyncio
+from copy import deepcopy
+from dataclasses import replace
+from pathlib import Path
+
+import pytest
+from mcp.server.mcpserver.exceptions import ToolError
+from sagasmith_dnd.character_schema import default_character_sheet
+from sagasmith_dnd.standard_spell_ids import CORE_SLEEP_SPELL_ID
+from test_official_expansions_mcp import _call, _config
+
+from sagasmith_dnd_mcp.server import close_server, create_server
+
+
+@pytest.mark.fresh_database
+def test_sleep_noncombat_missing_agent_spatial_facts_is_pending_without_payment(
+    tmp_path: Path,
+) -> None:
+    async def exercise() -> None:
+        workspace = Path(__file__).resolve().parents[3]
+        config = replace(
+            _config(tmp_path), auto_seed_rules=True, dnd_skills_dir=workspace / "skills"
+        )
+        server = create_server(config)
+        try:
+            campaign = await _call(
+                server,
+                "campaign_create",
+                {"name": "Sleep agent", "edition": "2014", "idempotency_key": "campaign"},
+            )
+            spells = await _call(
+                server,
+                "character_query",
+                {
+                    "view": "catalog",
+                    "payload": {
+                        "campaign_id": campaign["id"],
+                        "kind": "spell",
+                        "query": "Sleep",
+                    },
+                },
+            )
+            sleep = next(item for item in spells if item["id"] == CORE_SLEEP_SPELL_ID)
+            sheet = default_character_sheet()
+            sheet["progression"]["level"] = 3
+            sheet["progression"]["classes"] = [
+                {"name": "Bard", "level": 3, "subclass": "", "hit_die": 8}
+            ]
+            sheet["spellcasting"]["spell_slots"] = {
+                "1": {"label": "Level 1", "value": 1, "max": 1, "recovers_on": "long_rest"}
+            }
+            caster = await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "direct",
+                    "payload": {"campaign_id": campaign["id"], "name": "Bard", "sheet": sheet},
+                    "idempotency_key": "caster",
+                },
+            )
+            await _call(
+                server,
+                "character_content_apply",
+                {
+                    "character_id": caster["id"],
+                    "artifact_id": sleep["id"],
+                    "selection": {"source_class": "Bard", "method": "known"},
+                    "expected_revision": caster["revision"],
+                    "idempotency_key": "sleep",
+                },
+            )
+            before = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": caster["id"]}},
+            )
+            pending = await _call(
+                server,
+                "character_action",
+                {
+                    "character_id": caster["id"],
+                    "action": "cast_spell",
+                    "payload": {
+                        "spell_id": sleep["id"],
+                        "cast_level": 1,
+                        "declaration": {},
+                    },
+                    "expected_revision": before["revision"],
+                    "idempotency_key": "agent-sleep",
+                },
+            )
+            assert pending["status"] == "pending_ruling"
+            assert pending["missing"] == ["sleep.spatial_facts"]
+            after = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": caster["id"]}},
+            )
+            assert after == before
+            # A player controlling the caster still cannot author the DM's area decision.
+            await _call(
+                server,
+                "access_grant",
+                {
+                    "scope": "campaign",
+                    "campaign_id": campaign["id"],
+                    "principal_id": "player:caster",
+                    "payload": {"role": "player"},
+                },
+            )
+            await _call(
+                server,
+                "access_grant",
+                {
+                    "scope": "actor",
+                    "campaign_id": campaign["id"],
+                    "principal_id": "player:caster",
+                    "payload": {
+                        "actor_id": caster["id"],
+                        "can_control": True,
+                        "can_view_private": True,
+                    },
+                },
+            )
+
+            async def snapshot():
+                return {
+                    "campaign": await _call(
+                        server,
+                        "campaign_query",
+                        {
+                            "view": "get",
+                            "payload": {"campaign_id": campaign["id"]},
+                        },
+                    ),
+                    "caster": await _call(
+                        server,
+                        "character_query",
+                        {
+                            "view": "get",
+                            "payload": {"character_id": caster["id"]},
+                        },
+                    ),
+                }
+
+            before_rejected = await snapshot()
+            facts = {
+                "decision_id": "source-area",
+                "reason": "Only the caster is present in the selected area.",
+                "origin_description": "The point immediately beside the caster.",
+                "campaign_revision": before_rejected["campaign"]["revision"],
+                "origin_in_range": True,
+                "line_of_effect_clear": True,
+                "affected_target_ids": [caster["id"]],
+                "excluded_actor_ids": [],
+            }
+            arguments = {
+                "character_id": caster["id"],
+                "action": "cast_spell",
+                "payload": {
+                    "spell_id": sleep["id"],
+                    "cast_level": 1,
+                    "declaration": {"spatial_facts": facts},
+                },
+                "expected_revision": before_rejected["caster"]["revision"],
+                "idempotency_key": "player-decision",
+                "principal_id": "player:caster",
+            }
+            with pytest.raises(ToolError, match="cannot access|role"):
+                await server.call_tool("character_action", arguments)
+            assert await snapshot() == before_rejected
+            for index, (field, value) in enumerate(
+                [
+                    ("campaign_revision", facts["campaign_revision"] - 1),
+                    ("origin_in_range", 1),
+                    ("line_of_effect_clear", False),
+                    ("affected_target_ids", []),
+                    ("affected_target_ids", [caster["id"], "foreign"]),
+                    ("origin", {"x": 0, "y": 0}),
+                ]
+            ):
+                invalid = deepcopy(arguments)
+                invalid.pop("principal_id")
+                invalid["idempotency_key"] = f"invalid-area-{index}"
+                invalid["payload"]["declaration"]["spatial_facts"][field] = value
+                with pytest.raises(ToolError):
+                    await server.call_tool("character_action", invalid)
+                assert await snapshot() == before_rejected
+        finally:
+            close_server(server)
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.fresh_database
+@pytest.mark.parametrize(("cast_level", "expression"), [(1, "5d8"), (2, "7d8")])
+def test_sleep_noncombat_agent_self_target_replay_and_incapacitated_guard(
+    tmp_path: Path, cast_level: int, expression: str
+) -> None:
+    async def exercise() -> None:
+        workspace = Path(__file__).resolve().parents[3]
+        config = replace(
+            _config(tmp_path), auto_seed_rules=True, dnd_skills_dir=workspace / "skills"
+        )
+        server = create_server(config)
+        try:
+            campaign = await _call(
+                server,
+                "campaign_create",
+                {"name": "Sleep self", "edition": "2014", "idempotency_key": "campaign"},
+            )
+            sleep = next(
+                item
+                for item in await _call(
+                    server,
+                    "character_query",
+                    {
+                        "view": "catalog",
+                        "payload": {
+                            "campaign_id": campaign["id"],
+                            "kind": "spell",
+                            "query": "Sleep",
+                        },
+                    },
+                )
+                if item["id"] == CORE_SLEEP_SPELL_ID
+            )
+            sheet = default_character_sheet()
+            sheet["progression"].update(
+                level=3, classes=[{"name": "Bard", "level": 3, "subclass": "", "hit_die": 8}]
+            )
+            sheet["combat"]["hp"] = {"value": 1, "max": 1, "temp": 0}
+            sheet["spellcasting"]["spell_slots"] = {
+                str(level): {
+                    "label": f"Level {level}",
+                    "value": 2,
+                    "max": 2,
+                    "recovers_on": "long_rest",
+                }
+                for level in (1, 2)
+            }
+            caster = await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "direct",
+                    "payload": {"campaign_id": campaign["id"], "name": "Bard", "sheet": sheet},
+                    "idempotency_key": "caster",
+                },
+            )
+            await _call(
+                server,
+                "character_content_apply",
+                {
+                    "character_id": caster["id"],
+                    "artifact_id": sleep["id"],
+                    "selection": {"source_class": "Bard", "method": "known"},
+                    "expected_revision": caster["revision"],
+                    "idempotency_key": "spell",
+                },
+            )
+            target_sheet = default_character_sheet()
+            target_sheet["combat"]["hp"] = {"value": 1, "max": 1, "temp": 0}
+            target = await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "direct",
+                    "payload": {
+                        "campaign_id": campaign["id"],
+                        "name": "Target",
+                        "sheet": target_sheet,
+                    },
+                    "idempotency_key": "target",
+                },
+            )
+            current = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            caster_state = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": caster["id"]}},
+            )
+            facts = {
+                "decision_id": "self-sleep",
+                "reason": "The reviewed point includes both creatures in the sphere.",
+                "origin_description": "A point within ninety feet of the caster.",
+                "campaign_revision": current["revision"],
+                "origin_in_range": True,
+                "line_of_effect_clear": True,
+                "affected_target_ids": [caster["id"], target["id"]],
+                "excluded_actor_ids": [],
+            }
+            arguments = {
+                "character_id": caster["id"],
+                "action": "cast_spell",
+                "payload": {
+                    "spell_id": sleep["id"],
+                    "cast_level": cast_level,
+                    "declaration": {"spatial_facts": facts},
+                },
+                "expected_revision": caster_state["revision"],
+                "idempotency_key": f"self-{cast_level}",
+            }
+            raw = await server.call_tool("character_action", arguments)
+            result = raw[1]
+            assert result["status"] == "committed", result
+            settled = result["result"]["result"]
+            assert settled["pool_roll"]["expression"] == expression
+            assert result["result"].get("random_stream_receipt"), result
+            assert result["result"]["game_time"]["elapsed_ticks"] == 1
+            caster_after = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": caster["id"]}},
+            )
+            target_after = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": target["id"]}},
+            )
+            assert (
+                caster_after["sheet"]["spellcasting"]["spell_slots"][str(cast_level)]["value"] == 1
+            )
+            assert "unconscious" in caster_after["sheet"]["conditions"]
+            assert "unconscious" in target_after["sheet"]["conditions"]
+
+            async def snapshot():
+                return {
+                    "campaign": await _call(
+                        server,
+                        "campaign_query",
+                        {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+                    ),
+                    "actors": [
+                        await _call(
+                            server,
+                            "character_query",
+                            {"view": "get", "payload": {"character_id": actor["id"]}},
+                        )
+                        for actor in (caster, target)
+                    ],
+                }
+
+            after_cast = await snapshot()
+            before_rng = current["state"]["random_stream"]
+            after_rng = after_cast["campaign"]["state"]["random_stream"]
+            receipt = result["result"]["random_stream_receipt"]
+            assert after_rng["position"] == before_rng["position"] + 5 + 2 * (cast_level - 1)
+            assert after_rng["last_receipt"] == receipt
+            assert receipt["position_before"] == before_rng["position"]
+            assert receipt["position_after"] == after_rng["position"]
+            assert receipt["draw_count"] == 5 + 2 * (cast_level - 1)
+            assert await server.call_tool("character_action", arguments) == raw
+            assert await snapshot() == after_cast
+            close_server(server)
+            server = create_server(config)
+            assert await server.call_tool("character_action", arguments) == raw
+            assert await snapshot() == after_cast
+            with pytest.raises(ToolError, match="incapacitated"):
+                await server.call_tool(
+                    "character_action",
+                    {
+                        **arguments,
+                        "idempotency_key": f"new-{cast_level}",
+                        "expected_revision": caster_after["revision"],
+                    },
+                )
+            assert await snapshot() == after_cast
+        finally:
+            close_server(server)
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.fresh_database
+def test_sleep_agent_combat_coordinate_free_partition_commits_and_replays(tmp_path: Path) -> None:
+    async def exercise() -> None:
+        workspace = Path(__file__).resolve().parents[3]
+        config = replace(
+            _config(tmp_path), auto_seed_rules=True, dnd_skills_dir=workspace / "skills"
+        )
+        server = create_server(config)
+        try:
+            campaign = await _call(
+                server,
+                "campaign_create",
+                {"name": "Agent Sleep", "edition": "2014", "idempotency_key": "campaign"},
+            )
+            catalog = await _call(
+                server,
+                "character_query",
+                {
+                    "view": "catalog",
+                    "payload": {"campaign_id": campaign["id"], "kind": "spell", "query": "Sleep"},
+                },
+            )
+            sleep = next(item for item in catalog if item["id"] == CORE_SLEEP_SPELL_ID)
+            sheet = default_character_sheet()
+            sheet["progression"].update(
+                level=3, classes=[{"name": "Bard", "level": 3, "subclass": "", "hit_die": 8}]
+            )
+            sheet["spellcasting"]["spell_slots"] = {
+                "1": {"label": "Level 1", "value": 1, "max": 1, "recovers_on": "long_rest"}
+            }
+            caster = await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "direct",
+                    "payload": {"campaign_id": campaign["id"], "name": "Bard", "sheet": sheet},
+                    "idempotency_key": "caster",
+                },
+            )
+            await _call(
+                server,
+                "character_content_apply",
+                {
+                    "character_id": caster["id"],
+                    "artifact_id": sleep["id"],
+                    "selection": {"source_class": "Bard", "method": "known"},
+                    "expected_revision": caster["revision"],
+                    "idempotency_key": "sleep",
+                },
+            )
+            target_sheet = default_character_sheet()
+            target_sheet["combat"]["hp"] = {"value": 1, "max": 1, "temp": 0}
+            target = await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "direct",
+                    "payload": {
+                        "campaign_id": campaign["id"],
+                        "name": "Target",
+                        "sheet": target_sheet,
+                    },
+                    "idempotency_key": "target",
+                },
+            )
+            current = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            phase = await _call(
+                server,
+                "game_phase",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "set",
+                    "tool_profile": "play",
+                    "expected_revision": current["revision"],
+                    "idempotency_key": "play",
+                },
+            )
+            started = await _call(
+                server,
+                "combat_start",
+                {
+                    "positioning_mode": "agent",
+                    "campaign_id": campaign["id"],
+                    "participant_ids": [caster["id"], target["id"]],
+                    "participant_config": [
+                        {"actor_id": caster["id"], "initiative": 20, "disposition": "friendly"},
+                        {"actor_id": target["id"], "initiative": 10, "disposition": "hostile"},
+                    ],
+                    "expected_revision": phase["campaign_revision"],
+                    "idempotency_key": "start",
+                },
+            )
+            facts = {
+                "decision_id": "sleep-agent-1",
+                "reason": (
+                    "The reviewed room contains both creatures within the twenty-foot sphere."
+                ),
+                "origin_description": "The chamber center is within ninety feet of the caster.",
+                "campaign_revision": started["campaign_revision"],
+                "origin_in_range": True,
+                "line_of_effect_clear": True,
+                "affected_target_ids": [caster["id"], target["id"]],
+                "excluded_actor_ids": [],
+            }
+            arguments = {
+                "campaign_id": campaign["id"],
+                "actor_id": caster["id"],
+                "spell_id": sleep["id"],
+                "cast_level": 1,
+                "declaration": {"spatial_facts": facts},
+                "expected_revision": started["campaign_revision"],
+                "idempotency_key": "agent-sleep",
+            }
+            raw = await server.call_tool("combat_cast_spell", arguments)
+            result = raw[1]
+            assert result["status"] == "committed"
+            assert result["result"]["pool_roll"]["expression"] == "5d8"
+            assert {item["target_id"] for item in result["result"]["targets"]} == {
+                caster["id"],
+                target["id"],
+            }
+            assert await server.call_tool("combat_cast_spell", arguments) == raw
+        finally:
+            close_server(server)
+
+    asyncio.run(exercise())

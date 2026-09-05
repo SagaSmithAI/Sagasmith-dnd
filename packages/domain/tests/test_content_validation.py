@@ -758,6 +758,54 @@ def test_subclass_rejects_duplicate_always_prepared_spell_shape() -> None:
     ]
 
 
+@pytest.mark.parametrize("legacy", [[], [{"name": "Identify", "minimum_level": 1}]])
+def test_subclass_contract_cannot_hide_legacy_spell_grants_in_projection(legacy) -> None:
+    artifact = {
+        "id": "fixture.subclass.forge-domain",
+        "kind": "subclass",
+        "card": {
+            "name": "Forge Domain",
+            "class_name": "Cleric",
+            "minimum_level": 1,
+            "spell_grants": [],
+            "spell_list_expansion": [],
+        },
+    }
+    # An old binding omits the legacy field although its hash covers the whole
+    # card. A valid hash does not prove that the materializer consumes the grants.
+    artifact["selection_contract"] = build_selection_contract(artifact, status="ready")
+    artifact["card"]["always_prepared_spells"] = legacy
+    artifact["selection_contract"]["reviewed_content_hash"] = content_fingerprint(artifact)
+    errors = selection_contract_errors(artifact)
+    assert any("always_prepared_spells is unsupported" in error for error in errors)
+    with pytest.raises(ValueError, match="always_prepared_spells is unsupported"):
+        selection_schema_for_artifact(artifact)
+    with pytest.raises(ValueError, match="always_prepared_spells is unsupported"):
+        build_selection_contract(artifact, status="ready")
+
+
+def test_canonical_subclass_contract_preserves_distinct_spell_access_modes() -> None:
+    artifact = {
+        "id": "fixture.subclass.circle-of-spores",
+        "kind": "subclass",
+        "card": {
+            "name": "Circle of Spores",
+            "class_name": "Druid",
+            "minimum_level": 2,
+            "spell_grants": [
+                {"name": "Chill Touch", "minimum_level": 2, "method": "known"},
+                {"name": "Gentle Repose", "minimum_level": 3, "method": "always_prepared"},
+            ],
+            "spell_list_expansion": [],
+        },
+    }
+    before = copy.deepcopy(artifact)
+    contract = build_selection_contract(artifact, status="ready")
+    assert artifact == before
+    assert contract["schema"]["card_binding"] == artifact["card"]
+    assert selection_contract_errors({**artifact, "selection_contract": contract}) == []
+
+
 @pytest.mark.parametrize(
     ("kind", "card", "selection_fields"),
     [

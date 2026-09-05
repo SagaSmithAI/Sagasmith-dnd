@@ -7,20 +7,18 @@ from pathlib import Path
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 from sagasmith_dnd.character_schema import default_character_sheet
-from test_official_expansions_mcp import _call, _config
+from test_official_expansions_mcp import _call, _config, _locked_official_library
 
 from sagasmith_dnd_mcp.server import close_server, create_server
 
 
 @pytest.mark.fresh_database
-def test_scag_103_official_archive_activates_and_applies_watchers_eye(tmp_path: Path) -> None:
+def test_locked_scag_archive_activates_and_applies_watchers_eye(tmp_path: Path) -> None:
     async def exercise() -> None:
         workspace = Path(__file__).resolve().parents[3]
-        archive_root = workspace.parent / "SagaSmith-dnd-content-library" / "content-library"
-        if not (archive_root / "index.json").is_file():
-            pytest.skip("requires the sibling finalized content library")
+        archive_root = _locked_official_library()
         archives = list(
-            archive_root.glob("packages/*sword-coast-adventurer-s-guide*1.0.3.sagasmith-pack")
+            archive_root.glob("packages/*sword-coast-adventurer-s-guide*.sagasmith-pack")
         )
         assert len(archives) == 1
         with zipfile.ZipFile(archives[0]) as archive:
@@ -75,10 +73,10 @@ def test_scag_103_official_archive_activates_and_applies_watchers_eye(tmp_path: 
                     "version": package["version"],
                 },
                 "expected_revision": profile["campaign_revision"],
-                "idempotency_key": "activate-scag-103",
+                "idempotency_key": "activate-locked-scag",
             },
         )
-        assert activated["activation"]["version"] == "1.0.3"
+        assert activated["activation"]["version"] == package["version"]
 
         async def make_character(name: str) -> dict:
             sheet = default_character_sheet()

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from sagasmith_dnd.character_schema import default_character_sheet
 from sagasmith_dnd.content_actors import build_srd2014_preset_actors
+from sagasmith_dnd.core_content import build_srd2014_content
 from sagasmith_dnd.random_stream import (
     CampaignRandomStream,
     initial_random_stream,
@@ -1710,8 +1711,10 @@ def test_recharge_weapon_use_is_committed_on_attack_declaration(
     asyncio.run(exercise())
 
 
+@pytest.mark.parametrize("conditional_species", [None, "High Elf"])
 def test_locked_dragonborn_breath_uses_generic_area_and_save_primitives(
     tmp_path: Path,
+    conditional_species: str | None,
 ) -> None:
     async def exercise() -> None:
         server = create_server(_config(tmp_path))
@@ -1773,6 +1776,18 @@ def test_locked_dragonborn_breath_uses_generic_area_and_save_primitives(
         ]
         target_sheet = default_character_sheet()
         target_sheet["combat"]["hp"] = {"value": 30, "max": 30, "temp": 0}
+        if conditional_species:
+            _, artifacts = build_srd2014_content(Path(__file__).resolve().parents[3] / "skills")
+            species = next(
+                item["card"]
+                for item in artifacts
+                if item["kind"] == "species" and item["card"]["name"] == conditional_species
+            )
+            target_sheet["content"]["features"] = [
+                feature
+                for feature in species["grants"]["features"]
+                if feature["name"] == "Fey Ancestry"
+            ]
         source = await _call(
             server,
             "character_create_from",
@@ -1895,8 +1910,7 @@ def test_locked_dragonborn_breath_uses_generic_area_and_save_primitives(
         ]
         assert len(effect["targets"][0]["save"]["rolls"]) == 2
         assert [
-            receipt["mechanic_id"]
-            for receipt in effect["targets"][0]["save"]["rule_receipts"]
+            receipt["mechanic_id"] for receipt in effect["targets"][0]["save"]["rule_receipts"]
         ] == ["dnd5e.core.action.dodge"]
         assert source_after["sheet"]["content"]["activities"][0]["uses"]["value"] == 0
         assert target_after["sheet"]["combat"]["hp"]["value"] < 30

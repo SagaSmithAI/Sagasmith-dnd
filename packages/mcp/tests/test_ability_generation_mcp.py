@@ -198,11 +198,13 @@ def test_bundled_2014_class_catalog_can_complete_a_bootstrap_actor(tmp_path: Pat
         assert fighter_requirements["skill_choice_count"] == 2
         assert fighter_requirements["skill_options"] == [
             "acrobatics",
+            "animal_handling",
             "athletics",
             "history",
             "insight",
             "intimidation",
             "perception",
+            "survival",
         ]
         assert fighter_requirements["tool_choice_count"] == 0
         assert fighter_requirements["tool_options"] == []

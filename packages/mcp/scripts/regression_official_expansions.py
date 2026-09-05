@@ -25,21 +25,134 @@ from sagasmith_dnd_mcp.server import close_server, create_server
 
 _ADVANCEMENT_SOURCE = "bundled:srd2014/03_Characterization/Beyond_1st_Level.md"
 _ARTIFICER = (
-    "dnd5e.addon.rulebook.d-d-5e-eberron-rising-from-the-last-war."
-    "31293633134f.class.artificer"
+    "dnd5e.addon.rulebook.d-d-5e-eberron-rising-from-the-last-war.31293633134f.class.artificer"
 )
 _BATTLE_SMITH = (
     "dnd5e.addon.rulebook.d-d-5e-eberron-rising-from-the-last-war."
     "31293633134f.subclass.battle-smith"
 )
-_TORTLE = (
-    "dnd5e.addon.rulebook.d-d-5e-the-tortle-package."
-    "e3234de670da.species.tortle"
-)
+_TORTLE = "dnd5e.addon.rulebook.d-d-5e-the-tortle-package.e3234de670da.species.tortle"
 _CITY_WATCH = (
-    "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide."
-    "16e6a243ef0a.background.city-watch"
+    "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a.background.city-watch"
 )
+_ABERRANT_DRAGONMARK = (
+    "dnd5e.addon.rulebook.d-d-5e-eberron-rising-from-the-last-war."
+    "31293633134f.feat.aberrant-dragonmark"
+)
+_BATTLE_READY = (
+    "dnd5e.addon.rulebook.d-d-5e-eberron-rising-from-the-last-war.31293633134f.feature.battle-ready"
+)
+_ARMOR_OF_GLEAMING = (
+    "dnd5e.addon.rulebook.d-d-5e-xanathar-s-guide-to-everything.72d56f4f8dae.item.armor-of-gleaming"
+)
+_BOOMING_BLADE = (
+    "dnd5e.addon.rulebook.d-d-5e-tasha-s-cauldron-of-everything.89a729b37a4b.spell.booming-blade"
+)
+_GREEN_FLAME_BLADE = (
+    "dnd5e.addon.rulebook.d-d-5e-tasha-s-cauldron-of-everything."
+    "89a729b37a4b.spell.green-flame-blade"
+)
+_CURE_WOUNDS = "dnd5e.content.srd2014.spell.cure-wounds"
+_ARTIFICER_INFUSIONS = (
+    "Enhanced Arcane Focus",
+    "Enhanced Defense",
+    "Enhanced Weapon",
+    "Repeating Shot",
+)
+_LIGHT = "dnd5e.content.srd2014.spell.light"
+_BURNING_HANDS = "dnd5e.content.srd2014.spell.burning-hands"
+_ARTIFICER_PREFIX = _ARTIFICER.rsplit(".class.", 1)[0]
+_ARTIFICER_FEATURE_ORDER = tuple(
+    f"{_ARTIFICER_PREFIX}.feature.{slug}"
+    for slug in (
+        "magical-tinkering",
+        "spellcasting",
+        "infuse-item",
+        "artificer-specialist",
+        "the-right-tool-for-the-job",
+        "tool-proficiency-battle-smith",
+        "battle-smith-spells",
+        "battle-ready",
+        "steel-defender",
+    )
+)
+_REQUIRED_ARTIFICER_FEATURES = set(_ARTIFICER_FEATURE_ORDER) | {
+    f"{_ARTIFICER_PREFIX}.feature.{name.lower().replace(' ', '-')}" for name in _ARTIFICER_INFUSIONS
+}
+
+
+def _build_failures(sheet: dict[str, Any], follow_ups: list[dict[str, Any]]) -> list[str]:
+    """Reject incomplete level-three builds, even when their receipts persist."""
+    failures = []
+    content = dict(sheet.get("content") or {})
+    features = {str(item.get("id") or "") for item in content.get("features", [])}
+    required = _REQUIRED_ARTIFICER_FEATURES | {
+        str(item["artifact_id"])
+        for follow_up in follow_ups
+        for item in follow_up.get("feature_artifacts", [])
+    }
+    if required - features:
+        failures.append("missing_required_features")
+    spells = list(content.get("spells") or [])
+    cantrips = [
+        spell
+        for spell in spells
+        if spell.get("level") == 0
+        and dict(spell.get("grant") or {}).get("source_type") == "class"
+        and str(dict(spell.get("grant") or {}).get("source_key") or "").casefold() == "artificer"
+        and dict(spell.get("access") or {}).get("known") is True
+    ]
+    if len(cantrips) != 2 or len({spell.get("id") for spell in cantrips}) != 2:
+        failures.append("initial_artificer_cantrips_incomplete")
+    preparation = dict(dict(sheet.get("spellcasting") or {}).get("preparation") or {})
+    selected = list(preparation.get("selected_spell_ids") or [])
+    # This deterministic scenario starts at INT 10; neither Tortle nor the feat changes it.
+    if preparation.get("max_prepared") != 1 or len(selected) != 1:
+        failures.append("prepared_spell_selection_incomplete")
+    elif not any(
+        spell.get("id") == selected[0]
+        and spell.get("level") == 1
+        and dict(spell.get("grant") or {}).get("source_type") == "class"
+        and dict(spell.get("access") or {}).get("prepared") is True
+        and dict(spell.get("access") or {}).get("always_prepared") is not True
+        for spell in spells
+    ):
+        failures.append("prepared_spell_not_materialized")
+    for name in ("Heroism", "Shield"):
+        if not any(
+            str(spell.get("name") or "").casefold() == name.casefold()
+            and dict(spell.get("grant") or {}).get("source_type") == "subclass"
+            and dict(spell.get("grant") or {}).get("source_key") == "Battle Smith"
+            and dict(spell.get("access") or {}).get("prepared") is True
+            and dict(spell.get("access") or {}).get("always_prepared") is True
+            and spell.get("id") not in selected
+            for spell in spells
+        ):
+            failures.append(f"missing_battle_smith_spell_{name.casefold()}")
+    # Unknown or newly introduced follow-up requirements require deliberate support.
+    if any(
+        follow_up.get("prepared_spell_event")
+        or any(
+            int(value)
+            for key, value in dict(follow_up.get("spell_choices") or {}).items()
+            if key != "cantrips_to_add"
+        )
+        for follow_up in follow_ups
+    ):
+        failures.append("unhandled_follow_up")
+    return failures
+
+
+_EXPECTED_MATERIALIZERS = {
+    "background": "dnd5e.character.background.v1",
+    "class": "dnd5e.character.base_class.v1",
+    "feat": "dnd5e.character.feat.v1",
+    "feature": "dnd5e.character.feature.v1",
+    "item": "dnd5e.character.inventory_item.v1",
+    "species": "dnd5e.character.species.v1",
+    "spell": "dnd5e.character.spell.v1",
+    "subclass": "dnd5e.character.subclass.v1",
+}
 
 
 def _arguments() -> argparse.Namespace:
@@ -51,24 +164,33 @@ def _arguments() -> argparse.Namespace:
 
 
 async def _call(server: Any, name: str, arguments: dict[str, Any]) -> Any:
-    _, response = await server.call_tool(name, arguments)
+    response = await _call_raw(server, name, arguments)
     return response.get("result", response) if isinstance(response, dict) else response
+
+
+async def _call_raw(server: Any, name: str, arguments: dict[str, Any]) -> Any:
+    _, response = await server.call_tool(name, arguments)
+    return response
 
 
 async def _apply(
     server: Any,
     character: dict[str, Any],
-    artifact_id: str,
+    entry: dict[str, Any],
     key: str,
+    *,
+    ruleset_fingerprint: str,
     selection: dict[str, Any] | None = None,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    artifact_id = str(entry["id"])
+    selected = selection or {}
     result = await _call(
         server,
         "character_content_apply",
         {
             "character_id": character["id"],
             "artifact_id": artifact_id,
-            "selection": selection or {},
+            "selection": selected,
             "expected_revision": character["revision"],
             "idempotency_key": key,
         },
@@ -80,7 +202,82 @@ async def _apply(
             if result.get(field) is not None
         }
         raise RuntimeError(f"official artifact did not apply: {artifact_id}: {diagnostic}")
-    return result
+    runtime_context = dict(entry.get("runtime_context") or {})
+    contract = dict(runtime_context.get("selection_contract") or {})
+    artifact_content_hash = str(runtime_context.get("content_hash") or "")
+    if len(artifact_content_hash) != 64 or any(
+        value not in "0123456789abcdef" for value in artifact_content_hash
+    ):
+        raise RuntimeError(f"official artifact has an invalid content hash: {artifact_id}")
+    receipts = list(result.get("rule_receipts") or [])
+    if len(receipts) != 1:
+        raise RuntimeError(
+            f"official artifact application returned {len(receipts)} content receipts: "
+            f"{artifact_id}"
+        )
+    receipt = dict(receipts[0])
+    receipt_selection = selected
+    if entry.get("kind") in {"class", "species", "background", "subclass"}:
+        selections = [
+            item
+            for item in dict(result["sheet"].get("content") or {}).get("selections", [])
+            if item.get("artifact_id") == artifact_id
+        ]
+        if len(selections) != 1 or any(
+            selections[0].get(field) != entry.get(catalog_field)
+            for field, catalog_field in (
+                ("kind", "kind"),
+                ("pack_id", "pack_id"),
+                ("pack_version", "pack_version"),
+            )
+        ):
+            raise RuntimeError(f"official selection provenance mismatch: {artifact_id}")
+        # Materializers normalize choices and attach server-signed source authority.
+        # Compare the whole receipt with the resulting record, and independently
+        # ensure the requested choices were retained (not replaced by other choices).
+        receipt_selection = dict(selections[0].get("selection") or {})
+        for field, requested in selected.items():
+            observed = receipt_selection.get(field)
+            if field in {"skills", "tools", "languages"} and isinstance(requested, list):
+                matches = isinstance(observed, list) and [
+                    str(value).strip().casefold() for value in observed
+                ] == [str(value).strip().casefold() for value in requested]
+            else:
+                matches = observed == requested
+            if not matches:
+                raise RuntimeError(f"official selection changed requested {field}: {artifact_id}")
+    expected_receipt = {
+        "ruleset_fingerprint": ruleset_fingerprint,
+        "mechanic_id": str(contract.get("materializer") or ""),
+        "event": "character.content.apply",
+        "artifact_id": artifact_id,
+        "character_id": character["id"],
+        "pack_id": str(entry.get("pack_id") or ""),
+        "pack_version": str(entry.get("pack_version") or ""),
+        "artifact_content_hash": artifact_content_hash,
+        "reviewed_content_hash": str(contract.get("reviewed_content_hash") or ""),
+        "selection": receipt_selection,
+        "rule_refs": list(entry.get("rule_refs") or []),
+    }
+    if artifact_id == _TORTLE:
+        authority_id = receipt.get("content_authority_id")
+        if (
+            not isinstance(authority_id, str)
+            or len(authority_id) != 32
+            or any(value not in "0123456789abcdef" for value in authority_id)
+        ):
+            raise RuntimeError("official Tortle receipt lacks its server-issued authority id")
+        expected_receipt["content_authority_id"] = authority_id
+    if receipt != expected_receipt:
+        mismatches = {
+            key: {"expected": expected_receipt.get(key), "actual": receipt.get(key)}
+            for key in sorted(set(expected_receipt) | set(receipt))
+            if expected_receipt.get(key) != receipt.get(key)
+        }
+        raise RuntimeError(
+            f"official artifact content receipt mismatch: {artifact_id}: {mismatches}"
+        )
+    return result, receipt
 
 
 async def _catalog_selection(
@@ -88,8 +285,11 @@ async def _catalog_selection(
     campaign_id: str,
     artifact_id: str,
     *,
+    expected_kind: str,
+    official_pack_ids: set[str],
     target_class_name: str | None = None,
-) -> dict[str, Any]:
+    selection_overrides: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """Choose deterministic valid inputs from the public reviewed catalog contract."""
 
     entries = await _call(
@@ -97,12 +297,33 @@ async def _catalog_selection(
         "character_query",
         {
             "view": "catalog",
-            "payload": {"campaign_id": campaign_id, "query": artifact_id},
+            "payload": {
+                "campaign_id": campaign_id,
+                "query": artifact_id,
+                "include_context": True,
+            },
         },
     )
     entry = next((item for item in entries if item.get("id") == artifact_id), None)
     if entry is None:
         raise RuntimeError(f"official artifact is missing from the active catalog: {artifact_id}")
+    if entry.get("kind") != expected_kind:
+        raise RuntimeError(f"official artifact has the wrong catalog kind: {artifact_id}")
+    if str(entry.get("pack_id") or "") not in official_pack_ids:
+        raise RuntimeError(
+            f"official artifact resolved outside the official pack set: {artifact_id}"
+        )
+    if entry.get("application_state") != "selection_ready":
+        raise RuntimeError(f"official artifact is not selection-ready: {artifact_id}")
+    runtime_context = dict(entry.get("runtime_context") or {})
+    contract = dict(runtime_context.get("selection_contract") or {})
+    if contract.get("status") != "ready":
+        raise RuntimeError(f"official artifact has no ready selection contract: {artifact_id}")
+    if contract.get("materializer") != _EXPECTED_MATERIALIZERS[expected_kind]:
+        raise RuntimeError(f"official artifact uses an unexpected materializer: {artifact_id}")
+    reviewed_hash = str(contract.get("reviewed_content_hash") or "")
+    if len(reviewed_hash) != 64 or any(value not in "0123456789abcdef" for value in reviewed_hash):
+        raise RuntimeError(f"official artifact has an invalid reviewed content hash: {artifact_id}")
     requirements = dict(entry.get("selection_requirements") or {})
     selection: dict[str, Any] = {}
     skill_count = int(requirements.get("skill_choice_count", 0) or 0)
@@ -115,10 +336,10 @@ async def _catalog_selection(
     if language_count:
         language_options = list(requirements.get("language_options") or [])
         if len(language_options) < language_count and requirements.get("allow_any_language"):
+            # This build exercises ordinary choices, not DM authorization of
+            # exotic languages such as Draconic.
             language_options.extend(
-                item
-                for item in ("Draconic", "Dwarvish", "Elvish")
-                if item not in language_options
+                item for item in ("Dwarvish", "Elvish", "Giant") if item not in language_options
             )
         selection["languages"] = language_options[:language_count]
     equipment_options = list(requirements.get("equipment_package_options") or [])
@@ -126,7 +347,71 @@ async def _catalog_selection(
         selection["equipment_package"] = equipment_options[0]
     if target_class_name is not None:
         selection["target_class_name"] = target_class_name
-    return selection
+    selection.update(selection_overrides or {})
+    return entry, selection
+
+
+async def _finish_artificer_build(
+    server: Any,
+    campaign_id: str,
+    character: dict[str, Any],
+    *,
+    official_pack_ids: set[str],
+    ruleset_fingerprint: str,
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """Consume explicit feature/preparation work; do not synthesize sheet grants."""
+    receipts = {}
+    for artifact_id in _ARTIFICER_FEATURE_ORDER:
+        if any(
+            item.get("id") == artifact_id
+            for item in character["sheet"].get("content", {}).get("features", [])
+        ):
+            continue
+        entry, selection = await _catalog_selection(
+            server,
+            campaign_id,
+            artifact_id,
+            expected_kind="feature",
+            official_pack_ids=official_pack_ids,
+            selection_overrides=(
+                {"infusions": list(_ARTIFICER_INFUSIONS)}
+                if artifact_id == f"{_ARTIFICER_PREFIX}.feature.infuse-item"
+                else {}
+            ),
+        )
+        result, receipt = await _apply(
+            server,
+            character,
+            entry,
+            f"apply-official-feature-{artifact_id.rsplit('.', 1)[-1]}",
+            ruleset_fingerprint=ruleset_fingerprint,
+            selection=selection,
+        )
+        character = {
+            "id": character["id"],
+            "revision": result["revision"],
+            "sheet": result["sheet"],
+        }
+        receipts[artifact_id] = receipt
+    prepared = await _call(
+        server,
+        "character_spell_prepare",
+        {
+            "character_id": character["id"],
+            "mode": "replace_all",
+            "payload": {"spell_ids": [_CURE_WOUNDS], "event": "setup"},
+            "expected_revision": character["revision"],
+            "idempotency_key": "official-expansion-prepare-spells",
+        },
+    )
+    updated = dict(prepared.get("character") or {})
+    if (
+        updated.get("id") != character["id"]
+        or updated.get("revision") != character["revision"] + 1
+        or not isinstance(updated.get("sheet"), dict)
+    ):
+        raise RuntimeError("ordinary Artificer spell preparation did not settle")
+    return updated, receipts
 
 
 async def _all_catalog_entries(
@@ -175,7 +460,7 @@ def _create_regression_server(content_library: Path, home: Path) -> Any:
     return create_server(config)
 
 
-async def _run(server: Any) -> dict[str, Any]:
+async def _run(server: Any) -> tuple[dict[str, Any], dict[str, Any]]:
     campaign = await _call(
         server,
         "campaign_create",
@@ -305,6 +590,7 @@ async def _run(server: Any) -> dict[str, Any]:
         revision = int(current["revision"])
 
     catalog_counts: Counter[str] = Counter()
+    selection_counts: Counter[str] = Counter()
     official_pack_ids = {
         str(component["id"])
         for item in official
@@ -326,6 +612,12 @@ async def _run(server: Any) -> dict[str, Any]:
         catalog_counts[kind] = sum(
             1 for item in entries if str(item.get("pack_id") or "") in official_pack_ids
         )
+        selection_counts[kind] = sum(
+            1
+            for item in entries
+            if str(item.get("pack_id") or "") in official_pack_ids
+            and item.get("application_state") == "selection_ready"
+        )
     declared_catalog_counts: Counter[str] = Counter()
     declared_selection_counts: Counter[str] = Counter()
     for item in expected.values():
@@ -336,8 +628,23 @@ async def _run(server: Any) -> dict[str, Any]:
             f"active catalog coverage mismatch: {dict(catalog_counts)} != "
             f"{dict(declared_catalog_counts)}"
         )
+    if selection_counts != declared_selection_counts:
+        raise RuntimeError(
+            f"active selection-ready coverage mismatch: {dict(selection_counts)} != "
+            f"{dict(declared_selection_counts)}"
+        )
+
+    explained = await _call(
+        server,
+        "campaign_rules",
+        {"campaign_id": campaign["id"], "action": "explain", "payload": {}},
+    )
+    ruleset_fingerprint = str(explained.get("fingerprint") or "")
+    if not ruleset_fingerprint:
+        raise RuntimeError("the activated official ruleset has no fingerprint")
 
     sheet = default_character_sheet()
+    sheet["abilities"]["constitution"]["score"] = 11
     character = await _call(
         server,
         "character_create_from",
@@ -351,18 +658,43 @@ async def _run(server: Any) -> dict[str, Any]:
             "idempotency_key": "official-expansion-character",
         },
     )
-    selections = {
-        artifact_id: await _catalog_selection(server, campaign["id"], artifact_id)
-        for artifact_id in (_ARTIFICER, _TORTLE, _CITY_WATCH)
-    }
-    applied_ids = []
-    for index, artifact_id in enumerate((_ARTIFICER, _TORTLE, _CITY_WATCH)):
-        applied = await _apply(
+    initial_cases = (
+        ("class", _ARTIFICER, {}),
+        ("species", _TORTLE, {}),
+        ("background", _CITY_WATCH, {}),
+        (
+            "feat",
+            _ABERRANT_DRAGONMARK,
+            {
+                "spell_choices": {
+                    "cantrip": [_LIGHT],
+                    "level_1_spell": [_BURNING_HANDS],
+                }
+            },
+        ),
+        ("item", _ARMOR_OF_GLEAMING, {}),
+        ("spell", _BOOMING_BLADE, {"source_class": "Artificer", "method": "known"}),
+        ("spell", _GREEN_FLAME_BLADE, {"source_class": "Artificer", "method": "known"}),
+    )
+    content_receipts: dict[str, dict[str, Any]] = {}
+    applied_ids: list[str] = []
+    materializers: set[str] = set()
+    for index, (kind, artifact_id, overrides) in enumerate(initial_cases):
+        entry, selection = await _catalog_selection(
+            server,
+            campaign["id"],
+            artifact_id,
+            expected_kind=kind,
+            official_pack_ids=official_pack_ids,
+            selection_overrides=overrides,
+        )
+        applied, receipt = await _apply(
             server,
             character,
-            artifact_id,
+            entry,
             f"apply-official-{index}",
-            selections[artifact_id],
+            ruleset_fingerprint=ruleset_fingerprint,
+            selection=selection,
         )
         character = {
             "id": character["id"],
@@ -370,7 +702,21 @@ async def _run(server: Any) -> dict[str, Any]:
             "sheet": applied["sheet"],
         }
         applied_ids.append(artifact_id)
+        content_receipts[artifact_id] = receipt
+        materializers.add(str(receipt["mechanic_id"]))
+        if kind == "class":
+            initial_choices = dict(
+                dict(applied.get("class_materialization") or {}).get("spellcasting") or {}
+            ).get("spell_choices")
+            if initial_choices != {"cantrips_to_add": 2, "leveled_spells_to_add": 0}:
+                raise RuntimeError(
+                    "Artificer initial spell-choice obligations changed or are absent"
+                )
 
+    if character["sheet"]["abilities"]["constitution"]["score"] != 12:
+        raise RuntimeError("the official feat ability increase did not materialize")
+
+    follow_ups = []
     for level in (2, 3):
         advanced = await _call(
             server,
@@ -389,18 +735,23 @@ async def _run(server: Any) -> dict[str, Any]:
             },
         )
         character = advanced["character"]
+        follow_ups.append(dict(advanced["advancement"]["follow_up"]))
 
-    subclass = await _apply(
+    subclass_entry, subclass_selection = await _catalog_selection(
+        server,
+        campaign["id"],
+        _BATTLE_SMITH,
+        expected_kind="subclass",
+        official_pack_ids=official_pack_ids,
+        target_class_name="Artificer",
+    )
+    subclass, subclass_receipt = await _apply(
         server,
         character,
-        _BATTLE_SMITH,
+        subclass_entry,
         "apply-official-subclass",
-        await _catalog_selection(
-            server,
-            campaign["id"],
-            _BATTLE_SMITH,
-            target_class_name="Artificer",
-        ),
+        ruleset_fingerprint=ruleset_fingerprint,
+        selection=subclass_selection,
     )
     character = {
         "id": character["id"],
@@ -408,6 +759,21 @@ async def _run(server: Any) -> dict[str, Any]:
         "sheet": subclass["sheet"],
     }
     applied_ids.append(_BATTLE_SMITH)
+    content_receipts[_BATTLE_SMITH] = subclass_receipt
+    materializers.add(str(subclass_receipt["mechanic_id"]))
+
+    character, feature_receipts = await _finish_artificer_build(
+        server,
+        campaign["id"],
+        character,
+        official_pack_ids=official_pack_ids,
+        ruleset_fingerprint=ruleset_fingerprint,
+    )
+    applied_ids.extend(feature_receipts)
+    content_receipts.update(feature_receipts)
+    materializers.update(str(receipt["mechanic_id"]) for receipt in feature_receipts.values())
+    if materializers != set(_EXPECTED_MATERIALIZERS.values()):
+        raise RuntimeError("the regression did not exercise every selection materializer kind")
     classes = character["sheet"]["progression"]["classes"]
     if not any(
         item.get("name") == "Artificer"
@@ -438,7 +804,7 @@ async def _run(server: Any) -> dict[str, Any]:
         "campaign_query",
         {"view": "get", "payload": {"campaign_id": campaign["id"]}},
     )
-    settled = await _call(
+    settlement = await _call_raw(
         server,
         "character_check",
         {
@@ -446,26 +812,54 @@ async def _run(server: Any) -> dict[str, Any]:
             "action": "check",
             "payload": {
                 "actor_id": character["id"],
-                "kind": "check",
-                "ability": "intelligence",
+                "kind": "save",
+                "ability": "constitution",
                 "dc": 10,
             },
             "expected_revision": current["revision"],
-            "idempotency_key": "official-expansion-intelligence-check",
+            "idempotency_key": "official-expansion-constitution-save",
         },
     )
-    if not isinstance(settled.get("total"), int):
-        raise RuntimeError("the expansion-built character did not produce a settled check")
+    if settlement.get("status") != "committed":
+        raise RuntimeError("the expansion-built character save did not commit")
+    settled = dict(settlement.get("result") or {})
+    if not isinstance(settled.get("total"), int) or not isinstance(settled.get("natural"), int):
+        raise RuntimeError("the expansion-built character did not produce a settled save")
+    if settled.get("ability_modifier") != 1 or settled.get("proficiency_bonus") != 2:
+        raise RuntimeError("the applied feat and class did not affect the settled save")
+    if settled["total"] != settled["natural"] + 3:
+        raise RuntimeError("the settled save total did not use the materialized character state")
+    if settlement.get("campaign_revision") != current["revision"] + 1:
+        raise RuntimeError("the settled save did not advance the campaign revision exactly once")
+    resolution_id = str(settlement.get("resolution_id") or "")
+    if not resolution_id:
+        raise RuntimeError("the settled save has no resolution id")
+    after_settlement = await _call(
+        server,
+        "campaign_query",
+        {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+    )
+    resolution_log = list(after_settlement.get("state", {}).get("resolution_log") or [])
+    resolution = resolution_log[-1] if resolution_log else {}
+    if (
+        after_settlement.get("revision") != settlement["campaign_revision"]
+        or resolution.get("id") != resolution_id
+        or resolution.get("actor_id") != character["id"]
+        or resolution.get("type") != "save"
+        or dict(resolution.get("result") or {}).get("total") != settled["total"]
+    ):
+        raise RuntimeError("the committed save was not recorded in the campaign resolution log")
 
-    return {
-        "schema": "sagasmith.dnd-official-expansion-regression.v1",
+    report = {
+        "schema": "sagasmith.dnd-official-expansion-regression.v2",
         "edition": "2014",
         "packages": len(official),
         "activated": len(official),
         "catalog_entries": sum(catalog_counts.values()),
         "catalog_entries_by_kind": dict(sorted(catalog_counts.items())),
-        "selection_ready": sum(declared_selection_counts.values()),
-        "selection_ready_by_kind": dict(sorted(declared_selection_counts.items())),
+        "selection_ready": sum(selection_counts.values()),
+        "selection_ready_by_kind": dict(sorted(selection_counts.items())),
+        "materializers_exercised": len(materializers),
         "character": {
             "class": "Artificer",
             "level": 3,
@@ -476,21 +870,128 @@ async def _run(server: Any) -> dict[str, Any]:
             "level_advancements": 2,
         },
         "settlement": {
-            "kind": "intelligence_check",
-            "committed": True,
-            "has_rule_receipts": bool(settled.get("rule_receipts")),
+            "kind": "constitution_save",
+            "status": settlement["status"],
+            "committed": settlement["status"] == "committed",
+            "campaign_revision": settlement["campaign_revision"],
+            "mechanic_rule_receipts": len(settled.get("rule_receipts") or []),
         },
+        "receipts": {
+            "content_application": len(content_receipts),
+            "mechanic_settlement": len(settled.get("rule_receipts") or []),
+            "restart_persisted": 0,
+        },
+        "persistence": {"restart_verified": False},
+        "build": {"failures": _build_failures(character["sheet"], follow_ups)},
         "content_exported": False,
-        "passed": True,
     }
+    checkpoint = {
+        "campaign_id": campaign["id"],
+        "campaign_revision": after_settlement["revision"],
+        "character_id": character["id"],
+        "character_revision": character["revision"],
+        "character_sheet": character["sheet"],
+        "resolution_id": resolution_id,
+        "resolution_total": settled["total"],
+        "content_receipts": content_receipts,
+        "follow_ups": follow_ups,
+        "official_addons": {
+            (str(item["addon_id"]), str(item["version"])) for item in activation_order
+        },
+    }
+    return report, checkpoint
+
+
+async def _verify_restart(server: Any, checkpoint: dict[str, Any]) -> int:
+    campaign_id = str(checkpoint["campaign_id"])
+    campaign = await _call(
+        server,
+        "campaign_query",
+        {"view": "get", "payload": {"campaign_id": campaign_id}},
+    )
+    resolution_log = list(campaign.get("state", {}).get("resolution_log") or [])
+    resolution = resolution_log[-1] if resolution_log else {}
+    if (
+        campaign.get("revision") != checkpoint["campaign_revision"]
+        or resolution.get("id") != checkpoint["resolution_id"]
+        or dict(resolution.get("result") or {}).get("total") != checkpoint["resolution_total"]
+    ):
+        raise RuntimeError("campaign settlement state did not survive an MCP restart")
+
+    character = await _call(
+        server,
+        "character_query",
+        {"view": "get", "payload": {"character_id": checkpoint["character_id"]}},
+    )
+    if (
+        character.get("revision") != checkpoint["character_revision"]
+        or character.get("sheet") != checkpoint["character_sheet"]
+    ):
+        raise RuntimeError("the official-expansion character did not survive an MCP restart")
+
+    listed = await _call(
+        server,
+        "content_pack",
+        {"action": "list", "payload": {"campaign_id": campaign_id, "kind": "addon"}},
+    )
+    active_official = {
+        (str(item["addon_id"]), str(item["version"]))
+        for item in listed
+        if (item.get("built_in_official_expansion") or item.get("built_in_official_core_support"))
+        and dict(item.get("activation") or {}).get("enabled") is True
+    }
+    if active_official != checkpoint["official_addons"]:
+        raise RuntimeError("official addon activation state did not survive an MCP restart")
+
+    stored = await _call(
+        server,
+        "campaign_rules",
+        {"campaign_id": campaign_id, "action": "receipts", "payload": {"limit": 1000}},
+    )
+    expected_receipts = dict(checkpoint["content_receipts"])
+    persisted: dict[str, dict[str, Any]] = {}
+    for item in stored:
+        receipt = dict(item.get("receipt") or {})
+        artifact_id = str(receipt.get("artifact_id") or "")
+        if (
+            receipt.get("event") != "character.content.apply"
+            or artifact_id not in expected_receipts
+        ):
+            continue
+        if (
+            item.get("operation") != "character.content.apply"
+            or item.get("event") != "character.content.apply"
+            or item.get("mechanic_id") != receipt.get("mechanic_id")
+            or item.get("ruleset_fingerprint") != receipt.get("ruleset_fingerprint")
+            or not item.get("mutation_group_id")
+            or item.get("applied") is not True
+            or receipt != expected_receipts[artifact_id]
+        ):
+            raise RuntimeError(f"persisted content receipt is incomplete: {artifact_id}")
+        if artifact_id in persisted:
+            raise RuntimeError(f"persisted content receipt is duplicated: {artifact_id}")
+        persisted[artifact_id] = receipt
+    if set(persisted) != set(expected_receipts):
+        raise RuntimeError("content application receipts did not survive an MCP restart")
+    return len(persisted)
 
 
 def _execute(content_library: Path, home: Path) -> dict[str, Any]:
     server = _create_regression_server(content_library, home)
     try:
-        return asyncio.run(_run(server))
+        report, checkpoint = asyncio.run(_run(server))
     finally:
         close_server(server)
+    restarted = _create_regression_server(content_library, home)
+    try:
+        persisted_receipts = asyncio.run(_verify_restart(restarted, checkpoint))
+    finally:
+        close_server(restarted)
+    report["receipts"]["restart_persisted"] = persisted_receipts
+    report["persistence"]["restart_verified"] = True
+    # Persisting an incomplete build is not a successful official-rules regression.
+    report["passed"] = not report["build"]["failures"]
+    return report
 
 
 def main() -> int:

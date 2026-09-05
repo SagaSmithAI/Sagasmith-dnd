@@ -45,7 +45,6 @@ from sagasmith_core import (
     AccessService,
     ActorKnowledgeService,
     ActorKnowledgeTransfer,
-    ActorLifecycleService,
     AddonService,
     BranchService,
     CampaignService,
@@ -131,6 +130,7 @@ from sagasmith_dnd.activities import (
     recharge_activities_at_turn_start,
 )
 from sagasmith_dnd.activity_identity import is_multiattack_source_name
+from sagasmith_dnd.actor_inventory_transfer import transfer_actor_inventory_item
 from sagasmith_dnd.actor_types import (
     NON_PLAYER_CHARACTER_TYPES,
     require_agent_decidable_character_type,
@@ -187,6 +187,7 @@ from sagasmith_dnd.chase_engine import (
 from sagasmith_dnd.combat_engine import (
     ABILITY_CHECK_KINDS,
     ACTOR_CHECK_KINDS,
+    STEEL_DEFENDER_TURN_KIND,
     CombatEngineError,
     NeedsRulingError,
     active_hypnotic_pattern_effect_ids,
@@ -205,6 +206,7 @@ from sagasmith_dnd.combat_engine import (
     consume_weapon_mastery_attack_effects,
     current_combatant,
     damage_amount_after_reduction,
+    death_save_due,
     emerge_tortle_shell_defense,
     end_concentration_for_incapacitating_conditions,
     end_hypnotic_pattern_effects,
@@ -225,6 +227,7 @@ from sagasmith_dnd.combat_engine import (
     reconcile_tortle_shell_defense_projection,
     reconcile_witch_bolt_concentration,
     reconcile_witch_bolt_range,
+    record_death_save_turn_start,
     require_death_save_eligibility,
     resolve_actor_check,
     resolve_actor_contest,
@@ -299,6 +302,7 @@ from sagasmith_dnd.content_solution import (
 from sagasmith_dnd.content_validation import (
     build_catalog_review,
     build_selection_contract,
+    catalog_review_errors,
     content_fingerprint,
     selection_contract_errors,
     selection_input_errors,
@@ -312,9 +316,17 @@ from sagasmith_dnd.core_content_2024 import (
 )
 from sagasmith_dnd.core_content_2024 import build_srd2024_content
 from sagasmith_dnd.core_rule_pack import get_core_rule_pack
+from sagasmith_dnd.dependent_actor_refresh import (
+    STEEL_DEFENDER_RELATION_KEY,
+    STEEL_DEFENDER_REVIEWED_EXPRESSION_HASH,
+    materialize_dependent_actor_owner_scaling,
+    refresh_dependent_actor_sheet,
+)
+from sagasmith_dnd.dependent_actor_relations import validate_dependent_actor_relations
 from sagasmith_dnd.document_layout import DND5E_DOCUMENT_LAYOUT_PROFILE
 from sagasmith_dnd.editions import DEFAULT_CAMPAIGN_EDITION, normalize_dnd_edition
 from sagasmith_dnd.engine import resolve_check, roll
+from sagasmith_dnd.external_custody import validate_external_inventory_custody
 from sagasmith_dnd.game_time import (
     FIXED_GAME_TIME_PERIODS,
     NARRATIVE_GAME_TIME_PERIODS,
@@ -325,7 +337,10 @@ from sagasmith_dnd.game_time import (
     game_time_ticks,
     rules_day_from_ticks,
 )
+from sagasmith_dnd.ground_transfer import drop_held_items, pickup_ground_item
+from sagasmith_dnd.held_items import held_item_roots
 from sagasmith_dnd.heroic_inspiration import reroll_recorded_d20_result
+from sagasmith_dnd.item_attunement_ownership import complete_item_attunement_ownership
 from sagasmith_dnd.lifecycle import (
     LONG_REST_MINIMUM_MINUTES,
     advance_effect_durations,
@@ -418,6 +433,8 @@ from sagasmith_dnd.rule_engine import (
     validate_source_bound_mechanics,
 )
 from sagasmith_dnd.rule_providers import load_native_rule_providers
+from sagasmith_dnd.save_context import validated_save_source_facts
+from sagasmith_dnd.sleep import resolve_sleep_targets, wake_sleep_effects
 from sagasmith_dnd.spatial import (
     BattleMapError,
     compile_battle_map,
@@ -470,6 +487,10 @@ from sagasmith_dnd.standard_content import (
     build_standard2014_content,
 )
 from sagasmith_dnd.standard_feature_ids import (
+    CORE_DWARVEN_RESILIENCE_MECHANIC_ID,
+    CORE_FEY_ANCESTRY_MECHANIC_ID,
+    CORE_GNOME_CUNNING_MECHANIC_ID,
+    CORE_HALFLING_BRAVE_MECHANIC_ID,
     CORE_ORC_AGGRESSIVE_MECHANIC_ID,
     CORE_RELENTLESS_ENDURANCE_MECHANIC_ID,
     CORE_TORTLE_NATURAL_ARMOR_MECHANIC_ID,
@@ -492,6 +513,10 @@ from sagasmith_dnd.standard_spell_ids import (
     CORE_HYPNOTIC_PATTERN_SPELL_IDS,
     CORE_INVISIBILITY_MECHANIC_ID,
     CORE_INVISIBILITY_SPELL_IDS,
+    CORE_MENDING_MECHANIC_ID,
+    CORE_MENDING_SPELL_ID,
+    CORE_SLEEP_MECHANIC_ID,
+    CORE_SLEEP_SPELL_ID,
     CORE_WITCH_BOLT_MECHANIC_ID,
     STANDARD_2014_CONTENT_PACK_ID,
     STANDARD_2014_CONTENT_PACK_VERSION,
@@ -506,6 +531,7 @@ from sagasmith_dnd.statblocks import (
     apply_dependent_actor_template_variant,
     apply_reviewed_statblock_fill,
     apply_statblock_variant,
+    dependent_actor_owner_binding,
     dependent_actor_template_solution_errors,
     discover_2014_statblock_names_from_layout,
     discover_2014_statblock_slots_from_layout,
@@ -520,6 +546,19 @@ from sagasmith_dnd.statblocks import (
     parse_2024_statblock,
     recover_2014_statblock_from_ocr,
 )
+from sagasmith_dnd.steel_defender import (
+    STEEL_DEFENDER_DEFLECT_ATTACK_MECHANIC_ID,
+    SteelDefenderError,
+    apply_deflect_attack_to_plan,
+    begin_steel_defender_revival,
+    bind_steel_defender_runtime_mechanics,
+    complete_steel_defender_revival,
+    consume_deflect_attack_reaction,
+    kill_steel_defender_when_owner_dies,
+    mending_steel_defender,
+    repair_steel_defender,
+    validate_deflect_attack_eligibility,
+)
 from sagasmith_dnd.system import DND5E
 from sagasmith_dnd.vocabulary import (
     ADVANCEMENT_MODES,
@@ -533,6 +572,7 @@ from sagasmith_dnd.vocabulary import (
 )
 from sqlalchemy.exc import NoResultFound
 
+from sagasmith_dnd_mcp.actor_inventory_lifecycle import InventoryActorLifecycleService
 from sagasmith_dnd_mcp.actor_memory import select_actor_memory_context
 from sagasmith_dnd_mcp.bounded_evaluations import (
     BOUNDED_EVALUATION_PURPOSES,
@@ -1065,6 +1105,10 @@ ENGINE_SETTLED_CARD_MECHANIC_IDS = frozenset(
         "dnd5e.core.item.healing_potion",
         CORE_RELENTLESS_ENDURANCE_MECHANIC_ID,
         CORE_WATCHERS_EYE_MECHANIC_ID,
+        CORE_DWARVEN_RESILIENCE_MECHANIC_ID,
+        CORE_FEY_ANCESTRY_MECHANIC_ID,
+        CORE_GNOME_CUNNING_MECHANIC_ID,
+        CORE_HALFLING_BRAVE_MECHANIC_ID,
         "dnd5e.core.magic_ammunition.slaying",
         CORE_BLADE_WARD_MECHANIC_ID,
         CORE_FLY_MECHANIC_ID,
@@ -1073,9 +1117,177 @@ ENGINE_SETTLED_CARD_MECHANIC_IDS = frozenset(
         "dnd5e.core.spell.raise_dead",
         "dnd5e.core.spell.shield",
         "dnd5e.core.spell.structured_resolution",
+        CORE_SLEEP_MECHANIC_ID,
+        CORE_MENDING_MECHANIC_ID,
         CORE_WITCH_BOLT_MECHANIC_ID,
     }
 )
+
+
+def _semantic_plan_save_facts(
+    source_card: dict[str, Any], compiled_plan: Any
+) -> dict[str, dict[str, Any]]:
+    """Bind each save's static classification to that card's own effect text.
+
+    Plan-wide citation relevance is insufficient: an unrelated citation must
+    not classify another clause's save. Interpretation remains authored Pack
+    evidence; this boundary checks identity and does not infer rules from prose.
+    """
+    if str(source_card.get("id") or "") != compiled_plan.source_card_id:
+        raise CombatEngineError("save source plan does not match its recorded card")
+    evidence_texts = source_cards.source_card_evidence_texts(source_card)
+    result: dict[str, dict[str, Any]] = {}
+    for step in compiled_plan.steps:
+        if step["op"] != "check.save":
+            continue
+        source = step["args"].get("source")
+        try:
+            facts = validated_save_source_facts(
+                source,
+                citations=compiled_plan.citations,
+                source_card_kind=compiled_plan.source_card_kind,
+            )
+        except ValueError as error:
+            raise CombatEngineError(f"save step {step['id']} source: {error}") from error
+        if facts:
+            excerpt = _normalize_source_evidence_text(source["source_excerpt"])
+            if not any(excerpt in evidence for evidence in evidence_texts):
+                raise CombatEngineError(
+                    f"save step {step['id']} must cite its recorded card effect"
+                )
+        result[step["id"]] = facts
+    return result
+
+
+def _normalize_sleep_spatial_facts(
+    declaration: dict[str, Any] | None,
+    *,
+    actor_ids: set[str],
+    campaign_revision: int,
+) -> dict[str, Any]:
+    """Validate the DM's coordinate-free decision for the exact 2014 Sleep area."""
+    if declaration is None or declaration == {}:
+        raise NeedsRulingError(
+            "Sleep requires a reviewed 20-foot area and 90-foot origin-range decision",
+            missing=("sleep.spatial_facts",),
+            ruling_kind="agent_dm_adjudication",
+        )
+    if not isinstance(declaration, dict) or set(declaration) != {"spatial_facts"}:
+        raise CombatEngineError(
+            "Agent Sleep declaration requires only spatial_facts, not coordinates"
+        )
+    facts = declaration["spatial_facts"]
+    fields = {
+        "decision_id",
+        "reason",
+        "origin_description",
+        "campaign_revision",
+        "origin_in_range",
+        "line_of_effect_clear",
+        "affected_target_ids",
+        "excluded_actor_ids",
+    }
+    if not isinstance(facts, dict) or set(facts) != fields:
+        raise CombatEngineError(
+            "Sleep spatial_facts requires the complete source-bound area decision"
+        )
+    normalized = deepcopy(facts)
+    for field, minimum, maximum in (
+        ("decision_id", 1, 100),
+        ("reason", 10, 1000),
+        ("origin_description", 10, 500),
+    ):
+        value = facts[field]
+        if not isinstance(value, str) or not minimum <= len(" ".join(value.split())) <= maximum:
+            raise CombatEngineError(f"Sleep spatial fact {field} must be bounded non-empty text")
+        normalized[field] = " ".join(value.split())
+    if (
+        type(facts["campaign_revision"]) is not int
+        or facts["campaign_revision"] != campaign_revision
+    ):
+        raise CombatEngineError("Sleep spatial facts do not match the current campaign revision")
+    for field in ("origin_in_range", "line_of_effect_clear"):
+        if facts[field] is not True:
+            raise CombatEngineError(f"Sleep requires an affirmative boolean {field} decision")
+    for field in ("affected_target_ids", "excluded_actor_ids"):
+        values = facts[field]
+        if (
+            not isinstance(values, list)
+            or any(not isinstance(item, str) or not item for item in values)
+            or len(set(values)) != len(values)
+            or set(values) - actor_ids
+        ):
+            raise CombatEngineError(f"Sleep {field} must contain unique current living actor IDs")
+    affected = set(facts["affected_target_ids"])
+    excluded = set(facts["excluded_actor_ids"])
+    if affected & excluded or affected | excluded != actor_ids:
+        raise CombatEngineError(
+            "Sleep area decision must account for every living actor exactly once"
+        )
+    return {
+        "shape": "sphere",
+        "radius_ft": 20,
+        "origin_range_ft": 90,
+        "positioning_mode": "agent",
+        "spatial_facts": normalized,
+        "targets": [{"target_id": target_id} for target_id in facts["affected_target_ids"]],
+    }
+
+
+def _normalize_sleep_wake_spatial_facts(
+    payload: dict[str, Any] | None, *, campaign_revision: int
+) -> dict[str, Any]:
+    """Bind the DM's touch/reach judgment to this shake action's state snapshot."""
+    if payload is None or payload == {}:
+        raise NeedsRulingError(
+            "shaking a sleeper awake requires a reviewed contact-range decision",
+            missing=("shake_sleep.spatial_facts",),
+            ruling_kind="agent_dm_adjudication",
+        )
+    if not isinstance(payload, dict) or set(payload) != {"spatial_facts"}:
+        raise CombatEngineError("Agent shake_sleep accepts only spatial_facts, not coordinates")
+    facts = payload["spatial_facts"]
+    if not isinstance(facts, dict) or set(facts) != {
+        "decision_id",
+        "reason",
+        "campaign_revision",
+        "can_touch_target",
+    }:
+        raise CombatEngineError("shake_sleep requires a complete contact-range decision")
+    normalized = deepcopy(facts)
+    for field, minimum, maximum in (("decision_id", 1, 100), ("reason", 10, 1000)):
+        value = facts[field]
+        if not isinstance(value, str) or not minimum <= len(" ".join(value.split())) <= maximum:
+            raise CombatEngineError(f"shake_sleep {field} must be bounded non-empty text")
+        normalized[field] = " ".join(value.split())
+    if (
+        type(facts["campaign_revision"]) is not int
+        or facts["campaign_revision"] != campaign_revision
+    ):
+        raise CombatEngineError(
+            "shake_sleep spatial facts must match the current campaign revision"
+        )
+    if facts["can_touch_target"] is not True:
+        raise CombatEngineError("shake_sleep requires an affirmative boolean can_touch_target")
+    return normalized
+
+
+def _structured_spell_save_facts(
+    spell: dict[str, Any], resolution: dict[str, Any]
+) -> dict[str, Any]:
+    """Classify the exact native spell clause, never its display name or damage type."""
+    facts: dict[str, Any] = {"save_source_kind": "spell"}
+    spell_id = str(spell.get("id") or "")
+    nonpoison_spell_ids = {
+        f"dnd5e.content.srd2014.spell.{slug}"
+        for slug in ("sacred-flame", "fireball", "lightning-bolt")
+    }
+    if spell_id in nonpoison_spell_ids and resolution == effective_spell_resolution(
+        {"id": spell_id}
+    ):
+        facts.update(save_against_poison=False, save_effect_conditions=[])
+    return facts
+
 
 SCAG_OFFICIAL_ADDON_ID = (
     "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a.addon"
@@ -1098,9 +1310,6 @@ WATCHERS_EYE_CAPABILITIES = frozenset(
         "local_law",
         "local_criminal_activity",
         "watch_outpost",
-        "law_enforcement_contact",
-        "watch_information",
-        "recognition",
     }
 )
 WATCHERS_EYE_FACT_METADATA_KEY = "dnd5e_watchers_eye"
@@ -3674,6 +3883,59 @@ def _strip_artifact_authoring_state(
     return portable
 
 
+def _rebind_verified_official_review(
+    artifact: Mapping[str, Any],
+    reviewed_artifact: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Project archive review onto an ALREADY archive-verified runtime artifact.
+
+    The caller must prove the entire installed definition against its locked
+    archive first. This helper does not establish archive identity or equivalence.
+    No installed payload, package version, or historical receipt is rewritten.
+    """
+    value = _strip_artifact_authoring_state([dict(artifact)])[0]
+    if artifact.get("id") != reviewed_artifact.get("id") or artifact.get(
+        "kind"
+    ) != reviewed_artifact.get("kind"):
+        raise RulesetUnavailableError("official review artifact identity mismatch")
+    source_contract = reviewed_artifact.get("selection_contract")
+    source_review = reviewed_artifact.get("catalog_review")
+    if source_contract is None and source_review is None:
+        if str(value.get("application_state") or "selection_ready") == "selection_ready":
+            raise RulesetUnavailableError(
+                "official selection-ready artifact requires an archive review"
+            )
+        return value
+    errors = [
+        *selection_contract_errors(reviewed_artifact),
+        *catalog_review_errors(reviewed_artifact),
+    ]
+    if errors or dict(source_review or {}).get("status") != "approved":
+        raise RulesetUnavailableError("official archive has no valid approved selection review")
+    contract = dict(source_contract)
+    rebound = build_selection_contract(
+        value,
+        status=str(contract["status"]),
+        materializer=contract["materializer"],
+        schema=None if contract["status"] == "ready" else contract["schema"],
+        references=contract["references"],
+        blockers=contract["blockers"],
+    )
+    if contract["status"] == "ready" and (
+        rebound["schema"]["selection_fields"] != contract["schema"]["selection_fields"]
+    ):
+        raise RulesetUnavailableError(
+            "official runtime selection fields differ from archive review"
+        )
+    value["selection_contract"] = rebound
+    value["catalog_review"] = build_catalog_review(
+        value,
+        decisions=source_review["decisions"],
+        status=source_review["status"],
+    )
+    return value
+
+
 def _auth_receipt_revision(value: Any) -> int | str | None:
     if not isinstance(value, dict):
         return None
@@ -5174,7 +5436,12 @@ def _create_server(
     storage.migrate()
     campaigns = CampaignService(storage.database)
     characters = CharacterService(storage.database)
-    actor_lifecycle = ActorLifecycleService(storage.database)
+    actor_lifecycle = InventoryActorLifecycleService(
+        storage.database,
+        ground_context=lambda campaign, state, actor_id: ground_drop_context(
+            campaign, state, actor_id
+        ),
+    )
     branches = BranchService(storage.database)
     continuity = ContinuityService(storage.database)
     continuity_commits = ContinuityCommitService(storage.database)
@@ -6598,7 +6865,7 @@ def _create_server(
             raise ValueError(f"module does not support campaign edition {campaign_edition}")
         validated_actors = [validate_dnd_content_actor(actor) for actor in normalized["actors"]]
         for actor in validated_actors:
-            require_engine_owned_short_rest_hit_die_state(actor["sheet"])
+            require_engine_owned_character_state(actor["sheet"])
             _reject_new_intrinsic_attack_provenance(actor["sheet"])
             _reject_new_tortle_natural_armor_provenance(actor.get("sheet"))
         mismatched = [
@@ -7191,9 +7458,7 @@ def _create_server(
                     if dependency_provenance.get("source_definition_checksum") == rebind[
                         "runtime_checksum"
                     ] and dependency_provenance.get("definition_checksum"):
-                        matches[0]["checksum"] = str(
-                            dependency_provenance["definition_checksum"]
-                        )
+                        matches[0]["checksum"] = str(dependency_provenance["definition_checksum"])
             # Import provenance records this pre-save portable representation:
             # rebinds have been applied, but export dependency normalization,
             # authoring stripping, and runtime metadata have not yet happened.
@@ -7202,9 +7467,7 @@ def _create_server(
                 artifacts=expected_artifacts,
                 mechanics=expected_mechanics,
             )
-            persisted_expected_dependencies = deepcopy(
-                expected_manifest.get("dependencies") or []
-            )
+            persisted_expected_dependencies = deepcopy(expected_manifest.get("dependencies") or [])
             # The portable export pins each installed dependency to its runtime
             # definition checksum (the same canonical value used by
             # rule_content_descriptor), rather than the archive rebind's source
@@ -7311,6 +7574,7 @@ def _create_server(
                 "definition": definition,
                 "provenance": provenance,
                 "runtime_definition_checksum": installed_checksum,
+                "runtime_artifacts": deepcopy(installed.artifacts),
             }
         except RulesetUnavailableError:
             raise
@@ -7318,6 +7582,34 @@ def _create_server(
             raise RulesetUnavailableError(
                 f"{pack_id}@{version} requires its immutable official content archive"
             ) from error
+
+    def reviewed_official_runtime_artifact(
+        pack_id: str,
+        version: str,
+        artifact: dict[str, Any],
+    ) -> dict[str, Any]:
+        if pack_id not in _reserved_official_definition_owners():
+            return artifact
+        verified = verified_reserved_official_rule_definition(pack_id, version)
+        if verified is None:
+            raise RulesetUnavailableError("official selection requires its verified archive")
+        matches = [
+            item
+            for item in verified["package"]["content"].get("artifacts", [])
+            if item.get("rule_definition_id") == pack_id and item.get("id") == artifact.get("id")
+        ]
+        if len(matches) != 1:
+            raise RulesetUnavailableError(
+                "official selection review identity is ambiguous or absent"
+            )
+        runtime_matches = [
+            item for item in verified["runtime_artifacts"] if item.get("id") == artifact.get("id")
+        ]
+        if len(runtime_matches) != 1 or content_fingerprint(
+            runtime_matches[0]
+        ) != content_fingerprint(artifact):
+            raise RulesetUnavailableError("official selection changed during archive verification")
+        return _rebind_verified_official_review(runtime_matches[0], matches[0])
 
     def import_content_rules_package(
         campaign_id: str,
@@ -7439,7 +7731,19 @@ def _create_server(
 
     def checked_rule_facts(value: dict[str, Any] | None) -> dict[str, Any]:
         facts = dict(value or {})
-        reserved = {"actor_id", "kind", "ability", "dc"} & facts.keys()
+        # Save classification is derived by the native source executor. In
+        # particular, a caller must not suppress species traits by labelling
+        # an effect save as concentration or declaring an empty condition set.
+        reserved = {
+            "actor_id",
+            "kind",
+            "ability",
+            "dc",
+            "save_against_poison",
+            "save_source_kind",
+            "save_effect_conditions",
+            "save_purpose",
+        } & facts.keys()
         if reserved:
             raise ValueError("rule_facts cannot override: " + ", ".join(sorted(reserved)))
         if len(facts) > 32 or len(repr(facts)) > 8192:
@@ -10494,6 +10798,7 @@ def _create_server(
                 "attack_count",
                 "remaining_attacks",
                 "spell_resolution",
+                "deflect_attack",
             }
             value["result"] = {key: item for key, item in result.items() if key in allowed}
         value.pop("revisions", None)
@@ -11013,9 +11318,13 @@ def _create_server(
         """Resolve one executable plan from the exact recorded character card."""
 
         try:
-            return source_cards.character_resolution_plan(sheet, source_card_id, source_card_kind)
+            card, compiled = source_cards.character_resolution_plan(
+                sheet, source_card_id, source_card_kind
+            )
         except source_cards.CharacterSourceCardError as error:
             raise CombatEngineError(str(error)) from error
+        _semantic_plan_save_facts(card, compiled)
+        return card, compiled
 
     def character_activity_source_card(
         sheet: dict[str, Any],
@@ -11236,6 +11545,7 @@ def _create_server(
             raise CombatEngineError(
                 "authored resolution plan must cite the exact recorded card effect"
             )
+        _semantic_plan_save_facts(source_card, compiled)
         return compiled
 
     def sheet_with_content_solution(
@@ -11594,6 +11904,75 @@ def _create_server(
             "agent_ruling": deepcopy(agent_ruling),
         }
 
+    def validate_scene_save_damage_source(
+        campaign_id: str,
+        commitment: dict[str, Any],
+        *,
+        encounter: dict[str, Any],
+    ) -> None:
+        """Check the same reviewed clause before payment and before settlement."""
+        card_excerpt = commitment["mechanic_source_excerpt"]
+        try:
+            _normalized, _source, expanded = managed_module_source_ref(
+                campaign_id,
+                commitment["agent_ruling"]["source_ref"],
+                require_exact=True,
+                expected_scene_id=str(encounter.get("scene_id") or ""),
+                require_active_module=True,
+            )
+            assert expanded is not None
+            managed_module_source_excerpt(
+                expanded,
+                card_excerpt,
+                field="save damage mechanic_source_excerpt",
+                minimum_length=10,
+            )
+        except (LookupError, ValueError) as error:
+            raise CombatEngineError(str(error)) from error
+        ability_pattern = {
+            "strength": "strength|str",
+            "dexterity": "dexterity|dex",
+            "constitution": "constitution|con",
+            "intelligence": "intelligence|int",
+            "wisdom": "wisdom|wis",
+            "charisma": "charisma|cha",
+        }.get(commitment["save_ability"], "")
+        printed_half_damage = re.search(
+            r"(?i)\bhalf\s+(?:as\s+much|the)\s+damage\b.*"
+            r"\b(?:successful|success)\b",
+            card_excerpt,
+        )
+        printed_expressions = {
+            "".join(expression.split()).casefold()
+            for expression in re.findall(r"(?i)\b\d+\s*d\s*\d+(?:\s*[+-]\s*\d+)?\b", card_excerpt)
+        }
+        save_dc = commitment["save_dc"]
+        if (
+            not ability_pattern
+            or isinstance(save_dc, bool)
+            or not isinstance(save_dc, int)
+            or not 1 <= save_dc <= 40
+            or not isinstance(commitment["half_on_success"], bool)
+            or not isinstance(commitment["save_advantage"], bool)
+            or not isinstance(commitment["save_disadvantage"], bool)
+            or (commitment["save_advantage"] and commitment["save_disadvantage"])
+            or re.search(
+                rf"(?i)\bDC\s*{save_dc}\s+(?:{ability_pattern})\s+saving throw\b",
+                card_excerpt,
+            )
+            is None
+            or commitment["damage_expression"] not in printed_expressions
+            or re.search(
+                rf"(?i)\b{re.escape(commitment['damage_type'])}\b",
+                card_excerpt,
+            )
+            is None
+            or bool(printed_half_damage) != commitment["half_on_success"]
+        ):
+            raise CombatEngineError(
+                "save-damage declaration does not match the reviewed save, damage, or success terms"
+            )
+
     def validate_agent_save_damage_commitment(
         campaign_id: str,
         raw_commitment: Any,
@@ -11696,6 +12075,7 @@ def _create_server(
             raise CombatEngineError(
                 "agent_ruling_commitment is not a canonical source-bound save-damage contract"
             )
+        validate_scene_save_damage_source(campaign_id, normalized, encounter=encounter)
         for target_id in normalized_target_ids:
             require_campaign_actor(campaign_id, target_id)
             require_encounter_combatant(
@@ -11985,13 +12365,24 @@ def _create_server(
     def sync_combatant_conditions(
         encounter: dict[str, Any], actor_id: str, sheet: dict[str, Any]
     ) -> None:
-        for combatant in encounter.get("combatants", []):
+        for combatant in [
+            *encounter.get("combatants", []),
+            *encounter.get("reinforcements", []),
+        ]:
             if combatant.get("actor_id") == actor_id:
                 # Upgrade old encounter snapshots before replacing their stale
                 # projection. Otherwise removing a zero-speed or grappling
                 # effect could make a persisted dodging=True flag active again.
                 prior_dodge_transition = reconcile_dodge_lifecycle(combatant)
                 combatant["conditions"] = list(sheet.get("conditions") or [])
+                combatant["hit_points"] = int(sheet["combat"]["hp"]["value"])
+                if (
+                    combatant["hit_points"] > 0
+                    or condition_ids(sheet.get("conditions")) & DEATH_SAVE_SETTLED_CONDITIONS
+                ):
+                    flags = combatant.get("turn_flags")
+                    if isinstance(flags, dict) and "death_save_due" in flags:
+                        flags["death_save_due"] = False
                 combatant["condition_sources"] = timed_condition_sources(sheet)
                 combatant["speed_multiplier"] = source_speed_multiplier(sheet)
                 reconcile_tortle_shell_defense_projection(combatant, sheet)
@@ -12029,7 +12420,7 @@ def _create_server(
         character: Any,
         config_entry: dict[str, Any],
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any] | None]:
-        """Normalize scene-authored conditions for initial and joining combatants."""
+        """Normalize scene conditions and legacy state for entering combatants."""
 
         actor_id_value = str(character.id)
         condition_records: list[dict[str, Any]] = []
@@ -12091,10 +12482,16 @@ def _create_server(
                     "active": True,
                 }
             )
+        needs_held_drop = False
+        if sheet.get("edition") == "2014":
+            end_concentration_for_incapacitating_conditions(sheet)
+            if "unconscious" in condition_ids(sheet.get("conditions")):
+                apply_condition_change(sheet, condition_id="prone", add=True)
+                needs_held_drop = bool(held_item_roots(sheet))
         return (
             [],
             condition_records,
-            sheet if sheet != character.sheet else None,
+            sheet if sheet != character.sheet or needs_held_drop else None,
         )
 
     def add_attack_on_hit_window(
@@ -13374,6 +13771,731 @@ def _create_server(
             "recommended_operation": "continuity_context:npc_turn",
         }
 
+    def _dependent_actor_materialization(
+        campaign_id: str,
+        artifact: dict[str, Any],
+        requirement: dict[str, Any],
+        numeric_parameters: Mapping[str, int],
+        *,
+        template_variant: str | None,
+    ) -> dict[str, Any]:
+        """Rebuild one dependent card using the same two-pass path as creation."""
+        source_text, source_refs = dependent_actor_source_text(artifact)
+        preview_text, _ = materialize_parameterized_statblock_source(
+            source_text,
+            requirement,
+            numeric_parameters=numeric_parameters,
+            self_ability_modifiers={},
+            template_variant=template_variant,
+            allow_self_modifier_placeholders=True,
+        )
+        edition = campaign_rules_edition(campaign_id)
+        source_key = (
+            f"rule-pack:{artifact['_pack_id']}@{artifact['_pack_version']}"
+            f"#artifact:{artifact['id']}"
+        )
+        preview = parse_edition_statblock(
+            preview_text,
+            edition=edition,
+            source_key=source_key,
+            rule_refs=source_refs,
+        )
+        self_modifiers = dict(derive_character_sheet(preview.sheet).get("ability_modifiers") or {})
+        rendered_text, _ = materialize_parameterized_statblock_source(
+            source_text,
+            requirement,
+            numeric_parameters=numeric_parameters,
+            self_ability_modifiers=self_modifiers,
+            template_variant=template_variant,
+        )
+        parsed = parse_edition_statblock(
+            rendered_text,
+            edition=edition,
+            source_key=source_key,
+            rule_refs=source_refs,
+        )
+        hydrated_sheet, spell_warnings = hydrate_statblock_spellcasting(
+            campaign_id,
+            parsed,
+            source_key=source_key,
+            rule_refs=source_refs,
+        )
+        require_standard_statblock_engine_support(
+            hydrated_sheet,
+            None,
+            statblock_warnings=(),
+            spell_warnings=spell_warnings,
+        )
+        sheet = apply_dependent_actor_template_variant(
+            hydrated_sheet,
+            requirement,
+            template_variant=template_variant,
+        )
+        sheet = validate_character_sheet(finalize_actor_sheet_rulings(sheet, campaign_id))
+        scaled = materialize_dependent_actor_owner_scaling(
+            sheet,
+            numeric_parameters,
+            relation_key=str(
+                dict(requirement.get("owner_binding") or {}).get("relation_key") or ""
+            ),
+            reviewed_expression_hash=str(
+                dict(requirement.get("solution") or {}).get("reviewed_expression_hash") or ""
+            ),
+        )
+        if (
+            str(dict(requirement.get("owner_binding") or {}).get("relation_key") or "")
+            == STEEL_DEFENDER_RELATION_KEY
+        ):
+            scaled = bind_steel_defender_runtime_mechanics(scaled)
+        return validate_character_sheet(scaled)
+
+    def _dependent_actor_refresh_receipt(
+        relation: Mapping[str, Any],
+        artifact: Mapping[str, Any],
+        requirement: Mapping[str, Any],
+        campaign_id: str,
+    ) -> dict[str, Any]:
+        binding = dict(relation["template_binding"])
+        receipt = verify_receipt_signature(
+            binding["authorization"],
+            content_authority_secret,
+            missing_error="dependent actor template authorization is missing",
+            invalid_error="dependent actor template authorization signature is invalid",
+        )
+        expected_hash = str(dict(requirement["solution"])["reviewed_expression_hash"])
+        if binding["reviewed_expression_hash"] != expected_hash:
+            raise ValueError("dependent actor template relation hash is stale")
+        expected = {
+            "schema_version": 1,
+            "purpose": "dependent_actor_template",
+            "campaign_id": campaign_id,
+            "source_artifact_id": str(artifact["id"]),
+            "source_pack_id": str(artifact["_pack_id"]),
+            "source_pack_version": str(artifact["_pack_version"]),
+            "owner_character_id": relation["owner_character_id"],
+            "dependent_actor_id": relation["dependent_actor_id"],
+            "relation_key": relation["relation_key"],
+            "owner_class_name": binding["owner_class_name"],
+            "casting_slot_level": binding["casting_slot_level"],
+            "template_variant": binding["template_variant"],
+            "numeric_parameters": binding["numeric_parameters"],
+            "reviewed_expression_hash": expected_hash,
+        }
+        # The relation's authorization is a server-signed canonical envelope.
+        # Compare the verified payload exactly: accepting omitted or extra keys
+        # would make the editable relation state an authorization oracle.
+        if receipt != expected:
+            raise ValueError("dependent actor template receipt does not match its relation binding")
+        return receipt
+
+    def _activity_source_identity(card: Mapping[str, Any]) -> str:
+        """Hash immutable activity facts while permitting only its use counter to change."""
+
+        value = deepcopy(dict(card))
+        uses = value.get("uses")
+        if isinstance(uses, dict) and "value" in uses:
+            uses = deepcopy(uses)
+            uses["value"] = uses.get("max")
+            value["uses"] = uses
+        return json_sha256(value)
+
+    def _verified_steel_defender_relation(
+        campaign_id: str,
+        branch_id: str,
+        relation: dict[str, Any],
+        *,
+        require_current_parameters: bool,
+    ) -> dict[str, str]:
+        """Verify one signed Steel Defender relation without trusting editable state."""
+
+        if relation["relation_key"] != STEEL_DEFENDER_RELATION_KEY:
+            raise ValueError("relation is not a Steel Defender relation")
+        binding = dict(relation["template_binding"])
+        if binding["reviewed_expression_hash"] != STEEL_DEFENDER_REVIEWED_EXPRESSION_HASH:
+            raise ValueError("Steel Defender relation has a stale reviewed hash")
+        owner_id = relation["owner_character_id"]
+        dependent_id = relation["dependent_actor_id"]
+        owner = require_campaign_actor(campaign_id, owner_id)
+        dependent = require_campaign_actor(campaign_id, dependent_id)
+        artifact_matches = [
+            (pack_id, version, artifact)
+            for pack_id, version, artifact in available_content_artifacts(
+                campaign_id,
+                branch_id=branch_id,
+            )
+            if str(artifact.get("id") or "") == relation["source_artifact_id"]
+            and pack_id == relation["source_pack_id"]
+            and version == relation["source_pack_version"]
+        ]
+        if len(artifact_matches) != 1:
+            raise ValueError("Steel Defender source is not uniquely available")
+        pack_id, version, source_artifact = artifact_matches[0]
+        requirement = deepcopy(
+            dict(dict(source_artifact.get("card") or {}).get("dependent_actor_template") or {})
+        )
+        _dependent_actor_refresh_receipt(
+            relation,
+            {
+                **dict(source_artifact),
+                "_pack_id": pack_id,
+                "_pack_version": version,
+            },
+            requirement,
+            campaign_id,
+        )
+        current_parameters, _ = dependent_actor_numeric_parameters(
+            owner=owner,
+            requirement=requirement,
+            owner_class_name=str(binding["owner_class_name"] or ""),
+            casting_slot_level=binding["casting_slot_level"],
+        )
+        if require_current_parameters and current_parameters != binding["numeric_parameters"]:
+            raise ValueError("Steel Defender relation is stale for its owner")
+        if dependent.campaign_id != owner.campaign_id:
+            raise ValueError("Steel Defender relation crosses campaign boundaries")
+        return {
+            "kind": STEEL_DEFENDER_TURN_KIND,
+            "owner_actor_id": owner_id,
+            "source_artifact_id": relation["source_artifact_id"],
+            "source_pack_id": relation["source_pack_id"],
+            "source_pack_version": relation["source_pack_version"],
+            "reviewed_expression_hash": binding["reviewed_expression_hash"],
+        }
+
+    def _steel_defender_turn_contracts(
+        campaign_id: str,
+        branch_id: str,
+        participant_ids: set[str],
+    ) -> dict[str, dict[str, str]]:
+        """Project verified active Steel Defender relations into encounter-only state."""
+
+        state = dict(campaigns.get(campaign_id).state or {})
+        relations = validate_dependent_actor_relations(state.get("dependent_actor_relations", []))
+        contracts: dict[str, dict[str, str]] = {}
+        for relation in relations:
+            dependent_id = relation["dependent_actor_id"]
+            if relation["status"] != "active" or dependent_id not in participant_ids:
+                continue
+            if relation["relation_key"] != STEEL_DEFENDER_RELATION_KEY:
+                continue
+            owner_id = relation["owner_character_id"]
+            if owner_id not in participant_ids:
+                raise CombatEngineError(
+                    "an active Steel Defender can enter combat only with its owner"
+                )
+            contracts[dependent_id] = _verified_steel_defender_relation(
+                campaign_id,
+                branch_id,
+                relation,
+                require_current_parameters=True,
+            )
+        return contracts
+
+    def require_combat_actor_or_steel_defender_owner_control(
+        campaign_id: str,
+        actor_id_value: str,
+        principal_id: str,
+        *,
+        branch_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Authorize direct control or the signed owner of an active Steel Defender."""
+
+        try:
+            access.require_actor(
+                campaign_id,
+                actor_id_value,
+                principal_id,
+                control=True,
+            )
+            return None
+        except PermissionError as direct_error:
+            campaign, encounter = active_encounter(campaign_id)
+            if actor_id_value not in {
+                str(item.get("actor_id") or "")
+                for item in encounter.get("combatants", [])
+            }:
+                raise direct_error
+            matches = [
+                relation
+                for relation in validate_dependent_actor_relations(
+                    dict(campaign.state or {}).get("dependent_actor_relations", [])
+                )
+                if relation["dependent_actor_id"] == actor_id_value
+                and relation["relation_key"] == STEEL_DEFENDER_RELATION_KEY
+                and relation["status"] == "active"
+            ]
+            if len(matches) != 1:
+                raise direct_error
+            resolved_branch_id = branch_id or require_current_branch(campaign_id, None)
+            contract = _verified_steel_defender_relation(
+                campaign_id,
+                resolved_branch_id,
+                matches[0],
+                require_current_parameters=True,
+            )
+            access.require_actor(
+                campaign_id,
+                matches[0]["owner_character_id"],
+                principal_id,
+                control=True,
+            )
+            return {
+                **contract,
+                "owner_character_id": matches[0]["owner_character_id"],
+                "dependent_actor_id": actor_id_value,
+            }
+
+    def _verified_steel_defender_repair_activity(
+        campaign_id: str,
+        branch_id: str,
+        relation: dict[str, Any],
+    ) -> tuple[dict[str, Any], str, dict[str, str]]:
+        """Rebuild the signed template and return its one source-authored Repair card."""
+
+        contract = _verified_steel_defender_relation(
+            campaign_id,
+            branch_id,
+            relation,
+            require_current_parameters=True,
+        )
+        binding = dict(relation["template_binding"])
+        matches = [
+            (pack_id, version, artifact)
+            for pack_id, version, artifact in available_content_artifacts(
+                campaign_id,
+                branch_id=branch_id,
+            )
+            if str(artifact.get("id") or "") == relation["source_artifact_id"]
+            and pack_id == relation["source_pack_id"]
+            and version == relation["source_pack_version"]
+        ]
+        if len(matches) != 1:
+            raise CombatEngineError("Steel Defender source is not uniquely available")
+        pack_id, version, artifact = matches[0]
+        requirement = deepcopy(
+            dict(dict(artifact.get("card") or {}).get("dependent_actor_template") or {})
+        )
+        expected_sheet = _dependent_actor_materialization(
+            campaign_id,
+            {**dict(artifact), "_pack_id": pack_id, "_pack_version": version},
+            requirement,
+            binding["numeric_parameters"],
+            template_variant=binding["template_variant"],
+        )
+        candidates: list[tuple[dict[str, Any], str]] = []
+        for section, source_kind in (("activities", "activity"), ("features", "feature")):
+            for card in dict(expected_sheet.get("content") or {}).get(section, []):
+                if (
+                    isinstance(card, dict)
+                    and str(card.get("name") or "").strip().casefold().startswith("repair")
+                ):
+                    candidates.append((deepcopy(card), source_kind))
+        if len(candidates) != 1:
+            raise CombatEngineError(
+                "the signed Steel Defender template must contain exactly one Repair activity"
+            )
+        expected_card, _ = candidates[0]
+        expected_card, source_kind = character_activity_source_card(
+            expected_sheet,
+            str(expected_card["id"]),
+            character_type=characters.get(relation["dependent_actor_id"]).character_type,
+        )
+        return expected_card, source_kind, contract
+
+    def _verified_steel_defender_deflect_activity(
+        campaign_id: str,
+        branch_id: str,
+        relation: dict[str, Any],
+    ) -> tuple[dict[str, Any], str, dict[str, str]]:
+        """Return the current Deflect Attack only when it matches its signed source."""
+
+        contract = _verified_steel_defender_relation(
+            campaign_id,
+            branch_id,
+            relation,
+            require_current_parameters=True,
+        )
+        binding = dict(relation["template_binding"])
+        matches = [
+            (pack_id, version, artifact)
+            for pack_id, version, artifact in available_content_artifacts(
+                campaign_id,
+                branch_id=branch_id,
+            )
+            if str(artifact.get("id") or "") == relation["source_artifact_id"]
+            and pack_id == relation["source_pack_id"]
+            and version == relation["source_pack_version"]
+        ]
+        if len(matches) != 1:
+            raise CombatEngineError("Steel Defender source is not uniquely available")
+        pack_id, version, artifact = matches[0]
+        requirement = deepcopy(
+            dict(dict(artifact.get("card") or {}).get("dependent_actor_template") or {})
+        )
+        expected_sheet = _dependent_actor_materialization(
+            campaign_id,
+            {**dict(artifact), "_pack_id": pack_id, "_pack_version": version},
+            requirement,
+            binding["numeric_parameters"],
+            template_variant=binding["template_variant"],
+        )
+        expected_candidates: list[tuple[dict[str, Any], str]] = []
+        for section, source_kind in (("activities", "activity"), ("features", "feature")):
+            for card in dict(expected_sheet.get("content") or {}).get(section, []):
+                if (
+                    isinstance(card, dict)
+                    and str(card.get("name") or "").strip().casefold() == "deflect attack"
+                    and STEEL_DEFENDER_DEFLECT_ATTACK_MECHANIC_ID
+                    in {str(ref) for ref in card.get("mechanic_refs") or []}
+                ):
+                    expected_candidates.append((deepcopy(card), source_kind))
+        if len(expected_candidates) != 1:
+            raise CombatEngineError(
+                "the signed Steel Defender template must contain exactly one Deflect Attack"
+            )
+        expected_card, _ = expected_candidates[0]
+        dependent = characters.get(relation["dependent_actor_id"])
+        expected_card, expected_kind = character_activity_source_card(
+            expected_sheet,
+            str(expected_card["id"]),
+            character_type=dependent.character_type,
+        )
+        actual_candidates: list[tuple[dict[str, Any], str]] = []
+        for section, source_kind in (("activities", "activity"), ("features", "feature")):
+            for card in dict(dependent.sheet.get("content") or {}).get(section, []):
+                if (
+                    isinstance(card, dict)
+                    and str(card.get("name") or "").strip().casefold() == "deflect attack"
+                    and STEEL_DEFENDER_DEFLECT_ATTACK_MECHANIC_ID
+                    in {str(ref) for ref in card.get("mechanic_refs") or []}
+                ):
+                    actual_candidates.append((deepcopy(card), source_kind))
+        if len(actual_candidates) != 1:
+            raise CombatEngineError(
+                "the current Steel Defender must contain exactly one source-bound Deflect Attack"
+            )
+        actual_card, _ = actual_candidates[0]
+        actual_card, actual_kind = character_activity_source_card(
+            dependent.sheet,
+            str(actual_card["id"]),
+            character_type=dependent.character_type,
+        )
+        if (
+            actual_kind != expected_kind
+            or _activity_source_identity(actual_card) != _activity_source_identity(expected_card)
+        ):
+            raise CombatEngineError(
+                "Steel Defender Deflect Attack does not match its signed source template"
+            )
+        return actual_card, actual_kind, contract
+
+    def _prepare_steel_defender_deflect(
+        campaign_id: str,
+        branch_id: str,
+        principal_id: str,
+        actor_id: str,
+        target_id: str,
+        declaration: Any,
+        encounter: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Validate one source-bound, pre-roll Deflect Attack declaration."""
+
+        if declaration is None:
+            return None
+        if not isinstance(declaration, dict):
+            raise CombatEngineError("deflect_attack must be an object")
+        if str(encounter.get("ruleset") or "") != "2014":
+            raise CombatEngineError("Steel Defender Deflect Attack is a 2014 rule")
+        positioning_mode = str(encounter.get("positioning_mode") or "grid")
+        expected_fields = (
+            {"defender_id"}
+            if positioning_mode == "grid"
+            else {"defender_id", "spatial_facts"}
+        )
+        if set(declaration) != expected_fields:
+            raise CombatEngineError(
+                "deflect_attack requires its exact defender and positioning payload"
+            )
+        defender_id = str(declaration.get("defender_id") or "").strip()
+        if not defender_id:
+            raise CombatEngineError("deflect_attack requires defender_id")
+        if defender_id == actor_id:
+            raise CombatEngineError("an attacker cannot Deflect Attack against its own roll")
+        require_combat_actor_or_steel_defender_owner_control(
+            campaign_id,
+            defender_id,
+            principal_id,
+            branch_id=branch_id,
+        )
+        campaign = campaigns.get(campaign_id)
+        active_relations = [
+            relation
+            for relation in validate_dependent_actor_relations(
+                dict(campaign.state or {}).get("dependent_actor_relations", [])
+            )
+            if relation["dependent_actor_id"] == defender_id
+            and relation["status"] == "active"
+            and relation["relation_key"] == STEEL_DEFENDER_RELATION_KEY
+        ]
+        if len(active_relations) != 1:
+            raise CombatEngineError(
+                "Deflect Attack requires the defender's one active Steel Defender relation"
+            )
+        activity, _source_kind, contract = _verified_steel_defender_deflect_activity(
+            campaign_id,
+            branch_id,
+            active_relations[0],
+        )
+        combatants_by_id = {
+            str(item.get("actor_id") or ""): item
+            for item in encounter.get("combatants", [])
+        }
+        try:
+            defender_combatant = combatants_by_id[defender_id]
+            attacker_combatant = combatants_by_id[actor_id]
+            target_combatant = combatants_by_id[target_id]
+        except KeyError as error:
+            raise CombatEngineError(
+                "Deflect Attack defender, attacker, and target must be current combatants"
+            ) from error
+        eligibility_defender = defender_combatant
+        eligibility_attacker = attacker_combatant
+        eligibility_target = target_combatant
+        eligibility_facts: dict[str, Any] | None = None
+        committed_spatial_facts: dict[str, Any] | None = None
+        if positioning_mode == "grid":
+            cell_ft = int(
+                dict(dict(encounter.get("battle_map") or {}).get("grid") or {}).get(
+                    "cell_ft", 5
+                )
+                or 5
+            )
+        else:
+            access.require_campaign(
+                campaign_id,
+                principal_id,
+                roles=CAMPAIGN_DM_ROLES,
+            )
+            raw_spatial = declaration.get("spatial_facts")
+            if not isinstance(raw_spatial, dict) or set(raw_spatial) != {
+                "decision_id",
+                "defender_can_see_attacker",
+                "attacker_within_5_ft_of_defender",
+                "default_resolver",
+                "ruling_kind",
+                "reason",
+            }:
+                raise CombatEngineError(
+                    "agent-positioned Deflect Attack requires exact spatial_facts"
+                )
+            decision_id = str(raw_spatial.get("decision_id") or "").strip()
+            reason = " ".join(str(raw_spatial.get("reason") or "").split())
+            if (
+                not decision_id
+                or len(decision_id) > 200
+                or not isinstance(raw_spatial.get("defender_can_see_attacker"), bool)
+                or not isinstance(raw_spatial.get("attacker_within_5_ft_of_defender"), bool)
+                or raw_spatial.get("default_resolver") != "agent"
+                or raw_spatial.get("ruling_kind") != "agent_dm_adjudication"
+                or not 10 <= len(reason) <= 500
+            ):
+                raise CombatEngineError(
+                    "Deflect Attack spatial_facts require a bounded Agent ruling"
+                )
+            eligibility_facts = {
+                "defender_can_see_attacker": raw_spatial["defender_can_see_attacker"],
+                "attacker_within_5_ft_of_defender": raw_spatial[
+                    "attacker_within_5_ft_of_defender"
+                ],
+            }
+            committed_spatial_facts = {
+                **raw_spatial,
+                "decision_id": decision_id,
+                "reason": reason,
+                "committed": True,
+            }
+            # Agent mode is coordinate-free even if an imported snapshot
+            # happens to retain token positions.
+            eligibility_defender = deepcopy(defender_combatant)
+            eligibility_attacker = deepcopy(attacker_combatant)
+            eligibility_target = deepcopy(target_combatant)
+            eligibility_defender.pop("position", None)
+            eligibility_attacker.pop("position", None)
+            eligibility_target.pop("position", None)
+            cell_ft = 5
+        try:
+            eligibility = validate_deflect_attack_eligibility(
+                eligibility_defender,
+                eligibility_attacker,
+                eligibility_target,
+                spatial_facts=eligibility_facts,
+                cell_ft=cell_ft,
+            )
+        except SteelDefenderError as error:
+            raise CombatEngineError(str(error)) from error
+        if positioning_mode == "grid":
+            committed_spatial_facts = {
+                "defender_can_see_attacker": eligibility["defender_can_see_attacker"],
+                "attacker_within_5_ft_of_defender": eligibility[
+                    "attacker_within_5_ft_of_defender"
+                ],
+                "distance_ft": eligibility["distance_ft"],
+                "source": "grid_token_positions_and_recorded_visibility",
+                "committed": True,
+            }
+        assert committed_spatial_facts is not None
+        return {
+            "activity": activity,
+            "contract": contract,
+            "eligibility": eligibility,
+            "spatial_facts": committed_spatial_facts,
+        }
+
+    def _refresh_owner_dependents(
+        before: Any,
+        candidate_owner_sheet: dict[str, Any],
+        campaign: Any,
+        branch_id: str,
+        updates: list[CharacterStateUpdate],
+        campaign_state: dict[str, Any] | None,
+    ) -> tuple[list[CharacterStateUpdate], dict[str, Any] | None]:
+        """Append deterministic dependent refreshes to one owner mutation."""
+        if before.campaign_id is None:
+            return updates, campaign_state
+        state = deepcopy(campaign_state if campaign_state is not None else campaign.state or {})
+        relations = validate_dependent_actor_relations(state.get("dependent_actor_relations", []))
+        active = [
+            relation
+            for relation in relations
+            if relation["owner_character_id"] == before.id and relation["status"] == "active"
+        ]
+        if not active:
+            return updates, campaign_state
+        if authoritative_phase(before.campaign_id) == PROFILE_COMBAT:
+            raise CombatEngineError("dependent actor refresh is not allowed during active combat")
+        if any(item.character_id == before.id for item in updates) is False:
+            return updates, campaign_state
+        update_ids = {item.character_id for item in updates}
+        next_relations = list(relations)
+        changed = False
+        for relation in active:
+            dependent_id = relation["dependent_actor_id"]
+            if dependent_id in update_ids:
+                raise ValueError("dependent actor refresh conflicts with an existing actor update")
+            dependent = characters.get(dependent_id)
+            if dependent.campaign_id != before.campaign_id:
+                raise ValueError("dependent actor relation endpoint belongs to another campaign")
+            artifact_matches = [
+                (pack_id, version, artifact)
+                for pack_id, version, artifact in available_content_artifacts(
+                    before.campaign_id,
+                    branch_id=branch_id,
+                )
+                if str(artifact.get("id") or "") == relation["source_artifact_id"]
+                and pack_id == relation["source_pack_id"]
+                and version == relation["source_pack_version"]
+            ]
+            if len(artifact_matches) != 1:
+                raise ValueError("dependent actor template source is not uniquely available")
+            pack_id, version, source_artifact = artifact_matches[0]
+            artifact = {
+                **dict(source_artifact),
+                "_pack_id": pack_id,
+                "_pack_version": version,
+            }
+            requirement = deepcopy(
+                dict(dict(source_artifact.get("card") or {}).get("dependent_actor_template") or {})
+            )
+            binding = dict(relation["template_binding"])
+            requirement_hash = str(
+                dict(requirement.get("solution") or {}).get("reviewed_expression_hash") or ""
+            )
+            if requirement_hash != str(binding["reviewed_expression_hash"]):
+                raise ValueError("dependent actor template relation hash is stale")
+            _dependent_actor_refresh_receipt(
+                relation,
+                artifact,
+                requirement,
+                before.campaign_id,
+            )
+            old_parameters = dict(binding["numeric_parameters"])
+            owner_candidate = replace(before, sheet=deepcopy(candidate_owner_sheet))
+            new_parameters, _ = dependent_actor_numeric_parameters(
+                owner=owner_candidate,
+                requirement=requirement,
+                owner_class_name=str(binding["owner_class_name"] or ""),
+                casting_slot_level=binding["casting_slot_level"],
+            )
+            if new_parameters == old_parameters:
+                continue
+            old_sheet = _dependent_actor_materialization(
+                before.campaign_id,
+                artifact,
+                requirement,
+                old_parameters,
+                template_variant=binding["template_variant"],
+            )
+            new_sheet = _dependent_actor_materialization(
+                before.campaign_id,
+                artifact,
+                requirement,
+                new_parameters,
+                template_variant=binding["template_variant"],
+            )
+            refreshed = refresh_dependent_actor_sheet(
+                dependent.sheet,
+                old_sheet,
+                new_sheet,
+                old_parameters,
+                new_parameters,
+                relation_key=relation["relation_key"],
+            )
+            updates.append(
+                CharacterStateUpdate(
+                    character_id=dependent.id,
+                    sheet=refreshed["sheet"],
+                    notes=validate_character_notes(dependent.notes),
+                    expected_revision=dependent.revision,
+                )
+            )
+            for index, candidate in enumerate(next_relations):
+                if candidate["dependent_actor_id"] == dependent.id:
+                    refreshed_binding = {
+                        **binding,
+                        "numeric_parameters": deepcopy(new_parameters),
+                    }
+                    refreshed_binding["authorization"] = sign_receipt(
+                        {
+                            "schema_version": 1,
+                            "purpose": "dependent_actor_template",
+                            "campaign_id": before.campaign_id,
+                            "owner_character_id": relation["owner_character_id"],
+                            "dependent_actor_id": relation["dependent_actor_id"],
+                            "relation_key": relation["relation_key"],
+                            "source_artifact_id": relation["source_artifact_id"],
+                            "source_pack_id": relation["source_pack_id"],
+                            "source_pack_version": relation["source_pack_version"],
+                            "owner_class_name": refreshed_binding["owner_class_name"],
+                            "casting_slot_level": refreshed_binding["casting_slot_level"],
+                            "template_variant": refreshed_binding["template_variant"],
+                            "numeric_parameters": deepcopy(refreshed_binding["numeric_parameters"]),
+                            "reviewed_expression_hash": refreshed_binding[
+                                "reviewed_expression_hash"
+                            ],
+                        },
+                        content_authority_secret,
+                    )
+                    next_relations[index] = {
+                        **candidate,
+                        "template_binding": refreshed_binding,
+                    }
+                    break
+            changed = True
+        if not changed:
+            return updates, campaign_state
+        state["dependent_actor_relations"] = next_relations
+        return updates, validate_party_state(state)
+
     def update_character(
         before: Any,
         *,
@@ -13403,7 +14525,7 @@ def _create_server(
             _require_preserved_intrinsic_attack_provenance(before.sheet, sheet)
         if before.campaign_id is None:
             if sheet is not None:
-                require_engine_owned_short_rest_hit_die_state(
+                require_engine_owned_character_state(
                     sheet,
                     current_sheet=before.sheet,
                 )
@@ -13439,7 +14561,7 @@ def _create_server(
         if replay is not None:
             return replay
         if sheet is not None:
-            require_engine_owned_short_rest_hit_die_state(
+            require_engine_owned_character_state(
                 sheet,
                 current_sheet=before.sheet,
             )
@@ -13457,6 +14579,8 @@ def _create_server(
             # a full-sheet update that tries to forge the next revision.
             candidate_window["expected_character_revision"] = before.revision
         normalized_sheet = validate_character_sheet(candidate_sheet)
+        if normalized_sheet.get("edition") == "2014":
+            end_concentration_for_incapacitating_conditions(normalized_sheet)
         normalized_notes = (
             validate_character_notes(
                 canonical_character_notes(
@@ -13484,6 +14608,16 @@ def _create_server(
             player_name=player_name,
             summary=summary,
         )
+        campaign = campaigns.get(before.campaign_id)
+        effect_state, mutation_updates, _ = reconcile_actor_effect_dependencies(
+            campaign, None, [character_update], {}
+        )
+        # A self-targeted spell can also change the source sheet while its
+        # dependency is reconciled. Build the replay preview from that final
+        # candidate, not from the caller's pre-reconciliation sheet.
+        normalized_sheet = next(
+            update.sheet for update in mutation_updates if update.character_id == before.id
+        )
         response = response_for(
             character_view(
                 replace(
@@ -13497,11 +14631,35 @@ def _create_server(
                 )
             )
         )
-        followup = narrative_followup_for_mutation(
-            campaigns.get(before.campaign_id),
+        ground_state, mutation_updates, response = reconcile_unconscious_inventory(
+            campaign, effect_state, mutation_updates, response
+        )
+        owner_update = next(
+            (item for item in mutation_updates if item.character_id == before.id),
+            None,
+        )
+        if owner_update is not None:
+            mutation_updates, ground_state = _refresh_owner_dependents(
+                before,
+                owner_update.sheet,
+                campaign,
+                branch_id,
+                mutation_updates,
+                ground_state,
+            )
+        ground_state, mutation_updates, response = reconcile_steel_defender_deaths(
+            campaign,
+            ground_state,
+            mutation_updates,
+            response,
             branch_id=branch_id,
-            campaign_state=None,
-            character_updates=[character_update],
+        )
+        validate_inventory_custody_update(campaign, ground_state, mutation_updates)
+        followup = narrative_followup_for_mutation(
+            campaign,
+            branch_id=branch_id,
+            campaign_state=ground_state,
+            character_updates=mutation_updates,
         )
         if followup is not None:
             response = {**response, "narrative_followup": followup}
@@ -13511,8 +14669,13 @@ def _create_server(
             response.setdefault("random_stream_receipt", stream.receipt())
         StateMutationService(storage.database).replace(
             before.campaign_id,
-            character_updates=[character_update],
-            expected_campaign_revision=expected_campaign_revision,
+            campaign_state=validate_party_state(ground_state) if ground_state is not None else None,
+            character_updates=mutation_updates,
+            expected_campaign_revision=(
+                campaign.revision
+                if ground_state is not None and expected_campaign_revision is None
+                else expected_campaign_revision
+            ),
             operation=operation,
             actor=principal_id,
             branch_id=branch_id,
@@ -13539,6 +14702,7 @@ def _create_server(
         """Reconcile card and encounter dependencies before one atomic commit."""
 
         updates = list(character_updates or [])
+        card_dependency_changes: set[str] = set()
         if updates:
             # Narrative spell effects carry durable source links on actor cards,
             # without an encounter registry. They must end on the same commit as
@@ -13556,6 +14720,7 @@ def _create_server(
                 for actor_id_value, actor in campaign_actors.items()
             }
             card_dependencies = reconcile_source_effect_dependencies(candidate_sheets)
+            card_dependency_changes = set(card_dependencies["changed_actor_ids"])
             for actor_id_value in card_dependencies["changed_actor_ids"]:
                 sheet = validate_character_sheet(card_dependencies["sheets"][actor_id_value])
                 existing = by_actor_id.get(actor_id_value)
@@ -13579,6 +14744,15 @@ def _create_server(
             else deepcopy(dict(campaign.state or {}))
         )
         encounter = source_state.get("combat")
+        if isinstance(encounter, dict) and card_dependency_changes:
+            original_encounter = deepcopy(encounter)
+            for update in updates:
+                if update.character_id in card_dependency_changes:
+                    sync_combatant_conditions(encounter, update.character_id, update.sheet)
+            if encounter != original_encounter:
+                campaign_state = source_state
+                if "combat" in response_fields:
+                    response_fields = {**response_fields, "combat": deepcopy(encounter)}
         if (
             not isinstance(encounter, dict)
             or not isinstance(encounter.get("dependent_effects"), list)
@@ -13671,6 +14845,339 @@ def _create_server(
             next_response_fields["result"] = result
         return source_state, updates, next_response_fields
 
+    def reconcile_completed_item_attunements(
+        campaign: Any,
+        state: dict[str, Any],
+        updates: list[CharacterStateUpdate],
+        completed: dict[str, str],
+    ) -> list[CharacterStateUpdate]:
+        if not completed:
+            return updates
+        records = {actor.id: actor for actor in characters.list(campaign_id=campaign.id)}
+        by_id = {update.character_id: update for update in updates}
+        sheets = {
+            actor_id: by_id[actor_id].sheet if actor_id in by_id else actor.sheet
+            for actor_id, actor in records.items()
+        }
+        resolved = complete_item_attunement_ownership(
+            sheets, state.get("ground_items", []), completed
+        )
+        for actor_id, sheet in resolved.items():
+            if actor_id in by_id:
+                by_id[actor_id] = replace(by_id[actor_id], sheet=sheet)
+            elif sheet != validate_character_sheet(records[actor_id].sheet):
+                actor = records[actor_id]
+                by_id[actor_id] = CharacterStateUpdate(actor_id, sheet, actor.notes, actor.revision)
+        return list(by_id.values())
+
+    def validate_inventory_custody_update(
+        campaign: Any,
+        state: dict[str, Any] | None,
+        updates: list[CharacterStateUpdate] | None,
+    ) -> None:
+        """Reject legacy item writes that would strand a recorded owner reference."""
+        sheets = {actor.id: actor.sheet for actor in characters.list(campaign_id=campaign.id)}
+        sheets.update({update.character_id: update.sheet for update in updates or []})
+        if sheets:
+            validate_external_inventory_custody(
+                sheets,
+                (state if state is not None else campaign.state or {}).get("ground_items", []),
+            )
+
+    def ground_drop_context(campaign: Any, state: dict[str, Any], actor_id: str) -> dict[str, Any]:
+        encounter = dict(state.get("combat") or {})
+        combatant = next(
+            (
+                item
+                for item in [
+                    *encounter.get("combatants", []),
+                    *encounter.get("reinforcements", []),
+                ]
+                if item.get("actor_id") == actor_id
+            ),
+            None,
+        )
+        scene = npc_turn_scene_projection(modules.current_scene(campaign.id, scope_id="party"))
+        result = {
+            "scene_id": (
+                encounter.get("scene_id")
+                if encounter.get("active")
+                else (scene or {}).get("scene_id")
+            )
+            or None,
+            "encounter_id": encounter.get("id") if encounter.get("active") else None,
+            "campaign_revision": campaign.revision,
+            "location": {"mode": "agent", "anchor_actor_id": actor_id},
+        }
+        if encounter.get("active") and encounter.get("positioning_mode") == "grid" and combatant:
+            result["location"] = {"mode": "grid", "position": deepcopy(combatant["position"])}
+        return result
+
+    def reconcile_unconscious_inventory(
+        campaign: Any,
+        campaign_state: dict[str, Any] | None,
+        updates: list[CharacterStateUpdate] | None,
+        response_fields: dict[str, Any],
+    ) -> tuple[dict[str, Any] | None, list[CharacterStateUpdate], dict[str, Any]]:
+        """Settle Prone and held objects in the same unconscious mutation."""
+        candidates = list(updates or [])
+        posture_changes: set[str] = set()
+        for index, update in enumerate(candidates):
+            if update.sheet.get("edition") != "2014" or "unconscious" not in condition_ids(
+                update.sheet.get("conditions")
+            ):
+                continue
+            sheet = deepcopy(update.sheet)
+            apply_condition_change(sheet, condition_id="prone", add=True)
+            if sheet != update.sheet:
+                candidates[index] = replace(update, sheet=sheet)
+                posture_changes.add(update.character_id)
+        actor_ids = [
+            update.character_id
+            for update in candidates
+            if update.sheet.get("edition") == "2014"
+            and "unconscious" in condition_ids(update.sheet.get("conditions"))
+            and held_item_roots(update.sheet)
+        ]
+        if not actor_ids and not posture_changes:
+            return campaign_state, candidates, response_fields
+        records = {actor.id: actor for actor in characters.list(campaign_id=campaign.id)}
+        by_id = {update.character_id: update for update in candidates}
+        sheets = {
+            actor_id: deepcopy(by_id[actor_id].sheet if actor_id in by_id else actor.sheet)
+            for actor_id, actor in records.items()
+        }
+        original_state = (
+            campaign_state if campaign_state is not None else dict(campaign.state or {})
+        )
+        state = deepcopy(original_state)
+        encounter = state.get("combat")
+        if isinstance(encounter, dict):
+            for actor_id in sorted(posture_changes):
+                sync_combatant_conditions(encounter, actor_id, sheets[actor_id])
+        ground = state.get("ground_items", [])
+        dropped = []
+        for actor_id in actor_ids:
+            result = drop_held_items(
+                sheets,
+                ground,
+                actor_id,
+                record_ids={
+                    item_id: f"ground-{uuid4().hex}"
+                    for item_id in held_item_roots(sheets[actor_id])
+                },
+                **ground_drop_context(campaign, state, actor_id),
+            )
+            sheets, ground = result["sheets"], result["ground_items"]
+            # A caster can cause another actor to drop a container. The receipt
+            # identifies ground records without disclosing private contents.
+            dropped.append(
+                {"actor_id": actor_id, "ground_ids": [item["id"] for item in result["dropped"]]}
+            )
+        if actor_ids:
+            state["ground_items"] = ground
+        for actor_id, sheet in sheets.items():
+            previous = by_id.get(actor_id)
+            if previous is not None:
+                by_id[actor_id] = replace(previous, sheet=sheet)
+            elif sheet != validate_character_sheet(records[actor_id].sheet):
+                actor = records[actor_id]
+                by_id[actor_id] = CharacterStateUpdate(actor_id, sheet, actor.notes, actor.revision)
+
+        def refresh_preview(value: Any) -> Any:
+            if isinstance(value, list):
+                return [refresh_preview(item) for item in value]
+            if not isinstance(value, dict):
+                return value
+            result = {key: refresh_preview(item) for key, item in value.items()}
+            if (
+                isinstance(value.get("sheet"), dict)
+                and isinstance(value.get("id"), str)
+                and value.get("id") in by_id
+            ):
+                result["sheet"] = deepcopy(by_id[value["id"]].sheet)
+                if "derived" in value:
+                    result["derived"] = character_view(
+                        replace(records[value["id"]], sheet=by_id[value["id"]].sheet)
+                    )["derived"]
+            return result
+
+        response = refresh_preview(response_fields)
+        if posture_changes and "combat" in response and isinstance(encounter, dict):
+            response["combat"] = deepcopy(encounter)
+        if dropped:
+            response["ground_item_drops"] = dropped
+        # A card-only posture correction must not invent ground records or a
+        # campaign revision when no encounter projection needs to change.
+        settled_state = state if state != original_state else campaign_state
+        return settled_state, list(by_id.values()), response
+
+    def reconcile_steel_defender_deaths(
+        campaign: Any,
+        campaign_state: dict[str, Any] | None,
+        updates: list[CharacterStateUpdate] | None,
+        response_fields: dict[str, Any],
+        *,
+        branch_id: str,
+    ) -> tuple[dict[str, Any] | None, list[CharacterStateUpdate], dict[str, Any]]:
+        """Reconcile deaths, owner perishing, and due one-minute revivals atomically."""
+
+        candidates = list(updates or [])
+        records = {actor.id: actor for actor in characters.list(campaign_id=campaign.id)}
+        if not records:
+            return campaign_state, candidates, response_fields
+        by_id = {item.character_id: item for item in candidates}
+        state = validate_party_state(
+            deepcopy(campaign_state if campaign_state is not None else campaign.state or {})
+        )
+        relations = validate_dependent_actor_relations(
+            state.get("dependent_actor_relations", [])
+        )
+        steel_relations = [
+            (index, relation)
+            for index, relation in enumerate(relations)
+            if relation["relation_key"] == STEEL_DEFENDER_RELATION_KEY
+            and relation["status"] != "replaced"
+        ]
+        if not steel_relations:
+            return campaign_state, candidates, response_fields
+        elapsed_tick = int(dict(state["game_time"])["elapsed_ticks"])
+        deaths: list[dict[str, str]] = []
+        revivals: list[dict[str, str]] = []
+        encounter = state.get("combat")
+
+        def actor_sheet(actor_id: str) -> dict[str, Any]:
+            if actor_id not in records:
+                raise CombatEngineError("Steel Defender relation references a missing actor")
+            return deepcopy(by_id[actor_id].sheet if actor_id in by_id else records[actor_id].sheet)
+
+        def update_actor(actor_id: str, sheet: dict[str, Any]) -> None:
+            existing = by_id.get(actor_id)
+            by_id[actor_id] = CharacterStateUpdate(
+                character_id=actor_id,
+                sheet=validate_character_sheet(sheet),
+                notes=validate_character_notes(records[actor_id].notes),
+                expected_revision=(
+                    existing.expected_revision
+                    if existing is not None
+                    else records[actor_id].revision
+                ),
+            )
+
+        for relation_index, relation in steel_relations:
+            contract = _verified_steel_defender_relation(
+                campaign.id,
+                branch_id,
+                relation,
+                require_current_parameters=False,
+            )
+            owner_id = contract["owner_actor_id"]
+            dependent_id = relation["dependent_actor_id"]
+            owner_sheet = actor_sheet(owner_id)
+            dependent_sheet = actor_sheet(dependent_id)
+            owner_dead = "dead" in condition_ids(owner_sheet.get("conditions"))
+            dependent_dead = "dead" in condition_ids(dependent_sheet.get("conditions"))
+
+            if relation["status"] == "active":
+                if not owner_dead and not dependent_dead:
+                    continue
+                reason = "owner_died" if owner_dead else "defender_died"
+                if owner_dead:
+                    try:
+                        dependent_sheet = kill_steel_defender_when_owner_dies(
+                            owner_sheet,
+                            dependent_sheet,
+                        )["sheet"]
+                    except SteelDefenderError as error:
+                        raise CombatEngineError(str(error)) from error
+                    update_actor(dependent_id, dependent_sheet)
+                relations[relation_index] = {
+                    **relation,
+                    "status": "dead",
+                    "death_elapsed_ticks": elapsed_tick,
+                    "revival_started_elapsed_ticks": None,
+                    "revival_completes_elapsed_ticks": None,
+                }
+                if isinstance(encounter, dict):
+                    sync_combatant_conditions(encounter, dependent_id, dependent_sheet)
+                deaths.append(
+                    {
+                        "dependent_actor_id": dependent_id,
+                        "owner_character_id": owner_id,
+                        "reason": reason,
+                    }
+                )
+                continue
+
+            pending_start = relation["revival_started_elapsed_ticks"]
+            pending_due = relation["revival_completes_elapsed_ticks"]
+            if owner_dead:
+                if pending_start is not None:
+                    relations[relation_index] = {
+                        **relation,
+                        "revival_started_elapsed_ticks": None,
+                        "revival_completes_elapsed_ticks": None,
+                    }
+                if not dependent_dead:
+                    try:
+                        dependent_sheet = kill_steel_defender_when_owner_dies(
+                            owner_sheet,
+                            dependent_sheet,
+                        )["sheet"]
+                    except SteelDefenderError as error:
+                        raise CombatEngineError(str(error)) from error
+                    update_actor(dependent_id, dependent_sheet)
+                    if isinstance(encounter, dict):
+                        sync_combatant_conditions(encounter, dependent_id, dependent_sheet)
+                continue
+            if pending_start is None or elapsed_tick < int(pending_due):
+                continue
+            pending = {
+                "status": "pending",
+                "relation_key": STEEL_DEFENDER_RELATION_KEY,
+                "owner_character_id": owner_id,
+                "dependent_actor_id": dependent_id,
+                "started_elapsed_ticks": pending_start,
+                "completes_elapsed_ticks": pending_due,
+            }
+            try:
+                completed = complete_steel_defender_revival(
+                    dependent_sheet,
+                    pending,
+                    elapsed_ticks=elapsed_tick,
+                )
+            except SteelDefenderError as error:
+                raise CombatEngineError(str(error)) from error
+            if completed["status"] != "committed":
+                continue
+            update_actor(dependent_id, completed["sheet"])
+            relations[relation_index] = {
+                **relation,
+                "status": "active",
+                "death_elapsed_ticks": None,
+                "revival_started_elapsed_ticks": None,
+                "revival_completes_elapsed_ticks": None,
+            }
+            if isinstance(encounter, dict):
+                sync_combatant_conditions(encounter, dependent_id, completed["sheet"])
+            revivals.append(
+                {
+                    "dependent_actor_id": dependent_id,
+                    "owner_character_id": owner_id,
+                }
+            )
+        if not deaths and not revivals and relations == state.get("dependent_actor_relations", []):
+            return campaign_state, candidates, response_fields
+        state["dependent_actor_relations"] = validate_dependent_actor_relations(relations)
+        response = dict(response_fields)
+        if deaths:
+            response["steel_defender_deaths"] = deaths
+        if revivals:
+            response["steel_defender_revivals"] = revivals
+        if isinstance(encounter, dict) and "combat" in response:
+            response["combat"] = deepcopy(encounter)
+        return validate_party_state(state), list(by_id.values()), response
+
     def commit_campaign_state(
         campaign: Any,
         campaign_state: dict[str, Any] | None,
@@ -13691,6 +15198,15 @@ def _create_server(
     ) -> dict[str, Any]:
         """Commit one public state result and its exact retry response atomically."""
 
+        campaign_state, character_updates, response_fields = (
+            reconcile_steel_defender_deaths(
+                campaign,
+                campaign_state,
+                character_updates,
+                response_fields,
+                branch_id=branch_id,
+            )
+        )
         (
             campaign_state,
             character_updates,
@@ -13701,6 +15217,10 @@ def _create_server(
             character_updates,
             response_fields,
         )
+        campaign_state, character_updates, response_fields = reconcile_unconscious_inventory(
+            campaign, campaign_state, character_updates, response_fields
+        )
+        validate_inventory_custody_update(campaign, campaign_state, character_updates)
         if "narrative_followup" not in response_fields:
             followup = narrative_followup_for_mutation(
                 campaign,
@@ -13977,12 +15497,26 @@ def _create_server(
                 + ", ".join(sorted(pending_actor_ids))
             )
 
-    def require_engine_owned_short_rest_hit_die_state(
+    def require_engine_owned_character_state(
         candidate_sheet: Mapping[str, Any],
         *,
         current_sheet: Mapping[str, Any] | None = None,
     ) -> None:
-        """Reject caller creation or alteration of the persisted rest-choice capability."""
+        """Preserve runtime-owned rest capabilities and external inventory references."""
+
+        current_external = deepcopy(
+            dict((current_sheet or {}).get("inventory") or {}).get("external_items") or []
+        )
+        if "dead" in condition_ids(candidate_sheet.get("conditions")):
+            for item in current_external:
+                if item.get("attunement") == "attuned":
+                    item["attunement"] = "required"
+        candidate_external = dict(candidate_sheet.get("inventory") or {}).get("external_items", [])
+        if candidate_external != current_external:
+            raise ValueError(
+                "inventory.external_items is engine-owned and may only be changed "
+                "by an authoritative inventory settlement"
+            )
 
         candidate_combat = dict(candidate_sheet.get("combat") or {})
         candidate_has_window = "short_rest_hit_dice" in candidate_combat
@@ -17627,8 +19161,9 @@ def _create_server(
         source_condition_records: list[dict[str, Any]] = []
         source_condition_sheets: dict[str, dict[str, Any]] = {}
         source_condition_characters = {character.id: character for character in participants}
-        for actor_id_value, config_entry in config_by_actor.items():
-            actor = source_condition_characters[actor_id_value]
+        for actor in participants:
+            actor_id_value = actor.id
+            config_entry = config_by_actor.get(actor_id_value, {})
             _, conditions, sheet = source_participant_rules(
                 campaign_id,
                 resolved_scene_id,
@@ -17638,6 +19173,11 @@ def _create_server(
             source_condition_records.extend(conditions)
             if sheet is not None:
                 source_condition_sheets[actor_id_value] = sheet
+        dependent_turn_contracts = _steel_defender_turn_contracts(
+            campaign_id,
+            resolved_branch_id,
+            set(participant_ids),
+        )
         actors = []
         for character_id in participant_ids:
             actor = combat_actor_snapshot(character_id)
@@ -17645,6 +19185,10 @@ def _create_server(
             actor_config.pop("source_conditions", None)
             actor_config.pop("deployment_zone_id", None)
             actor.update(actor_config)
+            if character_id in dependent_turn_contracts:
+                actor["dependent_turn"] = deepcopy(
+                    dependent_turn_contracts[character_id]
+                )
             if character_id in source_condition_sheets:
                 actor["sheet"] = validate_character_sheet(
                     source_condition_sheets[character_id],
@@ -17713,10 +19257,20 @@ def _create_server(
             )
             for actor_id_value, sheet in initial_sheets.items()
             if sheet != source_condition_characters[actor_id_value].sheet
+            or actor_id_value in source_condition_sheets
         ]
+        updated_state, source_start_updates, _ = reconcile_actor_effect_dependencies(
+            campaign, updated_state, source_start_updates, {}
+        )
+        updated_state, source_start_updates, start_fields = reconcile_unconscious_inventory(
+            campaign, updated_state, source_start_updates, {"combat": encounter}
+        )
+        validate_inventory_custody_update(campaign, updated_state, source_start_updates)
+        encounter = updated_state["combat"]
 
         def start_response(revisions: list[Any]) -> dict[str, Any]:
             return {
+                **start_fields,
                 "combat": encounter,
                 "tool_profile": PROFILE_COMBAT,
                 "campaign_revision": campaign.revision + 1,
@@ -17809,6 +19363,8 @@ def _create_server(
         visible_to = config_value.get("visible_to_actor_ids")
         encounter_actor_ids = {
             str(item.get("actor_id") or "") for item in encounter.get("combatants", [])
+        } | {
+            str(item.get("actor_id") or "") for item in encounter.get("reinforcements", [])
         } | {actor_id}
         if visible_to is not None and (
             not isinstance(visible_to, list)
@@ -17839,6 +19395,13 @@ def _create_server(
         config_value.pop("source_conditions", None)
         actor = combat_actor_snapshot(actor_id)
         actor.update(config_value)
+        turn_contract = _steel_defender_turn_contracts(
+            campaign_id,
+            resolved_branch_id,
+            encounter_actor_ids,
+        ).get(actor_id)
+        if turn_contract is not None:
+            actor["dependent_turn"] = deepcopy(turn_contract)
         if joining_sheet is not None:
             actor["sheet"] = validate_character_sheet(
                 joining_sheet,
@@ -17891,9 +19454,21 @@ def _create_server(
             if joining_sheet is not None
             else []
         )
+        next_state, character_updates, _ = reconcile_actor_effect_dependencies(
+            campaign, next_state, character_updates, {}
+        )
+        next_state, character_updates, join_fields = reconcile_unconscious_inventory(
+            campaign, next_state, character_updates, {"combat": next_encounter}
+        )
+        validate_inventory_custody_update(campaign, next_state, character_updates)
+        next_encounter = next_state["combat"]
+        queued = next(
+            item for item in next_encounter["reinforcements"] if item.get("actor_id") == actor_id
+        )
 
         def join_response(revisions: list[Any]) -> dict[str, Any]:
             return {
+                **join_fields,
                 "status": "committed",
                 "queued": deepcopy(queued),
                 "combat": next_encounter,
@@ -17936,7 +19511,9 @@ def _create_server(
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
     ) -> dict[str, Any]:
         """List legal action categories without consuming a turn resource."""
-        access.require_actor(campaign_id, actor_id, principal_id, private=True)
+        require_combat_actor_or_steel_defender_owner_control(
+            campaign_id, actor_id, principal_id
+        )
         campaign = campaigns.get(campaign_id)
         campaign, encounter = active_encounter(campaign_id)
         combatant = next(
@@ -17948,20 +19525,14 @@ def _create_server(
         actions = available_actions(encounter, actor_id)
         actor = combat_actor_snapshot(actor_id)
         hit_points = int(dict(actor.get("derived", {}).get("hit_points") or {}).get("value", 0))
-        conditions = {str(item).casefold() for item in actor.get("sheet", {}).get("conditions", [])}
         current = current_combatant(encounter)
-        death_save_used = bool(dict(combatant.get("turn_flags") or {}).get("death_save_used"))
         if (
             current is not None
             and current.get("actor_id") == actor_id
             and bool(combatant.get("death_saves", False))
             and hit_points == 0
         ):
-            actions = (
-                ["death_save"]
-                if not conditions & DEATH_SAVE_SETTLED_CONDITIONS and not death_save_used
-                else []
-            )
+            actions = ["death_save"] if death_save_due(combatant, actor["sheet"]) else []
         return {
             "actor_id": actor_id,
             "actions": actions,
@@ -17978,14 +19549,27 @@ def _create_server(
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
     ) -> dict[str, Any]:
         """Validate an attack and return a non-mutating resolution plan."""
-        access.require_actor(campaign_id, actor_id, principal_id, control=True)
+        require_combat_actor_or_steel_defender_owner_control(
+            campaign_id, actor_id, principal_id
+        )
         campaign, encounter = active_encounter(campaign_id)
+        resolved_branch_id = require_current_branch(campaign_id, None)
         require_campaign_actor(campaign_id, target_id)
         action = sanitize_attack_action(campaign_id, principal_id, dict(action or {}))
+        deflect_declaration = action.pop("deflect_attack", None)
         validate_agent_attack_context(
             campaign_id,
             action,
             encounter=encounter,
+        )
+        prepared_deflect = _prepare_steel_defender_deflect(
+            campaign_id,
+            resolved_branch_id,
+            principal_id,
+            actor_id,
+            target_id,
+            deflect_declaration,
+            encounter,
         )
         try:
             attacker = combat_actor_snapshot(actor_id)
@@ -18009,6 +19593,11 @@ def _create_server(
                 light_extra_attack=action.get("light_extra_attack"),
                 weapon_mastery_followup=action.get("weapon_mastery_followup"),
             )
+            if prepared_deflect is not None:
+                plan = apply_deflect_attack_to_plan(
+                    plan,
+                    defender_id=str(prepared_deflect["eligibility"]["defender_id"]),
+                )
         except NeedsRulingError as error:
             if access.require_campaign(campaign_id, principal_id).role not in CAMPAIGN_DM_ROLES:
                 raise CombatEngineError("attack requires Agent-as-DM adjudication") from None
@@ -18066,7 +19655,9 @@ def _create_server(
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Resolve an attack and atomically update the attacker, target and encounter."""
-        access.require_actor(campaign_id, actor_id, principal_id, control=True)
+        require_combat_actor_or_steel_defender_owner_control(
+            campaign_id, actor_id, principal_id, branch_id=branch_id
+        )
         require_write_contract(expected_revision, idempotency_key)
         resolved_branch_id = require_current_branch(campaign_id, branch_id)
         if actor_id == target_id:
@@ -18074,6 +19665,7 @@ def _create_server(
         campaign = campaigns.get(campaign_id)
         action_payload = sanitize_attack_action(campaign_id, principal_id, deepcopy(action or {}))
         spell_resolution_id = str(action_payload.pop("spell_resolution_id", "") or "")
+        deflect_declaration = action_payload.pop("deflect_attack", None)
         payload = {
             "actor_id": actor_id,
             "target_id": target_id,
@@ -18082,6 +19674,7 @@ def _create_server(
             # normalized input instead of mutating it after the hash is bound.
             "action": deepcopy(action_payload),
             "spell_resolution_id": spell_resolution_id,
+            "deflect_attack": deepcopy(deflect_declaration),
             "branch_id": resolved_branch_id,
         }
         scope = f"combat-attack:{campaign_id}:{resolved_branch_id}:{principal_id}"
@@ -18150,6 +19743,27 @@ def _create_server(
         target_record = require_campaign_actor(campaign_id, target_id)
         attacker = character_view(attacker_record, rules_context=rule_context)
         target = character_view(target_record, rules_context=rule_context)
+        prepared_deflect = _prepare_steel_defender_deflect(
+            campaign_id,
+            resolved_branch_id,
+            principal_id,
+            actor_id,
+            target_id,
+            deflect_declaration,
+            encounter,
+        )
+        deflect_activity = (
+            dict(prepared_deflect["activity"]) if prepared_deflect is not None else None
+        )
+        deflect_contract = (
+            dict(prepared_deflect["contract"]) if prepared_deflect is not None else None
+        )
+        deflect_spatial_facts = (
+            dict(prepared_deflect["spatial_facts"]) if prepared_deflect is not None else None
+        )
+        deflect_eligibility = (
+            dict(prepared_deflect["eligibility"]) if prepared_deflect is not None else None
+        )
         compiled_item_plan = None
         item_card: dict[str, Any] | None = None
         try:
@@ -18200,6 +19814,7 @@ def _create_server(
                         raise CombatEngineError(
                             "recorded weapon plan must be an item attack.after_hit contract"
                         )
+                    _semantic_plan_save_facts(item_card, compiled_item_plan)
         except NeedsRulingError:
             if access.require_campaign(campaign_id, principal_id).role not in CAMPAIGN_DM_ROLES:
                 raise CombatEngineError("attack requires Agent-as-DM adjudication") from None
@@ -18232,7 +19847,48 @@ def _create_server(
                 ["dnd5e.core.action.multiattack_choice"],
                 "combat.attack.payment",
             )
+        if deflect_activity is not None:
+            assert deflect_contract is not None
+            assert deflect_spatial_facts is not None
+            assert deflect_eligibility is not None
+            try:
+                next_encounter = consume_deflect_attack_reaction(
+                    next_encounter,
+                    defender_id=str(deflect_eligibility["defender_id"]),
+                )
+            except SteelDefenderError as error:
+                raise CombatEngineError(str(error)) from error
+            plan = apply_deflect_attack_to_plan(
+                plan,
+                defender_id=str(deflect_eligibility["defender_id"]),
+            )
+            attack_payment_receipts = [
+                *attack_payment_receipts,
+                {
+                    "mechanic_id": STEEL_DEFENDER_DEFLECT_ATTACK_MECHANIC_ID,
+                    "event": "attack.before_roll.steel_defender_deflect",
+                    "operations": [{"op": "builtin.expansion_provider"}],
+                    "citations": [
+                        {
+                            "source_artifact_id": deflect_contract["source_artifact_id"],
+                            "source_pack_id": deflect_contract["source_pack_id"],
+                            "source_pack_version": deflect_contract["source_pack_version"],
+                            "reviewed_expression_hash": deflect_contract[
+                                "reviewed_expression_hash"
+                            ],
+                        }
+                    ],
+                    "facts": deepcopy(deflect_spatial_facts),
+                    "ruleset_fingerprint": rule_context.fingerprint,
+                },
+            ]
         attack_roll = roll_attack_action(plan=plan)
+        if deflect_activity is not None:
+            attack_roll["deflect_attack"] = {
+                "defender_id": str(deflect_eligibility["defender_id"]),
+                "activity_id": str(deflect_activity["id"]),
+                "reaction_paid": True,
+            }
         consumed_attack_advantage = consume_next_attack_advantage(
             next_encounter,
             plan,
@@ -18328,6 +19984,7 @@ def _create_server(
                 plan=deepcopy(plan),
                 attack=deepcopy(attack_roll),
                 attack_payment=deepcopy(attack_payment),
+                attack_rule_receipts=deepcopy(attack_payment_receipts),
                 ammunition=deepcopy(ammunition),
                 limited_use=deepcopy(limited_use),
                 spell_resolution_id=spell_resolution_id or None,
@@ -18834,7 +20491,9 @@ def _create_server(
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Advance a structured encounter turn with optimistic concurrency."""
-        access.require_actor(campaign_id, actor_id, principal_id, control=True)
+        require_combat_actor_or_steel_defender_owner_control(
+            campaign_id, actor_id, principal_id, branch_id=branch_id
+        )
         require_write_contract(expected_revision, idempotency_key)
         resolved_branch_id = require_current_branch(campaign_id, branch_id)
         campaign = campaigns.get(campaign_id)
@@ -18863,7 +20522,9 @@ def _create_server(
             turn_token=ended_turn_token,
         )
         next_state = dict(campaign.state or {})
-        next_state["combat"] = end_turn(next_encounter, actor_id_value=actor_id)
+        next_state["combat"] = end_turn(
+            next_encounter, actor_id_value=actor_id, current_actor_sheet=current_sheet
+        )
         expired_attack_advantage = expire_next_attack_advantage(
             next_state["combat"],
             actor_id=actor_id,
@@ -18881,6 +20542,7 @@ def _create_server(
         expired_standard_turn_start: list[str] = []
         if next_combatant is not None:
             next_actor_id = str(next_combatant.get("actor_id") or "")
+            record_death_save_turn_start(next_combatant, characters.get(next_actor_id).sheet)
             expired_standard_turn_start = expire_standard_source_turn_effects(
                 next_state["combat"],
                 actor_id=next_actor_id,
@@ -19109,6 +20771,16 @@ def _create_server(
         next_state, combat_updates, _ = reconcile_actor_effect_dependencies(
             campaign, next_state, combat_updates, {}
         )
+        next_state, combat_updates, steel_defender_lifecycle = (
+            reconcile_steel_defender_deaths(
+                campaign,
+                next_state,
+                combat_updates,
+                {},
+                branch_id=resolved_branch_id,
+            )
+        )
+        assert next_state is not None
 
         def turn_end_response(revisions: list[Any]) -> dict[str, Any]:
             response = {
@@ -19125,6 +20797,7 @@ def _create_server(
                 "ruleset_fingerprint": rule_context.fingerprint,
                 "campaign_revision": campaign.revision + 1,
                 "revisions": [asdict(item) for item in revisions],
+                **steel_defender_lifecycle,
             }
             stream = active_random_stream()
             if stream is not None and stream.draw_count > 0:
@@ -19533,7 +21206,9 @@ def _create_server(
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Resolve an owned opportunity-attack window atomically with its attack."""
-        access.require_actor(campaign_id, actor_id, principal_id, control=True)
+        require_combat_actor_or_steel_defender_owner_control(
+            campaign_id, actor_id, principal_id, branch_id=branch_id
+        )
         require_write_contract(expected_revision, idempotency_key)
         resolved_branch_id = require_current_branch(campaign_id, branch_id)
         if actor_id == target_id:
@@ -19804,9 +21479,7 @@ def _create_server(
         sneak_attack = dict(result.get("sneak_attack") or {})
         if sneak_attack.get("used"):
             attacker_combatant = next(
-                item
-                for item in next_encounter["combatants"]
-                if item.get("actor_id") == actor_id
+                item for item in next_encounter["combatants"] if item.get("actor_id") == actor_id
             )
             flags = dict(attacker_combatant.get("turn_flags") or {})
             flags["sneak_attack_turn_token"] = sneak_attack["turn_token"]
@@ -19887,7 +21560,9 @@ def _create_server(
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Resolve a post-hit defensive reaction before any damage is rolled."""
-        access.require_actor(campaign_id, actor_id, principal_id, control=True)
+        require_combat_actor_or_steel_defender_owner_control(
+            campaign_id, actor_id, principal_id, branch_id=branch_id
+        )
         require_write_contract(expected_revision, idempotency_key)
         resolved_branch_id = require_current_branch(campaign_id, branch_id)
         payload = {
@@ -20089,12 +21764,12 @@ def _create_server(
                 else None
             ),
         }
-        if spell_result is not None or activity_result is not None:
-            result["rule_receipts"] = [
-                *list(result.get("rule_receipts") or []),
-                *(list(spell_result.get("rule_receipts") or []) if spell_result else []),
-                *(list(activity_result.get("rule_receipts") or []) if activity_result else []),
-            ]
+        result["rule_receipts"] = [
+            *list(result.get("rule_receipts") or []),
+            *list(window.get("attack_rule_receipts") or []),
+            *(list(spell_result.get("rule_receipts") or []) if spell_result else []),
+            *(list(activity_result.get("rule_receipts") or []) if activity_result else []),
+        ]
         attacker_combatant = next(
             item for item in next_encounter["combatants"] if item.get("actor_id") == attacker_id
         )
@@ -20258,7 +21933,9 @@ def _create_server(
         opportunity-reaction windows.  Effect-driven forced movement and
         teleportation may move a combatant off-turn without consuming speed.
         """
-        access.require_actor(campaign_id, actor_id, principal_id, control=True)
+        require_combat_actor_or_steel_defender_owner_control(
+            campaign_id, actor_id, principal_id, branch_id=branch_id
+        )
         require_write_contract(expected_revision, idempotency_key)
         resolved_branch_id = require_current_branch(campaign_id, branch_id)
         payload = {
@@ -20407,7 +22084,9 @@ def _create_server(
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Stand from Prone by spending half the actor's speed, without using an action."""
-        access.require_actor(campaign_id, actor_id, principal_id, control=True)
+        require_combat_actor_or_steel_defender_owner_control(
+            campaign_id, actor_id, principal_id, branch_id=branch_id
+        )
         require_write_contract(expected_revision, idempotency_key)
         resolved_branch_id = require_current_branch(campaign_id, branch_id)
         payload = {"actor_id": actor_id, "branch_id": resolved_branch_id}
@@ -20463,9 +22142,11 @@ def _create_server(
         campaign_id: str,
         actor_id: str,
         action: Literal[
+            "command_dependent",
             "dash",
             "disengage",
             "dodge",
+            "drop_held",
             "emerge_shell",
             "escape",
             "help",
@@ -20473,10 +22154,13 @@ def _create_server(
             "influence",
             "interact_object",
             "improvise",
+            "pickup_ground",
             "ready",
+            "revive_steel_defender",
             "search",
             "shell_defense",
             "shake_hypnotic_pattern",
+            "shake_sleep",
             "stabilize",
             "study",
             "sustain_spell",
@@ -20492,7 +22176,23 @@ def _create_server(
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Settle a common action payment, including a turned creature's escape attempt."""
-        access.require_actor(campaign_id, actor_id, principal_id, control=True)
+        if action in {"drop_held", "pickup_ground"}:
+            if target_id is not None or trigger is not None:
+                raise ValueError("ground inventory actions use only their exact payload")
+            return ground_inventory_settlement(
+                campaign_id,
+                actor_id,
+                action,
+                dict(payload or {}),
+                principal_id=principal_id,
+                expected_revision=expected_revision,
+                branch_id=branch_id,
+                idempotency_key=idempotency_key,
+                in_combat=True,
+            )
+        require_combat_actor_or_steel_defender_owner_control(
+            campaign_id, actor_id, principal_id, branch_id=branch_id
+        )
         require_write_contract(expected_revision, idempotency_key)
         resolved_branch_id = require_current_branch(campaign_id, branch_id)
         payload_value = {
@@ -20519,6 +22219,125 @@ def _create_server(
         if target_id is not None:
             require_campaign_actor(campaign_id, target_id)
         normalized_action = str(action).strip().lower().replace("-", "_")
+        revival_relation_index: int | None = None
+        revival_relations: list[dict[str, Any]] | None = None
+        revival_relation: dict[str, Any] | None = None
+        revival_contract: dict[str, str] | None = None
+        revival_distance_ft: float | None = None
+        revival_spatial_facts: dict[str, Any] | None = None
+        revival_slot_level: int | None = None
+        if normalized_action == "revive_steel_defender":
+            if not target_id or trigger is not None:
+                raise CombatEngineError(
+                    "revive_steel_defender requires a target and does not accept a trigger"
+                )
+            revival_payload = dict(payload or {})
+            positioning_mode = str(encounter.get("positioning_mode") or "agent")
+            expected_fields = (
+                {"slot_level"}
+                if positioning_mode == "grid"
+                else {"slot_level", "spatial_facts"}
+            )
+            if set(revival_payload) != expected_fields:
+                raise CombatEngineError(
+                    "revive_steel_defender requires its exact slot and positioning payload"
+                )
+            raw_slot_level = revival_payload.get("slot_level")
+            if (
+                isinstance(raw_slot_level, bool)
+                or not isinstance(raw_slot_level, int)
+                or not 1 <= raw_slot_level <= 9
+            ):
+                raise CombatEngineError("Steel Defender revival slot_level must be from 1 to 9")
+            revival_slot_level = raw_slot_level
+            candidate_relations = validate_dependent_actor_relations(
+                dict(campaign.state or {}).get("dependent_actor_relations", [])
+            )
+            matches = [
+                (index, relation)
+                for index, relation in enumerate(candidate_relations)
+                if relation["owner_character_id"] == actor_id
+                and relation["dependent_actor_id"] == target_id
+                and relation["relation_key"] == STEEL_DEFENDER_RELATION_KEY
+            ]
+            if len(matches) != 1 or matches[0][1]["status"] != "dead":
+                raise CombatEngineError(
+                    "Steel Defender revival requires this owner's one dead defender relation"
+                )
+            revival_relation_index, revival_relation = matches[0]
+            revival_relations = candidate_relations
+            revival_contract = _verified_steel_defender_relation(
+                campaign_id,
+                resolved_branch_id,
+                revival_relation,
+                require_current_parameters=False,
+            )
+            if positioning_mode == "grid":
+                owner_combatant = require_encounter_combatant(
+                    encounter,
+                    actor_id,
+                    role="Steel Defender owner",
+                )
+                defender_combatant = require_encounter_combatant(
+                    encounter,
+                    target_id,
+                    role="dead Steel Defender",
+                )
+                cell_ft = int(
+                    dict(dict(encounter.get("battle_map") or {}).get("grid") or {}).get(
+                        "cell_ft", 5
+                    )
+                    or 5
+                )
+                distance = combat_distance(
+                    owner_combatant.get("position"),
+                    defender_combatant.get("position"),
+                    cell_ft=cell_ft,
+                )
+                if distance is None:
+                    raise CombatEngineError(
+                        "Steel Defender revival requires both grid token positions"
+                    )
+                revival_distance_ft = float(distance)
+                revival_spatial_facts = {
+                    "distance_ft": revival_distance_ft,
+                    "source": "grid_token_positions",
+                    "committed": True,
+                }
+            else:
+                access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
+                raw_spatial = revival_payload.get("spatial_facts")
+                if not isinstance(raw_spatial, dict) or set(raw_spatial) != {
+                    "distance_ft",
+                    "default_resolver",
+                    "ruling_kind",
+                    "reason",
+                }:
+                    raise CombatEngineError(
+                        "Steel Defender revival requires exact Agent spatial_facts"
+                    )
+                distance = raw_spatial.get("distance_ft")
+                reason = " ".join(str(raw_spatial.get("reason") or "").split())
+                if (
+                    isinstance(distance, bool)
+                    or not isinstance(distance, (int, float))
+                    or not math.isfinite(float(distance))
+                    or not 0 <= float(distance) <= 5
+                    or raw_spatial.get("default_resolver") != "agent"
+                    or raw_spatial.get("ruling_kind") != "agent_dm_adjudication"
+                    or not reason
+                    or len(reason) > 500
+                ):
+                    raise CombatEngineError(
+                        "Steel Defender revival requires a bounded within-5-feet Agent ruling"
+                    )
+                revival_distance_ft = float(distance)
+                revival_spatial_facts = {
+                    **raw_spatial,
+                    "distance_ft": revival_distance_ft,
+                    "reason": reason,
+                    "committed": True,
+                }
         if normalized_action == "sustain_spell":
             access.require_campaign(
                 campaign_id,
@@ -20709,6 +22528,7 @@ def _create_server(
         source_condition = ""
         source_condition_ruling = None
         hypnotic_target_record = None
+        sleep_wake_spatial_facts = None
         shell_defense_record = None
         shell_defense_sheet = None
         if normalized_action in {"shell_defense", "emerge_shell"}:
@@ -20722,11 +22542,9 @@ def _create_server(
                 if normalized_action == "shell_defense"
                 else emerge_tortle_shell_defense(shell_defense_record.sheet)
             )
-        if normalized_action == "shake_hypnotic_pattern":
+        if normalized_action in {"shake_hypnotic_pattern", "shake_sleep"}:
             if target_id is None or target_id == actor_id:
-                raise CombatEngineError("shaking Hypnotic Pattern requires another target creature")
-            if payload:
-                raise CombatEngineError("shake_hypnotic_pattern does not accept a payload")
+                raise CombatEngineError("shaking awake requires another target creature")
             acting_combatant = require_encounter_combatant(
                 encounter,
                 actor_id,
@@ -20735,20 +22553,40 @@ def _create_server(
             target_combatant = require_encounter_combatant(
                 encounter,
                 target_id,
-                role="Hypnotic Pattern target",
+                role="sleeping target",
             )
-            battle_map = dict(encounter.get("battle_map") or {})
-            cell_ft = int(dict(battle_map.get("grid") or {}).get("cell_ft", 5) or 5)
-            distance = combat_distance(
-                acting_combatant.get("position"),
-                target_combatant.get("position"),
-                cell_ft=cell_ft,
-            )
-            if distance is None or distance > 5:
-                raise CombatEngineError("shaking Hypnotic Pattern requires an adjacent target")
+            if normalized_action == "shake_sleep" and encounter.get("positioning_mode") == "agent":
+                access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
+                sleep_wake_spatial_facts = _agent_ruling_boundary(
+                    _normalize_sleep_wake_spatial_facts
+                )(payload, campaign_revision=campaign.revision)
+                if sleep_wake_spatial_facts.get("status") == "pending_ruling":
+                    return sleep_wake_spatial_facts
+                engine_payload = {"spatial_facts": sleep_wake_spatial_facts}
+            else:
+                if payload:
+                    raise CombatEngineError(f"{normalized_action} does not accept a payload")
+                battle_map = dict(encounter.get("battle_map") or {})
+                cell_ft = int(dict(battle_map.get("grid") or {}).get("cell_ft", 5) or 5)
+                distance = combat_distance(
+                    acting_combatant.get("position"),
+                    target_combatant.get("position"),
+                    cell_ft=cell_ft,
+                )
+                if distance is None or distance > 5:
+                    raise CombatEngineError("shaking awake requires an adjacent target")
             hypnotic_target_record = characters.get(target_id)
-            if not active_hypnotic_pattern_effect_ids(hypnotic_target_record.sheet):
-                raise CombatEngineError("target has no active Hypnotic Pattern effect")
+            active_shaken_effect_ids = (
+                active_hypnotic_pattern_effect_ids(hypnotic_target_record.sheet)
+                if normalized_action == "shake_hypnotic_pattern"
+                else [
+                    str(effect["id"])
+                    for effect in hypnotic_target_record.sheet.get("effects", [])
+                    if effect.get("active") and effect.get("source_spell_id") == CORE_SLEEP_SPELL_ID
+                ]
+            )
+            if not active_shaken_effect_ids:
+                raise CombatEngineError(f"target has no active effect for {normalized_action}")
         if "agent_ruling_commitment" in dict(payload or {}):
             if normalized_action != "improvise":
                 raise CombatEngineError(
@@ -20902,6 +22740,49 @@ def _create_server(
             trigger=trigger,
             payload=engine_payload,
         )
+        if normalized_action == "revive_steel_defender":
+            assert target_id is not None
+            assert revival_relation_index is not None
+            assert revival_relations is not None
+            assert revival_relation is not None
+            assert revival_distance_ft is not None
+            assert revival_slot_level is not None
+            owner_record = characters.get(actor_id)
+            defender_record = require_campaign_actor(campaign_id, target_id)
+            try:
+                started_revival = begin_steel_defender_revival(
+                    owner_record.sheet,
+                    defender_record.sheet,
+                    relation=revival_relation,
+                    elapsed_ticks=int(dict(campaign.state["game_time"])["elapsed_ticks"]),
+                    distance_ft=revival_distance_ft,
+                    slot_level=revival_slot_level,
+                    action_available=True,
+                )
+            except SteelDefenderError as error:
+                raise CombatEngineError(str(error)) from error
+            character_updates.append(
+                CharacterStateUpdate(
+                    character_id=actor_id,
+                    sheet=validate_character_sheet(started_revival["owner_sheet"]),
+                    notes=validate_character_notes(owner_record.notes),
+                    expected_revision=owner_record.revision,
+                )
+            )
+            pending = dict(started_revival["pending_revival"])
+            revival_relations[revival_relation_index] = {
+                **revival_relation,
+                "revival_started_elapsed_ticks": pending["started_elapsed_ticks"],
+                "revival_completes_elapsed_ticks": pending["completes_elapsed_ticks"],
+            }
+            condition_resolution = {
+                "kind": "steel_defender_revival_started",
+                "dependent_actor_id": target_id,
+                "payment": deepcopy(started_revival["payment"]),
+                "action_paid": True,
+                "completes_elapsed_ticks": pending["completes_elapsed_ticks"],
+                "spatial_facts": deepcopy(revival_spatial_facts),
+            }
         if shell_defense_record is not None and shell_defense_sheet is not None:
             sync_combatant_conditions(next_encounter, actor_id, shell_defense_sheet)
             character_updates.append(
@@ -20916,16 +22797,24 @@ def _create_server(
             condition_resolution = {
                 "kind": "tortle_shell_defense",
                 "withdrawn": withdrawn,
-                "armor_class": derive_character_sheet(
-                    shell_defense_sheet, character_id=actor_id
-                )["armor_class"],
+                "armor_class": derive_character_sheet(shell_defense_sheet, character_id=actor_id)[
+                    "armor_class"
+                ],
                 "speed_multiplier": source_speed_multiplier(shell_defense_sheet),
                 "conditions": list(shell_defense_sheet.get("conditions") or []),
             }
         if hypnotic_target_record is not None:
-            ended_hypnotic = end_hypnotic_pattern_effects(
-                hypnotic_target_record.sheet,
-                ended_reason="shaken_awake",
+            ended_hypnotic = (
+                end_hypnotic_pattern_effects(
+                    hypnotic_target_record.sheet, ended_reason="shaken_awake"
+                )
+                if normalized_action == "shake_hypnotic_pattern"
+                else wake_sleep_effects(hypnotic_target_record.sheet, reason="shaken_awake")
+            )
+            shaken_kind = (
+                "hypnotic_pattern_shaken_awake"
+                if normalized_action == "shake_hypnotic_pattern"
+                else "sleep_shaken_awake"
             )
             sync_combatant_conditions(
                 next_encounter,
@@ -20941,15 +22830,16 @@ def _create_server(
                 )
             )
             condition_resolution = {
-                "kind": "hypnotic_pattern_shaken_awake",
+                "kind": shaken_kind,
                 "target_id": str(target_id),
                 "ended_effect_ids": ended_hypnotic["ended_effect_ids"],
                 "ended_reason": "shaken_awake",
+                **({"spatial_facts": sleep_wake_spatial_facts} if sleep_wake_spatial_facts else {}),
             }
             next_encounter["log"] = [
                 *list(next_encounter.get("log") or []),
                 {
-                    "type": "hypnotic_pattern_shaken_awake",
+                    "type": shaken_kind,
                     "actor_id": actor_id,
                     "target_id": str(target_id),
                     "ended_effect_ids": ended_hypnotic["ended_effect_ids"],
@@ -21041,6 +22931,8 @@ def _create_server(
             boundary_ids.append("dnd5e.core.ready.action")
         if normalized_action == "shake_hypnotic_pattern":
             boundary_ids.append(CORE_HYPNOTIC_PATTERN_MECHANIC_ID)
+        if normalized_action == "shake_sleep":
+            boundary_ids.append(CORE_SLEEP_MECHANIC_ID)
         if normalized_action in {"shell_defense", "emerge_shell"}:
             boundary_ids.append(CORE_TORTLE_SHELL_DEFENSE_MECHANIC_ID)
         acting_combatant = next(
@@ -21053,7 +22945,31 @@ def _create_server(
             boundary_ids,
             f"action.{normalized_action}",
         )
+        if normalized_action == "revive_steel_defender":
+            assert revival_contract is not None
+            action_receipts.append(
+                {
+                    "mechanic_id": "dnd5e.expansion.steel_defender.revival",
+                    "event": "combat.steel_defender.revival.start",
+                    "operations": [{"op": "builtin.expansion_provider"}],
+                    "citations": [
+                        {
+                            "source_artifact_id": revival_contract["source_artifact_id"],
+                            "source_pack_id": revival_contract["source_pack_id"],
+                            "source_pack_version": revival_contract["source_pack_version"],
+                            "reviewed_expression_hash": revival_contract[
+                                "reviewed_expression_hash"
+                            ],
+                        }
+                    ],
+                    "ruleset_fingerprint": effective_rule_context(campaign_id).fingerprint,
+                }
+            )
         next_state = {**dict(campaign.state or {}), "combat": next_encounter}
+        if revival_relations is not None:
+            next_state["dependent_actor_relations"] = validate_dependent_actor_relations(
+                revival_relations
+            )
         response = commit_campaign_state(
             campaign,
             next_state,
@@ -21310,7 +23226,9 @@ def _create_server(
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
     ) -> list[dict[str, Any]]:
         """Read reaction windows an actor may resolve outside its own turn."""
-        access.require_actor(campaign_id, actor_id, principal_id, control=True)
+        require_combat_actor_or_steel_defender_owner_control(
+            campaign_id, actor_id, principal_id
+        )
         _campaign, encounter = active_encounter(campaign_id)
         windows = available_reactions(encounter, actor_id)
         if is_dm(campaign_id, principal_id):
@@ -21392,15 +23310,23 @@ def _create_server(
             )
             if source_item_id
             else next(
-                item
-                for item in current.sheet.get("content", {}).get("spells", [])
-                if item.get("id") == spell_id
+                (
+                    item
+                    for item in current.sheet.get("content", {}).get("spells", [])
+                    if item.get("id") == spell_id
+                ),
+                None,
             )
         )
+        if spell_entry is None:
+            raise CombatEngineError("spell is not recorded on the caster card")
         magic_missile = is_core_magic_missile_spell(spell_entry)
         fly = is_core_fly_spell(spell_entry)
         invisibility = is_core_invisibility_spell(spell_entry)
         hypnotic_pattern = is_core_hypnotic_pattern_spell(spell_entry)
+        sleep = spell_entry.get(
+            "id"
+        ) == CORE_SLEEP_SPELL_ID and CORE_SLEEP_MECHANIC_ID in spell_entry.get("mechanic_refs", [])
         structured_resolution = (
             (
                 deepcopy(dict(spell_entry["resolution"]))
@@ -21437,6 +23363,7 @@ def _create_server(
                 or fly
                 or invisibility
                 or hypnotic_pattern
+                or sleep
             ):
                 raise CombatEngineError(
                     "a spell card cannot combine a semantic plan with another "
@@ -21459,6 +23386,8 @@ def _create_server(
                 "Hypnotic Pattern cannot combine its Core mechanic with "
                 "structured damage resolution"
             )
+        if sleep and structured_resolution is not None:
+            raise CombatEngineError("Sleep cannot combine its Core mechanic with damage resolution")
         semantic_plan_commitment: dict[str, Any] | None = None
         if compiled_spell_plan is not None:
             if "agent_resolution_commitment" not in dict(declaration or {}):
@@ -21496,6 +23425,7 @@ def _create_server(
             and structured_resolution is None
             and compiled_spell_plan is None
             and not hypnotic_pattern
+            and not sleep
             and str(
                 spell_entry.get("effect")
                 or dict(spell_entry.get("definition") or {}).get("effect")
@@ -21609,6 +23539,7 @@ def _create_server(
         fly_target: dict[str, Any] | None = None
         invisibility_target: dict[str, Any] | None = None
         hypnotic_pattern_target: dict[str, Any] | None = None
+        sleep_target: dict[str, Any] | None = None
         if fly:
             if source_item_id is not None or spell_id not in CORE_FLY_SPELL_IDS:
                 raise CombatEngineError("the Core Fly path requires its exact actor spell card")
@@ -21748,6 +23679,29 @@ def _create_server(
                 spell=spell_entry,
                 declaration=declaration,
             )
+        if sleep:
+            if str(encounter.get("ruleset") or "") != "2014":
+                raise CombatEngineError("the source-bound Sleep mechanic is a 2014 rule")
+            if str(encounter.get("positioning_mode") or "grid") == "agent":
+                access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
+                sleep_target = _normalize_sleep_spatial_facts(
+                    declaration,
+                    actor_ids={
+                        str(item["actor_id"])
+                        for item in encounter.get("combatants", [])
+                        if "dead"
+                        not in {str(value).casefold() for value in item.get("conditions", [])}
+                    },
+                    campaign_revision=campaign.revision,
+                )
+            else:
+                sleep_target = normalize_area_declaration(
+                    encounter,
+                    source_id=actor_id,
+                    area={"shape": "sphere", "radius_ft": 20},
+                    origin_range_ft=90,
+                    declaration=declaration,
+                )
         if structured_resolution is not None:
             kind = str(structured_resolution.get("kind") or "")
             if kind == "spell_attack":
@@ -22192,6 +24146,83 @@ def _create_server(
                 ],
             )
             return combat_response(campaign_id, principal_id, response)
+        if sleep:
+            assert sleep_target is not None
+            if not 1 <= resolved_cast_level <= 9:
+                raise CombatEngineError("Sleep cast level must be between 1 and 9")
+            pool_roll = asdict(roll(f"{5 + 2 * (resolved_cast_level - 1)}d8"))
+            final_sheets: dict[str, dict[str, Any]] = {actor_id: deepcopy(applied["sheet"])}
+            targets: list[dict[str, Any]] = []
+            for target_context in sleep_target["targets"]:
+                target_id = str(target_context["target_id"])
+                target_actor = combat_actor_snapshot(target_id)
+                if target_id == actor_id:
+                    target_actor["sheet"] = deepcopy(applied["sheet"])
+                targets.append(target_actor)
+            settled_sleep = resolve_sleep_targets(
+                targets,
+                pool=int(pool_roll["total"]),
+                source_actor_id=actor_id,
+                source_spell_id=spell_id,
+                source_rule_refs=spell_entry.get("rule_refs", []),
+                ruleset="2014",
+            )
+            final_sheets.update(settled_sleep["sheets"])
+            for target_id, target_sheet in final_sheets.items():
+                sync_combatant_conditions(next_encounter, target_id, target_sheet)
+                reconcile_readied_spells(next_encounter, target_id, target_sheet)
+                reconcile_actor_witch_bolt_concentration(next_encounter, target_id, target_sheet)
+            resolution_receipts = [
+                *list(applied.get("rule_receipts") or []),
+                *core_receipts(
+                    rules,
+                    [CORE_SLEEP_MECHANIC_ID, "dnd5e.core.mcp.combat_spell_boundary"],
+                    "combat.spell.sleep",
+                ),
+            ]
+            for target_result in settled_sleep["targets"]:
+                if target_result["skip_reason"] == "immune_to_magical_sleep":
+                    target_result["rule_receipts"] = core_receipts(
+                        rules, [CORE_FEY_ANCESTRY_MECHANIC_ID], "combat.spell.sleep.immunity"
+                    )
+                    resolution_receipts.extend(target_result["rule_receipts"])
+            result = {
+                "kind": "sleep",
+                "spell_id": spell_id,
+                "cast_level": resolved_cast_level,
+                "pool_roll": pool_roll,
+                "pool_remaining": settled_sleep["pool_remaining"],
+                "area": sleep_target,
+                "targets": settled_sleep["targets"],
+                "payment": deepcopy(applied.get("payment") or {}),
+            }
+            next_encounter["log"] = [
+                *list(next_encounter.get("log") or []),
+                {"type": "sleep", "actor_id": actor_id, "result": deepcopy(result)},
+            ][-100:]
+            response = commit_campaign_state(
+                campaign,
+                {**dict(campaign.state or {}), "combat": next_encounter},
+                operation="combat.spell.sleep",
+                principal_id=principal_id,
+                branch_id=resolved_branch_id,
+                idempotency_key=idempotency_key,
+                scope=scope,
+                payload=payload,
+                response_fields={"status": "committed", "result": result, "combat": next_encounter},
+                character_updates=[
+                    CharacterStateUpdate(
+                        character_id=target_id,
+                        sheet=validate_character_sheet(target_sheet),
+                        notes=validate_character_notes(characters.get(target_id).notes),
+                        expected_revision=characters.get(target_id).revision,
+                    )
+                    for target_id, target_sheet in final_sheets.items()
+                    if target_sheet != characters.get(target_id).sheet
+                ],
+                rule_receipts=resolution_receipts,
+            )
+            return combat_response(campaign_id, principal_id, response)
         if hypnotic_pattern:
             assert hypnotic_pattern_target is not None
             derived_caster = derive_character_sheet(applied["sheet"], character_id=actor_id)
@@ -22555,7 +24586,7 @@ def _create_server(
                         "caster_id": actor_id,
                         "spell_id": spell_id,
                         "kind": "spell_save",
-                        "save_source_kind": "spell",
+                        **_structured_spell_save_facts(spell_entry, structured_resolution),
                     },
                 )
                 saved = resolve_actor_check(
@@ -22566,7 +24597,6 @@ def _create_server(
                     encounter=next_encounter,
                     bonus=cover_bonus,
                     save_source_kind="spell",
-                    save_effect_conditions=[],
                     ruleset=str(next_encounter.get("ruleset") or "2014"),
                     rules=target_rule_context,
                 )
@@ -23332,7 +25362,9 @@ def _create_server(
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Pay an activity and settle supported Core outcomes; return rulings for the rest."""
-        access.require_actor(campaign_id, actor_id, principal_id, control=True)
+        require_combat_actor_or_steel_defender_owner_control(
+            campaign_id, actor_id, principal_id, branch_id=branch_id
+        )
         require_write_contract(expected_revision, idempotency_key)
         resolved_branch_id = require_current_branch(campaign_id, branch_id)
         payload = {
@@ -23358,6 +25390,138 @@ def _create_server(
             activity_id,
             character_type=current.character_type,
         )
+        steel_defender_contract = _steel_defender_turn_contracts(
+            campaign_id,
+            resolved_branch_id,
+            {character.id for character in characters.list(campaign_id=campaign_id)},
+        ).get(actor_id)
+        steel_defender_repair = False
+        if steel_defender_contract is not None:
+            active_relations = [
+                relation
+                for relation in validate_dependent_actor_relations(
+                    dict(campaign.state or {}).get("dependent_actor_relations", [])
+                )
+                if relation["dependent_actor_id"] == actor_id
+                and relation["status"] == "active"
+                and relation["relation_key"] == STEEL_DEFENDER_RELATION_KEY
+            ]
+            if len(active_relations) != 1:
+                raise CombatEngineError("Steel Defender Repair requires one active relation")
+            expected_repair, expected_kind, steel_defender_contract = (
+                _verified_steel_defender_repair_activity(
+                    campaign_id,
+                    resolved_branch_id,
+                    active_relations[0],
+                )
+            )
+            if str(expected_repair.get("id") or "") == activity_id:
+                if (
+                    activity_source_card_kind != expected_kind
+                    or _activity_source_identity(activity_card)
+                    != _activity_source_identity(expected_repair)
+                ):
+                    raise CombatEngineError(
+                        "Steel Defender Repair does not match its signed source template"
+                    )
+                steel_defender_repair = True
+        repair_target_record = None
+        repair_target_kind = ""
+        repair_distance_ft: float = 0
+        repair_spatial_facts: dict[str, Any] | None = None
+        if steel_defender_repair:
+            declared_repair = dict(declaration or {})
+            if set(declared_repair) - {"target_id", "spatial_facts"}:
+                raise CombatEngineError(
+                    "Steel Defender Repair accepts only target_id and spatial_facts"
+                )
+            repair_target_id = str(declared_repair.get("target_id") or "").strip()
+            if not repair_target_id:
+                raise CombatEngineError("Steel Defender Repair requires target_id")
+            combatants_by_id = {
+                str(item.get("actor_id") or ""): item
+                for item in encounter.get("combatants", [])
+            }
+            source_combatant = combatants_by_id.get(actor_id)
+            target_combatant = combatants_by_id.get(repair_target_id)
+            if source_combatant is None or target_combatant is None:
+                raise CombatEngineError(
+                    "Steel Defender Repair source and target must be current combatants"
+                )
+            repair_target_record = require_campaign_actor(campaign_id, repair_target_id)
+            repair_target_kind = "self" if repair_target_id == actor_id else (
+                "construct"
+                if "construct"
+                in str(
+                    dict(repair_target_record.sheet.get("progression") or {}).get("species")
+                    or repair_target_record.sheet.get("creature_type")
+                    or ""
+                ).casefold()
+                else "object"
+                if "object"
+                in str(
+                    dict(repair_target_record.sheet.get("progression") or {}).get("species")
+                    or repair_target_record.sheet.get("creature_type")
+                    or ""
+                ).casefold()
+                else "invalid"
+            )
+            if repair_target_id == actor_id:
+                if declared_repair.get("spatial_facts") is not None:
+                    raise CombatEngineError(
+                        "self-targeted Steel Defender Repair derives zero distance"
+                    )
+                repair_distance_ft = 0.0
+                repair_spatial_facts = {
+                    "distance_ft": 0.0,
+                    "source": "self_target",
+                    "committed": True,
+                }
+            elif str(encounter.get("positioning_mode") or "agent") == "grid":
+                if declared_repair.get("spatial_facts") is not None:
+                    raise CombatEngineError(
+                        "grid Steel Defender Repair derives distance from token positions"
+                    )
+                distance = combat_distance(
+                    source_combatant.get("position"),
+                    target_combatant.get("position"),
+                )
+                if distance is None:
+                    raise CombatEngineError("Steel Defender Repair requires token positions")
+                repair_distance_ft = float(distance)
+                repair_spatial_facts = {
+                    "distance_ft": repair_distance_ft,
+                    "source": "grid_token_positions",
+                    "committed": True,
+                }
+            else:
+                raw_spatial = declared_repair.get("spatial_facts")
+                if not isinstance(raw_spatial, dict) or set(raw_spatial) != {
+                    "distance_ft",
+                    "default_resolver",
+                    "ruling_kind",
+                    "reason",
+                }:
+                    raise CombatEngineError(
+                        "agent-positioned Steel Defender Repair requires exact spatial_facts"
+                    )
+                access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
+                reason = " ".join(str(raw_spatial.get("reason") or "").split())
+                if (
+                    isinstance(raw_spatial.get("distance_ft"), bool)
+                    or not isinstance(raw_spatial.get("distance_ft"), (int, float))
+                    or not math.isfinite(float(raw_spatial["distance_ft"]))
+                    or float(raw_spatial["distance_ft"]) < 0
+                    or raw_spatial.get("default_resolver") != "agent"
+                    or raw_spatial.get("ruling_kind") != "agent_dm_adjudication"
+                    or not reason
+                    or len(reason) > 500
+                ):
+                    raise CombatEngineError(
+                        "Steel Defender Repair spatial_facts require a bounded Agent ruling"
+                    )
+                repair_distance_ft = raw_spatial["distance_ft"]
+                repair_spatial_facts = {**raw_spatial, "reason": reason, "committed": True}
         compiled_activity_plan = None
         if isinstance(
             activity_card.get("resolution_plan"),
@@ -23374,6 +25538,7 @@ def _create_server(
                 or compiled_activity_plan.source_card_kind != activity_source_card_kind
             ):
                 raise CombatEngineError("recorded activity resolution plan does not match its card")
+            _semantic_plan_save_facts(activity_card, compiled_activity_plan)
             if compiled_activity_plan.trigger != "action":
                 raise CombatEngineError(
                     "a combat-used activity resolution plan must use the action trigger"
@@ -23412,7 +25577,7 @@ def _create_server(
                 compiled_plan=compiled_activity_plan,
             )
             declaration = {"agent_resolution_commitment": normalized_commitment}
-        elif str(
+        elif not steel_defender_repair and str(
             activity_card.get("description") or ""
         ).strip() and not source_card_has_executable_mechanic(
             campaign_id,
@@ -23801,14 +25966,50 @@ def _create_server(
                 preserve_target_sheets,
                 allocations=preserve_allocations,
             )
-        try:
-            applied = consume_activity(
-                current.sheet,
-                activity_id=activity_id,
-                rules=rule_context,
+        repair_settlement: dict[str, Any] | None = None
+        if steel_defender_repair:
+            assert repair_target_record is not None
+            relation = next(
+                item
+                for item in validate_dependent_actor_relations(
+                    dict(campaign.state or {}).get("dependent_actor_relations", [])
+                )
+                if item["dependent_actor_id"] == actor_id and item["status"] == "active"
             )
-        except ActivityError as exc:
-            raise CombatEngineError(str(exc)) from exc
+            try:
+                repair_settlement = repair_steel_defender(
+                    current.sheet,
+                    (
+                        None
+                        if repair_target_record.id == actor_id
+                        else repair_target_record.sheet
+                    ),
+                    proficiency_bonus=int(
+                        dict(relation["template_binding"])["numeric_parameters"][
+                            "owner_proficiency_bonus"
+                        ]
+                    ),
+                    distance_ft=repair_distance_ft,
+                    target_kind=repair_target_kind,
+                    activity_id=activity_id,
+                )
+            except SteelDefenderError as error:
+                raise CombatEngineError(str(error)) from error
+            applied = {
+                "sheet": repair_settlement["defender_sheet"],
+                "activation": deepcopy(activity_card.get("activation") or {}),
+                "payment": deepcopy(repair_settlement["payment"]),
+                "rule_receipts": [],
+            }
+        else:
+            try:
+                applied = consume_activity(
+                    current.sheet,
+                    activity_id=activity_id,
+                    rules=rule_context,
+                )
+            except ActivityError as exc:
+                raise CombatEngineError(str(exc)) from exc
         if applied.get("status") in PENDING_RULE_RESULT_STATUSES:
             return {
                 **_ruling_status(
@@ -23889,6 +26090,29 @@ def _create_server(
             source_card=activity_card,
         )
         additional_updates: list[CharacterStateUpdate] = []
+        if repair_settlement is not None:
+            assert repair_target_record is not None
+            target_sheet = validate_character_sheet(repair_settlement["target_sheet"])
+            sync_combatant_conditions(next_encounter, repair_target_record.id, target_sheet)
+            if repair_target_record.id != actor_id:
+                additional_updates.append(
+                    CharacterStateUpdate(
+                        character_id=repair_target_record.id,
+                        sheet=target_sheet,
+                        notes=validate_character_notes(repair_target_record.notes),
+                        expected_revision=repair_target_record.revision,
+                    )
+                )
+            core_effect = {
+                "kind": "steel_defender_repair",
+                "target_id": repair_target_record.id,
+                "target_kind": repair_target_kind,
+                "distance_ft": repair_distance_ft,
+                "roll": deepcopy(repair_settlement["roll"]),
+                "healing": deepcopy(repair_settlement["healing"]),
+                "spatial_facts": deepcopy(repair_spatial_facts),
+                "requires_ruling": False,
+            }
         if legendary_spec is not None:
             legendary_effect = dict(legendary_spec.get("effect") or {})
             legendary_kind = str(legendary_effect.get("kind") or "")
@@ -23955,7 +26179,14 @@ def _create_server(
                     },
                     save_bonuses_by_actor_id=save_bonuses,
                     ruleset=encounter_rules_edition(campaign_id, next_encounter),
-                    rules=rule_context,
+                    rules=context_with_facts(
+                        rule_context,
+                        save_source_kind="nonmagical_effect",
+                        save_effect_conditions=[],
+                        # This is the validated Dragonborn ancestry breath
+                        # table, not a generic poison-damage heuristic.
+                        save_against_poison=breath_spec["damage_type"] == "poison",
+                    ),
                 )
                 breath_results = list(settled_breath["result"]["targets"])
                 damage_roll = deepcopy(settled_breath["result"]["damage_roll"])
@@ -24152,35 +26383,62 @@ def _create_server(
         if core_effect is not None:
             applied["requires_ruling"] = bool(core_effect.get("requires_ruling", False))
             applied["core_effect"] = core_effect
-            mechanic_id = {
-                "action_surge": "dnd5e.core.activity.action_surge",
-                "cunning_action": "dnd5e.core.activity.cunning_action",
-                "orc_aggressive": CORE_ORC_AGGRESSIVE_MECHANIC_ID,
-                "divine_spark": "dnd5e.core.activity.divine_spark",
-                "dragonborn_breath_weapon": CORE_DRAGONBORN_BREATH_MECHANIC_ID,
-                "legendary_action": ("dnd5e.core.activity.legendary_action"),
-                "second_wind": "dnd5e.core.activity.second_wind",
-                "preserve_life": "dnd5e.core.activity.preserve_life",
-                "turn_undead": "dnd5e.core.activity.turn_undead",
-            }[str(core_effect["kind"])]
-            applied["rule_receipts"] = [
-                *list(applied.get("rule_receipts") or []),
-                *core_receipts(
-                    rule_context,
-                    [mechanic_id],
-                    f"combat.activity.{core_effect['kind']}",
-                ),
-                *(
-                    core_receipts(
+            core_effect_kind = str(core_effect["kind"])
+            if core_effect_kind == "steel_defender_repair":
+                assert steel_defender_contract is not None
+                applied["rule_receipts"] = [
+                    *list(applied.get("rule_receipts") or []),
+                    {
+                        "mechanic_id": "dnd5e.expansion.steel_defender.repair",
+                        "event": "combat.activity.steel_defender_repair",
+                        "operations": [{"op": "builtin.expansion_provider"}],
+                        "citations": [
+                            {
+                                "source_artifact_id": steel_defender_contract[
+                                    "source_artifact_id"
+                                ],
+                                "source_pack_id": steel_defender_contract["source_pack_id"],
+                                "source_pack_version": steel_defender_contract[
+                                    "source_pack_version"
+                                ],
+                                "reviewed_expression_hash": steel_defender_contract[
+                                    "reviewed_expression_hash"
+                                ],
+                            }
+                        ],
+                        "ruleset_fingerprint": rule_context.fingerprint,
+                    },
+                ]
+            else:
+                mechanic_id = {
+                    "action_surge": "dnd5e.core.activity.action_surge",
+                    "cunning_action": "dnd5e.core.activity.cunning_action",
+                    "orc_aggressive": CORE_ORC_AGGRESSIVE_MECHANIC_ID,
+                    "divine_spark": "dnd5e.core.activity.divine_spark",
+                    "dragonborn_breath_weapon": CORE_DRAGONBORN_BREATH_MECHANIC_ID,
+                    "legendary_action": ("dnd5e.core.activity.legendary_action"),
+                    "second_wind": "dnd5e.core.activity.second_wind",
+                    "preserve_life": "dnd5e.core.activity.preserve_life",
+                    "turn_undead": "dnd5e.core.activity.turn_undead",
+                }[core_effect_kind]
+                applied["rule_receipts"] = [
+                    *list(applied.get("rule_receipts") or []),
+                    *core_receipts(
                         rule_context,
-                        ["dnd5e.core.activity.sear_undead"],
-                        "combat.activity.sear_undead",
-                    )
-                    if str(core_effect["kind"]) == "turn_undead"
-                    and core_effect.get("sear_undead") is not None
-                    else []
-                ),
-            ]
+                        [mechanic_id],
+                        f"combat.activity.{core_effect_kind}",
+                    ),
+                    *(
+                        core_receipts(
+                            rule_context,
+                            ["dnd5e.core.activity.sear_undead"],
+                            "combat.activity.sear_undead",
+                        )
+                        if core_effect_kind == "turn_undead"
+                        and core_effect.get("sear_undead") is not None
+                        else []
+                    ),
+                ]
         if compiled_activity_plan is not None:
             applied["requires_ruling"] = True
             applied["semantic_plan"] = {
@@ -24414,7 +26672,7 @@ def _create_server(
         require_write_contract(expected_revision, idempotency_key)
         resolved_branch_id = require_current_branch(campaign_id, branch_id)
         feature, binding = executable_watchers_eye_feature(
-            actor,
+            actor.sheet,
             feature_id,
             campaign_id=campaign_id,
             branch_id=resolved_branch_id,
@@ -25525,6 +27783,44 @@ def _create_server(
                 raise CombatEngineError("this combatant is not configured to make death saves")
             if dict(death_save_combatant.get("turn_flags") or {}).get("death_save_used"):
                 raise CombatEngineError("this actor already made a death save this turn")
+            if not death_save_due(death_save_combatant, characters.get(actor_id).sheet):
+                raise CombatEngineError("no death save is due from the start of this actor's turn")
+            if encounter_rules_edition(campaign_id, active) == "2014":
+                # Local call_tool invocations can lack the request RNG wrapper.
+                # Keep the roll, turn flag and receipt in the same settlement.
+                stream = active_random_stream()
+                if stream is None:
+                    stream = CampaignRandomStream.from_campaign_state(
+                        campaign_id,
+                        campaign.state,
+                        operation="combat_check",
+                        idempotency_key=idempotency_key,
+                        campaign_revision=campaign.revision,
+                    )
+                    with use_random_stream(stream):
+                        return combat_check(
+                            campaign_id,
+                            **payload,
+                            principal_id=principal_id,
+                            expected_revision=expected_revision,
+                            idempotency_key=idempotency_key,
+                        )
+                random_state = validate_random_stream_state(
+                    dict(campaign.state or {}).get("random_stream")
+                    or initial_random_stream(f"sagasmith-dnd:{campaign_id}")
+                )
+                if (
+                    stream.campaign_id != campaign_id
+                    or (
+                        stream.campaign_revision is not None
+                        and stream.campaign_revision != campaign.revision
+                    )
+                    or stream.seed != random_state["seed"]
+                    or stream.start_position != random_state["position"]
+                ):
+                    raise CombatEngineError(
+                        "death save requires the current campaign random snapshot"
+                    )
         elif kind == "stabilize":
             assert target_id is not None
             _campaign, active = active_encounter(campaign_id)
@@ -26035,6 +28331,7 @@ def _create_server(
             source_card_id,
             source_card_kind,
         )
+        save_facts_by_step = _semantic_plan_save_facts(_source_card, compiled_plan)
         normalized_commitment, bound_plan = validate_agent_resolution_commitment(
             campaign_id,
             commitment,
@@ -26281,6 +28578,7 @@ def _create_server(
                                     "ability": ability,
                                     "dc": dc,
                                     "semantic_plan_id": compiled_plan.id,
+                                    **save_facts_by_step[step_id],
                                 },
                                 branch_id=resolved_branch_id,
                             ),
@@ -26940,6 +29238,40 @@ def _create_server(
                 "campaign revision conflict: "
                 f"expected {expected_revision}, found {campaign.revision}"
             )
+        # Direct local tool calls do not enter the request-scoped RNG wrapper.
+        # Establish the same snapshot here, before any save or damage draw,
+        # and let the existing atomic mutation persist its receipt and position.
+        stream = active_random_stream()
+        if stream is None:
+            stream = CampaignRandomStream.from_campaign_state(
+                campaign_id,
+                campaign.state,
+                operation="combat_hp_change",
+                idempotency_key=idempotency_key,
+                campaign_revision=campaign.revision,
+            )
+            with use_random_stream(stream):
+                return combat_save_damage(
+                    campaign_id,
+                    **request_payload,
+                    principal_id=principal_id,
+                    expected_revision=expected_revision,
+                    idempotency_key=idempotency_key,
+                )
+        random_state = validate_random_stream_state(
+            dict(campaign.state or {}).get("random_stream")
+            or initial_random_stream(f"sagasmith-dnd:{campaign_id}")
+        )
+        if (
+            stream.campaign_id != campaign_id
+            or (
+                stream.campaign_revision is not None
+                and stream.campaign_revision != campaign.revision
+            )
+            or stream.seed != random_state["seed"]
+            or stream.start_position != random_state["position"]
+        ):
+            raise CombatEngineError("save damage requires the current campaign random snapshot")
         require_no_blocking_pending(encounter)
         positioning_mode = str(encounter.get("positioning_mode") or "grid")
         normalized_spatial_facts: dict[str, Any] | None = None
@@ -27052,64 +29384,9 @@ def _create_server(
                 "save damage requires distinct source/target actors and one "
                 "reviewed scene procedure; actor-card mechanics use content_solution"
             )
-        try:
-            _normalized, _source, expanded = managed_module_source_ref(
-                campaign_id,
-                normalized_ruling["source_ref"],
-                require_exact=True,
-                expected_scene_id=str(encounter.get("scene_id") or ""),
-                require_active_module=True,
-            )
-            assert expanded is not None
-            managed_module_source_excerpt(
-                expanded,
-                normalized_mechanic_excerpt,
-                field="save damage mechanic_source_excerpt",
-                minimum_length=10,
-            )
-        except (LookupError, ValueError) as error:
-            raise CombatEngineError(str(error)) from error
-        card_excerpt = normalized_mechanic_excerpt
         normalized_expression = "".join(str(damage_expression or "").split()).casefold()
         normalized_damage_type = str(damage_type or "").strip().casefold()
         normalized_save_ability = str(save_ability or "").strip().casefold()
-        ability_pattern = {
-            "strength": "strength|str",
-            "dexterity": "dexterity|dex",
-            "constitution": "constitution|con",
-            "intelligence": "intelligence|int",
-            "wisdom": "wisdom|wis",
-            "charisma": "charisma|cha",
-        }.get(normalized_save_ability, "")
-        printed_half_damage = re.search(
-            r"(?i)\bhalf\s+(?:as\s+much|the)\s+damage\b.*"
-            r"\b(?:successful|success)\b",
-            card_excerpt,
-        )
-        if (
-            not ability_pattern
-            or isinstance(save_dc, bool)
-            or not isinstance(save_dc, int)
-            or not isinstance(half_on_success, bool)
-            or not isinstance(save_advantage, bool)
-            or not isinstance(save_disadvantage, bool)
-            or (save_advantage and save_disadvantage)
-            or re.search(
-                rf"(?i)\bDC\s*{save_dc}\s+(?:{ability_pattern})\s+saving throw\b",
-                card_excerpt,
-            )
-            is None
-            or normalized_expression not in "".join(card_excerpt.split()).casefold()
-            or re.search(
-                rf"(?i)\b{re.escape(normalized_damage_type)}\b",
-                card_excerpt,
-            )
-            is None
-            or bool(printed_half_damage) != half_on_success
-        ):
-            raise CombatEngineError(
-                "save-damage declaration does not match the reviewed save, damage, or success terms"
-            )
         commitment = agent_save_damage_commitment(
             application_id=str(normalized_ruling["application_id"]),
             source_card_id=normalized_card_id,
@@ -27125,6 +29402,7 @@ def _create_server(
             mechanic_source_excerpt=normalized_mechanic_excerpt,
             agent_ruling=normalized_ruling,
         )
+        validate_scene_save_damage_source(campaign_id, commitment, encounter=encounter)
         payment_entry = require_agent_save_damage_payment(
             encounter,
             source_actor_id=source_actor_id,
@@ -28089,7 +30367,7 @@ def _create_server(
         if not idempotency_key:
             raise ValueError("idempotency_key is required for character creation")
         sheet_value = deepcopy(sheet or default_character_sheet())
-        require_engine_owned_short_rest_hit_die_state(sheet_value)
+        require_engine_owned_character_state(sheet_value)
         _reject_new_intrinsic_attack_provenance(sheet_value)
         _reject_new_tortle_natural_armor_provenance(sheet_value)
         _require_authoritative_background_state(
@@ -28199,7 +30477,7 @@ def _create_server(
         if template.campaign_id is not None:
             raise ValueError("template_id must reference a global library actor")
         sheet = deepcopy(template.sheet)
-        require_engine_owned_short_rest_hit_die_state(sheet)
+        require_engine_owned_character_state(sheet)
         _reject_new_intrinsic_attack_provenance(sheet)
         _reject_new_tortle_natural_armor_provenance(sheet)
         _require_authoritative_background_state(
@@ -28256,7 +30534,7 @@ def _create_server(
         if not idempotency_key:
             raise ValueError("idempotency_key is required for character build")
         sheet_value = deepcopy(sheet or default_character_sheet())
-        require_engine_owned_short_rest_hit_die_state(sheet_value)
+        require_engine_owned_character_state(sheet_value)
         _reject_new_intrinsic_attack_provenance(sheet_value)
         _reject_new_tortle_natural_armor_provenance(sheet_value)
         _require_authoritative_background_state(
@@ -28271,18 +30549,62 @@ def _create_server(
             rules=effective_rule_context(campaign_id),
         )
         normalized_notes = validate_character_notes(notes or default_character_notes())
-        template, instance = characters.create_with_instance(
-            system_id=DND5E.id,
-            campaign_id=campaign_id,
-            name=name,
-            character_type="pc",
-            player_name=player_name,
-            summary=summary,
-            sheet=normalized_sheet,
-            notes=normalized_notes,
-            principal_id=principal_id,
-            idempotency_key=idempotency_key,
-        )
+        # Keep the existing build request/response identity, while creating the
+        # live instance through the same lifecycle/custody transaction as all
+        # other campaign actors. The independent library template is unchanged.
+        build_payload = {
+            "system_id": DND5E.id,
+            "campaign_id": campaign_id,
+            "name": name,
+            "character_type": "pc",
+            "player_name": player_name,
+            "summary": summary,
+            "sheet": normalized_sheet,
+            "notes": normalized_notes,
+        }
+        scope = f"character-build:{campaign_id}:{principal_id}"
+        with storage.database.transaction(immediate=True) as session:
+            replay = idempotency.lookup_in_session(session, scope, idempotency_key, build_payload)
+            if replay is not None and replay.response is not None:
+                return {
+                    key: character_view(CharacterInfo(**replay.response[key]))
+                    for key in ("template", "instance")
+                }
+            template = characters.create(
+                system_id=DND5E.id,
+                name=name,
+                character_type="pc",
+                summary=summary,
+                sheet=normalized_sheet,
+                notes=normalized_notes,
+            )
+            created = actor_lifecycle.create(
+                campaign_id,
+                system_id=DND5E.id,
+                template_id=template.id,
+                name=name,
+                character_type="pc",
+                player_name=player_name,
+                summary=summary,
+                sheet=normalized_sheet,
+                notes=normalized_notes,
+                principal_id=principal_id,
+                idempotency_key=idempotency_key,
+                initial_grants=(InitialActorGrant(principal_id),),
+                operation="character.build",
+                actor=principal_id,
+                idempotency_payload={"operation": "character.build", **build_payload},
+            )
+            instance = created.character
+            idempotency.remember_in_session(
+                session,
+                scope,
+                idempotency_key,
+                build_payload,
+                {"template": asdict(template), "instance": asdict(instance)},
+                campaign_id=campaign_id,
+                mutation_group_id=created.mutation_group_id,
+            )
         return {"template": character_view(template), "instance": character_view(instance)}
 
     def character_get(
@@ -28386,6 +30708,25 @@ def _create_server(
             normalized_sheet,
         )
         normalized_notes = validate_character_notes(notes if notes is not None else current.notes)
+        if (
+            current.campaign_id is not None
+            and authoritative_phase(current.campaign_id) != PROFILE_LOBBY
+        ):
+            old_items = {
+                item["id"]: item["attunement"]
+                for item in validate_character_sheet(current.sheet)["inventory"]["items"]
+            }
+            new_items = {
+                item["id"]: item["attunement"] for item in normalized_sheet["inventory"]["items"]
+            }
+            if {key for key, value in old_items.items() if value == "attuned"} != {
+                key for key, value in new_items.items() if value == "attuned"
+            } or any(
+                old_items[key] != new_items[key] for key in old_items.keys() & new_items.keys()
+            ):
+                raise ValueError(
+                    "attunement cannot be patched in Play; use the short rest workflow"
+                )
         return update_character(
             current,
             operation="character.sheet.replace",
@@ -28645,6 +30986,206 @@ def _create_server(
             response_extra={"consumed": consumed},
         )
 
+    @_agent_ruling_boundary
+    def ground_inventory_settlement(
+        campaign_id: str,
+        actor_id: str,
+        action: str,
+        payload: dict[str, Any],
+        *,
+        principal_id: str,
+        expected_revision: int | None,
+        expected_character_revision: int | None = None,
+        branch_id: str | None = None,
+        idempotency_key: str | None,
+        in_combat: bool,
+    ) -> dict[str, Any]:
+        """Commit ground custody, character cards and pickup payment atomically."""
+        access.require_actor(campaign_id, actor_id, principal_id, control=True)
+        require_write_contract(expected_revision, idempotency_key)
+        if type(expected_revision) is not int or expected_revision < 0:
+            raise ValueError("expected campaign revision must be a non-negative integer")
+        if not in_combat and (
+            type(expected_character_revision) is not int or expected_character_revision < 0
+        ):
+            raise ValueError("expected character revision must be a non-negative integer")
+        resolved_branch = require_current_branch(campaign_id, branch_id)
+        allowed = {"ground_id", "slot", "spatial_facts"} if action == "pickup_ground" else set()
+        if action not in {"drop_held", "pickup_ground"} or set(payload) - allowed:
+            raise ValueError("unsupported ground inventory action or payload")
+        request = {
+            "actor_id": actor_id,
+            "action": action,
+            "payload": deepcopy(payload),
+            "in_combat": in_combat,
+            "branch_id": resolved_branch,
+        }
+        scope = f"ground-inventory:{campaign_id}:{resolved_branch}:{principal_id}"
+        replay = replay_idempotent(scope, idempotency_key, request)
+        if replay is not None:
+            return replay
+        campaign = campaigns.get(campaign_id)
+        if campaign.revision != expected_revision:
+            raise ValueError("campaign revision conflict")
+        records = {actor.id: actor for actor in characters.list(campaign_id=campaign_id)}
+        actor = records[actor_id]
+        if (
+            expected_character_revision is not None
+            and actor.revision != expected_character_revision
+        ):
+            raise ValueError("character revision conflict")
+        if actor.sheet.get("edition") != "2014":
+            raise ValueError("this ground inventory settlement implements the 2014 rules")
+        if condition_ids(actor.sheet.get("conditions")) & INCAPACITATING_STATE_IDS:
+            raise CombatEngineError(
+                "an incapacitated actor cannot drop or pick up an object voluntarily"
+            )
+        state = deepcopy(dict(campaign.state or {}))
+        encounter = state.get("combat")
+        active = isinstance(encounter, dict) and encounter.get("active", False)
+        if bool(active) != in_combat:
+            raise CombatEngineError(
+                "use the ground inventory entry point for the current game phase"
+            )
+        if in_combat:
+            require_no_blocking_pending(encounter)
+            acting = current_combatant(encounter)
+            if not acting or acting.get("actor_id") != actor_id:
+                raise CombatEngineError("ground item interaction requires the actor's turn")
+        context = ground_drop_context(campaign, state, actor_id)
+        sheets = {key: deepcopy(record.sheet) for key, record in records.items()}
+        ground = state.get("ground_items", [])
+        payment = None
+        if action == "drop_held":
+            roots = held_item_roots(actor.sheet)
+            if not roots:
+                raise ValueError("actor has no held objects to drop")
+            settled = drop_held_items(
+                sheets,
+                ground,
+                actor_id,
+                record_ids={item_id: f"ground-{uuid4().hex}" for item_id in roots},
+                **context,
+            )
+            details = {"dropped": settled["dropped"]}
+        else:
+            ground_id = payload.get("ground_id")
+            if not isinstance(ground_id, str) or not ground_id.strip():
+                raise ValueError("pickup requires a ground_id")
+            entry = next((item for item in ground if item.get("id") == ground_id), None)
+            if entry is None:
+                raise ValueError("ground item is not available")
+            if (
+                entry.get("scene_id") is not None
+                and context["scene_id"] is not None
+                and entry["scene_id"] != context["scene_id"]
+            ):
+                raise CombatEngineError("ground item belongs to a different scene")
+            grid = (
+                in_combat
+                and encounter.get("positioning_mode") == "grid"
+                and entry["location"]["mode"] == "grid"
+                and entry["encounter_id"] == encounter.get("id")
+            )
+            if grid:
+                if "spatial_facts" in payload:
+                    raise CombatEngineError("grid pickup does not accept spatial overrides")
+                distance = combat_distance(
+                    acting.get("position"),
+                    entry["location"]["position"],
+                    cell_ft=int(
+                        dict(dict(encounter.get("battle_map") or {}).get("grid") or {}).get(
+                            "cell_ft", 5
+                        )
+                    ),
+                )
+                if distance is None or distance > 5:
+                    raise CombatEngineError("ground item must be within 5 feet")
+            else:
+                access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
+                facts = payload.get("spatial_facts")
+                if facts is None:
+                    raise NeedsRulingError(
+                        "ground pickup needs a source-location reach decision",
+                        missing=("ground_item.spatial_facts",),
+                        ruling_kind="agent_dm_adjudication",
+                    )
+                if not isinstance(facts, dict) or set(facts) != {
+                    "decision_id",
+                    "reason",
+                    "campaign_revision",
+                    "can_reach_ground_item",
+                }:
+                    raise ValueError("ground pickup requires exact reach decision fields")
+                if (
+                    not isinstance(facts["decision_id"], str)
+                    or not 1 <= len(facts["decision_id"].strip()) <= 100
+                    or not isinstance(facts["reason"], str)
+                    or not 10 <= len(facts["reason"].strip()) <= 1000
+                    or type(facts["campaign_revision"]) is not int
+                    or facts["campaign_revision"] != campaign.revision
+                    or facts["can_reach_ground_item"] is not True
+                ):
+                    raise ValueError("ground pickup needs current affirmative reach evidence")
+            settled = pickup_ground_item(sheets, ground, actor_id, ground_id)
+            slot = payload.get("slot")
+            if slot is not None:
+                if slot not in {"main_hand", "off_hand"}:
+                    raise ValueError("pickup slot must be main_hand or off_hand")
+                if settled["sheets"][actor_id]["inventory"]["equipment_slots"][slot] is not None:
+                    raise ValueError("pickup requires an empty hand slot")
+                picked_id = settled["picked_up"]["root_item_id"]
+                settled["sheets"][actor_id] = equip_inventory_item(
+                    settled["sheets"][actor_id], picked_id, slot
+                )
+            if in_combat:
+                payment = (
+                    "object_interaction"
+                    if acting.get("turn_budget", {}).get("object_interaction", 0) > 0
+                    else "main_action"
+                    if acting.get("turn_budget", {}).get("main_action", 0) > 0
+                    else "extra_action"
+                )
+                encounter = resolve_common_action(
+                    encounter,
+                    actor_id_value=actor_id,
+                    action="interact_object" if payment == "object_interaction" else "use_object",
+                    payload={
+                        "object_description": entry["items"][0]["name"],
+                        "interaction": "pick up",
+                    },
+                    payment=payment,
+                )
+                state["combat"] = encounter
+            details = {
+                "picked_up": settled["picked_up"],
+                "payment": payment,
+                "spatial_facts": deepcopy(payload.get("spatial_facts")),
+            }
+        state["ground_items"] = settled["ground_items"]
+        updates = [
+            CharacterStateUpdate(key, sheet, records[key].notes, records[key].revision)
+            for key, sheet in settled["sheets"].items()
+            if sheet != validate_character_sheet(records[key].sheet)
+        ]
+        after = replace(actor, sheet=settled["sheets"][actor_id], revision=actor.revision + 1)
+        return commit_campaign_state(
+            campaign,
+            state,
+            operation=f"inventory.{action}",
+            principal_id=principal_id,
+            branch_id=resolved_branch,
+            idempotency_key=idempotency_key,
+            scope=scope,
+            payload=request,
+            response_fields={
+                "status": "committed",
+                "result": details,
+                "character": visible_character_view(after, principal_id),
+            },
+            character_updates=updates,
+        )
+
     def character_inventory_transfer(
         source_character_id: str,
         target_character_id: str,
@@ -28688,9 +31229,36 @@ def _create_server(
         access.require_actor(source.campaign_id, source.id, principal_id, control=True)
         access.require_actor(source.campaign_id, target.id, principal_id, control=True)
         campaign = campaigns.get(source.campaign_id)
-        source_sheet, moved = remove_inventory_item(source.sheet, item_id, quantity)
-        moved = inventory_item_for_receipt(target.sheet, moved)
-        target_sheet = receive_inventory_item(target.sheet, moved)
+        if campaign.revision != expected_campaign_revision:
+            raise ValueError("campaign revision conflict")
+        if (
+            source.revision != expected_source_revision
+            or target.revision != expected_target_revision
+        ):
+            raise ValueError("character revision conflict")
+        reference_updates = []
+        if source.sheet.get("edition") == target.sheet.get("edition") == "2014":
+            records = {actor.id: actor for actor in characters.list(campaign_id=campaign.id)}
+            settled = transfer_actor_inventory_item(
+                {key: actor.sheet for key, actor in records.items()},
+                (campaign.state or {}).get("ground_items", []),
+                source.id,
+                target.id,
+                item_id,
+                quantity,
+            )
+            source_sheet, target_sheet = settled["sheets"][source.id], settled["sheets"][target.id]
+            moved = settled["item"]
+            reference_updates = [
+                CharacterStateUpdate(key, sheet, records[key].notes, records[key].revision)
+                for key, sheet in settled["sheets"].items()
+                if key not in {source.id, target.id}
+                and sheet != validate_character_sheet(records[key].sheet)
+            ]
+        else:
+            source_sheet, moved = remove_inventory_item(source.sheet, item_id, quantity)
+            moved = inventory_item_for_receipt(target.sheet, moved)
+            target_sheet = receive_inventory_item(target.sheet, moved)
         source_sheet = finalize_actor_sheet_rulings(source_sheet, source.campaign_id)
         target_sheet = finalize_actor_sheet_rulings(target_sheet, target.campaign_id)
         source_after = replace(
@@ -28724,6 +31292,7 @@ def _create_server(
                 CharacterStateUpdate(
                     target.id, target_sheet, target.notes, expected_target_revision
                 ),
+                *reference_updates,
             ],
             include_campaign_revision=False,
             include_revisions=False,
@@ -28824,6 +31393,7 @@ def _create_server(
             },
         )
 
+    @_agent_ruling_boundary
     def campaign_stable_recovery(
         campaign_id: str,
         members: list[dict[str, Any]],
@@ -29196,6 +31766,17 @@ def _create_server(
                 expired[current.id] = list(dict.fromkeys(character_expired))
         next_state, updates, _ = reconcile_actor_effect_dependencies(
             campaign, next_state, updates, {}
+        )
+        updates = reconcile_completed_item_attunements(
+            campaign,
+            next_state,
+            updates,
+            {
+                member["character_id"]: str(member["attune_item_id"])
+                for member in normalized_resting
+                if member["attune_item_id"] is not None
+                and all_characters[member["character_id"]].sheet.get("edition") == "2014"
+            },
         )
         update_by_id = {item.character_id: item for item in updates}
         stream = active_random_stream()
@@ -29599,6 +32180,7 @@ def _create_server(
         source_item_id: str | None = None,
         target_character_ids: list[str] | None = None,
         willing_target_ids: list[str] | None = None,
+        declaration: dict[str, Any] | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
         expected_revision: int | None = None,
         idempotency_key: str | None = None,
@@ -29623,6 +32205,7 @@ def _create_server(
             "source_item_id": source_item_id,
             "target_character_ids": target_character_ids,
             "willing_target_ids": willing_target_ids,
+            **({"declaration": declaration} if declaration is not None else {}),
         }
         scope = f"character-cast:{current.campaign_id}:{branch_id}:{principal_id}"
         replay = replay_idempotent(scope, idempotency_key, payload)
@@ -29633,6 +32216,8 @@ def _create_server(
                 f"character revision conflict: expected {expected_revision}, "
                 f"found {current.revision}"
             )
+        if condition_ids(current.sheet.get("conditions")) & INCAPACITATING_STATE_IDS:
+            raise CombatEngineError("an incapacitated character cannot cast a spell")
         if source_item_id and (signature_free_cast or feature_cast_source):
             raise CombatEngineError(
                 "a magic item spell cannot use a character feature casting source"
@@ -29652,13 +32237,171 @@ def _create_server(
             )
             if source_item_id
             else next(
-                item
-                for item in current.sheet.get("content", {}).get("spells", [])
-                if item.get("id") == spell_id
+                (
+                    item
+                    for item in current.sheet.get("content", {}).get("spells", [])
+                    if item.get("id") == spell_id
+                ),
+                None,
             )
         )
+        if spell_entry is None:
+            raise CombatEngineError("spell is not recorded on the caster card")
         fly = is_core_fly_spell(spell_entry)
         invisibility = is_core_invisibility_spell(spell_entry)
+        sleep = spell_entry.get(
+            "id"
+        ) == CORE_SLEEP_SPELL_ID and CORE_SLEEP_MECHANIC_ID in spell_entry.get("mechanic_refs", [])
+        mending = (
+            spell_entry.get("id") == CORE_MENDING_SPELL_ID
+            and CORE_MENDING_MECHANIC_ID
+            in {str(item) for item in spell_entry.get("mechanic_refs", [])}
+        )
+        sleep_target = None
+        mending_target_id: str | None = None
+        mending_spatial_facts: dict[str, Any] | None = None
+        mending_contract: dict[str, str] | None = None
+        all_characters = characters.list(campaign_id=current.campaign_id)
+        if sleep or mending:
+            stream = active_random_stream()
+            if stream is None:
+                stream = CampaignRandomStream.from_campaign_state(
+                    current.campaign_id,
+                    campaign.state,
+                    operation="character_action",
+                    idempotency_key=idempotency_key,
+                    campaign_revision=campaign.revision,
+                )
+                with use_random_stream(stream):
+                    return character_cast_spell(
+                        character_id=character_id,
+                        spell_id=spell_id,
+                        cast_level=cast_level,
+                        ritual=ritual,
+                        signature_free_cast=signature_free_cast,
+                        feature_cast_source=feature_cast_source,
+                        component_ruling=component_ruling,
+                        source_item_id=source_item_id,
+                        target_character_ids=target_character_ids,
+                        willing_target_ids=willing_target_ids,
+                        declaration=declaration,
+                        principal_id=principal_id,
+                        expected_revision=expected_revision,
+                        idempotency_key=idempotency_key,
+                    )
+            random_state = validate_random_stream_state(
+                dict(campaign.state or {}).get("random_stream")
+                or initial_random_stream(f"sagasmith-dnd:{current.campaign_id}")
+            )
+            if (
+                stream.campaign_id != current.campaign_id
+                or (
+                    stream.campaign_revision is not None
+                    and stream.campaign_revision != campaign.revision
+                )
+                or stream.seed != random_state["seed"]
+                or stream.start_position != random_state["position"]
+            ):
+                raise CombatEngineError(
+                    f"{'Sleep' if sleep else 'Mending'} requires the current campaign "
+                    "random snapshot"
+                )
+        if sleep:
+            access.require_campaign(current.campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
+            if current.sheet.get("edition") != "2014":
+                raise CombatEngineError("the source-bound Sleep mechanic is a 2014 rule")
+            if spell_entry.get("resolution_plan") or spell_entry.get("resolution"):
+                raise CombatEngineError("Sleep cannot combine native and other settlement paths")
+            if target_character_ids is not None or willing_target_ids is not None:
+                raise CombatEngineError("Sleep selects its complete area through declaration")
+            sleep_target = _normalize_sleep_spatial_facts(
+                declaration,
+                actor_ids={
+                    character.id
+                    for character in all_characters
+                    if "dead"
+                    not in {
+                        str(value).casefold() for value in character.sheet.get("conditions", [])
+                    }
+                },
+                campaign_revision=campaign.revision,
+            )
+        elif mending:
+            access.require_campaign(current.campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
+            definition = dict(spell_entry.get("definition") or {})
+            if str(current.sheet.get("edition") or "") != "2014":
+                raise CombatEngineError("the Steel Defender Mending mechanic is a 2014 rule")
+            if (
+                int(spell_entry.get("level", -1)) != 0
+                or str(definition.get("casting_time") or "").strip().casefold()
+                not in {"1 minute", "one minute"}
+                or dict(definition.get("range") or {}).get("kind") != "touch"
+            ):
+                raise CombatEngineError(
+                    "Steel Defender Mending requires the exact source casting contract"
+                )
+            if willing_target_ids is not None:
+                raise CombatEngineError("Steel Defender Mending does not use willing_target_ids")
+            normalized_targets = [
+                str(item).strip() for item in list(target_character_ids or [])
+            ]
+            if len(normalized_targets) != 1 or not normalized_targets[0]:
+                raise CombatEngineError("Steel Defender Mending requires exactly one target")
+            mending_target_id = normalized_targets[0]
+            target = require_campaign_actor(current.campaign_id, mending_target_id)
+            contracts = _steel_defender_turn_contracts(
+                current.campaign_id,
+                branch_id,
+                {character.id for character in all_characters},
+            )
+            if mending_target_id not in contracts:
+                raise CombatEngineError(
+                    "Steel Defender Mending requires a verified active defender target"
+                )
+            mending_contract = contracts[mending_target_id]
+            declared = dict(declaration or {})
+            if set(declared) != {"spatial_facts"}:
+                raise CombatEngineError(
+                    "Steel Defender Mending declaration requires only spatial_facts"
+                )
+            spatial = declared.get("spatial_facts")
+            if not isinstance(spatial, dict) or set(spatial) != {
+                "distance_ft",
+                "default_resolver",
+                "ruling_kind",
+                "reason",
+            }:
+                raise CombatEngineError(
+                    "Steel Defender Mending requires exact touch spatial_facts"
+                )
+            distance_ft = spatial.get("distance_ft")
+            reason = " ".join(str(spatial.get("reason") or "").split())
+            if (
+                isinstance(distance_ft, bool)
+                or not isinstance(distance_ft, (int, float))
+                or not math.isfinite(float(distance_ft))
+                or not 0 <= float(distance_ft) <= 5
+                or spatial.get("default_resolver") != "agent"
+                or spatial.get("ruling_kind") != "agent_dm_adjudication"
+                or not reason
+                or len(reason) > 500
+            ):
+                raise CombatEngineError(
+                    "Steel Defender Mending requires a bounded touch-range Agent ruling"
+                )
+            if target.campaign_id != current.campaign_id:
+                raise CombatEngineError("Steel Defender Mending target crosses campaigns")
+            mending_spatial_facts = {
+                **spatial,
+                "distance_ft": float(distance_ft),
+                "reason": reason,
+                "committed": True,
+            }
+        elif declaration is not None:
+            raise CombatEngineError(
+                "noncombat spell declaration is supported only for native Sleep or "
+                "Steel Defender Mending"
+            )
         normalized_fly_targets: list[str] = []
         normalized_willing_targets: list[str] = []
         normalized_invisibility_targets: list[str] = []
@@ -29728,6 +32471,8 @@ def _create_server(
                     raise CombatEngineError(
                         "every Invisibility target must belong to the caster's campaign"
                     )
+        elif mending:
+            pass
         elif target_character_ids is not None or willing_target_ids is not None:
             raise CombatEngineError(
                 "target_character_ids and willing_target_ids are currently "
@@ -29749,6 +32494,7 @@ def _create_server(
             ).strip()
             and not fly
             and not invisibility
+            and not mending
             and not source_card_has_executable_mechanic(
                 current.campaign_id,
                 spell_entry,
@@ -29800,7 +32546,6 @@ def _create_server(
         advanced: dict[str, list[str]] = {}
         expired: dict[str, list[str]] = {}
         rule_receipts: list[dict[str, Any]] = []
-        all_characters = characters.list(campaign_id=current.campaign_id)
         for character in all_characters:
             round_duration = advance_effect_durations(
                 character.sheet,
@@ -29971,10 +32716,106 @@ def _create_server(
                     "spell.invisibility",
                 )
             )
+        if mending:
+            assert mending_target_id is not None
+            assert mending_contract is not None
+            try:
+                mending_result = mending_steel_defender(
+                    timed_sheets[mending_target_id]
+                )
+            except SteelDefenderError as error:
+                raise CombatEngineError(str(error)) from error
+            timed_sheets[mending_target_id] = validate_character_sheet(
+                mending_result["sheet"]
+            )
+            applied["sheet"] = timed_sheets[current.id]
+            applied["automatic_effect"] = "steel_defender_mending"
+            applied["target_id"] = mending_target_id
+            applied["roll"] = deepcopy(mending_result["roll"])
+            applied["healing"] = deepcopy(mending_result["healing"])
+            applied["spatial_facts"] = deepcopy(mending_spatial_facts)
+            applied["ruling_required"] = [
+                item
+                for item in applied.get("ruling_required") or []
+                if item != "targets_and_effect"
+            ]
+            applied["ruling_requirements"] = [
+                item
+                for item in applied.get("ruling_requirements") or []
+                if item.get("kind") != "targets_and_effect"
+            ]
+            rule_receipts.append(
+                {
+                    "mechanic_id": "dnd5e.expansion.steel_defender.mending",
+                    "event": "spell.steel_defender_mending",
+                    "operations": [{"op": "builtin.expansion_provider"}],
+                    "citations": [
+                        {
+                            "source_artifact_id": mending_contract["source_artifact_id"],
+                            "source_pack_id": mending_contract["source_pack_id"],
+                            "source_pack_version": mending_contract["source_pack_version"],
+                            "reviewed_expression_hash": mending_contract[
+                                "reviewed_expression_hash"
+                            ],
+                        }
+                    ],
+                    "ruleset_fingerprint": rules.fingerprint,
+                }
+            )
+            rule_receipts.extend(
+                core_receipts(
+                    rules,
+                    [CORE_MENDING_MECHANIC_ID],
+                    "spell.mending.steel_defender",
+                )
+            )
+        if sleep:
+            assert sleep_target is not None
+            resolved_level = int(applied.get("cast_level", cast_level or 1))
+            if not 1 <= resolved_level <= 9:
+                raise CombatEngineError("Sleep cast level must be between 1 and 9")
+            pool_roll = asdict(roll(f"{5 + 2 * (resolved_level - 1)}d8"))
+            settled = resolve_sleep_targets(
+                [
+                    {"id": target["target_id"], "sheet": timed_sheets[target["target_id"]]}
+                    for target in sleep_target["targets"]
+                ],
+                pool=int(pool_roll["total"]),
+                source_actor_id=current.id,
+                source_spell_id=spell_id,
+                source_rule_refs=spell_entry.get("rule_refs", []),
+                ruleset="2014",
+            )
+            timed_sheets.update(settled["sheets"])
+            applied.update(
+                automatic_effect="sleep",
+                area=sleep_target,
+                pool_roll=pool_roll,
+                pool_remaining=settled["pool_remaining"],
+                targets=settled["targets"],
+            )
+            applied["ruling_required"] = [
+                item
+                for item in applied.get("ruling_required") or []
+                if item != "targets_and_effect"
+            ]
+            applied["ruling_requirements"] = [
+                item
+                for item in applied.get("ruling_requirements") or []
+                if item.get("kind") != "targets_and_effect"
+            ]
+            rule_receipts.extend(core_receipts(rules, [CORE_SLEEP_MECHANIC_ID], "spell.sleep"))
+            for target_result in settled["targets"]:
+                if target_result["skip_reason"] == "immune_to_magical_sleep":
+                    target_result["rule_receipts"] = core_receipts(
+                        rules, [CORE_FEY_ANCESTRY_MECHANIC_ID], "spell.sleep.immunity"
+                    )
+                    rule_receipts.extend(target_result["rule_receipts"])
         reconciled_dependencies = reconcile_source_effect_dependencies(timed_sheets)
         timed_sheets = reconciled_dependencies["sheets"]
         applied["sheet"] = timed_sheets[current.id]
         rule_receipts.extend(applied.get("rule_receipts") or [])
+        applied["rule_receipts"] = deepcopy(rule_receipts)
         updates = [
             CharacterStateUpdate(
                 character_id=character.id,
@@ -30006,7 +32847,7 @@ def _create_server(
             }
 
         def cast_response(revisions: list[Any]) -> dict[str, Any]:
-            return {
+            response = {
                 **_ruling_status(
                     "committed" if applied.get("automatic_effect") else "pending_ruling",
                     "generic_spell_effect",
@@ -30024,6 +32865,10 @@ def _create_server(
                 "campaign_revision": campaign.revision + 1,
                 "revisions": [asdict(item) for item in revisions],
             }
+            stream = active_random_stream()
+            if stream is not None and stream.draw_count > 0:
+                response["random_stream_receipt"] = stream.receipt()
+            return response
 
         revisions_result = StateMutationService(storage.database).replace(
             current.campaign_id,
@@ -30513,6 +33358,18 @@ def _create_server(
         stream = active_random_stream()
         next_state, updates, _ = reconcile_actor_effect_dependencies(
             campaign, next_state, updates, {}
+        )
+        updates = reconcile_completed_item_attunements(
+            campaign,
+            next_state,
+            updates,
+            {
+                member["character_id"]: str(member["attune_item_id"])
+                for member in normalized_members
+                if normalized_rest_type == "short_rest"
+                and member["attune_item_id"] is not None
+                and all_characters[member["character_id"]].sheet.get("edition") == "2014"
+            },
         )
         base_response = {
             "status": "committed",
@@ -31540,9 +34397,7 @@ def _create_server(
         except ValueError as error:
             raise CombatEngineError(str(error)) from error
         result = {key: value for key, value in applied.items() if key != "sheet"}
-        normalized_sheet = finalize_actor_sheet_rulings(
-            applied["sheet"], current.campaign_id
-        )
+        normalized_sheet = finalize_actor_sheet_rulings(applied["sheet"], current.campaign_id)
         normalized_sheet = validate_character_sheet(
             normalized_sheet,
             rules=effective_rule_context(current.campaign_id),
@@ -39713,6 +42568,98 @@ def _create_server(
         ]
         return reviewed_dependency_matches or dependency_matches or matches
 
+    def selected_progression_content_source(
+        sheet: dict[str, Any],
+        candidates: list[tuple[str, str, dict[str, Any]]],
+        *,
+        class_name: str,
+        subclass_name: str = "",
+    ) -> tuple[str, str, dict[str, Any]] | None:
+        """Resolve recorded class/subclass identity, never infer a printing from a name."""
+        kind = "subclass" if subclass_name else "class"
+        selected: dict[tuple[str, str, str], tuple[str, str, dict[str, Any]]] = {}
+        by_identity = {
+            (pack_id, version, str(artifact.get("id") or "")): (pack_id, version, artifact)
+            for pack_id, version, artifact in candidates
+        }
+        for record in sheet.get("content", {}).get("selections", []):
+            if record.get("kind") != kind:
+                continue
+            identity = (
+                str(record.get("pack_id") or ""),
+                str(record.get("pack_version") or ""),
+                str(record.get("artifact_id") or ""),
+            )
+            source = by_identity.get(identity)
+            if source is None or source[2].get("kind") != kind:
+                raise RulesetUnavailableError("selected progression source is unavailable")
+            source = (
+                source[0],
+                source[1],
+                reviewed_official_runtime_artifact(source[0], source[1], source[2]),
+            )
+            source_card = dict(source[2].get("card") or {})
+            source_class = str(source_card.get("class_name" if subclass_name else "name") or "")
+            if source_class.casefold() != class_name.casefold():
+                continue
+            if subclass_name and str(source_card.get("name") or "").casefold() != (
+                subclass_name.casefold()
+            ):
+                continue
+            selected[identity] = source
+        if len(selected) > 1:
+            raise RulesetUnavailableError("selected progression source is ambiguous")
+        return next(iter(selected.values()), None)
+
+    def progression_feature_source_matches(
+        sheet: dict[str, Any],
+        candidates: list[tuple[str, str, dict[str, Any]]],
+        artifact: dict[str, Any],
+        *,
+        source_cache: dict[tuple[str, str], tuple[str, str, dict[str, Any]] | None] | None = None,
+    ) -> list[tuple[str, str, dict[str, Any]]]:
+        """Prefer a selected printing only among matching class/subclass features.
+
+        A differently named addition from another pack is not a reprint and
+        remains available. Equal names across different classes/subclasses are
+        likewise distinct; genuinely ambiguous source choices fail closed.
+        """
+        card = dict(artifact.get("card") or {})
+        fields = ("class_name", "subclass_name", "name")
+        identity = tuple(str(card.get(field) or "").casefold() for field in fields)
+        matches = [
+            item
+            for item in candidates
+            if item[2].get("kind") == "feature"
+            and tuple(
+                str(dict(item[2].get("card") or {}).get(field) or "").casefold() for field in fields
+            )
+            == identity
+        ]
+        if not identity[0]:
+            return matches
+        source_key = (identity[0], identity[1])
+        if source_cache is not None and source_key in source_cache:
+            source = source_cache[source_key]
+        else:
+            source = selected_progression_content_source(
+                sheet,
+                candidates,
+                class_name=identity[0],
+                subclass_name=identity[1],
+            )
+            if source_cache is not None:
+                source_cache[source_key] = source
+        if source is not None:
+            matches = source_scoped_content_matches(
+                matches,
+                source_pack_id=source[0],
+                source_pack_version=source[1],
+            )
+        if len(matches) != 1:
+            raise RulesetUnavailableError("progression feature source is ambiguous")
+        return matches
+
     def content_runtime_context(
         pack_id: str,
         version: str,
@@ -39874,7 +42821,7 @@ def _create_server(
         }
 
     def executable_watchers_eye_feature(
-        actor: CharacterInfo,
+        sheet: Mapping[str, Any],
         feature_id: str,
         *,
         campaign_id: str,
@@ -39885,7 +42832,7 @@ def _create_server(
         normalized_feature_id = str(feature_id or "").strip()
         features = [
             dict(item)
-            for item in dict(actor.sheet.get("content") or {}).get("features", [])
+            for item in dict(sheet.get("content") or {}).get("features", [])
             if str(dict(item).get("id") or "") == normalized_feature_id
         ]
         if len(features) != 1:
@@ -39895,7 +42842,7 @@ def _create_server(
         feature = features[0]
         selections = [
             dict(item)
-            for item in dict(actor.sheet.get("content") or {}).get("selections", [])
+            for item in dict(sheet.get("content") or {}).get("selections", [])
             if str(dict(item).get("artifact_id") or "") in SCAG_WATCHERS_EYE_BACKGROUND_IDS
             and str(dict(item).get("kind") or "") == "background"
         ]
@@ -40630,6 +43577,24 @@ def _create_server(
                 (item for item in pack.artifacts if str(item.get("id") or "") == artifact_id),
                 None,
             )
+            if artifact is None and artifact_id in {
+                f"{background_id}.feature.watchers-eye"
+                for background_id in SCAG_WATCHERS_EYE_BACKGROUND_IDS
+            }:
+                # This native narrative feature is derived from its background,
+                # not stored as a top-level artifact. Reuse execution's exact
+                # archive/selection checks and never trust sheet HP grants.
+                _, binding = executable_watchers_eye_feature(
+                    sheet,
+                    artifact_id,
+                    campaign_id=campaign_id,
+                    branch_id=branch_id,
+                )
+                artifact = {
+                    "id": artifact_id,
+                    "kind": "feature",
+                    "card": watchers_eye_feature_card(binding),
+                }
             if artifact is None:
                 for parent in pack.artifacts:
                     parent_id = str(parent.get("id") or "").strip()
@@ -40712,6 +43677,9 @@ def _create_server(
         subclass_name = str(target_class.get("subclass") or "")
         feature_options: list[dict[str, Any]] = []
         subclass_options: list[dict[str, Any]] = []
+        # Only reuse verification inside this read-only operation, never across
+        # requests or after a write. A full archive need not be rebuilt per feature.
+        feature_sources: dict[tuple[str, str], tuple[str, str, dict[str, Any]] | None] = {}
         for pack_id, version, artifact in candidates:
             if str(artifact.get("application_state") or "selection_ready") != "selection_ready":
                 continue
@@ -40738,6 +43706,19 @@ def _create_server(
                     continue
                 declared_subclass = str(card.get("subclass_name") or "")
                 if declared_subclass and declared_subclass.casefold() != subclass_name.casefold():
+                    continue
+                source_matches = progression_feature_source_matches(
+                    sheet,
+                    candidates,
+                    artifact,
+                    source_cache=feature_sources,
+                )
+                if not any(
+                    item[0] == pack_id
+                    and item[1] == version
+                    and str(item[2].get("id") or "") == artifact_id
+                    for item in source_matches
+                ):
                     continue
                 requirements_by_level = dict(card.get("selection_requirements_by_level") or {})
                 selection_requirements = deepcopy(
@@ -41134,7 +44115,7 @@ def _create_server(
                 entry["runtime_context"] = content_runtime_context(
                     pack_id,
                     version,
-                    artifact,
+                    reviewed_official_runtime_artifact(pack_id, version, artifact),
                 )
             result.append(entry)
         if include_context and len(result) != 1:
@@ -41468,6 +44449,8 @@ def _create_server(
             )
         match = matches[0]
         pack_id, version, artifact = match
+        artifact = reviewed_official_runtime_artifact(pack_id, version, artifact)
+        match = (pack_id, version, artifact)
         application_state = str(artifact.get("application_state") or "selection_ready")
         if application_state != "selection_ready":
             return {
@@ -41534,27 +44517,30 @@ def _create_server(
                     content_authority_secret,
                 ),
             }
-        content_receipt: dict[str, Any] | None = None
+        content_receipt: dict[str, Any] = {
+            "ruleset_fingerprint": effective_rule_context(current.campaign_id).fingerprint,
+            "mechanic_id": "dnd5e.character.content.apply.v1",
+            "event": "character.content.apply",
+            "artifact_id": artifact_id,
+            "character_id": current.id,
+            "pack_id": pack_id,
+            "pack_version": version,
+            "artifact_content_hash": content_fingerprint(artifact),
+            "selection": deepcopy(selection),
+            "rule_refs": list(artifact.get("rule_refs") or []),
+        }
         raw_selection_contract = artifact.get("selection_contract")
         if isinstance(raw_selection_contract, dict) and not selection_contract_errors(artifact):
             selection_contract = dict(raw_selection_contract)
             if selection_contract.get("status") == "ready":
-                content_receipt = {
-                    "ruleset_fingerprint": effective_rule_context(current.campaign_id).fingerprint,
-                    "mechanic_id": str(selection_contract["materializer"]),
-                    "event": "character.content.apply",
-                    "artifact_id": artifact_id,
-                    "character_id": current.id,
-                    "pack_id": pack_id,
-                    "pack_version": version,
-                    "reviewed_content_hash": str(selection_contract["reviewed_content_hash"]),
-                    "selection": deepcopy(selection),
-                    "rule_refs": list(artifact.get("rule_refs") or []),
-                }
-                if tortle_natural_armor_authority is not None:
-                    content_receipt["content_authority_id"] = str(
-                        tortle_natural_armor_authority["authority_id"]
-                    )
+                content_receipt["mechanic_id"] = str(selection_contract["materializer"])
+                content_receipt["reviewed_content_hash"] = str(
+                    selection_contract["reviewed_content_hash"]
+                )
+        if tortle_natural_armor_authority is not None:
+            content_receipt["content_authority_id"] = str(
+                tortle_natural_armor_authority["authority_id"]
+            )
         sheet = deepcopy(current.sheet)
         phase = authoritative_phase(current.campaign_id)
         spellbook_copy: dict[str, Any] | None = None
@@ -42457,6 +45443,19 @@ def _create_server(
             existing_subclass = str(target.get("subclass") or "")
             if existing_subclass and existing_subclass != str(card.get("name") or artifact_id):
                 raise ValueError("target class already has a different subclass")
+            if existing_subclass:
+                selected_source = selected_progression_content_source(
+                    sheet,
+                    candidates,
+                    class_name=target_class,
+                    subclass_name=existing_subclass,
+                )
+                if selected_source is not None and (
+                    selected_source[0] != pack_id
+                    or selected_source[1] != version
+                    or str(selected_source[2].get("id") or "") != artifact_id
+                ):
+                    raise ValueError("target class already has a source-bound subclass")
             target["subclass"] = str(card.get("name") or artifact_id)
             sheet["progression"]["classes"] = classes
             resolved_expansion, unresolved_spell_name = resolve_spell_list_expansion(
@@ -43765,6 +46764,15 @@ def _create_server(
                 }
             )
         elif kind in {"feature", "activity"}:
+            if kind == "feature" and str(card.get("class_name") or "").strip():
+                source_matches = progression_feature_source_matches(sheet, candidates, artifact)
+                if not any(
+                    item[0] == pack_id
+                    and item[1] == version
+                    and str(item[2].get("id") or "") == artifact_id
+                    for item in source_matches
+                ):
+                    raise ValueError("feature does not belong to the selected progression source")
             if kind == "activity" and selection:
                 raise ValueError("activity content selection does not accept input fields")
             if kind == "feature" and str(card.get("feature_subtype") or "") == (
@@ -43805,7 +46813,19 @@ def _create_server(
                 and (kind != "feature" or grant_level not in repeatable_levels)
             ):
                 raise ValueError(f"content {kind} is already present")
-            if grant_level and grant_level not in repeatable_levels:
+            # Later choice unlocks need not include the initial feature level.
+            # Permit that first grant only; never turn it into a repeatable grant.
+            initial_feature_grant = (
+                kind == "feature"
+                and existing_content is None
+                and bool(repeatable_levels)
+                and (
+                    str(card.get("class_name") or "").strip()
+                    or str(card.get("species_name") or "").strip()
+                )
+                and grant_level == int(card.get("minimum_level", 1) or 1)
+            )
+            if grant_level and grant_level not in repeatable_levels and not initial_feature_grant:
                 raise ValueError("feature grant_level is not a repeatable selection level")
             if existing_content is not None and any(
                 int(item.get("level", 0) or 0) == grant_level
@@ -44413,6 +47433,7 @@ def _create_server(
                                 "subclass_name",
                                 "minimum_level",
                                 "feature_subtype",
+                                "repeatable_selection_levels",
                                 "selection_requirements",
                                 "selection_requirements_by_level",
                                 "mechanical_grants",
@@ -44989,6 +48010,7 @@ def _create_server(
                                     "required_cantrip",
                                     "required_invocation",
                                     "required_pact_boon",
+                                    "repeatable_selection_levels",
                                     "selection_requirements",
                                     "selection_requirements_by_level",
                                     "subclass_name",
@@ -48791,6 +51813,7 @@ boundary.
         casting_slot_level: int | None = None,
         template_variant: str | None = None,
         participant_config: dict[str, Any] | None = None,
+        replace_existing: bool = False,
         expected_revision: int | None = None,
         branch_id: str | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
@@ -48800,6 +51823,8 @@ boundary.
         access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
         if not idempotency_key:
             raise ValueError("idempotency_key is required for addon actor instantiation")
+        if not isinstance(replace_existing, bool):
+            raise ValueError("replace_existing must be a boolean")
         addon_request = {
             "artifact_id": artifact_id,
             "owner_character_id": owner_character_id,
@@ -48812,27 +51837,22 @@ boundary.
             "casting_slot_level": casting_slot_level,
             "template_variant": template_variant,
             "participant_config": deepcopy(participant_config),
+            "replace_existing": replace_existing,
             "expected_revision": expected_revision,
             "branch_id": branch_id,
         }
-        lifecycle_scope = f"actor-lifecycle:{campaign_id}:{principal_id}"
-        replay = idempotency.lookup(lifecycle_scope, idempotency_key, addon_request)
-        if replay is not None and replay.response is not None:
-            response = dict(replay.response)
-            return {
-                "character": character_view(CharacterInfo(**dict(response["character"]))),
-                "content_receipt": deepcopy(response["content_receipt"]),
-                "actor_knowledge_imported": False,
-                "combat": deepcopy(response.get("combat")),
-                "mutation_group_id": str(response["mutation_group_id"]),
-                "next": None,
-            }
+        resolved_branch_id = require_current_branch(campaign_id, branch_id)
+        # Bind the implicit current branch into the retry digest.  A request
+        # with branch_id=None means "the branch checked out now", not a
+        # branch-independent operation.
+        addon_request["branch_id"] = resolved_branch_id
         owner = characters.get(owner_character_id)
         if owner.campaign_id != campaign_id:
             raise ValueError("dependent actor owner belongs to another campaign")
+        available_artifacts = available_content_artifacts(campaign_id, branch_id=resolved_branch_id)
         matches = [
             (pack_id, version, artifact)
-            for pack_id, version, artifact in available_content_artifacts(campaign_id)
+            for pack_id, version, artifact in available_artifacts
             if str(artifact.get("id") or "") == artifact_id
         ]
         if len(matches) != 1:
@@ -48847,12 +51867,97 @@ boundary.
             raise ValueError(
                 "dependent actor template is not runtime-ready: " + "; ".join(solution_errors)
             )
+        owner_binding = dependent_actor_owner_binding(requirement)
+        dependent_actor_authorization: dict[str, Any] | None = None
+        if owner_binding is not None:
+            feature_matches = [
+                feature_artifact
+                for feature_pack_id, feature_version, feature_artifact in available_artifacts
+                if feature_pack_id == pack_id
+                and feature_version == version
+                and str(feature_artifact.get("id") or "") == owner_binding["feature_artifact_id"]
+                and str(feature_artifact.get("kind") or "") == "feature"
+            ]
+            if len(feature_matches) != 1:
+                raise RulesetUnavailableError(
+                    "dependent actor bound feature is not uniquely available in its source pack"
+                )
+            feature_artifact = reviewed_official_runtime_artifact(
+                pack_id, version, feature_matches[0]
+            )
+            feature_contract = dict(feature_artifact.get("selection_contract") or {})
+            reviewed_content_hash = str(feature_contract.get("reviewed_content_hash") or "")
+            receipt_fields = {
+                "event": "character.content.apply",
+                "artifact_id": owner_binding["feature_artifact_id"],
+                "character_id": owner.id,
+                "pack_id": pack_id,
+                "pack_version": version,
+                "artifact_content_hash": content_fingerprint(feature_artifact),
+            }
+            if reviewed_content_hash:
+                receipt_fields["reviewed_content_hash"] = reviewed_content_hash
+            sheet_features = [
+                feature
+                for feature in dict(owner.sheet.get("content") or {}).get("features", [])
+                if isinstance(feature, Mapping)
+                and str(feature.get("id") or "") == owner_binding["feature_artifact_id"]
+                and str(feature.get("pack_id") or "") == pack_id
+                and str(feature.get("pack_version") or "") == version
+            ]
+            if (
+                len(sheet_features) != 1
+                or (reviewed_content_hash and len(reviewed_content_hash) != 64)
+                or not rule_receipts.has_applied_receipt(
+                    campaign_id,
+                    event="character.content.apply",
+                    receipt_fields=receipt_fields,
+                    branch_id=resolved_branch_id,
+                )
+            ):
+                raise ValueError(
+                    "dependent actor owner lacks the exact applied feature entitlement"
+                )
+            dependent_actor_authorization = {
+                "owner_character_id": owner.id,
+                "owner_character_revision": owner.revision,
+                "feature_artifact_id": owner_binding["feature_artifact_id"],
+                "source_pack_id": pack_id,
+                "source_pack_version": version,
+                "receipt_event": "character.content.apply",
+                "receipt_fields": receipt_fields,
+                "branch_id": resolved_branch_id,
+            }
+        # Core stores actor lifecycle idempotency at campaign/principal scope.
+        # The resolved branch is part of ``addon_request``, so another branch
+        # conflicts instead of replaying this response.
+        lifecycle_scope = f"actor-lifecycle:{campaign_id}:{principal_id}"
+        # Replay only after the current branch and (when source-bound) the
+        # current applied entitlement have been verified.  This prevents a
+        # successful response from surviving a receipt undo.
+        replay = idempotency.lookup(lifecycle_scope, idempotency_key, addon_request)
+        if replay is not None and replay.response is not None:
+            response = dict(replay.response)
+            return {
+                "character": character_view(CharacterInfo(**dict(response["character"]))),
+                "content_receipt": deepcopy(response["content_receipt"]),
+                "actor_knowledge_imported": False,
+                "combat": deepcopy(response.get("combat")),
+                "replaced_actor_id": response.get("replaced_actor_id"),
+                "mutation_group_id": str(response["mutation_group_id"]),
+                "next": None,
+            }
         source_text, source_refs = dependent_actor_source_text(artifact)
         numeric_parameters, selected_class_name = dependent_actor_numeric_parameters(
             owner=owner,
             requirement=requirement,
             owner_class_name=str(owner_class_name or ""),
             casting_slot_level=casting_slot_level,
+        )
+        normalized_template_variant = (
+            str(template_variant).strip().casefold().replace(" ", "_")
+            if template_variant is not None
+            else None
         )
         preview_text, _ = materialize_parameterized_statblock_source(
             source_text,
@@ -48904,7 +52009,18 @@ boundary.
             template_variant=template_variant,
         )
         sheet = finalize_actor_sheet_rulings(sheet, campaign_id)
-        require_engine_owned_short_rest_hit_die_state(sheet)
+        if owner_binding is not None:
+            sheet = materialize_dependent_actor_owner_scaling(
+                sheet,
+                numeric_parameters,
+                relation_key=owner_binding["relation_key"],
+                reviewed_expression_hash=str(
+                    dict(requirement.get("solution") or {}).get("reviewed_expression_hash") or ""
+                ),
+            )
+            if owner_binding["relation_key"] == STEEL_DEFENDER_RELATION_KEY:
+                sheet = bind_steel_defender_runtime_mechanics(sheet)
+        require_engine_owned_character_state(sheet)
         _reject_new_intrinsic_attack_provenance(sheet)
         _require_authoritative_background_state(
             sheet,
@@ -48913,8 +52029,18 @@ boundary.
         )
         if character_type not in NON_PLAYER_CHARACTER_TYPES:
             raise ValueError("addon actor templates create only npc or monster actors")
+        actor_id = str(
+            uuid5(
+                NAMESPACE_URL,
+                f"sagasmith-dnd:addon-actor:{campaign_id}:{principal_id}:{idempotency_key}",
+            )
+        )
         requested_name = str(name or "").strip()
-        actor_name = requested_name or f"{parsed.name} ({owner.name})"
+        actor_name = requested_name or (
+            f"{parsed.name} ({owner.name}; {actor_id[:8]})"
+            if replace_existing
+            else f"{parsed.name} ({owner.name})"
+        )
         notes_value = deepcopy(notes or default_character_notes())
         profile = notes_value.setdefault("profile", {})
         receipt = {
@@ -48939,23 +52065,171 @@ boundary.
             ),
             "source_refs": source_refs,
         }
+        relation_campaign = campaigns.get(campaign_id)
+        existing_relations = validate_dependent_actor_relations(
+            dict(relation_campaign.state or {}).get("dependent_actor_relations", [])
+        )
+        active_relations = (
+            []
+            if owner_binding is None
+            else [
+                relation
+                for relation in existing_relations
+                if relation["owner_character_id"] == owner.id
+                and relation["relation_key"] == owner_binding["relation_key"]
+                and relation["status"] == "active"
+            ]
+        )
+        if replace_existing and owner_binding is None:
+            raise ValueError("replace_existing requires a source-bound dependent actor")
+        if len(active_relations) > 1:
+            raise ValueError("dependent actor owner has ambiguous active bound actors")
+        if not replace_existing and active_relations:
+            raise ValueError("dependent actor owner already has an active bound actor")
+        if replace_existing and len(active_relations) != 1:
+            raise ValueError("dependent actor replacement requires exactly one active bound actor")
+        replacement_actor = None
+        replacement_rest_tick: int | None = None
+        if replace_existing:
+            if authoritative_phase(campaign_id) == PROFILE_COMBAT:
+                raise CombatEngineError(
+                    "dependent actor replacement must occur at the end of a long rest"
+                )
+            if expected_revision is None or expected_revision != relation_campaign.revision:
+                raise ValueError(
+                    "dependent actor replacement requires the current campaign expected_revision"
+                )
+            rest_history = dict(dict(owner.sheet.get("combat") or {}).get("rest_history") or {})
+            replacement_rest_tick = rest_history.get("last_long_rest_elapsed_ticks")
+            if (
+                isinstance(replacement_rest_tick, bool)
+                or not isinstance(replacement_rest_tick, int)
+                or replacement_rest_tick < 0
+                or rest_history.get("last_rest_type") != "long_rest"
+                or rest_history.get("last_rest_completed_elapsed_ticks") != replacement_rest_tick
+                or int(
+                    dict(relation_campaign.state or {})
+                    .get("game_time", {})
+                    .get("elapsed_ticks", -1)
+                )
+                != replacement_rest_tick
+            ):
+                raise ValueError(
+                    "dependent actor replacement must use the owner's just-completed long rest"
+                )
+            inventory_items = list(dict(owner.sheet.get("inventory") or {}).get("items") or [])
+            has_smiths_tools = any(
+                isinstance(item, Mapping)
+                and int(item.get("quantity", 0) or 0) > 0
+                and str(item.get("name") or "")
+                .replace("’", "'")
+                .replace("‘", "'")
+                .strip()
+                .casefold()
+                in {"smith's tools", "smiths tools"}
+                for item in inventory_items
+            )
+            if not has_smiths_tools:
+                raise ValueError(
+                    "dependent actor replacement requires smith's tools with the owner"
+                )
+            if active_relations[0].get("created_long_rest_elapsed_ticks") == replacement_rest_tick:
+                raise ValueError("this long rest has already created the active dependent actor")
+            replacement_actor = characters.get(active_relations[0]["dependent_actor_id"])
+            if replacement_actor.campaign_id != campaign_id:
+                raise ValueError("dependent actor replacement target belongs to another campaign")
+            if (
+                active_relations[0]["source_artifact_id"] != artifact_id
+                or active_relations[0]["source_pack_id"] != pack_id
+                or active_relations[0]["source_pack_version"] != version
+            ):
+                raise ValueError(
+                    "dependent actor replacement must use the same source-bound template"
+                )
+            _dependent_actor_refresh_receipt(
+                active_relations[0],
+                {
+                    **dict(artifact),
+                    "_pack_id": pack_id,
+                    "_pack_version": version,
+                },
+                requirement,
+                campaign_id,
+            )
+            existing_binding = dict(active_relations[0]["template_binding"])
+            expected_existing_binding = {
+                "owner_class_name": selected_class_name,
+                "casting_slot_level": casting_slot_level,
+                "template_variant": normalized_template_variant,
+                "numeric_parameters": deepcopy(numeric_parameters),
+                "reviewed_expression_hash": str(
+                    dict(requirement["solution"])["reviewed_expression_hash"]
+                ),
+            }
+            if {
+                key: existing_binding[key] for key in expected_existing_binding
+            } != expected_existing_binding:
+                raise ValueError(
+                    "dependent actor replacement binding is stale or conflicts with the owner"
+                )
+        if (
+            owner_binding is not None
+            and any(
+                relation["owner_character_id"] == owner.id
+                and relation["relation_key"] == owner_binding["relation_key"]
+                and relation["status"] == "active"
+                for relation in existing_relations
+            )
+            and not replace_existing
+        ):
+            raise ValueError("dependent actor owner already has an active bound actor")
+        receipt.update(
+            {
+                "replace_existing": replace_existing,
+                "replaced_actor_id": (
+                    replacement_actor.id if replacement_actor is not None else None
+                ),
+                "created_long_rest_elapsed_ticks": replacement_rest_tick,
+            }
+        )
+        template_binding = {
+            "owner_class_name": selected_class_name,
+            "casting_slot_level": casting_slot_level,
+            "template_variant": normalized_template_variant,
+            "numeric_parameters": deepcopy(numeric_parameters),
+            "reviewed_expression_hash": str(
+                dict(requirement["solution"])["reviewed_expression_hash"]
+            ),
+        }
+        template_binding["authorization"] = sign_receipt(
+            {
+                "schema_version": 1,
+                "purpose": "dependent_actor_template",
+                "campaign_id": campaign_id,
+                "owner_character_id": owner.id,
+                "dependent_actor_id": actor_id,
+                "relation_key": (
+                    owner_binding["relation_key"] if owner_binding is not None else ""
+                ),
+                "source_artifact_id": artifact_id,
+                "source_pack_id": pack_id,
+                "source_pack_version": version,
+                **deepcopy(template_binding),
+            },
+            content_authority_secret,
+        )
         provenance = "sagasmith:addon-actor-template:" + canonical_json(receipt)
         existing_dm_notes = str(profile.get("dm_notes") or "").strip()
         profile["dm_notes"] = "\n".join(value for value in (existing_dm_notes, provenance) if value)
-        actor_id = str(
-            uuid5(
-                NAMESPACE_URL,
-                f"sagasmith-dnd:addon-actor:{campaign_id}:{principal_id}:{idempotency_key}",
-            )
-        )
-        resolved_branch_id = require_current_branch(campaign_id, branch_id)
         campaign_state: dict[str, Any] | None = None
         combat_result: dict[str, Any] | None = None
         actor_sheet = sheet
+        relation_base_revision = relation_campaign.revision
         if authoritative_phase(campaign_id) == PROFILE_COMBAT:
             if expected_revision is None:
                 raise ValueError("expected_revision is required during Combat")
             campaign, encounter = active_encounter(campaign_id)
+            relation_base_revision = campaign.revision
             require_no_blocking_pending(encounter)
             if campaign.revision != expected_revision:
                 raise ValueError(
@@ -49029,6 +52303,22 @@ boundary.
                 provisional = replace(provisional, sheet=deepcopy(actor_sheet))
             actor_snapshot = character_view(provisional)
             actor_snapshot.update(config_value)
+            if (
+                owner_binding is not None
+                and owner_binding["relation_key"] == STEEL_DEFENDER_RELATION_KEY
+                and template_binding["reviewed_expression_hash"]
+                == STEEL_DEFENDER_REVIEWED_EXPRESSION_HASH
+            ):
+                actor_snapshot["dependent_turn"] = {
+                    "kind": STEEL_DEFENDER_TURN_KIND,
+                    "owner_actor_id": owner.id,
+                    "source_artifact_id": artifact_id,
+                    "source_pack_id": pack_id,
+                    "source_pack_version": version,
+                    "reviewed_expression_hash": template_binding[
+                        "reviewed_expression_hash"
+                    ],
+                }
             next_encounter = queue_combatant(
                 encounter,
                 actor_snapshot,
@@ -49047,6 +52337,80 @@ boundary.
                 "combat": next_encounter,
                 "campaign_revision": campaign.revision + 1,
             }
+        lifecycle_expected_revision = expected_revision
+        if owner_binding is not None:
+            relation_state = deepcopy(
+                campaign_state
+                if campaign_state is not None
+                else dict(relation_campaign.state or {})
+            )
+            # Re-read from the exact state being submitted. During Combat that
+            # snapshot may be newer than the earlier fast-path relation check;
+            # never overwrite a concurrently committed relation with the old
+            # list merely because the caller supplied the newer revision.
+            submitted_relations = validate_dependent_actor_relations(
+                relation_state.get("dependent_actor_relations", [])
+            )
+            submitted_active = [
+                relation
+                for relation in submitted_relations
+                if relation["owner_character_id"] == owner.id
+                and relation["relation_key"] == owner_binding["relation_key"]
+                and relation["status"] == "active"
+            ]
+            if len(submitted_active) > 1:
+                raise ValueError("dependent actor owner has ambiguous active bound actors")
+            if submitted_active and not replace_existing:
+                raise ValueError("dependent actor owner already has an active bound actor")
+            if replace_existing and (
+                len(submitted_active) != 1
+                or submitted_active[0]["dependent_actor_id"] != replacement_actor.id
+            ):
+                raise ValueError("dependent actor replacement target changed before commit")
+            if replace_existing:
+                replacement_death_tick = int(
+                    dict(relation_state["game_time"])["elapsed_ticks"]
+                )
+                submitted_relations = [
+                    {
+                        **relation,
+                        "status": "replaced",
+                        "death_elapsed_ticks": replacement_death_tick,
+                        "revival_started_elapsed_ticks": None,
+                        "revival_completes_elapsed_ticks": None,
+                    }
+                    if relation["dependent_actor_id"] == replacement_actor.id
+                    else relation
+                    for relation in submitted_relations
+                ]
+            if any(
+                relation["owner_character_id"] == owner.id
+                and relation["relation_key"] == owner_binding["relation_key"]
+                and relation["status"] == "active"
+                for relation in submitted_relations
+            ):
+                raise ValueError("dependent actor owner already has an active bound actor")
+            relation_state["dependent_actor_relations"] = [
+                *submitted_relations,
+                {
+                    "owner_character_id": owner.id,
+                    "dependent_actor_id": actor_id,
+                    "relation_key": owner_binding["relation_key"],
+                    "source_artifact_id": artifact_id,
+                    "source_pack_id": pack_id,
+                    "source_pack_version": version,
+                    "status": "active",
+                    "created_campaign_revision": relation_base_revision + 1,
+                    "created_long_rest_elapsed_ticks": replacement_rest_tick,
+                    "death_elapsed_ticks": None,
+                    "revival_started_elapsed_ticks": None,
+                    "revival_completes_elapsed_ticks": None,
+                    "template_binding": deepcopy(template_binding),
+                },
+            ]
+            campaign_state = validate_party_state(relation_state)
+            if lifecycle_expected_revision is None:
+                lifecycle_expected_revision = relation_campaign.revision
         _reject_new_tortle_natural_armor_provenance(actor_sheet)
         created = actor_lifecycle.create(
             campaign_id,
@@ -49061,16 +52425,28 @@ boundary.
             idempotency_key=idempotency_key,
             initial_grants=(InitialActorGrant(principal_id),),
             campaign_state=campaign_state,
-            expected_campaign_revision=expected_revision,
+            expected_campaign_revision=lifecycle_expected_revision,
             operation="addon.actor.instantiate",
             actor=principal_id,
             branch_id=resolved_branch_id,
             actor_id=actor_id,
             idempotency_payload=addon_request,
+            dependent_actor_authorization=dependent_actor_authorization,
+            dependent_actor_replacement=(
+                {
+                    "character_id": replacement_actor.id,
+                    "expected_revision": replacement_actor.revision,
+                }
+                if replacement_actor is not None
+                else None
+            ),
             response_extra={
                 "content_receipt": receipt,
                 "actor_knowledge_imported": False,
                 "combat": combat_result,
+                "replaced_actor_id": (
+                    replacement_actor.id if replacement_actor is not None else None
+                ),
                 "next": None,
             },
         )
@@ -49080,6 +52456,7 @@ boundary.
             "content_receipt": receipt,
             "actor_knowledge_imported": False,
             "combat": combat_result,
+            "replaced_actor_id": (replacement_actor.id if replacement_actor is not None else None),
             "mutation_group_id": created.mutation_group_id,
             "next": None,
         }
@@ -49237,7 +52614,7 @@ boundary.
                 if len(matches) != 1:
                     raise ValueError("artifact_id must identify exactly one package actor")
                 card = validate_dnd_content_actor(matches[0])
-                require_engine_owned_short_rest_hit_die_state(card["sheet"])
+                require_engine_owned_character_state(card["sheet"])
                 package_checksum = package["checksum"]
                 card = runtime_actor_with_portrait(card, package, package_blobs)
             if card.get("schema") != "sagasmith.actor-card.v3":
@@ -50277,13 +53654,47 @@ boundary.
 
     @public_tool()
     def inventory_transfer(
-        mode: Literal["character_to_character", "party_to_character", "character_to_party"],
+        mode: Literal[
+            "character_to_character",
+            "party_to_character",
+            "character_to_party",
+            "character_to_ground",
+            "ground_to_character",
+        ],
         payload: dict[str, Any],
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Transfer inventory with the revision contract required by every affected owner."""
         data = facade_payload(payload)
+        if mode in {"character_to_ground", "ground_to_character"}:
+            shared = {
+                "campaign_id",
+                "character_id",
+                "expected_campaign_revision",
+                "expected_character_revision",
+            }
+            specific = (
+                {"ground_id", "slot", "spatial_facts"} if mode == "ground_to_character" else set()
+            )
+            if set(data) - shared - specific or shared - set(data):
+                raise ValueError(
+                    "ground transfer requires exact campaign, character and revision fields"
+                )
+            return facade_result(
+                mode,
+                ground_inventory_settlement(
+                    data["campaign_id"],
+                    data["character_id"],
+                    "pickup_ground" if mode == "ground_to_character" else "drop_held",
+                    {key: value for key, value in data.items() if key in specific},
+                    principal_id=principal_id,
+                    expected_revision=data["expected_campaign_revision"],
+                    expected_character_revision=data["expected_character_revision"],
+                    idempotency_key=idempotency_key,
+                    in_combat=False,
+                ),
+            )
         if mode == "character_to_character":
             result = character_inventory_transfer(
                 required(data, "source_character_id"),
@@ -50551,10 +53962,266 @@ boundary.
             raise ValueError(f"unsupported character state action: {action}")
         return facade_result(action, result)
 
+    @_agent_ruling_boundary
+    def character_revive_steel_defender(
+        owner_character_id: str,
+        dependent_actor_id: str,
+        slot_level: int,
+        spatial_facts: dict[str, Any],
+        principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
+        expected_revision: int | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Spend the source-defined action, tools, slot, and minute to revive a defender."""
+
+        owner = characters.get(owner_character_id)
+        require_character_control(owner, principal_id)
+        require_outside_active_combat(owner, "Steel Defender revival")
+        if owner.campaign_id is None:
+            raise CombatEngineError("Steel Defender revival requires a campaign-bound owner")
+        if expected_revision is None or not idempotency_key:
+            raise ValueError(
+                "expected_revision and idempotency_key are required for Steel Defender revival"
+            )
+        branch_id = require_current_branch(owner.campaign_id, None)
+        normalized_spatial = dict(spatial_facts or {})
+        payload = {
+            "owner_character_id": owner_character_id,
+            "dependent_actor_id": dependent_actor_id,
+            "slot_level": slot_level,
+            "spatial_facts": normalized_spatial,
+        }
+        scope = f"steel-defender-revive:{owner.campaign_id}:{branch_id}:{principal_id}"
+        replay = replay_idempotent(scope, idempotency_key, payload)
+        if replay is not None:
+            return replay
+        if owner.revision != expected_revision:
+            raise ValueError(
+                f"character revision conflict: expected {expected_revision}, "
+                f"found {owner.revision}"
+            )
+        access.require_campaign(owner.campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
+        if set(normalized_spatial) != {
+            "distance_ft",
+            "default_resolver",
+            "ruling_kind",
+            "reason",
+        }:
+            raise CombatEngineError("Steel Defender revival requires exact spatial_facts")
+        distance_ft = normalized_spatial.get("distance_ft")
+        reason = " ".join(str(normalized_spatial.get("reason") or "").split())
+        if (
+            isinstance(distance_ft, bool)
+            or not isinstance(distance_ft, (int, float))
+            or not math.isfinite(float(distance_ft))
+            or not 0 <= float(distance_ft) <= 5
+            or normalized_spatial.get("default_resolver") != "agent"
+            or normalized_spatial.get("ruling_kind") != "agent_dm_adjudication"
+            or not reason
+            or len(reason) > 500
+        ):
+            raise CombatEngineError(
+                "Steel Defender revival requires a bounded within-5-feet Agent ruling"
+            )
+        campaign = campaigns.get(owner.campaign_id)
+        state = validate_party_state(deepcopy(campaign.state or {}))
+        require_resolved_short_rest_hit_dice(
+            owner.campaign_id,
+            state,
+            operation="reviving a Steel Defender",
+        )
+        relations = validate_dependent_actor_relations(
+            state.get("dependent_actor_relations", [])
+        )
+        relation_matches = [
+            (index, relation)
+            for index, relation in enumerate(relations)
+            if relation["owner_character_id"] == owner_character_id
+            and relation["dependent_actor_id"] == dependent_actor_id
+            and relation["relation_key"] == STEEL_DEFENDER_RELATION_KEY
+        ]
+        if len(relation_matches) != 1:
+            raise CombatEngineError("Steel Defender revival requires one exact owner relation")
+        relation_index, relation = relation_matches[0]
+        if relation["status"] != "dead":
+            raise CombatEngineError("Steel Defender revival requires a dead relation")
+        revival_contract = _verified_steel_defender_relation(
+            owner.campaign_id,
+            branch_id,
+            relation,
+            require_current_parameters=False,
+        )
+        defender = require_campaign_actor(owner.campaign_id, dependent_actor_id)
+        start_tick = int(dict(state["game_time"])["elapsed_ticks"])
+        state, time_transition = advance_state_game_time(state, elapsed_ticks=10)
+        world_duration = advance_world_effect_clocks(
+            state,
+            elapsed_ticks=10,
+            period_steps={"round": 10},
+        )
+        state = world_duration["state"]
+        all_characters = characters.list(campaign_id=owner.campaign_id)
+        timed_sheets: dict[str, dict[str, Any]] = {}
+        advanced: dict[str, list[str]] = {}
+        expired: dict[str, list[str]] = {}
+        rule_receipts: list[dict[str, Any]] = []
+        rules = effective_rule_context(owner.campaign_id)
+        for character in all_characters:
+            round_duration = advance_effect_durations(
+                character.sheet,
+                period="round",
+                amount=10,
+            )
+            elapsed_duration = advance_elapsed_effect_durations(
+                round_duration["sheet"],
+                elapsed_ticks=10,
+                advance_breathing=False,
+            )
+            extension = apply_rule_event(
+                elapsed_duration["sheet"],
+                "duration.advance",
+                context_with_facts(
+                    rules,
+                    actor_id=character.id,
+                    period="round",
+                    amount=10,
+                    elapsed_ticks=10,
+                    elapsed_minutes=1,
+                ),
+            )
+            timed_sheets[character.id] = extension.sheet
+            rule_receipts.extend(extension.receipts)
+            actor_advanced = [
+                *list(round_duration["advanced"]),
+                *list(elapsed_duration["advanced"]),
+            ]
+            actor_expired = [
+                *list(round_duration["expired"]),
+                *list(elapsed_duration["expired"]),
+            ]
+            if actor_advanced:
+                advanced[character.id] = list(dict.fromkeys(actor_advanced))
+            if actor_expired:
+                expired[character.id] = list(dict.fromkeys(actor_expired))
+        try:
+            started = begin_steel_defender_revival(
+                timed_sheets[owner.id],
+                timed_sheets[defender.id],
+                relation=relation,
+                elapsed_ticks=start_tick,
+                distance_ft=float(distance_ft),
+                slot_level=slot_level,
+                action_available=True,
+            )
+            completed = complete_steel_defender_revival(
+                started["defender_sheet"],
+                started["pending_revival"],
+                elapsed_ticks=int(dict(state["game_time"])["elapsed_ticks"]),
+            )
+        except SteelDefenderError as error:
+            raise CombatEngineError(str(error)) from error
+        if completed["status"] != "committed":
+            raise CombatEngineError("Steel Defender revival did not reach its one-minute boundary")
+        timed_sheets[owner.id] = validate_character_sheet(started["owner_sheet"])
+        timed_sheets[defender.id] = validate_character_sheet(completed["sheet"])
+        rule_receipts.append(
+            {
+                "mechanic_id": "dnd5e.expansion.steel_defender.revival",
+                "event": "character.steel_defender.revive",
+                "operations": [{"op": "builtin.expansion_provider"}],
+                "citations": [
+                    {
+                        "source_artifact_id": revival_contract["source_artifact_id"],
+                        "source_pack_id": revival_contract["source_pack_id"],
+                        "source_pack_version": revival_contract["source_pack_version"],
+                        "reviewed_expression_hash": revival_contract[
+                            "reviewed_expression_hash"
+                        ],
+                    }
+                ],
+                "ruleset_fingerprint": rules.fingerprint,
+            }
+        )
+        relations[relation_index] = {
+            **relation,
+            "status": "active",
+            "death_elapsed_ticks": None,
+            "revival_started_elapsed_ticks": None,
+            "revival_completes_elapsed_ticks": None,
+        }
+        state["dependent_actor_relations"] = validate_dependent_actor_relations(relations)
+        reconciled = reconcile_source_effect_dependencies(timed_sheets)
+        timed_sheets = reconciled["sheets"]
+        updates = [
+            CharacterStateUpdate(
+                character_id=character.id,
+                sheet=validate_character_sheet(timed_sheets[character.id]),
+                notes=validate_character_notes(character.notes),
+                expected_revision=(
+                    expected_revision if character.id == owner.id else character.revision
+                ),
+            )
+            for character in all_characters
+            if timed_sheets[character.id] != character.sheet
+        ]
+        owner_after = replace(
+            owner,
+            sheet=validate_character_sheet(timed_sheets[owner.id]),
+            notes=validate_character_notes(owner.notes),
+            revision=owner.revision + 1,
+        )
+
+        def revival_response(revisions: list[Any]) -> dict[str, Any]:
+            return {
+                "status": "committed",
+                "owner": character_view(owner_after),
+                "dependent_actor_id": dependent_actor_id,
+                "payment": deepcopy(started["payment"]),
+                "action_paid": True,
+                "spatial_facts": {
+                    **normalized_spatial,
+                    "distance_ft": float(distance_ft),
+                    "reason": reason,
+                    "committed": True,
+                },
+                "game_time": time_transition["after"],
+                "world_time": time_transition["world_time_after"],
+                "elapsed_ticks": 10,
+                "advanced": advanced,
+                "expired": expired,
+                "world_advanced": list(dict.fromkeys(world_duration["advanced"])),
+                "world_expired": list(dict.fromkeys(world_duration["expired"])),
+                "campaign_revision": campaign.revision + 1,
+                "revisions": [asdict(item) for item in revisions],
+            }
+
+        revisions_result = StateMutationService(storage.database).replace(
+            owner.campaign_id,
+            campaign_state=state,
+            character_updates=updates,
+            expected_campaign_revision=campaign.revision,
+            operation="character.steel_defender.revive",
+            actor=principal_id,
+            branch_id=branch_id,
+            idempotency_key=idempotency_key,
+            idempotency_write=IdempotencyWrite(
+                scope=scope,
+                payload=payload,
+                response=revival_response,
+            ),
+            rule_receipts=rule_receipts,
+        )
+        return revival_response(list(revisions_result or []))
+
     @public_tool()
     def character_action(
         character_id: str,
-        action: Literal["cast_spell", "use_activity", "attack_source_object"],
+        action: Literal[
+            "cast_spell",
+            "use_activity",
+            "attack_source_object",
+            "revive_steel_defender",
+        ],
         payload: dict[str, Any],
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
         expected_revision: int | None = None,
@@ -50574,6 +54241,7 @@ boundary.
                 source_item_id=data.get("source_item_id"),
                 target_character_ids=data.get("target_character_ids"),
                 willing_target_ids=data.get("willing_target_ids"),
+                declaration=data.get("declaration"),
                 principal_id=principal_id,
                 expected_revision=expected_revision,
                 idempotency_key=idempotency_key,
@@ -50586,6 +54254,22 @@ boundary.
                 principal_id,
                 expected_revision,
                 idempotency_key,
+            )
+        elif action == "revive_steel_defender":
+            unexpected = set(data) - {"dependent_actor_id", "slot_level", "spatial_facts"}
+            if unexpected:
+                raise ValueError(
+                    "revive_steel_defender payload accepts only dependent_actor_id, "
+                    f"slot_level, and spatial_facts; unexpected fields: {sorted(unexpected)}"
+                )
+            result = character_revive_steel_defender(
+                owner_character_id=character_id,
+                dependent_actor_id=required(data, "dependent_actor_id"),
+                slot_level=required(data, "slot_level"),
+                spatial_facts=required(data, "spatial_facts"),
+                principal_id=principal_id,
+                expected_revision=expected_revision,
+                idempotency_key=idempotency_key,
             )
         else:
             result = character_source_object_attack(

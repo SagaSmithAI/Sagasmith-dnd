@@ -305,7 +305,9 @@ def selection_schema_for_artifact(artifact: Mapping[str, Any]) -> dict[str, Any]
         raise ValueError(f"{kind} artifact needs a structured card")
     card_value = dict(card)
     binding = {field: copy.deepcopy(card_value.get(field)) for field in _CARD_BINDINGS[kind]}
-    _validate_materializer_card(kind, binding)
+    # Check deprecated subclass fields before projecting the canonical binding;
+    # otherwise ignored spell grants can be falsely approved as executable.
+    _validate_materializer_card(kind, card_value if kind == "subclass" else binding)
     selection_fields = list(_SELECTION_FIELDS[kind])
     if kind in {"feat", "feature"}:
         dynamic_fields = _dynamic_selection_fields(kind, card_value)

@@ -392,6 +392,7 @@ def _default_inventory() -> dict[str, Any]:
     return {
         "wallet": {denomination: 0 for denomination in DENOMINATIONS},
         "items": [],
+        "external_items": [],
         "equipment_slots": {slot: None for slot in EQUIPMENT_SLOTS},
         "encumbrance": {"mode": "standard", "ignore_currency_weight": False},
     }
@@ -1443,8 +1444,7 @@ def _normalize_intrinsic_attack(value: Any, field: str) -> dict[str, Any]:
         ),
     }
     if not all(
-        normalized_source[key]
-        for key in ("artifact_id", "pack_id", "pack_version", "rule_refs")
+        normalized_source[key] for key in ("artifact_id", "pack_id", "pack_version", "rule_refs")
     ):
         raise ValueError(f"{field}.source requires exact content provenance")
     return {
@@ -1466,7 +1466,11 @@ def _normalize_intrinsic_attack(value: Any, field: str) -> dict[str, Any]:
 
 def validate_inventory(value: Any) -> dict[str, Any]:
     inventory = _merge_defaults(_default_inventory(), _object(value or {}, "inventory"))
-    _reject_unknown(inventory, "inventory", {"wallet", "items", "equipment_slots", "encumbrance"})
+    _reject_unknown(
+        inventory,
+        "inventory",
+        {"wallet", "items", "external_items", "equipment_slots", "encumbrance"},
+    )
     wallet = _object(inventory["wallet"], "inventory.wallet")
     _reject_unknown(wallet, "inventory.wallet", set(DENOMINATIONS))
     normalized_wallet = {
@@ -1482,7 +1486,65 @@ def validate_inventory(value: Any) -> dict[str, Any]:
     item_ids = {item["id"] for item in items}
     if len(item_ids) != len(items):
         raise ValueError("inventory.items contains duplicate ids")
-    attuned_items = [item for item in items if item["attunement"] == "attuned"]
+    external_items = []
+    for index, raw in enumerate(_array(inventory["external_items"], "inventory.external_items")):
+        field = f"inventory.external_items[{index}]"
+        entry = _object(raw, field)
+        _reject_unknown(entry, field, {"id", "name", "attunement", "location"})
+        external_id = _text(entry.get("id"), f"{field}.id", maximum=100)
+        if not external_id:
+            raise ValueError(f"{field}.id must be a non-empty string")
+        name = _text(entry.get("name"), f"{field}.name", maximum=300)
+        if not name:
+            raise ValueError(f"{field}.name must be a non-empty string")
+        attunement = _text(entry.get("attunement"), f"{field}.attunement")
+        if attunement not in {"none", "required", "attuned"}:
+            raise ValueError(f"{field}.attunement is invalid")
+        location = _object(entry.get("location"), f"{field}.location")
+        kind = _text(location.get("kind"), f"{field}.location.kind")
+        if kind == "ground":
+            _reject_unknown(location, f"{field}.location", {"kind", "ground_id", "item_id"})
+            normalized_location = {
+                "kind": kind,
+                "ground_id": _text(
+                    location.get("ground_id"), f"{field}.location.ground_id", maximum=100
+                ),
+                "item_id": _text(location.get("item_id"), f"{field}.location.item_id", maximum=100),
+            }
+        elif kind == "actor":
+            _reject_unknown(location, f"{field}.location", {"kind", "actor_id", "item_id"})
+            normalized_location = {
+                "kind": kind,
+                "actor_id": _text(
+                    location.get("actor_id"), f"{field}.location.actor_id", maximum=100
+                ),
+                "item_id": _text(location.get("item_id"), f"{field}.location.item_id", maximum=100),
+            }
+        else:
+            raise ValueError(f"{field}.location.kind is invalid")
+        for location_id in normalized_location.values():
+            if isinstance(location_id, str) and not location_id:
+                raise ValueError(f"{field}.location ids must be non-empty strings")
+        external_items.append(
+            {
+                "id": external_id,
+                "name": name,
+                "attunement": attunement,
+                "location": normalized_location,
+            }
+        )
+    external_ids = {item["id"] for item in external_items}
+    if len(external_ids) != len(external_items):
+        raise ValueError("inventory.external_items contains duplicate ids")
+    if item_ids & external_ids:
+        raise ValueError("inventory.external_items ids must not collide with inventory item ids")
+    location_keys = [
+        tuple([location["kind"]] + [value for key, value in location.items() if key != "kind"])
+        for location in (item["location"] for item in external_items)
+    ]
+    if len(location_keys) != len(set(location_keys)):
+        raise ValueError("inventory.external_items contains duplicate physical item references")
+    attuned_items = [item for item in items + external_items if item["attunement"] == "attuned"]
     if len(attuned_items) > 3:
         raise ValueError("a character cannot be attuned to more than three magic items")
     # source_key records provenance and can legitimately differ between two
@@ -1555,6 +1617,7 @@ def validate_inventory(value: Any) -> dict[str, Any]:
     return {
         "wallet": normalized_wallet,
         "items": items,
+        "external_items": external_items,
         "equipment_slots": normalized_slots,
         "encumbrance": {
             "mode": mode,
@@ -2725,9 +2788,7 @@ def validate_character_sheet(
                     f"sheet.combat.short_rest_hit_dice references an unknown hit die: {key}"
                 )
             if amount > int(resource.get("value", 0) or 0):
-                raise ValueError(
-                    "sheet.combat.short_rest_hit_dice cannot exceed current hit dice"
-                )
+                raise ValueError("sheet.combat.short_rest_hit_dice cannot exceed current hit dice")
         song_die = short_rest_hit_dice.get("song_of_rest_die_sides")
         if song_die is not None:
             song_die = _integer(
@@ -3312,7 +3373,7 @@ def validate_character_sheet(
     if exhaustion >= 6 and "dead" not in conditions:
         conditions.append("dead")
     if "dead" in conditions:
-        for item in inventory["items"]:
+        for item in inventory["items"] + inventory["external_items"]:
             if item["attunement"] == "attuned":
                 item["attunement"] = "required"
     effects = [
@@ -3380,7 +3441,9 @@ def validate_character_sheet(
         "sheet.progression.subclass_grants.spell_list_expansion",
     )
     inventory_item_ids = {item["id"] for item in inventory["items"]}
-    if not set(background_item_ids).issubset(inventory_item_ids):
+    if not set(background_item_ids).issubset(
+        inventory_item_ids | {item["id"] for item in inventory["external_items"]}
+    ):
         raise ValueError("background equipment references an unknown inventory item")
 
     normalized = {
@@ -3740,6 +3803,7 @@ def validate_character_notes(
 
 
 def validate_party_state(state: dict[str, Any]) -> dict[str, Any]:
+    from sagasmith_dnd.dependent_actor_relations import validate_dependent_actor_relations
     from sagasmith_dnd.game_time import (
         game_time_from_ticks,
         validate_game_time,
@@ -3786,6 +3850,10 @@ def validate_party_state(state: dict[str, Any]) -> dict[str, Any]:
         value["random_stream"] = validate_random_stream_state(value["random_stream"])
     if "playthrough_manifest" in value:
         value["playthrough_manifest"] = validate_playthrough_manifest(value["playthrough_manifest"])
+    if "dependent_actor_relations" in value:
+        value["dependent_actor_relations"] = validate_dependent_actor_relations(
+            value["dependent_actor_relations"]
+        )
     return value
 
 
@@ -4358,11 +4426,7 @@ def _weapon_attacks(
         magic_bonus = mechanics["magic_bonus"] if magic_properties_active else 0
         ability = mechanics["attack_ability"]
         property_keys = {str(value).strip().casefold() for value in mechanics["properties"]}
-        if (
-            mechanics["attack_type"] == "melee"
-            and "finesse" in property_keys
-            and ability in {"strength", "dexterity"}
-        ):
+        if "finesse" in property_keys and ability in {"strength", "dexterity"}:
             ability = max(
                 ("strength", "dexterity"),
                 key=lambda candidate: ability_modifiers[candidate],
@@ -4482,9 +4546,7 @@ def _weapon_attacks(
         )
         damage_expression = damage_formula
         if modifier:
-            damage_expression = (
-                f"{damage_formula} {'+' if modifier > 0 else '-'} {abs(modifier)}"
-            )
+            damage_expression = f"{damage_formula} {'+' if modifier > 0 else '-'} {abs(modifier)}"
         attacks.append(
             {
                 "item_id": attack["id"],
@@ -5004,7 +5066,11 @@ def attune_inventory_item(sheet: dict[str, Any], item_id: str) -> dict[str, Any]
         raise ValueError("item does not require attunement")
     if item["attunement"] == "attuned":
         raise ValueError("item is already attuned")
-    attuned = [entry for entry in value["inventory"]["items"] if entry["attunement"] == "attuned"]
+    attuned = [
+        entry
+        for entry in value["inventory"]["items"] + value["inventory"]["external_items"]
+        if entry["attunement"] == "attuned"
+    ]
     if len(attuned) >= 3:
         raise ValueError("a character cannot be attuned to more than three magic items")
     identity = str(item.get("name") or item.get("source_key") or "").strip().casefold()

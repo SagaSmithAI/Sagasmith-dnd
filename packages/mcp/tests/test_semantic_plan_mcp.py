@@ -5,7 +5,9 @@ from copy import deepcopy
 from pathlib import Path
 
 import pytest
+from mcp.server.mcpserver.exceptions import ToolError
 from sagasmith_dnd.character_schema import default_character_sheet
+from sagasmith_dnd.core_content import build_srd2014_content
 
 from sagasmith_dnd_mcp import server as server_module
 from sagasmith_dnd_mcp.config import McpConfig
@@ -26,8 +28,10 @@ async def _raw(server, name: str, arguments: dict):
     return result
 
 
+@pytest.mark.parametrize("save_source_kind", [None, "magical_effect", "nonmagical_effect"])
 def test_custom_monster_plan_pays_executes_replays_and_rejects_mutation(
     tmp_path: Path,
+    save_source_kind: str | None,
 ) -> None:
     module_root = tmp_path / "modules"
     module_root.mkdir()
@@ -37,6 +41,12 @@ def test_custom_monster_plan_pays_executes_replays_and_rejects_mutation(
         "throw, taking 3d8 radiant damage on a failed save, or no damage on a "
         "successful one."
     )
+    if save_source_kind is not None:
+        mechanic_excerpt += (
+            " This is a magical effect, not poison."
+            if save_source_kind == "magical_effect"
+            else " This is a nonmagical effect, not poison."
+        )
     spell_excerpt = (
         "Chromatic Spark. One visible creature within 30 feet takes 1d4 radiant "
         "damage and is frightened until the start of the prism beast's next turn."
@@ -306,6 +316,14 @@ def test_custom_monster_plan_pays_executes_replays_and_rejects_mutation(
                 },
             }
         ]
+        if save_source_kind is not None:
+            pulse_plan = beast_sheet["content"]["activities"][0]["resolution_plan"]
+            pulse_plan["steps"][1]["args"]["source"] = {
+                **deepcopy(pulse_plan["citations"][0]),
+                "save_source_kind": save_source_kind,
+                "save_effect_conditions": [],
+                "save_against_poison": False,
+            }
         beast = await _call(
             server,
             "character_sheet_replace",
@@ -322,6 +340,15 @@ def test_custom_monster_plan_pays_executes_replays_and_rejects_mutation(
         ):
             sheet = default_character_sheet()
             sheet["combat"]["hp"] = {"value": 40, "max": 40, "temp": 0}
+            if save_source_kind is not None:
+                _, artifacts = build_srd2014_content(Path(__file__).resolve().parents[3] / "skills")
+                species_name = "Hill Dwarf" if actor["id"] == hero_one["id"] else "Rock Gnome"
+                species = next(
+                    item["card"]
+                    for item in artifacts
+                    if item["kind"] == "species" and item["card"]["name"] == species_name
+                )
+                sheet["content"]["features"] = deepcopy(species["grants"]["features"])
             await _call(
                 server,
                 "character_sheet_replace",
@@ -504,6 +531,18 @@ def test_custom_monster_plan_pays_executes_replays_and_rejects_mutation(
         save_targets = {
             item["target_id"]: item for item in settled["result"]["results"]["save"]["targets"]
         }
+        if save_source_kind is not None:
+            assert len(save_targets[hero_one["id"]]["rolls"]) == 1
+            assert len(save_targets[hero_two["id"]]["rolls"]) == (
+                2 if save_source_kind == "magical_effect" else 1
+            )
+            assert save_targets[hero_two["id"]]["ruleset_fingerprint"]
+            gnome_receipts = {
+                item["mechanic_id"] for item in save_targets[hero_two["id"]]["rule_receipts"]
+            }
+            assert ("dnd5e.core.save.gnome_cunning" in gnome_receipts) is (
+                save_source_kind == "magical_effect"
+            )
         damage_targets = {item["target_id"]: item for item in damage["targets"]}
         for actor in (hero_one, hero_two):
             target_id = actor["id"]
@@ -679,10 +718,14 @@ def test_content_solution_accepts_only_exact_active_rule_chunk_evidence(
 ) -> None:
     import_root = tmp_path / "rules"
     import_root.mkdir()
-    effect = "Moon Ribbon marks one creature until the start of the caster's next turn."
+    effect = (
+        "Moon Ribbon is a magical effect, not poison. A creature makes a DC 12 Wisdom save, "
+        "becoming marked on a failure until the start of the caster's next turn."
+    )
+    other_effect = "The unrelated Moon Venom calls for a Wisdom save against its magical poison."
     source = import_root / "moon-lore.md"
     source.write_text(
-        f"# Moon Lore\n\n## Moon Ribbon\n\n{effect}\n",
+        f"# Moon Lore\n\n## Moon Ribbon\n\n{effect} {other_effect}\n",
         encoding="utf-8",
     )
     config = McpConfig(
@@ -846,6 +889,61 @@ def test_content_solution_accepts_only_exact_active_rule_chunk_evidence(
             await _call(server, "content_solution", arguments)
 
         plan["citations"][0]["source"] = "rule-source:moon-lore"
+        # Both excerpts are authentic and in this active rule chunk, but only
+        # Moon Ribbon is on this actor's card. One relevant citation cannot
+        # authorize a save classified using the unrelated Moon Venom clause.
+        unrelated_plan = deepcopy(plan)
+        unrelated_citation = {
+            **deepcopy(plan["citations"][0]),
+            "source_excerpt": other_effect,
+        }
+        unrelated_plan["citations"].append(unrelated_citation)
+        unrelated_plan["steps"].insert(
+            0,
+            {
+                "id": "unrelated-save",
+                "op": "check.save",
+                "args": {
+                    "target_ids": [{"$slot": "target"}],
+                    "ability": "wisdom",
+                    "dc": 12,
+                    "source": {
+                        **deepcopy(unrelated_citation),
+                        "save_source_kind": "magical_effect",
+                        "save_effect_conditions": ["poisoned"],
+                        "save_against_poison": True,
+                    },
+                },
+            },
+        )
+        before = await _call(
+            server, "character_query", {"view": "get", "payload": {"character_id": actor["id"]}}
+        )
+        with pytest.raises(ToolError, match="save step unrelated-save must cite"):
+            await _call(
+                server,
+                "content_solution",
+                {
+                    **arguments,
+                    "payload": {**arguments["payload"], "resolution_plan": unrelated_plan},
+                    "idempotency_key": "unrelated-save",
+                },
+            )
+        assert (
+            await _call(
+                server, "character_query", {"view": "get", "payload": {"character_id": actor["id"]}}
+            )
+            == before
+        )
+        valid_save = deepcopy(unrelated_plan["steps"][0])
+        valid_save["id"] = "ribbon-save"
+        valid_save["args"]["source"] = {
+            **deepcopy(plan["citations"][0]),
+            "save_source_kind": "magical_effect",
+            "save_effect_conditions": [],
+            "save_against_poison": False,
+        }
+        plan["steps"].insert(0, valid_save)
         compiled = await _call(
             server,
             "content_solution",
