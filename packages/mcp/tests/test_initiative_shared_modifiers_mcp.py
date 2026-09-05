@@ -97,7 +97,7 @@ def test_public_2014_initiative_applies_persisted_shared_modifiers(
     tmp_path: Path, case: str, joining: bool
 ) -> None:
     async def exercise() -> None:
-        server = create_server(_config(tmp_path))
+        server = create_server(_config(tmp_path, tmp_path))
         try:
             campaign = await _call(server, "campaign_create", {
                 "name": "Initiative shared modifiers", "edition": "2014",
@@ -152,12 +152,18 @@ def test_public_2014_initiative_applies_persisted_shared_modifiers(
             with use_random_stream(stream):
                 result = await _raw(server, tool, arguments)
             after = await _snapshot(server, campaign_id)
+            assert after["revision"] == before["revision"] + 1
+            assert result["campaign_revision"] == after["revision"]
             roster = after["state"]["combat"]["reinforcements" if joining else "combatants"]
             rolled = next(item for item in roster if item["actor_id"] == actor["id"])
             expected_disadvantage = case in {"poisoned", "armor", "heavy_variant"}
             expected_bonus = -4 if case == "revival_0" else 0
             assert len(rolled["initiative_roll"]["rolls"]) == (2 if expected_disadvantage else 1)
             assert rolled["initiative_bonus"] == expected_bonus
+            if expected_disadvantage or expected_bonus:
+                assert "dnd5e.core.initiative.ability_check_modifiers" in rolled[
+                    "rule_boundary_ids"
+                ]
             expected_natural = (
                 min(rolled["initiative_roll"]["rolls"])
                 if expected_disadvantage
@@ -172,9 +178,10 @@ def test_public_2014_initiative_applies_persisted_shared_modifiers(
             assert await _raw(server, tool, arguments) == result
             assert await _snapshot(server, campaign_id) == after
             close_server(server)
-            server = create_server(_config(tmp_path))
+            server = create_server(_config(tmp_path, tmp_path))
             assert await _snapshot(server, campaign_id) == after
             assert await _raw(server, tool, arguments) == result
+            assert await _snapshot(server, campaign_id) == after
         finally:
             close_server(server)
 
@@ -260,6 +267,10 @@ def test_public_2014_chase_start_applies_the_same_initiative_contract(
             with use_random_stream(stream):
                 result = await _raw(server, "chase", arguments)
             after = await _snapshot(server, campaign_id)
+            assert after["revision"] == before["revision"] + 1
+            chase_result = result["result"]
+            assert chase_result["status"] == "committed"
+            assert chase_result["campaign_revision"] == after["revision"]
             rolled = next(
                 item for item in after["state"]["chase"]["participants"]
                 if item["actor_id"] == pursuer["id"]
@@ -274,6 +285,10 @@ def test_public_2014_chase_start_applies_the_same_initiative_contract(
             )
             assert rolled["initiative"] == expected_natural + expected_bonus
             assert rolled["initiative_bonus"] == expected_bonus
+            if expected_disadvantage or expected_bonus:
+                assert "dnd5e.core.initiative.ability_check_modifiers" in {
+                    receipt["mechanic_id"] for receipt in chase_result["rule_receipts"]
+                }
             assert rolled["initiative_roll"]["roll_mode"] == (
                 "disadvantage" if expected_disadvantage else "normal"
             )
@@ -288,6 +303,7 @@ def test_public_2014_chase_start_applies_the_same_initiative_contract(
             server = create_server(_config(tmp_path, tmp_path))
             assert await _snapshot(server, campaign_id) == after
             assert await _raw(server, "chase", arguments) == result
+            assert await _snapshot(server, campaign_id) == after
         finally:
             close_server(server)
 
