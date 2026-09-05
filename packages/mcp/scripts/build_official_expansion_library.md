@@ -17,7 +17,8 @@ python packages/mcp/scripts/build_official_expansion_library.py \
 The supplied canonical library must contain the exact eleven locally supplied
 inputs (ten expansions and the PHB dependency). The builder applies subclass
 grants, Artificer ASI, context, the exact-hash-bound Steel Defender
-citation, owner-binding, starting-equipment and lifecycle-policy repairs in the pinned order;
+citation, owner-binding, starting-equipment, lifecycle-policy and infusion-source
+repairs in the pinned order;
 six unaffected packages retain their original bytes. Output archive hashes, package identities,
 inner definition checksums and catalog counts must match the shipped lock.
 The Eberron equipment recipe binds its class contract to the exact EQUIPMENT
@@ -26,13 +27,27 @@ verified page number, so the recipe does not invent a page citation. It preserve
 the source blobs, offers the reviewed equipment choices or rolled gold alternative, and
 does not substitute the Tasha or Wayfinder printing. This is archive-source
 verification, not a claim of independent PDF-page verification.
-The final Eberron repair adds an explicit `lifecycle_policy` to the bound
+The lifecycle Eberron repair adds an explicit `lifecycle_policy` to the bound
 Steel Defender template: `schema_version: 1`, `owner_death: independent`.
 This exact older source predates the owner-perishing sentence added by the
 [2020 errata](https://media.wizards.com/2020/dnd/downloads/ERftLW-Errata.pdf).
 It does not import that erratum or change the source text or feature identity.
 The runtime also supports the explicitly reviewed `perish` value, but synthetic
 variant tests do not establish acceptance of a complete errata-edition package.
+
+The subsequent exact infusion-source repair corrects two card boundaries in that
+same older source. Enhanced Arcane Focus no longer includes the preceding Boots
+of the Winding Path text; its level-2 eligibility is preserved. Replicate Magic
+Item keeps the original level-2 and level-6 table headings next to their rows and
+restores the missing source chunk containing the level-10 and level-14 tables.
+The level-10 heading is section metadata; the embedded level-14 heading stays
+inside its unmodified chunk body. Original references are retained, with that
+verified additional chunk appended to the card and its selection evidence.
+Descriptions, Agent evidence, per-chunk citations and review hashes agree, while
+source blobs, source identities, existing selection schemas and mechanical fields remain
+unchanged. The recipe checks the exact input archive, normalized asset, section
+titles and chunk hashes; it does not repair arbitrary PDFs or add infusion-item
+settlement, structured replication choices, tool casting or optional INT attacks.
 
 Lifecycle policy is required at creation and compared with the activated source
 and signed relation on subsequent settlement and owner-scaling refresh. Missing

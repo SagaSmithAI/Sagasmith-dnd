@@ -24,8 +24,8 @@ from tests.test_steel_defender_lifecycle_mcp import (
 )
 
 _PREFIX = "dnd5e.addon.rulebook.d-d-5e-eberron-rising-from-the-last-war.31293633134f"
-_VERSION = "1.0.7-local.steel-defender-lifecycle.1"
-_RULE_VERSION = "1.0.5-local.steel-defender-lifecycle.1"
+_VERSION = "1.0.8-local.infusion-source.2"
+_RULE_VERSION = "1.0.6-local.infusion-source.2"
 _CLASS = _PREFIX + ".class.artificer"
 _DEFENDER = _PREFIX + ".statblock.steel-defender"
 _SRD = "dnd5e.content.srd2014."
@@ -34,6 +34,57 @@ _FEATURES = (
     "the-right-tool-for-the-job", "tool-proficiency-battle-smith", "battle-smith-spells",
     "battle-ready", "steel-defender",
 )
+
+
+async def _read_infusion_source_framing(server, campaign_id: str) -> dict:
+    """Check the actual activated source seen by the Agent, not item execution."""
+    contexts = {}
+    for slug in ("enhanced-arcane-focus", "replicate-magic-item"):
+        artifact_id = _PREFIX + ".feature." + slug
+        entries = await _call(server, "character_query", {
+            "view": "catalog", "payload": {
+                "campaign_id": campaign_id, "query": artifact_id, "include_context": True,
+            },
+        })
+        assert len(entries) == 1 and entries[0]["id"] == artifact_id
+        context = entries[0]["runtime_context"]
+        assert context["pack_id"] == _PREFIX and context["pack_version"] == _RULE_VERSION
+        assert context["content_hash"] == context["catalog_review_hash"]
+        assert context["content_hash"] == context["selection_contract"]["reviewed_content_hash"]
+        assert context["card"]["minimum_level"] == 2
+        assert context["semantic_resolution"]["mode"] == "agent_ruling"
+        assert context["card"]["ruling_requirements"][0]["source_excerpt"] == (
+            context["card"]["description"]
+        )
+        contexts[slug] = context
+    focus = contexts["enhanced-arcane-focus"]
+    assert "boots" not in focus["card"]["description"].lower()
+    focus_excerpt = focus["rule_clauses"][0]["source_citations"][0]["source_excerpt"]
+    assert "teleport" not in focus_excerpt.lower()
+    replicate = contexts["replicate-magic-item"]
+    text = replicate["card"]["description"]
+    assert text.index("REPLICABLE ITE M S (2N D-LEVEL ARTIFI CER)") < text.index(
+        "REPLICABLE ITE M S (6TH-LEVEL ARTIFICER)"
+    )
+    assert text.index("REPLICABLE ITE M S (6TH-LEVEL ARTIFICER)") < text.index(
+        "REPLICABLE ITEM S (lOT H-lEVEL ARTI FICER)"
+    ) < text.index("R E PLICABLE ITE M S (14T H - LEVEL ART I F I CER)")
+    citations = replicate["rule_clauses"][0]["source_citations"]
+    assert len(citations) == 4
+    # Archive chunk keys are localized to runtime IDs during import.
+    chunk_ids = [c["source_ref"]["chunk_id"] for c in citations]
+    assert len(set(chunk_ids)) == 4 and all(chunk_ids)
+    assert all(
+        any(ref.endswith("#chunk:" + chunk_id) for ref in replicate["rule_refs"])
+        for chunk_id in chunk_ids
+    )
+    assert text == "\n\n".join([
+        citations[0]["source_excerpt"],
+        "REPLICABLE ITE M S (2N D-LEVEL ARTIFI CER)\n" + citations[1]["source_excerpt"],
+        "REPLICABLE ITE M S (6TH-LEVEL ARTIFICER)\n" + citations[2]["source_excerpt"],
+        "REPLICABLE ITEM S (lOT H-lEVEL ARTI FICER)\n" + citations[3]["source_excerpt"],
+    ])
+    return contexts
 
 
 def test_protocol_combat_uses_and_persists_campaign_random_stream(tmp_path: Path) -> None:
@@ -403,6 +454,7 @@ def test_locked_artificer_build_creates_and_commands_defender(tmp_path: Path) ->
                     "addon_id": _PREFIX + ".addon", "version": _VERSION,
                 }, "expected_revision": profile["campaign_revision"], "idempotency_key": "activate",
             })
+            infusion_contexts = await _read_infusion_source_framing(server, campaign["id"])
             sheet = default_character_sheet()
             sheet["abilities"]["intelligence"]["score"] = 16
             owner = await _call(server, "character_create_from", {
@@ -451,6 +503,11 @@ def test_locked_artificer_build_creates_and_commands_defender(tmp_path: Path) ->
                     "infusions": ["Enhanced Arcane Focus", "Enhanced Defense",
                                   "Enhanced Weapon", "Repeating Shot"],
                 } if feature == "infuse-item" else {})
+            focus_card = next(item for item in owner["sheet"]["content"]["features"]
+                              if item["id"] == _PREFIX + ".feature.enhanced-arcane-focus")
+            assert focus_card["description"] == (
+                infusion_contexts["enhanced-arcane-focus"]["card"]["description"]
+            )
             before = await current()
             with pytest.raises(ToolError, match="feature entitlement"):
                 await _call(server, "addon_actor_instantiate", {
@@ -527,6 +584,7 @@ def test_locked_artificer_build_creates_and_commands_defender(tmp_path: Path) ->
                 Client(runtime, mode="2026-07-28"),
             ))
             assert await current() == final_campaign
+            assert await _read_infusion_source_framing(server, campaign["id"]) == infusion_contexts
             assert await _call(server, "character_query", {
                 "view": "get", "payload": {"character_id": defender["id"]},
             }) == final

@@ -84,9 +84,9 @@ def test_eberron_repairs_are_ordered_and_exact_hash_bound():
     target = next(
         package for package in lock["packages"] if package["publication_id"] == "erlw2014"
     )
-    assert target["local_repair"]["steps"][-3:] == [
+    assert target["local_repair"]["steps"][-4:] == [
         "steel_defender_owner_binding", "artificer_starting_equipment",
-        "steel_defender_lifecycle_policy",
+        "steel_defender_lifecycle_policy", "artificer_infusion_source",
     ]
     recipe = next(iter(builder.repair_steel_defender_citation._RECIPES.values()))
     assert recipe["version"] == "1.0.4-local.steel-defender-citation.1"
@@ -116,11 +116,20 @@ def test_eberron_repairs_are_ordered_and_exact_hash_bound():
     assert lifecycle._SOURCE_SHA == (
         "6189467c53b675d39cc3eddd8de74932040ee2e2a9024a187b9dfd80f76b8cd4"
     )
-    assert lifecycle._PACKAGE_VERSION == target["version"]
+    assert lifecycle._PACKAGE_VERSION == "1.0.7-local.steel-defender-lifecycle.1"
     assert lifecycle._DEFINITION_VERSION == "1.0.5-local.steel-defender-lifecycle.1"
     assert lifecycle._CHUNK_KEY == owner._CHUNK_KEY
     with pytest.raises(ValueError, match="exact reviewed"):
         lifecycle.repair_archive(b"wrong archive")
+    infusion = builder.repair_artificer_infusion_source
+    assert infusion._SOURCE_SHA == (
+        "1196e53ae9c706bfdb80bf0576fca0f8b0dcf0c5915790f58745d91b54281942"
+    )
+    assert infusion._PACKAGE_VERSION == target["version"]
+    assert infusion._DEFINITION_VERSION == "1.0.6-local.infusion-source.2"
+    assert set(infusion._SECTIONS) == {404, 416, 417, 418, 419}
+    with pytest.raises(ValueError, match="exact reviewed"):
+        infusion.repair_archive(b"wrong archive")
 
 
 @pytest.mark.parametrize("relative", ["../outside.pack", "missing.pack"])

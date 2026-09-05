@@ -15,6 +15,7 @@ from pathlib import Path
 
 import repair_artificer_asi
 import repair_artificer_context
+import repair_artificer_infusion_source
 import repair_artificer_starting_equipment
 import repair_steel_defender_citation
 import repair_steel_defender_lifecycle_policy
@@ -35,6 +36,7 @@ _STEPS = {
     "steel_defender_owner_binding": repair_steel_defender_owner_binding.repair_archive,
     "artificer_starting_equipment": repair_artificer_starting_equipment.repair_archive,
     "steel_defender_lifecycle_policy": repair_steel_defender_lifecycle_policy.repair_archive,
+    "artificer_infusion_source": repair_artificer_infusion_source.repair_archive,
 }
 
 
