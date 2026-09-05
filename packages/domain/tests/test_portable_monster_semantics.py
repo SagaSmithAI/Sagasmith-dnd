@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from sagasmith_dnd.character_schema import derive_character_sheet
 from sagasmith_dnd.core_rule_pack import get_core_rule_pack
 from sagasmith_dnd.statblocks import parse_2014_statblock
@@ -153,6 +155,36 @@ start of its turn.
         },
         "source_excerpt": "The emberling makes a Claw attack.",
     }
+
+
+@pytest.mark.parametrize("filename", ["Aboleth.md", "Adult_Blue_Dragon_(Chromatic).md"])
+def test_bundled_bold_legendary_entries_materialize_without_rewriting_source(filename: str) -> None:
+    path = (
+        Path(__file__).resolve().parents[3] / "skills/full/skills/dnd-dm/srd"
+        / "references-2014-en/10_Monsters/Monsters_Each" / filename
+    )
+    source = path.read_text(encoding="utf-8")
+    assert "**Detect**." in source
+    parsed = parse_2014_statblock(source, source_key=f"bundled:srd2014/{filename}")
+    activity = next(item for item in parsed.sheet["content"]["activities"]
+                    if item["name"] == "Detect")
+    spec = activity["choices"]["legendary_action"]
+    assert spec["effect"] == {"kind": "skill_check", "ability": "wisdom", "skill": "perception"}
+    assert spec["pool"]["maximum"] == 3
+    assert spec["cost"] == 1
+    assert "Wisdom (Perception) check" in spec["source_excerpt"]
+
+
+@pytest.mark.parametrize("title", ["**Detect**.", "**Detect.**"])
+def test_bold_action_titles_do_not_split_inline_hit_labels(title: str) -> None:
+    description = "The emberling checks the room. **Reminder.** Keep watching."
+    source = SOURCE + f"\n\n## Actions\n\n{title} {description}\n"
+    parsed = parse_2014_statblock(source, source_key="test:bold-action")
+    activity = next(item for item in parsed.sheet["content"]["activities"]
+                    if item["name"] == "Detect")
+    assert activity["description"] == description
+    assert any(item["name"] == "Claw" for item in parsed.sheet["inventory"]["items"])
+    assert not any(item["name"] == "Hit" for item in parsed.sheet["content"]["activities"])
 
 
 def test_engine_source_has_no_legacy_monster_specific_runtime_contracts() -> None:

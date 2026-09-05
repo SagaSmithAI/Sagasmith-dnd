@@ -18,7 +18,7 @@ def test_srd2024_content_covers_every_core_catalog_kind_with_exact_sources() -> 
     counts = Counter(item["kind"] for item in artifacts)
 
     assert manifest["id"] == PACK_ID
-    assert manifest["version"] == PACK_VERSION == "1.3.0"
+    assert manifest["version"] == PACK_VERSION == "1.4.0"
     assert manifest["editions"] == ["2024"]
     assert len(artifacts) == 1463
     assert counts == {

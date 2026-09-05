@@ -358,7 +358,8 @@ def _entry_blocks(markdown: str) -> list[tuple[str, str, str]]:
     markdown = _base_statblock_markdown(markdown)
     markers = list(
         re.finditer(
-            r"(?<!\*)\*\*\*(.+?)(?:\.\*\*\*|\*\*\*\.)\s*",
+            r"(?<!\*)\*\*\*(?P<triple>.+?)(?:\.\*\*\*|\*\*\*\.)\s*"
+            r"|(?m:^[ \t]*\*\*(?!\*)(?P<bold>[^*\r\n]+?)(?:\.\*\*|\*\*\.))[ \t]*",
             markdown,
         )
     )
@@ -379,7 +380,8 @@ def _entry_blocks(markdown: str) -> list[tuple[str, str, str]]:
         description = re.sub(r"[^\S\n]+", " ", description)
         description = re.sub(r"\n[ \t]*\n+", "\n\n", description)
         description = re.sub(r"(?<!\n)\n(?!\n)", " ", description).strip()
-        result.append((section, marker.group(1).strip(), description))
+        entry_name = (marker.group("triple") or marker.group("bold")).strip()
+        result.append((section, entry_name, description))
     return result
 
 

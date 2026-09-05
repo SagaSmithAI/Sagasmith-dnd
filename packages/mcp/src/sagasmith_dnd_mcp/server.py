@@ -18225,6 +18225,7 @@ def _create_server(
             "source_excerpt": normalized_excerpt,
         }
 
+    @_agent_ruling_boundary
     def chase_start(
         campaign_id: str,
         participant_ids: list[str],
@@ -26209,6 +26210,7 @@ def _create_server(
                         kind="ability",
                         ability=str(legendary_effect["skill"]),
                         dc=0,
+                        encounter=next_encounter,
                         ruleset=str(next_encounter.get("ruleset") or "2014"),
                         rules=rule_context,
                     ),
@@ -28006,6 +28008,7 @@ def _create_server(
                 kind="ability",
                 ability="wisdom",
                 dc=10,
+                encounter=encounter,
                 proficient=False,
                 bonus=medicine_total - wisdom_modifier,
                 advantage=advantage,
@@ -28368,6 +28371,7 @@ def _create_server(
         )
         return combat_response(campaign_id, principal_id, response)
 
+    @_agent_ruling_boundary
     def combat_resolution_plan(
         campaign_id: str,
         source_actor_id: str,
@@ -28689,6 +28693,7 @@ def _create_server(
                         kind="ability",
                         ability=str(arguments["ability"]),
                         dc=int(arguments["dc"]),
+                        encounter=self.encounter,
                         proficient=bool(arguments.get("proficient", False)),
                         bonus=int(arguments.get("bonus", 0) or 0),
                         advantage=bool(arguments.get("advantage", False)),
@@ -28710,6 +28715,7 @@ def _create_server(
                         self.actor(str(arguments["target_actor_id"])),
                         source_ability=str(arguments["source_ability"]),
                         target_ability=str(arguments["target_ability"]),
+                        encounter=self.encounter,
                         source_proficient=bool(arguments.get("source_proficient", False)),
                         target_proficient=bool(arguments.get("target_proficient", False)),
                         source_bonus=int(arguments.get("source_bonus", 0) or 0),
@@ -28718,6 +28724,26 @@ def _create_server(
                         source_disadvantage=bool(arguments.get("source_disadvantage", False)),
                         target_advantage=bool(arguments.get("target_advantage", False)),
                         target_disadvantage=bool(arguments.get("target_disadvantage", False)),
+                        source_rules=effective_rule_context(
+                            campaign_id,
+                            facts={
+                                "actor_id": str(arguments["source_actor_id"]),
+                                "kind": "ability",
+                                "ability": str(arguments["source_ability"]),
+                                "semantic_plan_id": compiled_plan.id,
+                            },
+                            branch_id=resolved_branch_id,
+                        ),
+                        target_rules=effective_rule_context(
+                            campaign_id,
+                            facts={
+                                "actor_id": str(arguments["target_actor_id"]),
+                                "kind": "ability",
+                                "ability": str(arguments["target_ability"]),
+                                "semantic_plan_id": compiled_plan.id,
+                            },
+                            branch_id=resolved_branch_id,
+                        ),
                     )
                 if opcode == "attack.resolve":
                     attacker_id = str(arguments["source_actor_id"])
@@ -29173,6 +29199,11 @@ def _create_server(
             ResolutionPlanExecutionError,
             ValueError,
         ) as error:
+            # The primitive executor has already rolled back. Preserve a source
+            # ruling so the outer boundary rewinds RNG and returns a retryable
+            # pause instead of erasing it into a generic tool failure.
+            if isinstance(error.__cause__, NeedsRulingError):
+                raise error.__cause__
             raise CombatEngineError(str(error)) from error
         next_encounter = runtime.encounter
         application_id = str(normalized_commitment.get("application_id") or "")

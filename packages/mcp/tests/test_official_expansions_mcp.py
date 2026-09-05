@@ -1207,21 +1207,23 @@ def test_official_expansion_lock_matches_seeded_core_content(tmp_path: Path) -> 
                     "mechanic_refs": installed.manifest["native_mechanic_refs"],
                 }
             ]
-        for pack_id, version, content_pack_id, content_version in (
+        for pack_id, version, content_pack_id, content_version, expected_version in (
             (
                 SRD2014_PRESET_PACK_ID,
                 SRD2014_PRESET_PACK_VERSION,
                 CORE_CONTENT_PACK_ID,
                 CORE_CONTENT_PACK_VERSION,
+                "2.2.0",
             ),
             (
                 SRD2024_PRESET_PACK_ID,
                 SRD2024_PRESET_PACK_VERSION,
                 server_module.CORE_2024_CONTENT_PACK_ID,
                 server_module.CORE_2024_CONTENT_PACK_VERSION,
+                "2.2.0",
             ),
         ):
-            assert version == "2.1.0"
+            assert version == expected_version
             installed = packs.get_version(pack_id, version)
             assert installed.status == "installed"
             assert installed.artifacts
