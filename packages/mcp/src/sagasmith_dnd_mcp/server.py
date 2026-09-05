@@ -4774,6 +4774,13 @@ class RequestScopedMCPServer(MCPServer):
                 return value
             updated = deepcopy(value)
             payload = updated.get("result")
+            # Atomic response builders already retain the receipt at their
+            # public result level. Adding another copy only on the first call
+            # would diverge from the persisted, draw-free idempotent replay.
+            if "random_stream_receipt" in updated or (
+                isinstance(payload, dict) and "random_stream_receipt" in payload
+            ):
+                return updated
             if isinstance(payload, dict):
                 payload["random_stream_receipt"] = deepcopy(receipt)
             else:
@@ -4790,11 +4797,15 @@ class RequestScopedMCPServer(MCPServer):
             except json.JSONDecodeError:
                 updated_content.append(item)
                 continue
+            attached = attach(decoded)
+            if attached == decoded:
+                updated_content.append(item)
+                continue
             updated_content.append(
                 item.model_copy(
                     update={
                         "text": json.dumps(
-                            attach(decoded),
+                            attached,
                             ensure_ascii=False,
                             separators=(",", ":"),
                         )
