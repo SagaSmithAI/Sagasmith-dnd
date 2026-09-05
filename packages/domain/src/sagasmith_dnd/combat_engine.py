@@ -1220,18 +1220,23 @@ def start_encounter(
         ]
     }
     frightened_initiative: dict[str, bool] = {}
+    initiative_check_modifiers: dict[str, tuple[int, bool, bool]] = {}
     for (
-        _index, actor, identifier, _derived, _sheet, conditions, _exhaustion
+        _index, actor, identifier, derived, sheet, conditions, _exhaustion
     ) in validated_participants:
         if (
             normalized_ruleset == "2014"
-            and "frightened" in conditions
             and actor.get("initiative") is None
             and identifier not in dependent_contracts
         ):
-            frightened_initiative[identifier] = _frightened_ability_check_disadvantage(
-                actor, initiative_roster
+            # Validate every rolled participant's effects before consuming any RNG.
+            initiative_check_modifiers[identifier] = _sheet_check_modifiers(
+                sheet, derived, kind="ability", ability="dexterity"
             )
+            if "frightened" in conditions:
+                frightened_initiative[identifier] = _frightened_ability_check_disadvantage(
+                    actor, initiative_roster
+                )
 
     combatants: list[dict[str, Any]] = []
     rule_boundary_ids: set[str] = set()
@@ -1254,6 +1259,14 @@ def start_encounter(
         initiative_disadvantage = bool(actor.get("initiative_disadvantage", False)) or (
             surprised and normalized_ruleset == "2024"
         )
+        if identifier in initiative_check_modifiers:
+            effect_bonus, equipment_disadvantage, poisoned = initiative_check_modifiers[identifier]
+            initiative_bonus += effect_bonus
+            initiative_disadvantage |= equipment_disadvantage or poisoned
+            if effect_bonus or equipment_disadvantage or poisoned:
+                boundary_id = "dnd5e.core.initiative.ability_check_modifiers"
+                rule_boundary_ids.add(boundary_id)
+                participant_boundary_ids.append(boundary_id)
         if identifier in frightened_initiative:
             initiative_disadvantage |= frightened_initiative[identifier]
             rule_boundary_ids.add("dnd5e.core.initiative.frightened")
@@ -7090,6 +7103,26 @@ def _frightened_ability_check_disadvantage(
     return any(can_see(actor, source) for source in source_combatants)
 
 
+def _sheet_check_modifiers(
+    sheet: dict[str, Any], derived: dict[str, Any], *, kind: str, ability: str
+) -> tuple[int, bool, bool]:
+    """Nonrolling modifiers shared by ordinary checks and 2014 initiative.
+
+    Keep Stealth-only armor penalties, proficiency, exhaustion and rule-event
+    choices at their respective callers; these are not interchangeable rolls.
+    """
+    effect_bonus = active_effect_roll_bonus(sheet, kind)
+    normalized_ability = str(ability).strip().casefold().replace(" ", "_")
+    check_ability = SKILL_ABILITIES.get(normalized_ability, _long_ability_name(ability))
+    equipment_penalties = dict(derived.get("equipment_penalties") or {})
+    penalty_field = (
+        "save_disadvantage_abilities" if kind == "save" else "check_disadvantage_abilities"
+    )
+    equipment_disadvantage = check_ability in set(equipment_penalties.get(penalty_field) or [])
+    poisoned = kind in ABILITY_CHECK_KINDS and "poisoned" in _condition_set(sheet.get("conditions"))
+    return effect_bonus, equipment_disadvantage, poisoned
+
+
 def resolve_actor_check(
     actor: dict[str, Any],
     *,
@@ -7115,7 +7148,9 @@ def resolve_actor_check(
     normalized_ruleset = _normalize_ruleset(ruleset or sheet.get("edition"))
     conditions = _condition_set(sheet.get("conditions"))
     exhaustion = int(sheet.get("combat", {}).get("exhaustion", 0) or 0)
-    effect_roll_bonus = active_effect_roll_bonus(sheet, kind)
+    effect_roll_bonus, equipment_disadvantage, poisoned = _sheet_check_modifiers(
+        sheet, derived, kind=kind, ability=ability
+    )
     roll_bonus = int(bonus) + effect_roll_bonus
     extension = apply_rule_event(sheet, "check.before", rules)
     if extension.status != "committed":
@@ -7132,12 +7167,6 @@ def resolve_actor_check(
         elif modifier["op"] == "disadvantage.add":
             disadvantage = True
     normalized_ability = str(ability).strip().casefold().replace(" ", "_")
-    check_ability = SKILL_ABILITIES.get(normalized_ability, _long_ability_name(ability))
-    equipment_penalties = dict(derived.get("equipment_penalties") or {})
-    penalty_field = (
-        "save_disadvantage_abilities" if kind == "save" else "check_disadvantage_abilities"
-    )
-    equipment_disadvantage = check_ability in set(equipment_penalties.get(penalty_field) or [])
     if equipment_disadvantage:
         disadvantage = True
     level = int(sheet.get("progression", {}).get("level", 1) or 1)
@@ -7382,7 +7411,7 @@ def resolve_actor_check(
                     "reason": sorted(automatic)[0],
                 }
             )
-    if kind in ABILITY_CHECK_KINDS and "poisoned" in conditions:
+    if poisoned:
         disadvantage = True
     if (
         normalized_ruleset == "2014"

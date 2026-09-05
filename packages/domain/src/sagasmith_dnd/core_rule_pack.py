@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.78.0"
+CORE_RULE_PACK_VERSION = "1.79.0"
 
 
 @dataclass(frozen=True)
@@ -554,6 +554,13 @@ BOUNDARIES = (
         "combat_engine.start_encounter",
         ("tests/test_frightened_checks.py",),
         "bundled:srd2014/08_Gamemastering/Conditions.md#frightened",
+    ),
+    CoreBoundary(
+        "dnd5e.core.initiative.ability_check_modifiers",
+        ("2014",),
+        "combat_engine.start_encounter|_sheet_check_modifiers",
+        ("tests/test_initiative_check_modifiers.py",),
+        "bundled:srd2014/06_Gameplay/Order_of_Combat.md#initiative",
     ),
     CoreBoundary(
         "dnd5e.core.attack.help",
