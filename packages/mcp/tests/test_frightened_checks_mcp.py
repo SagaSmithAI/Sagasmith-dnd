@@ -18,10 +18,14 @@ async def raw(server, name: str, arguments: dict) -> dict:
     return result
 
 
-@pytest.mark.parametrize("visibility", ["visible", "unseen", "missing"])
-@pytest.mark.parametrize("check_action", ["search", "stabilize", "legendary"])
+@pytest.mark.parametrize(("check_action", "visibility", "advantage"), [
+    *[(action, visibility, False)
+      for action in ("search", "stabilize", "legendary")
+      for visibility in ("visible", "unseen", "missing")],
+    ("search", "visible", True),
+])
 def test_frightened_checks_use_recorded_sources_and_atomic_receipts(
-    tmp_path: Path, visibility: str, check_action: str
+    tmp_path: Path, visibility: str, check_action: str, advantage: bool
 ) -> None:
     async def exercise() -> None:
         config = _config(tmp_path)
@@ -131,6 +135,7 @@ def test_frightened_checks_use_recorded_sources_and_atomic_receipts(
             arguments = {
                 "campaign_id": campaign_id, "actor_id": actor["id"], "kind": "check",
                 "ability": "perception", "action": "search", "dc": 12,
+                "advantage": advantage,
                 "rule_facts": {"frightened_source_visibility": False},
                 "expected_revision": before["revision"], "idempotency_key": "fear-search",
             }
@@ -163,7 +168,7 @@ def test_frightened_checks_use_recorded_sources_and_atomic_receipts(
                 assert stream.draw_count == 0
                 assert await snapshot() == before
             else:
-                expected_draws = 2 if visibility == "visible" else 1
+                expected_draws = 2 if visibility == "visible" and not advantage else 1
                 assert settled["status"] == "committed"
                 check = settled["result"]
                 if check_action == "legendary":
@@ -193,6 +198,178 @@ def test_frightened_checks_use_recorded_sources_and_atomic_receipts(
             repeated = await raw(server, tool, arguments)
             assert repeated == settled
             assert await snapshot() == final_snapshot
+        finally:
+            close_server(server)
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("mode", ["grid", "agent"])
+def test_missing_source_check_resumes_after_authoritative_source_entry(
+    tmp_path: Path, mode: str
+) -> None:
+    async def exercise() -> None:
+        config = _config(tmp_path)
+        server = create_server(config)
+        try:
+            campaign = await _call(server, "campaign_create", {
+                "name": "Fear source enters", "edition": "2014", "idempotency_key": "campaign",
+            })
+            campaign_id = campaign["id"]
+
+            async def snapshot() -> dict:
+                return await _call(server, "campaign_query", {
+                    "view": "get", "payload": {"campaign_id": campaign_id},
+                })
+
+            sheet = default_character_sheet()
+            sheet["edition"] = "2014"
+            sheet["combat"]["hp"] = {"value": 10, "max": 10, "temp": 0}
+            source = await _call(server, "character_create_from", {
+                "mode": "direct", "payload": {
+                    "campaign_id": campaign_id, "name": "Source", "sheet": sheet,
+                }, "idempotency_key": "source",
+            })
+            sheet["conditions"] = ["frightened"]
+            sheet["effects"] = [{
+                "id": "fear", "name": "Fear", "kind": "timed_conditions", "active": True,
+                "source": source["id"], "duration": {"period": "round", "remaining": 10},
+                "changes": [{"path": "conditions", "mode": "add", "value": "frightened"}],
+            }]
+            actor = await _call(server, "character_create_from", {
+                "mode": "direct", "payload": {
+                    "campaign_id": campaign_id, "name": "Frightened", "sheet": sheet,
+                }, "idempotency_key": "actor",
+            })
+            await _call(server, "access_grant", {
+                "scope": "campaign", "campaign_id": campaign_id,
+                "principal_id": "player:observer", "payload": {"role": "player"},
+            })
+            current = await snapshot()
+            phase = await _call(server, "game_phase", {
+                "campaign_id": campaign_id, "action": "set", "tool_profile": "play",
+                "expected_revision": current["revision"], "idempotency_key": "play",
+            })
+            participant = {"actor_id": actor["id"], "initiative": 20}
+            spatial = {"positioning_mode": mode}
+            if mode == "grid":
+                participant["position"] = {"x": 0, "y": 0}
+                spatial["battle_map"] = {"width_cells": 6, "height_cells": 6}
+            await raw(server, "combat_start", {
+                "campaign_id": campaign_id, **spatial, "participant_ids": [actor["id"]],
+                "participant_config": [participant],
+                "expected_revision": phase["campaign_revision"],
+                "idempotency_key": "start",
+            })
+            before = await snapshot()
+            check_args = {
+                "campaign_id": campaign_id, "actor_id": actor["id"], "kind": "check",
+                "ability": "perception", "dc": 10, "action": "search",
+                "expected_revision": before["revision"], "idempotency_key": "search-once",
+            }
+            pending = await raw(server, "combat_check", check_args)
+            assert pending["status"] == "pending_ruling"
+            assert pending["committed"] is False
+            assert await snapshot() == before
+            joining = {
+                "initiative": 10, "hidden": mode == "grid",
+                "visible_to_actor_ids": [] if mode == "grid" else [actor["id"]],
+            }
+            if mode == "grid":
+                joining["position"] = {"x": 2, "y": 0}
+            await raw(server, "combat_join", {
+                "campaign_id": campaign_id, "actor_id": source["id"],
+                "participant_config": joining, "expected_revision": before["revision"],
+                "idempotency_key": "source-joins",
+            })
+            queued = await snapshot()
+            # A queued future source is not a present source for an ability check.
+            repeated_pending = await raw(server, "combat_check", {
+                **check_args, "expected_revision": queued["revision"],
+            })
+            assert repeated_pending["status"] == "pending_ruling"
+            assert await snapshot() == queued
+            await raw(server, "combat_end_turn", {
+                "campaign_id": campaign_id, "actor_id": actor["id"],
+                "expected_revision": queued["revision"], "idempotency_key": "next-round",
+            })
+            entered = await snapshot()
+            assert any(item["actor_id"] == source["id"]
+                       for item in entered["state"]["combat"]["combatants"])
+            patch_args = {
+                "campaign_id": campaign_id, "patches": [{
+                    "key": "combatant_visibility", "value": {
+                        "actor_id": source["id"], "hidden": False,
+                        "visible_to_actor_ids": [actor["id"]],
+                        "reason": "The DM confirms the entering source is now in sight.",
+                    },
+                }], "expected_revision": entered["revision"], "idempotency_key": "reveal",
+            }
+            with pytest.raises(ToolError, match="role|cannot access|permission"):
+                await raw(server, "combat_map_patch", {
+                    **patch_args, "principal_id": "player:observer",
+                })
+            assert await snapshot() == entered
+            with pytest.raises(ToolError, match="revision conflict"):
+                await raw(server, "combat_map_patch", {
+                    **patch_args, "expected_revision": entered["revision"] - 1,
+                })
+            assert await snapshot() == entered
+            if mode == "grid":
+                with pytest.raises(ToolError, match="unique encounter participant"):
+                    await raw(server, "combat_map_patch", {
+                        **patch_args, "idempotency_key": "wrong-source", "patches": [{
+                            "key": "combatant_visibility", "value": {
+                                **patch_args["patches"][0]["value"], "actor_id": "outside-roster",
+                            },
+                        }],
+                    })
+                assert await snapshot() == entered
+                revealed = await raw(server, "combat_map_patch", patch_args)
+                now = await snapshot()
+                assert now["revision"] == entered["revision"] + 1
+                assert await raw(server, "combat_map_patch", patch_args) == revealed
+                assert await snapshot() == now
+                with pytest.raises(ToolError, match="idempotency|different payload"):
+                    await raw(server, "combat_map_patch", {
+                        **patch_args, "patches": [{
+                            "key": "combatant_visibility", "value": {
+                                **patch_args["patches"][0]["value"], "visible_to_actor_ids": [],
+                            },
+                        }],
+                    })
+                assert await snapshot() == now
+            else:
+                # Do not invent a map to use a grid-only update API. The current
+                # visible source fact was explicitly supplied in combat_join.
+                with pytest.raises(ToolError, match="no temporary battle map"):
+                    await raw(server, "combat_map_patch", patch_args)
+                now = await snapshot()
+                assert now == entered
+                assert all(item.get("position") is None
+                           for item in now["state"]["combat"]["combatants"])
+            with pytest.raises(ToolError, match="revision conflict"):
+                await raw(server, "combat_check", check_args)
+            assert await snapshot() == now
+            resumed_args = {**check_args, "expected_revision": now["revision"]}
+            stream = CampaignRandomStream.from_campaign_state(
+                campaign_id, now["state"], operation="combat_check", idempotency_key="search-once",
+                campaign_revision=now["revision"],
+            )
+            with use_random_stream(stream):
+                settled = await raw(server, "combat_check", resumed_args)
+            assert settled["status"] == "committed"
+            assert stream.draw_count == 2
+            assert len(settled["result"]["rolls"]) == 2
+            after = await snapshot()
+            assert after["revision"] == now["revision"] + 1
+            assert await raw(server, "combat_check", resumed_args) == settled
+            assert await snapshot() == after
+            close_server(server)
+            server = create_server(config)
+            assert await snapshot() == after
+            assert await raw(server, "combat_check", resumed_args) == settled
+            assert await snapshot() == after
         finally:
             close_server(server)
 
