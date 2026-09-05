@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Iterable
 from uuid import uuid4
 
+from sagasmith_dnd import steel_defender as _steel_defender
 from sagasmith_dnd.activity_identity import is_multiattack_activity
 from sagasmith_dnd.breathing import breathing_blocks_recovery
 from sagasmith_dnd.character_schema import (
@@ -231,6 +232,28 @@ def d20_exhaustion_adjustment(
 
 class CombatEngineError(ValueError):
     """Base error for a rejected or incomplete combat operation."""
+
+
+# Stable domain entry points; MCP remains responsible for source binding and
+# authority before calling these pure mechanics.
+def check_deflect_attack_eligibility(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    return _steel_defender.check_deflect_attack_eligibility(*args, **kwargs)
+
+
+def check_deflect_attack_in_encounter(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    return _steel_defender.check_deflect_attack_in_encounter(*args, **kwargs)
+
+
+def validate_deflect_attack_eligibility(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    return _steel_defender.validate_deflect_attack_eligibility(*args, **kwargs)
+
+
+def apply_deflect_attack_to_plan(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    return _steel_defender.apply_deflect_attack_to_plan(*args, **kwargs)
+
+
+def consume_deflect_attack_reaction(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    return _steel_defender.consume_deflect_attack_reaction(*args, **kwargs)
 
 
 def source_spell_resolution(sheet: dict[str, Any], spell_id: str) -> dict[str, Any]:
@@ -1199,7 +1222,12 @@ def start_encounter(
             initiative_bonus += jack_of_all_trades_bonus
             rule_boundary_ids.add(_JACK_OF_ALL_TRADES_BOUNDARY_ID)
             participant_boundary_ids.append(_JACK_OF_ALL_TRADES_BOUNDARY_ID)
-        surprised = bool(actor.get("surprised", False))
+        vigilant = normalized_ruleset == "2014" and _steel_defender.has_steel_defender_vigilant(
+            actor
+        )
+        # 2014 Vigilant means this source-bound defender cannot be surprised;
+        # consequently surprise must not remove any turn-budget resources.
+        surprised = bool(actor.get("surprised", False)) and not vigilant
         initiative_disadvantage = bool(actor.get("initiative_disadvantage", False)) or (
             surprised and normalized_ruleset == "2024"
         )
@@ -1273,7 +1301,8 @@ def start_encounter(
                 "disposition": _normalize_disposition(actor.get("disposition")),
                 "reach_ft": _nonnegative_int(actor.get("reach_ft"), default=5),
                 "can_share_space": bool(actor.get("can_share_space", False)),
-                "surprised": bool(actor.get("surprised", False)),
+                "surprised": surprised,
+                "vigilant": vigilant,
                 "turns_completed": 0,
                 "death_saves": bool(actor.get("death_saves", actor.get("character_type") == "pc")),
                 "zero_hp_recovery": bool(actor.get("zero_hp_recovery", False)),
@@ -1401,6 +1430,8 @@ def queue_combatant(
         )
     generated_actor = deepcopy(actor)
     generated_actor.pop("dependent_turn", None)
+    if contract is not None and _steel_defender.has_steel_defender_vigilant(actor):
+        generated_actor["surprised"] = False
     generated_encounter = start_encounter(
         [generated_actor],
         ruleset=value.get("ruleset"),
@@ -1422,6 +1453,7 @@ def queue_combatant(
         generated["initiative_roll"] = None
         generated["initiative_bonus"] = int(owner.get("initiative_bonus", 0) or 0)
         generated["tie_breaker"] = int(owner.get("tie_breaker", 0) or 0)
+        generated["vigilant"] = _steel_defender.has_steel_defender_vigilant(actor)
     value["rule_boundary_ids"] = sorted(
         {
             *list(value.get("rule_boundary_ids") or []),

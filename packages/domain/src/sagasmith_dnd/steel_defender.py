@@ -374,15 +374,296 @@ def kill_steel_defender_when_owner_dies(
     return {"status": "perished", "sheet": defender, "pending_revival": None}
 
 
+# These identifiers are intentionally domain-level boundaries.  MCP must still
+# verify the signed/source-bound activity and caller authority before invoking
+# the pure helpers below.
+STEEL_DEFENDER_DEFLECT_ATTACK_MECHANIC_ID = (
+    "dnd5e.expansion.steel_defender.deflect_attack"
+)
+STEEL_DEFENDER_VIGILANT_MECHANIC_ID = "dnd5e.expansion.steel_defender.vigilant"
+STEEL_DEFENDER_DEFLECT_ATTACK_SOURCE = STEEL_DEFENDER_DEFLECT_ATTACK_MECHANIC_ID
+STEEL_DEFENDER_TURN_KIND = "steel_defender_2014"
+
+
+def _actor_identifier(value: Mapping[str, Any]) -> str:
+    return str(value.get("id") or value.get("character_id") or value.get("actor_id") or "")
+
+
+def _actor_conditions(value: Mapping[str, Any]) -> set[str]:
+    raw = value.get("conditions")
+    if raw is None and isinstance(value.get("sheet"), Mapping):
+        raw = value["sheet"].get("conditions")
+    return set(condition_ids(raw or []))
+
+
+def _finite_position(value: Mapping[str, Any]) -> tuple[float, float] | None:
+    point = value.get("position")
+    if not isinstance(point, Mapping):
+        return None
+    try:
+        x, y = float(point["x"]), float(point["y"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not isfinite(x) or not isfinite(y):
+        return None
+    return x, y
+
+
+def _can_see_for_deflect(viewer: Mapping[str, Any], subject: Mapping[str, Any]) -> bool:
+    if "blinded" in _actor_conditions(viewer):
+        return False
+    visible_to = subject.get("visible_to_actor_ids")
+    if isinstance(visible_to, list):
+        return _actor_identifier(viewer) in {str(item) for item in visible_to}
+    if subject.get("hidden", False):
+        return False
+    return "invisible" not in _actor_conditions(subject)
+
+
+def has_steel_defender_vigilant(actor: Mapping[str, Any]) -> bool:
+    """Recognize Vigilant only on a verified dependent-turn actor projection."""
+    contract = actor.get("dependent_turn")
+    if not isinstance(contract, Mapping) or contract.get("kind") != STEEL_DEFENDER_TURN_KIND:
+        return False
+    sheet = actor.get("sheet") if isinstance(actor.get("sheet"), Mapping) else actor
+    content = dict(sheet.get("content") or {})
+    return any(
+        isinstance(item, Mapping)
+        and STEEL_DEFENDER_VIGILANT_MECHANIC_ID in {
+            str(ref) for ref in (item.get("mechanic_refs") or [])
+        }
+        for section in ("features", "activities")
+        for item in content.get(section, [])
+    )
+
+
+def bind_steel_defender_runtime_mechanics(sheet: Mapping[str, Any]) -> dict[str, Any]:
+    """Bind exact parsed Steel Defender cards to their engine-owned mechanics."""
+
+    value = deepcopy(dict(sheet))
+    content = value.setdefault("content", {})
+    bindings = {
+        "features": {"vigilant": STEEL_DEFENDER_VIGILANT_MECHANIC_ID},
+        "activities": {
+            "deflect attack": STEEL_DEFENDER_DEFLECT_ATTACK_MECHANIC_ID,
+        },
+    }
+    for section, names in bindings.items():
+        for card in content.get(section, []):
+            if not isinstance(card, dict):
+                continue
+            mechanic_id = names.get(str(card.get("name") or "").strip().casefold())
+            if mechanic_id is None:
+                continue
+            refs = [str(item) for item in card.get("mechanic_refs") or []]
+            card["mechanic_refs"] = list(dict.fromkeys([*refs, mechanic_id]))
+    return value
+
+
+def check_deflect_attack_eligibility(
+    defender: Mapping[str, Any],
+    attacker: Mapping[str, Any],
+    target: Mapping[str, Any],
+    *,
+    reaction_available: bool | None = None,
+    spatial_facts: Mapping[str, Any] | None = None,
+    cell_ft: int = 5,
+) -> dict[str, Any]:
+    """Check all 2014 Deflect Attack prerequisites without mutating state."""
+    defender_id, attacker_id, target_id = (
+        _actor_identifier(defender),
+        _actor_identifier(attacker),
+        _actor_identifier(target),
+    )
+    reasons: list[str] = []
+    if not defender_id or not attacker_id or not target_id:
+        reasons.append("missing_actor_id")
+    if target_id == defender_id:
+        reasons.append("target_is_defender")
+    if reaction_available is None:
+        reaction_available = (
+            int(dict(defender.get("turn_budget") or {}).get("reaction", 0) or 0) > 0
+        )
+    if reaction_available is not True:
+        reasons.append("reaction_unavailable")
+    if _actor_conditions(defender) & INCAPACITATING_STATE_IDS:
+        reasons.append("defender_incapacitated")
+
+    if isinstance(cell_ft, bool) or not isinstance(cell_ft, int) or cell_ft <= 0:
+        raise SteelDefenderError("cell_ft must be a positive integer")
+    facts = spatial_facts if isinstance(spatial_facts, Mapping) else {}
+    if "defender_can_see_attacker" in facts:
+        visible = facts["defender_can_see_attacker"] is True
+        visibility_source = "agent_spatial_facts"
+    else:
+        visible = _can_see_for_deflect(defender, attacker)
+        visibility_source = "recorded_visibility"
+    if not visible:
+        reasons.append("attacker_not_visible")
+
+    defender_position, attacker_position = (
+        _finite_position(defender),
+        _finite_position(attacker),
+    )
+    distance_ft: float | None = None
+    if defender_position is not None and attacker_position is not None:
+        distance_ft = max(
+            abs(defender_position[0] - attacker_position[0]),
+            abs(defender_position[1] - attacker_position[1]),
+        ) * cell_ft
+        within_five = distance_ft <= 5
+        distance_source = "grid_position"
+    elif "attacker_within_5_ft_of_defender" in facts:
+        within_five = facts["attacker_within_5_ft_of_defender"] is True
+        distance_source = "agent_spatial_facts"
+    else:
+        within_five = False
+        distance_source = "missing_spatial_evidence"
+    if not within_five:
+        reasons.append("attacker_not_within_5_ft")
+    return {
+        "eligible": not reasons,
+        "reasons": reasons,
+        "defender_id": defender_id,
+        "attacker_id": attacker_id,
+        "target_id": target_id,
+        "distance_ft": distance_ft,
+        "distance_source": distance_source,
+        "visibility_source": visibility_source,
+        "defender_can_see_attacker": visible,
+        "attacker_within_5_ft_of_defender": within_five,
+        "mechanic_id": STEEL_DEFENDER_DEFLECT_ATTACK_MECHANIC_ID,
+    }
+
+
+def validate_deflect_attack_eligibility(
+    defender: Mapping[str, Any],
+    attacker: Mapping[str, Any],
+    target: Mapping[str, Any],
+    *,
+    reaction_available: bool | None = None,
+    spatial_facts: Mapping[str, Any] | None = None,
+    cell_ft: int = 5,
+) -> dict[str, Any]:
+    result = check_deflect_attack_eligibility(
+        defender,
+        attacker,
+        target,
+        reaction_available=reaction_available,
+        spatial_facts=spatial_facts,
+        cell_ft=cell_ft,
+    )
+    if not result["eligible"]:
+        raise SteelDefenderError(
+            "Deflect Attack is not eligible: " + ", ".join(result["reasons"])
+        )
+    return result
+
+
+def check_deflect_attack_in_encounter(
+    encounter: Mapping[str, Any],
+    *,
+    defender_id: str,
+    attacker_id: str,
+    target_id: str,
+    spatial_facts: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Use encounter-owned combatants, positions, and reaction budget."""
+    by_id = {
+        str(item.get("actor_id") or ""): item
+        for item in encounter.get("combatants", [])
+        if isinstance(item, Mapping)
+    }
+    try:
+        defender, attacker, target = (
+            by_id[str(defender_id)],
+            by_id[str(attacker_id)],
+            by_id[str(target_id)],
+        )
+    except KeyError as error:
+        raise SteelDefenderError("actor is not a combatant") from error
+    cell_ft = int(dict(dict(encounter.get("battle_map") or {}).get("grid") or {}).get(
+        "cell_ft", 5
+    ) or 5)
+    return check_deflect_attack_eligibility(
+        defender,
+        attacker,
+        target,
+        spatial_facts=spatial_facts,
+        cell_ft=cell_ft,
+    )
+
+
+def apply_deflect_attack_to_plan(
+    attack_plan: Mapping[str, Any], *, defender_id: str
+) -> dict[str, Any]:
+    """Add one source-tagged disadvantage to an attack plan, idempotently."""
+    value = deepcopy(dict(attack_plan))
+    sources = list(value.get("disadvantage_sources") or [])
+    if STEEL_DEFENDER_DEFLECT_ATTACK_SOURCE not in {str(item) for item in sources}:
+        sources.append(STEEL_DEFENDER_DEFLECT_ATTACK_SOURCE)
+    value["disadvantage"] = True
+    value["disadvantage_sources"] = sources
+    value["deflect_attack"] = {
+        "mechanic_id": STEEL_DEFENDER_DEFLECT_ATTACK_MECHANIC_ID,
+        "defender_id": str(defender_id),
+    }
+    return value
+
+
+def consume_deflect_attack_reaction(
+    encounter: Mapping[str, Any], *, defender_id: str
+) -> dict[str, Any]:
+    """Consume one reaction in a copied encounter, or raise before mutation."""
+    value = deepcopy(dict(encounter))
+    combatant = next(
+        (
+            item
+            for item in value.get("combatants", [])
+            if str(item.get("actor_id") or "") == str(defender_id)
+        ),
+        None,
+    )
+    if combatant is None:
+        raise SteelDefenderError("actor is not a combatant")
+    if _actor_conditions(combatant) & INCAPACITATING_STATE_IDS:
+        raise SteelDefenderError("defender is incapacitated")
+    budget = dict(combatant.get("turn_budget") or {})
+    if int(budget.get("reaction", 0) or 0) <= 0:
+        raise SteelDefenderError("defender has no reaction remaining")
+    budget["reaction"] = int(budget["reaction"]) - 1
+    combatant["turn_budget"] = budget
+    value["log"] = [
+        *list(value.get("log") or []),
+        {
+            "type": "reaction_consumed",
+            "actor_id": str(defender_id),
+            "mechanic_id": STEEL_DEFENDER_DEFLECT_ATTACK_MECHANIC_ID,
+        },
+    ][-100:]
+    return value
+
+
 __all__ = [
     "REPAIR_USES_MAX",
     "REVIVE_DELAY_TICKS",
     "REVIVE_WINDOW_TICKS",
     "STEEL_DEFENDER_RELATION_KEY",
+    "STEEL_DEFENDER_TURN_KIND",
+    "STEEL_DEFENDER_DEFLECT_ATTACK_MECHANIC_ID",
+    "STEEL_DEFENDER_DEFLECT_ATTACK_SOURCE",
+    "STEEL_DEFENDER_VIGILANT_MECHANIC_ID",
+    "apply_deflect_attack_to_plan",
+    "bind_steel_defender_runtime_mechanics",
     "SteelDefenderError",
     "begin_steel_defender_revival",
     "complete_steel_defender_revival",
     "kill_steel_defender_when_owner_dies",
+    "check_deflect_attack_eligibility",
+    "check_deflect_attack_in_encounter",
+    "consume_deflect_attack_reaction",
     "mending_steel_defender",
     "repair_steel_defender",
+    "has_steel_defender_vigilant",
+    "validate_deflect_attack_eligibility",
 ]

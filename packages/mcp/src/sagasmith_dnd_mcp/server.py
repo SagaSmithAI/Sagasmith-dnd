@@ -547,12 +547,17 @@ from sagasmith_dnd.statblocks import (
     recover_2014_statblock_from_ocr,
 )
 from sagasmith_dnd.steel_defender import (
+    STEEL_DEFENDER_DEFLECT_ATTACK_MECHANIC_ID,
     SteelDefenderError,
+    apply_deflect_attack_to_plan,
     begin_steel_defender_revival,
+    bind_steel_defender_runtime_mechanics,
     complete_steel_defender_revival,
+    consume_deflect_attack_reaction,
     kill_steel_defender_when_owner_dies,
     mending_steel_defender,
     repair_steel_defender,
+    validate_deflect_attack_eligibility,
 )
 from sagasmith_dnd.system import DND5E
 from sagasmith_dnd.vocabulary import (
@@ -10793,6 +10798,7 @@ def _create_server(
                 "attack_count",
                 "remaining_attacks",
                 "spell_resolution",
+                "deflect_attack",
             }
             value["result"] = {key: item for key, item in result.items() if key in allowed}
         value.pop("revisions", None)
@@ -13826,7 +13832,7 @@ def _create_server(
             template_variant=template_variant,
         )
         sheet = validate_character_sheet(finalize_actor_sheet_rulings(sheet, campaign_id))
-        return materialize_dependent_actor_owner_scaling(
+        scaled = materialize_dependent_actor_owner_scaling(
             sheet,
             numeric_parameters,
             relation_key=str(
@@ -13836,6 +13842,12 @@ def _create_server(
                 dict(requirement.get("solution") or {}).get("reviewed_expression_hash") or ""
             ),
         )
+        if (
+            str(dict(requirement.get("owner_binding") or {}).get("relation_key") or "")
+            == STEEL_DEFENDER_RELATION_KEY
+        ):
+            scaled = bind_steel_defender_runtime_mechanics(scaled)
+        return validate_character_sheet(scaled)
 
     def _dependent_actor_refresh_receipt(
         relation: Mapping[str, Any],
@@ -14089,6 +14101,255 @@ def _create_server(
             character_type=characters.get(relation["dependent_actor_id"]).character_type,
         )
         return expected_card, source_kind, contract
+
+    def _verified_steel_defender_deflect_activity(
+        campaign_id: str,
+        branch_id: str,
+        relation: dict[str, Any],
+    ) -> tuple[dict[str, Any], str, dict[str, str]]:
+        """Return the current Deflect Attack only when it matches its signed source."""
+
+        contract = _verified_steel_defender_relation(
+            campaign_id,
+            branch_id,
+            relation,
+            require_current_parameters=True,
+        )
+        binding = dict(relation["template_binding"])
+        matches = [
+            (pack_id, version, artifact)
+            for pack_id, version, artifact in available_content_artifacts(
+                campaign_id,
+                branch_id=branch_id,
+            )
+            if str(artifact.get("id") or "") == relation["source_artifact_id"]
+            and pack_id == relation["source_pack_id"]
+            and version == relation["source_pack_version"]
+        ]
+        if len(matches) != 1:
+            raise CombatEngineError("Steel Defender source is not uniquely available")
+        pack_id, version, artifact = matches[0]
+        requirement = deepcopy(
+            dict(dict(artifact.get("card") or {}).get("dependent_actor_template") or {})
+        )
+        expected_sheet = _dependent_actor_materialization(
+            campaign_id,
+            {**dict(artifact), "_pack_id": pack_id, "_pack_version": version},
+            requirement,
+            binding["numeric_parameters"],
+            template_variant=binding["template_variant"],
+        )
+        expected_candidates: list[tuple[dict[str, Any], str]] = []
+        for section, source_kind in (("activities", "activity"), ("features", "feature")):
+            for card in dict(expected_sheet.get("content") or {}).get(section, []):
+                if (
+                    isinstance(card, dict)
+                    and str(card.get("name") or "").strip().casefold() == "deflect attack"
+                    and STEEL_DEFENDER_DEFLECT_ATTACK_MECHANIC_ID
+                    in {str(ref) for ref in card.get("mechanic_refs") or []}
+                ):
+                    expected_candidates.append((deepcopy(card), source_kind))
+        if len(expected_candidates) != 1:
+            raise CombatEngineError(
+                "the signed Steel Defender template must contain exactly one Deflect Attack"
+            )
+        expected_card, _ = expected_candidates[0]
+        dependent = characters.get(relation["dependent_actor_id"])
+        expected_card, expected_kind = character_activity_source_card(
+            expected_sheet,
+            str(expected_card["id"]),
+            character_type=dependent.character_type,
+        )
+        actual_candidates: list[tuple[dict[str, Any], str]] = []
+        for section, source_kind in (("activities", "activity"), ("features", "feature")):
+            for card in dict(dependent.sheet.get("content") or {}).get(section, []):
+                if (
+                    isinstance(card, dict)
+                    and str(card.get("name") or "").strip().casefold() == "deflect attack"
+                    and STEEL_DEFENDER_DEFLECT_ATTACK_MECHANIC_ID
+                    in {str(ref) for ref in card.get("mechanic_refs") or []}
+                ):
+                    actual_candidates.append((deepcopy(card), source_kind))
+        if len(actual_candidates) != 1:
+            raise CombatEngineError(
+                "the current Steel Defender must contain exactly one source-bound Deflect Attack"
+            )
+        actual_card, _ = actual_candidates[0]
+        actual_card, actual_kind = character_activity_source_card(
+            dependent.sheet,
+            str(actual_card["id"]),
+            character_type=dependent.character_type,
+        )
+        if (
+            actual_kind != expected_kind
+            or _activity_source_identity(actual_card) != _activity_source_identity(expected_card)
+        ):
+            raise CombatEngineError(
+                "Steel Defender Deflect Attack does not match its signed source template"
+            )
+        return actual_card, actual_kind, contract
+
+    def _prepare_steel_defender_deflect(
+        campaign_id: str,
+        branch_id: str,
+        principal_id: str,
+        actor_id: str,
+        target_id: str,
+        declaration: Any,
+        encounter: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Validate one source-bound, pre-roll Deflect Attack declaration."""
+
+        if declaration is None:
+            return None
+        if not isinstance(declaration, dict):
+            raise CombatEngineError("deflect_attack must be an object")
+        if str(encounter.get("ruleset") or "") != "2014":
+            raise CombatEngineError("Steel Defender Deflect Attack is a 2014 rule")
+        positioning_mode = str(encounter.get("positioning_mode") or "grid")
+        expected_fields = (
+            {"defender_id"}
+            if positioning_mode == "grid"
+            else {"defender_id", "spatial_facts"}
+        )
+        if set(declaration) != expected_fields:
+            raise CombatEngineError(
+                "deflect_attack requires its exact defender and positioning payload"
+            )
+        defender_id = str(declaration.get("defender_id") or "").strip()
+        if not defender_id:
+            raise CombatEngineError("deflect_attack requires defender_id")
+        if defender_id == actor_id:
+            raise CombatEngineError("an attacker cannot Deflect Attack against its own roll")
+        require_combat_actor_or_steel_defender_owner_control(
+            campaign_id,
+            defender_id,
+            principal_id,
+            branch_id=branch_id,
+        )
+        campaign = campaigns.get(campaign_id)
+        active_relations = [
+            relation
+            for relation in validate_dependent_actor_relations(
+                dict(campaign.state or {}).get("dependent_actor_relations", [])
+            )
+            if relation["dependent_actor_id"] == defender_id
+            and relation["status"] == "active"
+            and relation["relation_key"] == STEEL_DEFENDER_RELATION_KEY
+        ]
+        if len(active_relations) != 1:
+            raise CombatEngineError(
+                "Deflect Attack requires the defender's one active Steel Defender relation"
+            )
+        activity, _source_kind, contract = _verified_steel_defender_deflect_activity(
+            campaign_id,
+            branch_id,
+            active_relations[0],
+        )
+        combatants_by_id = {
+            str(item.get("actor_id") or ""): item
+            for item in encounter.get("combatants", [])
+        }
+        try:
+            defender_combatant = combatants_by_id[defender_id]
+            attacker_combatant = combatants_by_id[actor_id]
+            target_combatant = combatants_by_id[target_id]
+        except KeyError as error:
+            raise CombatEngineError(
+                "Deflect Attack defender, attacker, and target must be current combatants"
+            ) from error
+        eligibility_defender = defender_combatant
+        eligibility_attacker = attacker_combatant
+        eligibility_target = target_combatant
+        eligibility_facts: dict[str, Any] | None = None
+        committed_spatial_facts: dict[str, Any] | None = None
+        if positioning_mode == "grid":
+            cell_ft = int(
+                dict(dict(encounter.get("battle_map") or {}).get("grid") or {}).get(
+                    "cell_ft", 5
+                )
+                or 5
+            )
+        else:
+            access.require_campaign(
+                campaign_id,
+                principal_id,
+                roles=CAMPAIGN_DM_ROLES,
+            )
+            raw_spatial = declaration.get("spatial_facts")
+            if not isinstance(raw_spatial, dict) or set(raw_spatial) != {
+                "decision_id",
+                "defender_can_see_attacker",
+                "attacker_within_5_ft_of_defender",
+                "default_resolver",
+                "ruling_kind",
+                "reason",
+            }:
+                raise CombatEngineError(
+                    "agent-positioned Deflect Attack requires exact spatial_facts"
+                )
+            decision_id = str(raw_spatial.get("decision_id") or "").strip()
+            reason = " ".join(str(raw_spatial.get("reason") or "").split())
+            if (
+                not decision_id
+                or len(decision_id) > 200
+                or not isinstance(raw_spatial.get("defender_can_see_attacker"), bool)
+                or not isinstance(raw_spatial.get("attacker_within_5_ft_of_defender"), bool)
+                or raw_spatial.get("default_resolver") != "agent"
+                or raw_spatial.get("ruling_kind") != "agent_dm_adjudication"
+                or not 10 <= len(reason) <= 500
+            ):
+                raise CombatEngineError(
+                    "Deflect Attack spatial_facts require a bounded Agent ruling"
+                )
+            eligibility_facts = {
+                "defender_can_see_attacker": raw_spatial["defender_can_see_attacker"],
+                "attacker_within_5_ft_of_defender": raw_spatial[
+                    "attacker_within_5_ft_of_defender"
+                ],
+            }
+            committed_spatial_facts = {
+                **raw_spatial,
+                "decision_id": decision_id,
+                "reason": reason,
+                "committed": True,
+            }
+            # Agent mode is coordinate-free even if an imported snapshot
+            # happens to retain token positions.
+            eligibility_defender = deepcopy(defender_combatant)
+            eligibility_attacker = deepcopy(attacker_combatant)
+            eligibility_target = deepcopy(target_combatant)
+            eligibility_defender.pop("position", None)
+            eligibility_attacker.pop("position", None)
+            eligibility_target.pop("position", None)
+            cell_ft = 5
+        try:
+            eligibility = validate_deflect_attack_eligibility(
+                eligibility_defender,
+                eligibility_attacker,
+                eligibility_target,
+                spatial_facts=eligibility_facts,
+                cell_ft=cell_ft,
+            )
+        except SteelDefenderError as error:
+            raise CombatEngineError(str(error)) from error
+        if positioning_mode == "grid":
+            committed_spatial_facts = {
+                "defender_can_see_attacker": eligibility["defender_can_see_attacker"],
+                "attacker_within_5_ft_of_defender": eligibility[
+                    "attacker_within_5_ft_of_defender"
+                ],
+                "distance_ft": eligibility["distance_ft"],
+                "source": "grid_token_positions_and_recorded_visibility",
+                "committed": True,
+            }
+        assert committed_spatial_facts is not None
+        return {
+            "activity": activity,
+            "contract": contract,
+            "eligibility": eligibility,
+            "spatial_facts": committed_spatial_facts,
+        }
 
     def _refresh_owner_dependents(
         before: Any,
@@ -19292,12 +19553,23 @@ def _create_server(
             campaign_id, actor_id, principal_id
         )
         campaign, encounter = active_encounter(campaign_id)
+        resolved_branch_id = require_current_branch(campaign_id, None)
         require_campaign_actor(campaign_id, target_id)
         action = sanitize_attack_action(campaign_id, principal_id, dict(action or {}))
+        deflect_declaration = action.pop("deflect_attack", None)
         validate_agent_attack_context(
             campaign_id,
             action,
             encounter=encounter,
+        )
+        prepared_deflect = _prepare_steel_defender_deflect(
+            campaign_id,
+            resolved_branch_id,
+            principal_id,
+            actor_id,
+            target_id,
+            deflect_declaration,
+            encounter,
         )
         try:
             attacker = combat_actor_snapshot(actor_id)
@@ -19321,6 +19593,11 @@ def _create_server(
                 light_extra_attack=action.get("light_extra_attack"),
                 weapon_mastery_followup=action.get("weapon_mastery_followup"),
             )
+            if prepared_deflect is not None:
+                plan = apply_deflect_attack_to_plan(
+                    plan,
+                    defender_id=str(prepared_deflect["eligibility"]["defender_id"]),
+                )
         except NeedsRulingError as error:
             if access.require_campaign(campaign_id, principal_id).role not in CAMPAIGN_DM_ROLES:
                 raise CombatEngineError("attack requires Agent-as-DM adjudication") from None
@@ -19388,6 +19665,7 @@ def _create_server(
         campaign = campaigns.get(campaign_id)
         action_payload = sanitize_attack_action(campaign_id, principal_id, deepcopy(action or {}))
         spell_resolution_id = str(action_payload.pop("spell_resolution_id", "") or "")
+        deflect_declaration = action_payload.pop("deflect_attack", None)
         payload = {
             "actor_id": actor_id,
             "target_id": target_id,
@@ -19396,6 +19674,7 @@ def _create_server(
             # normalized input instead of mutating it after the hash is bound.
             "action": deepcopy(action_payload),
             "spell_resolution_id": spell_resolution_id,
+            "deflect_attack": deepcopy(deflect_declaration),
             "branch_id": resolved_branch_id,
         }
         scope = f"combat-attack:{campaign_id}:{resolved_branch_id}:{principal_id}"
@@ -19464,6 +19743,27 @@ def _create_server(
         target_record = require_campaign_actor(campaign_id, target_id)
         attacker = character_view(attacker_record, rules_context=rule_context)
         target = character_view(target_record, rules_context=rule_context)
+        prepared_deflect = _prepare_steel_defender_deflect(
+            campaign_id,
+            resolved_branch_id,
+            principal_id,
+            actor_id,
+            target_id,
+            deflect_declaration,
+            encounter,
+        )
+        deflect_activity = (
+            dict(prepared_deflect["activity"]) if prepared_deflect is not None else None
+        )
+        deflect_contract = (
+            dict(prepared_deflect["contract"]) if prepared_deflect is not None else None
+        )
+        deflect_spatial_facts = (
+            dict(prepared_deflect["spatial_facts"]) if prepared_deflect is not None else None
+        )
+        deflect_eligibility = (
+            dict(prepared_deflect["eligibility"]) if prepared_deflect is not None else None
+        )
         compiled_item_plan = None
         item_card: dict[str, Any] | None = None
         try:
@@ -19547,7 +19847,48 @@ def _create_server(
                 ["dnd5e.core.action.multiattack_choice"],
                 "combat.attack.payment",
             )
+        if deflect_activity is not None:
+            assert deflect_contract is not None
+            assert deflect_spatial_facts is not None
+            assert deflect_eligibility is not None
+            try:
+                next_encounter = consume_deflect_attack_reaction(
+                    next_encounter,
+                    defender_id=str(deflect_eligibility["defender_id"]),
+                )
+            except SteelDefenderError as error:
+                raise CombatEngineError(str(error)) from error
+            plan = apply_deflect_attack_to_plan(
+                plan,
+                defender_id=str(deflect_eligibility["defender_id"]),
+            )
+            attack_payment_receipts = [
+                *attack_payment_receipts,
+                {
+                    "mechanic_id": STEEL_DEFENDER_DEFLECT_ATTACK_MECHANIC_ID,
+                    "event": "attack.before_roll.steel_defender_deflect",
+                    "operations": [{"op": "builtin.expansion_provider"}],
+                    "citations": [
+                        {
+                            "source_artifact_id": deflect_contract["source_artifact_id"],
+                            "source_pack_id": deflect_contract["source_pack_id"],
+                            "source_pack_version": deflect_contract["source_pack_version"],
+                            "reviewed_expression_hash": deflect_contract[
+                                "reviewed_expression_hash"
+                            ],
+                        }
+                    ],
+                    "facts": deepcopy(deflect_spatial_facts),
+                    "ruleset_fingerprint": rule_context.fingerprint,
+                },
+            ]
         attack_roll = roll_attack_action(plan=plan)
+        if deflect_activity is not None:
+            attack_roll["deflect_attack"] = {
+                "defender_id": str(deflect_eligibility["defender_id"]),
+                "activity_id": str(deflect_activity["id"]),
+                "reaction_paid": True,
+            }
         consumed_attack_advantage = consume_next_attack_advantage(
             next_encounter,
             plan,
@@ -19643,6 +19984,7 @@ def _create_server(
                 plan=deepcopy(plan),
                 attack=deepcopy(attack_roll),
                 attack_payment=deepcopy(attack_payment),
+                attack_rule_receipts=deepcopy(attack_payment_receipts),
                 ammunition=deepcopy(ammunition),
                 limited_use=deepcopy(limited_use),
                 spell_resolution_id=spell_resolution_id or None,
@@ -21422,12 +21764,12 @@ def _create_server(
                 else None
             ),
         }
-        if spell_result is not None or activity_result is not None:
-            result["rule_receipts"] = [
-                *list(result.get("rule_receipts") or []),
-                *(list(spell_result.get("rule_receipts") or []) if spell_result else []),
-                *(list(activity_result.get("rule_receipts") or []) if activity_result else []),
-            ]
+        result["rule_receipts"] = [
+            *list(result.get("rule_receipts") or []),
+            *list(window.get("attack_rule_receipts") or []),
+            *(list(spell_result.get("rule_receipts") or []) if spell_result else []),
+            *(list(activity_result.get("rule_receipts") or []) if activity_result else []),
+        ]
         attacker_combatant = next(
             item for item in next_encounter["combatants"] if item.get("actor_id") == attacker_id
         )
@@ -51676,6 +52018,8 @@ boundary.
                     dict(requirement.get("solution") or {}).get("reviewed_expression_hash") or ""
                 ),
             )
+            if owner_binding["relation_key"] == STEEL_DEFENDER_RELATION_KEY:
+                sheet = bind_steel_defender_runtime_mechanics(sheet)
         require_engine_owned_character_state(sheet)
         _reject_new_intrinsic_attack_provenance(sheet)
         _require_authoritative_background_state(

@@ -35,6 +35,10 @@ from sagasmith_dnd.statblocks import (
     compile_parameterized_statblock_solution,
     parameterized_statblock_requirements,
 )
+from sagasmith_dnd.steel_defender import (
+    STEEL_DEFENDER_DEFLECT_ATTACK_MECHANIC_ID,
+    STEEL_DEFENDER_VIGILANT_MECHANIC_ID,
+)
 
 import sagasmith_dnd_mcp.server as server_module
 from sagasmith_dnd_mcp.config import McpConfig
@@ -1052,11 +1056,16 @@ def test_dependent_actor_feature_binding_is_atomic_unique_and_restart_safe(
         "bonus increases by 1: the defender's skill and saving throw bonuses (above), the "
         "bonuses to hit and damage of its rend attack, and the number of hit points restored by "
         "its Repair action (below).\n\n"
+        "***Vigilant.*** The defender can't be surprised.\n\n"
         "###### Actions\n\n"
         "***Force-Empowered Rend.*** *Melee Weapon Attack:* +4 to hit, reach 5 ft., "
         "one target. *Hit:* 1d8 + 2 force damage.\n\n"
         "***Repair (3/Day).*** The magical mechanisms inside the defender restore 2d8 + 2 hit "
-        "points to itself or to one construct or object within 5 feet of it.\n"
+        "points to itself or to one construct or object within 5 feet of it.\n\n"
+        "###### Reactions\n\n"
+        "***Deflect Attack.*** The defender imposes disadvantage on the attack roll of one "
+        "creature it can see that is within 5 feet of it, provided the attack roll is against "
+        "a creature other than the defender.\n"
     )
     requirement = parameterized_statblock_requirements(source_text)
     assert requirement is not None
@@ -1513,6 +1522,20 @@ def test_dependent_actor_feature_binding_is_atomic_unique_and_restart_safe(
             }
 
             initial_defender = created["character"]
+            vigilant = next(
+                item
+                for item in initial_defender["sheet"]["content"]["features"]
+                if item["name"] == "Vigilant"
+            )
+            assert vigilant["mechanic_refs"] == [STEEL_DEFENDER_VIGILANT_MECHANIC_ID]
+            deflect = next(
+                item
+                for item in initial_defender["sheet"]["content"]["activities"]
+                if item["name"] == "Deflect Attack"
+            )
+            assert deflect["mechanic_refs"] == [
+                STEEL_DEFENDER_DEFLECT_ATTACK_MECHANIC_ID
+            ]
             level_four = await _call(
                 server,
                 "character_state_change",
@@ -1809,6 +1832,20 @@ def test_dependent_actor_feature_binding_is_atomic_unique_and_restart_safe(
             )
 
             second_owner = await create_entitled_owner("Combat Battle Smith", "combat-bound-owner")
+            attack_target = await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "direct",
+                    "payload": {
+                        "campaign_id": campaign["id"],
+                        "name": "Deflect Attack Target",
+                        "character_type": "npc",
+                        "sheet": default_character_sheet(),
+                    },
+                    "idempotency_key": "deflect-attack-target",
+                },
+            )
             await _call(
                 server,
                 "access_grant",
@@ -2145,6 +2182,20 @@ def test_dependent_actor_feature_binding_is_atomic_unique_and_restart_safe(
                 second_owner["id"],
                 combat_created["character"]["id"],
             ]
+            queued_target = await _call(
+                server,
+                "combat_join",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": attack_target["id"],
+                    "participant_config": {
+                        "disposition": "friendly",
+                        "initiative": 0,
+                    },
+                    "expected_revision": joined["campaign_revision"],
+                    "idempotency_key": "queue-deflect-attack-target",
+                },
+            )
             damaged_combat_defender = await _call(
                 server,
                 "combat_hp_change",
@@ -2153,7 +2204,7 @@ def test_dependent_actor_feature_binding_is_atomic_unique_and_restart_safe(
                     "target_id": combat_created["character"]["id"],
                     "action": "damage",
                     "payload": {"parts": [{"amount": 10, "damage_type": "force"}]},
-                    "expected_revision": joined["campaign_revision"],
+                    "expected_revision": queued_target["campaign_revision"],
                     "idempotency_key": "damage-commanded-defender-before-repair",
                 },
             )
@@ -2275,13 +2326,131 @@ def test_dependent_actor_feature_binding_is_atomic_unique_and_restart_safe(
                     "idempotency_key": "finish-commanded-defender-turn",
                 },
             )
+            deflect_attack_arguments = {
+                "campaign_id": campaign["id"],
+                "actor_id": second_owner["id"],
+                "target_id": attack_target["id"],
+                "action": {
+                    "weapon_id": "unarmed-strike",
+                    "attack_mode": "melee",
+                    "context": {
+                        "spatial_facts": {
+                            "decision_id": "deflect-attack-primary-spatial-facts",
+                            "reason": (
+                                "The attacker can reach and see the target in the current scene."
+                            ),
+                            "targetable": True,
+                            "in_range": True,
+                            "cover_degree": "none",
+                            "attacker_can_see_target": True,
+                            "target_can_see_attacker": True,
+                        }
+                    },
+                    "deflect_attack": {
+                        "defender_id": combat_created["character"]["id"],
+                        "spatial_facts": {
+                            "decision_id": "steel-defender-deflect-spatial-facts",
+                            "defender_can_see_attacker": True,
+                            "attacker_within_5_ft_of_defender": True,
+                            "default_resolver": "agent",
+                            "ruling_kind": "agent_dm_adjudication",
+                            "reason": (
+                                "The Steel Defender sees the adjacent attacker before the roll."
+                            ),
+                        },
+                    },
+                },
+                "expected_revision": owner_round_three["campaign_revision"],
+                "idempotency_key": "resolve-source-bound-deflect-attack",
+            }
+            deflect_preflight = await _call(
+                server,
+                "combat_preflight_attack",
+                {
+                    key: value
+                    for key, value in deflect_attack_arguments.items()
+                    if key not in {"expected_revision", "idempotency_key"}
+                },
+            )
+            assert deflect_preflight["disadvantage"] is True
+            assert deflect_preflight["deflect_attack"] == {
+                "mechanic_id": STEEL_DEFENDER_DEFLECT_ATTACK_MECHANIC_ID,
+                "defender_id": combat_created["character"]["id"],
+            }
+            ineligible_deflect = deepcopy(deflect_attack_arguments)
+            ineligible_deflect["action"]["deflect_attack"]["spatial_facts"][
+                "attacker_within_5_ft_of_defender"
+            ] = False
+            ineligible_deflect["idempotency_key"] = "reject-out-of-range-deflect-attack"
+            with pytest.raises(Exception, match="attacker_not_within_5_ft"):
+                await server.call_tool("combat_resolve_attack", ineligible_deflect)
+            before_deflect = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            assert before_deflect["revision"] == owner_round_three["campaign_revision"]
+            assert next(
+                item
+                for item in before_deflect["state"]["combat"]["combatants"]
+                if item["actor_id"] == second_owner["id"]
+            )["turn_budget"]["main_action"] == 1
+            assert next(
+                item
+                for item in before_deflect["state"]["combat"]["combatants"]
+                if item["actor_id"] == combat_created["character"]["id"]
+            )["turn_budget"]["reaction"] == 1
+            _, deflected = await server.call_tool(
+                "combat_resolve_attack",
+                deflect_attack_arguments,
+            )
+            _, deflected_replay = await server.call_tool(
+                "combat_resolve_attack",
+                deflect_attack_arguments,
+            )
+            assert deflected_replay == deflected
+            assert len(deflected["result"]["rolls"]) == 2
+            assert deflected["result"]["deflect_attack"] == {
+                "defender_id": combat_created["character"]["id"],
+                "activity_id": deflect["id"],
+                "reaction_paid": True,
+            }
+            deflect_receipt = next(
+                item
+                for item in deflected["result"]["rule_receipts"]
+                if item["mechanic_id"] == STEEL_DEFENDER_DEFLECT_ATTACK_MECHANIC_ID
+            )
+            assert deflect_receipt["event"] == "attack.before_roll.steel_defender_deflect"
+            deflected_audit = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            deflecting_combatant = next(
+                item
+                for item in deflected_audit["state"]["combat"]["combatants"]
+                if item["actor_id"] == combat_created["character"]["id"]
+            )
+            assert deflecting_combatant["turn_budget"]["reaction"] == 0
+            removed_attack_target = await _call(
+                server,
+                "combat_hp_change",
+                {
+                    "campaign_id": campaign["id"],
+                    "target_id": attack_target["id"],
+                    "action": "damage",
+                    "payload": {"parts": [{"amount": 100, "damage_type": "force"}]},
+                    "expected_revision": deflected["campaign_revision"],
+                    "idempotency_key": "remove-deflect-attack-target",
+                },
+            )
             default_turn = await _call(
                 server,
                 "combat_end_turn",
                 {
                     "campaign_id": campaign["id"],
                     "actor_id": second_owner["id"],
-                    "expected_revision": owner_round_three["campaign_revision"],
+                    "expected_revision": removed_attack_target["campaign_revision"],
                     "idempotency_key": "begin-default-defender-turn",
                 },
             )
