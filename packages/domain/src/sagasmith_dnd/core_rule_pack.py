@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.77.0"
+CORE_RULE_PACK_VERSION = "1.78.0"
 
 
 @dataclass(frozen=True)
@@ -540,6 +540,20 @@ BOUNDARIES = (
         "combat_engine.preflight_attack",
         ("tests/test_combat_engine.py",),
         "bundled:srd/conditions",
+    ),
+    CoreBoundary(
+        "dnd5e.core.check.frightened",
+        ("2014",),
+        "combat_engine.resolve_actor_check",
+        ("tests/test_frightened_checks.py",),
+        "bundled:srd2014/08_Gamemastering/Conditions.md#frightened",
+    ),
+    CoreBoundary(
+        "dnd5e.core.initiative.frightened",
+        ("2014",),
+        "combat_engine.start_encounter",
+        ("tests/test_frightened_checks.py",),
+        "bundled:srd2014/08_Gamemastering/Conditions.md#frightened",
     ),
     CoreBoundary(
         "dnd5e.core.attack.help",

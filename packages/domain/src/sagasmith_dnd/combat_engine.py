@@ -1143,6 +1143,7 @@ def start_encounter(
     battle_map: dict[str, Any] | None = None,
     positioning_mode: str | None = None,
     rng: Any = None,
+    initiative_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create encounter state from actor references and derived values.
 
@@ -1210,6 +1211,28 @@ def start_encounter(
             (index, actor, identifier, derived, sheet, conditions, exhaustion)
         )
 
+    # Initiative is a Dexterity check in 2014. Preflight the complete roster
+    # before rolling anyone, including when a fear source comes later in order.
+    initiative_roster = {
+        "combatants": [
+            *list((initiative_context or {}).get("combatants") or []),
+            *[{**actor, "actor_id": actor_id(actor)} for actor in participants],
+        ]
+    }
+    frightened_initiative: dict[str, bool] = {}
+    for (
+        _index, actor, identifier, _derived, _sheet, conditions, _exhaustion
+    ) in validated_participants:
+        if (
+            normalized_ruleset == "2014"
+            and "frightened" in conditions
+            and actor.get("initiative") is None
+            and identifier not in dependent_contracts
+        ):
+            frightened_initiative[identifier] = _frightened_ability_check_disadvantage(
+                actor, initiative_roster
+            )
+
     combatants: list[dict[str, Any]] = []
     rule_boundary_ids: set[str] = set()
     for index, actor, identifier, derived, sheet, conditions, exhaustion in validated_participants:
@@ -1231,6 +1254,10 @@ def start_encounter(
         initiative_disadvantage = bool(actor.get("initiative_disadvantage", False)) or (
             surprised and normalized_ruleset == "2024"
         )
+        if identifier in frightened_initiative:
+            initiative_disadvantage |= frightened_initiative[identifier]
+            rule_boundary_ids.add("dnd5e.core.initiative.frightened")
+            participant_boundary_ids.append("dnd5e.core.initiative.frightened")
         exhaustion_adjustment = d20_exhaustion_adjustment(
             ruleset=normalized_ruleset,
             exhaustion=exhaustion,
@@ -1252,7 +1279,10 @@ def start_encounter(
         current_movement = int(speed * speed_multiplier)
         supplied = actor.get("initiative")
         die = None
-        if supplied is None:
+        if identifier in dependent_contracts:
+            # The source feature assigns its owner's initiative, not another roll.
+            initiative = 0
+        elif supplied is None:
             die = roll_d20(
                 advantage=bool(actor.get("initiative_advantage", False))
                 or ("invisible" in conditions and normalized_ruleset == "2024"),
@@ -1430,6 +1460,13 @@ def queue_combatant(
         )
     generated_actor = deepcopy(actor)
     generated_actor.pop("dependent_turn", None)
+    if contract is not None:
+        owner = next(
+            item for item in existing
+            if str(item.get("actor_id") or "") == contract["owner_actor_id"]
+        )
+        generated_actor["initiative"] = int(owner.get("initiative", 0) or 0)
+        generated_actor["tie_breaker"] = int(owner.get("tie_breaker", 0) or 0)
     if contract is not None and _steel_defender.has_steel_defender_vigilant(actor):
         generated_actor["surprised"] = False
     generated_encounter = start_encounter(
@@ -1440,6 +1477,8 @@ def queue_combatant(
         ),
         positioning_mode=str(value.get("positioning_mode") or "agent"),
         rng=rng,
+        # A future-round entry does not establish present line of sight.
+        initiative_context={"combatants": list(value.get("combatants") or [])},
     )
     generated = generated_encounter["combatants"][0]
     if contract is not None:
@@ -7022,6 +7061,35 @@ def resolve_turn_undead_to_sheets(
     }
 
 
+def _frightened_ability_check_disadvantage(
+    actor: dict[str, Any], encounter: dict[str, Any] | None
+) -> bool:
+    """Use active fear ownership and recorded visibility, never caller roll flags."""
+    effects = active_condition_source_effects(actor_sheet(actor), "frightened")
+    sources = {str(effect.get("source") or "") for effect in effects}
+    if not sources or "" in sources:
+        raise NeedsRulingError(
+            "a frightened ability check requires its active fear sources",
+            missing=("frightened_source",),
+            ruling_kind="missing_or_conflicting_source_review",
+        )
+    combatants = list((encounter or {}).get("combatants") or [])
+    source_combatants = [
+        combatant for combatant in combatants
+        if str(combatant.get("actor_id") or "") in sources
+    ]
+    if any(
+        sum(str(combatant.get("actor_id") or "") == source for combatant in combatants) != 1
+        for source in sources
+    ):
+        raise NeedsRulingError(
+            "a frightened ability check requires recorded fear-source visibility",
+            missing=("frightened_source_visibility",),
+            ruling_kind="source_or_scene_fact",
+        )
+    return any(can_see(actor, source) for source in source_combatants)
+
+
 def resolve_actor_check(
     actor: dict[str, Any],
     *,
@@ -7316,6 +7384,14 @@ def resolve_actor_check(
             )
     if kind in ABILITY_CHECK_KINDS and "poisoned" in conditions:
         disadvantage = True
+    if (
+        normalized_ruleset == "2014"
+        and kind in ABILITY_CHECK_KINDS
+        and "frightened" in conditions
+    ):
+        if _frightened_ability_check_disadvantage(actor, encounter):
+            disadvantage = True
+        boundary_ids.append("dnd5e.core.check.frightened")
     if kind == "save" and _long_ability_name(ability) == "dexterity" and "restrained" in conditions:
         disadvantage = True
     exhaustion_adjustment = d20_exhaustion_adjustment(
@@ -7453,6 +7529,14 @@ def resolve_actor_group_check(
             "contexts: " + ", ".join(incompatible_rule_actor_ids)
         )
 
+    # An unresolved later participant must not consume an earlier participant's RNG.
+    for actor in actors:
+        sheet = actor_sheet(actor)
+        if (
+            _normalize_ruleset(sheet.get("edition")) == "2014"
+            and "frightened" in _condition_set(sheet.get("conditions"))
+        ):
+            _frightened_ability_check_disadvantage(actor, None)
     checks: list[dict[str, Any]] = []
     for actor in actors:
         participant_id = actor_id(actor)
@@ -7668,6 +7752,7 @@ def resolve_actor_contest(
     *,
     source_ability: str,
     target_ability: str,
+    encounter: dict[str, Any] | None = None,
     source_proficient: bool = False,
     target_proficient: bool = False,
     source_bonus: int = 0,
@@ -7694,6 +7779,14 @@ def resolve_actor_contest(
     if target_advantage and target_disadvantage:
         raise CombatEngineError("contest target cannot have advantage and disadvantage together")
 
+    for actor in (source_actor, target_actor):
+        sheet = actor_sheet(actor)
+        if (
+            _normalize_ruleset(sheet.get("edition")) == "2014"
+            and "frightened" in _condition_set(sheet.get("conditions"))
+        ):
+            _frightened_ability_check_disadvantage(actor, encounter)
+
     def contest_check(
         actor: dict[str, Any],
         *,
@@ -7709,6 +7802,7 @@ def resolve_actor_contest(
             kind="ability",
             ability=ability,
             dc=0,
+            encounter=encounter,
             proficient=proficient,
             bonus=bonus,
             advantage=advantage,
