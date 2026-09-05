@@ -417,6 +417,107 @@ def _initialize_profile_spellcasting(
     }
 
 
+def profile_spell_selection_status(
+    sheet: dict[str, Any], *, class_name: str
+) -> dict[str, Any] | None:
+    """Describe a reviewed class profile's outstanding choices without selecting spells.
+
+    The profile supplies total spells known, not a delta from the last level.
+    Prepared capacity is reported separately: a larger capacity after leveling
+    does not authorize changing an existing 2014 preparation list.
+    """
+    class_key = str(class_name).strip().casefold()
+    classes = [
+        item
+        for item in sheet.get("progression", {}).get("classes", [])
+        if str(item.get("name") or "").casefold() == class_key
+    ]
+    if len(classes) != 1:
+        raise CombatEngineError("spell selection requires one exact recorded source class")
+    target = classes[0]
+    if not target.get("spellcasting"):
+        return None
+    profile = normalize_class_spellcasting_profile(target["spellcasting"])
+    class_level = target.get("level")
+    if (
+        isinstance(class_level, bool)
+        or not isinstance(class_level, int)
+        or not 1 <= class_level <= 20
+    ):
+        raise CombatEngineError("spell selection class level must be between 1 and 20")
+    spells = list(sheet.get("content", {}).get("spells", []))
+
+    def from_class(spell: dict[str, Any]) -> bool:
+        grant = dict(spell.get("grant") or {})
+        return (
+            grant.get("source_type") == "class"
+            and str(grant.get("source_key") or "").casefold() == class_key
+        )
+
+    learned = [
+        spell
+        for spell in spells
+        if from_class(spell)
+        and dict(spell.get("grant") or {}).get("method") == "known"
+        and dict(spell.get("access") or {}).get("known") is True
+    ]
+    choices = {}
+    for key, table_key, is_cantrip in (
+        ("cantrips", "cantrips_known_by_level", True),
+        ("leveled_spells", "leveled_spells_known_by_level", False),
+    ):
+        table = profile[table_key]
+        required = table[class_level - 1] if table else 0
+        spell_ids = sorted(
+            {
+                str(spell["id"])
+                for spell in learned
+                if (int(spell.get("level", 0) or 0) == 0) == is_cantrip
+            }
+        )
+        choices[key] = {
+            "required": required,
+            "present": len(spell_ids),
+            "missing": max(0, required - len(spell_ids)),
+            "excess": max(0, len(spell_ids) - required),
+            "spell_ids": spell_ids,
+        }
+    preparation = dict(sheet.get("spellcasting", {}).get("preparation") or {})
+    selected_ids = set(preparation.get("selected_spell_ids") or [])
+    prepared_ids = sorted(
+        str(spell["id"])
+        for spell in spells
+        if from_class(spell)
+        and spell.get("id") in selected_ids
+        and int(spell.get("level", 0) or 0) > 0
+        and dict(spell.get("grant") or {}).get("method") in {"class_prepared", "spellbook"}
+        and dict(spell.get("access") or {}).get("prepared") is True
+        and dict(spell.get("access") or {}).get("always_prepared") is not True
+    )
+    prepares = profile["preparation_mode"] in PREPARED_SELECTION_MODES
+    prepared_limit = (
+        prepared_spell_limit(sheet, sheet["edition"], class_key, class_level) if prepares else 0
+    )
+    return {
+        "scope": "profile_class_spell_choices",
+        "class_name": str(target["name"]),
+        "class_level": class_level,
+        **choices,
+        "learned_spells_complete": all(
+            not item["missing"] and not item["excess"] for item in choices.values()
+        ),
+        "preparation": {
+            "mode": profile["preparation_mode"],
+            "limit": prepared_limit,
+            "selected": len(prepared_ids),
+            "spell_ids": prepared_ids,
+            "missing_for_setup": max(0, prepared_limit - len(prepared_ids)),
+            "excess": max(0, len(prepared_ids) - prepared_limit),
+            "changes_on": "long_rest" if prepares else None,
+        },
+    }
+
+
 def initialize_base_class(
     sheet: dict[str, Any],
     *,

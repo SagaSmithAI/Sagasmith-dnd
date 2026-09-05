@@ -391,6 +391,7 @@ from sagasmith_dnd.progression import (
     award_experience,
     experience_status,
     initialize_base_class,
+    profile_spell_selection_status,
     synchronize_class_feature_resources,
 )
 from sagasmith_dnd.random_stream import (
@@ -32093,19 +32094,44 @@ def _create_server(
         character_id: str,
         class_name: str,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
+        *,
+        scope: str = "next_level",
     ) -> dict[str, Any]:
         """Preview all source-bound follow-up work without committing a level."""
+        if scope not in {"next_level", "current_level"}:
+            raise ValueError("advancement scope must be next_level or current_level")
         current = characters.get(character_id)
         require_character_control(current, principal_id)
         require_outside_active_combat(current, "level advancement planning")
         if current.campaign_id is None:
             raise ValueError("level advancement planning requires a campaign-bound character")
-        if not is_dm(current.campaign_id, principal_id):
+        if scope == "next_level" and not is_dm(current.campaign_id, principal_id):
             raise PermissionError("level advancement planning requires the campaign DM")
         campaign = campaigns.get(current.campaign_id)
         if authoritative_phase(current.campaign_id) != PROFILE_LOBBY:
             raise CombatEngineError("switch to lobby before planning a character level")
         branch_id = require_current_branch(current.campaign_id, None)
+        if scope == "current_level":
+            follow_up = current_class_feature_follow_up(
+                current.campaign_id,
+                current.sheet,
+                class_name=class_name,
+                branch_id=branch_id,
+            )
+            spell_status = profile_spell_selection_status(current.sheet, class_name=class_name)
+            return {
+                "status": "ready" if follow_up["complete"] else "pending_choice",
+                "scope": follow_up["scope"],
+                "character_id": current.id,
+                "character_revision": current.revision,
+                "campaign_id": current.campaign_id,
+                "campaign_revision": campaign.revision,
+                "branch_id": branch_id,
+                "class_name": follow_up["class_name"],
+                "class_level": follow_up["class_level"],
+                "follow_up": follow_up,
+                **({"spell_selection": spell_status} if spell_status is not None else {}),
+            }
         old_level = int(current.sheet.get("progression", {}).get("level", 0) or 0)
         experience = experience_status(current.sheet)
         advancement_mode = campaign_advancement_mode(campaign)
@@ -43555,6 +43581,7 @@ def _create_server(
         class_name: str,
         new_level: int,
         branch_id: str,
+        include_overdue_grants: bool = False,
     ) -> dict[str, Any]:
         """Resolve source-bound per-level modifiers and post-level catalog work."""
         candidates = available_content_artifacts(campaign_id, branch_id=branch_id)
@@ -43695,7 +43722,22 @@ def _create_server(
                 for value in card.get("repeatable_selection_levels", [])
                 if int(value) > 0
             }
-            repeat_due = new_level in repeatable_levels
+            recorded_grant_levels = {
+                int(item.get("level", 0) or 0)
+                for item in present_features.get(artifact_id, {}).get("advancement_grants", [])
+            }
+            repeat_due = (
+                new_level in repeatable_levels and new_level not in recorded_grant_levels
+            )
+            due_grant_level = new_level if repeat_due else None
+            if include_overdue_grants and repeatable_levels:
+                outstanding_levels = sorted(
+                    level
+                    for level in {minimum_level, *repeatable_levels}
+                    if level <= new_level and level not in recorded_grant_levels
+                )
+                due_grant_level = next(iter(outstanding_levels), None)
+                repeat_due = due_grant_level is not None
             if kind == "feature" and (artifact_id not in present_features or repeat_due):
                 if str(card.get("feature_subtype") or "") == "selectable_option":
                     continue
@@ -43723,7 +43765,7 @@ def _create_server(
                 requirements_by_level = dict(card.get("selection_requirements_by_level") or {})
                 selection_requirements = deepcopy(
                     dict(
-                        requirements_by_level.get(str(new_level))
+                        requirements_by_level.get(str(due_grant_level or new_level))
                         or card.get("selection_requirements")
                         or {}
                     )
@@ -43736,7 +43778,7 @@ def _create_server(
                         "class_name": declared_class,
                         "subclass_name": declared_subclass,
                         "selection_requirements": selection_requirements,
-                        "grant_level": new_level if repeat_due else None,
+                        "grant_level": due_grant_level,
                         "pack_id": pack_id,
                         "pack_version": version,
                         "rule_refs": list(artifact.get("rule_refs") or []),
@@ -43796,6 +43838,42 @@ def _create_server(
             "subclass_options": sorted(
                 subclass_options, key=lambda item: (item["name"], item["artifact_id"])
             ),
+        }
+
+    def current_class_feature_follow_up(
+        campaign_id: str,
+        sheet: dict[str, Any],
+        *,
+        class_name: str,
+        branch_id: str,
+    ) -> dict[str, Any]:
+        """Describe remaining current-level feature grants, not whole-build readiness."""
+        selected_class = next(
+            (
+                item
+                for item in sheet["progression"]["classes"]
+                if str(item.get("name") or "").casefold() == class_name.casefold()
+            ),
+            None,
+        )
+        if selected_class is None:
+            raise ValueError("follow-up class is not on this actor card")
+        class_level = int(selected_class["level"])
+        context = level_advancement_content_context(
+            campaign_id,
+            sheet,
+            class_name=class_name,
+            new_level=class_level,
+            branch_id=branch_id,
+            include_overdue_grants=True,
+        )
+        return {
+            "scope": "current_class_features",
+            "class_name": str(selected_class["name"]),
+            "class_level": class_level,
+            "feature_artifacts": context["feature_options"],
+            "subclass_options": context["subclass_options"],
+            "complete": not (context["feature_options"] or context["subclass_options"]),
         }
 
     def content_catalog_list(
@@ -45264,6 +45342,13 @@ def _create_server(
         if kind == "class":
             if phase != PROFILE_LOBBY:
                 raise CombatEngineError("base-class selection is available only during lobby setup")
+            supported_choices = {"skills", "tools", "skill_replacements", "tool_replacements"}
+            unsupported_choices = set(selection) - supported_choices
+            if unsupported_choices:
+                raise ValueError(
+                    "unsupported base-class selection fields: "
+                    + ", ".join(sorted(unsupported_choices))
+                )
             class_definition = card.get("class_definition")
             if not isinstance(class_definition, dict):
                 return {
@@ -45363,6 +45448,8 @@ def _create_server(
                     "spell selection method must be known, spellbook, spellbook_copy, "
                     "or class_prepared"
                 )
+            if level == 0 and method != "known":
+                raise ValueError("cantrips must be selected as known spells")
             if method in {"spellbook", "spellbook_copy"} and preparation_mode != "spellbook":
                 raise ValueError("only a spellbook caster can select a spellbook grant")
             if method == "class_prepared" and preparation_mode != "prepared":
@@ -45371,6 +45458,16 @@ def _create_server(
                 raise ValueError(
                     "this caster records level 1+ spells as prepared or spellbook grants"
                 )
+            if method == "known":
+                spell_status = profile_spell_selection_status(sheet, class_name=source_class)
+                if spell_status is not None:
+                    choice_kind = "cantrips" if level == 0 else "leveled_spells"
+                    choice_status = spell_status[choice_kind]
+                    if choice_status["present"] >= choice_status["required"]:
+                        raise ValueError(
+                            f"{source_class} {choice_kind} selection exceeds the reviewed "
+                            f"class-level limit of {choice_status['required']}"
+                        )
             if method == "spellbook_copy":
                 if source_class != "wizard":
                     raise ValueError("only wizard spells can be copied into this spellbook")
@@ -48477,6 +48574,36 @@ def _create_server(
                 else {}
             ),
         }
+        # Choosing a subclass after leveling unlocks features absent from the
+        # earlier advancement response. Recompute from this pending sheet, after
+        # recording its exact source selection, and persist the result together
+        # with the mutation so an idempotent replay returns the same work list.
+        follow_up_class = ""
+        if kind == "class":
+            follow_up_class = str(card.get("name") or "")
+        elif kind in {"subclass", "feature"}:
+            follow_up_class = str(artifact.get("card", {}).get("class_name") or "")
+        elif kind == "spell":
+            follow_up_class = source_class
+        if phase == PROFILE_LOBBY and follow_up_class:
+            selected_class = next(
+                (
+                    item
+                    for item in sheet["progression"]["classes"]
+                    if str(item.get("name") or "").casefold() == follow_up_class.casefold()
+                ),
+                None,
+            )
+            if selected_class is not None:
+                response_extra["follow_up"] = current_class_feature_follow_up(
+                    current.campaign_id,
+                    sheet,
+                    class_name=follow_up_class,
+                    branch_id=branch_id,
+                )
+                spell_status = profile_spell_selection_status(sheet, class_name=follow_up_class)
+                if spell_status is not None:
+                    response_extra["spell_selection"] = spell_status
         return update_sheet(
             character_id,
             sheet,
@@ -51464,6 +51591,7 @@ boundary.
                 str(required(data, "character_id")),
                 str(required(data, "class_name")),
                 principal_id,
+                scope=str(data.get("scope", "next_level")),
             )
         elif view == "rest":
             character_id = str(required(data, "character_id"))
