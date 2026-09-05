@@ -22,7 +22,10 @@ def _equipment_artifacts():
     artifacts = _printing(PACK)
     class_artifact = artifacts[1]
     equipment = {
-        "items": [{"artifact_id": f"{PACK}.item.bolts", "quantity": 20}],
+        "items": [
+            {"artifact_id": f"{PACK}.item.bolts", "quantity": 20},
+            {"artifact_id": "dnd5e.content.srd2014.item.crossbow-light", "quantity": 1},
+        ],
         "choices": [
             {
                 "id": "weapons", "count": 2, "allow_duplicates": True,
@@ -232,13 +235,13 @@ def test_starting_equipment_public_order_atomicity_and_restart(tmp_path, monkeyp
                 assert inventory["wallet"]["gp"] == 27
                 names = Counter(item["name"] for item in inventory["items"])
                 assert names == Counter({
-                    "bolts": 1, "club": 2, "Courier Badge": 1,
+                    "bolts": 1, "club": 2, "Courier Badge": 1, "Crossbow, light": 1,
                     f"{'medium' if background_first else 'light'}-armor": 1,
                 })
                 assert next(item for item in inventory["items"] if item["name"] == "bolts")[
                     "quantity"
                 ] == 20
-                assert len(result["item_ids"]) == len(set(result["item_ids"])) == 4
+                assert len(result["item_ids"]) == len(set(result["item_ids"])) == 5
                 assert result["roll"] is None
                 for item in inventory["items"]:
                     if item["id"] in result["item_ids"]:

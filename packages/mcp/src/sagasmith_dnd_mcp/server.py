@@ -45557,7 +45557,8 @@ def _create_server(
                             item_pack, item_version, item_artifact
                         )
                         if (
-                            item_artifact.get("application_state") != "selection_ready"
+                            str(item_artifact.get("application_state") or "selection_ready")
+                            != "selection_ready"
                             or (
                                 item_artifact.get("selection_contract") is not None
                                 and selection_input_errors(item_artifact, {})

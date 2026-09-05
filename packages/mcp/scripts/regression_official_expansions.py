@@ -19,6 +19,10 @@ from sagasmith_dnd.character_schema import default_character_sheet
 from sagasmith_dnd.core_content import PACK_ID as CORE_CONTENT_PACK_ID
 from sagasmith_dnd.core_content import PACK_VERSION as CORE_CONTENT_PACK_VERSION
 from sagasmith_dnd.official_expansions import official_expansion_catalog
+from sagasmith_dnd.starting_equipment import (
+    normalize_starting_equipment_contract,
+    normalize_starting_equipment_selection,
+)
 
 from sagasmith_dnd_mcp.config import McpConfig
 from sagasmith_dnd_mcp.server import close_server, create_server
@@ -353,6 +357,18 @@ async def _catalog_selection(
     equipment_options = list(requirements.get("equipment_package_options") or [])
     if equipment_options:
         selection["equipment_package"] = equipment_options[0]
+    starting_equipment = requirements.get("starting_equipment")
+    if expected_kind == "class" and starting_equipment is not None:
+        equipment_contract = normalize_starting_equipment_contract(starting_equipment)
+        choices = {}
+        for group in equipment_contract["choices"]:
+            options = group["options"]
+            choices[group["id"]] = [
+                options[index % len(options)] for index in range(group["count"])
+            ]
+        selection["starting_equipment"] = normalize_starting_equipment_selection(
+            equipment_contract, {"mode": "equipment", "choices": choices}
+        )
     if target_class_name is not None:
         selection["target_class_name"] = target_class_name
     selection.update(selection_overrides or {})

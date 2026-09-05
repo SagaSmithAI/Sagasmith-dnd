@@ -122,7 +122,6 @@ def repair_archive(data: bytes) -> tuple[bytes, dict]:
     ref = {
         "chunk_key": _CHUNK_KEY,
         "note": "Starting equipment source evidence",
-        "page": 55,
         "source_key": _SOURCE_KEY,
     }
     artifact["source_refs"] = [*artifact.get("source_refs", []), ref]

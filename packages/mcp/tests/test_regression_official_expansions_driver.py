@@ -72,6 +72,37 @@ class _FakeServer:
         return None, {"result": self.responses[name].pop(0)}
 
 
+@pytest.mark.parametrize("override", [None, {"starting_equipment": {"mode": "gold"}}])
+def test_catalog_selects_reviewed_class_equipment_without_inventing_items(monkeypatch, override):
+    contract = {
+        "items": [{"artifact_id": "fixture.bolts", "quantity": 20}],
+        "choices": [{"id": "weapons", "count": 2, "options": ["fixture.club"],
+                     "allow_duplicates": True}],
+        "gold_alternative": {"dice": "5d4", "multiplier": 10, "denomination": "gp",
+                             "replaces_background_equipment": True},
+    }
+
+    async def catalog(_server, _name, _arguments):
+        return [{
+            "id": "fixture.class", "kind": "class", "pack_id": "official",
+            "application_state": "selection_ready",
+            "runtime_context": {"selection_contract": {
+                "status": "ready", "materializer": "dnd5e.character.base_class.v1",
+                "reviewed_content_hash": "a" * 64,
+            }},
+            "selection_requirements": {"starting_equipment": deepcopy(contract)},
+        }]
+
+    monkeypatch.setattr(driver, "_call", catalog)
+    _, selected = asyncio.run(driver._catalog_selection(
+        None, "campaign", "fixture.class", expected_kind="class", official_pack_ids={"official"},
+        selection_overrides=override,
+    ))
+    assert selected == (override or {"starting_equipment": {
+        "mode": "equipment", "choices": {"weapons": ["fixture.club", "fixture.club"]},
+    }})
+
+
 @pytest.mark.parametrize("already_applied", [False, True])
 def test_finish_artificer_build_consumes_features_and_preparation(monkeypatch, already_applied):
     original = {

@@ -15,6 +15,7 @@ from pathlib import Path
 
 import repair_artificer_asi
 import repair_artificer_context
+import repair_artificer_starting_equipment
 import repair_steel_defender_citation
 import repair_steel_defender_owner_binding
 import repair_subclass_grants
@@ -31,6 +32,7 @@ _STEPS = {
     "artificer_context": repair_artificer_context.repair_archive,
     "steel_defender_citation": repair_steel_defender_citation.repair_archive,
     "steel_defender_owner_binding": repair_steel_defender_owner_binding.repair_archive,
+    "artificer_starting_equipment": repair_artificer_starting_equipment.repair_archive,
 }
 
 

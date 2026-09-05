@@ -79,12 +79,14 @@ def test_shipped_recipes_are_executable_and_explicitly_local():
         assert all(step in builder._STEPS for step in recipe["steps"])
 
 
-def test_steel_defender_repair_is_last_and_exact_hash_bound():
+def test_eberron_repairs_are_ordered_and_exact_hash_bound():
     lock = load_official_expansion_lock()
     target = next(
         package for package in lock["packages"] if package["publication_id"] == "erlw2014"
     )
-    assert target["local_repair"]["steps"][-1] == "steel_defender_owner_binding"
+    assert target["local_repair"]["steps"][-2:] == [
+        "steel_defender_owner_binding", "artificer_starting_equipment",
+    ]
     recipe = next(iter(builder.repair_steel_defender_citation._RECIPES.values()))
     assert recipe["version"] == "1.0.4-local.steel-defender-citation.1"
     assert recipe["definition_version"] == "1.0.2-local.steel-defender-citation.1"
@@ -99,10 +101,16 @@ def test_steel_defender_repair_is_last_and_exact_hash_bound():
     owner = builder.repair_steel_defender_owner_binding
     assert owner._SOURCE_SHA == "6c045a44eba3e231d4e65897c1617f6543df7f85f5ceaa16e008c69dd01d2f09"
     assert owner._CHUNK_KEY.endswith("/section-390/chunk-417-e7d3b85f277baaaa")
-    assert owner._PACKAGE_VERSION == target["version"]
+    assert owner._PACKAGE_VERSION == "1.0.5-local.steel-defender-owner-binding.1"
     assert owner._DEFINITION_VERSION == "1.0.3-local.steel-defender-owner-binding.1"
     with pytest.raises(ValueError, match="exact reviewed"):
         owner.repair_archive(b"wrong archive")
+    equipment = builder.repair_artificer_starting_equipment
+    assert equipment._PACKAGE_VERSION == target["version"]
+    assert equipment._CHUNK_KEY.endswith("/section-324/chunk-349-a6c7c7a1e1a8b94f")
+    assert equipment._SOURCE_SHA == (
+        "bfd0d326c22abef2c3bb5770c6683a1d82ce522ea4aa4ddc2dba01750a14c122"
+    )
 
 
 @pytest.mark.parametrize("relative", ["../outside.pack", "missing.pack"])

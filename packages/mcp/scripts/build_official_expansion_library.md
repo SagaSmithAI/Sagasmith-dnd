@@ -17,9 +17,15 @@ python packages/mcp/scripts/build_official_expansion_library.py \
 The supplied canonical library must contain the exact eleven locally supplied
 inputs (ten expansions and the PHB dependency). The builder applies subclass
 grants, Artificer ASI, context, the exact-hash-bound Steel Defender
-citation repair and final owner-binding repair in the pinned order; six unaffected
-packages retain their original bytes. Output archive hashes, package identities,
+citation repair, owner-binding and starting-equipment repair in the pinned order;
+six unaffected packages retain their original bytes. Output archive hashes, package identities,
 inner definition checksums and catalog counts must match the shipped lock.
+The Eberron equipment recipe binds its class contract to the exact EQUIPMENT
+normalized source chunk and existing SRD item IDs. The supplied chunk has no
+verified page number, so the recipe does not invent a page citation. It preserves
+the source blobs, offers the reviewed equipment choices or rolled gold alternative, and
+does not substitute the Tasha or Wayfinder printing. This is archive-source
+verification, not a claim of independent PDF-page verification.
 The builder performs default-lock library verification before writing
 `repair-report.json`. Existing outputs and source/output overlap are refused.
 If interrupted, a partial new directory is retained, not activated; use a new
@@ -40,3 +46,16 @@ The source-free builder tests exercise hash, step, path and overwrite guards;
 real local archive generation and MCP activation require private integration
 validation. Passing library validation is not evidence that all 2014 gameplay
 mechanics or a full character build have been implemented.
+
+For the focused real Eberron starting-award scenario, set
+`SAGASMITH_DND_TEST_OFFICIAL_CONTENT_LIBRARY` to the verified output directory,
+then run:
+
+```sh
+uv run --no-sync pytest packages/mcp/tests/test_artificer_equipment_official_archive_mcp.py -q
+```
+
+Without the private library this test explicitly skips. It checks weapon and
+armor choices, gold/background exclusion, source-bound awards and restart/replay;
+it does not certify spellcasting tools, all class features, or consumption of
+individual items described inside a bundled equipment pack.
