@@ -18225,6 +18225,7 @@ def _create_server(
             "source_excerpt": normalized_excerpt,
         }
 
+    @_agent_ruling_boundary
     def chase_start(
         campaign_id: str,
         participant_ids: list[str],
