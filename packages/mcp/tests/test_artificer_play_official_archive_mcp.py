@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import AsyncExitStack
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
 from mcp import Client
 from mcp.server.mcpserver.exceptions import ToolError
 from sagasmith_dnd.character_schema import default_character_sheet
+from sagasmith_dnd.steel_defender import STEEL_DEFENDER_DEFLECT_ATTACK_MECHANIC_ID
 
 from sagasmith_dnd_mcp.config import McpConfig
 from sagasmith_dnd_mcp.server import close_server, create_server
@@ -259,7 +261,110 @@ async def _exercise_defender_combat(server, campaign_id: str, owner: dict, defen
     assert (await current())["state"]["combat"]["combatants"][1]["turn_budget"][
         "main_action"
     ] == 0
-    return repair_request, repaired, attack_request, attack_response
+    await end(defender["id"], "defender-rend-end")
+    deflect_request, deflected = await _exercise_deflect_attack(
+        server, campaign_id, owner, defender, target,
+    )
+    return repair_request, repaired, attack_request, attack_response, deflect_request, deflected
+
+
+async def _exercise_deflect_attack(server, campaign_id, owner, defender, attacker):
+    """Use the real materialized reaction, without injecting a synthetic activity."""
+    async def snapshot():
+        campaign = await _call(server, "campaign_query", {
+            "view": "get", "payload": {"campaign_id": campaign_id},
+        })
+        actors = [await _call(server, "character_query", {
+            "view": "get", "payload": {"character_id": actor["id"]},
+        }) for actor in (owner, defender, attacker)]
+        return campaign, actors
+
+    before = await snapshot()
+    relation = next(item for item in before[0]["state"]["dependent_actor_relations"]
+                    if item["dependent_actor_id"] == defender["id"])
+    activity = next(item for item in before[1][1]["sheet"]["content"]["activities"]
+                    if item["name"] == "Deflect Attack")
+    assert STEEL_DEFENDER_DEFLECT_ATTACK_MECHANIC_ID in activity["mechanic_refs"]
+    request = {
+        "campaign_id": campaign_id, "actor_id": attacker["id"], "target_id": owner["id"],
+        "action": {
+            "weapon_id": "unarmed-strike", "attack_mode": "melee",
+            "context": {"spatial_facts": {
+                "decision_id": "actual-deflect-primary",
+                "reason": "Visible adjacent sparring partner",
+                "targetable": True, "in_range": True, "cover_degree": "none",
+                "attacker_can_see_target": True, "target_can_see_attacker": True,
+            }},
+            "deflect_attack": {"defender_id": defender["id"], "spatial_facts": {
+                "decision_id": "actual-deflect-reaction",
+                "defender_can_see_attacker": True, "attacker_within_5_ft_of_defender": True,
+                "default_resolver": "agent", "ruling_kind": "agent_dm_adjudication",
+                "reason": "The Defender sees the adjacent attacker attacking its owner.",
+            }},
+        }, "expected_revision": before[0]["revision"], "idempotency_key": "actual-deflect",
+    }
+    preflight = await _call(server, "combat_preflight_attack", {
+        key: value for key, value in request.items()
+        if key not in {"expected_revision", "idempotency_key"}
+    })
+    assert preflight["disadvantage"] is True
+    assert preflight["advantage"] is False
+    assert preflight["deflect_attack"] == {
+        "mechanic_id": STEEL_DEFENDER_DEFLECT_ATTACK_MECHANIC_ID,
+        "defender_id": defender["id"],
+    }
+    assert await snapshot() == before
+    for field, reason in (
+        ("defender_can_see_attacker", "attacker_not_visible"),
+        ("attacker_within_5_ft_of_defender", "attacker_not_within_5_ft"),
+        ("target_id", "target_is_defender"),
+    ):
+        rejected = deepcopy(request)
+        if field == "target_id":
+            rejected[field] = defender["id"]
+        else:
+            rejected["action"]["deflect_attack"]["spatial_facts"][field] = False
+        rejected["idempotency_key"] = "reject-deflect-" + field
+        with pytest.raises(ToolError, match=reason):
+            await server.call_tool("combat_resolve_attack", rejected)
+        assert await snapshot() == before
+
+    response = await server.call_tool("combat_resolve_attack", request)
+    result = response[1]["result"]
+    assert json.loads(response[0][0].text) == response[1]
+    assert len(result["rolls"]) == 2
+    assert result["natural"] == min(result["rolls"])
+    assert result["deflect_attack"] == {
+        "defender_id": defender["id"], "activity_id": activity["id"], "reaction_paid": True,
+    }
+    receipt = next(item for item in result["rule_receipts"]
+                   if item["mechanic_id"] == STEEL_DEFENDER_DEFLECT_ATTACK_MECHANIC_ID)
+    assert receipt["event"] == "attack.before_roll.steel_defender_deflect"
+    assert receipt["citations"] == [{
+        "source_artifact_id": _DEFENDER, "source_pack_id": _PREFIX,
+        "source_pack_version": _RULE_VERSION,
+        "reviewed_expression_hash": relation["template_binding"]["reviewed_expression_hash"],
+    }]
+    assert receipt["facts"]["committed"] is True
+    stream = response[1]["random_stream_receipt"]
+    assert stream["position_before"] == before[0]["state"]["random_stream"]["position"]
+    assert stream["draw_count"] == 2  # Unarmed damage is fixed, not another random draw.
+    after = await snapshot()
+    for state, reaction in ((before, 1), (after, 0)):
+        combatant = next(item for item in state[0]["state"]["combat"]["combatants"]
+                         if item["actor_id"] == defender["id"])
+        assert combatant["turn_budget"]["reaction"] == reaction
+        assert combatant.get("position") is None
+    assert after[0]["state"]["random_stream"]["position"] == stream["position_after"]
+    assert await server.call_tool("combat_resolve_attack", request) == response
+    assert await snapshot() == after
+    with pytest.raises(ToolError, match="reaction_unavailable"):
+        await server.call_tool("combat_resolve_attack", {
+            **request, "expected_revision": after[0]["revision"],
+            "idempotency_key": "reject-deflect-without-reaction",
+        })
+    assert await snapshot() == after
+    return request, response
 
 
 @pytest.mark.fresh_database
@@ -400,7 +505,8 @@ def test_locked_artificer_build_creates_and_commands_defender(tmp_path: Path) ->
                     "idempotency_key": "duplicate-defender",
                 })
             assert await current() == before
-            repair_request, repaired, attack_request, attack = await _exercise_defender_combat(
+            (repair_request, repaired, attack_request, attack,
+             deflect_request, deflected) = await _exercise_defender_combat(
                 server, campaign["id"], owner, defender,
             )
             lifecycle_replays, lifecycle_final = await _exercise_defender_lifecycle(
@@ -427,6 +533,7 @@ def test_locked_artificer_build_creates_and_commands_defender(tmp_path: Path) ->
             assert await _call(server, "addon_actor_instantiate", create_request) == created
             assert await server.call_tool("combat_use_activity", repair_request) == repaired
             assert await server.call_tool("combat_resolve_attack", attack_request) == attack
+            assert await server.call_tool("combat_resolve_attack", deflect_request) == deflected
             for tool, request, response in lifecycle_replays:
                 assert await server.call_tool(tool, request) == response
             assert await _call(server, "character_query", {
