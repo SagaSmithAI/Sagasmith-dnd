@@ -106,7 +106,7 @@ def normalize_starting_equipment_contract(raw: Any) -> dict[str, Any]:
         dice_match = _DICE.fullmatch(dice)
         if not dice_match:
             raise ValueError("starting equipment gold_alternative.dice must be NdS")
-        if int(dice_match.group(1)) > 100 or int(dice_match.group(2)) > 1000:
+        if int(dice_match.group(1)) > 100 or not 2 <= int(dice_match.group(2)) <= 1000:
             raise ValueError(
                 "starting equipment gold_alternative.dice exceeds engine limits"
             )
@@ -125,7 +125,7 @@ def normalize_starting_equipment_contract(raw: Any) -> dict[str, Any]:
                 "must be a boolean"
             )
         gold = {
-            "dice": dice,
+            "dice": dice.lower(),
             "multiplier": multiplier,
             "denomination": denomination,
             "replaces_background_equipment": replaces,
@@ -237,7 +237,8 @@ def apply_starting_equipment(
             item["source_key"] = source
             item["equipped"] = False
             item["equipped_slot"] = None
-            item["attunement"] = "none"
+            if item.get("attunement") == "attuned":
+                item["attunement"] = "required"
             result_sheet, item_id = add_inventory_item(result_sheet, item)
             item_ids.append(item_id)
     recorded_selection = copy.deepcopy(normalized_selection)

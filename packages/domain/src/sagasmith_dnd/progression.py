@@ -16,6 +16,7 @@ from sagasmith_dnd.spells import (
     prepared_spell_limit,
     synchronize_prepared_spell_limit,
 )
+from sagasmith_dnd.starting_equipment import normalize_starting_equipment_contract
 from sagasmith_dnd.vocabulary import PREPARED_SELECTION_MODES
 
 FULL_CASTER_SLOTS: dict[int, tuple[int, ...]] = {
@@ -558,12 +559,14 @@ def initialize_base_class(
         "tool_proficiencies",
         "weapon_proficiencies",
     }
-    optional_fields = {"tool_choice_count", "tool_options", "spellcasting"}
+    optional_fields = {"tool_choice_count", "tool_options", "spellcasting", "starting_equipment"}
     if (
         not expected_fields.issubset(definition)
         or set(definition) - expected_fields - optional_fields
     ):
         raise CombatEngineError("class_definition has missing or unsupported fields")
+    if "starting_equipment" in definition:
+        normalize_starting_equipment_contract(definition["starting_equipment"])
     hit_die = definition.get("hit_die")
     if isinstance(hit_die, bool) or not isinstance(hit_die, int) or hit_die not in {6, 8, 10, 12}:
         raise CombatEngineError("class hit_die must be one of 6, 8, 10, or 12")

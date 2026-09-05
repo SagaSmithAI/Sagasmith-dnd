@@ -24,6 +24,7 @@ from sagasmith_dnd.character_schema import (
     normalize_feature_casting_overrides,
     normalize_spell_definition,
 )
+from sagasmith_dnd.starting_equipment import normalize_starting_equipment_contract
 
 CATALOG_REVIEW_SCHEMA_VERSION = 1
 SELECTION_CONTRACT_SCHEMA_VERSION = 2
@@ -309,6 +310,8 @@ def selection_schema_for_artifact(artifact: Mapping[str, Any]) -> dict[str, Any]
     # otherwise ignored spell grants can be falsely approved as executable.
     _validate_materializer_card(kind, card_value if kind == "subclass" else binding)
     selection_fields = list(_SELECTION_FIELDS[kind])
+    if kind == "class" and "starting_equipment" in dict(card_value.get("class_definition") or {}):
+        selection_fields.append("starting_equipment")
     if kind in {"feat", "feature"}:
         dynamic_fields = _dynamic_selection_fields(kind, card_value)
         selection_fields = sorted(set(selection_fields) | set(dynamic_fields))
@@ -1624,7 +1627,7 @@ def _validate_materializer_card(kind: str, binding: Mapping[str, Any]) -> None:
             "tool_proficiencies",
             "weapon_proficiencies",
         }
-        optional = {"tool_choice_count", "tool_options", "spellcasting"}
+        optional = {"tool_choice_count", "tool_options", "spellcasting", "starting_equipment"}
         if not expected.issubset(definition) or set(definition) - expected - optional:
             raise ValueError("class_definition has missing or unsupported fields")
         hit_die = definition.get("hit_die")
@@ -1690,6 +1693,8 @@ def _validate_materializer_card(kind: str, binding: Mapping[str, Any]) -> None:
                 definition["spellcasting"],
                 "class class_definition.spellcasting",
             )
+        if "starting_equipment" in definition:
+            normalize_starting_equipment_contract(definition["starting_equipment"])
     elif kind == "species":
         if not isinstance(binding.get("grants"), Mapping):
             raise ValueError("species card needs grants")
