@@ -1026,19 +1026,10 @@ to hit, reach 5 ft., one target. *Hit:* 1d8 + PB force damage.
     asyncio.run(exercise())
 
 
-@pytest.mark.fresh_database
-def test_dependent_actor_feature_binding_is_atomic_unique_and_restart_safe(
-    tmp_path: Path,
-) -> None:
-    workspace = Path(__file__).resolve().parents[3]
-    config = McpConfig(
-        home=tmp_path / "home",
-        database_url=None,
-        chroma_url=None,
-        chroma_path_override=None,
-        dnd_skills_dir=workspace / "skills",
-        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
-    )
+def _bound_defender_fixture_artifacts(
+    *, owner_death: str = "independent",
+) -> tuple[dict, dict, str, str]:
+    """Reuse the reviewed synthetic source without running the full play scenario."""
     source_text = (
         "### Steel Defender\n\n*Medium construct, neutral*\n\n"
         "**Armor Class** 15 (natural armor)\n\n"
@@ -1084,6 +1075,12 @@ def test_dependent_actor_feature_binding_is_atomic_unique_and_restart_safe(
         "feature_artifact_id": feature_id,
         "relation_key": "steel_defender",
     }
+    requirement["lifecycle_policy"] = {"schema_version": 1, "owner_death": owner_death}
+    lifecycle_description = (
+        "In this synthetic variant, the companion perishes when its owner dies."
+        if owner_death == "perish" else
+        "In this synthetic variant, the owner's death does not kill the companion."
+    )
     artifact = {
         "id": "dnd5e.addon.binding.statblock.steel-defender",
         "rule_definition_id": "dnd5e.addon.binding",
@@ -1132,6 +1129,7 @@ def test_dependent_actor_feature_binding_is_atomic_unique_and_restart_safe(
         "Mechanics and choices for Steel Defender Entitlement were reviewed for this fixture.\n\n"
         "## Steel Defender\n\n"
         "Mechanics and choices for Steel Defender were reviewed for this fixture."
+        "\n\n" + lifecycle_description
     )
     fixture_source_checksum = hashlib.sha256(fixture_source_text.encode()).hexdigest()
     fixture_chunk_key = rule_chunk_key(fixture_source_key, 0, 0, fixture_source_text)
@@ -1191,7 +1189,7 @@ def test_dependent_actor_feature_binding_is_atomic_unique_and_restart_safe(
         ],
         "card": {
             "name": "Steel Defender Entitlement",
-            "description": "Authorizes one bound Steel Defender.",
+            "description": "Authorizes one bound Steel Defender. " + lifecycle_description,
             "minimum_level": 1,
             "repeatable_selection_levels": [],
             "selection_requirements": {},
@@ -1213,6 +1211,28 @@ def test_dependent_actor_feature_binding_is_atomic_unique_and_restart_safe(
             _review_decision("critic", "agent:binding-critic"),
         ],
     )
+
+    return artifact, feature_artifact, fixture_source_key, fixture_source_text
+
+
+@pytest.mark.fresh_database
+def test_dependent_actor_feature_binding_is_atomic_unique_and_restart_safe(
+    tmp_path: Path,
+) -> None:
+    workspace = Path(__file__).resolve().parents[3]
+    config = McpConfig(
+        home=tmp_path / "home",
+        database_url=None,
+        chroma_url=None,
+        chroma_path_override=None,
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
+    )
+    artifact, feature_artifact, fixture_source_key, fixture_source_text = (
+        _bound_defender_fixture_artifacts(owner_death="perish")
+    )
+    feature_id = feature_artifact["id"]
+    requirement = artifact["card"]["dependent_actor_template"]
 
     async def exercise() -> tuple[str, str, str, dict]:
         server = create_server(config)
@@ -1519,6 +1539,7 @@ def test_dependent_actor_feature_binding_is_atomic_unique_and_restart_safe(
                 "template_variant": None,
                 "numeric_parameters": binding["numeric_parameters"],
                 "reviewed_expression_hash": binding["reviewed_expression_hash"],
+                "lifecycle_policy": {"schema_version": 1, "owner_death": "perish"},
             }
 
             initial_defender = created["character"]
@@ -1613,6 +1634,8 @@ def test_dependent_actor_feature_binding_is_atomic_unique_and_restart_safe(
             refreshed_authorization = dict(refreshed_binding["authorization"])
             assert "authorization" not in refreshed_authorization
             assert refreshed_authorization["numeric_parameters"]["owner_proficiency_bonus"] == 3
+            assert refreshed_binding["lifecycle_policy"] == binding["lifecycle_policy"]
+            assert refreshed_authorization["lifecycle_policy"] == binding["lifecycle_policy"]
             assert await _call(server, "character_state_change", level_five_arguments) == level_five
             assert (
                 await _call(

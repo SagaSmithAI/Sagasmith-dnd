@@ -668,17 +668,21 @@ def test_finalized_combat_grid_template_starts_isolated_encounter_map(tmp_path: 
                         "actor_id": target_mover["id"],
                         "position": {"x": 0, "y": 3},
                         "deployment_zone_id": "party",
+                        # This scenario verifies map isolation, not random ties.
+                        "initiative": 20,
                     },
                     {
                         "actor_id": target_threat["id"],
                         "position": {"x": 5, "y": 0},
                         "deployment_zone_id": "hostile",
+                        "initiative": 10,
                     },
                 ],
                 "expected_revision": target_state["revision"],
                 "idempotency_key": "target-combat",
             },
         )
+        assert "combat" in target_combat, target_combat
         target_map = target_combat["combat"]["battle_map"]
         assert target_map["id"] != battle_map["id"]
         assert target_map["authority_receipt"]["package_checksum"] == package_after["checksum"]

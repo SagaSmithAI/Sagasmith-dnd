@@ -155,10 +155,10 @@
   "packages": [
     {
       "id": "dnd5e.addon.rulebook.d-d-5e-eberron-rising-from-the-last-war.31293633134f.addon",
-      "version": "1.0.6-local.starting-equipment.1",
-      "checksum": "af6b2cd22af81f9e5e14ba9f4d5d18c3b959f174576cc36ec2a9730d1a93c88e",
-      "archive_sha256": "6189467c53b675d39cc3eddd8de74932040ee2e2a9024a187b9dfd80f76b8cd4",
-      "local_repair": {"source_archive_sha256": "19ae3b071dfd25f0133c6159190e62fe4ae480299611e8ee8893106053c5038b", "steps": ["subclass_grants", "artificer_asi", "artificer_context", "steel_defender_citation", "steel_defender_owner_binding", "artificer_starting_equipment"]},
+      "version": "1.0.7-local.steel-defender-lifecycle.1",
+      "checksum": "3b201a87420230af35d910f2d11eec0cd1d5399c5d9b7d51120ebfd74d565b4d",
+      "archive_sha256": "1196e53ae9c706bfdb80bf0576fca0f8b0dcf0c5915790f58745d91b54281942",
+      "local_repair": {"source_archive_sha256": "19ae3b071dfd25f0133c6159190e62fe4ae480299611e8ee8893106053c5038b", "steps": ["subclass_grants", "artificer_asi", "artificer_context", "steel_defender_citation", "steel_defender_owner_binding", "artificer_starting_equipment", "steel_defender_lifecycle_policy"]},
       "publication_id": "erlw2014",
       "title": "D&D 5E - Eberron - Rising from the Last War",
       "classification": "official_supplement",

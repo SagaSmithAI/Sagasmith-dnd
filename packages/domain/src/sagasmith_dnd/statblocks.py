@@ -23,6 +23,7 @@ from sagasmith_dnd.character_schema import (
     default_character_sheet,
     validate_character_sheet,
 )
+from sagasmith_dnd.dependent_actor_lifecycle import dependent_actor_lifecycle_policy
 from sagasmith_dnd.engine import ability_modifier
 from sagasmith_dnd.resolution_plan import (
     ResolutionPlanCompilationError,
@@ -5657,6 +5658,13 @@ def dependent_actor_template_solution_errors(
                 or len(relation_key) > 200
             ):
                 errors.append("dependent actor template owner_binding is invalid")
+    # Historical numeric templates remain readable for explicit source repair.
+    # Missing lifecycle review is rejected at execution, not guessed here.
+    if "lifecycle_policy" in requirement:
+        try:
+            dependent_actor_lifecycle_policy(requirement)
+        except ValueError as error:
+            errors.append(str(error))
     if requirement.get("runtime_ready") is not True:
         errors.append("dependent actor template is not runtime-ready")
     return errors

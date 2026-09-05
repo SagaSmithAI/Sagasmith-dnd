@@ -6,6 +6,8 @@ import re
 from copy import deepcopy
 from typing import Any
 
+from sagasmith_dnd.dependent_actor_lifecycle import validate_steel_defender_lifecycle_policy
+
 _FIELDS = frozenset(
     {
         "owner_character_id",
@@ -64,9 +66,14 @@ def _text(value: Any, field: str, *, maximum: int = 500) -> str:
     return normalized
 
 
-def _template_binding(value: Any, field: str) -> dict[str, Any]:
-    if not isinstance(value, dict) or set(value) != _TEMPLATE_BINDING_FIELDS:
+def _template_binding(value: Any, field: str, *, relation_key: str) -> dict[str, Any]:
+    lifecycle_fields = {"lifecycle_policy"} if relation_key == "steel_defender" else set()
+    if not isinstance(value, dict) or set(value) != _TEMPLATE_BINDING_FIELDS | lifecycle_fields:
         raise ValueError(f"{field} must contain exactly the template binding fields")
+    lifecycle_policy = (
+        validate_steel_defender_lifecycle_policy(value["lifecycle_policy"])
+        if lifecycle_fields else None
+    )
     owner_class_name = value["owner_class_name"]
     if owner_class_name is not None:
         owner_class_name = _text(owner_class_name, f"{field}.owner_class_name", maximum=200)
@@ -100,9 +107,18 @@ def _template_binding(value: Any, field: str) -> dict[str, Any]:
     ):
         raise ValueError(f"{field}.reviewed_expression_hash must be a SHA-256 hex digest")
     authorization = value["authorization"]
-    if not isinstance(authorization, dict) or set(authorization) != _AUTHORIZATION_FIELDS:
+    if not isinstance(authorization, dict) or set(authorization) != (
+        _AUTHORIZATION_FIELDS | lifecycle_fields
+    ):
         raise ValueError(f"{field}.authorization must contain exactly the authority fields")
-    payload = {key: deepcopy(authorization[key]) for key in _AUTHORIZATION_PAYLOAD_FIELDS}
+    payload = {
+        key: deepcopy(authorization[key])
+        for key in _AUTHORIZATION_PAYLOAD_FIELDS | lifecycle_fields
+    }
+    if lifecycle_fields and (
+        validate_steel_defender_lifecycle_policy(payload["lifecycle_policy"]) != lifecycle_policy
+    ):
+        raise ValueError(f"{field}.authorization.lifecycle_policy does not match binding")
     if (
         isinstance(payload["schema_version"], bool)
         or not isinstance(payload["schema_version"], int)
@@ -139,6 +155,7 @@ def _template_binding(value: Any, field: str) -> dict[str, Any]:
         "template_variant": template_variant,
         "numeric_parameters": numeric_parameters,
         "reviewed_expression_hash": reviewed_expression_hash,
+        **({"lifecycle_policy": lifecycle_policy} if lifecycle_fields else {}),
         "authorization": deepcopy(authorization),
     }
 
@@ -176,6 +193,7 @@ def validate_dependent_actor_relations(value: Any) -> list[dict[str, Any]]:
         relation["template_binding"] = _template_binding(
             relation["template_binding"],
             f"dependent_actor_relations[{index}].template_binding",
+            relation_key=relation["relation_key"],
         )
         revision = relation["created_campaign_revision"]
         if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:

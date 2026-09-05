@@ -16,10 +16,14 @@ from sagasmith_dnd_mcp.config import McpConfig
 from sagasmith_dnd_mcp.server import close_server, create_server
 from scripts.regression_official_expansions import _ProtocolTools
 from tests.test_official_expansions_mcp import _call, _locked_official_library, _selection_for
+from tests.test_steel_defender_lifecycle_mcp import (
+    _exercise_defender_lifecycle,
+    _exercise_owner_death,
+)
 
 _PREFIX = "dnd5e.addon.rulebook.d-d-5e-eberron-rising-from-the-last-war.31293633134f"
-_VERSION = "1.0.6-local.starting-equipment.1"
-_RULE_VERSION = "1.0.4-local.starting-equipment.1"
+_VERSION = "1.0.7-local.steel-defender-lifecycle.1"
+_RULE_VERSION = "1.0.5-local.steel-defender-lifecycle.1"
 _CLASS = _PREFIX + ".class.artificer"
 _DEFENDER = _PREFIX + ".statblock.steel-defender"
 _SRD = "dnd5e.content.srd2014."
@@ -361,6 +365,17 @@ def test_locked_artificer_build_creates_and_commands_defender(tmp_path: Path) ->
                 _PREFIX + ".feature." + feature for feature in _FEATURES
             }
             assert len(owner["sheet"]["inventory"]["items"]) == 7
+            # Starting equipment supplies thieves' tools, not smith's tools;
+            # proficiency alone must not create an item. For this lifecycle
+            # encounter the DM awards one real SRD tool artifact via public
+            # content application. This does not exercise Right Tool for the Job.
+            assert not any(item["name"].casefold() == "smith's tools"
+                           for item in owner["sheet"]["inventory"]["items"])
+            await apply(_SRD + "item.smith-s-tools")
+            tools = [item for item in owner["sheet"]["inventory"]["items"]
+                     if item["source_key"] == _SRD + "item.smith-s-tools"]
+            assert len(tools) == 1 and tools[0]["quantity"] == 1
+            assert tools[0]["weight_oz"] == 128
             create_request = {
                 "campaign_id": campaign["id"], "artifact_id": _DEFENDER,
                 "owner_character_id": owner["id"],
@@ -375,6 +390,9 @@ def test_locked_artificer_build_creates_and_commands_defender(tmp_path: Path) ->
             assert relation["source_pack_version"] == _RULE_VERSION
             assert relation["owner_character_id"] == owner["id"]
             assert relation["dependent_actor_id"] == defender["id"]
+            assert relation["template_binding"]["lifecycle_policy"] == {
+                "schema_version": 1, "owner_death": "independent",
+            }
             before = await current()
             with pytest.raises(ToolError):
                 await _call(server, "addon_actor_instantiate", {
@@ -385,6 +403,13 @@ def test_locked_artificer_build_creates_and_commands_defender(tmp_path: Path) ->
             repair_request, repaired, attack_request, attack = await _exercise_defender_combat(
                 server, campaign["id"], owner, defender,
             )
+            lifecycle_replays, lifecycle_final = await _exercise_defender_lifecycle(
+                server, campaign["id"], owner, defender,
+            )
+            owner_death_replay, lifecycle_final = await _exercise_owner_death(
+                server, campaign["id"], owner, defender, owner_death="independent",
+            )
+            lifecycle_replays.append(owner_death_replay)
             final = await _call(server, "character_query", {
                 "view": "get", "payload": {"character_id": defender["id"]},
             })
@@ -402,6 +427,11 @@ def test_locked_artificer_build_creates_and_commands_defender(tmp_path: Path) ->
             assert await _call(server, "addon_actor_instantiate", create_request) == created
             assert await server.call_tool("combat_use_activity", repair_request) == repaired
             assert await server.call_tool("combat_resolve_attack", attack_request) == attack
+            for tool, request, response in lifecycle_replays:
+                assert await server.call_tool(tool, request) == response
+            assert await _call(server, "character_query", {
+                "view": "get", "payload": {"character_id": owner["id"]},
+            }) == lifecycle_final[1]
             assert await current() == final_campaign
         finally:
             await sessions.aclose()

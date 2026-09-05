@@ -31,6 +31,7 @@ def relation(**overrides):
                 "owner_proficiency_bonus": 3,
             },
             "reviewed_expression_hash": "a" * 64,
+            "lifecycle_policy": {"schema_version": 1, "owner_death": "independent"},
             "authorization": {
                 "schema_version": 1,
                 "purpose": "dependent_actor_template",
@@ -49,6 +50,7 @@ def relation(**overrides):
                     "owner_proficiency_bonus": 3,
                 },
                 "reviewed_expression_hash": "a" * 64,
+                "lifecycle_policy": {"schema_version": 1, "owner_death": "independent"},
                 "signature": "b" * 64,
             },
         },

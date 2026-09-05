@@ -17,6 +17,7 @@ import repair_artificer_asi
 import repair_artificer_context
 import repair_artificer_starting_equipment
 import repair_steel_defender_citation
+import repair_steel_defender_lifecycle_policy
 import repair_steel_defender_owner_binding
 import repair_subclass_grants
 from sagasmith_core.content_pack import loads_content_archive
@@ -33,6 +34,7 @@ _STEPS = {
     "steel_defender_citation": repair_steel_defender_citation.repair_archive,
     "steel_defender_owner_binding": repair_steel_defender_owner_binding.repair_archive,
     "artificer_starting_equipment": repair_artificer_starting_equipment.repair_archive,
+    "steel_defender_lifecycle_policy": repair_steel_defender_lifecycle_policy.repair_archive,
 }
 
 

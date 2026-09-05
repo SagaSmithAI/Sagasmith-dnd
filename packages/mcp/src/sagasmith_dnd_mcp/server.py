@@ -317,6 +317,7 @@ from sagasmith_dnd.core_content_2024 import (
 )
 from sagasmith_dnd.core_content_2024 import build_srd2024_content
 from sagasmith_dnd.core_rule_pack import get_core_rule_pack
+from sagasmith_dnd.dependent_actor_lifecycle import dependent_actor_lifecycle_policy
 from sagasmith_dnd.dependent_actor_refresh import (
     STEEL_DEFENDER_RELATION_KEY,
     STEEL_DEFENDER_REVIEWED_EXPRESSION_HASH,
@@ -4823,6 +4824,37 @@ class RequestScopedMCPServer(MCPServer):
         return updated_content, updated_structured
 
     @staticmethod
+    def _canonicalize_structured_text(result: Any) -> Any:
+        """Render the JSON mirror independently of persisted dictionary order."""
+        if isinstance(result, CallToolResult):
+            content, structured = result.content, result.structured_content
+        elif isinstance(result, tuple) and len(result) == 2:
+            content, structured = result
+        else:
+            return result
+        if not isinstance(structured, dict):
+            return result
+        updated = []
+        for item in content:
+            if isinstance(item, TextContent):
+                try:
+                    decoded = json.loads(item.text)
+                except json.JSONDecodeError:
+                    decoded = None
+                # Only normalize the structured JSON mirror, never narrative
+                # text, images, resource blocks, or unrelated JSON content.
+                if decoded == structured:
+                    item = item.model_copy(update={
+                        "text": json.dumps(
+                            structured, ensure_ascii=False, sort_keys=True, indent=2,
+                        ),
+                    })
+            updated.append(item)
+        if isinstance(result, CallToolResult):
+            return result.model_copy(update={"content": updated})
+        return updated, structured
+
+    @staticmethod
     def _ensure_text_fallback(result: Any) -> Any:
         """Keep legacy clients useful when a structured result is empty/list-shaped."""
 
@@ -5392,6 +5424,7 @@ class RequestScopedMCPServer(MCPServer):
             return self._structured_tool_error(message)
         result = self._ensure_text_fallback(result)
         result = self._attach_random_receipt(result, random_receipt)
+        result = self._canonicalize_structured_text(result)
         if (
             legacy_request is not None
             and name == "exposure"
@@ -13953,6 +13986,7 @@ def _create_server(
             invalid_error="dependent actor template authorization signature is invalid",
         )
         expected_hash = str(dict(requirement["solution"])["reviewed_expression_hash"])
+        lifecycle_policy = dependent_actor_lifecycle_policy(requirement)
         if binding["reviewed_expression_hash"] != expected_hash:
             raise ValueError("dependent actor template relation hash is stale")
         expected = {
@@ -13970,6 +14004,7 @@ def _create_server(
             "template_variant": binding["template_variant"],
             "numeric_parameters": binding["numeric_parameters"],
             "reviewed_expression_hash": expected_hash,
+            **({"lifecycle_policy": lifecycle_policy} if lifecycle_policy is not None else {}),
         }
         # The relation's authorization is a server-signed canonical envelope.
         # Compare the verified payload exactly: accepting omitted or extra keys
@@ -14572,6 +14607,12 @@ def _create_server(
                             "reviewed_expression_hash": refreshed_binding[
                                 "reviewed_expression_hash"
                             ],
+                            **(
+                                {"lifecycle_policy": deepcopy(
+                                    refreshed_binding["lifecycle_policy"],
+                                )}
+                                if "lifecycle_policy" in refreshed_binding else {}
+                            ),
                         },
                         content_authority_secret,
                     )
@@ -15167,12 +15208,17 @@ def _create_server(
             dependent_sheet = actor_sheet(dependent_id)
             owner_dead = "dead" in condition_ids(owner_sheet.get("conditions"))
             dependent_dead = "dead" in condition_ids(dependent_sheet.get("conditions"))
+            # _verified_steel_defender_relation has just compared this signed
+            # policy with the unique currently activated source template.
+            owner_perishing = owner_dead and (
+                relation["template_binding"]["lifecycle_policy"]["owner_death"] == "perish"
+            )
 
             if relation["status"] == "active":
-                if not owner_dead and not dependent_dead:
+                if not owner_perishing and not dependent_dead:
                     continue
-                reason = "owner_died" if owner_dead else "defender_died"
-                if owner_dead:
+                reason = "owner_died" if owner_perishing else "defender_died"
+                if owner_perishing:
                     try:
                         dependent_sheet = kill_steel_defender_when_owner_dies(
                             owner_sheet,
@@ -15201,7 +15247,7 @@ def _create_server(
 
             pending_start = relation["revival_started_elapsed_ticks"]
             pending_due = relation["revival_completes_elapsed_ticks"]
-            if owner_dead:
+            if owner_perishing:
                 if pending_start is not None:
                     relations[relation_index] = {
                         **relation,
@@ -44258,6 +44304,11 @@ def _create_server(
                 dependent_template = deepcopy(dict(card.get("dependent_actor_template") or {}))
                 if dependent_template:
                     solution = dict(dependent_template.get("solution") or {})
+                    runtime_errors = dependent_actor_template_solution_errors(dependent_template)
+                    try:
+                        dependent_actor_lifecycle_policy(dependent_template)
+                    except ValueError as exc:
+                        runtime_errors.append(str(exc))
                     selection_requirements = {
                         "fields": [
                             "owner_character_id",
@@ -44284,9 +44335,7 @@ def _create_server(
                         "source_statblock_name": name,
                         "source_resolution": "reviewed_addon_artifact",
                         "normalization_authority": "engine",
-                        "runtime_ready": not dependent_actor_template_solution_errors(
-                            dependent_template
-                        ),
+                        "runtime_ready": not runtime_errors,
                         "dependent_actor_template": dependent_template,
                     }
                 else:
@@ -52324,6 +52373,7 @@ boundary.
                 "dependent actor template is not runtime-ready: " + "; ".join(solution_errors)
             )
         owner_binding = dependent_actor_owner_binding(requirement)
+        lifecycle_policy = dependent_actor_lifecycle_policy(requirement)
         dependent_actor_authorization: dict[str, Any] | None = None
         if owner_binding is not None:
             feature_matches = [
@@ -52656,6 +52706,7 @@ boundary.
             "reviewed_expression_hash": str(
                 dict(requirement["solution"])["reviewed_expression_hash"]
             ),
+            **({"lifecycle_policy": lifecycle_policy} if lifecycle_policy is not None else {}),
         }
         template_binding["authorization"] = sign_receipt(
             {
@@ -54509,6 +54560,20 @@ boundary.
         )
         defender = require_campaign_actor(owner.campaign_id, dependent_actor_id)
         start_tick = int(dict(state["game_time"])["elapsed_ticks"])
+        # The action and slot are paid at the start, not after effects expire
+        # during the revival delay. Keep payment on a copy until the atomic commit.
+        try:
+            started = begin_steel_defender_revival(
+                owner.sheet,
+                defender.sheet,
+                relation=relation,
+                elapsed_ticks=start_tick,
+                distance_ft=float(distance_ft),
+                slot_level=slot_level,
+                action_available=True,
+            )
+        except SteelDefenderError as error:
+            raise CombatEngineError(str(error)) from error
         state, time_transition = advance_state_game_time(state, elapsed_ticks=10)
         world_duration = advance_world_effect_clocks(
             state,
@@ -54524,7 +54589,7 @@ boundary.
         rules = effective_rule_context(owner.campaign_id)
         for character in all_characters:
             round_duration = advance_effect_durations(
-                character.sheet,
+                started["owner_sheet"] if character.id == owner.id else character.sheet,
                 period="round",
                 amount=10,
             )
@@ -54559,27 +54624,7 @@ boundary.
                 advanced[character.id] = list(dict.fromkeys(actor_advanced))
             if actor_expired:
                 expired[character.id] = list(dict.fromkeys(actor_expired))
-        try:
-            started = begin_steel_defender_revival(
-                timed_sheets[owner.id],
-                timed_sheets[defender.id],
-                relation=relation,
-                elapsed_ticks=start_tick,
-                distance_ft=float(distance_ft),
-                slot_level=slot_level,
-                action_available=True,
-            )
-            completed = complete_steel_defender_revival(
-                started["defender_sheet"],
-                started["pending_revival"],
-                elapsed_ticks=int(dict(state["game_time"])["elapsed_ticks"]),
-            )
-        except SteelDefenderError as error:
-            raise CombatEngineError(str(error)) from error
-        if completed["status"] != "committed":
-            raise CombatEngineError("Steel Defender revival did not reach its one-minute boundary")
-        timed_sheets[owner.id] = validate_character_sheet(started["owner_sheet"])
-        timed_sheets[defender.id] = validate_character_sheet(completed["sheet"])
+        timed_sheets[owner.id] = validate_character_sheet(timed_sheets[owner.id])
         rule_receipts.append(
             {
                 "mechanic_id": "dnd5e.expansion.steel_defender.revival",
@@ -54600,10 +54645,10 @@ boundary.
         )
         relations[relation_index] = {
             **relation,
-            "status": "active",
-            "death_elapsed_ticks": None,
-            "revival_started_elapsed_ticks": None,
-            "revival_completes_elapsed_ticks": None,
+            "revival_started_elapsed_ticks": started["pending_revival"]["started_elapsed_ticks"],
+            "revival_completes_elapsed_ticks": (
+                started["pending_revival"]["completes_elapsed_ticks"]
+            ),
         }
         state["dependent_actor_relations"] = validate_dependent_actor_relations(relations)
         reconciled = reconcile_source_effect_dependencies(timed_sheets)
@@ -54620,6 +54665,14 @@ boundary.
             for character in all_characters
             if timed_sheets[character.id] != character.sheet
         ]
+        # Use the same due-revival/death ordering as combat and clock advancement.
+        # A source event may kill the owner during the delay; payment and time
+        # still settle, but owner death must cancel the pending defender revival.
+        state, updates, _ = reconcile_steel_defender_deaths(
+            campaign, state, updates, {}, branch_id=branch_id,
+        )
+        for update in updates:
+            timed_sheets[update.character_id] = update.sheet
         owner_after = replace(
             owner,
             sheet=validate_character_sheet(timed_sheets[owner.id]),
