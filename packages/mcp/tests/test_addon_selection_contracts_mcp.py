@@ -1026,19 +1026,8 @@ to hit, reach 5 ft., one target. *Hit:* 1d8 + PB force damage.
     asyncio.run(exercise())
 
 
-@pytest.mark.fresh_database
-def test_dependent_actor_feature_binding_is_atomic_unique_and_restart_safe(
-    tmp_path: Path,
-) -> None:
-    workspace = Path(__file__).resolve().parents[3]
-    config = McpConfig(
-        home=tmp_path / "home",
-        database_url=None,
-        chroma_url=None,
-        chroma_path_override=None,
-        dnd_skills_dir=workspace / "skills",
-        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
-    )
+def _bound_defender_fixture_artifacts() -> tuple[dict, dict, str, str]:
+    """Reuse the reviewed synthetic source without running the full play scenario."""
     source_text = (
         "### Steel Defender\n\n*Medium construct, neutral*\n\n"
         "**Armor Class** 15 (natural armor)\n\n"
@@ -1213,6 +1202,28 @@ def test_dependent_actor_feature_binding_is_atomic_unique_and_restart_safe(
             _review_decision("critic", "agent:binding-critic"),
         ],
     )
+
+    return artifact, feature_artifact, fixture_source_key, fixture_source_text
+
+
+@pytest.mark.fresh_database
+def test_dependent_actor_feature_binding_is_atomic_unique_and_restart_safe(
+    tmp_path: Path,
+) -> None:
+    workspace = Path(__file__).resolve().parents[3]
+    config = McpConfig(
+        home=tmp_path / "home",
+        database_url=None,
+        chroma_url=None,
+        chroma_path_override=None,
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
+    )
+    artifact, feature_artifact, fixture_source_key, fixture_source_text = (
+        _bound_defender_fixture_artifacts()
+    )
+    feature_id = feature_artifact["id"]
+    requirement = artifact["card"]["dependent_actor_template"]
 
     async def exercise() -> tuple[str, str, str, dict]:
         server = create_server(config)

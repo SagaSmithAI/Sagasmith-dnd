@@ -5,6 +5,7 @@ from copy import deepcopy
 
 import pytest
 from mcp.types import CallToolResult, TextContent
+from sagasmith_core.idempotency import _public_response, _stored_response
 
 from sagasmith_dnd_mcp.server import RequestScopedMCPServer
 
@@ -40,3 +41,34 @@ def test_attach_preserves_persisted_receipt_location(legacy_tuple, placement):
     assert payload == original
     # No new draw on an idempotent replay: do not synthesize a new receipt.
     assert RequestScopedMCPServer._attach_random_receipt(attached, None) == attached
+
+
+@pytest.mark.parametrize("legacy_tuple", [False, True])
+def test_compressed_replay_json_mirror_is_byte_stable(legacy_tuple):
+    payload = {"z": "compressible fixture " * 5000, "a": {"z": 1, "a": 2}}
+    stored = _stored_response(payload)
+    assert stored["_sagasmith_encoding"] == "sagasmith.idempotency.response+zlib.v1"
+    replay = _public_response(stored)
+    assert replay == payload and list(replay) != list(payload)
+    narrative = TextContent(type="text", text="Leave this narrative unchanged.")
+    unrelated = TextContent(type="text", text='{"separate": "document"}')
+    outputs = []
+    for value in (payload, replay):
+        content = [TextContent(type="text", text=json.dumps(value, indent=2)),
+                   narrative, unrelated]
+        result = (content, value) if legacy_tuple else CallToolResult(
+            content=content, structured_content=value, _meta={"fixture": "preserved"},
+        )
+        original = deepcopy(result)
+        normalized = RequestScopedMCPServer._canonicalize_structured_text(result)
+        actual_content, actual = normalized if legacy_tuple else (
+            normalized.content, normalized.structured_content,
+        )
+        assert result == original
+        assert actual == payload
+        assert json.loads(actual_content[0].text) == actual
+        assert actual_content[1:] == [narrative, unrelated]
+        if not legacy_tuple:
+            assert normalized.meta == result.meta
+        outputs.append(normalized)
+    assert outputs[0] == outputs[1]

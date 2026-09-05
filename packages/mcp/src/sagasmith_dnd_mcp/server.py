@@ -4823,6 +4823,37 @@ class RequestScopedMCPServer(MCPServer):
         return updated_content, updated_structured
 
     @staticmethod
+    def _canonicalize_structured_text(result: Any) -> Any:
+        """Render the JSON mirror independently of persisted dictionary order."""
+        if isinstance(result, CallToolResult):
+            content, structured = result.content, result.structured_content
+        elif isinstance(result, tuple) and len(result) == 2:
+            content, structured = result
+        else:
+            return result
+        if not isinstance(structured, dict):
+            return result
+        updated = []
+        for item in content:
+            if isinstance(item, TextContent):
+                try:
+                    decoded = json.loads(item.text)
+                except json.JSONDecodeError:
+                    decoded = None
+                # Only normalize the structured JSON mirror, never narrative
+                # text, images, resource blocks, or unrelated JSON content.
+                if decoded == structured:
+                    item = item.model_copy(update={
+                        "text": json.dumps(
+                            structured, ensure_ascii=False, sort_keys=True, indent=2,
+                        ),
+                    })
+            updated.append(item)
+        if isinstance(result, CallToolResult):
+            return result.model_copy(update={"content": updated})
+        return updated, structured
+
+    @staticmethod
     def _ensure_text_fallback(result: Any) -> Any:
         """Keep legacy clients useful when a structured result is empty/list-shaped."""
 
@@ -5392,6 +5423,7 @@ class RequestScopedMCPServer(MCPServer):
             return self._structured_tool_error(message)
         result = self._ensure_text_fallback(result)
         result = self._attach_random_receipt(result, random_receipt)
+        result = self._canonicalize_structured_text(result)
         if (
             legacy_request is not None
             and name == "exposure"
@@ -54509,6 +54541,20 @@ boundary.
         )
         defender = require_campaign_actor(owner.campaign_id, dependent_actor_id)
         start_tick = int(dict(state["game_time"])["elapsed_ticks"])
+        # The action and slot are paid at the start, not after effects expire
+        # during the revival delay. Keep payment on a copy until the atomic commit.
+        try:
+            started = begin_steel_defender_revival(
+                owner.sheet,
+                defender.sheet,
+                relation=relation,
+                elapsed_ticks=start_tick,
+                distance_ft=float(distance_ft),
+                slot_level=slot_level,
+                action_available=True,
+            )
+        except SteelDefenderError as error:
+            raise CombatEngineError(str(error)) from error
         state, time_transition = advance_state_game_time(state, elapsed_ticks=10)
         world_duration = advance_world_effect_clocks(
             state,
@@ -54524,7 +54570,7 @@ boundary.
         rules = effective_rule_context(owner.campaign_id)
         for character in all_characters:
             round_duration = advance_effect_durations(
-                character.sheet,
+                started["owner_sheet"] if character.id == owner.id else character.sheet,
                 period="round",
                 amount=10,
             )
@@ -54559,27 +54605,7 @@ boundary.
                 advanced[character.id] = list(dict.fromkeys(actor_advanced))
             if actor_expired:
                 expired[character.id] = list(dict.fromkeys(actor_expired))
-        try:
-            started = begin_steel_defender_revival(
-                timed_sheets[owner.id],
-                timed_sheets[defender.id],
-                relation=relation,
-                elapsed_ticks=start_tick,
-                distance_ft=float(distance_ft),
-                slot_level=slot_level,
-                action_available=True,
-            )
-            completed = complete_steel_defender_revival(
-                started["defender_sheet"],
-                started["pending_revival"],
-                elapsed_ticks=int(dict(state["game_time"])["elapsed_ticks"]),
-            )
-        except SteelDefenderError as error:
-            raise CombatEngineError(str(error)) from error
-        if completed["status"] != "committed":
-            raise CombatEngineError("Steel Defender revival did not reach its one-minute boundary")
-        timed_sheets[owner.id] = validate_character_sheet(started["owner_sheet"])
-        timed_sheets[defender.id] = validate_character_sheet(completed["sheet"])
+        timed_sheets[owner.id] = validate_character_sheet(timed_sheets[owner.id])
         rule_receipts.append(
             {
                 "mechanic_id": "dnd5e.expansion.steel_defender.revival",
@@ -54600,10 +54626,10 @@ boundary.
         )
         relations[relation_index] = {
             **relation,
-            "status": "active",
-            "death_elapsed_ticks": None,
-            "revival_started_elapsed_ticks": None,
-            "revival_completes_elapsed_ticks": None,
+            "revival_started_elapsed_ticks": started["pending_revival"]["started_elapsed_ticks"],
+            "revival_completes_elapsed_ticks": (
+                started["pending_revival"]["completes_elapsed_ticks"]
+            ),
         }
         state["dependent_actor_relations"] = validate_dependent_actor_relations(relations)
         reconciled = reconcile_source_effect_dependencies(timed_sheets)
@@ -54620,6 +54646,14 @@ boundary.
             for character in all_characters
             if timed_sheets[character.id] != character.sheet
         ]
+        # Use the same due-revival/death ordering as combat and clock advancement.
+        # A source event may kill the owner during the delay; payment and time
+        # still settle, but owner death must cancel the pending defender revival.
+        state, updates, _ = reconcile_steel_defender_deaths(
+            campaign, state, updates, {}, branch_id=branch_id,
+        )
+        for update in updates:
+            timed_sheets[update.character_id] = update.sheet
         owner_after = replace(
             owner,
             sheet=validate_character_sheet(timed_sheets[owner.id]),
