@@ -24,8 +24,8 @@ from tests.test_steel_defender_lifecycle_mcp import (
 )
 
 _PREFIX = "dnd5e.addon.rulebook.d-d-5e-eberron-rising-from-the-last-war.31293633134f"
-_VERSION = "1.0.8-local.infusion-source.1"
-_RULE_VERSION = "1.0.6-local.infusion-source.1"
+_VERSION = "1.0.8-local.infusion-source.2"
+_RULE_VERSION = "1.0.6-local.infusion-source.2"
 _CLASS = _PREFIX + ".class.artificer"
 _DEFENDER = _PREFIX + ".statblock.steel-defender"
 _SRD = "dnd5e.content.srd2014."
@@ -66,11 +66,14 @@ async def _read_infusion_source_framing(server, campaign_id: str) -> dict:
     assert text.index("REPLICABLE ITE M S (2N D-LEVEL ARTIFI CER)") < text.index(
         "REPLICABLE ITE M S (6TH-LEVEL ARTIFICER)"
     )
+    assert text.index("REPLICABLE ITE M S (6TH-LEVEL ARTIFICER)") < text.index(
+        "REPLICABLE ITEM S (lOT H-lEVEL ARTI FICER)"
+    ) < text.index("R E PLICABLE ITE M S (14T H - LEVEL ART I F I CER)")
     citations = replicate["rule_clauses"][0]["source_citations"]
-    assert len(citations) == 3
+    assert len(citations) == 4
     # Archive chunk keys are localized to runtime IDs during import.
     chunk_ids = [c["source_ref"]["chunk_id"] for c in citations]
-    assert len(set(chunk_ids)) == 3 and all(chunk_ids)
+    assert len(set(chunk_ids)) == 4 and all(chunk_ids)
     assert all(
         any(ref.endswith("#chunk:" + chunk_id) for ref in replicate["rule_refs"])
         for chunk_id in chunk_ids
@@ -79,6 +82,7 @@ async def _read_infusion_source_framing(server, campaign_id: str) -> dict:
         citations[0]["source_excerpt"],
         "REPLICABLE ITE M S (2N D-LEVEL ARTIFI CER)\n" + citations[1]["source_excerpt"],
         "REPLICABLE ITE M S (6TH-LEVEL ARTIFICER)\n" + citations[2]["source_excerpt"],
+        "REPLICABLE ITEM S (lOT H-lEVEL ARTI FICER)\n" + citations[3]["source_excerpt"],
     ])
     return contexts
 

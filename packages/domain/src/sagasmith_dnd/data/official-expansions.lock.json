@@ -155,9 +155,9 @@
   "packages": [
     {
       "id": "dnd5e.addon.rulebook.d-d-5e-eberron-rising-from-the-last-war.31293633134f.addon",
-      "version": "1.0.8-local.infusion-source.1",
-      "checksum": "48efac97391cccacd67aaa1a1371643705f43118defd688c7decaf283862112d",
-      "archive_sha256": "ce62f55c90938a7fe83076c012bd4230b1c23b24d425849bb6c1d1a12b108755",
+      "version": "1.0.8-local.infusion-source.2",
+      "checksum": "09b3b1f3882925d347a367a0a65baf70830ea56b64439fae02fa9a4fe6e6f907",
+      "archive_sha256": "bb1772429781cbeef343f0811d8d18486420727805ec8e52b79fdac0de20486d",
       "local_repair": {"source_archive_sha256": "19ae3b071dfd25f0133c6159190e62fe4ae480299611e8ee8893106053c5038b", "steps": ["subclass_grants", "artificer_asi", "artificer_context", "steel_defender_citation", "steel_defender_owner_binding", "artificer_starting_equipment", "steel_defender_lifecycle_policy", "artificer_infusion_source"]},
       "publication_id": "erlw2014",
       "title": "D&D 5E - Eberron - Rising from the Last War",

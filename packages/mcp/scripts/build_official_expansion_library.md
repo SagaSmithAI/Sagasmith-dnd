@@ -38,9 +38,13 @@ variant tests do not establish acceptance of a complete errata-edition package.
 The subsequent exact infusion-source repair corrects two card boundaries in that
 same older source. Enhanced Arcane Focus no longer includes the preceding Boots
 of the Winding Path text; its level-2 eligibility is preserved. Replicate Magic
-Item keeps the original level-2 and level-6 table headings next to their rows.
+Item keeps the original level-2 and level-6 table headings next to their rows and
+restores the missing source chunk containing the level-10 and level-14 tables.
+The level-10 heading is section metadata; the embedded level-14 heading stays
+inside its unmodified chunk body. Original references are retained, with that
+verified additional chunk appended to the card and its selection evidence.
 Descriptions, Agent evidence, per-chunk citations and review hashes agree, while
-source blobs, source identities, existing selections and mechanical fields remain
+source blobs, source identities, existing selection schemas and mechanical fields remain
 unchanged. The recipe checks the exact input archive, normalized asset, section
 titles and chunk hashes; it does not repair arbitrary PDFs or add infusion-item
 settlement, structured replication choices, tool casting or optional INT attacks.

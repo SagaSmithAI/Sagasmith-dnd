@@ -126,8 +126,8 @@ def test_eberron_repairs_are_ordered_and_exact_hash_bound():
         "1196e53ae9c706bfdb80bf0576fca0f8b0dcf0c5915790f58745d91b54281942"
     )
     assert infusion._PACKAGE_VERSION == target["version"]
-    assert infusion._DEFINITION_VERSION == "1.0.6-local.infusion-source.1"
-    assert set(infusion._SECTIONS) == {404, 416, 417, 418}
+    assert infusion._DEFINITION_VERSION == "1.0.6-local.infusion-source.2"
+    assert set(infusion._SECTIONS) == {404, 416, 417, 418, 419}
     with pytest.raises(ValueError, match="exact reviewed"):
         infusion.repair_archive(b"wrong archive")
 

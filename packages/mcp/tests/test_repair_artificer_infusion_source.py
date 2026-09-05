@@ -123,6 +123,67 @@ def test_synthetic_framing_preserves_level_and_rebinds_all_evidence():
     )
 
 
+@pytest.mark.parametrize("invalid_reference", [False, True])
+def test_missing_source_extension_preserves_old_refs_and_requires_exact_binding(invalid_reference):
+    artifact, section = _fixture()
+    artifact["rule_refs"] = [f"rule-source:{repair._SOURCE_KEY}#chunk:{section['chunk_key']}"]
+    artifact["selection_contract"] = build_selection_contract(
+        artifact,
+        status="ready",
+        references=[f"rule-source-chunk:{section['chunk_key']}"],
+    )
+    extra = {
+        "chunk_key": "fixture/later-chunk",
+        "title": "Synthetic higher level",
+        "text": "Synthetic later source table.",
+    }
+    if invalid_reference:
+        artifact["selection_contract"]["references"] = ["unrelated"]
+    before = deepcopy(artifact)
+    description = section["text"] + "\n\n" + extra["title"] + "\n" + extra["text"]
+
+    def rewrite():
+        repair._rewrite_card(
+            artifact,
+            [section],
+            name="Synthetic Focus",
+            old_description=section["text"],
+            description=description,
+            excerpts=[section["text"], extra["text"]],
+            additional_sections=[extra],
+        )
+
+    if invalid_reference:
+        with pytest.raises(ValueError, match="reference extension mismatch"):
+            rewrite()
+        assert artifact == before
+        return
+    rewrite()
+    assert artifact["source_refs"] == [
+        *before["source_refs"],
+        {
+            "source_key": repair._SOURCE_KEY,
+            "chunk_key": extra["chunk_key"],
+        },
+    ]
+    assert artifact["rule_refs"] == [
+        *before["rule_refs"],
+        f"rule-source:{repair._SOURCE_KEY}#chunk:{extra['chunk_key']}",
+    ]
+    assert artifact["selection_contract"]["references"] == [
+        *before["selection_contract"]["references"],
+        f"rule-source-chunk:{extra['chunk_key']}",
+    ]
+    assert [c["source_excerpt"] for c in artifact["rule_clauses"][0]["source_citations"]] == [
+        section["text"],
+        extra["text"],
+    ]
+    assert artifact["card"]["description"] == description
+    assert artifact["card"]["ruling_requirements"][0]["source_excerpt"] == description
+    assert artifact["selection_contract"]["schema"] == before["selection_contract"]["schema"]
+    assert selection_contract_errors(artifact) == catalog_review_errors(artifact) == []
+
+
 @pytest.mark.parametrize("change", ["level", "description", "ref", "citation", "ruling", "mode"])
 def test_unexpected_card_or_citation_fails_without_partial_rewrite(change):
     artifact, section = _fixture()
@@ -220,8 +281,12 @@ def test_private_exact_repair_changes_only_two_cards_and_preserves_source():
     assert "boots" in focus_before["card"]["description"].lower()
     assert "teleport" in focus_before["card"]["ruling_requirements"][0]["source_excerpt"].lower()
     sections = repair._source_sections(original, blobs)
-    titles = [sections[ordinal]["title"] for ordinal in (417, 418)]
+    titles = [sections[ordinal]["title"] for ordinal in (417, 418, 419)]
     assert all(title not in replicate_before["card"]["description"] for title in titles)
+    assert repair._FOURTEENTH_HEADING not in replicate_before["card"]["description"]
+    assert sections[419]["chunk_key"] not in {
+        ref["chunk_key"] for ref in replicate_before["source_refs"]
+    }
     output, report = repair.repair_archive(data)
     assert repair.repair_archive(data) == (output, report)
     changed, changed_blobs = loads_content_archive(output)
@@ -241,15 +306,39 @@ def test_private_exact_repair_changes_only_two_cards_and_preserves_source():
     assert text == "\n\n".join(
         [
             sections[416]["text"],
-            *(sections[n]["title"] + "\n" + sections[n]["text"] for n in (417, 418)),
+            *(sections[n]["title"] + "\n" + sections[n]["text"] for n in (417, 418, 419)),
         ]
     )
     assert text.index(titles[0]) < text.index(sections[417]["text"]) < text.index(titles[1])
+    assert text.index(titles[1]) < text.index(titles[2]) < text.index(repair._FOURTEENTH_HEADING)
+    assert text.count(repair._FOURTEENTH_HEADING) == 1
     for identifier in (focus_id, replicate_id):
         artifact, old = after[identifier], before[identifier]
         assert selection_contract_errors(artifact) == catalog_review_errors(artifact) == []
-        assert artifact["source_refs"] == old["source_refs"]
-        assert artifact["rule_refs"] == old["rule_refs"]
+        if identifier == focus_id:
+            assert artifact["source_refs"] == old["source_refs"]
+            assert artifact["rule_refs"] == old["rule_refs"]
+            assert (
+                artifact["selection_contract"]["references"]
+                == (old["selection_contract"]["references"])
+            )
+        else:
+            added_key = sections[419]["chunk_key"]
+            assert artifact["source_refs"] == [
+                *old["source_refs"],
+                {
+                    "source_key": repair._SOURCE_KEY,
+                    "chunk_key": added_key,
+                },
+            ]
+            assert artifact["rule_refs"] == [
+                *old["rule_refs"],
+                f"rule-source:{repair._SOURCE_KEY}#chunk:{added_key}",
+            ]
+            assert artifact["selection_contract"]["references"] == [
+                *old["selection_contract"]["references"],
+                f"rule-source-chunk:{added_key}",
+            ]
         assert artifact["semantic_resolution"] == old["semantic_resolution"]
         assert (
             artifact["card"]["ruling_requirements"][0]["source_excerpt"]
@@ -265,7 +354,7 @@ def test_private_exact_repair_changes_only_two_cards_and_preserves_source():
                 if s["chunk_key"] == citation["source_ref"]["chunk_key"]
             )
             assert citation["source_excerpt"] in section["text"]
-    assert len(replicate["rule_clauses"][0]["source_citations"]) == 3
+    assert len(replicate["rule_clauses"][0]["source_citations"]) == 4
     assert report["archive_sha256"] == hashlib.sha256(output).hexdigest()
     assert path.read_bytes() == data
     with pytest.raises(ValueError, match="exact reviewed"):

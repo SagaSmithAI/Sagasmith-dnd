@@ -24,9 +24,10 @@ _SOURCE_KEY = "user.rulebook.d-d-5e-eberron-rising-from-the-last-war.3129363313"
 _PREFIX = "dnd5e.addon.rulebook.d-d-5e-eberron-rising-from-the-last-war.31293633134f"
 _SOURCE_SHA = "1196e53ae9c706bfdb80bf0576fca0f8b0dcf0c5915790f58745d91b54281942"
 _ASSET_SHA = "38daf35316b56176b2a516aa09174c76b67bd0d905b831c12e8868d04781782c"
-_PACKAGE_VERSION = "1.0.8-local.infusion-source.1"
-_DEFINITION_VERSION = "1.0.6-local.infusion-source.1"
+_PACKAGE_VERSION = "1.0.8-local.infusion-source.2"
+_DEFINITION_VERSION = "1.0.6-local.infusion-source.2"
 _FOCUS_HEADING = "ENHANCED ARCANE Focus"
+_FOURTEENTH_HEADING = "R E PLICABLE ITE M S (14T H - LEVEL ART I F I CER)"
 # Titles are metadata outside the section body's hash. The archive digest binds
 # both; verify them explicitly before restoring table headings to the card.
 _SECTIONS = {
@@ -49,6 +50,11 @@ _SECTIONS = {
         "REPLICABLE ITE M S (6TH-LEVEL ARTIFICER)",
         445,
         "f86d78740822fcb332b319b3ccc7d211c4617f18c2109e586f131cbc422ed45a",
+    ),
+    419: (
+        "REPLICABLE ITEM S (lOT H-lEVEL ARTI FICER)",
+        446,
+        "693c0d3b0fe78c7655d33e7449dcac26bfb25637f2a471cdc48f359b8e718dc7",
     ),
 }
 
@@ -93,8 +99,17 @@ def _source_sections(package, blobs):
     return result
 
 
-def _rewrite_card(artifact, sections, *, name, old_description, description, excerpts):
-    """Rewrite only text and its existing attestations after exact-shape checks."""
+def _rewrite_card(
+    artifact,
+    sections,
+    *,
+    name,
+    old_description,
+    description,
+    excerpts,
+    additional_sections=(),
+):
+    """Repair source text and references after checking the exact historical shape."""
     card = artifact["card"]
     if (
         artifact["kind"] != "feature"
@@ -107,6 +122,7 @@ def _rewrite_card(artifact, sections, *, name, old_description, description, exc
     ruling = _one(card["ruling_requirements"], "Agent ruling requirement")
     clause = _one(artifact["rule_clauses"], "Agent rule clause")
     citation = _one(clause["source_citations"], "historical source citation")
+    cited_sections = [*sections, *additional_sections]
     if (
         ruling.get("kind") != "source_bound_import_resolution"
         or ruling.get("default_resolver") != "agent"
@@ -115,16 +131,25 @@ def _rewrite_card(artifact, sections, *, name, old_description, description, exc
         or citation.get("source") != f"rule-source:{_SOURCE_KEY}"
         or citation.get("source_ref") != {"chunk_key": sections[0]["chunk_key"]}
         or citation["source_excerpt"] != sections[0]["text"]
-        or len(excerpts) != len(sections)
+        or len(excerpts) != len(cited_sections)
     ):
         raise ValueError("reviewed infusion ruling/citation mismatch")
     # Citations stay exact spans of their own indexed chunk. The description and
     # Agent framing additionally retain titles, which belong to section metadata.
     if any(
         not excerpt or excerpt not in section["text"]
-        for section, excerpt in zip(sections, excerpts, strict=True)
+        for section, excerpt in zip(cited_sections, excerpts, strict=True)
     ):
         raise ValueError("infusion citation must remain an exact source span")
+    selection = artifact["selection_contract"]
+    if additional_sections and (
+        len({s["chunk_key"] for s in cited_sections}) != len(cited_sections)
+        or artifact["rule_refs"]
+        != [f"rule-source:{_SOURCE_KEY}#chunk:{s['chunk_key']}" for s in sections]
+        or selection["references"] != [f"rule-source-chunk:{s['chunk_key']}" for s in sections]
+        or any(r.get("source_key") != _SOURCE_KEY for r in artifact["source_refs"])
+    ):
+        raise ValueError("reviewed infusion reference extension mismatch")
     card["description"] = description
     ruling["source_excerpt"] = description
     clause["source_citations"] = [
@@ -133,13 +158,23 @@ def _rewrite_card(artifact, sections, *, name, old_description, description, exc
             "source_ref": {"chunk_key": section["chunk_key"]},
             "source_excerpt": excerpt,
         }
-        for section, excerpt in zip(sections, excerpts, strict=True)
+        for section, excerpt in zip(cited_sections, excerpts, strict=True)
     ]
-    selection = artifact["selection_contract"]
+    for section in additional_sections:
+        artifact["source_refs"].append(
+            {
+                "source_key": _SOURCE_KEY,
+                "chunk_key": section["chunk_key"],
+            }
+        )
+        artifact["rule_refs"].append(f"rule-source:{_SOURCE_KEY}#chunk:{section['chunk_key']}")
     artifact["selection_contract"] = build_selection_contract(
         artifact,
         status=selection["status"],
-        references=selection["references"],
+        references=[
+            *selection["references"],
+            *(f"rule-source-chunk:{s['chunk_key']}" for s in additional_sections),
+        ],
         blockers=selection["blockers"],
     )
     artifact["catalog_review"] = build_catalog_review(
@@ -196,7 +231,9 @@ def repair_archive(data: bytes) -> tuple[bytes, dict]:
         (a for a in artifacts if a["id"] == _PREFIX + ".feature.replicate-magic-item"),
         "Replicate Magic Item",
     )
-    tables = [sections[416], sections[417], sections[418]]
+    tables = [sections[416], sections[417], sections[418], sections[419]]
+    if tables[-1]["text"].count(_FOURTEENTH_HEADING) != 1:
+        raise ValueError("reviewed embedded fourteenth-level table heading mismatch")
     description = "\n\n".join(
         [
             tables[0]["text"],
@@ -205,11 +242,12 @@ def repair_archive(data: bytes) -> tuple[bytes, dict]:
     )
     _rewrite_card(
         replicate,
-        tables,
+        tables[:3],
         name="Replicate Magic Item",
-        old_description="\n\n".join(s["text"] for s in tables),
+        old_description="\n\n".join(s["text"] for s in tables[:3]),
         description=description,
         excerpts=[s["text"] for s in tables],
+        additional_sections=tables[3:],
     )
     errors = validate_selection_ready_artifacts([focus, replicate])
     if errors:

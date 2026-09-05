@@ -16,7 +16,7 @@ from tests.test_official_expansions_mcp import _call, _locked_official_library, 
 
 _PREFIX = "dnd5e.addon.rulebook.d-d-5e-eberron-rising-from-the-last-war.31293633134f"
 _CLASS = _PREFIX + ".class.artificer"
-_VERSION = "1.0.8-local.infusion-source.1"
+_VERSION = "1.0.8-local.infusion-source.2"
 _SRD = "dnd5e.content.srd2014.item."
 _WEAPONS = (
     "club", "dagger", "greatclub", "handaxe", "javelin", "light-hammer", "mace",
