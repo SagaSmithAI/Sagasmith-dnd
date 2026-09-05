@@ -1,7 +1,7 @@
 """Stable identifiers for source-bound standard spell mechanics."""
 
 STANDARD_2014_CONTENT_PACK_ID = "dnd5e.content.standard2014"
-STANDARD_2014_CONTENT_PACK_VERSION = "1.6.0"
+STANDARD_2014_CONTENT_PACK_VERSION = "1.7.0"
 
 # The 2014 SRD publishes these otherwise-identical spells under generic names.
 # Importers may use the mapping only for an official 2014 source and must keep

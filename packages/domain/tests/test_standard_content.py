@@ -83,7 +83,7 @@ def test_standard_2014_mechanics_pack_is_separate_from_srd_and_native() -> None:
     manifest, artifacts = build_standard2014_content()
 
     assert manifest["id"] == STANDARD_2014_CONTENT_PACK_ID
-    assert manifest["version"] == STANDARD_2014_CONTENT_PACK_VERSION == "1.6.0"
+    assert manifest["version"] == STANDARD_2014_CONTENT_PACK_VERSION == "1.7.0"
     assert {item["id"] for item in artifacts} == {
         CORE_BLADE_WARD_SPELL_ID,
         CORE_DESTRUCTIVE_WAVE_SPELL_ID,

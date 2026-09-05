@@ -37,9 +37,9 @@ from sagasmith_dnd.statblocks import (
 
 DND5E_SYSTEM_ID = "dnd5e"
 SRD2014_PRESET_PACK_ID = "dnd5e.presets.srd2014"
-SRD2014_PRESET_PACK_VERSION = "2.2.0"
+SRD2014_PRESET_PACK_VERSION = "2.3.0"
 SRD2024_PRESET_PACK_ID = "dnd5e.presets.srd2024"
-SRD2024_PRESET_PACK_VERSION = "2.2.0"
+SRD2024_PRESET_PACK_VERSION = "2.3.0"
 ACTOR_CARD_COMPILER = "sagasmith-dnd.actor-card.v3"
 
 
