@@ -198,7 +198,8 @@ def _entry() -> dict[str, Any]:
                 "status": "ready",
                 "materializer": "dnd5e.character.feat.v1",
                 "reviewed_content_hash": "a" * 64,
-            }
+            },
+            "content_hash": "b" * 64,
         },
     }
 
@@ -213,6 +214,7 @@ def _receipt() -> dict[str, Any]:
         "character_id": "character-1",
         "pack_id": entry["pack_id"],
         "pack_version": entry["pack_version"],
+        "artifact_content_hash": "b" * 64,
         "reviewed_content_hash": "a" * 64,
         "selection": {"ability": "constitution"},
         "rule_refs": entry["rule_refs"],
@@ -411,7 +413,9 @@ def test_persisted_incomplete_build_cannot_pass(mutation):
     assert driver._build_failures(sheet, follow_ups)
 
 
-@pytest.mark.parametrize("field", ["character_id", "pack_version", "reviewed_content_hash"])
+@pytest.mark.parametrize(
+    "field", ["character_id", "pack_version", "artifact_content_hash", "reviewed_content_hash"]
+)
 def test_content_receipt_identity_mismatch_is_rejected(field):
     receipt = _receipt()
     receipt[field] = "wrong"

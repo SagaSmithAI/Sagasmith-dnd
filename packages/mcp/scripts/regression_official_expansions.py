@@ -204,6 +204,11 @@ async def _apply(
         raise RuntimeError(f"official artifact did not apply: {artifact_id}: {diagnostic}")
     runtime_context = dict(entry.get("runtime_context") or {})
     contract = dict(runtime_context.get("selection_contract") or {})
+    artifact_content_hash = str(runtime_context.get("content_hash") or "")
+    if len(artifact_content_hash) != 64 or any(
+        value not in "0123456789abcdef" for value in artifact_content_hash
+    ):
+        raise RuntimeError(f"official artifact has an invalid content hash: {artifact_id}")
     receipts = list(result.get("rule_receipts") or [])
     if len(receipts) != 1:
         raise RuntimeError(
@@ -249,7 +254,7 @@ async def _apply(
         "character_id": character["id"],
         "pack_id": str(entry.get("pack_id") or ""),
         "pack_version": str(entry.get("pack_version") or ""),
-        "artifact_content_hash": str(contract.get("reviewed_content_hash") or ""),
+        "artifact_content_hash": artifact_content_hash,
         "reviewed_content_hash": str(contract.get("reviewed_content_hash") or ""),
         "selection": receipt_selection,
         "rule_refs": list(entry.get("rule_refs") or []),
