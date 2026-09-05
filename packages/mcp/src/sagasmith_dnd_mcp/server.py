@@ -306,6 +306,7 @@ from sagasmith_dnd.content_validation import (
     content_fingerprint,
     selection_contract_errors,
     selection_input_errors,
+    selection_schema_for_artifact,
 )
 from sagasmith_dnd.core_content import PACK_ID as CORE_CONTENT_PACK_ID
 from sagasmith_dnd.core_content import PACK_VERSION as CORE_CONTENT_PACK_VERSION
@@ -391,6 +392,7 @@ from sagasmith_dnd.progression import (
     award_experience,
     experience_status,
     initialize_base_class,
+    profile_spell_selection_status,
     synchronize_class_feature_resources,
 )
 from sagasmith_dnd.random_stream import (
@@ -520,6 +522,11 @@ from sagasmith_dnd.standard_spell_ids import (
     CORE_WITCH_BOLT_MECHANIC_ID,
     STANDARD_2014_CONTENT_PACK_ID,
     STANDARD_2014_CONTENT_PACK_VERSION,
+)
+from sagasmith_dnd.starting_equipment import (
+    apply_starting_equipment,
+    normalize_starting_equipment_contract,
+    normalize_starting_equipment_selection,
 )
 from sagasmith_dnd.statblock_ocr import recover_2014_pdf_statblock_layout
 from sagasmith_dnd.statblock_spells import (
@@ -3098,6 +3105,74 @@ PHB2014_TOOL_PROFICIENCIES = (
     "Woodcarver's Tools",
 )
 BACKGROUND_AUTHORITY_SELECTION_KEY = "_background_authority"
+CLASS_EQUIPMENT_AUTHORITY_KEY = "_class_equipment_authority"
+
+
+def _class_equipment_records(sheet: Mapping[str, Any]) -> list[dict[str, Any]]:
+    return [
+        dict(record)
+        for record in dict(sheet.get("content") or {}).get("selections", [])
+        if record.get("kind") == "class"
+        and (
+            "starting_equipment" in dict(record.get("selection") or {})
+            or "starting_equipment_result" in dict(record.get("selection") or {})
+            or CLASS_EQUIPMENT_AUTHORITY_KEY in dict(record.get("selection") or {})
+        )
+    ]
+
+
+def _class_equipment_authority_payload(
+    record: Mapping[str, Any], *, character_id: str
+) -> dict[str, Any]:
+    selection = deepcopy(dict(record.get("selection") or {}))
+    selection.pop(CLASS_EQUIPMENT_AUTHORITY_KEY, None)
+    return {
+        "schema_version": 1,
+        "purpose": "class_starting_equipment",
+        "character_id": character_id,
+        "artifact_id": record["artifact_id"],
+        "pack_id": record["pack_id"],
+        "pack_version": record["pack_version"],
+        "class_name": record["name"],
+        "selection_checksum": json_sha256(selection),
+    }
+
+
+def _require_authoritative_class_equipment(
+    sheet: Mapping[str, Any], *, character_id: str | None, secret: bytes,
+    current_sheet: Mapping[str, Any] | None = None,
+) -> None:
+    records = _class_equipment_records(sheet)
+    previous = _class_equipment_records(current_sheet or {})
+    if previous and not records:
+        raise ValueError("class starting-equipment authority cannot be removed")
+    if not records:
+        return
+    if character_id is None or len(records) != 1:
+        raise ValueError("class starting equipment requires one actor-bound selection")
+    record = records[0]
+    signature = dict(record.get("selection") or {}).get(CLASS_EQUIPMENT_AUTHORITY_KEY)
+    payload = verify_receipt_signature(
+        signature, secret,
+        missing_error="class starting-equipment authority is missing",
+        invalid_error="class starting-equipment authority is invalid",
+    )
+    if payload != _class_equipment_authority_payload(record, character_id=character_id):
+        raise ValueError("class starting-equipment authority does not match the selection")
+    if not any(
+        str(item.get("name") or "").casefold() == str(record["name"]).casefold()
+        for item in dict(sheet.get("progression") or {}).get("classes", [])
+    ):
+        raise ValueError("class starting-equipment selection requires its source class")
+
+
+def _class_gold_replaces_background(sheet: Mapping[str, Any]) -> bool:
+    return any(
+        dict(dict(record.get("selection") or {}).get("starting_equipment_result") or {}).get(
+            "replaces_background_equipment"
+        ) is True
+        for record in _class_equipment_records(sheet)
+    )
 
 
 def _load_or_create_content_authority_secret(path: Path) -> bytes:
@@ -3182,6 +3257,10 @@ def _require_authoritative_background_state(
     current_sheet: Mapping[str, Any] | None = None,
 ) -> None:
     """Reject forged, removed, or altered official background materialization."""
+
+    _require_authoritative_class_equipment(
+        candidate_sheet, character_id=character_id, secret=secret, current_sheet=current_sheet
+    )
 
     records = _background_selection_records(candidate_sheet)
     meaningful = _has_background_grants(candidate_sheet)
@@ -32093,19 +32172,44 @@ def _create_server(
         character_id: str,
         class_name: str,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
+        *,
+        scope: str = "next_level",
     ) -> dict[str, Any]:
         """Preview all source-bound follow-up work without committing a level."""
+        if scope not in {"next_level", "current_level"}:
+            raise ValueError("advancement scope must be next_level or current_level")
         current = characters.get(character_id)
         require_character_control(current, principal_id)
         require_outside_active_combat(current, "level advancement planning")
         if current.campaign_id is None:
             raise ValueError("level advancement planning requires a campaign-bound character")
-        if not is_dm(current.campaign_id, principal_id):
+        if scope == "next_level" and not is_dm(current.campaign_id, principal_id):
             raise PermissionError("level advancement planning requires the campaign DM")
         campaign = campaigns.get(current.campaign_id)
         if authoritative_phase(current.campaign_id) != PROFILE_LOBBY:
             raise CombatEngineError("switch to lobby before planning a character level")
         branch_id = require_current_branch(current.campaign_id, None)
+        if scope == "current_level":
+            follow_up = current_class_feature_follow_up(
+                current.campaign_id,
+                current.sheet,
+                class_name=class_name,
+                branch_id=branch_id,
+            )
+            spell_status = profile_spell_selection_status(current.sheet, class_name=class_name)
+            return {
+                "status": "ready" if follow_up["complete"] else "pending_choice",
+                "scope": follow_up["scope"],
+                "character_id": current.id,
+                "character_revision": current.revision,
+                "campaign_id": current.campaign_id,
+                "campaign_revision": campaign.revision,
+                "branch_id": branch_id,
+                "class_name": follow_up["class_name"],
+                "class_level": follow_up["class_level"],
+                "follow_up": follow_up,
+                **({"spell_selection": spell_status} if spell_status is not None else {}),
+            }
         old_level = int(current.sheet.get("progression", {}).get("level", 0) or 0)
         experience = experience_status(current.sheet)
         advancement_mode = campaign_advancement_mode(campaign)
@@ -43555,6 +43659,7 @@ def _create_server(
         class_name: str,
         new_level: int,
         branch_id: str,
+        include_overdue_grants: bool = False,
     ) -> dict[str, Any]:
         """Resolve source-bound per-level modifiers and post-level catalog work."""
         candidates = available_content_artifacts(campaign_id, branch_id=branch_id)
@@ -43695,7 +43800,22 @@ def _create_server(
                 for value in card.get("repeatable_selection_levels", [])
                 if int(value) > 0
             }
-            repeat_due = new_level in repeatable_levels
+            recorded_grant_levels = {
+                int(item.get("level", 0) or 0)
+                for item in present_features.get(artifact_id, {}).get("advancement_grants", [])
+            }
+            repeat_due = (
+                new_level in repeatable_levels and new_level not in recorded_grant_levels
+            )
+            due_grant_level = new_level if repeat_due else None
+            if include_overdue_grants and repeatable_levels:
+                outstanding_levels = sorted(
+                    level
+                    for level in {minimum_level, *repeatable_levels}
+                    if level <= new_level and level not in recorded_grant_levels
+                )
+                due_grant_level = next(iter(outstanding_levels), None)
+                repeat_due = due_grant_level is not None
             if kind == "feature" and (artifact_id not in present_features or repeat_due):
                 if str(card.get("feature_subtype") or "") == "selectable_option":
                     continue
@@ -43723,7 +43843,7 @@ def _create_server(
                 requirements_by_level = dict(card.get("selection_requirements_by_level") or {})
                 selection_requirements = deepcopy(
                     dict(
-                        requirements_by_level.get(str(new_level))
+                        requirements_by_level.get(str(due_grant_level or new_level))
                         or card.get("selection_requirements")
                         or {}
                     )
@@ -43736,7 +43856,7 @@ def _create_server(
                         "class_name": declared_class,
                         "subclass_name": declared_subclass,
                         "selection_requirements": selection_requirements,
-                        "grant_level": new_level if repeat_due else None,
+                        "grant_level": due_grant_level,
                         "pack_id": pack_id,
                         "pack_version": version,
                         "rule_refs": list(artifact.get("rule_refs") or []),
@@ -43798,6 +43918,42 @@ def _create_server(
             ),
         }
 
+    def current_class_feature_follow_up(
+        campaign_id: str,
+        sheet: dict[str, Any],
+        *,
+        class_name: str,
+        branch_id: str,
+    ) -> dict[str, Any]:
+        """Describe remaining current-level feature grants, not whole-build readiness."""
+        selected_class = next(
+            (
+                item
+                for item in sheet["progression"]["classes"]
+                if str(item.get("name") or "").casefold() == class_name.casefold()
+            ),
+            None,
+        )
+        if selected_class is None:
+            raise ValueError("follow-up class is not on this actor card")
+        class_level = int(selected_class["level"])
+        context = level_advancement_content_context(
+            campaign_id,
+            sheet,
+            class_name=class_name,
+            new_level=class_level,
+            branch_id=branch_id,
+            include_overdue_grants=True,
+        )
+        return {
+            "scope": "current_class_features",
+            "class_name": str(selected_class["name"]),
+            "class_level": class_level,
+            "feature_artifacts": context["feature_options"],
+            "subclass_options": context["subclass_options"],
+            "complete": not (context["feature_options"] or context["subclass_options"]),
+        }
+
     def content_catalog_list(
         campaign_id: str,
         kind: str | None = None,
@@ -43856,6 +44012,10 @@ def _create_server(
                     fields.append("skills")
                 if tool_count:
                     fields.append("tools")
+                starting_equipment = definition.get("starting_equipment")
+                if starting_equipment is not None:
+                    starting_equipment = normalize_starting_equipment_contract(starting_equipment)
+                    fields.append("starting_equipment")
                 selection_requirements = {
                     "fields": fields,
                     "skill_choice_count": skill_count,
@@ -43869,6 +44029,10 @@ def _create_server(
                     "skill_replacement_options": sorted(SKILL_ABILITIES),
                     "tool_replacement_options": sorted(
                         _reviewed_tool_options(catalog_candidates).values(), key=str.casefold
+                    ),
+                    **(
+                        {"starting_equipment": starting_equipment}
+                        if starting_equipment is not None else {}
                     ),
                 }
             elif artifact_kind == "subclass":
@@ -44470,6 +44634,8 @@ def _create_server(
             raise ValueError("official expansion authority is server-managed")
         if BACKGROUND_AUTHORITY_SELECTION_KEY in selection:
             raise ValueError("background selection authority is server-managed")
+        if CLASS_EQUIPMENT_AUTHORITY_KEY in selection:
+            raise ValueError("class starting-equipment authority is server-managed")
         contract_required = artifact.get("selection_contract") is not None
         if contract_required:
             contract_errors = selection_input_errors(artifact, selection)
@@ -45264,7 +45430,21 @@ def _create_server(
         if kind == "class":
             if phase != PROFILE_LOBBY:
                 raise CombatEngineError("base-class selection is available only during lobby setup")
+            supported_choices = {"skills", "tools", "skill_replacements", "tool_replacements"}
             class_definition = card.get("class_definition")
+            equipment_contract = (
+                class_definition.get("starting_equipment")
+                if isinstance(class_definition, dict) else None
+            )
+            if equipment_contract is not None:
+                equipment_contract = normalize_starting_equipment_contract(equipment_contract)
+                supported_choices.add("starting_equipment")
+            unsupported_choices = set(selection) - supported_choices
+            if unsupported_choices:
+                raise ValueError(
+                    "unsupported base-class selection fields: "
+                    + ", ".join(sorted(unsupported_choices))
+                )
             if not isinstance(class_definition, dict):
                 return {
                     **_ruling_status(
@@ -45272,6 +45452,13 @@ def _create_server(
                         "missing_or_conflicting_source_review",
                     ),
                     "reason": "base class has no reviewed class_definition",
+                }
+            equipment_selection = selection.get("starting_equipment")
+            if equipment_contract is not None and equipment_selection is None:
+                return {
+                    "status": "pending_choice",
+                    "reason": "base class requires its reviewed starting-equipment choice",
+                    "starting_equipment": deepcopy(equipment_contract),
                 }
             raw_skills = selection.get("skills")
             if not isinstance(raw_skills, list):
@@ -45308,10 +45495,158 @@ def _create_server(
                     }
                 raise ValueError(str(error)) from error
             sheet = class_result.pop("sheet")
+            if equipment_contract is not None:
+                if not isinstance(equipment_selection, dict):
+                    raise ValueError("starting_equipment must be an object")
+                equipment_selection = normalize_starting_equipment_selection(
+                    equipment_contract, equipment_selection
+                )
+                if equipment_selection["mode"] == "gold":
+                    stream = active_random_stream()
+                    if stream is None:
+                        stream = CampaignRandomStream.from_campaign_state(
+                            current.campaign_id, campaign.state,
+                            operation="character_content_apply",
+                            idempotency_key=idempotency_key,
+                            campaign_revision=campaign.revision,
+                        )
+                        with use_random_stream(stream):
+                            return character_content_apply_impl(
+                                character_id, artifact_id, selection, grant,
+                                principal_id, expected_revision, idempotency_key,
+                            )
+                    random_state = validate_random_stream_state(
+                        dict(campaign.state or {}).get("random_stream")
+                        or initial_random_stream(f"sagasmith-dnd:{current.campaign_id}")
+                    )
+                    if (
+                        stream.campaign_id != current.campaign_id
+                        or stream.campaign_revision != campaign.revision
+                        or stream.seed != random_state["seed"]
+                        or stream.start_position != random_state["position"]
+                    ):
+                        raise CombatEngineError(
+                            "starting equipment requires the current campaign random snapshot"
+                        )
+                templates = {}
+                item_sources = {}
+                if equipment_selection.get("mode") == "equipment":
+                    required_item_ids = {
+                        item["artifact_id"] for item in equipment_contract["items"]
+                    }
+                    raw_choices = equipment_selection.get("choices", {})
+                    if not isinstance(raw_choices, dict):
+                        raise ValueError("starting_equipment choices must be an object")
+                    for choices in raw_choices.values():
+                        if not isinstance(choices, list) or any(
+                            not isinstance(item, str) for item in choices
+                        ):
+                            raise ValueError("starting_equipment choices must be arrays of ids")
+                        required_item_ids.update(choices)
+                    for item_id in sorted(required_item_ids):
+                        item_matches = [
+                            item for item in candidates
+                            if item[2].get("kind") == "item" and item[2].get("id") == item_id
+                        ]
+                        if len(item_matches) != 1:
+                            raise RulesetUnavailableError(
+                                "starting equipment requires one exact active item artifact"
+                            )
+                        item_pack, item_version, item_artifact = item_matches[0]
+                        item_artifact = reviewed_official_runtime_artifact(
+                            item_pack, item_version, item_artifact
+                        )
+                        if (
+                            str(item_artifact.get("application_state") or "selection_ready")
+                            != "selection_ready"
+                            or (
+                                item_artifact.get("selection_contract") is not None
+                                and selection_input_errors(item_artifact, {})
+                            )
+                        ):
+                            raise RulesetUnavailableError(
+                                "starting equipment item has no reviewed selection contract"
+                            )
+                        # Finalized non-official runtime definitions deliberately
+                        # omit draft review records. Validate their item shape;
+                        # reserved official definitions require archive review above.
+                        selection_schema_for_artifact(item_artifact)
+                        template = dict(item_artifact.get("card") or {}).get("inventory_template")
+                        if not isinstance(template, dict):
+                            raise RulesetUnavailableError("starting equipment item has no template")
+                        templates[item_id] = deepcopy(template)
+                        item_sources[item_id] = {
+                            "pack_id": item_pack, "pack_version": item_version,
+                            "content_hash": content_fingerprint(item_artifact),
+                        }
+                if (
+                    equipment_selection.get("mode") == "gold"
+                    and dict(equipment_contract.get("gold_alternative") or {}).get(
+                        "replaces_background_equipment"
+                    ) is True
+                    and sheet["progression"].get("background")
+                ):
+                    # Only reclaim the exact, still-held starting award. A spent,
+                    # transferred or changed award cannot erase unrelated property.
+                    _require_authoritative_background_state(
+                        sheet, character_id=current.id, secret=content_authority_secret
+                    )
+                    grants = sheet["progression"]["background_grants"]
+                    award = grants["choices"].get("starting_equipment_award")
+                    if not isinstance(award, dict):
+                        raise ValueError("background starting-equipment award is not recorded")
+                    awarded_items = list(award.get("items") or [])
+                    award_ids = {item["id"] for item in awarded_items}
+                    if set(grants["equipment_item_ids"]) != award_ids:
+                        raise ValueError("background starting equipment is not an exact award")
+                    held = {item["id"]: item for item in sheet["inventory"]["items"]}
+                    if any(held.get(item["id"]) != item for item in awarded_items):
+                        raise ValueError(
+                            "background starting equipment has changed or left custody"
+                        )
+                    grants["equipment_item_ids"] = []
+                    sheet["inventory"]["items"] = [
+                        item for item in sheet["inventory"]["items"] if item["id"] not in award_ids
+                    ]
+                    for slot, item_id in sheet["inventory"]["equipment_slots"].items():
+                        if item_id in award_ids:
+                            sheet["inventory"]["equipment_slots"][slot] = None
+                    for denomination, amount in award.get("wallet", {}).items():
+                        if amount:
+                            sheet = adjust_wallet(sheet, denomination, -amount)
+                    grants = sheet["progression"]["background_grants"]
+                    grants["choices"]["equipment_mode"] = "class_starting_gold"
+                    grants["choices"]["starting_equipment_award"] = {"items": [], "wallet": {}}
+                    background_record = next(
+                        item for item in sheet["content"]["selections"]
+                        if item["kind"] == "background"
+                    )
+                    background_record["selection"]["equipment_mode"] = "class_starting_gold"
+                    authority_id = uuid4().hex
+                    background_record["selection"][BACKGROUND_AUTHORITY_SELECTION_KEY] = {
+                        "authority_id": authority_id,
+                        "authorization": sign_receipt(
+                            _background_authority_payload(
+                                sheet, background_record, character_id=current.id,
+                                authority_id=authority_id,
+                            ), content_authority_secret,
+                        ),
+                    }
+                equipment_result = apply_starting_equipment(
+                    sheet, contract=equipment_contract, selection=equipment_selection,
+                    item_templates=templates, source_key=f"{pack_id}@{version}:{artifact_id}",
+                    rng=active_random_stream(),
+                )
+                sheet = equipment_result.pop("sheet")
+                equipment_result["item_sources"] = item_sources
+                class_result["starting_equipment"] = equipment_result
             selection = {
                 "skills": list(class_result.get("skill_proficiency_choices") or []),
                 "tools": list(class_result.get("tool_proficiency_choices") or []),
             }
+            if equipment_contract is not None:
+                selection["starting_equipment"] = deepcopy(equipment_result["selection"])
+                selection["starting_equipment_result"] = deepcopy(equipment_result)
             if class_result.get("skill_proficiency_replacements"):
                 selection["skill_replacements"] = deepcopy(
                     dict(class_result["skill_proficiency_replacements"])
@@ -45363,6 +45698,8 @@ def _create_server(
                     "spell selection method must be known, spellbook, spellbook_copy, "
                     "or class_prepared"
                 )
+            if level == 0 and method != "known":
+                raise ValueError("cantrips must be selected as known spells")
             if method in {"spellbook", "spellbook_copy"} and preparation_mode != "spellbook":
                 raise ValueError("only a spellbook caster can select a spellbook grant")
             if method == "class_prepared" and preparation_mode != "prepared":
@@ -45371,6 +45708,16 @@ def _create_server(
                 raise ValueError(
                     "this caster records level 1+ spells as prepared or spellbook grants"
                 )
+            if method == "known":
+                spell_status = profile_spell_selection_status(sheet, class_name=source_class)
+                if spell_status is not None:
+                    choice_kind = "cantrips" if level == 0 else "leveled_spells"
+                    choice_status = spell_status[choice_kind]
+                    if choice_status["present"] >= choice_status["required"]:
+                        raise ValueError(
+                            f"{source_class} {choice_kind} selection exceeds the reviewed "
+                            f"class-level limit of {choice_status['required']}"
+                        )
             if method == "spellbook_copy":
                 if source_class != "wizard":
                     raise ValueError("only wizard spells can be copied into this spellbook")
@@ -45847,7 +46194,21 @@ def _create_server(
                 }
             equipment_packages = dict(requirements.get("equipment_packages") or {})
             equipment_mode = str(selection.get("equipment_mode") or "").strip().casefold()
-            if custom_name:
+            _require_authoritative_class_equipment(
+                sheet, character_id=current.id, secret=content_authority_secret
+            )
+            class_gold_excludes_equipment = _class_gold_replaces_background(sheet)
+            if class_gold_excludes_equipment:
+                if (
+                    equipment_mode not in {"", "starting_coin"}
+                    or selection.get("equipment_package")
+                    or selection.get("equipment_item_ids") not in (None, [])
+                ):
+                    raise ValueError("class starting gold cannot stack background equipment")
+                equipment_mode = "class_starting_gold"
+                fixed_equipment = {}
+                equipment_packages = {}
+            elif custom_name:
                 if equipment_mode not in {"source", "starting_coin"}:
                     return {
                         "status": "pending_choice",
@@ -45880,6 +46241,7 @@ def _create_server(
                 str(selection.get("equipment_package") or "").strip().upper()
             )
             equipment_item_ids: list[str] = []
+            equipment_award_wallet: dict[str, int] = {}
             if equipment_packages:
                 if not selected_equipment_package:
                     return {
@@ -46005,7 +46367,9 @@ def _create_server(
                         raise RulesetUnavailableError(
                             "background equipment package currency is invalid"
                         )
-                    sheet = adjust_wallet(sheet, normalized_denomination, amount)
+                    equipment_award_wallet[normalized_denomination] = amount
+                    if amount:
+                        sheet = adjust_wallet(sheet, normalized_denomination, amount)
             else:
                 equipment_item_ids_raw = selection.get("equipment_item_ids", [])
                 if custom_name and equipment_item_ids_raw not in (None, []):
@@ -46065,6 +46429,13 @@ def _create_server(
                 "feature_source_artifact_id": feature_source_artifact_id,
                 "feature_source": deepcopy(feature_source_identity),
                 "equipment_mode": equipment_mode,
+                "starting_equipment_award": {
+                    "items": [
+                        deepcopy(item) for item in sheet["inventory"]["items"]
+                        if equipment_packages and item["id"] in equipment_item_ids
+                    ],
+                    "wallet": equipment_award_wallet,
+                },
                 "selected_equipment_package": (
                     "" if selected_equipment_package == "__FIXED__" else selected_equipment_package
                 ),
@@ -48430,6 +48801,11 @@ def _create_server(
                     ),
                 }
                 selection = deepcopy(selection_record["selection"])
+            elif kind == "class" and "starting_equipment_result" in recorded_selection:
+                selection_record["selection"][CLASS_EQUIPMENT_AUTHORITY_KEY] = sign_receipt(
+                    _class_equipment_authority_payload(selection_record, character_id=current.id),
+                    content_authority_secret,
+                )
             sheet["content"]["selections"].append(selection_record)
             if content_receipt is not None:
                 content_receipt["selection"] = deepcopy(selection_record["selection"])
@@ -48477,6 +48853,43 @@ def _create_server(
                 else {}
             ),
         }
+        # Choosing a subclass after leveling unlocks features absent from the
+        # earlier advancement response. Recompute from this pending sheet, after
+        # recording its exact source selection, and persist the result together
+        # with the mutation so an idempotent replay returns the same work list.
+        follow_up_class = ""
+        if kind == "class":
+            follow_up_class = str(card.get("name") or "")
+        elif kind in {"subclass", "feature"}:
+            follow_up_class = str(artifact.get("card", {}).get("class_name") or "")
+        elif kind == "spell":
+            follow_up_class = source_class
+        if phase == PROFILE_LOBBY and follow_up_class:
+            selected_class = next(
+                (
+                    item
+                    for item in sheet["progression"]["classes"]
+                    if str(item.get("name") or "").casefold() == follow_up_class.casefold()
+                ),
+                None,
+            )
+            if selected_class is not None:
+                response_extra["follow_up"] = current_class_feature_follow_up(
+                    current.campaign_id,
+                    sheet,
+                    class_name=follow_up_class,
+                    branch_id=branch_id,
+                )
+                spell_status = profile_spell_selection_status(sheet, class_name=follow_up_class)
+                if spell_status is not None:
+                    response_extra["spell_selection"] = spell_status
+        equipment_stream = active_random_stream()
+        if (
+            class_materialization is not None
+            and class_materialization.get("starting_equipment", {}).get("roll") is not None
+            and equipment_stream is not None
+        ):
+            response_extra["random_stream_receipt"] = equipment_stream.receipt()
         return update_sheet(
             character_id,
             sheet,
@@ -51464,6 +51877,7 @@ boundary.
                 str(required(data, "character_id")),
                 str(required(data, "class_name")),
                 principal_id,
+                scope=str(data.get("scope", "next_level")),
             )
         elif view == "rest":
             character_id = str(required(data, "character_id"))

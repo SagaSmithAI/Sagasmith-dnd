@@ -4654,7 +4654,9 @@ def test_reviewed_addon_base_class_uses_bound_level_one_materializer(
                             "rounding": "down",
                             "minimum": 1,
                         },
-                        "spell_list_expansion": ["Cure Wounds", "Magic Weapon"],
+                        "spell_list_expansion": [
+                            "Cure Wounds", "Magic Weapon", "Light", "Mending", "Guidance"
+                        ],
                     },
                 },
             },
@@ -4843,6 +4845,40 @@ def test_reviewed_addon_base_class_uses_bound_level_one_materializer(
             },
         )
 
+        # A caller must not receive a successful class receipt after an
+        # unsupported equipment/wealth choice has silently been discarded.
+        before_class = await _call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": character["id"]}},
+        )
+        for extra_field, extra_value in (
+            ("equipment_mode", "starting_coin"),
+            ("equipment_package", "scale_mail"),
+            ("starting_gold", 200),
+        ):
+            with pytest.raises(Exception, match="unsupported base-class selection fields"):
+                await _call(
+                    server,
+                    "character_content_apply",
+                    {
+                        "character_id": character["id"],
+                        "artifact_id": artifact["id"],
+                        "selection": {
+                            "skills": ["arcana", "investigation"],
+                            "tools": ["weaver's tools"],
+                            extra_field: extra_value,
+                        },
+                        "expected_revision": character["revision"],
+                        "idempotency_key": f"reject-class-{extra_field}",
+                    },
+                )
+            assert await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": character["id"]}},
+            ) == before_class
+
         applied = await _call(
             server,
             "character_content_apply",
@@ -4867,6 +4903,22 @@ def test_reviewed_addon_base_class_uses_bound_level_one_materializer(
         assert applied["sheet"]["spellcasting"]["class_lists"] == ["artificer"]
         assert applied["sheet"]["spellcasting"]["spell_slots"]["1"]["max"] == 2
         assert applied["sheet"]["spellcasting"]["preparation"]["max_prepared"] == 1
+        assert applied["spell_selection"]["cantrips"]["missing"] == 2
+        assert applied["spell_selection"]["preparation"]["missing_for_setup"] == 1
+        initial_plan = await _call(
+            server,
+            "character_query",
+            {
+                "view": "advancement",
+                "payload": {
+                    "character_id": character["id"],
+                    "class_name": "Artificer",
+                    "scope": "current_level",
+                },
+            },
+        )
+        assert initial_plan["spell_selection"] == applied["spell_selection"]
+        assert initial_plan["character_revision"] == applied["revision"]
         assert applied["sheet"]["skills"]["arcana"]["proficiency"] == "proficient"
         assert applied["class_materialization"]["saving_throw_proficiencies"] == [
             "constitution",
@@ -5003,6 +5055,46 @@ def test_reviewed_addon_base_class_uses_bound_level_one_materializer(
                     "idempotency_key": "addon-infusion-direct-rejected",
                 },
             )
+
+        latest = infused
+        for index, slug in enumerate(("light", "mending"), start=1):
+            latest = await _call(
+                server,
+                "character_content_apply",
+                {
+                    "character_id": character["id"],
+                    "artifact_id": f"dnd5e.content.srd2014.spell.{slug}",
+                    "selection": {"source_class": "Artificer", "method": "known"},
+                    "expected_revision": latest["revision"],
+                    "idempotency_key": f"artificer-cantrip-{slug}",
+                },
+            )
+            assert latest["spell_selection"]["cantrips"]["missing"] == 2 - index
+        assert latest["spell_selection"]["learned_spells_complete"] is True
+        assert latest["spell_selection"]["preparation"]["missing_for_setup"] == 1
+        for method, message in (
+            ("known", "class-level limit of 2"),
+            ("class_prepared", "cantrips must be selected as known"),
+        ):
+            with pytest.raises(Exception, match=message):
+                await _call(
+                    server,
+                    "character_content_apply",
+                    {
+                        "character_id": character["id"],
+                        "artifact_id": "dnd5e.content.srd2014.spell.guidance",
+                        "selection": {"source_class": "Artificer", "method": method},
+                        "expected_revision": latest["revision"],
+                        "idempotency_key": f"excess-cantrip-{method}",
+                    },
+                )
+            unchanged = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": character["id"]}},
+            )
+            assert unchanged["revision"] == latest["revision"]
+            assert unchanged["sheet"] == latest["sheet"]
 
     import asyncio
 

@@ -19,6 +19,10 @@ from sagasmith_dnd.character_schema import default_character_sheet
 from sagasmith_dnd.core_content import PACK_ID as CORE_CONTENT_PACK_ID
 from sagasmith_dnd.core_content import PACK_VERSION as CORE_CONTENT_PACK_VERSION
 from sagasmith_dnd.official_expansions import official_expansion_catalog
+from sagasmith_dnd.starting_equipment import (
+    normalize_starting_equipment_contract,
+    normalize_starting_equipment_selection,
+)
 
 from sagasmith_dnd_mcp.config import McpConfig
 from sagasmith_dnd_mcp.server import close_server, create_server
@@ -79,6 +83,14 @@ _ARTIFICER_FEATURE_ORDER = tuple(
 _REQUIRED_ARTIFICER_FEATURES = set(_ARTIFICER_FEATURE_ORDER) | {
     f"{_ARTIFICER_PREFIX}.feature.{name.lower().replace(' ', '-')}" for name in _ARTIFICER_INFUSIONS
 }
+# These #172/#173 requirements are not exercised by this driver yet. Remove
+# entries only alongside actual public-tool setup and persisted-state assertions;
+# feature cards and successful restarts are not evidence of their execution.
+_UNVERIFIED_BUILD_REQUIREMENTS = (
+    "class_starting_equipment",
+    "spellcasting_tool_requirements",
+    "feature_driven_defender_creation",
+)
 
 
 def _build_failures(sheet: dict[str, Any], follow_ups: list[dict[str, Any]]) -> list[str]:
@@ -345,6 +357,18 @@ async def _catalog_selection(
     equipment_options = list(requirements.get("equipment_package_options") or [])
     if equipment_options:
         selection["equipment_package"] = equipment_options[0]
+    starting_equipment = requirements.get("starting_equipment")
+    if expected_kind == "class" and starting_equipment is not None:
+        equipment_contract = normalize_starting_equipment_contract(starting_equipment)
+        choices = {}
+        for group in equipment_contract["choices"]:
+            options = group["options"]
+            choices[group["id"]] = [
+                options[index % len(options)] for index in range(group["count"])
+            ]
+        selection["starting_equipment"] = normalize_starting_equipment_selection(
+            equipment_contract, {"mode": "equipment", "choices": choices}
+        )
     if target_class_name is not None:
         selection["target_class_name"] = target_class_name
     selection.update(selection_overrides or {})
@@ -882,7 +906,11 @@ async def _run(server: Any) -> tuple[dict[str, Any], dict[str, Any]]:
             "restart_persisted": 0,
         },
         "persistence": {"restart_verified": False},
-        "build": {"failures": _build_failures(character["sheet"], follow_ups)},
+        "build": {
+            "scope": "artificer_3_battle_smith_setup",
+            "failures": _build_failures(character["sheet"], follow_ups),
+            "unverified_requirements": list(_UNVERIFIED_BUILD_REQUIREMENTS),
+        },
         "content_exported": False,
     }
     checkpoint = {
@@ -990,7 +1018,10 @@ def _execute(content_library: Path, home: Path) -> dict[str, Any]:
     report["receipts"]["restart_persisted"] = persisted_receipts
     report["persistence"]["restart_verified"] = True
     # Persisting an incomplete build is not a successful official-rules regression.
-    report["passed"] = not report["build"]["failures"]
+    build = report["build"]
+    report["passed"] = (
+        build.get("failures") == [] and build.get("unverified_requirements") == []
+    )
     return report
 
 

@@ -1,3 +1,5 @@
+from copy import deepcopy
+
 import pytest
 
 import sagasmith_dnd.progression as progression_module
@@ -10,6 +12,7 @@ from sagasmith_dnd.progression import (
     award_experience,
     experience_status,
     initialize_base_class,
+    profile_spell_selection_status,
     synchronize_class_feature_resources,
 )
 from sagasmith_dnd.spells import validate_spell_grant
@@ -289,6 +292,90 @@ def test_reviewed_addon_class_spellcasting_survives_selection_and_advancement() 
         for level, resource in advanced["spellcasting"]["spell_slots"].items()
     } == {"1": 4, "2": 2}
     assert advanced["spellcasting"]["preparation"]["max_prepared"] == 5
+
+
+@pytest.mark.parametrize("level,required", [(1, 2), (9, 2), (10, 3), (13, 3), (14, 4), (20, 4)])
+def test_profile_spell_choices_use_total_class_known_cantrips(level, required) -> None:
+    sheet = default_character_sheet()
+    sheet["progression"]["classes"] = [
+        {"name": "Artificer", "level": level, "spellcasting": _artificer_spellcasting_profile()}
+    ]
+    sheet["abilities"]["intelligence"]["score"] = 16
+
+    def spell(identifier, source_type="class", source_key="artificer", method="known"):
+        return {
+            "id": identifier,
+            "level": 0,
+            "grant": {"source_type": source_type, "source_key": source_key, "method": method},
+            "access": {"known": True, "prepared": False, "always_prepared": False},
+        }
+
+    sheet["content"]["spells"] = [
+        spell("one"),
+        spell("two", source_key="Artificer"),
+        spell("species", source_type="species"),
+        spell("other-class", source_key="wizard"),
+        spell("not-known", method="class_prepared"),
+    ]
+    before = deepcopy(sheet)
+    status = profile_spell_selection_status(sheet, class_name="Artificer")
+    assert status["cantrips"] == {
+        "required": required,
+        "present": 2,
+        "missing": required - 2,
+        "excess": 0,
+        "spell_ids": ["one", "two"],
+    }
+    assert status["leveled_spells"]["required"] == 0
+    assert status["learned_spells_complete"] is (required == 2)
+    assert status["preparation"]["limit"] == 3 + level // 2
+    assert status["preparation"]["missing_for_setup"] == 3 + level // 2
+    assert sheet == before
+
+
+def test_profile_spell_selection_excludes_always_prepared_and_preserves_preparation() -> None:
+    sheet = default_character_sheet()
+    sheet["progression"]["classes"] = [
+        {"name": "Artificer", "level": 4, "spellcasting": _artificer_spellcasting_profile()}
+    ]
+    sheet["abilities"]["intelligence"]["score"] = 10
+    sheet["content"]["spells"] = [
+        {
+            "id": "chosen",
+            "level": 1,
+            "grant": {
+                "source_type": "class", "source_key": "artificer", "method": "class_prepared"
+            },
+            "access": {"prepared": True, "always_prepared": False},
+        },
+        {
+            "id": "subclass",
+            "level": 1,
+            "grant": {
+                "source_type": "subclass", "source_key": "Battle Smith", "method": "class_prepared"
+            },
+            "access": {"prepared": True, "always_prepared": True},
+        },
+    ]
+    sheet["spellcasting"]["preparation"]["selected_spell_ids"] = ["chosen"]
+    before = deepcopy(sheet)
+    status = profile_spell_selection_status(sheet, class_name="Artificer")
+    assert status["preparation"] == {
+        "mode": "prepared",
+        "limit": 2,
+        "selected": 1,
+        "spell_ids": ["chosen"],
+        "missing_for_setup": 1,
+        "excess": 0,
+        "changes_on": "long_rest",
+    }
+    assert sheet == before  # No level-up or ability-change preparation is performed.
+
+
+def test_profile_spell_selection_does_not_invent_a_profile() -> None:
+    sheet = default_character_sheet()
+    sheet["progression"]["classes"] = [{"name": "Artificer", "level": 1}]
+    assert profile_spell_selection_status(sheet, class_name="Artificer") is None
 
 
 class _SequenceRng:
