@@ -1769,7 +1769,7 @@ def test_locked_dragonborn_breath_uses_generic_area_and_save_primitives(
                     }
                 },
                 "pack_id": "dnd5e.content.standard2014",
-                "pack_version": "1.4.0",
+                "pack_version": "1.7.0",
                 "rule_refs": ["book:players-handbook-2014:p34"],
                 "mechanic_refs": ["dnd5e.core.activity.dragonborn_breath_weapon"],
             }
