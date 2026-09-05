@@ -20,8 +20,12 @@ from tests.test_addon_selection_contracts_mcp import _bound_defender_fixture_art
 from tests.test_official_expansions_mcp import _call
 
 
-async def _create_bound_defender(server, config: McpConfig) -> tuple[dict, dict, dict]:
-    artifact, feature, source_key, source_text = _bound_defender_fixture_artifacts()
+async def _create_bound_defender(
+    server, config: McpConfig, *, owner_death: str = "independent", instantiate: bool = True,
+) -> tuple[dict, dict, dict]:
+    artifact, feature, source_key, source_text = _bound_defender_fixture_artifacts(
+        owner_death=owner_death,
+    )
     campaign = await _call(server, "campaign_create", {
         "name": "Defender lifecycle", "edition": "2014",
         "random_seed": "defender-lifecycle-v11", "idempotency_key": "campaign",
@@ -79,12 +83,94 @@ async def _create_bound_defender(server, config: McpConfig) -> tuple[dict, dict,
     current = await _call(server, "campaign_query", {
         "view": "get", "payload": {"campaign_id": campaign["id"]},
     })
+    if not instantiate:
+        return current, owner, artifact
     created = await _call(server, "addon_actor_instantiate", {
         "campaign_id": campaign["id"], "artifact_id": artifact["id"],
         "owner_character_id": owner["id"], "expected_revision": current["revision"],
         "idempotency_key": "defender",
     })
     return campaign, owner, created["character"]
+
+
+async def _exercise_owner_death(server, campaign_id, owner, defender, *, owner_death):
+    """Actual archive and synthetic variants share this public-protocol assertion."""
+    async def snapshot():
+        campaign = await _call(server, "campaign_query", {
+            "view": "get", "payload": {"campaign_id": campaign_id},
+        })
+        actors = [await _call(server, "character_query", {
+            "view": "get", "payload": {"character_id": actor["id"]},
+        }) for actor in (owner, defender)]
+        return campaign, *actors
+
+    before = await snapshot()
+    assert "dead" not in before[1]["sheet"]["conditions"]
+    assert "dead" not in before[2]["sheet"]["conditions"]
+    request = {
+        "character_id": owner["id"], "action": "damage",
+        "payload": {"parts": [{"amount": 1000, "damage_type": "force"}]},
+        "expected_revision": before[1]["revision"], "idempotency_key": "source-policy-owner-death",
+    }
+    response = await server.call_tool("character_state_change", request)
+    after = await snapshot()
+    assert "dead" in after[1]["sheet"]["conditions"]
+    relation = next(r for r in after[0]["state"]["dependent_actor_relations"]
+                    if r["dependent_actor_id"] == defender["id"])
+    policy = {"schema_version": 1, "owner_death": owner_death}
+    assert relation["template_binding"]["lifecycle_policy"] == policy
+    assert relation["template_binding"]["authorization"]["lifecycle_policy"] == policy
+    if owner_death == "perish":
+        assert "dead" in after[2]["sheet"]["conditions"]
+        assert after[2]["sheet"]["combat"]["hp"]["value"] == 0
+        assert relation["status"] == "dead"
+        assert relation["death_elapsed_ticks"] == after[0]["state"]["game_time"]["elapsed_ticks"]
+    else:
+        assert after[2] == before[2]
+        assert relation["status"] == "active" and relation["death_elapsed_ticks"] is None
+    assert await server.call_tool("character_state_change", request) == response
+    assert await snapshot() == after
+    return ("character_state_change", request, response), after
+
+
+@pytest.mark.parametrize("owner_death", ["independent", "perish"])
+def test_owner_death_uses_signed_source_policy_and_survives_restart(tmp_path, owner_death):
+    config = McpConfig(
+        home=tmp_path / "home", database_url=None, chroma_url=None,
+        chroma_path_override=None, dnd_skills_dir=tmp_path / "skills",
+        modulegen_skills_dir=tmp_path / "modulegen", auto_seed_rules=False,
+    )
+
+    async def exercise():
+        runtime = create_server(config)
+        try:
+            async with Client(runtime, mode="2026-07-28") as client:
+                server = _ProtocolTools(client)
+                campaign, owner, defender = await _create_bound_defender(
+                    server, config, owner_death=owner_death,
+                )
+                replay, after = await _exercise_owner_death(
+                    server, campaign["id"], owner, defender, owner_death=owner_death,
+                )
+        finally:
+            close_server(runtime)
+        restarted = create_server(config)
+        try:
+            async with Client(restarted, mode="2026-07-28") as client:
+                server = _ProtocolTools(client)
+                tool, request, response = replay
+                assert await server.call_tool(tool, request) == response
+                assert await _call(server, "campaign_query", {
+                    "view": "get", "payload": {"campaign_id": campaign["id"]},
+                }) == after[0]
+                for index, actor in enumerate((owner, defender), 1):
+                    assert await _call(server, "character_query", {
+                        "view": "get", "payload": {"character_id": actor["id"]},
+                    }) == after[index]
+        finally:
+            close_server(restarted)
+
+    asyncio.run(exercise())
 
 
 async def _exercise_defender_lifecycle(server, campaign_id: str, owner: dict, defender: dict):

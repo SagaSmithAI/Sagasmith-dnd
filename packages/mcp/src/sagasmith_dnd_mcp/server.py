@@ -317,6 +317,7 @@ from sagasmith_dnd.core_content_2024 import (
 )
 from sagasmith_dnd.core_content_2024 import build_srd2024_content
 from sagasmith_dnd.core_rule_pack import get_core_rule_pack
+from sagasmith_dnd.dependent_actor_lifecycle import dependent_actor_lifecycle_policy
 from sagasmith_dnd.dependent_actor_refresh import (
     STEEL_DEFENDER_RELATION_KEY,
     STEEL_DEFENDER_REVIEWED_EXPRESSION_HASH,
@@ -13985,6 +13986,7 @@ def _create_server(
             invalid_error="dependent actor template authorization signature is invalid",
         )
         expected_hash = str(dict(requirement["solution"])["reviewed_expression_hash"])
+        lifecycle_policy = dependent_actor_lifecycle_policy(requirement)
         if binding["reviewed_expression_hash"] != expected_hash:
             raise ValueError("dependent actor template relation hash is stale")
         expected = {
@@ -14002,6 +14004,7 @@ def _create_server(
             "template_variant": binding["template_variant"],
             "numeric_parameters": binding["numeric_parameters"],
             "reviewed_expression_hash": expected_hash,
+            **({"lifecycle_policy": lifecycle_policy} if lifecycle_policy is not None else {}),
         }
         # The relation's authorization is a server-signed canonical envelope.
         # Compare the verified payload exactly: accepting omitted or extra keys
@@ -14604,6 +14607,12 @@ def _create_server(
                             "reviewed_expression_hash": refreshed_binding[
                                 "reviewed_expression_hash"
                             ],
+                            **(
+                                {"lifecycle_policy": deepcopy(
+                                    refreshed_binding["lifecycle_policy"],
+                                )}
+                                if "lifecycle_policy" in refreshed_binding else {}
+                            ),
                         },
                         content_authority_secret,
                     )
@@ -15199,12 +15208,17 @@ def _create_server(
             dependent_sheet = actor_sheet(dependent_id)
             owner_dead = "dead" in condition_ids(owner_sheet.get("conditions"))
             dependent_dead = "dead" in condition_ids(dependent_sheet.get("conditions"))
+            # _verified_steel_defender_relation has just compared this signed
+            # policy with the unique currently activated source template.
+            owner_perishing = owner_dead and (
+                relation["template_binding"]["lifecycle_policy"]["owner_death"] == "perish"
+            )
 
             if relation["status"] == "active":
-                if not owner_dead and not dependent_dead:
+                if not owner_perishing and not dependent_dead:
                     continue
-                reason = "owner_died" if owner_dead else "defender_died"
-                if owner_dead:
+                reason = "owner_died" if owner_perishing else "defender_died"
+                if owner_perishing:
                     try:
                         dependent_sheet = kill_steel_defender_when_owner_dies(
                             owner_sheet,
@@ -15233,7 +15247,7 @@ def _create_server(
 
             pending_start = relation["revival_started_elapsed_ticks"]
             pending_due = relation["revival_completes_elapsed_ticks"]
-            if owner_dead:
+            if owner_perishing:
                 if pending_start is not None:
                     relations[relation_index] = {
                         **relation,
@@ -44290,6 +44304,11 @@ def _create_server(
                 dependent_template = deepcopy(dict(card.get("dependent_actor_template") or {}))
                 if dependent_template:
                     solution = dict(dependent_template.get("solution") or {})
+                    runtime_errors = dependent_actor_template_solution_errors(dependent_template)
+                    try:
+                        dependent_actor_lifecycle_policy(dependent_template)
+                    except ValueError as exc:
+                        runtime_errors.append(str(exc))
                     selection_requirements = {
                         "fields": [
                             "owner_character_id",
@@ -44316,9 +44335,7 @@ def _create_server(
                         "source_statblock_name": name,
                         "source_resolution": "reviewed_addon_artifact",
                         "normalization_authority": "engine",
-                        "runtime_ready": not dependent_actor_template_solution_errors(
-                            dependent_template
-                        ),
+                        "runtime_ready": not runtime_errors,
                         "dependent_actor_template": dependent_template,
                     }
                 else:
@@ -52356,6 +52373,7 @@ boundary.
                 "dependent actor template is not runtime-ready: " + "; ".join(solution_errors)
             )
         owner_binding = dependent_actor_owner_binding(requirement)
+        lifecycle_policy = dependent_actor_lifecycle_policy(requirement)
         dependent_actor_authorization: dict[str, Any] | None = None
         if owner_binding is not None:
             feature_matches = [
@@ -52688,6 +52706,7 @@ boundary.
             "reviewed_expression_hash": str(
                 dict(requirement["solution"])["reviewed_expression_hash"]
             ),
+            **({"lifecycle_policy": lifecycle_policy} if lifecycle_policy is not None else {}),
         }
         template_binding["authorization"] = sign_receipt(
             {

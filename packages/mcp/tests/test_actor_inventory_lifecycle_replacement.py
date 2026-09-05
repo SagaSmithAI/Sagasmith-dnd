@@ -34,6 +34,7 @@ def _authorization(campaign_id: str, owner_id: str, dependent_id: str) -> dict:
             "owner_proficiency_bonus": 3,
         },
         "reviewed_expression_hash": "a" * 64,
+        "lifecycle_policy": {"schema_version": 1, "owner_death": "independent"},
         "signature": "b" * 64,
     }
 
@@ -95,6 +96,7 @@ def _service_fixture(tmp_path: Path):
                         "owner_proficiency_bonus": 3,
                     },
                     "reviewed_expression_hash": "a" * 64,
+                    "lifecycle_policy": {"schema_version": 1, "owner_death": "independent"},
                     "authorization": _authorization(campaign.id, owner.id, old.id),
                 },
             }
@@ -144,6 +146,7 @@ def _replacement_state(
                     "owner_proficiency_bonus": 3,
                 },
                 "reviewed_expression_hash": "a" * 64,
+                "lifecycle_policy": {"schema_version": 1, "owner_death": "independent"},
                 "authorization": _authorization(campaign_id, owner_id, new_id),
             },
         }

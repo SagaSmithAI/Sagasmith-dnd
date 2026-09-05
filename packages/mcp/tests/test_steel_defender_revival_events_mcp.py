@@ -3,6 +3,7 @@
 import asyncio
 from pathlib import Path
 
+import pytest
 from mcp import Client
 
 from sagasmith_dnd_mcp.config import McpConfig
@@ -13,7 +14,10 @@ from tests.test_official_expansions_mcp import _call
 from tests.test_steel_defender_lifecycle_mcp import _create_bound_defender
 
 
-def test_source_event_owner_death_during_revival_keeps_defender_dead(tmp_path: Path) -> None:
+@pytest.mark.parametrize("owner_death", ["independent", "perish"])
+def test_source_event_owner_death_during_revival_follows_source_policy(
+    tmp_path: Path, owner_death: str,
+) -> None:
     config = McpConfig(
         home=tmp_path / "home", database_url=None, chroma_url=None,
         chroma_path_override=None, dnd_skills_dir=tmp_path / "skills",
@@ -25,7 +29,9 @@ def test_source_event_owner_death_during_revival_keeps_defender_dead(tmp_path: P
         try:
             async with Client(runtime, mode="2026-07-28") as client:
                 server = _ProtocolTools(client)
-                campaign, owner, defender = await _create_bound_defender(server, config)
+                campaign, owner, defender = await _create_bound_defender(
+                    server, config, owner_death=owner_death,
+                )
 
                 async def snapshot():
                     current = await _call(server, "campaign_query", {
@@ -94,8 +100,10 @@ def test_source_event_owner_death_during_revival_keeps_defender_dead(tmp_path: P
                 after = await snapshot()
                 after_campaign, after_owner, after_defender = after
                 assert "dead" in after_owner["sheet"]["conditions"]
-                assert "dead" in after_defender["sheet"]["conditions"]
-                assert after_defender["sheet"]["combat"]["hp"]["value"] == 0
+                perishes = owner_death == "perish"
+                assert ("dead" in after_defender["sheet"]["conditions"]) is perishes
+                hp = after_defender["sheet"]["combat"]["hp"]
+                assert hp["value"] == (0 if perishes else hp["max"])
                 assert after_owner["sheet"]["spellcasting"]["spell_slots"]["1"]["value"] == (
                     current_owner["sheet"]["spellcasting"]["spell_slots"]["1"]["value"] - 1
                 )
@@ -103,8 +111,8 @@ def test_source_event_owner_death_during_revival_keeps_defender_dead(tmp_path: P
                     ready[0]["state"]["game_time"]["elapsed_ticks"] + 10
                 )
                 relation = after_campaign["state"]["dependent_actor_relations"][0]
-                assert relation["status"] == "dead"
-                assert relation["death_elapsed_ticks"] == death_tick
+                assert relation["status"] == ("dead" if perishes else "active")
+                assert relation["death_elapsed_ticks"] == (death_tick if perishes else None)
                 assert relation["revival_started_elapsed_ticks"] is None
                 assert relation["revival_completes_elapsed_ticks"] is None
                 result = response[1]["result"]

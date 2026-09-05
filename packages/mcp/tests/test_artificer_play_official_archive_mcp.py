@@ -16,11 +16,14 @@ from sagasmith_dnd_mcp.config import McpConfig
 from sagasmith_dnd_mcp.server import close_server, create_server
 from scripts.regression_official_expansions import _ProtocolTools
 from tests.test_official_expansions_mcp import _call, _locked_official_library, _selection_for
-from tests.test_steel_defender_lifecycle_mcp import _exercise_defender_lifecycle
+from tests.test_steel_defender_lifecycle_mcp import (
+    _exercise_defender_lifecycle,
+    _exercise_owner_death,
+)
 
 _PREFIX = "dnd5e.addon.rulebook.d-d-5e-eberron-rising-from-the-last-war.31293633134f"
-_VERSION = "1.0.6-local.starting-equipment.1"
-_RULE_VERSION = "1.0.4-local.starting-equipment.1"
+_VERSION = "1.0.7-local.steel-defender-lifecycle.1"
+_RULE_VERSION = "1.0.5-local.steel-defender-lifecycle.1"
 _CLASS = _PREFIX + ".class.artificer"
 _DEFENDER = _PREFIX + ".statblock.steel-defender"
 _SRD = "dnd5e.content.srd2014."
@@ -387,6 +390,9 @@ def test_locked_artificer_build_creates_and_commands_defender(tmp_path: Path) ->
             assert relation["source_pack_version"] == _RULE_VERSION
             assert relation["owner_character_id"] == owner["id"]
             assert relation["dependent_actor_id"] == defender["id"]
+            assert relation["template_binding"]["lifecycle_policy"] == {
+                "schema_version": 1, "owner_death": "independent",
+            }
             before = await current()
             with pytest.raises(ToolError):
                 await _call(server, "addon_actor_instantiate", {
@@ -400,6 +406,10 @@ def test_locked_artificer_build_creates_and_commands_defender(tmp_path: Path) ->
             lifecycle_replays, lifecycle_final = await _exercise_defender_lifecycle(
                 server, campaign["id"], owner, defender,
             )
+            owner_death_replay, lifecycle_final = await _exercise_owner_death(
+                server, campaign["id"], owner, defender, owner_death="independent",
+            )
+            lifecycle_replays.append(owner_death_replay)
             final = await _call(server, "character_query", {
                 "view": "get", "payload": {"character_id": defender["id"]},
             })
