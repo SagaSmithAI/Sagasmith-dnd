@@ -727,7 +727,7 @@ def test_magic_item_charges_cast_source_bound_defenses() -> None:
         name="Mage Armor",
         classes=["wizard", "sorcerer"],
         pack_id="dnd5e.content.srd2014",
-        pack_version="1.7.0",
+        pack_version="1.6.0",
         rule_refs=["bundled:srd2014/spells/mage-armor"],
     )
     shield = _spell(CORE_SHIELD_SPELL_ID, level=1)
@@ -735,7 +735,7 @@ def test_magic_item_charges_cast_source_bound_defenses() -> None:
         name="Shield",
         classes=["wizard", "sorcerer"],
         pack_id="dnd5e.content.srd2014",
-        pack_version="1.7.0",
+        pack_version="1.6.0",
         rule_refs=["bundled:srd2014/spells/shield"],
         mechanic_refs=[CORE_SHIELD_MECHANIC_ID],
     )
@@ -831,7 +831,7 @@ def test_magic_item_concentration_spell_replaces_existing_concentration() -> Non
         name="Web",
         classes=["wizard"],
         pack_id="dnd5e.content.srd2014",
-        pack_version="1.7.0",
+        pack_version="1.6.0",
         rule_refs=["bundled:srd2014/spells/web"],
     )
     sheet["inventory"]["items"] = [
@@ -957,7 +957,7 @@ def test_magic_item_spell_cast_requires_attunement_and_class_list() -> None:
     mage_armor.update(
         classes=["wizard"],
         pack_id="dnd5e.content.srd2014",
-        pack_version="1.7.0",
+        pack_version="1.6.0",
         rule_refs=["bundled:srd2014/spells/mage-armor"],
     )
     sheet["inventory"]["items"] = [

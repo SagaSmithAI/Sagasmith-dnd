@@ -1532,7 +1532,7 @@ def test_trusted_species_reference_prefers_complete_standard_mechanics() -> None
         },
         "_selection_schema_reference": {
             "pack_id": "dnd5e.content.standard2014",
-            "pack_version": "1.7.0",
+            "pack_version": "1.4.0",
             "artifact_id": "dnd5e.content.standard2014.species.tiefling",
         },
     }
