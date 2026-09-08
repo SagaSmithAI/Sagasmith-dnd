@@ -498,6 +498,25 @@ def test_locked_artificer_build_creates_and_commands_defender(tmp_path: Path) ->
                 })
                 owner = advanced["character"]
             await apply(_PREFIX + ".subclass.battle-smith", {"target_class_name": "Artificer"})
+            # The subclass is selected after the class has already reached its
+            # level-3 feature threshold.  Its source-bound spell grants must be
+            # settled immediately and must remain outside the prepared-spell
+            # limit, regardless of selection order.
+            spells = {
+                spell["name"]: spell for spell in owner["sheet"]["content"]["spells"]
+            }
+            for name in ("Heroism", "Shield"):
+                assert spells[name]["access"]["always_prepared"] is True
+                assert spells[name]["access"]["prepared"] is True
+                assert spells[name]["grant"] == {
+                    "source_type": "subclass",
+                    "source_key": "Battle Smith",
+                    "method": "class_prepared",
+                }
+            selected_spells = owner["sheet"]["spellcasting"]["preparation"][
+                "selected_spell_ids"
+            ]
+            assert all(spells[name]["id"] not in selected_spells for name in ("Heroism", "Shield"))
             for feature in _FEATURES[:-1]:
                 await apply(_PREFIX + ".feature." + feature, {
                     "infusions": ["Enhanced Arcane Focus", "Enhanced Defense",
