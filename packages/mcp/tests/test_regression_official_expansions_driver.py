@@ -533,10 +533,11 @@ def test_execute_never_marks_persisted_incomplete_build_passed(
     assert closed == servers
 
 
-def test_official_build_retains_descriptive_spellcasting_tool_requirement():
-    assert driver._UNVERIFIED_BUILD_REQUIREMENTS == (
-        "spellcasting_tool_requirements",
-    )
+def test_official_build_treats_artificer_tool_use_as_descriptive():
+    # The reviewed Artificer text explicitly says tool-use details do not limit
+    # casting.  Tool proficiencies are materialized by the class contract; no
+    # unsupported possession gate should keep the complete build red.
+    assert driver._UNVERIFIED_BUILD_REQUIREMENTS == ()
 
 
 @pytest.mark.parametrize("changed_choice", [False, True])

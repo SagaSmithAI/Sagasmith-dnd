@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 from sagasmith_dnd.character_schema import default_character_sheet
-from test_official_expansions_mcp import _call, _config
+from test_official_expansions_mcp import _call, _config, _locked_official_library
 
 from sagasmith_dnd_mcp.server import close_server, create_server
 
@@ -20,14 +20,15 @@ def test_scag_103_clan_crafter_tool_duplicate_replacement_and_custom_contract(
 ) -> None:
     async def exercise() -> None:
         workspace = Path(__file__).resolve().parents[3]
-        library = workspace.parent / "SagaSmith-dnd-content-library" / "content-library"
-        if not (library / "index.json").is_file():
-            pytest.skip("requires the sibling finalized content library")
-        archives = list(
-            library.glob("packages/*sword-coast-adventurer-s-guide*1.0.3.sagasmith-pack")
+        library = _locked_official_library()
+        index = json.loads((library / "index.json").read_text(encoding="utf-8"))
+        package_entry = next(
+            item
+            for item in index["packages"]
+            if item["id"]
+            == "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a.addon"
         )
-        assert len(archives) == 1
-        with zipfile.ZipFile(archives[0]) as archive:
+        with zipfile.ZipFile(library / package_entry["path"]) as archive:
             package = json.loads(archive.read("package.sagasmith.json"))
         config = replace(
             _config(tmp_path),

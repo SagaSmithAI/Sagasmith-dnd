@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 from sagasmith_dnd.character_schema import default_character_sheet
-from test_official_expansions_mcp import _call, _config
+from test_official_expansions_mcp import _call, _config, _locked_official_library
 
 from sagasmith_dnd_mcp.server import close_server, create_server
 
@@ -20,14 +20,15 @@ def test_scag_103_background_choices_are_source_correct_across_restart(
 ) -> None:
     async def exercise() -> None:
         workspace = Path(__file__).resolve().parents[3]
-        archive_root = workspace.parent / "SagaSmith-dnd-content-library" / "content-library"
-        if not (archive_root / "index.json").is_file():
-            pytest.skip("requires the sibling finalized content library")
-        archives = list(
-            archive_root.glob("packages/*sword-coast-adventurer-s-guide*1.0.3.sagasmith-pack")
+        archive_root = _locked_official_library()
+        index = json.loads((archive_root / "index.json").read_text(encoding="utf-8"))
+        package_entry = next(
+            item
+            for item in index["packages"]
+            if item["id"]
+            == "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a.addon"
         )
-        assert len(archives) == 1
-        with zipfile.ZipFile(archives[0]) as archive:
+        with zipfile.ZipFile(archive_root / package_entry["path"]) as archive:
             package = json.loads(archive.read("package.sagasmith.json"))
         definition_id = package["content"]["rule_definitions"][0]["id"]
         config = replace(

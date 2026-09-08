@@ -105,11 +105,11 @@ _ARTIFICER_FEATURE_ORDER = tuple(
 _REQUIRED_ARTIFICER_FEATURES = set(_ARTIFICER_FEATURE_ORDER) | {
     f"{_ARTIFICER_PREFIX}.feature.{name.lower().replace(' ', '-')}" for name in _ARTIFICER_INFUSIONS
 }
-# Tool-gated spellcasting remains descriptive in the current source contract;
-# keep it visible until the public spell settlement flow can enforce it.
-_UNVERIFIED_BUILD_REQUIREMENTS = (
-    "spellcasting_tool_requirements",
-)
+# The reviewed Artificer source describes tools as the narrative method of
+# spellcasting and explicitly says the details do not limit the spellcaster.
+# The executable contract is therefore the persisted tool proficiencies below,
+# not a possession gate on every spell cast.
+_UNVERIFIED_BUILD_REQUIREMENTS: tuple[str, ...] = ()
 
 
 def _build_failures(sheet: dict[str, Any], follow_ups: list[dict[str, Any]]) -> list[str]:
@@ -786,7 +786,7 @@ async def _run(server: Any) -> tuple[dict[str, Any], dict[str, Any]]:
                 for value in class_materialization.get("proficiencies", {}).get("tools", [])
             }
             if not {"thieves' tools", "tinker's tools", *selected_tools} <= effective_tools:
-                raise RuntimeError("Artificer spellcasting tool proficiencies are incomplete")
+                raise RuntimeError("Artificer tool proficiencies are incomplete")
 
     if character["sheet"]["abilities"]["constitution"]["score"] != 12:
         raise RuntimeError("the official feat ability increase did not materialize")
