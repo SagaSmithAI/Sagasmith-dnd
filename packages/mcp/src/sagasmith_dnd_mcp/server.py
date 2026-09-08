@@ -17346,6 +17346,10 @@ def _create_server(
         """Grant DM/player/observer campaign access; caller role is resolved server-side."""
         caller = by_principal_id or LOCAL_SYSTEM_PRINCIPAL_ID
         access.require_campaign(campaign_id, caller, roles=CAMPAIGN_DM_ROLES)
+        if role == "owner":
+            raise AccessDeniedError(
+                "campaign owners can only be created with campaign_create"
+            )
         access.ensure_principal(principal_id, platform="mcp", external_id=principal_id)
         return asdict(access.grant_campaign(campaign_id, principal_id, role=role))
 
