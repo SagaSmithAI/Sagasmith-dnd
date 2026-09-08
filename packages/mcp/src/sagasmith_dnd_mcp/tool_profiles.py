@@ -90,6 +90,7 @@ PHASE_TOOLS = {
         combat_common_action combat_concentration_check combat_end combat_end_turn combat_hp_change
         combat_join combat_map_patch combat_movement combat_preflight_attack combat_query
         combat_reaction_attack combat_ready combat_resolve_attack combat_use_activity
+        combat_use_official_item
         content_solution continuity_context dnd_check dnd_dice_roll module_query module_search
         playthrough_manifest rule_expand rule_search snapshot_create snapshot_query snapshot_restore
         state_revision
