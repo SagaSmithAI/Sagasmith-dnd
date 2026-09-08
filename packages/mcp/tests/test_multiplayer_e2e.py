@@ -256,6 +256,47 @@ def test_character_list_requires_campaign_scope_and_cannot_enumerate_other_table
     asyncio.run(exercise())
 
 
+def test_campaign_member_grant_cannot_promote_a_principal_to_owner(
+    tmp_path: Path,
+) -> None:
+    async def exercise() -> None:
+        server = create_server(config(tmp_path))
+        campaign = await call(
+            server,
+            "campaign_create",
+            {"name": "Owner boundary", "idempotency_key": "campaign"},
+        )
+
+        with pytest.raises(
+            Exception,
+            match="campaign owners can only be created with campaign_create",
+        ):
+            await call(
+                server,
+                "access_grant",
+                {
+                    "scope": "campaign",
+                    "campaign_id": campaign["id"],
+                    "principal_id": "user:forged-owner",
+                    "payload": {"role": "owner"},
+                    "by_principal_id": "system:local",
+                },
+            )
+
+        with pytest.raises(Exception, match="cannot access campaign"):
+            await call(
+                server,
+                "campaign_query",
+                {
+                    "view": "get",
+                    "payload": {"campaign_id": campaign["id"]},
+                    "principal_id": "user:forged-owner",
+                },
+            )
+
+    asyncio.run(exercise())
+
+
 def test_dm_two_players_restart_and_combat_projection(tmp_path: Path) -> None:
     async def exercise() -> None:
         runtime = config(tmp_path)
