@@ -817,6 +817,14 @@ def _official_item_provenance(sheet: Mapping[str, Any] | None) -> list[dict[str,
             {
                 "selection": deepcopy(dict(selection)),
                 "item_id": item_id,
+                "official_item_state": str(
+                    dict(dict(item.get("mechanics") or {}).get("official_item") or {}).get(
+                        "state"
+                    )
+                    or ""
+                )
+                if item is not None
+                else "",
                 "materialized_item_hash": (
                     materialized_item_binding_hash(item) if item is not None else ""
                 ),
