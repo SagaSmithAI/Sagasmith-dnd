@@ -527,6 +527,34 @@ def test_locked_artificer_build_creates_and_commands_defender(tmp_path: Path) ->
                 _PREFIX + ".feature." + feature for feature in _FEATURES
             }
             assert len(owner["sheet"]["inventory"]["items"]) == 7
+            added_weapon = await _call(server, "inventory_change", {
+                "owner": "character", "action": "add", "owner_id": owner["id"],
+                "payload": {"item": {
+                    "id": "battle-ready-fixture-weapon", "name": "Battle Ready fixture",
+                    "kind": "weapon", "source_key": "test:battle-ready-fixture",
+                    "mechanics": {
+                        "category": "martial", "attack_type": "melee",
+                        "attack_ability": "strength", "damage_formula": "1d8",
+                        "damage_type": "slashing", "magical": True, "magic_bonus": 1,
+                    },
+                }},
+                "expected_revision": owner["revision"],
+                "idempotency_key": "battle-ready-weapon-add",
+            })
+            owner = added_weapon["character"]
+            equipped_weapon = await _call(server, "inventory_change", {
+                "owner": "character", "action": "equip", "owner_id": owner["id"],
+                "payload": {"item_id": "battle-ready-fixture-weapon", "slot": "main_hand"},
+                "expected_revision": owner["revision"],
+                "idempotency_key": "battle-ready-weapon-equip",
+            })
+            owner = equipped_weapon["character"]
+            weapon_attack = next(
+                attack for attack in owner["derived"]["inventory"]["weapon_attacks"]
+                if attack["item_id"] == "battle-ready-fixture-weapon"
+            )
+            assert weapon_attack["attack_ability"] == "intelligence"
+            assert weapon_attack["damage_bonus"] == 4
             # Starting equipment supplies thieves' tools, not smith's tools;
             # proficiency alone must not create an item. For this lifecycle
             # encounter the DM awards one real SRD tool artifact via public
