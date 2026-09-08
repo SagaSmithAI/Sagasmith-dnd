@@ -160,6 +160,13 @@ def _weapon_actor(item_template: dict, *, species: str = "") -> tuple[dict, str]
                         "inventory_item_id": item_id,
                         "artifact_content_hash": reviewed_hash,
                         "reviewed_content_hash": reviewed_hash,
+                        "materialized_item_hash": materialization.materialized_item_binding_hash(
+                            next(
+                                item
+                                for item in sheet["inventory"]["items"]
+                                if item["id"] == item_id
+                            )
+                        ),
                     },
                 }
             )

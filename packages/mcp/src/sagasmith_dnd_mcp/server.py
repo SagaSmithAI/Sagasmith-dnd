@@ -392,6 +392,7 @@ from sagasmith_dnd.official_item_materialization import (
     EBERRON_ITEM_PACK_ID,
     is_bound_official_item_id,
     materialize_official_item_template,
+    materialized_item_binding_hash,
     official_item_profile,
     reviewed_official_item_hash,
 )
@@ -786,6 +787,59 @@ def _require_preserved_battle_ready_provenance(
     if _battle_ready_provenance(current) != _battle_ready_provenance(replacement):
         raise ValueError(
             "character mutation cannot add, remove, or alter authoritative Battle Ready provenance"
+        )
+
+
+def _official_item_provenance(sheet: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    """Return bound official item selections with their immutable item binding."""
+
+    value = dict(sheet or {})
+    content = dict(value.get("content") or {})
+    items = {
+        str(item.get("id") or ""): item
+        for item in dict(value.get("inventory") or {}).get("items", [])
+        if isinstance(item, Mapping)
+    }
+    result: list[dict[str, Any]] = []
+    for selection in content.get("selections", []):
+        if not isinstance(selection, Mapping):
+            continue
+        artifact_id = str(selection.get("artifact_id") or "")
+        if (
+            selection.get("kind") != "item"
+            or not is_bound_official_item_id(str(selection.get("pack_id") or ""), artifact_id)
+        ):
+            continue
+        recorded = dict(selection.get("selection") or {})
+        item_id = str(recorded.get("inventory_item_id") or "")
+        item = items.get(item_id)
+        result.append(
+            {
+                "selection": deepcopy(dict(selection)),
+                "item_id": item_id,
+                "materialized_item_hash": (
+                    materialized_item_binding_hash(item) if item is not None else ""
+                ),
+            }
+        )
+    return result
+
+
+def _reject_new_official_item_provenance(sheet: Mapping[str, Any] | None) -> None:
+    if _official_item_provenance(sheet):
+        raise ValueError(
+            "official item provenance can be created only by character_content_apply"
+        )
+
+
+def _require_preserved_official_item_provenance(
+    current: Mapping[str, Any], replacement: Mapping[str, Any]
+) -> None:
+    before = _official_item_provenance(current)
+    after = _official_item_provenance(replacement)
+    if before != after:
+        raise ValueError(
+            "character mutation cannot add, remove, or alter authoritative official item provenance"
         )
 
 
@@ -7037,6 +7091,7 @@ def _create_server(
             _reject_new_intrinsic_attack_provenance(actor["sheet"])
             _reject_new_tortle_natural_armor_provenance(actor.get("sheet"))
             _reject_new_battle_ready_provenance(actor["sheet"])
+            _reject_new_official_item_provenance(actor["sheet"])
         mismatched = [
             actor["id"]
             for actor in validated_actors
@@ -14700,6 +14755,7 @@ def _create_server(
 
         if sheet is not None and operation != "character.content.apply":
             _require_preserved_intrinsic_attack_provenance(before.sheet, sheet)
+            _require_preserved_official_item_provenance(before.sheet, sheet)
         if sheet is not None and operation not in {
             "character.content.apply",
             "character.rule_artifact.add",
@@ -30797,6 +30853,7 @@ def _create_server(
         _reject_new_intrinsic_attack_provenance(sheet_value)
         _reject_new_tortle_natural_armor_provenance(sheet_value)
         _reject_new_battle_ready_provenance(sheet_value)
+        _reject_new_official_item_provenance(sheet_value)
         _require_authoritative_background_state(
             sheet_value,
             character_id=None,
@@ -30908,6 +30965,7 @@ def _create_server(
         _reject_new_intrinsic_attack_provenance(sheet)
         _reject_new_tortle_natural_armor_provenance(sheet)
         _reject_new_battle_ready_provenance(sheet)
+        _reject_new_official_item_provenance(sheet)
         _require_authoritative_background_state(
             sheet,
             character_id=None,
@@ -30966,6 +31024,7 @@ def _create_server(
         _reject_new_intrinsic_attack_provenance(sheet_value)
         _reject_new_tortle_natural_armor_provenance(sheet_value)
         _reject_new_battle_ready_provenance(sheet_value)
+        _reject_new_official_item_provenance(sheet_value)
         _require_authoritative_background_state(
             sheet_value,
             character_id=None,
@@ -47623,6 +47682,13 @@ def _create_server(
             if item_profile is not None:
                 recorded_selection["reviewed_content_hash"] = str(
                     item_profile["reviewed_content_hash"]
+                )
+                recorded_selection["materialized_item_hash"] = materialized_item_binding_hash(
+                    next(
+                        item
+                        for item in sheet["inventory"]["items"]
+                        if item["id"] == inventory_item_id
+                    )
                 )
             if armblade_base_source is not None:
                 recorded_selection["base_weapon_source"] = deepcopy(armblade_base_source)

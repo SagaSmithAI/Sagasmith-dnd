@@ -11,7 +11,19 @@ from __future__ import annotations
 import copy
 from typing import Any, Mapping
 
-from sagasmith_dnd.content_validation import content_fingerprint
+
+def _content_fingerprint(artifact: Mapping[str, Any]) -> str:
+    # Import lazily: content_validation itself consumes character_schema, while
+    # character_schema needs this module for the derived attack binding hash.
+    from sagasmith_dnd.content_validation import content_fingerprint
+
+    return content_fingerprint(artifact)
+
+
+def content_fingerprint(artifact: Mapping[str, Any]) -> str:
+    """Lazy compatibility wrapper for the reviewed artifact fingerprint."""
+
+    return _content_fingerprint(artifact)
 
 EBERRON_ITEM_PACK_ID = (
     "dnd5e.addon.rulebook.d-d-5e-eberron-rising-from-the-last-war.31293633134f"
@@ -41,6 +53,30 @@ def reviewed_official_item_hash(artifact_id: str) -> str | None:
     """Return the pinned source-card hash for one executable official item."""
 
     return _REVIEWED_ITEM_HASHES.get(str(artifact_id))
+
+
+def materialized_item_binding_hash(item: Mapping[str, Any]) -> str:
+    """Hash the immutable mechanics of one materialized official inventory item.
+
+    Attunement, equipment, quantity, and the item's activation state are runtime
+    state.  The remaining weapon mechanics are the reviewed executable profile;
+    binding that projection into the selection receipt prevents a later generic
+    inventory patch from silently changing what the official card executes.
+    """
+
+    value = copy.deepcopy(dict(item))
+    mechanics = copy.deepcopy(dict(value.get("mechanics") or {}))
+    contract = mechanics.get("official_item")
+    if isinstance(contract, dict) and "state" in contract:
+        contract["state"] = "__runtime_state__"
+        mechanics["official_item"] = contract
+    return content_fingerprint(
+        {
+            "kind": str(value.get("kind") or ""),
+            "source_key": str(value.get("source_key") or ""),
+            "mechanics": mechanics,
+        }
+    )
 
 
 def official_item_profile(
@@ -215,6 +251,7 @@ __all__ = [
     "EBERRON_ITEM_PACK_ID",
     "is_bound_official_item_id",
     "materialize_official_item_template",
+    "materialized_item_binding_hash",
     "official_item_profile",
     "reviewed_official_item_hash",
 ]

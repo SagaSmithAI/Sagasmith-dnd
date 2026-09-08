@@ -24,6 +24,7 @@ from sagasmith_dnd.editions import DEFAULT_CHARACTER_EDITION, normalize_dnd_edit
 from sagasmith_dnd.engine import ability_modifier, proficiency_bonus
 from sagasmith_dnd.game_time import TICKS_PER_DAY, TICKS_PER_HOUR, TICKS_PER_MINUTE
 from sagasmith_dnd.hit_points import effective_hit_point_maximum_value
+from sagasmith_dnd.official_item_materialization import materialized_item_binding_hash
 from sagasmith_dnd.resolution_plan import (
     ResolutionPlanCompilationError,
     compile_resolution_plan,
@@ -4547,6 +4548,7 @@ def _inventory_weight_oz(inventory: dict[str, Any]) -> float:
 
 def _weapon_attacks(
     inventory: dict[str, Any],
+    official_selections: list[dict[str, Any]],
     intrinsic_attacks: list[dict[str, Any]],
     ability_modifiers: dict[str, int],
     proficiency: int,
@@ -4573,6 +4575,33 @@ def _weapon_attacks(
             continue
         mechanics = item["mechanics"]
         official_item = dict(mechanics.get("official_item") or {})
+        materialized_item_hash = ""
+        official_binding_valid = True
+        if official_item:
+            materialized_item_hash = materialized_item_binding_hash(item)
+            source_key = str(item.get("source_key") or "")
+            artifact_id = source_key.rsplit(":", 1)[-1] if ":" in source_key else ""
+            selection = next(
+                (
+                    value
+                    for value in official_selections
+                    if isinstance(value, dict)
+                    and value.get("kind") == "item"
+                    and str(value.get("artifact_id") or "") == artifact_id
+                    and str(dict(value.get("selection") or {}).get("inventory_item_id") or "")
+                    == str(item.get("id") or "")
+                ),
+                None,
+            )
+            official_binding_valid = not (
+                selection is None
+                or str(dict(selection.get("selection") or {}).get("materialized_item_hash") or "")
+                != materialized_item_hash
+            )
+            if not official_binding_valid:
+                # Keep the mundane base weapon visible, but never expose magic
+                # mechanics or the reviewed contract from a forged source item.
+                official_item = {}
         if item.get("attunement") != "attuned":
             official_item = {}
         if official_item.get("kind") == "armblade" and official_item.get("state") == "retracted":
@@ -4585,7 +4614,9 @@ def _weapon_attacks(
             "state"
         ) == "sheathed":
             continue
-        magic_properties_active = item.get("attunement") != "required"
+        magic_properties_active = (
+            item.get("attunement") != "required" and official_binding_valid
+        )
         magic_bonus = mechanics["magic_bonus"] if magic_properties_active else 0
         ability = mechanics["attack_ability"]
         property_keys = {str(value).strip().casefold() for value in mechanics["properties"]}
@@ -4711,6 +4742,7 @@ def _weapon_attacks(
                 "recharge": copy.deepcopy(mechanics.get("recharge") or {}),
                 "attack_ability_modifier": modifier,
                 "official_item": official_item,
+                "materialized_item_hash": materialized_item_hash,
                 "source_key": item.get("source_key", ""),
                 "attunement": item.get("attunement", "none"),
             }
@@ -5170,6 +5202,7 @@ def derive_character_sheet(
             "encumbrance": encumbrance_summary,
             "weapon_attacks": _weapon_attacks(
                 inventory,
+                value["content"]["selections"],
                 value["traits"]["intrinsic_attacks"],
                 ability_modifiers,
                 proficiency,

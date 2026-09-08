@@ -1638,6 +1638,14 @@ def _verified_official_item_for_attack(
         or str(recorded.get("reviewed_content_hash") or "") != expected_hash
     ):
         return {}
+    recorded_binding_hash = str(
+        dict(selection.get("selection") or {}).get("materialized_item_hash") or ""
+    )
+    if (
+        not recorded_binding_hash
+        or recorded_binding_hash != str(weapon.get("materialized_item_hash") or "")
+    ):
+        return {}
     return contract
 
 
