@@ -339,6 +339,45 @@ def test_official_attack_effects_require_attunement_and_applied_selection(monkey
     assert plan["disadvantage"] is False
     assert plan["official_item"] == {}
 
+    # A receipt for the original mechanics must not authorize a later generic
+    # inventory patch that changes the reviewed weapon's magic payload.
+    from sagasmith_dnd.content_validation import content_fingerprint as real_content_fingerprint
+
+    monkeypatch.setattr(materialization, "content_fingerprint", real_content_fingerprint)
+    item = next(item for item in sheet["inventory"]["items"] if item["id"] == item_id)
+    source_key = str(item["source_key"])
+    artifact_id = source_key.rsplit(":", 1)[-1]
+    pack_id, versioned_artifact = source_key.split("@", 1)
+    pack_version = versioned_artifact.split(":", 1)[0]
+    sheet["content"]["selections"].append(
+        {
+            "artifact_id": artifact_id,
+            "kind": "item",
+            "name": item["name"],
+            "pack_id": pack_id,
+            "pack_version": pack_version,
+            "rule_refs": [],
+            "mechanic_refs": [],
+            "selection": {
+                "inventory_item_id": item_id,
+                "artifact_content_hash": materialization.reviewed_official_item_hash(artifact_id),
+                "reviewed_content_hash": materialization.reviewed_official_item_hash(artifact_id),
+                "materialized_item_hash": materialization.materialized_item_binding_hash(item),
+            },
+        }
+    )
+    attacker["derived"] = derive_character_sheet(sheet)
+    item["mechanics"]["magic_bonus"] = 99
+    attacker["derived"] = derive_character_sheet(sheet)
+    tampered = preflight_attack(
+        attacker,
+        target,
+        action={"weapon_id": item_id, "attack_mode": "melee"},
+        require_attack_action=False,
+    )
+    assert tampered["official_item"] == {}
+    assert tampered["additional_damage"] == []
+
     item = next(item for item in sheet["inventory"]["items"] if item["id"] == item_id)
     item["attunement"] = "attuned"
     attacker["derived"] = derive_character_sheet(sheet)
