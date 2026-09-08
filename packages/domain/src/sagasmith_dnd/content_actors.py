@@ -98,9 +98,46 @@ def validate_dnd_content_actor(actor: Mapping[str, Any]) -> dict[str, Any]:
     if "external_items" not in value["sheet"].get("inventory", {}):
         if normalized["sheet"]["inventory"].get("external_items") == []:
             normalized["sheet"]["inventory"].pop("external_items")
+    # Older immutable archives also predate three empty item-mechanics
+    # defaults. Accept only those exact omissions and retain the signed
+    # payload; explicit values still have to pass the current schema.
+    _strip_legacy_item_mechanics_defaults(value["sheet"], normalized["sheet"])
     if normalized["sheet"] != value["sheet"] or normalized["notes"] != value["notes"]:
         raise ContentPackageError("D&D content actor must use canonical sheet and notes")
     return value
+
+
+def _strip_legacy_item_mechanics_defaults(
+    original_sheet: Mapping[str, Any], normalized_sheet: dict[str, Any]
+) -> None:
+    """Preserve historical omissions that normalize to empty item defaults."""
+
+    original_inventory = original_sheet.get("inventory")
+    normalized_inventory = normalized_sheet.get("inventory")
+    if not isinstance(original_inventory, Mapping) or not isinstance(
+        normalized_inventory, dict
+    ):
+        return
+    original_items = original_inventory.get("items")
+    normalized_items = normalized_inventory.get("items")
+    if not isinstance(original_items, list) or not isinstance(normalized_items, list):
+        return
+    for original_item, normalized_item in zip(original_items, normalized_items):
+        if not isinstance(original_item, Mapping) or not isinstance(normalized_item, dict):
+            continue
+        original_mechanics = original_item.get("mechanics")
+        normalized_mechanics = normalized_item.get("mechanics")
+        if not isinstance(original_mechanics, Mapping) or not isinstance(
+            normalized_mechanics, dict
+        ):
+            continue
+        for key, default in (
+            ("category", ""),
+            ("strength_requirement", 0),
+            ("magical", False),
+        ):
+            if key not in original_mechanics and normalized_mechanics.get(key) == default:
+                normalized_mechanics.pop(key, None)
 
 
 def _normalized_dnd_content_actor(
