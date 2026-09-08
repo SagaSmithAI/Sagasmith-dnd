@@ -535,7 +535,7 @@ def test_locked_artificer_build_creates_and_commands_defender(tmp_path: Path) ->
                     "mechanics": {
                         "category": "martial", "attack_type": "melee",
                         "attack_ability": "strength", "damage_formula": "1d8",
-                        "damage_type": "slashing", "magic_bonus": 1,
+                        "damage_type": "slashing", "magical": True, "magic_bonus": 1,
                     },
                 }},
                 "expected_revision": owner["revision"],

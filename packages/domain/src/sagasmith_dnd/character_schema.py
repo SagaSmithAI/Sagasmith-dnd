@@ -857,6 +857,7 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
                 "thrown_long_range_ft",
                 "ammunition_item_id",
                 "proficient",
+                "magical",
                 "magic_bonus",
                 "reach_ft",
                 "attack_bonus_override",
@@ -935,6 +936,9 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
             ),
             "proficient": _boolean(
                 mechanics.get("proficient"), f"{field}.proficient", default=True
+            ),
+            "magical": _boolean(
+                mechanics.get("magical"), f"{field}.magical", default=False
             ),
             "magic_bonus": _integer(mechanics.get("magic_bonus"), f"{field}.magic_bonus"),
             "reach_ft": _integer(
@@ -4442,11 +4446,11 @@ def _weapon_attacks(
         # active magic mechanics. Battle Ready changes only those attacks;
         # ordinary weapons and suppressed attunement keep their normal ability.
         magic_weapon = magic_properties_active and (
-            mechanics["magic_bonus"] != 0
+            mechanics["magical"]
+            or mechanics["magic_bonus"] != 0
             or bool(mechanics["additional_damage"])
             or bool(mechanics["versatile_additional_damage"])
             or bool(mechanics["on_hit_effect"])
-            or item.get("resolution_plan") is not None
         )
         if battle_ready and magic_weapon and ability in {"strength", "dexterity"}:
             ability = "intelligence"

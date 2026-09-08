@@ -256,7 +256,7 @@ def test_2014_battle_ready_uses_intelligence_for_active_magic_weapons_only() -> 
                 "attack_ability": "strength",
                 "damage_formula": "1d8",
                 "damage_type": "slashing",
-                "magic_bonus": 1,
+                "magical": True,
             },
         },
     )
@@ -285,8 +285,8 @@ def test_2014_battle_ready_uses_intelligence_for_active_magic_weapons_only() -> 
     magic_attack = attacks[magic_id]
     assert magic_attack["attack_ability"] == "intelligence"
     assert magic_attack["attack_ability_modifier"] == 4
-    assert magic_attack["attack_bonus"] == 7
-    assert magic_attack["damage_bonus"] == 5
+    assert magic_attack["attack_bonus"] == 6
+    assert magic_attack["damage_bonus"] == 4
     assert attacks[mundane_id]["attack_ability"] == "strength"
 
 
