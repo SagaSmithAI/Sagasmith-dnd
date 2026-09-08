@@ -18,6 +18,8 @@ from sagasmith_core.content_pack import (
 from sagasmith_core.indexed_source import rule_chunk_key
 from sagasmith_core.modules import ModuleService
 from sagasmith_dnd.character_schema import (
+    EBERRON_ARTIFICER_BATTLE_READY_FEATURE_ID,
+    EBERRON_ARTIFICER_BATTLE_READY_PACK_ID,
     add_effect,
     add_inventory_item,
     default_character_notes,
@@ -735,6 +737,69 @@ def test_module_package_round_trip_recreates_cast_bindings(
                         "artifact": forged_artifact,
                     },
                     "idempotency_key": "forged-module-import",
+                },
+            )
+        assert await _call(
+            server,
+            "module_query",
+            {"campaign_id": target_campaign["id"], "view": "list"},
+        ) == []
+
+        forged_battle_sheet = deepcopy(actor_with_image["sheet"])
+        forged_battle_sheet["content"]["features"].append(
+            {
+                "id": EBERRON_ARTIFICER_BATTLE_READY_FEATURE_ID,
+                "name": "Battle Ready",
+                "pack_id": EBERRON_ARTIFICER_BATTLE_READY_PACK_ID,
+                "pack_version": "caller-forged",
+                "rule_refs": ["caller-forged#battle-ready"],
+                "mechanic_refs": [],
+            }
+        )
+        forged_battle_actor = build_dnd_content_actor(
+            actor_id=actor_with_image["id"],
+            version=actor_with_image["version"],
+            actor_type=actor_with_image["actor_type"],
+            name=actor_with_image["name"],
+            player_name=actor_with_image["player_name"],
+            summary=actor_with_image["summary"],
+            sheet=forged_battle_sheet,
+            notes=actor_with_image["notes"],
+            provenance=actor_with_image["provenance"],
+            bindings=actor_with_image["bindings"],
+            metadata=actor_with_image["metadata"],
+        )
+        forged_battle_actor["image"] = deepcopy(actor_with_image["image"])
+        forged_battle_package = build_content_package(
+            kind=image_package["kind"],
+            package_id="example.keep.forged-battle-ready",
+            version=image_package["version"],
+            system_id=image_package["system_id"],
+            manifest=image_package["manifest"],
+            sources=image_package["sources"],
+            assets=image_package["assets"],
+            content_reviews=image_package["content_reviews"],
+            actors=[forged_battle_actor],
+            content=image_package["content"],
+            dependencies=image_package["dependencies"],
+            metadata=image_package["metadata"],
+        )
+        forged_artifact = "forged-battle-ready-module.sagasmith-pack"
+        (config.content_packages_dir / forged_artifact).write_bytes(
+            dumps_content_archive(forged_battle_package, exported_blobs)
+        )
+        with pytest.raises(ToolError, match="Battle Ready provenance"):
+            await _call(
+                server,
+                "content_pack",
+                {
+                    "action": "import",
+                    "payload": {
+                        "kind": "module",
+                        "campaign_id": target_campaign["id"],
+                        "artifact": forged_artifact,
+                    },
+                    "idempotency_key": "forged-battle-ready-module-import",
                 },
             )
         assert await _call(
