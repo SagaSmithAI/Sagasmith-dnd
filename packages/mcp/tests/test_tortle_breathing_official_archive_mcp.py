@@ -13,6 +13,7 @@ from sagasmith_dnd.standard_feature_ids import (
     TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
     TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
 )
+from test_official_expansions_mcp import _locked_official_library
 
 import sagasmith_dnd_mcp.server as server_module
 from sagasmith_dnd_mcp.config import McpConfig
@@ -29,7 +30,7 @@ async def _call(server, name: str, arguments: dict):
 
 def _config(tmp_path: Path) -> McpConfig:
     repository_root = Path(__file__).resolve().parents[3]
-    library = repository_root.parent / "SagaSmith-dnd-content-library" / "content-library"
+    library = _locked_official_library()
     return McpConfig(
         home=tmp_path / "home",
         database_url=None,

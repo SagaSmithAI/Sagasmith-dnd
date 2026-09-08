@@ -567,7 +567,7 @@ def test_locked_artificer_build_creates_and_commands_defender(tmp_path: Path) ->
                 "expected_revision": owner["revision"],
                 "idempotency_key": "battle-ready-weapon-equip",
             })
-            owner = equipped_weapon["character"]
+            owner = equipped_weapon
             weapon_attack = next(
                 attack for attack in owner["derived"]["inventory"]["weapon_attacks"]
                 if attack["item_id"] == "battle-ready-fixture-weapon"

@@ -533,10 +533,10 @@ def test_execute_never_marks_persisted_incomplete_build_passed(
     assert closed == servers
 
 
-def test_official_build_retains_known_unverified_requirements():
-    assert "class_starting_equipment" in driver._UNVERIFIED_BUILD_REQUIREMENTS
-    assert "spellcasting_tool_requirements" in driver._UNVERIFIED_BUILD_REQUIREMENTS
-    assert "feature_driven_defender_creation" in driver._UNVERIFIED_BUILD_REQUIREMENTS
+def test_official_build_retains_descriptive_spellcasting_tool_requirement():
+    assert driver._UNVERIFIED_BUILD_REQUIREMENTS == (
+        "spellcasting_tool_requirements",
+    )
 
 
 @pytest.mark.parametrize("changed_choice", [False, True])

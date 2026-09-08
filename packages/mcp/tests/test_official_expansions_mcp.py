@@ -548,9 +548,7 @@ def test_finalized_tortle_archive_settles_natural_armor_end_to_end(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repository_root = Path(__file__).resolve().parents[3]
-    official_library = repository_root.parent / "SagaSmith-dnd-content-library" / "content-library"
-    if not (official_library / "index.json").is_file():
-        pytest.skip("requires the sibling finalized SagaSmith D&D content library")
+    official_library = _locked_official_library()
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
@@ -1026,9 +1024,7 @@ def test_reserved_tortle_archive_rejects_installed_payload_tampering(
     tmp_path: Path, tamper: str
 ) -> None:
     repository_root = Path(__file__).resolve().parents[3]
-    official_library = repository_root.parent / "SagaSmith-dnd-content-library" / "content-library"
-    if not (official_library / "index.json").is_file():
-        pytest.skip("requires the sibling finalized SagaSmith D&D content library")
+    official_library = _locked_official_library()
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,

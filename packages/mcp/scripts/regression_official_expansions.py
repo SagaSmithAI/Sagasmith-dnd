@@ -53,6 +53,10 @@ _BATTLE_SMITH = (
     "dnd5e.addon.rulebook.d-d-5e-eberron-rising-from-the-last-war."
     "31293633134f.subclass.battle-smith"
 )
+_STEEL_DEFENDER = (
+    "dnd5e.addon.rulebook.d-d-5e-eberron-rising-from-the-last-war."
+    "31293633134f.statblock.steel-defender"
+)
 _TORTLE = "dnd5e.addon.rulebook.d-d-5e-the-tortle-package.e3234de670da.species.tortle"
 _CITY_WATCH = (
     "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a.background.city-watch"
@@ -101,13 +105,10 @@ _ARTIFICER_FEATURE_ORDER = tuple(
 _REQUIRED_ARTIFICER_FEATURES = set(_ARTIFICER_FEATURE_ORDER) | {
     f"{_ARTIFICER_PREFIX}.feature.{name.lower().replace(' ', '-')}" for name in _ARTIFICER_INFUSIONS
 }
-# These #172/#173 requirements are not exercised by this driver yet. Remove
-# entries only alongside actual public-tool setup and persisted-state assertions;
-# feature cards and successful restarts are not evidence of their execution.
+# Tool-gated spellcasting remains descriptive in the current source contract;
+# keep it visible until the public spell settlement flow can enforce it.
 _UNVERIFIED_BUILD_REQUIREMENTS = (
-    "class_starting_equipment",
     "spellcasting_tool_requirements",
-    "feature_driven_defender_creation",
 )
 
 
@@ -754,6 +755,38 @@ async def _run(server: Any) -> tuple[dict[str, Any], dict[str, Any]]:
                 raise RuntimeError(
                     "Artificer initial spell-choice obligations changed or are absent"
                 )
+            class_materialization = dict(applied.get("class_materialization") or {})
+            equipment = dict(class_materialization.get("starting_equipment") or {})
+            equipment_sources = set(equipment.get("item_sources") or [])
+            expected_sources = {
+                *list(selection.get("starting_equipment", {}).get("choices", {}).get(
+                    "simple_weapons", []
+                )),
+                *list(selection.get("starting_equipment", {}).get("choices", {}).get(
+                    "armor", []
+                )),
+                "dnd5e.content.srd2014.item.crossbow-light",
+                "dnd5e.content.srd2014.item.crossbow-bolts",
+                "dnd5e.content.srd2014.item.thieves-tools",
+                "dnd5e.content.srd2014.item.dungeoneer-s-pack",
+            }
+            if equipment.get("selection", {}).get("mode") != "equipment":
+                raise RuntimeError("Artificer starting equipment did not settle equipment mode")
+            if equipment_sources != expected_sources or len(equipment.get("item_ids") or []) != 7:
+                raise RuntimeError("Artificer starting equipment did not materialize exactly")
+            selected_tools = [str(value).casefold() for value in selection.get("tools", [])]
+            materialized_tools = [
+                str(value).casefold()
+                for value in class_materialization.get("tool_proficiency_choices", [])
+            ]
+            if not selected_tools or materialized_tools != selected_tools:
+                raise RuntimeError("Artificer artisan-tool requirement did not settle")
+            effective_tools = {
+                str(value).casefold()
+                for value in class_materialization.get("proficiencies", {}).get("tools", [])
+            }
+            if not {"thieves' tools", "tinker's tools", *selected_tools} <= effective_tools:
+                raise RuntimeError("Artificer spellcasting tool proficiencies are incomplete")
 
     if character["sheet"]["abilities"]["constitution"]["score"] != 12:
         raise RuntimeError("the official feat ability increase did not materialize")
@@ -824,6 +857,50 @@ async def _run(server: Any) -> tuple[dict[str, Any], dict[str, Any]]:
         for item in classes
     ):
         raise RuntimeError("official Artificer/Battle Smith character build did not settle")
+
+    current = await _call(
+        server,
+        "campaign_query",
+        {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+    )
+    defender_result = await _call(
+        server,
+        "addon_actor_instantiate",
+        {
+            "campaign_id": campaign["id"],
+            "artifact_id": _STEEL_DEFENDER,
+            "owner_character_id": character["id"],
+            "expected_revision": current["revision"],
+            "idempotency_key": "official-expansion-steel-defender",
+        },
+    )
+    defender = dict(defender_result.get("character") or {})
+    if not defender.get("id") or not isinstance(defender.get("sheet"), dict):
+        raise RuntimeError("the Steel Defender feature did not create a dependent actor")
+    relation = next(
+        (
+            item
+            for item in dict(
+                (await _call(
+                    server,
+                    "campaign_query",
+                    {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+                )).get("state")
+                or {}
+            ).get("dependent_actor_relations", [])
+            if item.get("dependent_actor_id") == defender["id"]
+        ),
+        None,
+    )
+    if relation is None or relation.get("owner_character_id") != character["id"]:
+        raise RuntimeError("the Steel Defender dependent-actor relation was not persisted")
+    if relation.get("source_pack_id") != _ARTIFICER_PREFIX:
+        raise RuntimeError("the Steel Defender relation lost official source provenance")
+    if dict(relation.get("template_binding") or {}).get("lifecycle_policy") != {
+        "schema_version": 1,
+        "owner_death": "independent",
+    }:
+        raise RuntimeError("the Steel Defender lifecycle policy was not bound")
 
     current = await _call(
         server,
@@ -910,6 +987,7 @@ async def _run(server: Any) -> tuple[dict[str, Any], dict[str, Any]]:
             "background": "City Watch",
             "applied_artifacts": len(applied_ids),
             "level_advancements": 2,
+            "steel_defender": True,
         },
         "settlement": {
             "kind": "constitution_save",
@@ -935,6 +1013,7 @@ async def _run(server: Any) -> tuple[dict[str, Any], dict[str, Any]]:
         "campaign_id": campaign["id"],
         "campaign_revision": after_settlement["revision"],
         "character_id": character["id"],
+        "defender_id": defender["id"],
         "character_revision": character["revision"],
         "character_sheet": character["sheet"],
         "resolution_id": resolution_id,
@@ -974,6 +1053,23 @@ async def _verify_restart(server: Any, checkpoint: dict[str, Any]) -> int:
         or character.get("sheet") != checkpoint["character_sheet"]
     ):
         raise RuntimeError("the official-expansion character did not survive an MCP restart")
+
+    defender_id = str(checkpoint.get("defender_id") or "")
+    if defender_id:
+        defender = await _call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": defender_id}},
+        )
+        if defender.get("id") != defender_id or not isinstance(defender.get("sheet"), dict):
+            raise RuntimeError("the Steel Defender did not survive an MCP restart")
+        relations = list(campaign.get("state", {}).get("dependent_actor_relations") or [])
+        if not any(
+            item.get("dependent_actor_id") == defender_id
+            and item.get("owner_character_id") == checkpoint["character_id"]
+            for item in relations
+        ):
+            raise RuntimeError("the Steel Defender relation did not survive an MCP restart")
 
     listed = await _call(
         server,
