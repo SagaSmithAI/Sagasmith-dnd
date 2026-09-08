@@ -147,6 +147,12 @@ ENGINE_SETTLED_NON_AC_EFFECT_PATHS = {
     "traits.size",
 }
 CONTENT_ARTIFACT_ID_MAX_LENGTH = 300
+EBERRON_ARTIFICER_BATTLE_READY_PACK_ID = (
+    "dnd5e.addon.rulebook.d-d-5e-eberron-rising-from-the-last-war.31293633134f"
+)
+EBERRON_ARTIFICER_BATTLE_READY_FEATURE_ID = (
+    EBERRON_ARTIFICER_BATTLE_READY_PACK_ID + ".feature.battle-ready"
+)
 
 STANDARD_WEAPON_MATERIALS = {
     "club": ["wood"],
@@ -4404,6 +4410,7 @@ def _weapon_attacks(
     weapon_proficiencies: list[str],
     spell_ability: str | None,
     active_effects: list[dict[str, Any]] | None = None,
+    battle_ready: bool = False,
 ) -> list[dict[str, Any]]:
     melee_reach_bonus = 0
     weapon_dice_multiplier = 1
@@ -4431,6 +4438,18 @@ def _weapon_attacks(
                 ("strength", "dexterity"),
                 key=lambda candidate: ability_modifiers[candidate],
             )
+        # The current item schema represents magic weapons through their
+        # active magic mechanics. Battle Ready changes only those attacks;
+        # ordinary weapons and suppressed attunement keep their normal ability.
+        magic_weapon = magic_properties_active and (
+            mechanics["magic_bonus"] != 0
+            or bool(mechanics["additional_damage"])
+            or bool(mechanics["versatile_additional_damage"])
+            or bool(mechanics["on_hit_effect"])
+            or item.get("resolution_plan") is not None
+        )
+        if battle_ready and magic_weapon and ability in {"strength", "dexterity"}:
+            ability = "intelligence"
         modifier = (
             ability_modifiers.get(spell_ability or "", 0)
             if ability == "spell"
@@ -4737,6 +4756,37 @@ def _has_2014_dwarf_heavy_armor_speed_exception(sheet: dict[str, Any]) -> bool:
     return bool(legacy_matches)
 
 
+def _has_2014_artificer_battle_ready(sheet: dict[str, Any]) -> bool:
+    """Recognize the exact official 2014 Battle Ready feature provenance."""
+
+    if sheet.get("edition") != "2014":
+        return False
+    matches = []
+    for feature in dict(sheet.get("content") or {}).get("features", []):
+        if not isinstance(feature, dict):
+            continue
+        if feature.get("id") != EBERRON_ARTIFICER_BATTLE_READY_FEATURE_ID:
+            continue
+        if feature.get("pack_id") != EBERRON_ARTIFICER_BATTLE_READY_PACK_ID:
+            continue
+        pack_version = feature.get("pack_version")
+        rule_refs = feature.get("rule_refs")
+        if not isinstance(pack_version, str) or not pack_version.strip():
+            continue
+        if (
+            not isinstance(rule_refs, list)
+            or not rule_refs
+            or not all(
+                isinstance(reference, str) and reference.strip() for reference in rule_refs
+            )
+        ):
+            continue
+        matches.append(feature)
+    if len(matches) > 1:
+        raise ValueError("actor card has more than one official Battle Ready feature")
+    return bool(matches)
+
+
 def derive_character_sheet(
     sheet: dict[str, Any],
     *,
@@ -4892,6 +4942,7 @@ def derive_character_sheet(
     )
     encumbrance_summary["disadvantage_abilities"] = encumbrance_disadvantage_abilities
     effective_hp_max = effective_hit_point_maximum(value)
+    battle_ready = _has_2014_artificer_battle_ready(value)
     derived = {
         "proficiency_bonus": proficiency,
         "size": effective_actor_size,
@@ -4966,6 +5017,7 @@ def derive_character_sheet(
                 value["traits"]["proficiencies"]["weapons"],
                 spell_ability,
                 active_effects,
+                battle_ready,
             ),
         },
         "active_effects": [

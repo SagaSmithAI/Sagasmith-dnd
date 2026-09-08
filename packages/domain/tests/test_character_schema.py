@@ -6,6 +6,8 @@ from typing import Any
 import pytest
 
 from sagasmith_dnd.character_schema import (
+    EBERRON_ARTIFICER_BATTLE_READY_FEATURE_ID,
+    EBERRON_ARTIFICER_BATTLE_READY_PACK_ID,
     add_effect,
     add_inventory_item,
     adjust_wallet,
@@ -225,6 +227,67 @@ def test_weapon_attacks_derive_actor_proficiency_and_finesse_ability() -> None:
     assert finesse_attack["attack_ability"] == "dexterity"
     assert finesse_attack["attack_bonus"] == 5
     assert finesse_attack["damage_expression"] == "1d4 + 3"
+
+
+def test_2014_battle_ready_uses_intelligence_for_active_magic_weapons_only() -> None:
+    sheet = default_character_sheet()
+    sheet["abilities"]["strength"]["score"] = 8
+    sheet["abilities"]["dexterity"]["score"] = 10
+    sheet["abilities"]["intelligence"]["score"] = 18
+    sheet["traits"]["proficiencies"]["weapons"] = ["martial weapons"]
+    sheet["content"]["features"] = [
+        {
+            "id": EBERRON_ARTIFICER_BATTLE_READY_FEATURE_ID,
+            "name": "Battle Ready",
+            "pack_id": EBERRON_ARTIFICER_BATTLE_READY_PACK_ID,
+            "pack_version": "1.0.8-local.infusion-source.2",
+            "rule_refs": ["eberron-rising-from-the-last-war#battle-ready"],
+        }
+    ]
+    sheet, magic_id = add_inventory_item(
+        sheet,
+        {
+            "id": "enhanced-longsword",
+            "name": "Enhanced longsword",
+            "kind": "weapon",
+            "mechanics": {
+                "category": "martial",
+                "attack_type": "melee",
+                "attack_ability": "strength",
+                "damage_formula": "1d8",
+                "damage_type": "slashing",
+                "magic_bonus": 1,
+            },
+        },
+    )
+    sheet = equip_inventory_item(sheet, magic_id, "main_hand")
+    sheet, mundane_id = add_inventory_item(
+        sheet,
+        {
+            "id": "mundane-dagger",
+            "name": "Mundane dagger",
+            "kind": "weapon",
+            "mechanics": {
+                "category": "simple",
+                "attack_type": "melee",
+                "attack_ability": "strength",
+                "damage_formula": "1d4",
+                "damage_type": "piercing",
+            },
+        },
+    )
+    sheet = equip_inventory_item(sheet, mundane_id, "off_hand")
+
+    attacks = {
+        item["item_id"]: item
+        for item in derive_character_sheet(sheet)["inventory"]["weapon_attacks"]
+    }
+    magic_attack = attacks[magic_id]
+    assert magic_attack["attack_ability"] == "intelligence"
+    assert magic_attack["attack_ability_modifier"] == 4
+    assert magic_attack["attack_bonus"] == 7
+    assert magic_attack["damage_bonus"] == 5
+    assert attacks[mundane_id]["attack_ability"] == "strength"
 
 
 @pytest.mark.parametrize(
