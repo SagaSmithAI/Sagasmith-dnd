@@ -7022,6 +7022,7 @@ def _create_server(
             require_engine_owned_character_state(actor["sheet"])
             _reject_new_intrinsic_attack_provenance(actor["sheet"])
             _reject_new_tortle_natural_armor_provenance(actor.get("sheet"))
+            _reject_new_battle_ready_provenance(actor["sheet"])
         mismatched = [
             actor["id"]
             for actor in validated_actors
@@ -49071,6 +49072,11 @@ def _create_server(
         artifact = next((item for item in pack.artifacts if item.get("id") == artifact_id), None)
         if artifact is None:
             raise LookupError(artifact_id)
+        # Rebind reserved official artifacts only after the immutable archive
+        # verifier has checked the installed definition and runtime fingerprint.
+        # This path predates character_content_apply and must not become a
+        # provenance bypass for privileged Battle Ready mechanics.
+        artifact = reviewed_official_runtime_artifact(pack_id, version, artifact)
         section = {
             "feature": "features",
             "activity": "activities",
