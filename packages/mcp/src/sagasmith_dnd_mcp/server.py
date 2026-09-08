@@ -49328,6 +49328,11 @@ boundary.
             raise ValueError(f"payload.{name} must be a boolean")
         return value
 
+    def required_boolean(payload: dict[str, Any], name: str) -> bool:
+        if name not in payload:
+            raise ValueError(f"payload.{name} is required")
+        return facade_bool(payload, name)
+
     def required(payload: dict[str, Any], name: str) -> Any:
         value = payload.get(name)
         if value is None or value == "":
@@ -49452,10 +49457,10 @@ boundary.
                 data["actor_ids"],
                 data["ability"],
                 data["dc"],
-                data.get("proficient", False),
+                facade_bool(data, "proficient"),
                 data.get("bonus", 0),
-                data.get("advantage", False),
-                data.get("disadvantage", False),
+                facade_bool(data, "advantage"),
+                facade_bool(data, "disadvantage"),
                 data.get("rule_facts"),
                 principal_id,
                 expected_revision,
@@ -49470,14 +49475,14 @@ boundary.
                 data["target_actor_id"],
                 data["source_ability"],
                 data["target_ability"],
-                data.get("source_proficient", False),
-                data.get("target_proficient", False),
+                facade_bool(data, "source_proficient"),
+                facade_bool(data, "target_proficient"),
                 data.get("source_bonus", 0),
                 data.get("target_bonus", 0),
-                data.get("source_advantage", False),
-                data.get("source_disadvantage", False),
-                data.get("target_advantage", False),
-                data.get("target_disadvantage", False),
+                facade_bool(data, "source_advantage"),
+                facade_bool(data, "source_disadvantage"),
+                facade_bool(data, "target_advantage"),
+                facade_bool(data, "target_disadvantage"),
                 data.get("source_rule_facts"),
                 data.get("target_rule_facts"),
                 principal_id,
@@ -49497,10 +49502,10 @@ boundary.
             data["kind"],
             data["ability"],
             data.get("dc", 0),
-            data.get("proficient", False),
+            facade_bool(data, "proficient"),
             data.get("bonus", 0),
-            data.get("advantage", False),
-            data.get("disadvantage", False),
+            facade_bool(data, "advantage"),
+            facade_bool(data, "disadvantage"),
             data.get("rule_facts"),
             principal_id,
             expected_revision,
@@ -49556,7 +49561,7 @@ boundary.
                 data["actor_id"],
                 turn_action,
                 data.get("complication_choice", ""),
-                data.get("stand_from_prone", True),
+                facade_bool(data, "stand_from_prone", default=True),
                 data.get("quarry_visibility"),
                 principal_id,
                 branch_id,
@@ -50311,7 +50316,7 @@ boundary.
                         job_id,
                         required(data, "page_number"),
                         data.get("scale", 1.5),
-                        data.get("include_ocr_text", True),
+                        facade_bool(data, "include_ocr_text", default=True),
                         principal_id,
                     )
                 )
@@ -50863,11 +50868,15 @@ boundary.
             source = storage.artifact_module_path(job.artifact)
             if source.suffix.casefold() != ".pdf":
                 raise ValueError("module evidence rendering requires a staged PDF")
-            rendered = render_pdf_page(source, data["page_number"], scale=data.get("scale", 1.5))
+            rendered = render_pdf_page(
+                source,
+                data["page_number"],
+                scale=data.get("scale", 1.5),
+            )
             transcription = staged_transcription_evidence(
                 job,
                 data["page_number"],
-                include_ocr=data.get("include_ocr_text", True),
+                include_ocr=facade_bool(data, "include_ocr_text", default=True),
             )
             page_chunks = []
             if job.module_id:
@@ -51721,7 +51730,7 @@ boundary.
                         campaign_id,
                         str(required(data, "pack_id")),
                         str(required(data, "version")),
-                        bool(data.get("enabled", True)),
+                        facade_bool(data, "enabled", default=True),
                         dict(data.get("options") or {}),
                         principal_id,
                         data.get("branch_id"),
@@ -51969,7 +51978,7 @@ boundary.
                 str(data.get("query") or ""),
                 principal_id,
                 data.get("branch_id"),
-                include_context=bool(data.get("include_context", False)),
+                include_context=facade_bool(data, "include_context"),
             )
         elif view == "get":
             result = character_get(required(data, "character_id"), principal_id)
@@ -52073,7 +52082,18 @@ boundary.
             )
             attune_item_id = str(data.get("attune_item_id") or "").strip() or None
             if attune_item_id is not None:
-                if data.get("attunement_prerequisite_confirmed") is not True:
+                if "attunement_prerequisite_confirmed" not in data:
+                    raise NeedsRulingError(
+                        "attunement requires explicit DM confirmation that the actor "
+                        "satisfies every source-defined prerequisite",
+                        missing=("attunement_prerequisite",),
+                        ruling_kind="source_or_scene_fact",
+                    )
+                if not isinstance(data["attunement_prerequisite_confirmed"], bool):
+                    raise CombatEngineError(
+                        "payload.attunement_prerequisite_confirmed must be a boolean"
+                    )
+                if not data["attunement_prerequisite_confirmed"]:
                     raise NeedsRulingError(
                         "attunement requires explicit DM confirmation that the actor "
                         "satisfies every source-defined prerequisite",
@@ -52085,7 +52105,11 @@ boundary.
                         "attunement prerequisite confirmation requires the Agent in the DM role"
                     )
                 attune_inventory_item(current.sheet, attune_item_id)
-            elif data.get("attunement_prerequisite_confirmed") is not None:
+            elif "attunement_prerequisite_confirmed" in data:
+                if not isinstance(data["attunement_prerequisite_confirmed"], bool):
+                    raise CombatEngineError(
+                        "payload.attunement_prerequisite_confirmed must be a boolean"
+                    )
                 raise CombatEngineError("attunement_prerequisite_confirmed requires attune_item_id")
             duration_minutes = data.get("duration_minutes")
             if isinstance(duration_minutes, bool) or not isinstance(duration_minutes, int):
@@ -54377,9 +54401,9 @@ boundary.
             result = character_apply_damage(
                 character_id,
                 required(data, "parts"),
-                critical=data.get("critical", False),
-                knock_out=data.get("knock_out", False),
-                melee=data.get("melee", False),
+                critical=facade_bool(data, "critical"),
+                knock_out=facade_bool(data, "knock_out"),
+                melee=facade_bool(data, "melee"),
                 principal_id=principal_id,
                 expected_revision=expected_revision,
                 idempotency_key=idempotency_key,
@@ -54420,8 +54444,8 @@ boundary.
                 )
             result = character_breathing_transition(
                 character_id,
-                can_breathe=required(data, "can_breathe"),
-                choking=data.get("choking", False),
+                can_breathe=required_boolean(data, "can_breathe"),
+                choking=facade_bool(data, "choking"),
                 principal_id=principal_id,
                 expected_revision=expected_revision,
                 idempotency_key=idempotency_key,
@@ -54444,8 +54468,8 @@ boundary.
             result = character_apply_raise_dead(
                 character_id,
                 elapsed_days=required(data, "elapsed_days"),
-                soul_willing=required(data, "soul_willing"),
-                body_intact=required(data, "body_intact"),
+                soul_willing=required_boolean(data, "soul_willing"),
+                body_intact=required_boolean(data, "body_intact"),
                 source_ref=required(data, "source_ref"),
                 reason=required(data, "reason"),
                 source_actor_id=data.get("source_actor_id"),
@@ -54786,8 +54810,8 @@ boundary.
                 character_id=character_id,
                 spell_id=required(data, "spell_id"),
                 cast_level=data.get("cast_level"),
-                ritual=data.get("ritual", False),
-                signature_free_cast=data.get("signature_free_cast", False),
+                ritual=facade_bool(data, "ritual"),
+                signature_free_cast=facade_bool(data, "signature_free_cast"),
                 feature_cast_source=data.get("feature_cast_source"),
                 component_ruling=data.get("component_ruling"),
                 source_item_id=data.get("source_item_id"),
@@ -54830,8 +54854,8 @@ boundary.
                 required(data, "weapon_id"),
                 required(data, "source_ref"),
                 required(data, "reason"),
-                data.get("advantage", False),
-                data.get("disadvantage", False),
+                facade_bool(data, "advantage"),
+                facade_bool(data, "disadvantage"),
                 principal_id,
                 expected_revision,
                 required(data, "expected_campaign_revision"),
@@ -54854,7 +54878,7 @@ boundary.
             result = character_spell_prepare_impl(
                 character_id,
                 required(data, "spell_id"),
-                required(data, "prepared"),
+                required_boolean(data, "prepared"),
                 principal_id,
                 expected_revision,
                 idempotency_key,
@@ -56257,7 +56281,7 @@ boundary.
                 campaign_id,
                 required(data, "name"),
                 data.get("from_snapshot_id"),
-                data.get("checkout", False),
+                facade_bool(data, "checkout"),
                 principal_id,
                 expected_revision,
                 expected_branch_id,
@@ -56468,7 +56492,7 @@ boundary.
                 data.get("destination"),
                 data.get("path"),
                 data.get("movement_mode", "voluntary"),
-                data.get("crawl", False),
+                facade_bool(data, "crawl"),
                 data.get("spatial_facts"),
                 principal_id,
                 expected_revision,
@@ -56500,13 +56524,13 @@ boundary.
                 campaign_id,
                 target_id,
                 required(data, "parts"),
-                data.get("critical", False),
+                facade_bool(data, "critical"),
                 principal_id,
                 expected_revision,
                 branch_id,
                 idempotency_key,
-                knock_out=data.get("knock_out", False),
-                melee=data.get("melee", False),
+                knock_out=facade_bool(data, "knock_out"),
+                melee=facade_bool(data, "melee"),
             )
         elif action == "heal":
             result = combat_heal(
@@ -56548,9 +56572,9 @@ boundary.
                 save_dc=required(data, "save_dc"),
                 damage_expression=required(data, "damage_expression"),
                 damage_type=required(data, "damage_type"),
-                half_on_success=required(data, "half_on_success"),
-                save_advantage=data.get("save_advantage", False),
-                save_disadvantage=data.get("save_disadvantage", False),
+                half_on_success=required_boolean(data, "half_on_success"),
+                save_advantage=facade_bool(data, "save_advantage"),
+                save_disadvantage=facade_bool(data, "save_disadvantage"),
                 mechanic_source_excerpt=required(
                     data,
                     "mechanic_source_excerpt",
