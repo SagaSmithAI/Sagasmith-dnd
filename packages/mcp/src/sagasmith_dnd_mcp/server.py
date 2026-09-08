@@ -382,6 +382,12 @@ from sagasmith_dnd.official_expansions import (
     resolve_official_expansion_archives,
     resolve_official_expansion_support_archives,
 )
+from sagasmith_dnd.official_item_materialization import (
+    ARMBLADE_ID,
+    is_bound_official_item_id,
+    materialize_official_item_template,
+    official_item_profile,
+)
 from sagasmith_dnd.playthrough import (
     playthrough_source_bindings,
     validate_playthrough_manifest,
@@ -42904,7 +42910,7 @@ def _create_server(
         """Return bounded source and settlement context for an external Agent."""
 
         catalog_review = dict(artifact.get("catalog_review") or {})
-        return {
+        context = {
             "artifact_id": str(artifact.get("id") or ""),
             "kind": str(artifact.get("kind") or ""),
             "pack_id": pack_id,
@@ -42922,6 +42928,10 @@ def _create_server(
             "rule_refs": list(artifact.get("rule_refs") or []),
             "source_citations": deepcopy(list(artifact.get("source_citations") or [])),
         }
+        item_profile = official_item_profile(pack_id, artifact)
+        if item_profile is not None:
+            context["executable_item_profile"] = deepcopy(item_profile)
+        return context
 
     def trusted_watchers_eye_binding(
         campaign_id: str,
@@ -44771,8 +44781,98 @@ def _create_server(
             raise ValueError("background selection authority is server-managed")
         if CLASS_EQUIPMENT_AUTHORITY_KEY in selection:
             raise ValueError("class starting-equipment authority is server-managed")
+        item_profile = official_item_profile(pack_id, artifact)
+        if is_bound_official_item_id(pack_id, artifact_id) and item_profile is None:
+            return {
+                **_ruling_status(
+                    "pending_ruling",
+                    "missing_or_conflicting_source_review",
+                ),
+                "reason": (
+                    "official item identity is reserved for a reviewed executable profile, "
+                    "but its current content fingerprint is not approved"
+                ),
+            }
+        armblade_base_template: dict[str, Any] | None = None
+        armblade_base_source: dict[str, Any] | None = None
+        special_item_selection = item_profile is not None and artifact_id == ARMBLADE_ID
+        if special_item_selection:
+            if set(selection) != {"base_weapon_artifact_id"}:
+                return {
+                    "status": "pending_choice",
+                    "reason": (
+                        "Armblade requires one reviewed one-handed melee weapon "
+                        "to define its source-bound base profile"
+                    ),
+                    "selection_requirements": {
+                        "base_weapon_artifact_id": {
+                            "kind": "item",
+                            "pack_id": CORE_CONTENT_PACK_ID,
+                            "artifact_kind": "weapon",
+                            "attack_type": "melee",
+                            "two_handed": False,
+                        }
+                    },
+                }
+            base_weapon_artifact_id = str(selection.get("base_weapon_artifact_id") or "")
+            base_matches = [
+                item
+                for item in candidates
+                if item[2].get("id") == base_weapon_artifact_id and item[2].get("kind") == "item"
+            ]
+            if len(base_matches) != 1:
+                raise ValueError("Armblade base weapon must name one active weapon artifact")
+            base_pack_id, base_version, base_artifact = base_matches[0]
+            base_artifact = reviewed_official_runtime_artifact(
+                base_pack_id, base_version, base_artifact
+            )
+            if base_pack_id != CORE_CONTENT_PACK_ID:
+                raise ValueError(
+                    "Armblade base weapon must be an active SRD 2014 core weapon artifact"
+                )
+            if str(base_artifact.get("application_state") or "selection_ready") != (
+                "selection_ready"
+            ):
+                raise RulesetUnavailableError(
+                    "Armblade base weapon must be a selection-ready reviewed artifact"
+                )
+            if base_artifact.get("selection_contract") is not None:
+                base_contract_errors = selection_input_errors(base_artifact, {})
+                if base_contract_errors:
+                    raise RulesetUnavailableError(
+                        "Armblade base weapon has no reviewed executable selection contract"
+                    )
+            base_card = dict(base_artifact.get("card") or {})
+            base_template = base_card.get("inventory_template")
+            base_mechanics = dict(dict(base_template or {}).get("mechanics") or {})
+            base_properties = {
+                str(value).strip().casefold() for value in base_mechanics.get("properties", [])
+            }
+            if (
+                not isinstance(base_template, dict)
+                or base_template.get("kind") != "weapon"
+                or base_mechanics.get("attack_type") != "melee"
+                or "two-handed" in base_properties
+                or "two_handed" in base_properties
+            ):
+                raise ValueError(
+                    "Armblade base weapon must be an executable one-handed melee weapon"
+                )
+            armblade_base_template = deepcopy(base_template)
+            armblade_base_source = {
+                "artifact_id": base_weapon_artifact_id,
+                "pack_id": base_pack_id,
+                "pack_version": base_version,
+                "content_hash": content_fingerprint(base_artifact),
+                "catalog_review_hash": str(
+                    dict(base_artifact.get("catalog_review") or {}).get(
+                        "reviewed_content_hash"
+                    )
+                    or ""
+                ),
+            }
         contract_required = artifact.get("selection_contract") is not None
-        if contract_required:
+        if contract_required and not special_item_selection:
             contract_errors = selection_input_errors(artifact, selection)
             if contract_errors:
                 return {
@@ -44787,6 +44887,10 @@ def _create_server(
                     "errors": contract_errors,
                 }
         runtime_context = content_runtime_context(pack_id, version, artifact)
+        if armblade_base_source is not None:
+            executable_item_profile = dict(runtime_context.get("executable_item_profile") or {})
+            executable_item_profile["base_weapon_source"] = deepcopy(armblade_base_source)
+            runtime_context["executable_item_profile"] = executable_item_profile
         tortle_archive_verification = (
             verified_reserved_official_rule_definition(pack_id, version)
             if artifact_id == TORTLE_NATURAL_ARMOR_ARTIFACT_ID
@@ -44830,6 +44934,8 @@ def _create_server(
             "selection": deepcopy(selection),
             "rule_refs": list(artifact.get("rule_refs") or []),
         }
+        if armblade_base_source is not None:
+            content_receipt["base_weapon_source"] = deepcopy(armblade_base_source)
         raw_selection_contract = artifact.get("selection_contract")
         if isinstance(raw_selection_contract, dict) and not selection_contract_errors(artifact):
             selection_contract = dict(raw_selection_contract)
@@ -47237,14 +47343,14 @@ def _create_server(
                     source=f"{selected_species} species",
                 )
         elif kind == "item":
-            if selection:
+            if selection and not special_item_selection:
                 raise ValueError("item content selection does not accept input fields")
             if any(
                 item.get("artifact_id") == artifact_id for item in sheet["content"]["selections"]
             ):
                 raise ValueError("content item is already present")
             inventory_template = card.get("inventory_template")
-            if not isinstance(inventory_template, dict):
+            if item_profile is None and not isinstance(inventory_template, dict):
                 return {
                     **_ruling_status(
                         "pending_ruling",
@@ -47252,11 +47358,30 @@ def _create_server(
                     ),
                     "reason": "item has no reviewed inventory_template",
                 }
-            item_template = deepcopy(inventory_template)
+            item_template = (
+                materialize_official_item_template(
+                    pack_id,
+                    artifact,
+                    base_weapon_template=armblade_base_template,
+                )
+                if item_profile is not None
+                else deepcopy(inventory_template)
+            )
+            if item_profile is not None and item_template is None:
+                return {
+                    **_ruling_status(
+                        "pending_ruling",
+                        "missing_or_conflicting_source_review",
+                    ),
+                    "reason": "official item has no complete reviewed weapon materialization",
+                }
             item_template["source_key"] = str(
                 item_template.get("source_key") or f"{pack_id}@{version}:{artifact_id}"
             )
             sheet, inventory_item_id = add_inventory_item(sheet, item_template)
+            recorded_selection = {"inventory_item_id": inventory_item_id}
+            if armblade_base_source is not None:
+                recorded_selection["base_weapon_source"] = deepcopy(armblade_base_source)
             sheet["content"]["selections"].append(
                 {
                     "artifact_id": artifact_id,
@@ -47266,7 +47391,7 @@ def _create_server(
                     "pack_version": version,
                     "rule_refs": list(artifact.get("rule_refs") or []),
                     "mechanic_refs": list(artifact.get("mechanic_refs") or []),
-                    "selection": {"inventory_item_id": inventory_item_id},
+                    "selection": recorded_selection,
                 }
             )
         elif kind in {"feature", "activity"}:
