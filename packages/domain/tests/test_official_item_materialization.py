@@ -366,6 +366,23 @@ def test_official_attack_effects_require_attunement_and_applied_selection(monkey
             },
         }
     )
+    # A generic inventory mutation must not turn a source-required official
+    # weapon into an unattuned magic weapon.  The binding receipt is still
+    # valid because runtime attunement is intentionally excluded from its
+    # mechanics hash.
+    item = next(item for item in sheet["inventory"]["items"] if item["id"] == item_id)
+    item["attunement"] = "none"
+    attacker["derived"] = derive_character_sheet(sheet)
+    suppressed = preflight_attack(
+        attacker,
+        target,
+        action={"weapon_id": item_id, "attack_mode": "melee"},
+        require_attack_action=False,
+    )
+    assert suppressed["damage_expression"] == "1d4"
+    assert suppressed["additional_damage"] == []
+    assert suppressed["official_item"] == {}
+    item["attunement"] = "required"
     attacker["derived"] = derive_character_sheet(sheet)
     item["mechanics"]["magic_bonus"] = 99
     attacker["derived"] = derive_character_sheet(sheet)

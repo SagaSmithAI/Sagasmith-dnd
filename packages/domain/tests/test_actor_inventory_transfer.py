@@ -53,6 +53,44 @@ def test_full_transfer_moves_attuned_bond() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    "official_item",
+    [
+        {
+            "kind": "armblade",
+            "state": "extended",
+            "qualification": "warforged",
+            "toggle_activation": "bonus_action",
+            "occupies_hand_when_extended": True,
+            "inseparable_while_attuned": True,
+        },
+        {
+            "kind": "dyrrn_tentacle_whip",
+            "state": "drawn",
+            "qualification": "any",
+            "disadvantage_against_species": ["aberration"],
+            "natural_20_stun": True,
+            "stun_duration": "target_end_next_turn",
+            "sheath_draw_activation": "bonus_action",
+            "cursed_attunement": True,
+        },
+    ],
+)
+def test_transfer_rejects_attuned_custody_locked_official_item(official_item: dict) -> None:
+    item = _weapon("locked", attunement="attuned")
+    item["mechanics"]["official_item"] = official_item
+    source = _sheet(item)
+
+    with pytest.raises(ValueError, match="custody-locked"):
+        transfer_actor_inventory_item(
+            {"source": source, "target": _sheet()},
+            [],
+            "source",
+            "target",
+            "locked",
+        )
+
+
 def test_attuned_item_return_restores_original_id_and_bond() -> None:
     first = transfer_actor_inventory_item(
         {"a": _sheet(_weapon("amulet", attunement="attuned")), "b": _sheet()},

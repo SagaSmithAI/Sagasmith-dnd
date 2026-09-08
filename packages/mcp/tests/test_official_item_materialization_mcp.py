@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -129,6 +130,18 @@ def test_locked_official_weapons_materialize_and_replay(tmp_path: Path) -> None:
                     "remove_action": True,
                 },
             }
+            invalid_anatomy = deepcopy(actor["sheet"])
+            invalid_anatomy["traits"]["anatomy"] = {
+                "functional_arms": 2,
+                "functional_hands": 2,
+            }
+            with pytest.raises(ToolError, match="official item provenance"):
+                await _call(server, "character_sheet_replace", {
+                    "character_id": actor["id"],
+                    "sheet": invalid_anatomy,
+                    "expected_revision": actor["revision"],
+                    "idempotency_key": "arcane-eligibility-bypass",
+                })
 
             await apply(DYRRN_TENTACLE_WHIP_ID, None, "dyrrn")
             whip = next(item for item in actor["sheet"]["inventory"]["items"]
@@ -141,6 +154,18 @@ def test_locked_official_weapons_materialize_and_replay(tmp_path: Path) -> None:
             assert whip["mechanics"]["properties"] == ["finesse", "reach"]
             assert whip["mechanics"]["official_item"]["natural_20_stun"] is True
             assert "stunned until the end of its next turn" in whip["mechanics"]["on_hit_effect"]
+            with pytest.raises(ToolError, match="official item provenance"):
+                await _call(server, "inventory_change", {
+                    "owner": "character",
+                    "action": "update",
+                    "owner_id": actor["id"],
+                    "payload": {
+                        "item_id": whip["id"],
+                        "patch": {"attunement": "none"},
+                    },
+                    "expected_revision": actor["revision"],
+                    "idempotency_key": "official-attunement-bypass",
+                })
 
             pending_request = {
                 "character_id": actor["id"],
@@ -190,6 +215,15 @@ def test_locked_official_weapons_materialize_and_replay(tmp_path: Path) -> None:
                 if item["artifact_id"] == ARMBLADE_ID
             )
             assert receipt["base_weapon_source"] == base_source
+            invalid_species = deepcopy(actor["sheet"])
+            invalid_species["progression"]["species"] = "Human"
+            with pytest.raises(ToolError, match="official item provenance"):
+                await _call(server, "character_sheet_replace", {
+                    "character_id": actor["id"],
+                    "sheet": invalid_species,
+                    "expected_revision": actor["revision"],
+                    "idempotency_key": "armblade-eligibility-bypass",
+                })
             final = await _call(server, "character_query", {
                 "view": "get", "payload": {"character_id": actor["id"]},
             })

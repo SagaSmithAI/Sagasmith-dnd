@@ -4575,9 +4575,10 @@ def _weapon_attacks(
             continue
         mechanics = item["mechanics"]
         official_item = dict(mechanics.get("official_item") or {})
+        has_official_contract = bool(official_item)
         materialized_item_hash = ""
         official_binding_valid = True
-        if official_item:
+        if has_official_contract:
             materialized_item_hash = materialized_item_binding_hash(item)
             source_key = str(item.get("source_key") or "")
             artifact_id = source_key.rsplit(":", 1)[-1] if ":" in source_key else ""
@@ -4614,8 +4615,15 @@ def _weapon_attacks(
             "state"
         ) == "sheathed":
             continue
-        magic_properties_active = (
-            item.get("attunement") != "required" and official_binding_valid
+        # Ordinary magic items are active when they do not require attunement;
+        # a materialized official weapon always requires attunement, so its
+        # reviewed mechanics must remain suppressed until the dedicated rest
+        # flow records the attuned state.  Do not let a generic patch to
+        # ``attunement=none`` turn the official payload back on.
+        magic_properties_active = official_binding_valid and (
+            item.get("attunement") == "attuned"
+            if has_official_contract
+            else item.get("attunement") != "required"
         )
         magic_bonus = mechanics["magic_bonus"] if magic_properties_active else 0
         ability = mechanics["attack_ability"]

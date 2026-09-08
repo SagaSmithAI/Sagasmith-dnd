@@ -136,6 +136,43 @@ def test_pickup_preserves_attunement_for_owner_and_requires_it_for_other_actor()
     assert owner_result["picked_up"]["items"][0]["attunement"] == "attuned"
 
 
+def test_drop_keeps_an_attuned_inseparable_armblade_with_its_owner() -> None:
+    sheet = validate_character_sheet({})
+    sheet, item_id = add_inventory_item(
+        sheet,
+        {
+            **_weapon("armblade"),
+            "attunement": "attuned",
+            "mechanics": {
+                **_weapon("armblade")["mechanics"],
+                "official_item": {
+                    "kind": "armblade",
+                    "state": "extended",
+                    "qualification": "warforged",
+                    "toggle_activation": "bonus_action",
+                    "occupies_hand_when_extended": True,
+                    "inseparable_while_attuned": True,
+                },
+            },
+        },
+    )
+    sheet = equip_inventory_item(sheet, item_id, "main_hand")
+
+    result = drop_held_items(
+        {"actor": sheet},
+        [],
+        "actor",
+        record_ids={},
+        scene_id=None,
+        encounter_id=None,
+        campaign_revision=1,
+        location={"mode": "agent", "anchor_actor_id": "actor"},
+    )
+
+    assert result["dropped"] == []
+    assert result["sheets"]["actor"]["inventory"]["equipment_slots"]["main_hand"] == item_id
+
+
 def test_failed_transfer_does_not_mutate_inputs() -> None:
     sheet = validate_character_sheet({})
     sheets = {"actor": sheet}

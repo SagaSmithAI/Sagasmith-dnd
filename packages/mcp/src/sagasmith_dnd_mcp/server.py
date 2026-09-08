@@ -813,6 +813,22 @@ def _official_item_provenance(sheet: Mapping[str, Any] | None) -> list[dict[str,
         recorded = dict(selection.get("selection") or {})
         item_id = str(recorded.get("inventory_item_id") or "")
         item = items.get(item_id)
+        contract = (
+            dict(dict(item.get("mechanics") or {}).get("official_item") or {})
+            if item
+            else {}
+        )
+        qualification: dict[str, Any] = {}
+        if contract.get("kind") == "armblade":
+            qualification["species"] = str(
+                dict(value.get("progression") or {}).get("species") or ""
+            )
+        elif contract.get("kind") == "arcane_propulsion_arm":
+            anatomy = dict(dict(value.get("traits") or {}).get("anatomy") or {})
+            qualification = {
+                "functional_arms": int(anatomy.get("functional_arms", 2) or 0),
+                "functional_hands": int(anatomy.get("functional_hands", 2) or 0),
+            }
         result.append(
             {
                 "selection": deepcopy(dict(selection)),
@@ -825,6 +841,8 @@ def _official_item_provenance(sheet: Mapping[str, Any] | None) -> list[dict[str,
                 )
                 if item is not None
                 else "",
+                "attunement": str(item.get("attunement") or "") if item is not None else "",
+                "qualification": qualification,
                 "materialized_item_hash": (
                     materialized_item_binding_hash(item) if item is not None else ""
                 ),
